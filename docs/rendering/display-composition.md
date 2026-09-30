@@ -71,9 +71,8 @@ a source level finer than its own sampling grid.
 
 The shared layer traversal builds an expression tree. Normal premultiplied
 source-over runs use associativity, with each layer's opacity applied before
-regrouping. The final operand stays above a balanced lower stack, so painting
-the front layer reuses the same lower composite at every layer count. Transparent
-paper adds no operand. Power-of-two grouping boundaries and empty layer positions
+regrouping into balanced branches across the whole run. Transparent paper adds
+no operand. Power-of-two grouping boundaries and empty layer positions
 preserve lower branches when painting starts; transparent operands require no
 image or blend pass. Group opacity, masks, clipping and non-normal blends
 remain expression boundaries. Exact and reduced composition share blend formulas
@@ -99,8 +98,7 @@ priority. No cached expression owns original image bytes or raster history.
 Evaluation visits the child needing more scratch first, reuses completed
 branches, and writes changed pages into a stable root image. An edit in a
 balanced normal run needs logarithmically many composition operations when
-its unchanged branches fit the budget. Separating the front operand adds at most
-one composition operation to a lower-layer edit; front-layer edits need one.
+its unchanged branches fit the budget.
 Placed sources and masks use the common transform
 resampler. Their most magnified axis determines source resolution; an additional
 level of detail and up to four samples per axis limit placement-edge error.
@@ -216,9 +214,10 @@ semantics, including its view-dependent block evaluation. This happens on demand
 once for that tail, replacing the compact scratch pages. The already-composed display stays valid;
 the next live tail returns to compact scratch. Save/undo history contains only
 committed native pixels. Idle display refinement composes those authoritative
-pixels; it never delays committing paint or adds work to undo history.
+pixels without becoming a publication gate or adding work to undo history.
+Its unfinished GPU batch still precedes newly submitted painting on the queue.
 
-Once the view and artwork stop changing, the renderer refines up to two native pages
+Once the view and artwork stop changing, the renderer refines up to four native pages
 per idle submission through the same region executor used by exact queries.
 It reduces the exact composite into the retained display window and overview,
 then updates the adjacent presentation mip. When a native hierarchy is resident,

@@ -160,8 +160,8 @@ fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
     r.submit(frame).unwrap();
     let refined = r.metrics.composited_pixels - work;
     assert!(r.metrics.command_passes - passes <= 5, "resident pages share one composition pass");
-    assert!(refined > u64::from(PAGE_SIZE).pow(2), "idle work must amortize submission and presentation across pages");
-    assert!(refined <= 2 * u64::from(PAGE_SIZE).pow(2), "an idle submission must leave room for new input");
+    assert!(refined > 2 * u64::from(PAGE_SIZE).pow(2), "idle work must amortize submission and presentation across pages");
+    assert!(refined <= 4 * u64::from(PAGE_SIZE).pow(2), "an idle submission must leave room for new input");
     assert!(r.has_pending_work());
     let completed = r.background_ready.clone();
     r.hold_background(false);

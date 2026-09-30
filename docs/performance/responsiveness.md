@@ -81,7 +81,7 @@ the separate 33 ms target. Raw records are in
 The previous build's records are `settle-21-brush-{fast,slow}` and
 `settle-21-pauses-matched-resume.json`.
 
-### Current resumed contacts
+### Resumed contacts before the batch tradeoff
 
 Measured on 2026-09-30 after the covered-pixel and composition changes at
 `c82970142`, with Perceptual blending, default workspace, Stats closed and
@@ -128,6 +128,72 @@ and connection to refinement are unproven; it remains a robustness gap.
 Raw records: `artifacts/optimization-roi/all-layer-followup/current-{low,top}-{fast,slow}-{25,10}`
 for the corresponding tier, `current-pauses-paired.json`, failed
 `current-top-fast`, and diagnostic `current-top-fast-25-memory`.
+
+### Refinement batch tradeoff
+
+Measured on 2026-09-30 with three controlled optimized release APKs, based on
+`1557688aa`. All use balanced whole-run composition, the covered-pixel guard,
+transparent-paper exclusion, independent batch-completion tokens and the actual
+page-strip width. Only the page cap and the fresh-input submission gate differ.
+The gated control waits for optional refinement to finish before submitting
+fresh artwork; both queueing builds allow it behind at most one unfinished
+batch. Required raster backpressure remains in every build.
+
+TCL uses the 4248 × 2832 reference photo, G-Pen 1024 px and a 250 × 140 px path.
+MovinkPad 11 uses 6000 × 4000, G-Pen 2048 px and a 479.7 × 299 px path.
+Both use Perceptual blending, Fit, 16 ms prediction, default workspace with
+Navigator, Stats closed and thermal status zero. Continuous measurements are
+three warmed five-second strokes. Contact measurements are three sequences of
+25 contacts, each 100 ms with 100 ms gaps. Each run excludes the initial contact;
+the table reports the median of the three run medians for the 72 resumed contacts.
+GPU completion is a proxy, not physical pen-to-photon latency.
+
+| Tier / build | Fresh updates/s | Settling after continuous stroke, median | Resumed first submission, median | Resumed GPU completion, median | Resumed GPU completion, median run p95 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Low / two pages, queue fresh input | 63.70 | 596 ms | 17.6 ms | 56.6 ms | 76.2 ms |
+| Low / four pages, queue fresh input | 63.69 | 496 ms | 19.9 ms | 59.0 ms | 79.3 ms |
+| Low / four pages, gate fresh input | 64.00 | 527 ms | 19.7 ms | 57.5 ms | 73.5 ms |
+| Mid / two pages, queue fresh input | 47.96 | 903 ms | 26.4 ms | 89.1 ms | 104.2 ms |
+| Mid / four pages, queue fresh input | 48.04 | 687 ms | 27.8 ms | 92.4 ms | 103.5 ms |
+| Mid / four pages, gate fresh input | 48.01 | 671 ms | 48.5 ms | 112.6 ms | 162.8 ms |
+
+The two-page cap has no continuous-stroke gain. It saves only 2.4 ms on low-tier
+and 3.4 ms on mid-tier typical resumed GPU completion while lengthening median
+settling by 100 and 216 ms. Four pages are restored. Queueing remains because
+it saves about 21 ms of mid-tier submission delay, 20 ms of median GPU completion
+and 59 ms of GPU-completion p95 against the four-page gated control, without a
+continuous-rate loss. Low-tier queueing differences are within a few milliseconds;
+the mid-tier benefit supports the shared policy. This adds no second refinement
+batch, cache or layer-dependent policy.
+
+The preceding roughly 20 ms result compares pending refinement with an already
+settled renderer. It is not a measured regression introduced by queueing.
+Optional exact composition still occupies the GPU queue after pen-up. Its cost
+recurs when short strokes resume before settling. These absolute contact latencies
+do not qualify the separate added-latency
+target, which requires paired pending-versus-settled runs of the selected build.
+
+A separate immediate-after-lift one-second pinch probe records similar display
+cadence across the variants: about 54–56 fps on TCL and 48–50 fps on MovinkPad 11.
+The selected mid build retains navigation input-queue p95 of 94–109 ms. These
+short presentation-traced diagnostics do not qualify sustained moving-canvas
+navigation or resolve that queue gap. Top tier was reserved by another session
+and is not remeasured. Physical stylus latency and the earlier rare Adreno
+allocation failure remain unclassified.
+
+APK SHA-256:
+
+- Two pages, queueing:
+  `44c681044dcfac79787feadbed8687ed817e81016d25acabdb1b22a1d2521a15`.
+- Four pages, queueing, selected:
+  `05d747e5f3e6417e9ea3a96a0d1b5bfe38a3aca00744891bbdd01c9a37334a8b`.
+- Four pages, gated:
+  `5d030a9a23f372060bd8bbbfa58f75b58e998ff76276662278ab94904b632e5e`.
+
+Raw results, source patches and analysis:
+`artifacts/refinement-tradeoff/{two-overlap,four-overlap,four-gated}-{low,mid}-{constant,pauses,settle}`,
+`provenance.json`, `results.json` and `analyze.py`. Rate runs have tracing disabled;
+only the short navigation probes use presentation tracing.
 
 ### Healing finalization
 

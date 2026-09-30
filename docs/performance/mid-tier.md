@@ -98,7 +98,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 2048 px | 49.0 fresh updates/s (48.62–49.42); completion gap p99 32.55–34.35 ms | **Not met** |
+| G-Pen (1) | Simple | 2048 px | 48.0 fresh updates/s (47.90–48.08); completion gap p99 36.78–38.06 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 2048 px | 12.2 updates/s (12.0–12.2); gap p99 152.2 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 2048 px | 35.2 updates/s (35.1–35.3); gap p99 73.2 ms | **Not met** |
 | Antique Pen (30) | Simple | 2048 px | 16.2 updates/s (16.0–16.3); gap p99 171.2 ms | **Not met** |
@@ -147,7 +147,7 @@ Retouching rows use the integrated-compositor measurements below, copying from t
 Measured on 2026-09-30 against `ba8835fec`: the tier photo beneath one paint
 layer, Perceptual blending, 2048 px G-Pen, Fit, 16 ms prediction, default
 workspace with Stats closed, warm-up and three five-second strokes. Thermal
-status is zero. The front-stack and covered-pixel candidate raises fresh input
+status is zero. This historical front-stack and covered-pixel candidate raises fresh input
 throughput from 37.72 to 49.02 updates/s. Completion-gap p99 is
 32.55–34.35 ms. The 90/s rate target and 22.2 ms gap target remain open.
 This does not qualify the class or its other brushes.
@@ -158,6 +158,30 @@ Candidate: `c452a0642` (production source matches `fc5d00fd5` after the
 test-fixture rebase), optimized benchmark APK SHA-256
 `865b0dd05b8253b3b22eac806136023a5befeac5b642e5fddb2f3cd24194d047`.
 Raw records: `artifacts/optimization-roi/{current-main,final}-mid-fit`.
+
+### Layer-neutral composition and refinement
+
+Measured on 2026-09-30 on the MovinkPad 11: 24 MP Perceptual photo, G-Pen
+2048 px at Fit, 479.7 × 299 px path, 16 ms prediction, default workspace,
+Stats closed and thermal status zero. Three warmed five-second strokes in the
+selected balanced-root, four-page build reach 48.04 fresh updates/s
+(47.90–48.08), with completion-gap p99 36.78–38.06 ms. The 90/s and 22.2 ms
+targets remain open.
+
+The controlled two-page build reaches 47.96/s. Restoring four-page batches
+shortens median settling from 903 to 687 ms, while median resumed-contact
+GPU completion changes from 89.1 to 92.4 ms. Allowing fresh-input submission
+behind one unfinished batch reduces median submission from 48.5 to 27.8 ms
+and GPU completion from 112.6 to 92.4 ms against the four-page gated control.
+Continuous-stroke rates are unchanged. The cap is restored to four; queueing
+remains. See [responsiveness](responsiveness.md#refinement-batch-tradeoff) for
+the complete controls and limits.
+
+Source base: `1557688aa` plus the layer-neutral root and four-page cap changes.
+Optimized release benchmark APK SHA-256:
+`05d747e5f3e6417e9ea3a96a0d1b5bfe38a3aca00744891bbdd01c9a37334a8b`.
+Raw records: `artifacts/refinement-tradeoff/four-overlap-mid-constant`;
+the source patches and other controls are in the same artifact directory.
 
 ## Retouching with the integrated compositor
 

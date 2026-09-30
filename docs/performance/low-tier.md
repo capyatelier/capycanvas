@@ -348,7 +348,7 @@ Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with t
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | 65.7 fresh updates/s (65.59–66.10); completion gap p99 26.12–28.57 ms | **Met for this stroke** |
+| G-Pen (1) | Simple | 1024 px | 63.7 fresh updates/s (63.53–63.90); completion gap p99 27.07–28.31 ms | **Met for this stroke** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -393,7 +393,7 @@ Measured on 2026-09-30 against `ba8835fec`: Perceptual 12 MP photo,
 240 × 140 px trajectory, 16 ms prediction, three five-second strokes after
 warm-up. Stats is closed, Navigator is visible and thermal status is zero.
 Fresh updates count completed frames that consumed new real pen samples.
-The candidate separates the front layer from the balanced lower composite and
+This historical candidate separates the front layer from the balanced lower composite and
 skips color reads for fully covered in-place uniform Normal pixels. It keeps
 the same formats, memory allowance and existing pipelines.
 
@@ -428,7 +428,7 @@ p95 still fails in one run. See
 [responsiveness](responsiveness.md#resuming-during-refinement). Its raw records
 are `artifacts/latency-investigation/two-25-stack-{50,100}-{constant,pauses}`.
 This does not qualify interruption after the current shader and graph changes.
-Smaller idle batches improve interruption while increasing total settling time;
+In that comparison, smaller idle batches improve interruption while increasing total settling time;
 Fit settling is 590–613 ms here versus 478–544 ms on the current main control.
 
 ### Painting below the front layer
@@ -465,6 +465,40 @@ balanced `9e3e455bc1446a4e414582791ed288e755c984736e197f6e39c19e962a3d3f88`.
 Raw records and source provenance:
 `artifacts/optimization-roi/all-layer-followup/tree-comparison.json` and
 `{biased,balanced}-{7,8}-{top,middle,lower}` for the listed cases.
+
+### Layer-neutral composition and refinement
+
+The fixed front-operand preference is removed. The selected four-page build
+retains balanced whole-run grouping, the covered-pixel guard and transparent-paper
+exclusion. A regression checks bounded blend paths and exact pixels for top,
+middle and lower edits across layer counts and blend spaces.
+
+Measured on 2026-09-30: the same eight-visible-layer, 100% zoom conditions above,
+with three warmed five-second strokes per position. Fresh updates/s are
+16.56 at the top, 16.50 in the middle and 16.54 above the opaque bottom photo.
+Completion-gap p99 ranges are 68.42–70.34, 69.30–70.66 and 67.75–71.65 ms,
+respectively. All remain below the 60/s target. This verifies the selected
+implementation across positions; the preceding matched root comparison
+establishes the cost of the removed preference.
+
+At Fit, one photo and G-Pen 1024 px now reach 63.69 fresh updates/s
+(63.53–63.90), with completion-gap p99 27.07–28.31 ms. These three five-second
+strokes use a 250 × 140 px path, Perceptual blending, 16 ms prediction, default
+workspace, Stats closed and thermal status zero. This stroke meets the moving
+target; it does not qualify the brush class or the eight-paint-layer target.
+
+Four-page batches restore median settling to 496 ms versus 596 ms with two
+pages, without a continuous-stroke rate change. Typical resumed GPU completion
+increases from 56.6 to 59.0 ms. The two-page cap is removed; fresh-input queueing
+behind one unfinished batch remains. See the controlled
+[refinement tradeoff](responsiveness.md#refinement-batch-tradeoff).
+
+Source base: `1557688aa` plus the layer-neutral root and four-page cap changes.
+Optimized release benchmark APK SHA-256:
+`05d747e5f3e6417e9ea3a96a0d1b5bfe38a3aca00744891bbdd01c9a37334a8b`.
+Raw records, immutable APKs and source patches:
+`artifacts/refinement-tradeoff/{four-overlap-low-constant,final-layer-{top,middle,lower}}`
+and `provenance.json`.
 
 ### GPU attribution with Stats closed
 

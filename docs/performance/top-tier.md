@@ -124,7 +124,7 @@ of idle, despite longer settling not increasing the matched run medians.
 A 25-contact rapid sequence also encountered a GPU-driver allocation crash;
 a memory-sampled repeat passed. Neither the cause of the idle start delay nor
 the intermittent allocation failure is established. See
-[current resumed contacts](responsiveness.md#current-resumed-contacts) before
+[the resumed-contact audit](responsiveness.md#resumed-contacts-before-the-batch-tradeoff) before
 treating settling time as harmless to subsequent drawing.
 
 ## Retouching with the integrated compositor
@@ -152,6 +152,16 @@ refinement and keeps backpressure for required raster work; APK SHA-256
 Raw reports are `artifacts/latency-investigation/qualified-25-top-retouch`.
 These successful runs do not establish that the earlier rare Adreno fault is
 fixed, or qualify the other brushes and presentation-paced navigation.
+
+## Latest refinement validation status
+
+The subsequent 2026-09-30 shared renderer removes the fixed front-layer
+preference and restores four-page idle-refinement batches while retaining
+fresh-input queueing. It is measured on low and mid tiers in
+[the controlled tradeoff](responsiveness.md#refinement-batch-tradeoff).
+MovinkPad 14 was reserved by another session, so that version has no top-tier
+remeasurement. The G-Pen and retouching rows above retain their frozen builds;
+they do not qualify the latest version.
 
 ## Shared layout regression comparison
 
