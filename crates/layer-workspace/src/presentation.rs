@@ -91,11 +91,12 @@ impl ManagerButton {
     }
 }
 #[derive(Clone, Debug, Serialize)]
-pub struct ManagerRow {
+pub struct WorkspaceRow {
     pub id: String,
     pub title: String,
     pub subtitle: String,
-    pub builtin: bool,
+    pub current: bool,
+    pub actions: Vec<ManagerButton>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ManagerDetails {
@@ -129,7 +130,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             actions: toolbar_actions(panel, visible, idle),
         })
     }
-    pub fn rows(&self, page: ManagerPage, query: &str, now: u64) -> Vec<ManagerRow> {
+    pub fn rows(&self, page: ManagerPage, query: &str, now: u64) -> Vec<WorkspaceRow> {
         if page == ManagerPage::History {
             return Vec::new();
         }
@@ -147,7 +148,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .iter()
                 .filter(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
                 .filter(|p| name_key(p.title()).contains(&name_key(query)))
-                .map(|p| ManagerRow {
+                .map(|p| WorkspaceRow {
                     id: serde_json::to_string(&p.id).unwrap(),
                     title: p.title().into(),
                     subtitle: if capture.history.layout().panel_group(p.id).is_some() {
@@ -156,7 +157,8 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         "Hidden"
                     }
                     .into(),
-                    builtin: false,
+                    current: false,
+                    actions: Vec::new(),
                 })
                 .collect();
         }
@@ -207,11 +209,12 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 } else {
                     i.metadata.description.clone()
                 };
-                ManagerRow {
+                WorkspaceRow {
                     id: i.id,
                     title: i.metadata.name,
                     subtitle,
-                    builtin: i.metadata.builtin,
+                    current: false,
+                    actions: Vec::new(),
                 }
             })
             .collect()

@@ -630,14 +630,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .and_then(|s| s.claim.as_ref())
             .is_some_and(|c| c.owner == self.owner && c.expires_at_ms > now)
     }
-    pub fn lease_expires_at_ms(&self) -> Option<u64> {
-        self.state
-            .borrow()
-            .saved
-            .as_ref()
-            .and_then(|s| s.claim.as_ref())
-            .map(|c| c.expires_at_ms)
-    }
+
     /// Resume an expired owner only after a coherent claim proves no intervening
     /// writes. Dirty memory is preserved; an unresolved old-fence delivery needs
     /// explicit recovery as a new workspace, never silent payload mutation.

@@ -118,7 +118,7 @@ fn concurrent_default_catalog_creation_retires_only_the_duplicate_seed() {
         let initial = m.initialize(2_000).await.unwrap();
         assert_eq!(initial.entity.id, DEFAULT_WORKSPACES[1].0);
         m.activate(initial);
-        let prompt = m.prompt(&ManagerAction::New, 2_000).await.unwrap();
+        let prompt = m.form_prompt(&ManagerAction::New, None).unwrap();
         assert!(prompt.choices.is_empty() && prompt.choice_label.is_none());
         assert_eq!(prompt.name.as_deref(), Some("New Workspace"));
         m.close().await.unwrap();
@@ -378,27 +378,11 @@ fn included_workspace_history_restores_layout_but_respects_active_owners() {
         let mut changed = original.clone();
         changed.bands[0].extent += 60.;
         capture.history.append(&changed, "Resize toolbar");
-        let current = capture.history.current.clone();
         m.observe(capture.clone(), 2_000);
         m.flush().await.unwrap();
-        for (revision, idle, enabled) in [
-            ("r0", true, true),
-            ("r0", false, false),
-            (current.as_str(), true, false),
-        ] {
-            let view = m
-                .history_view(&id, Some(revision), idle, 3_000)
-                .await
-                .unwrap();
-            assert_eq!(view.restore.is_some(), enabled);
-        }
         let other =
             WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
-        let view = other
-            .history_view(&id, Some("r0"), true, 3_000)
-            .await
-            .unwrap();
-        assert!(view.restore.is_none());
+        assert!(other.change_layout(&id, Some("r0"), 3_000).await.is_err());
         let restored = m.change_layout(&id, Some("r0"), 4_000).await.unwrap();
         assert_eq!(
             restored.entity.capture().unwrap().history.layout(),
@@ -417,15 +401,15 @@ fn close_retains_ownership_until_release_is_acknowledged_and_can_be_retried() {
         let f = Fixture::new();
         let m = &f.manager;
         let id = m.active_id().unwrap();
-        let lease = m.lease_expires_at_ms();
+        let claim = m.current_record().unwrap().claim;
         m.store.fail_release.set(true);
         assert!(m.close().await.is_err());
-        assert_eq!(m.lease_expires_at_ms(), lease);
+        assert_eq!(m.current_record().unwrap().claim, claim);
         assert!(m.load(&id).await.unwrap().claim.is_some());
         m.store.fail_release.set(false);
         m.close().await.unwrap();
         assert!(m.load(&id).await.unwrap().claim.is_none());
-        assert!(m.lease_expires_at_ms().is_none());
+        assert!(m.current_record().unwrap().claim.is_none());
         m.revalidate_owner(2_000).await.unwrap();
         assert!(m.load(&id).await.unwrap().claim.is_some());
     });

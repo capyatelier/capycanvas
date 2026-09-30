@@ -8,6 +8,10 @@ owner UUID, epoch, fence and generation checks still authorize writes. The files
 are under `<database>-locks/`, keyed by a hash of the item ID; existence is not
 ownership. Never unlink/recreate a lock file while clients may be running.
 
+`WorkspaceController` presents workspace and layout-history rows through
+`WorkspaceView`. Restoring history uses `WorkspaceManager::change_layout`, which
+checks storage ownership before changing the layout.
+
 Lock acquisition and liveness probes run under an IMMEDIATE SQLite transaction.
 Claim/load/list, writes, renewal and maintenance reconcile stale claims before
 making ownership decisions. An unlocked stale claim is cleared immediately,

@@ -41,6 +41,9 @@ pub struct PointerBatch<'a> {
     pub id: u64,
     pub tool: u8,
     pub button: u8,
+    /// Records: x/y, pressure, tilt x/y, twist, distance, monotonic ns, phase.
+    /// Phase 0 hover, 1 down, 2 move, 3 up, 4 cancel. Tool 0 pen, 1 mouse,
+    /// 2 eraser, 3 touch. Pointer routing is decided by the shared core.
     pub records: &'a [f64],
     pub predicted: bool,
     pub view_revision: u64,
@@ -371,27 +374,6 @@ impl NativeHost {
         }
         self.dirty = true;
         Ok(())
-    }
-    /// Records: x/y, pressure, tilt x/y, twist, distance, monotonic ns, phase.
-    /// Phase 0 hover, 1 down, 2 move, 3 up, 4 cancel. Tool 0 pen, 1 mouse,
-    /// 2 eraser, 3 touch. Pointer routing is decided by the shared core.
-    pub fn pointer(
-        &mut self,
-        id: u64,
-        tool: u8,
-        button: u8,
-        records: &[f64],
-        predicted: bool,
-    ) -> Result<(), String> {
-        self.pointer_batch(PointerBatch {
-            id,
-            tool,
-            button,
-            records,
-            predicted,
-            view_revision: self.session.state().camera.revision,
-            barrel_twist: false,
-        })
     }
 
     pub fn accepts_pointer_input(&self, view_revision: u64) -> bool {
@@ -1050,6 +1032,15 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pointer(host: &mut NativeHost, id: u64, tool: u8, button: u8, records: &[f64], predicted: bool) -> Result<(), String> {
+        host.pointer_batch(PointerBatch {
+            id, tool, button, records, predicted,
+            view_revision: host.session.state().camera.revision,
+            barrel_twist: false,
+        })
+    }
+
     #[test]
     fn command_reason_queries_current_input_while_published_commands_stay_stable() {
         let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
@@ -1410,7 +1401,7 @@ mod tests {
         app.resize(2560, 1600, 2.0).unwrap();
         assert!(app.take_value().is_some());
         for i in 0..1000 {
-            app.pointer(
+            pointer(&mut app,
                 1,
                 0,
                 0,
@@ -1501,7 +1492,7 @@ mod tests {
         app.resize(2560, 1600, 2.0).unwrap();
         app.take_value().unwrap();
         let finger = |app: &mut NativeHost, id, x, phase| {
-            app.pointer(
+            pointer(app,
                 id,
                 3,
                 0,
@@ -1670,7 +1661,7 @@ mod tests {
             };
             host.pointer_event(event, PointerButton::Primary).unwrap();
         }
-        assert!(host.deferred_contacts.holds(1), "the contact waits instead of being dropped");
+        assert!(!host.deferred_contacts.is_empty(), "the contact waits instead of being dropped");
         while !host.deferred_contacts.is_empty() {
             frame(&mut host);
         }
@@ -1750,46 +1741,40 @@ mod tests {
 
     #[test]
     fn typed_touch_uses_the_same_shared_navigation_as_packed_input() {
-        let mut typed = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        let mut packed = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        for app in [&mut typed, &mut packed] {
-            app.resize(1600, 1000, 2.0).unwrap();
+        for (platform, size, samples) in [
+            (layer_ui::Platform::Windows, [1600, 1000], [
+                (1, 400., 300., 1_000_000, 1), (2, 600., 300., 1_000_000, 1),
+                (2, 750., 300., 1_000_000, 2), (2, 750., 300., 1_000_000, 3),
+            ]),
+            (layer_ui::Platform::Android, [2560, 1600], [
+                (1, 100., 100., 1_000_000, 1), (2, 200., 100., 1_000_000, 1),
+                (1, 120., 120., 2_000_000, 2), (1, 120., 120., 3_000_000, 3),
+            ]),
+        ] {
+            let mut typed = NativeHost::new(platform).unwrap();
+            let mut packed = NativeHost::new(platform).unwrap();
+            for app in [&mut typed, &mut packed] {
+                app.resize(size[0], size[1], 2.0).unwrap();
+            }
+            let before = packed.session.state().camera.revision;
+            for (id, x, y, timestamp_ns, phase) in samples {
+                typed.pointer_event(PenEvent {
+                    device_id: id, sequence: 1, timestamp_ns,
+                    view_revision: typed.session.state().camera.revision,
+                    surface_position: Point { x, y }, pressure: 1.,
+                    tilt_radians: [0., 0.], twist_radians: 0., distance: 0.,
+                    phase: match phase { 1 => PenPhase::Down, 2 => PenPhase::Move, _ => PenPhase::Up },
+                    tool: ToolKind::Finger, flags: SampleFlags::PRIMARY,
+                }, PointerButton::Primary).unwrap();
+                pointer(&mut packed, id, 3, 0,
+                    &[x as f64, y as f64, 1., 0., 0., 0., 0., timestamp_ns as f64, phase as f64], false).unwrap();
+            }
+            assert_eq!(json!(typed.session.state().camera), json!(packed.session.state().camera));
+            assert_eq!(typed.sequence, 0);
+            assert_eq!(packed.sequence, 0);
+            assert_eq!(packed.paint_start_sequence(), 0);
+            assert!(packed.session.state().camera.revision > before);
         }
-        for (id, x, phase) in [(1, 400., 1), (2, 600., 1), (2, 750., 2), (2, 750., 3)] {
-            let event = PenEvent {
-                device_id: id,
-                sequence: 1,
-                timestamp_ns: 1_000_000,
-                view_revision: typed.session.state().camera.revision,
-                surface_position: Point { x, y: 300. },
-                pressure: 1.,
-                tilt_radians: [0., 0.],
-                twist_radians: 0.,
-                distance: 0.,
-                phase: match phase {
-                    1 => PenPhase::Down,
-                    2 => PenPhase::Move,
-                    _ => PenPhase::Up,
-                },
-                tool: ToolKind::Finger,
-                flags: SampleFlags::PRIMARY,
-            };
-            typed.pointer_event(event, PointerButton::Primary).unwrap();
-            packed
-                .pointer(
-                    id,
-                    3,
-                    0,
-                    &[x as f64, 300., 1., 0., 0., 0., 0., 1_000_000., phase as f64],
-                    false,
-                )
-                .unwrap();
-        }
-        assert_eq!(
-            json!(typed.session.state().camera),
-            json!(packed.session.state().camera)
-        );
-        assert_eq!(typed.sequence, 0);
     }
 
     #[test]
@@ -1938,51 +1923,10 @@ mod tests {
             vec![f64::NAN; 9],
             vec![0., 0., 1., 0., 0., 0., 0., -1., 1.],
         ] {
-            assert!(app.pointer(1, 0, 0, &sample, false).is_err());
+            assert!(pointer(&mut app, 1, 0, 0, &sample, false).is_err());
         }
         assert_eq!(app.sequence, 0);
         assert!(app.resize(0, 100, 1.0).is_err());
         assert!(app.resize(100, 100, 0.0).is_err());
-    }
-    #[test]
-    fn touch_uses_shared_navigation_not_paint() {
-        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
-        app.resize(2560, 1600, 2.0).unwrap();
-        let before = app.session.state().camera.revision;
-        app.pointer(
-            1,
-            3,
-            0,
-            &[100., 100., 1., 0., 0., 0., 0., 1_000_000., 1.],
-            false,
-        )
-        .unwrap();
-        app.pointer(
-            2,
-            3,
-            0,
-            &[200., 100., 1., 0., 0., 0., 0., 1_000_000., 1.],
-            false,
-        )
-        .unwrap();
-        app.pointer(
-            1,
-            3,
-            0,
-            &[120., 120., 1., 0., 0., 0., 0., 2_000_000., 2.],
-            false,
-        )
-        .unwrap();
-        app.pointer(
-            1,
-            3,
-            0,
-            &[120., 120., 1., 0., 0., 0., 0., 3_000_000., 3.],
-            false,
-        )
-        .unwrap();
-        assert_eq!(app.sequence, 0);
-        assert_eq!(app.paint_start_sequence(), 0);
-        assert!(app.session.state().camera.revision > before);
     }
 }

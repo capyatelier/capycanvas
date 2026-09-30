@@ -13,19 +13,7 @@ enum WorkerRequest {
 }
 type Message = (WorkerRequest, async_channel::Sender<Result<StoreResponse>>);
 pub struct StoreReply(async_channel::Receiver<Result<StoreResponse>>);
-impl StoreReply {
-    /// Hosts poll from their event loop; no disk or SQLite lock is acquired here.
-    pub fn poll(&self) -> Option<Result<StoreResponse>> {
-        match self.0.try_recv() {
-            Ok(value) => Some(value),
-            Err(async_channel::TryRecvError::Empty) => None,
-            Err(async_channel::TryRecvError::Closed) => Some(Err(StoreError::new(
-                ErrorKind::Unavailable,
-                "Workspace storage worker stopped.",
-            ))),
-        }
-    }
-}
+
 struct Worker {
     sender: Option<mpsc::Sender<Message>>,
     thread: Option<std::thread::JoinHandle<()>>,

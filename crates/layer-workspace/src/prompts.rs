@@ -68,14 +68,7 @@ pub fn recover_prompt(changes: Vec<(String, String)>) -> Result<ManagerPrompt, S
     .choices("Interrupted changes", choices, None))
 }
 impl<S: WorkspaceStore> WorkspaceManager<S> {
-    pub async fn presentation_entity(&self, id: &str) -> Result<Entity, StoreError> {
-        if self.active_id().as_deref() == Some(id) {
-            self.current()
-                .ok_or_else(|| StoreError::invalid("No workspace is active."))
-        } else {
-            self.load(id).await.map(|s| s.entity)
-        }
-    }
+
     fn choices_for(&self, kind: ItemKind) -> Vec<ManagerChoice> {
         self.items()
             .into_iter()
@@ -118,23 +111,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         p.name = Some("New Toolbar".into());
         p
     }
-    pub async fn prompt(
-        &self,
-        action: &ManagerAction,
-        now: u64,
-    ) -> Result<ManagerPrompt, StoreError> {
-        use ManagerAction as A;
-        if matches!(action, A::RecoverInterrupted) {
-            return recover_prompt(self.interrupted_changes(now).await?);
-        }
-        let source = match action {
-            A::Rename(id) | A::Reset(id) | A::Delete(id) | A::UpdateToolbar(id) => {
-                Some(self.presentation_entity(id).await?.metadata)
-            }
-            _ => None,
-        };
-        self.form_prompt(action, source.as_ref())
-    }
+
     pub fn form_prompt(
         &self,
         action: &ManagerAction,

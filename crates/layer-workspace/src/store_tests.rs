@@ -835,9 +835,10 @@ fn the_last_native_client_drains_accepted_requests_and_joins_sqlite() {
     let reply = last.request(StoreRequest::Commit { batch });
     drop(last);
     // No waiting here: the last client's Drop must have joined the worker.
+    let mut reply = reply.into_future();
     assert!(matches!(
-        reply.poll(),
-        Some(Ok(StoreResponse::Committed(_)))
+        reply.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())),
+        std::task::Poll::Ready(Ok(StoreResponse::Committed(_)))
     ));
     let mut reopened = SqliteStore::open(&directory.join("workspaces.sqlite3")).unwrap();
     assert_eq!(

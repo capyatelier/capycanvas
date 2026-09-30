@@ -78,14 +78,6 @@ impl<T> Task<T> {
         }
     }
 }
-#[derive(Clone, Debug, Serialize)]
-pub struct WorkspaceRow {
-    pub id: String,
-    pub title: String,
-    pub subtitle: String,
-    pub current: bool,
-    pub actions: Vec<ManagerButton>,
-}
 /// Another window owns this workspace; the host brings that window forward.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FocusTarget {
@@ -570,11 +562,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         })
                         .unwrap_or_default();
                     WorkspaceRow {
-                        id: r.id,
-                        title: r.title,
-                        subtitle: r.subtitle,
-                        current: false,
                         actions,
+                        ..r
                     }
                 })
                 .collect(),
@@ -588,9 +577,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         .map(|i| m.summary_actions(i, true, now))
                         .unwrap_or_default(),
                     current: active.as_ref() == Some(&r.id),
-                    id: r.id,
-                    title: r.title,
-                    subtitle: r.subtitle,
+                    ..r
                 })
                 .collect(),
         };

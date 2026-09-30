@@ -74,10 +74,6 @@ impl DeferredContacts {
         self.contacts.retain(|_, contact| contact.discarded);
         self.held.drain(..).collect()
     }
-    /// Whether events of contact `id` are held or discarded.
-    pub fn holds(&self, id: u64) -> bool {
-        self.contacts.contains_key(&id)
-    }
     pub fn is_empty(&self) -> bool {
         self.contacts.is_empty()
     }
@@ -187,7 +183,7 @@ mod tests {
             contacts.admit(sample(1, sequence, PenPhase::Move), false, t);
         }
         assert!(contacts.release(true, t).is_empty(), "an oversized contact is dropped");
-        assert!(contacts.holds(1));
+        assert!(!contacts.is_empty());
         contacts.admit(sample(1, 9 + SAMPLES as u64, PenPhase::Up), true, t);
         assert!(contacts.is_empty());
     }

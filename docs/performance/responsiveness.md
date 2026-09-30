@@ -36,8 +36,9 @@ The unread-metadata cleanup APK SHA-256 is
 | Median per-run p99 completion gap | 9.41 ms | 9.70 ms |
 | Input to GPU completion p99 | 14.48 ms | 13.49 ms |
 
-A repeated baseline reached 232.1 fresh updates/s. Owner CPU p99 varied from
-3.58 to 4.34 ms across baseline batches; cleanup was 4.05 ms. The samples
+A repeated baseline reached 232.1 fresh updates/s; the repeated cleanup reached
+231.1, with a 9.58 ms p99 completion gap. Owner CPU p99 varied from
+3.58 to 4.34 ms across baseline batches; cleanup was 3.98–4.05 ms. The samples
 show no change beyond the observed run spread. These completed updates do not
 measure display cadence or physical pen latency, and this small brush on Huion
 does not qualify any reference-tier brush target.

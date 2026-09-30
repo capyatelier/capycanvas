@@ -46,22 +46,3 @@ pub(crate) fn retention_plan(
         .map(|(e, _)| e)
         .collect())
 }
-
-impl<S: WorkspaceStore> WorkspaceManager<S> {
-    pub async fn maintain_storage(
-        &self,
-        clear_older: bool,
-    ) -> Result<Option<StoredEntity>, StoreError> {
-        self.flush().await?;
-        self.execute(StoreRequest::Maintenance {
-            owner: Some(self.owner.clone()),
-            clear_older,
-        })
-        .await?;
-        self.refresh().await?;
-        match self.active_id() {
-            Some(id) => self.load(&id).await.map(Some),
-            None => Ok(None),
-        }
-    }
-}
