@@ -547,7 +547,7 @@ fn warps(source: Rect) -> Vec<layer_core::MeshMap> {
     use layer_core::{MeshMap, Projective};
     let quad = |q: [[f32; 2]; 4]| Projective::rect_to_quad(source, q.map(|[x, y]| Point { x, y })).unwrap();
     let keystone = quad([[90., 40.], [420., 90.], [460., 330.], [40., 250.]]);
-    let edited = MeshMap::from_projective(source, [3, 3], &keystone)
+    let edited = MeshMap::fit(source, [3, 3], |p| keystone.map(p))
         .unwrap()
         .move_node(5, Point { x: 21.5, y: -14.25 })
         .unwrap()

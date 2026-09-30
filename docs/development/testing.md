@@ -53,6 +53,8 @@ budget and coordinate mapping. Pen fixtures override the shared event's timestam
 and pressure where their cadence differs.
 Retouch replay fixtures keep each brush's path and pen-up position. Check source
 readiness and healing counts after replay settles, before collecting result pages.
+Mesh fixtures pass a previously constructed projective map to `MeshMap::fit`.
+Raster corruption fixtures retain their exact pixel descriptor.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless

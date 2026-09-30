@@ -192,7 +192,7 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
     let all = Selection::polygon(vec![bounds.min, Point { x: 517., y: 0. }, bounds.max, Point { x: 0., y: 259. }]).unwrap();
     let projective = Projective::rect_to_quad(bounds,
         [[10., 5.], [510., 20.], [480., 254.], [25., 235.]].map(|[x,y]| Point { x,y })).unwrap();
-    let mesh = MeshMap::from_projective(bounds, [3,3], &projective).unwrap()
+    let mesh = MeshMap::fit(bounds, [3,3], |p| projective.map(p)).unwrap()
         .move_node(5, Point { x: 24., y: -12. }).unwrap();
     let folded = mesh.move_node(5, Point { x: 360., y: 160. }).unwrap();
     let maps = [TransformMap::Affine(Affine::translation(Point { x: 12., y: -8. })),
@@ -449,7 +449,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
         .map(|[x,y]| Point {x,y}).to_vec()).unwrap();
     let projective = Projective::rect_to_quad(bounds,
         [[8.,4.],[251.,9.],[235.,124.],[15.,115.]].map(|[x,y]| Point {x,y})).unwrap();
-    let mesh = MeshMap::from_projective(bounds,[3,3],&projective).unwrap()
+    let mesh = MeshMap::fit(bounds, [3,3], |p| projective.map(p)).unwrap()
         .move_node(5,Point {x:12.,y:-6.}).unwrap();
     for selection in [None, Some(part)] {
         let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();

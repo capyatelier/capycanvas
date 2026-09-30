@@ -584,7 +584,7 @@ mod tests {
             )
             .is_err()
         );
-        let wrong = TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &vec![0; 262144]).unwrap();
+        let wrong = TileBlob::encode(crate::color::SRGB8_PAINT, &vec![0; 262144]).unwrap();
         assert!(tile.publish(Ok(wrong)).is_err());
         assert!(matches!(tile.try_backing(), Some(Err(_))));
         assert_eq!(tile.descriptor(), descriptor);
@@ -730,7 +730,7 @@ mod tests {
         );
         assert!(
             TileBlob::from_compressed(
-                PixelDescriptor::SRGB8_PAINT,
+                crate::color::SRGB8_PAINT,
                 blob.digest,
                 blob.compressed().unwrap()
             )

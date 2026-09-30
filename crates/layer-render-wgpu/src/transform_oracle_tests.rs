@@ -651,11 +651,8 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
     };
     let quad =
         [[30.3, 20.1], [250.2, 45.4], [280.1, 200.3], [10.2, 170.4]].map(|[x, y]| Point { x, y });
-    let seeded = MeshMap::from_projective(
-        source,
-        [3, 3],
-        &Projective::rect_to_quad(source, quad).unwrap(),
-    )
+    let projective = Projective::rect_to_quad(source, quad).unwrap();
+    let seeded = MeshMap::fit(source, [3, 3], |p| projective.map(p))
     .unwrap();
     let warped = seeded
         .move_node(5, Point { x: 21.5, y: -14.25 })

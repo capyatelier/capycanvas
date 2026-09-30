@@ -1,5 +1,5 @@
 //! Warp meshes: tensor-product cubic Bézier patches over a source rectangle.
-use crate::{Affine, Point, Projective, Rect, clip_convex};
+use crate::{Affine, Point, Rect, clip_convex};
 use std::sync::Arc;
 
 /// `frame` maps the unit square onto the source rectangle, split into
@@ -85,9 +85,6 @@ impl MeshMap {
     }
     pub fn from_affine(bounds: Rect, cells: [u16; 2], affine: Affine) -> Option<Self> {
         Self::fit(bounds, cells, |p| Some(affine.map(p)))
-    }
-    pub fn from_projective(bounds: Rect, cells: [u16; 2], map: &Projective) -> Option<Self> {
-        Self::fit(bounds, cells, |p| map.map(p))
     }
 
     /// Finite, invertible framing, bounded cells and a net of matching size.
@@ -453,6 +450,7 @@ fn unit_frame(bounds: Rect) -> Option<Affine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Projective;
     use crate::affine::tests::{distance, rect, samples};
     use crate::{ImageTransform, Selection, TransformMap};
 
@@ -720,7 +718,7 @@ mod tests {
         let bounds = rect(0., 0., 1200., 800.);
         let quad = [[80., 40.], [1100., 120.], [1180., 760.], [20., 700.]];
         let map = Projective::rect_to_quad(bounds, quad.map(|[x, y]| Point { x, y })).unwrap();
-        let mesh = MeshMap::from_projective(bounds, [4, 4], &map)
+        let mesh = MeshMap::fit(bounds, [4, 4], |p| map.map(p))
             .unwrap()
             .move_node(7, Point { x: 60., y: 90. })
             .unwrap();

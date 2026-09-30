@@ -81,17 +81,6 @@ impl PixelDescriptor {
     pub fn depth(self) -> SampleDepth {
         if self.sample == SampleType::Float { if self.bits_per_channel == 32 { SampleDepth::F32 } else { SampleDepth::F16 } } else if self.bits_per_channel == 16 { SampleDepth::U16 } else { SampleDepth::U8 }
     }
-    pub const SRGB8_STRAIGHT: Self = Self {
-        sample: SampleType::Unsigned,
-        channels: 4,
-        bits_per_channel: 8,
-        encoding: TransferEncoding::Srgb,
-        alpha: AlphaAssociation::Straight,
-    };
-    pub const SRGB8_PAINT: Self = Self {
-        alpha: AlphaAssociation::PremultipliedLinear,
-        ..Self::SRGB8_STRAIGHT
-    };
     pub const COVERAGE8: Self = Self {
         sample: SampleType::Unsigned,
         channels: 1,
@@ -144,26 +133,35 @@ pub fn srgb_encode(value: f32) -> f32 {
 }
 
 #[cfg(test)]
+pub(crate) const SRGB8_PAINT: PixelDescriptor = PixelDescriptor {
+    sample: SampleType::Unsigned,
+    channels: 4,
+    bits_per_channel: 8,
+    encoding: TransferEncoding::Srgb,
+    alpha: AlphaAssociation::PremultipliedLinear,
+};
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn unsupported_layouts_and_invalid_extents_fail() {
         assert_eq!(
-            PixelDescriptor::SRGB8_PAINT.byte_len([256, 256]),
+            SRGB8_PAINT.byte_len([256, 256]),
             Some(262144)
         );
         assert_eq!(PixelDescriptor::COVERAGE8.byte_len([256, 256]), Some(65536));
-        assert_eq!(PixelDescriptor::SRGB8_PAINT.byte_len([0, 1]), None);
+        assert_eq!(SRGB8_PAINT.byte_len([0, 1]), None);
         assert_eq!(
             PixelDescriptor {
                 bits_per_channel: 32,
-                ..PixelDescriptor::SRGB8_PAINT
+                ..SRGB8_PAINT
             }
             .byte_len([1, 1]),
             None
         );
         assert_eq!(
-            PixelDescriptor::SRGB8_PAINT.byte_len([u32::MAX, u32::MAX]),
+            SRGB8_PAINT.byte_len([u32::MAX, u32::MAX]),
             None
         );
     }

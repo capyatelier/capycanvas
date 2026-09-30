@@ -110,20 +110,6 @@ impl RgbColor {
         Ok((peak > 0.).then(|| peak.log2()))
     }
 
-    pub fn with_brightness_ev_at_depth(self, destination: RgbSpace, stops: f32, depth: super::SampleDepth) -> Result<Self, String> {
-        let lower = if depth == super::SampleDepth::F32 { -149. } else { -16. };
-        let upper = if depth == super::SampleDepth::F32 { 128. } else { 15. };
-        if !stops.is_finite() || !(lower..=upper).contains(&stops) {
-            return Err(format!("Brightness must be between {lower} and {upper} EV"));
-        }
-        let mut p = self.linear_in(destination)?;
-        let peak = p[..3].iter().copied().fold(0., f32::max);
-        if peak <= 0. { return Err("Choose a color brighter than black first".into()); }
-        let scale = f64::from(stops).exp2() / f64::from(peak);
-        for v in &mut p[..3] { *v = (f64::from(*v) * scale) as f32; }
-        super::hdr::validate_pixel(depth, p).map_err(str::to_string)?;
-        Self::from_linear(destination, p)
-    }
 
     /// Allow only conversion roundoff at a boundary, below half an integer16
     /// code. This reports gamut; it never alters the selected color.
@@ -137,7 +123,6 @@ impl RgbColor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::SampleDepth;
 
     #[test]
     fn authored_linear_float32_survives_transfer_encoding_and_serialization() {
@@ -163,14 +148,10 @@ mod tests {
         assert!(color.in_hdr_gamut(RgbSpace::Srgb).unwrap());
         assert!(!color.in_gamut(RgbSpace::Srgb).unwrap());
         assert!((color.brightness_ev(RgbSpace::Srgb).unwrap().unwrap() - 3.).abs() < 1e-6);
-        let brighter = color.with_brightness_ev_at_depth(RgbSpace::Srgb, 4., SampleDepth::F16).unwrap().linear_in(RgbSpace::Srgb).unwrap();
-        for (a, b) in brighter.into_iter().zip([16., 4., 2., 0.25]) { assert!((a-b).abs() < 2e-5); }
         let red = RgbColor::from_linear(RgbSpace::DisplayP3, [8., 0., 0., 1.]).unwrap();
         assert!(!red.in_hdr_gamut(RgbSpace::Srgb).unwrap());
         assert!(red.in_hdr_gamut(RgbSpace::DisplayP3).unwrap());
         assert!(RgbColor::BLACK.brightness_ev(RgbSpace::Srgb).unwrap().is_none());
-        assert!(RgbColor::BLACK.with_brightness_ev_at_depth(RgbSpace::Srgb, 1., SampleDepth::F16).is_err());
-        assert!(color.with_brightness_ev_at_depth(RgbSpace::Srgb, f32::NAN, SampleDepth::F16).is_err());
     }
 
     #[test]

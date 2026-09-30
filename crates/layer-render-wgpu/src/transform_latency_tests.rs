@@ -67,7 +67,7 @@ fn warp(t: f32, cells: [u16; 2]) -> TransformMap {
     )
     .unwrap();
     let columns = u32::from(cells[0]) + 1;
-    let mesh = MeshMap::from_projective(bounds(), cells, &keystone)
+    let mesh = MeshMap::fit(bounds(), cells, |p| keystone.map(p))
         .unwrap()
         .move_node(
             columns + 1,
