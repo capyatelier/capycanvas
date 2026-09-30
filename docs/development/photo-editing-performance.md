@@ -72,6 +72,13 @@ is 8.47 / 9.65 / 9.73 seconds. Renderer-owned storage falls from about 2,245 to
 finish. It is not the time to the first visible photo and cannot directly qualify
 that response target. The cold readiness regression remains open; attribute
 document-critical compilation separately from optional background compilation
-before changing startup requirements. Shared user shader caches cannot establish
+before changing startup requirements. A later cold diagnostic with separate
+readiness counters reaches document shaders at 2.97 seconds, brush shaders at
+4.41 seconds and all shaders at 7.70 seconds. Full readiness follows all-shader
+readiness within the same poll, so draining document edits does not explain that
+run's remaining delay. This single run attributes stages; it does not replace
+the alternating cold comparison or measure first visible content.
+Shared user shader caches cannot establish
 a cold comparison. Records are
-`artifacts/latency-investigation/two-25-private-startup-{old,current}-{0,1,2}.json`.
+`artifacts/latency-investigation/two-25-private-startup-{old,current}-{0,1,2}.json`
+and `artifacts/latency-investigation/phase-28-startup.json`.

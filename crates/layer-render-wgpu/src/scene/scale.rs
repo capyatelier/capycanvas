@@ -728,9 +728,17 @@ impl Cache {
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
+        r.telemetry.phase_begin(9, &r.device, &r.queue, encoding.encoder);
+        let records = encoding.commands.cursor;
         let mut changed = self.render_graph(scene, r, packet, dirty, encoding, None, tiles)?;
+        r.telemetry.phase_end(9, encoding.encoder);
+        crate::performance_trace::counter(c"Capy main composition records", u64::from(encoding.commands.cursor - records));
         if let Some(mut overview) = self.overview.take() {
+            r.telemetry.phase_begin(10, &r.device, &r.queue, encoding.encoder);
+            let records = encoding.commands.cursor;
             let result = overview.render_graph(scene, r, packet, dirty, encoding, Some((self, changed)), tiles);
+            r.telemetry.phase_end(10, encoding.encoder);
+            crate::performance_trace::counter(c"Capy overview composition records", u64::from(encoding.commands.cursor - records));
             self.overview = Some(overview);
             changed = changed.union(result?);
         }
@@ -875,7 +883,11 @@ impl Cache {
         {
             self.refined.clone_from(&self.valid);
         }
+        let phase = if finer.is_some() { 12 } else { 11 };
+        if crate::performance_trace::enabled() { commands.flush(r, encoder)?; }
+        r.telemetry.phase_begin(phase, &r.device, &r.queue, encoder);
         self.reduce_output(r, encoder, written, commands)?;
+        r.telemetry.phase_end(phase, encoder);
         Ok(if written.is_empty() { written } else { PixelRect::new(
             output_bounds.min_x() + written.min_x() * side, output_bounds.min_y() + written.min_y() * side,
             output_bounds.min_x() + written.max_x() * side, output_bounds.min_y() + written.max_y() * side,

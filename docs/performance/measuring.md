@@ -129,6 +129,13 @@ and enables timestamp sampling even without a trace. Record diagnostic runs
 separately: timing queries add work, and opening the panel also changes the work
 area and Fit camera. Older runs without a `stats_panel` field always opened
 Stats.
+Display-graph traces split source preparation, main and overview composition,
+and their mip reductions. Main composition includes source updates performed
+inside that view. Trace mode flushes queued composition records before the mip
+timestamp so the mip interval excludes deferred blends. Match GPU observations
+to renderer frame IDs inside the input window; publication of timing counters
+can occur after motion has ended. Missing observations are skipped, never waited
+for, and do not represent zero cost.
 Keep the whole stroke footprint inside the photo for sustained painting tests.
 Choose `--radius-x` and `--radius-y` from the photo's displayed bounds and brush
 radius; the default work-area ellipse can leave a small Fit-view canvas. Compare

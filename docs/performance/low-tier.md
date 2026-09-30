@@ -469,6 +469,27 @@ Raw records are `artifacts/latency-investigation/phase-26-{fit,stack50,stack100,
 `phase-26-{linear100,no-prediction100}` and `phase-26-untraced-{fit,stack50,stack100}`.
 The frame-ID analysis is `analyze-phase-26.py`.
 
+Further subphase diagnostics retain the same workspace. Main composition,
+excluding its mip interval, has paired medians of 4.01 / 11.75 / 21.37 ms for
+Fit / 50% / 100%. Main mip intervals are 0.60 / 1.80 / 6.66 ms. Separate
+overview composition is 1.95 ms at 50% and 0.005 ms at 100%, where detail already
+supplies the overview. Source preparation outside the main view is about
+0.002 ms; source reductions inside main composition remain in that interval.
+The mip boundary flushes buffered blends before its timestamp. Earlier probe
+captures without that flush attribute some blends to mips and cannot establish
+the mip cost.
+
+These observations rule out separate overview composition as the main 100%
+bottleneck. Main source/blend work, changed-pixel count, mip traffic and viewport
+work need a quantitative work-removal model before a new algorithm is selected.
+They do not establish a hardware waiver or a guaranteed path to 60/s.
+Untraced three-stroke checks measure 53.76 (53.33–53.96),
+29.69 (29.67–29.71) and 19.50 (19.30–19.50) fresh updates/s, with no timestamp
+allocations. APK SHA-256:
+`3cdb3d409760b3257c22dbcbd60a3f23eb46d7448b6bcb14b94762ed7d8a2059`.
+Raw data: `artifacts/latency-investigation/phase-28-{fit,stack50,stack100}` and
+`phase-28-untraced-{fit,stack50,stack100}`; analysis: `analyze-phase-28.py`.
+
 ## Input during Healing finalization
 
 TCL navigation during large Healing/Spot Healing finalization has input-queue

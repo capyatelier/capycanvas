@@ -1391,7 +1391,9 @@ impl Scene {
                 }
                 self.placement_display = true;
                 self.effects.retain(packet.layers);
+                r.telemetry.phase_begin(8, &r.device, &r.queue, encoder);
                 self.prepare_display_sources(&cache, &mut commands, r, packet, encoder)?;
+                r.telemetry.phase_end(8, encoder);
                 cache.render(self, r, packet, dirty, &mut scale::Encoding { encoder, commands: &mut commands }, tiles)
             }
         })();

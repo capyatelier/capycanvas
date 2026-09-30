@@ -228,11 +228,18 @@ fn native_large_photo_navigation() {
     }
     w.window.present();
     let deadline = Instant::now() + Duration::from_secs(60);
+    let mut canvas_shaders_ready_ms = None;
+    let mut brush_shaders_ready_ms = None;
+    let mut all_shaders_ready_ms = None;
     loop {
         pump(5);
         let ready = w.gpu.borrow().as_ref().is_some_and(|g| {
             assert!(!g.session.rendering_suspended());
-            g.session.engine().backend().startup.complete
+            let progress = g.session.engine().backend().startup;
+            if progress.canvas_ready { canvas_shaders_ready_ms.get_or_insert_with(|| startup.elapsed().as_secs_f64() * 1000.); }
+            if progress.brush_ready { brush_shaders_ready_ms.get_or_insert_with(|| startup.elapsed().as_secs_f64() * 1000.); }
+            if progress.complete { all_shaders_ready_ms.get_or_insert_with(|| startup.elapsed().as_secs_f64() * 1000.); }
+            progress.complete
                 && !g.session.engine().has_pending_document_edits()
                 && w.frame_timer.borrow().is_none()
         });
@@ -401,6 +408,9 @@ fn native_large_photo_navigation() {
     let telemetry = ui_session(&w).engine().backend().telemetry();
     let mut report = serde_json::json!({
         "startup_ready_ms": startup_ms,
+        "canvas_shaders_ready_ms": canvas_shaders_ready_ms,
+        "brush_shaders_ready_ms": brush_shaders_ready_ms,
+        "all_shaders_ready_ms": all_shaders_ready_ms,
         "motion_begin_ns": motion_begin_ns, "motion_end_ns": motion_end_ns,
         "idle_after_300_ms": idle_after_300_ms, "settled_after_input_ms": settled_after_input_ms,
         "idle_navigation": idle, "rendering_suspended": suspended,
