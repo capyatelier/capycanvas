@@ -2,6 +2,10 @@ use super::*;
 use crate::test_support::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+fn claim_of<'a>(items: &'a [ItemSummary], id: &str) -> Option<&'a Claim> {
+    items.iter().find(|i| i.id == id).unwrap().claim.as_ref()
+}
+
 fn wait(reply: StoreReply) -> Result<StoreResponse> {
     pollster::block_on(reply.into_future())
 }
@@ -850,27 +854,6 @@ fn the_last_native_client_drains_accepted_requests_and_joins_sqlite() {
 }
 
 #[test]
-fn native_worker_shares_storage_across_window_clients() {
-    let directory = temp_dir("workspace-worker");
-    let first = StoreWorker::shared(&directory).unwrap();
-    let second = StoreWorker::shared(&directory).unwrap();
-    let entity = workspace("Painting");
-    let id = entity.id.clone();
-    let batch = CommitBatch::prepare(Owner::fresh(), vec![create(entity)]).unwrap();
-    assert!(matches!(
-        wait(first.request(StoreRequest::Commit { batch })).unwrap(),
-        StoreResponse::Committed(_)
-    ));
-    assert!(matches!(
-        wait(second.request(StoreRequest::Load { id })).unwrap(),
-        StoreResponse::Entity(_)
-    ));
-    drop(first);
-    drop(second);
-    let _ = std::fs::remove_dir_all(directory);
-}
-
-#[test]
 fn concurrent_claims_have_exactly_one_editable_owner() {
     let mut f = Fixture::new();
     let item = f.create("Painting");
@@ -1001,23 +984,9 @@ fn killed_native_process_restores_without_waiting_for_its_lease() {
     child.0.kill().unwrap();
     child.0.wait().unwrap();
     let catalog = concurrent.list().unwrap();
-    assert!(
-        catalog
-            .iter()
-            .find(|i| i.id == saved.entity.id)
-            .unwrap()
-            .claim
-            .is_none()
-    );
+    assert!(claim_of(&catalog, &saved.entity.id).is_none());
     assert_eq!(
-        catalog
-            .iter()
-            .find(|i| i.id == survivor_id)
-            .unwrap()
-            .claim
-            .as_ref()
-            .unwrap()
-            .owner,
+        claim_of(&catalog, &survivor_id).unwrap().owner,
         survivor_owner
     );
     assert!(matches!(concurrent.handle(StoreRequest::Pending).unwrap(),
@@ -1072,31 +1041,10 @@ fn dropped_window_retires_all_its_claims_after_queued_writes_not_other_windows()
     let StoreResponse::List(items) = wait(worker.request(StoreRequest::List)).unwrap() else {
         panic!()
     };
-    assert!(
-        items
-            .iter()
-            .find(|i| i.id == closing.entity.id)
-            .unwrap()
-            .claim
-            .is_none()
-    );
-    assert!(
-        items
-            .iter()
-            .find(|i| i.id == pending_id)
-            .unwrap()
-            .claim
-            .is_none()
-    );
+    assert!(claim_of(&items, &closing.entity.id).is_none());
+    assert!(claim_of(&items, &pending_id).is_none());
     assert_eq!(
-        items
-            .iter()
-            .find(|i| i.id == surviving.entity.id)
-            .unwrap()
-            .claim
-            .as_ref()
-            .unwrap()
-            .owner,
+        claim_of(&items, &surviving.entity.id).unwrap().owner,
         f.owner
     );
     assert!(matches!(wait(reply).unwrap(), StoreResponse::Committed(_)));

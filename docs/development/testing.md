@@ -37,6 +37,9 @@ in that test fixture module; production sessions keep the host's platform.
 Photo writer tests use `photo::test_support::assert_provider_failure` for row
 cancellation. Keep each codec's admission, publication and pixel assertions.
 
+Workspace tests replay the SQLite/browser preference fixture through IndexedDB.
+The manager fixture's `expire_lease` changes both the cached claim and SQLite row.
+
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
 `RUST_TEST_THREADS` or `--test-threads` says otherwise. Some Linux drivers limit

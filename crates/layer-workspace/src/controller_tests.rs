@@ -223,6 +223,7 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
             assert!(f.controller.view.error.is_some());
             assert_eq!(f.controller.view.id.as_ref(), Some(&deleted));
             assert!(record.is_ok());
+            assert_eq!(f.controller.manager.items().len(), count, "Deletion never adds a replacement row");
             assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
         } else {
             let replacement = defaults[occupied];

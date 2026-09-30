@@ -58,6 +58,12 @@ struct Fixture {
     manager: WorkspaceManager<TestStore>,
 }
 impl Fixture {
+    fn expire_lease(&self, id: &str) {
+        self.manager.state.borrow_mut().saved.as_mut().unwrap().claim.as_mut().unwrap().expires_at_ms = 0;
+        let sql = rusqlite::Connection::open(self.directory.join("workspaces.sqlite3")).unwrap();
+        sql.execute("UPDATE items SET lease_until='0' WHERE id=?1", [id]).unwrap();
+    }
+
     fn new() -> Self {
         let directory = crate::test_support::temp_dir("workspace-manager");
         let worker = StoreWorker::shared(&directory).unwrap();
@@ -242,55 +248,6 @@ fn an_unreadable_item_fails_startup_until_storage_is_replaced() {
 }
 
 #[test]
-fn active_deletion_without_a_replacement_never_creates_a_workspace() {
-    pollster::block_on(async {
-        let defaults = [
-            DEFAULT_WORKSPACES[1].0,
-            DEFAULT_WORKSPACES[0].0,
-            DEFAULT_WORKSPACES[2].0,
-        ];
-        for occupied in 0..=defaults.len() {
-            let f = Fixture::new();
-            let m = &f.manager;
-            let custom = m
-                .create_from_snapshot(m.current().unwrap(), "Delete Me", true, 2_000)
-                .await
-                .unwrap();
-            let id = custom.entity.id.clone();
-            let outgoing = m.activate(custom).unwrap();
-            m.release(&outgoing).await;
-            let other = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
-            for id in &defaults[..occupied] {
-                other.claim(id).await.unwrap();
-            }
-            let result = m.delete_item(&id, None, 3_000).await;
-            if occupied == defaults.len() {
-                assert!(result.is_err());
-                assert!(m.load(&id).await.is_ok());
-                assert_eq!(m.active_id().as_deref(), Some(id.as_str()));
-            } else {
-                let incoming = result.unwrap().unwrap();
-                assert_eq!(incoming.entity.id, defaults[occupied]);
-                assert_eq!(m.load(&id).await.unwrap_err().kind, ErrorKind::NotFound);
-                let outgoing = m.activate(incoming).unwrap();
-                m.release(&outgoing).await;
-            }
-            m.refresh().await.unwrap();
-            assert_eq!(
-                m.items().len(),
-                if occupied == defaults.len() { 4 } else { 3 },
-                "Deletion never adds a replacement row"
-            );
-            for id in &defaults[..occupied] {
-                let record = other.load(id).await.unwrap();
-                assert_eq!(record.claim.as_ref().unwrap().owner, other.owner);
-                other.release(&record).await;
-            }
-        }
-    });
-}
-
-#[test]
 fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restart() {
     pollster::block_on(async {
         let f = Fixture::new();
@@ -421,24 +378,10 @@ fn resumed_owner_revalidates_without_losing_dirty_edits_or_overwriting_successor
         let f = Fixture::new();
         let m = &f.manager;
         let id = m.active_id().unwrap();
-        let expire = || {
-            m.state
-                .borrow_mut()
-                .saved
-                .as_mut()
-                .unwrap()
-                .claim
-                .as_mut()
-                .unwrap()
-                .expires_at_ms = 0;
-            let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
-            sql.execute("UPDATE items SET lease_until='0' WHERE id=?1", [&id])
-                .unwrap();
-        };
         let mut capture = m.current().unwrap().capture().unwrap();
         capture.working.zen_mode = true;
         m.observe(capture.clone(), 2_000);
-        expire();
+        f.expire_lease(&id);
         m.revalidate_owner(1).await.unwrap();
         assert!(m.dirty());
         assert_eq!(m.current().unwrap().working, Some(capture.working.clone()));
@@ -448,7 +391,7 @@ fn resumed_owner_revalidates_without_losing_dirty_edits_or_overwriting_successor
             "a suspended native window retains its kernel lock and fence"
         );
         m.flush().await.unwrap();
-        expire();
+        f.expire_lease(&id);
         let held = m.current_record().unwrap().claim.unwrap();
         m.store
             .worker
@@ -527,18 +470,7 @@ fn expired_owner_resolves_a_committed_save_before_reacquiring_its_claim() {
         assert!(m.save_once().await.is_err());
         assert!(m.dirty());
         m.store.block_receipts.set(false);
-        m.state
-            .borrow_mut()
-            .saved
-            .as_mut()
-            .unwrap()
-            .claim
-            .as_mut()
-            .unwrap()
-            .expires_at_ms = 0;
-        let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
-        sql.execute("UPDATE items SET lease_until='0' WHERE id=?1", [&id])
-            .unwrap();
+        f.expire_lease(&id);
         m.revalidate_owner(1).await.unwrap();
         assert!(!m.dirty());
         assert!(m.error().is_none());

@@ -173,90 +173,25 @@ fn browser_transactions_match_sqlite_contract() {
         1001,
     );
     execute(StoreRequest::List, 1001);
-    execute(StoreRequest::WorkspaceOrder, 1001);
-    let order = vec![first.id.clone(), second.id.clone()];
-    execute(
-        StoreRequest::UpdateWorkspaceOrder {
-            expected: None,
-            ids: order.clone(),
-        },
-        1001,
-    );
-    execute(
-        StoreRequest::UpdateWorkspaceOrder {
-            expected: None,
-            ids: order.clone(),
-        },
-        1001,
-    );
-    execute(
-        StoreRequest::UpdateWorkspaceOrder {
-            expected: None,
-            ids: vec![],
-        },
-        1001,
-    );
-    execute(
-        StoreRequest::UpdateWorkspaceOrder {
-            expected: Some(order.clone()),
-            ids: vec![first.id.clone(), first.id.clone()],
-        },
-        1001,
-    );
-    execute(
-        StoreRequest::UpdateWorkspaceOrder {
-            expected: Some(order.clone()),
-            ids: vec!["missing".into()],
-        },
-        1001,
-    );
-    execute(
-        StoreRequest::UpdateWorkspaceOrder {
-            expected: Some(order.clone()),
-            ids: vec![second.id.clone(), first.id.clone()],
-        },
-        1001,
-    );
-    execute(StoreRequest::WorkspaceOrder, 1001);
-    execute(StoreRequest::Switcher, 1001);
-    let pins = vec![second.id.clone(), first.id.clone()];
-    execute(
-        StoreRequest::UpdateSwitcher {
-            expected: None,
-            ids: pins.clone(),
-        },
-        1001,
-    );
-    // Same delivery is idempotent; stale and invalid replacements cannot win.
-    execute(
-        StoreRequest::UpdateSwitcher {
-            expected: None,
-            ids: pins.clone(),
-        },
-        1001,
-    );
-    execute(
-        StoreRequest::UpdateSwitcher {
-            expected: None,
-            ids: vec![],
-        },
-        1001,
-    );
-    execute(
-        StoreRequest::UpdateSwitcher {
-            expected: Some(pins.clone()),
-            ids: vec![first.id.clone(), first.id.clone()],
-        },
-        1001,
-    );
-    execute(
-        StoreRequest::UpdateSwitcher {
-            expected: Some(pins),
-            ids: vec![],
-        },
-        1001,
-    );
-    execute(StoreRequest::Switcher, 1001);
+    type PreferenceUpdate = fn(Option<Vec<String>>, Vec<String>) -> StoreRequest;
+    for (read, update, ids, replacements) in [
+        (StoreRequest::WorkspaceOrder,
+            (|expected, ids| StoreRequest::UpdateWorkspaceOrder { expected, ids }) as PreferenceUpdate,
+            vec![first.id.clone(), second.id.clone()],
+            vec![vec!["missing".into()], vec![second.id.clone(), first.id.clone()]]),
+        (StoreRequest::Switcher,
+            (|expected, ids| StoreRequest::UpdateSwitcher { expected, ids }) as PreferenceUpdate,
+            vec![second.id.clone(), first.id.clone()], vec![vec![]]),
+    ] {
+        execute(read.clone(), 1001);
+        for (expected, replacement) in [
+            (None, ids.clone()), (None, ids.clone()), (None, vec![]),
+            (Some(ids.clone()), vec![first.id.clone(), first.id.clone()]),
+        ].into_iter().chain(replacements.into_iter().map(|ids2| (Some(ids.clone()), ids2))) {
+            execute(update(expected, replacement), 1001);
+        }
+        execute(read, 1001);
+    }
     execute(
         StoreRequest::Load {
             id: first.id.clone(),
