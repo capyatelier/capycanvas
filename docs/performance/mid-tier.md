@@ -98,7 +98,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 2048 px | 48.3 fresh updates/s (45.51–48.86); completion gap p99 36.00–40.42 ms | **Not met** |
+| G-Pen (1) | Simple | 2048 px | 49.0 fresh updates/s (48.62–49.42); completion gap p99 32.55–34.35 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 2048 px | 12.2 updates/s (12.0–12.2); gap p99 152.2 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 2048 px | 35.2 updates/s (35.1–35.3); gap p99 73.2 ms | **Not met** |
 | Antique Pen (30) | Simple | 2048 px | 16.2 updates/s (16.0–16.3); gap p99 171.2 ms | **Not met** |
@@ -144,18 +144,20 @@ Retouching rows use the integrated-compositor measurements below, copying from t
 
 ## Current G-Pen comparison
 
-Measured on 2026-09-30 against `829f1e223`: the tier photo beneath one paint
+Measured on 2026-09-30 against `ba8835fec`: the tier photo beneath one paint
 layer, Perceptual blending, 2048 px G-Pen, Fit, 16 ms prediction, default
 workspace with Stats closed, warm-up and three five-second strokes. Thermal
 status is zero. The front-stack and covered-pixel candidate raises fresh input
-throughput from 37.46 to 48.33 updates/s. Completion-gap p99 is
-36.00–40.42 ms. The 90/s rate target and 22.2 ms gap target remain open.
+throughput from 37.72 to 49.02 updates/s. Completion-gap p99 is
+32.55–34.35 ms. The 90/s rate target and 22.2 ms gap target remain open.
 This does not qualify the class or its other brushes.
+Settling increases from 671–679 ms to 787–811 ms; smaller idle-refinement
+batches trade completion time for admission of fresh input.
 
-Candidate: `63d6fede3` plus front-stack, covered-pixel and field-observation
-changes, optimized benchmark APK SHA-256
-`f0b87ae5094b33d4383bfb3f9d0ab8d8699d1aa508ee7f6c1fe11edb6d261ad2`.
-Raw records: `artifacts/optimization-roi/main-mid-fit` and `candidate1-mid-fit`.
+Candidate: `c452a0642` (production source matches `fc5d00fd5` after the
+test-fixture rebase), optimized benchmark APK SHA-256
+`865b0dd05b8253b3b22eac806136023a5befeac5b642e5fddb2f3cd24194d047`.
+Raw records: `artifacts/optimization-roi/{current-main,final}-mid-fit`.
 
 ## Retouching with the integrated compositor
 

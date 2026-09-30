@@ -348,18 +348,18 @@ Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with t
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | 65.8 fresh updates/s (65.43–66.14); completion gap p99 26.57–27.10 ms | **Met for this stroke** |
+| G-Pen (1) | Simple | 1024 px | 65.7 fresh updates/s (65.59–66.10); completion gap p99 26.12–28.57 ms | **Met for this stroke** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
 | Realistic Pen (31) | Simple | 1024 px | 28.3 updates/s (28.2–28.3); gap p99 63.4 ms | **Not met** |
 | Wet Ink (32) | Simple | 1024 px | 23.0 updates/s (22.9–23.1); gap p99 73.7 ms | **Not met** |
-| Pencil (2) | Simple | 1024 px | 11.2 fresh updates/s (11.17–11.33); completion gap p99 111.62–112.88 ms | **Not met** |
+| Pencil (2) | Simple | 1024 px | 11.1 fresh updates/s (11.08–11.36); completion gap p99 107.46–113.63 ms | **Not met** |
 | Pointy Pencil (25) | Simple | 1024 px | 15.2 updates/s (15.2–15.3); gap p99 96.7 ms | **Not met** |
 | Shading Pencil (26) | Simple | 1024 px | 58.3 updates/s (56.2–59.8); gap p99 58.0 ms | **Not met** |
 | Charcoal (27) | Simple | 1024 px | 14.2 updates/s (14.2–14.3); gap p99 114.0 ms | **Not met** |
 | Chalk (6) | Simple | 1024 px | 10.4 updates/s (10.3–10.5); gap p99 131.3 ms | **Not met** |
-| Eraser (3) | Simple | 1024 px | 30.1 fresh updates/s (30.07–30.32); completion gap p99 44.86–45.72 ms | **Not met** |
+| Eraser (3) | Simple | 1024 px | 29.9 fresh updates/s (29.71–29.95); completion gap p99 44.67–45.06 ms | **Not met** |
 | Airbrush (5) | Simple | 1024 px | 32.7 updates/s (32.4–33.1); gap p99 55.6 ms | **Not met** |
 | Marker (7) | Complex | 1024 px | 16.5 updates/s (16.5–16.6); gap p99 100.5 ms | **Not met** |
 | Blotty Ink (33) | Complex | 1024 px | 15.1 updates/s (15.0–15.1); gap p99 105.5 ms | **Not met** |
@@ -389,7 +389,7 @@ Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with t
 
 ## Integrated compositor measurement
 
-Measured on 2026-09-30 against `829f1e223`: Perceptual 12 MP photo,
+Measured on 2026-09-30 against `ba8835fec`: Perceptual 12 MP photo,
 240 × 140 px trajectory, 16 ms prediction, three five-second strokes after
 warm-up. Stats is closed, Navigator is visible and thermal status is zero.
 Fresh updates count completed frames that consumed new real pen samples.
@@ -399,52 +399,37 @@ the same formats, memory allowance and existing pipelines.
 
 | Workload | Main fresh updates/s | Candidate fresh updates/s (range) | Candidate completion gap p99, range | Target |
 | --- | ---: | ---: | ---: | --- |
-| G-Pen 1024 px, one photo at Fit | 54.81 | 65.83 (65.43–66.14) | 26.57–27.10 ms | Meets 60/s for this stroke |
-| G-Pen 1024 px, eight photos at 50% | 29.72 | 35.87 (35.51–35.99) | 39.61–45.62 ms | Not met |
-| G-Pen 1024 px, eight photos at 100% | 19.52 | 27.07 (26.94–27.48) | 43.47–45.05 ms | Not met |
-| Pencil 1024 px, one photo at Fit | 11.14 | 11.17 (11.17–11.33) | 111.62–112.88 ms | Not met |
-| Eraser 1024 px, one photo at Fit | 30.06 | 30.10 (30.07–30.32) | 44.86–45.72 ms | Not met |
+| G-Pen 1024 px, one photo at Fit | 54.81 | 65.70 (65.59–66.10) | 26.12–28.57 ms | Meets 60/s for this stroke |
+| G-Pen 1024 px, eight photos at 50% | 29.88 | 35.67 (35.65–35.83) | 39.05–39.78 ms | Not met |
+| G-Pen 1024 px, eight photos at 100% | 19.50 | 27.05 (27.02–27.05) | 44.06–44.75 ms | Not met |
+| Pencil 1024 px, one photo at Fit | 11.14 | 11.14 (11.08–11.36) | 107.46–113.63 ms | Not met |
+| Eraser 1024 px, one photo at Fit | 30.06 | 29.91 (29.71–29.95) | 44.67–45.06 ms | Not met |
 
 The stacked rows have nine visible layers: eight translucent photos and one
 paint layer. They do not qualify the separate eight-paint-layer target. Fit is
 15.97%. Candidate allocator residency is 812 MiB at Fit, 1,069 MiB at 50% and
 1,008 MiB at 100%, within 2 MiB of the matched controls. G-Pen owner CPU p50 is
-10.24 / 14.19 / 12.23 ms; these are CPU times, not frame or GPU intervals.
-Settling is 578–601 / 871–984 / 695–731 ms. The size-class guarantee remains
+10.37 / 14.64 / 13.15 ms; these are CPU times, not frame or GPU intervals.
+Settling is 590–613 / 930–961 / 700–736 ms. The size-class guarantee remains
 open because other brushes and trajectories are not qualified.
 
-Candidate: `63d6fede3` plus the front-stack, covered-pixel and field-observation
-changes; optimized benchmark APK SHA-256
-`f0b87ae5094b33d4383bfb3f9d0ab8d8699d1aa508ee7f6c1fe11edb6d261ad2`.
-Raw records are `artifacts/optimization-roi/{main,candidate1}-{fit,stack50,stack100}`
-and `{main,candidate1}-other-simple`.
+Candidate: `c452a0642` (production source matches `fc5d00fd5` after the
+test-fixture rebase), optimized benchmark APK SHA-256
+`865b0dd05b8253b3b22eac806136023a5befeac5b642e5fddb2f3cd24194d047`.
+Raw records are `artifacts/optimization-roi/{current-main,final}-low-fit`,
+`{current-main,final}-stack{50,100}` and `main-other-simple`. Pencil and Eraser
+controls use `829f1e223`; their rates remain within 1% of the candidate.
+A neighboring seven-photo check at 100% reaches 27.12/s versus 25.94/s on
+`829f1e223`; raw records are `{main,candidate1}-stack7-100`.
 
-Matched resumed contacts meet the one-frame added-submission p95 budget in all
-three runs; added GPU-completion p95 still fails in one run. See
-[responsiveness](responsiveness.md#resuming-during-refinement).
-Settling after continuous strokes takes 587–732 ms, compared with 483–581 ms
-in the preceding four-page build. Smaller idle batches improve interruption
-while increasing total settling time.
-
-Three further runs per case use eight translucent photo layers, the same
-1024 px brush and trajectory, and 50% or 100% zoom. Stats remains closed and
-Navigator visible. Thermal status is zero; at least 2,045 MiB system RAM stays
-available. These moving strokes do not meet 60/s.
-
-| Zoom | Fresh updates/s, median (range) | Completion gap p99, range | Settling after input |
-| --- | ---: | ---: | ---: |
-| 50% | 29.9 (29.71–30.12) | 41.53–43.28 ms | 858–932 ms |
-| 100% | 19.5 (19.43–19.53) | 61.79–65.31 ms | 662–741 ms |
-
-Elapsed render-owner callbacks have medians of 32–33 ms at 50% and 48–49 ms
-at 100%, while actual owner-thread CPU time is about 15 ms in both cases.
-Presentation calls account for 17–18 ms and 34–35 ms respectively. This
-distinguishes waiting from CPU execution. The matching 100 ms paused contacts
-have median first-GPU-completion latency of 90–95 ms and 111–127 ms. Few or no
-fresh completions fall inside those short contact windows, so their per-second
-counts cannot be compared with continuous strokes. Paused settling is 732–845
-ms at 50% and 583–626 ms at 100%. Raw reports are
-`artifacts/latency-investigation/two-25-stack-{50,100}-{constant,pauses}`.
+The preceding two-page idle-refinement comparison (2026-09-29) passes the
+one-frame added-submission p95 budget in all three runs; added GPU-completion
+p95 still fails in one run. See
+[responsiveness](responsiveness.md#resuming-during-refinement). Its raw records
+are `artifacts/latency-investigation/two-25-stack-{50,100}-{constant,pauses}`.
+This does not qualify interruption after the current shader and graph changes.
+Smaller idle batches improve interruption while increasing total settling time;
+Fit settling is 590–613 ms here versus 478–544 ms on the current main control.
 
 ### GPU attribution with Stats closed
 
@@ -470,6 +455,8 @@ There are typically 24 tiled output regions per update. Sparse mips could avoid
 That area ratio neither establishes a GPU-time saving nor closes the 60/s gap.
 Main composition, preview and viewport work remain material costs. None of these
 measurements proves the target impossible or establishes a complete path to it.
+This diagnostic predates the rebase and uses the candidate APK SHA-256
+`f0b87ae5094b33d4383bfb3f9d0ab8d8699d1aa508ee7f6c1fe11edb6d261ad2`.
 Raw records: `artifacts/optimization-roi/candidate1-stack100-diagnostic`.
 
 ## Input during Healing finalization
