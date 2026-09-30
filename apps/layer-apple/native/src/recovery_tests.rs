@@ -1,22 +1,11 @@
 use super::*;
 use std::io::{Read, Seek};
-use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+use std::os::fd::AsRawFd;
 
 #[test]
 fn apple_save_and_recovery_during_contact_capture_only_committed_rasters() {
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!(
-            "capy-active-save-{}-{platform}.capy",
-            std::process::id()
-        ));
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .unwrap();
+        let mut file = fixtures::tempfile();
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
             Some(native_renderer());
@@ -86,25 +75,13 @@ fn apple_save_and_recovery_during_contact_capture_only_committed_rasters() {
         app.draw_until_idle();
         assert_eq!(app.pixels(), completed_pixels);
         assert_eq!(app.state()["document_file"]["modified"], true);
-        std::fs::remove_file(path).unwrap();
     }
 }
 
 #[test]
 fn project_recovery_preserves_captured_pixels_and_requires_a_durable_manual_save() {
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!(
-            "capy-recovery-{}-{platform}.capy",
-            std::process::id()
-        ));
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .unwrap();
+        let mut file = fixtures::tempfile();
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
             Some(native_renderer());
@@ -221,6 +198,5 @@ fn project_recovery_preserves_captured_pixels_and_requires_a_durable_manual_save
             false,
             "An acknowledged manual save establishes the normal checkpoint again"
         );
-        std::fs::remove_file(path).unwrap();
     }
 }

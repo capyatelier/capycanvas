@@ -66,7 +66,7 @@ fn native_penup_and_following_strokes() {
     }
     assert_eq!(state(&w).brush.diameter, diameter, "benchmark brush diameter");
     assert_eq!(state(&w).brush.preset, preset as u32, "benchmark brush preset");
-    if w.gpu.borrow().as_ref().unwrap().session.engine().document().color.depth.is_float() {
+    if ui_session(&w).engine().document().color.depth.is_float() {
         w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
             color: layer_core::color::RgbColor::from_linear(
                 layer_core::color::RgbSpace::ProPhoto, [8., -0.125, 2., 1.]).unwrap(),
@@ -78,7 +78,7 @@ fn native_penup_and_following_strokes() {
             serde_json::to_vec_pretty(&proof).unwrap()).unwrap();
     }
     if sdr {
-        let change = w.gpu.borrow_mut().as_mut().unwrap().session.set_proof_mode(layer_ui::ProofMode::Sdr).unwrap();
+        let change = ui_session_mut(&w).set_proof_mode(layer_ui::ProofMode::Sdr).unwrap();
         w.changed(Ok(change));
         let deadline = Instant::now() + Duration::from_secs(60);
         while w.local_tone.ready_count().is_none() {
@@ -86,12 +86,7 @@ fn native_penup_and_following_strokes() {
             assert!(Instant::now() < deadline, "initial GPU guide: {}", w.local_tone.label.text());
         }
     }
-    let stats = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let stats = ui_session(&w)
         .engine()
         .backend()
         .stats
@@ -131,12 +126,7 @@ fn native_penup_and_following_strokes() {
     };
     let count: usize = std::env::var("LAYER_PENUP_STROKES").map_or(12, |v| v.parse().unwrap());
     assert!((4..=100).contains(&count));
-    let mut expected = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let mut expected = ui_session(&w)
         .engine()
         .metrics()
         .committed_strokes;
@@ -217,12 +207,7 @@ fn native_penup_and_following_strokes() {
             });
             loop {
                 pump(2);
-                if !w
-                    .gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                if !ui_session(&w)
                     .engine()
                     .has_pending_document_edits()
                 {
@@ -317,11 +302,7 @@ fn native_terminal_wake_preserves_commit_cancel_and_idle() {
     };
     settle();
     let root = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers[0]
@@ -329,11 +310,7 @@ fn native_terminal_wake_preserves_commit_cancel_and_idle() {
             .clone()
     };
     let committed = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .metrics()
             .committed_strokes

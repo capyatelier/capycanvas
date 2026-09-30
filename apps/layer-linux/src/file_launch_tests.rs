@@ -166,7 +166,7 @@ fn native_application_file_launch() {
     assert!(activated.get());
     let second = w.documents.selected();
     assert_eq!(
-        w.gpu.borrow().as_ref().unwrap().session.engine().document(),
+        ui_session(&w).engine().document(),
         &project.document
     );
     assert_eq!(

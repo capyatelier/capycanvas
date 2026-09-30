@@ -11,11 +11,7 @@ fn native_contact_brushes() {
     pump(1600);
     until(
         || {
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .backend()
                 .startup
@@ -76,11 +72,7 @@ fn native_contact_brushes() {
         assert_eq!(state(&w).brush.preset, id);
         assert!(button.has_css_class("selected-tool"));
         assert_eq!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .configured_brush()
                 .contact
@@ -138,11 +130,7 @@ fn native_contact_brushes() {
         capture_reference(&w, &format!("{output}/{id:02}-{preset:?}.png"), 1.);
         assert!(!w.status.is_visible(), "{preset:?}: {}", w.status.text());
         assert_eq!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .metrics()
                 .committed_strokes,
@@ -154,12 +142,12 @@ fn native_contact_brushes() {
         command: CommandId::Undo,
     });
     pump(150);
-    assert!(w.gpu.borrow().as_ref().unwrap().session.engine().can_redo());
+    assert!(ui_session(&w).engine().can_redo());
     w.dispatch(UiAction::Invoke {
         command: CommandId::Redo,
     });
     pump(150);
-    assert!(!w.gpu.borrow().as_ref().unwrap().session.engine().can_redo());
+    assert!(!ui_session(&w).engine().can_redo());
     capture_reference(&w, &format!("{output}/all-contact-brushes.png"), 1.);
     w.window.close();
     pump(50);

@@ -886,10 +886,7 @@ fn check_palette_context(devices: &[&str]) {
                 d.w.window
                     .visible_dialog()
                     .expect("native row menu opens naming dialog");
-            let entry = find_named(dialog.upcast_ref(), "palette-library-name")
-                .unwrap()
-                .downcast::<gtk::Entry>()
-                .unwrap();
+            let entry = named::<gtk::Entry>(dialog.upcast_ref(), "palette-library-name");
             assert_eq!(entry.text(), library.palettes[1].name);
             dialog.close();
             pump(150);

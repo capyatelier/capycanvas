@@ -1021,11 +1021,7 @@ fn native_toolbar_visible_edges_input() {
             d.input
                 .perform(serde_json::json!([{"point":a,"down":true},{"point":[800.,500.]}]));
             let update =
-                d.w.gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                ui_session(&d.w)
                     .workspace_update();
             let preview = update.drag.unwrap().group.unwrap().bounds;
             let grab = [800. - preview.x, 500. - preview.y];
@@ -1587,11 +1583,7 @@ fn slider_preview_gestures(d: &mut Driver, devices: &[&str]) {
     for &device in devices {
         let context = state(&d.w).toolbar_context();
         let stamp =
-            d.w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&d.w)
                 .toolbar_stamp(context);
         assert!(
             stamp.is_ok(),
@@ -1731,7 +1723,7 @@ fn native_tonal_toolbar_input() {
     d.w.dispatch(UiAction::Invoke {command:CommandId::TonalSelect});
     let ready=|d:&Driver| {
         let deadline=Instant::now()+Duration::from_secs(25);
-        loop {pump(20);if d.w.gpu.borrow().as_ref().unwrap().session.require_document_idle().is_ok() {break;}
+        loop {pump(20);if ui_session(&d.w).require_document_idle().is_ok() {break;}
             assert!(Instant::now()<deadline,"tonal update: {:?}",state(&d.w).host_error);}
     };
     for edge in [Edge::Top,Edge::Left] {
@@ -1752,7 +1744,7 @@ fn native_tonal_toolbar_input() {
             d.click_name("tool-choice-tonal-tones-4");ready(&d);
         }
         assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Choice {id:"tonal-tones",items,..} if items[4].selected)));
-        assert!(d.w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some());
+        assert!(ui_session(&d.w).engine().document().selection.is_some());
         let _=crate::snapshot(&d.w);pump(120);
         crate::snapshot(&d.w).save_to_png(d.input.dir.join(format!("tonal-toolbar-{edge:?}.png"))).unwrap();
         if edge==Edge::Left {d.click_name(&format!("tile-{options}"));pump(100);}

@@ -120,7 +120,7 @@ fn native_notice_wand_offers_a_reference() {
     input.click([b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]);
     until(
         || {
-            w.gpu.borrow().as_ref().unwrap().session.engine().document().reference_layers
+            ui_session(&w).engine().document().reference_layers
                 == [layer_core::LayerId(1)].into()
         },
         "the notice action marks the layer below as a reference",

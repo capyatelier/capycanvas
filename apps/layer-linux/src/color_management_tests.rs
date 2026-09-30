@@ -48,12 +48,7 @@ fn native_numeric_colors_and_saved_palettes() {
         action: ColorAction::Definition { color: original },
     });
     w.dispatch(UiAction::SetBrushOpacity { value: 0.37 });
-    let revision = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let revision = ui_session(&w)
         .engine()
         .document()
         .revision;
@@ -83,10 +78,7 @@ fn native_numeric_colors_and_saved_palettes() {
         1.,
     );
     let dialog = w.window.visible_dialog().unwrap();
-    let model = find_named(dialog.upcast_ref(), "edit-color-model")
-        .unwrap()
-        .downcast::<adw::ComboRow>()
-        .unwrap();
+    let model = named::<adw::ComboRow>(dialog.upcast_ref(), "edit-color-model");
     for selected in 0..ColorInputModel::ALL.len() {
         model.set_selected(selected as u32);
         pump(10);
@@ -100,10 +92,7 @@ fn native_numeric_colors_and_saved_palettes() {
     );
     click_named(&w, "color-edit-menu");
     let dialog = w.window.visible_dialog().unwrap();
-    let entry = find_named(dialog.upcast_ref(), "edit-color-value-0")
-        .unwrap()
-        .downcast::<adw::EntryRow>()
-        .unwrap();
+    let entry = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-value-0");
     entry.set_text("NaN");
     pump(10);
     assert!(
@@ -115,10 +104,7 @@ fn native_numeric_colors_and_saved_palettes() {
     assert_eq!(state(&w).colors.definition(), original);
     click_named(&w, "color-edit-menu");
     let dialog = w.window.visible_dialog().unwrap();
-    let model = find_named(dialog.upcast_ref(), "edit-color-model")
-        .unwrap()
-        .downcast::<adw::ComboRow>()
-        .unwrap();
+    let model = named::<adw::ComboRow>(dialog.upcast_ref(), "edit-color-model");
     model.set_selected(
         ColorInputModel::ALL
             .iter()
@@ -126,10 +112,7 @@ fn native_numeric_colors_and_saved_palettes() {
             .unwrap() as u32,
     );
     pump(10);
-    let entry = find_named(dialog.upcast_ref(), "edit-color-value-0")
-        .unwrap()
-        .downcast::<adw::EntryRow>()
-        .unwrap();
+    let entry = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-value-0");
     entry.set_text("#12A5E3");
     respond(&w, "Use Color");
     let hex = state(&w).colors.definition();
@@ -153,10 +136,7 @@ fn native_numeric_colors_and_saved_palettes() {
     pump(100);
     click_named(&w, "palette-add-color");
     click_named(&w, "palette-color-name");
-    let entry = find_named(w.window.upcast_ref(), "palette-name-editor")
-        .unwrap()
-        .downcast::<gtk::Entry>()
-        .unwrap();
+    let entry = named::<gtk::Entry>(w.window.upcast_ref(), "palette-name-editor");
     entry.set_text("P3 low-alpha red");
     entry.emit_activate();
     pump(50);
@@ -178,12 +158,7 @@ fn native_numeric_colors_and_saved_palettes() {
     assert_eq!(state(&w).colors.definition(), original);
     // Restore in another document, select the other paint slot, and retain the
     // exact tagged values through native selection and palette deletion.
-    let capture = w
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    let capture = ui_session_mut(&w)
         .capture_workspace()
         .unwrap();
     let bytes = serde_json::to_vec(&capture).unwrap();
@@ -192,12 +167,7 @@ fn native_numeric_colors_and_saved_palettes() {
     sdr_ready(&next);
     let prepared =
         layer_ui::PreparedWorkspace::new(serde_json::from_slice(&bytes).unwrap()).unwrap();
-    let change = next
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    let change = ui_session_mut(&next)
         .adopt_workspace(prepared);
     next.changed(change);
     crate::color_library::show(&next, ColorSlot::Background);
@@ -206,22 +176,14 @@ fn native_numeric_colors_and_saved_palettes() {
     assert_eq!(state(&next).colors.background, original);
     assert_eq!(state(&next).colors.rgb_space(), RgbSpace::Srgb);
     assert_eq!(
-        next.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&next)
             .engine()
             .configured_brush()
             .color_rgba_linear,
         original.linear_in(RgbSpace::Srgb).unwrap()
     );
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .revision,
@@ -306,11 +268,7 @@ fn native_sdr_portable_paint_and_sampling() {
         w.dispatch(UiAction::SetBrushSize { value: 80. });
         assert_eq!(state(&w).colors.definition(), definition);
         assert_eq!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .configured_brush()
                 .color_rgba_linear,
@@ -425,11 +383,7 @@ fn native_sdr_document_modes() {
             w.window.present();
             sdr_ready(&w);
             assert_eq!(
-                w.gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                ui_session(&w)
                     .engine()
                     .backend()
                     .document_color(),
@@ -451,12 +405,7 @@ fn native_sdr_document_modes() {
                 painted, original,
                 "{color:?} brush draws over retained photo"
             );
-            let root = w
-                .gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            let root = ui_session(&w)
                 .engine()
                 .document()
                 .layers[0]
@@ -480,12 +429,7 @@ fn native_sdr_document_modes() {
             });
             sdr_ready(&w);
             assert_eq!(pixels(&w, 9103), painted, "{color:?} redo");
-            let project = w
-                .gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            let project = ui_session(&w)
                 .capture_project_recovery()
                 .unwrap();
             assert!(Arc::ptr_eq(
@@ -555,11 +499,7 @@ fn native_sdr_bounded_canvas_startup_and_paint() {
     );
     sdr_ready(&w);
     assert!(
-        w.gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        ui_session_mut(&w)
             .renderer_mut()
             .request_color_sample(ColorSampleRequest {
                 request_id: 9700,
@@ -572,12 +512,7 @@ fn native_sdr_bounded_canvas_startup_and_paint() {
     let deadline = Instant::now() + Duration::from_secs(30);
     let sample = loop {
         pump(10);
-        let sample = w
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        let sample = ui_session_mut(&w)
             .renderer_mut()
             .take_color_sample();
         if let Some(sample) = sample {

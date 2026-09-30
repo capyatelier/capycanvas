@@ -48,11 +48,7 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
     w.window.present();
     ready(&w);
     // An actual edit makes dirty-state preservation observable.
-    w.gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    ui_session_mut(&w)
         .import_layer_source(
             "Mark",
             std::sync::Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([1, 1], |_, _| {
@@ -64,12 +60,7 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
     w.wake();
     ready(&w);
     let before = snapshot(&w);
-    let revision = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let revision = ui_session(&w)
         .engine()
         .document()
         .revision;
@@ -105,55 +96,33 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
         size.set_selected(1);
         let dialog = w.window.visible_dialog().unwrap();
         for (name, value) in ["export-width", "export-height"].into_iter().zip(bounds) {
-            let row = find_named(dialog.upcast_ref(), name)
-                .unwrap()
-                .downcast::<adw::SpinRow>()
-                .unwrap();
+            let row = named::<adw::SpinRow>(dialog.upcast_ref(), name);
             assert!(row.is_visible());
             row.set_value(f64::from(value));
         }
-        let allow = find_named(dialog.upcast_ref(), "export-enlarge")
-            .unwrap()
-            .downcast::<adw::SwitchRow>()
-            .unwrap();
+        let allow = named::<adw::SwitchRow>(dialog.upcast_ref(), "export-enlarge");
         allow.set_active(enlarge);
         // Physical density remains independent of delivery pixel dimensions.
         combo(&w, "export-resolution").set_selected(format);
         if format == 1 {
-            find_named(dialog.upcast_ref(), "export-ppi")
-                .unwrap()
-                .downcast::<adw::SpinRow>()
-                .unwrap()
+            named::<adw::SpinRow>(dialog.upcast_ref(), "export-ppi")
                 .set_value(300.);
         }
-        let note = find_named(dialog.upcast_ref(), "export-size-description")
-            .unwrap()
-            .downcast::<gtk::Label>()
-            .unwrap();
+        let note = named::<gtk::Label>(dialog.upcast_ref(), "export-size-description");
         assert!(
             note.text()
                 .contains(&format!("{} × {} px", expected[0], expected[1]))
         );
         assert_eq!(combo(&w, "export-preset").selected(), 3);
         assert_eq!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .document()
                 .revision,
             revision
         );
-        let after = find_named(dialog.upcast_ref(), "color-preview-after")
-            .unwrap()
-            .downcast::<gtk::Picture>()
-            .unwrap();
-        let status = find_named(dialog.upcast_ref(), "color-preview-status")
-            .unwrap()
-            .downcast::<gtk::Label>()
-            .unwrap();
+        let after = named::<gtk::Picture>(dialog.upcast_ref(), "color-preview-after");
+        let status = named::<gtk::Label>(dialog.upcast_ref(), "color-preview-status");
         let deadline = Instant::now() + Duration::from_secs(30);
         while after.paintable().is_none() {
             assert!(Instant::now() < deadline, "preview: {}", status.text());
@@ -181,10 +150,7 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
             format == 2
         );
         if format == 2 {
-            find_named(dialog.upcast_ref(), "export-jpeg-quality")
-                .unwrap()
-                .downcast::<adw::SpinRow>()
-                .unwrap()
+            named::<adw::SpinRow>(dialog.upcast_ref(), "export-jpeg-quality")
                 .set_value(55.);
             pump(50);
             assert_eq!(

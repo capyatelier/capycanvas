@@ -76,10 +76,7 @@ fn native_workspace_transition_stability() {
     pump(300);
     // Hold the host's pause long enough to deliver real input. Checking the
     // button signal catches native activation even if the model rejects it.
-    let painter = find_named(w.header.root.upcast_ref(), "workspace-switch-painter")
-        .unwrap()
-        .downcast::<gtk::ToggleButton>()
-        .unwrap();
+    let painter = named::<gtk::ToggleButton>(w.header.root.upcast_ref(), "workspace-switch-painter");
     let activations = Rc::new(Cell::new(0));
     painter.connect_clicked(glib::clone!(
         #[strong]
@@ -273,11 +270,7 @@ fn native_starting_layout_preview() {
     w.dispatch(UiAction::SetBrushSize { value: 73. });
     pump(400);
     let capture = || {
-        w.gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        ui_session_mut(&w)
             .capture_workspace()
             .unwrap()
     };
@@ -409,12 +402,7 @@ fn check_active_workspace_delete(occupied_default: bool) {
         .entity
         .capture()
         .unwrap();
-    let depth = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let depth = ui_session(&w)
         .engine()
         .document()
         .color
@@ -623,12 +611,7 @@ fn native_workspace_switcher_input() {
     let manager = w.workspaces.manager().unwrap();
     let [p, i, f] = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string());
     let original = manager.current().unwrap().capture().unwrap();
-    let document = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let document = ui_session(&w)
         .engine()
         .document()
         .clone();
@@ -805,7 +788,7 @@ fn native_workspace_switcher_input() {
         *original.history.layout()
     );
     assert_eq!(
-        w.gpu.borrow().as_ref().unwrap().session.engine().document(),
+        ui_session(&w).engine().document(),
         &document
     );
     // Populate a longer library without switching the live editor.

@@ -1,7 +1,7 @@
 //! Actual native SDR preparation, backing, history and GPU replacement.
 use super::*;
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
-use std::{io::Seek, os::fd::AsRawFd, os::unix::fs::OpenOptionsExt};
+use std::{io::Seek, os::fd::AsRawFd};
 
 #[test]
 fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
@@ -97,20 +97,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
             }
             .project()
             .unwrap();
-            let path = std::env::temp_dir().join(format!(
-                "capy-native-color-{}-{platform}-{space:?}.capy",
-                std::process::id()
-            ));
-            let mut file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path)
-                .unwrap();
-            // The exclusively owned descriptor remains usable without leaving
-            // a disposable drawing behind when an assertion fails.
-            std::fs::remove_file(path).unwrap();
+            let mut file = fixtures::tempfile();
             project.write(&mut file).unwrap();
             file.rewind().unwrap();
             let app = App::new(platform);

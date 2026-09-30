@@ -9,12 +9,7 @@ fn native_gpu_tone_retains_preview_cancels_and_refreshes_after_drawing() {
     let w = Workspace::with_project(&app, Some((p, None)));
     w.window.present();
     ready(&w);
-    let change = w
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    let change = ui_session_mut(&w)
         .set_proof_mode(layer_ui::ProofMode::Sdr);
     w.changed(change);
     w.dispatch(UiAction::SetBrushSize { value: 180. });
@@ -50,11 +45,7 @@ fn native_gpu_tone_retains_preview_cancels_and_refreshes_after_drawing() {
         )
     };
     let capture = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .backend()
             .capture()

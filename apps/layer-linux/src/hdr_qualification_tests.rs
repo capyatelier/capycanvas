@@ -108,29 +108,16 @@ fn native_local_tone_sustained_qualification() {
         .find_map(|i| controllers.item(i).and_downcast::<gtk::GestureDrag>())
         .unwrap();
     let rendition = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .sdr_rendition
     };
     let before = rendition();
-    w.gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    ui_session_mut(&w)
         .renderer_mut()
         .set_telemetry_enabled(true);
-    let stats = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let stats = ui_session(&w)
         .engine()
         .backend()
         .stats
@@ -175,11 +162,7 @@ fn native_local_tone_sustained_qualification() {
             memory.push(serde_json::json!({"second": i/120, "memory": process_memory()}));
         }
         assert!(
-            !w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            !ui_session(&w)
                 .rendering_suspended()
         );
     }
@@ -193,12 +176,7 @@ fn native_local_tone_sustained_qualification() {
     tick.remove();
     pump(300);
     let s = stats.lock().unwrap();
-    let telemetry = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let telemetry = ui_session(&w)
         .engine()
         .backend()
         .telemetry();
@@ -217,11 +195,7 @@ fn native_local_tone_sustained_qualification() {
     ready(&w);
     assert_eq!(rendition(), before, "one drag remains one undo step");
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers,

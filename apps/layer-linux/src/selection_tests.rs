@@ -3,11 +3,7 @@ use super::*;
 use layer_ui::SelectionTool;
 
 fn selection(d: &Driver) -> Option<layer_core::Selection> {
-    d.w.gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    ui_session(&d.w)
         .engine()
         .document()
         .selection
@@ -87,7 +83,7 @@ fn native_quick_mask_input() {
         d.w.dispatch(UiAction::SetTheme { theme:Some(theme) }); pump(250);
         let _ = crate::snapshot(&d.w); pump(100);
         crate::snapshot(&d.w).save_to_png(output.join(format!("quick-mask-{theme:?}.png"))).unwrap();
-        let capture=d.w.gpu.borrow().as_ref().unwrap().session.engine().backend().capture().unwrap();
+        let capture=ui_session(&d.w).engine().backend().capture().unwrap();
         let tinted=capture.bytes.chunks_exact(4).filter(|p|p[0]>p[1].saturating_add(30) && p[0]>p[2].saturating_add(30)).count();
         assert!(tinted>100,"{theme:?} mask overlay disappeared: {tinted} pixels");
     }
@@ -116,7 +112,7 @@ fn native_quick_mask_input() {
     assert_eq!(state(&d.w).layer_tools.mask_editing.unwrap().layer,Some(id));
     d.click_name(&layers); pump(100);
     let w = d.w.clone();
-    let saved = || w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
+    let saved = || ui_session(&w).engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
     let before = saved();
     d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::BeginRefine {kind:layer_ui::RefineKind::Grow,layer:Some(id)}});
     let field = d.named("selection-refine-value");
@@ -131,7 +127,7 @@ fn native_quick_mask_input() {
     let grow_idle = || state(&w).commands.iter().any(|c| c.id == CommandId::GrowSelection && c.enabled);
     until(|| state(&w).layer_tools.selection_resize.is_none() && grow_idle() && saved() != before, "Grow completed");
     d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);
-    assert_eq!(d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap(),before);
+    assert_eq!(ui_session(&d.w).engine().document().saved_selection(layer_core::LayerId(id)).unwrap(),before);
 
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
     d.click_name(&layers); pump(150);
@@ -617,7 +613,7 @@ fn native_selection_options_input() {
 
 pub(super) fn wait_tonal(d:&Driver) {
     let deadline=Instant::now()+Duration::from_secs(25);
-    loop {pump(20);if d.w.gpu.borrow().as_ref().unwrap().session.require_document_idle().is_ok() {return;}
+    loop {pump(20);if ui_session(&d.w).require_document_idle().is_ok() {return;}
         assert!(Instant::now()<deadline,"tonal update timed out: {:?}",state(&d.w).host_error);}
 }
 #[test]
@@ -660,7 +656,7 @@ fn native_tonal_selection_input() {
     let first=wait_selection(&d);
     assert!(byte_pixel(&first,700,700)>240 && byte_pixel(&first,1250,700)>240);
     assert_eq!(byte_pixel(&first,1000,700),0);
-    let image=d.w.gpu.borrow().as_ref().unwrap().session.engine().backend().capture().unwrap();
+    let image=ui_session(&d.w).engine().backend().capture().unwrap();
     let m=state(&d.w).camera.document_to_surface();
     let [x,y]=[(m[0]*1250.+m[2]*700.+m[4]) as usize,(m[1]*1250.+m[3]*700.+m[5]) as usize];
     let pixel=&image.bytes[y*image.stride as usize+x*4..][..4];
@@ -714,7 +710,7 @@ fn native_tonal_selection_input() {
     assert_eq!(selection(&d),Some(sampled.clone()));
     if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
     let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-quick-mask.png")).unwrap();
-    let image=d.w.gpu.borrow().as_ref().unwrap().session.engine().backend().capture().unwrap();
+    let image=ui_session(&d.w).engine().backend().capture().unwrap();
     assert!(image.bytes.chunks_exact(4).filter(|p|p[0]>p[1].saturating_add(30)).count()>100);
     d.click_name(&opener);
     // The red overlay is excluded from both point and rectangle sampling.
@@ -728,7 +724,7 @@ fn native_tonal_selection_input() {
     d.input.key(b'q' as u32);
     d.w.dispatch(UiAction::Invoke {command:CommandId::NewSelectionLayer});wait_tonal(&d);
     let id=state(&d.w).layer_tools.mask_editing.unwrap().layer.unwrap();
-    let saved=|d:&Driver| d.w.gpu.borrow().as_ref().unwrap().session.engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
+    let saved=|d:&Driver| ui_session(&d.w).engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
     let before=saved(&d);assert_eq!(before,layer_core::Selection::empty());
     d.click_name(&opener);d.click_name("tool-choice-tonal-tones-0");wait_tonal(&d);
     let mask=saved(&d);assert!(byte_pixel(&mask,700,700)>240 && byte_pixel(&mask,1250,700)>240);
@@ -769,7 +765,7 @@ pub(super) fn tonal_bounds(d: &Driver) -> [f32; 2] {
 }
 fn tonal_handle_point(d: &Driver, range: &str, index: usize) -> [f32; 2] {
     let id=["tonal_lower","tonal_upper"][index];
-    let handle=find_named(&d.named(range),&format!("range-handle-{id}")).unwrap().downcast::<crate::range_control::RangeHandle>().unwrap();
+    let handle=named::<crate::range_control::RangeHandle>(&d.named(range),&format!("range-handle-{id}"));
     let mut p=d.point(handle.upcast_ref());
     p[0]+=handle.position(handle.value()) as f32-handle.width() as f32/2.+if index==0 {-4.} else {4.};p
 }

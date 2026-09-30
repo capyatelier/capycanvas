@@ -17,13 +17,7 @@ fn press(w: &Rc<Workspace>, name: &str) {
     pump(100);
 }
 fn field(w: &Rc<Workspace>, index: usize, text: &str) {
-    find_named(
-        w.window.visible_dialog().unwrap().upcast_ref(),
-        &format!("edit-color-value-{index}"),
-    )
-    .unwrap()
-    .downcast::<adw::EntryRow>()
-    .unwrap()
+    named::<adw::EntryRow>(w.window.visible_dialog().unwrap().upcast_ref(), &format!("edit-color-value-{index}"))
     .set_text(text);
     pump(20);
 }

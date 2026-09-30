@@ -5,11 +5,11 @@ use super::*;
 use layer_core::{ColorMixSpace, DefaultBrushPreset};
 
 fn mixing(d: &Driver) -> ColorMixSpace {
-    d.w.gpu.borrow().as_ref().unwrap().session.engine().configured_brush().wet_mix.mix_space
+    ui_session(&d.w).engine().configured_brush().wet_mix.mix_space
 }
 
 fn committed(d: &Driver) -> u64 {
-    d.w.gpu.borrow().as_ref().unwrap().session.engine().metrics().committed_strokes
+    ui_session(&d.w).engine().metrics().committed_strokes
 }
 
 fn stroke(d: &mut Driver, device: &str, from: [f32; 2], to: [f32; 2]) {

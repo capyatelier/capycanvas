@@ -1,7 +1,6 @@
 use super::*;
 use std::io::Seek;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
 
 fn install(app: &App) {
     let gpu = native_renderer();
@@ -74,8 +73,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
 
             let task = ProjectJob::new(&app, false);
             let request = app.state()["requests"][0]["id"].clone();
-            let path = std::env::temp_dir().join(format!("capy-gpu-recovery-{}-{platform}-{fault}.capy", std::process::id()));
-            let mut file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).mode(0o600).open(&path).unwrap();
+            let mut file = fixtures::tempfile();
             let fd = file.as_raw_fd();
             let pointer = task.0 as usize;
             assert_eq!(std::thread::spawn(move || unsafe { capy_project_write(pointer as *const CapyProjectTask, fd) }).join().unwrap(), 0, "{:?}", task.error());
@@ -84,7 +82,6 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             let saved = layer_core::Project::read(&mut file, Default::default()).unwrap();
             assert_project_document(&saved.document, &document);
             assert!(saved.document.layers.iter().any(|layer| layer.source.is_some()));
-            std::fs::remove_file(path).unwrap();
 
             install(&app);
             app.draw_until_idle();

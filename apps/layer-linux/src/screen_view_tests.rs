@@ -42,7 +42,7 @@ fn chip(w: &Rc<Workspace>, label: &str) {
 }
 
 fn canvas_pixel(w: &Rc<Workspace>, document: [f32; 2]) -> [u8; 4] {
-    let capture = w.gpu.borrow().as_ref().unwrap().session.engine().backend().capture_in(w.view_color()).unwrap();
+    let capture = ui_session(&w).engine().backend().capture_in(w.view_color()).unwrap();
     let m = state(w).camera.document_to_surface();
     let x = (m[0] * document[0] + m[2] * document[1] + m[4]).round() as usize;
     let y = (m[1] * document[0] + m[3] * document[1] + m[5]).round() as usize;
@@ -72,7 +72,7 @@ fn native_screen_status_marks_clipped_colors_and_follows_proofing() {
     let popover = w.screen.popover();
     assert!(popover.is_visible());
     capture_popover(popover, output.join("clipped-details.png").to_str().unwrap());
-    let mark = find_named(popover.upcast_ref(), "screen-mark-clipped").unwrap().downcast::<gtk::CheckButton>().unwrap();
+    let mark = named::<gtk::CheckButton>(popover.upcast_ref(), "screen-mark-clipped");
     assert!(!mark.is_active());
     mark.set_active(true);
     pump(300);
@@ -90,10 +90,7 @@ fn native_screen_status_marks_clipped_colors_and_follows_proofing() {
 
     w.dispatch(UiAction::Invoke { command: CommandId::SoftProofSetup });
     pump(150);
-    find_named(w.proof_panel.root.upcast_ref(), "proof-mode")
-        .unwrap()
-        .downcast::<adw::ToggleGroup>()
-        .unwrap()
+    named::<adw::ToggleGroup>(w.proof_panel.root.upcast_ref(), "proof-mode")
         .set_active_name(Some("print"));
     super::new_photo::profile_action(&w, "proof", "add");
     let file = chooser();
@@ -133,7 +130,7 @@ fn native_screen_status_describes_hdr_drawings() {
     capture_ui(&w, &output, "hdr.png");
     w.screen.button.emit_clicked();
     pump(100);
-    let details = w.gpu.borrow().as_ref().unwrap().session.screen_details().unwrap();
+    let details = ui_session(&w).screen_details().unwrap();
     assert!(details.headline.starts_with("Showing"));
     capture_popover(w.screen.popover(), output.join("hdr-details.png").to_str().unwrap());
     w.screen.popover().popdown();
@@ -223,10 +220,7 @@ fn native_screen_status_gallery() {
 
     w.dispatch(UiAction::Invoke { command: CommandId::SoftProofSetup });
     pump(150);
-    find_named(w.proof_panel.root.upcast_ref(), "proof-mode")
-        .unwrap()
-        .downcast::<adw::ToggleGroup>()
-        .unwrap()
+    named::<adw::ToggleGroup>(w.proof_panel.root.upcast_ref(), "proof-mode")
         .set_active_name(Some("print"));
     super::new_photo::profile_action(&w, "proof", "add");
     let file = chooser();

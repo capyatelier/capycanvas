@@ -18,11 +18,7 @@ fn native_command_bar_input() {
             state(&d.w).command_search.is_some(),
             "keyboard opener {attempt}: focus={:?}, command={:?}, error={:?}",
             gtk::prelude::GtkWindowExt::focus(&d.w.window),
-            d.w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&d.w)
                 .command(CommandId::SearchCommands),
             state(&d.w).host_error
         );
@@ -111,11 +107,7 @@ fn native_command_bar_input() {
     assert_eq!(state(&d.w).brush.tool, Tool::Eraser);
     d.input.perform(open);
     let revision =
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .document()
             .revision;
@@ -129,11 +121,7 @@ fn native_command_bar_input() {
         "outside contact dismisses"
     );
     assert_eq!(
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .document()
             .revision,

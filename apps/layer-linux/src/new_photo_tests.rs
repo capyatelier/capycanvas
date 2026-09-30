@@ -59,11 +59,11 @@ pub(super) fn export_enabled(w: &Rc<Workspace>) -> bool {
 pub(super) fn export_page(w: &Rc<Workspace>, tag: &str) {
     let dialog = w.window.visible_dialog().unwrap();
     if dialog.widget_name() != "export-options" { return; }
-    let nav = find_named(dialog.upcast_ref(), "export-navigation").unwrap().downcast::<adw::NavigationView>().unwrap();
+    let nav = named::<adw::NavigationView>(dialog.upcast_ref(), "export-navigation");
     if nav.visible_page_tag().as_deref() == Some(tag) { return; }
     nav.pop_to_tag("main");
     if tag != "main" {
-        let row = find_named(dialog.upcast_ref(), &format!("export-open-{tag}")).unwrap().downcast::<adw::ActionRow>().unwrap();
+        let row = named::<adw::ActionRow>(dialog.upcast_ref(), &format!("export-open-{tag}"));
         row.emit_by_name::<()>("activated", &[]);
     }
     pump(350);
@@ -74,7 +74,7 @@ pub(super) fn controls_root(window: &adw::ApplicationWindow) -> gtk::Widget {
 }
 pub(super) fn combo(w: &Rc<Workspace>, name: &str) -> adw::ComboRow {
     if name == "proof-intent" && w.window.visible_dialog().is_none() {
-        find_named(w.proof_panel.root.upcast_ref(),"proof-advanced").unwrap().downcast::<gtk::MenuButton>().unwrap().popup();
+        named::<gtk::MenuButton>(w.proof_panel.root.upcast_ref(),"proof-advanced").popup();
         pump(100);
     }
     find_named(&controls_root(&w.window), name)
@@ -104,16 +104,10 @@ pub(super) fn profile_action_window(window: &adw::ApplicationWindow, prefix: &st
 
     if prefix == "export" {
         let dialog = window.visible_dialog().unwrap();
-        let nav = find_named(dialog.upcast_ref(), "export-navigation").unwrap().downcast::<adw::NavigationView>().unwrap();
+        let nav = named::<adw::NavigationView>(dialog.upcast_ref(), "export-navigation");
         if nav.visible_page_tag().as_deref() != Some("color") { nav.pop_to_tag("main"); nav.push_by_tag("color"); pump(350); }
     }
-    let menu = find_named(
-        &controls_root(window),
-        &format!("{prefix}-profile-choose"),
-    )
-    .unwrap()
-    .downcast::<gtk::MenuButton>()
-    .unwrap();
+    let menu = named::<gtk::MenuButton>(&controls_root(window), &format!("{prefix}-profile-choose"));
     menu.popup();
     let popup = menu
         .popover()
@@ -139,13 +133,7 @@ pub(super) fn profile_action_window(window: &adw::ApplicationWindow, prefix: &st
 }
 pub(super) fn profile_manager_action(w: &Rc<Workspace>, index: u32, action: &str) {
     let dialog = w.window.visible_dialog().unwrap();
-    let menu = find_named(
-        dialog.upcast_ref(),
-        &format!("profile-library-menu-{index}"),
-    )
-    .unwrap()
-    .downcast::<gtk::MenuButton>()
-    .unwrap();
+    let menu = named::<gtk::MenuButton>(dialog.upcast_ref(), &format!("profile-library-menu-{index}"));
     menu.popup();
     pump(30);
     menu.popover()
@@ -159,7 +147,7 @@ pub(super) fn profile_name(w: &Rc<Workspace>, name: &str) -> String {
     let root=controls_root(&w.window);
     let control=find_named(&root,name).unwrap();
     if let Some(row)=control.downcast_ref::<adw::ActionRow>() {return row.subtitle().unwrap().into();}
-    find_named(&control,"proof-profile-choose").unwrap().downcast::<gtk::MenuButton>().unwrap().label().unwrap().into()
+    named::<gtk::MenuButton>(&control,"proof-profile-choose").label().unwrap().into()
 }
 pub(super) fn response(w: &Rc<Workspace>, id: &str) {
     if w.window.visible_dialog().is_some_and(|d| d.widget_name() == "export-options") {
@@ -318,10 +306,7 @@ fn native_new_presets_and_profiled_photo_master() {
     assert_eq!(combo(&w, "new-document-depth").selected(), 0);
     combo(&w, "new-document-background").set_selected(1);
     for name in ["new-document-width", "new-document-height"] {
-        find_named(w.window.upcast_ref(), name)
-            .unwrap()
-            .downcast::<adw::SpinRow>()
-            .unwrap()
+        named::<adw::SpinRow>(w.window.upcast_ref(), name)
             .set_value(256.);
     }
     let options = NewDocumentOptions {
@@ -341,21 +326,12 @@ fn native_new_presets_and_profiled_photo_master() {
         .unwrap(),
     );
     pump(100);
-    find_named(
-        w.window.visible_dialog().unwrap().upcast_ref(),
-        "new-document-preset-name",
-    )
-    .unwrap()
-    .downcast::<adw::EntryRow>()
-    .unwrap()
+    named::<adw::EntryRow>(w.window.visible_dialog().unwrap().upcast_ref(), "new-document-preset-name")
     .set_text("P3 cover");
     response(&w, "save");
     assert_eq!(state(&w).settings.new_document.presets[0].options, options);
     assert_eq!(combo(&w, "new-document-preset").selected(), 5);
-    find_named(w.window.upcast_ref(), "new-document-remember")
-        .unwrap()
-        .downcast::<gtk::CheckButton>()
-        .unwrap()
+    named::<gtk::CheckButton>(w.window.upcast_ref(), "new-document-remember")
         .set_active(true);
     capture_ui(&w, &output, "new-p3-preset.png");
     response(&w, "create");
@@ -375,10 +351,7 @@ fn native_new_presets_and_profiled_photo_master() {
     assert_eq!(combo(&w, "new-document-space").selected(), 3);
     assert_eq!(combo(&w, "new-document-depth").selected(), 1);
     capture_ui(&w, &output, "new-photo-preset.png");
-    find_named(w.window.upcast_ref(), "new-document-color")
-        .unwrap()
-        .downcast::<adw::ExpanderRow>()
-        .unwrap()
+    named::<adw::ExpanderRow>(w.window.upcast_ref(), "new-document-color")
         .set_expanded(true);
     combo(&w, "new-document-space").set_selected(2);
     combo(&w, "new-document-depth").set_selected(0);
@@ -396,24 +369,14 @@ fn native_new_presets_and_profiled_photo_master() {
     fresh.window.present();
     ready(&fresh);
     assert_eq!(
-        fresh
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&fresh)
             .engine()
             .document()
             .color,
         options.color
     );
     assert_eq!(
-        fresh
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&fresh)
             .engine()
             .document()
             .width,
@@ -422,12 +385,7 @@ fn native_new_presets_and_profiled_photo_master() {
     native_pen_path(&fresh, &[[80., 120.], [130., 120.], [180., 120.]]);
     ready(&fresh);
     assert!(
-        !fresh
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        !ui_session(&fresh)
             .engine()
             .document()
             .layers[0]
@@ -441,10 +399,7 @@ fn native_new_presets_and_profiled_photo_master() {
     pump(50);
     invoke(&w, CommandId::NewDocument);
     combo(&w, "new-document-preset").set_selected(5);
-    find_named(w.window.upcast_ref(), "new-document-remove-preset")
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap()
+    named::<gtk::Button>(w.window.upcast_ref(), "new-document-remove-preset")
         .emit_clicked();
     pump(100);
     assert!(state(&w).settings.new_document.presets.is_empty());
@@ -522,12 +477,7 @@ fn native_new_presets_and_profiled_photo_master() {
     ready(&photo);
     native_pen_path(&photo, &[[200., 120.], [230., 120.], [270., 120.]]);
     ready(&photo);
-    let edited = photo
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let edited = ui_session(&photo)
         .capture_project_recovery()
         .unwrap();
     assert!(

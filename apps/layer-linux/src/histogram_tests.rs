@@ -86,7 +86,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
     let inspector = w.histogram.borrow().as_ref().unwrap().clone();
     assert!(!inspector.window.is_modal());
     let initial = completed(&inspector);
-    find_named(inspector.window.upcast_ref(), "histogram-details").unwrap().downcast::<gtk::Expander>().unwrap().set_expanded(true);
+    named::<gtk::Expander>(inspector.window.upcast_ref(), "histogram-details").set_expanded(true);
     pump(100);
     let output = std::path::PathBuf::from(format!(
         "../../artifacts/color-m2/histogram-ui/{}",
@@ -97,10 +97,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
     crate::snapshot_window(&inspector.window, 1.)
         .save_to_png(output.join("rgb.png"))
         .unwrap();
-    let channel = find_named(inspector.window.upcast_ref(), "histogram-channel")
-        .unwrap()
-        .downcast::<gtk::DropDown>()
-        .unwrap();
+    let channel = named::<gtk::DropDown>(inspector.window.upcast_ref(), "histogram-channel");
     channel.set_selected(4);
     pump(100);
     assert!(
@@ -113,10 +110,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
         .unwrap();
     assert_eq!(super::place_source::snapshot(&w), before);
 
-    let automatic = find_named(inspector.window.upcast_ref(), "histogram-automatic")
-        .unwrap()
-        .downcast::<gtk::CheckButton>()
-        .unwrap();
+    let automatic = named::<gtk::CheckButton>(inspector.window.upcast_ref(), "histogram-automatic");
     automatic.set_active(false);
     w.dispatch(UiAction::Effect {
         action: EffectAction::Insert {
@@ -124,12 +118,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
         },
     });
     ready(&w);
-    let effect = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let effect = ui_session(&w)
         .engine()
         .document()
         .active_layer;

@@ -18,7 +18,7 @@ fn brightness(pixel: [u8; 4]) -> u32 {
 /// The canvas's own composite at document point `at`, before the display's
 /// color conversion.
 fn composite(w: &Workspace, [x, y]: [f32; 2]) -> [u8; 4] {
-    let image = w.gpu.borrow().as_ref().unwrap().session.engine().backend().capture().unwrap();
+    let image = ui_session(&w).engine().backend().capture().unwrap();
     let m = state(w).camera.document_to_surface();
     let [x, y] = [(m[0] * x + m[2] * y + m[4]) as usize, (m[1] * x + m[3] * y + m[5]) as usize];
     image.bytes[y * image.stride as usize + x * 4..][..4].try_into().unwrap()
@@ -40,7 +40,7 @@ fn run(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str, command: Comman
 }
 
 fn paint(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str, rgba: [f32; 4], from: [f32; 2], to: [f32; 2]) {
-    let strokes = || w.gpu.borrow().as_ref().unwrap().session.engine().metrics().committed_strokes;
+    let strokes = || ui_session(&w).engine().metrics().committed_strokes;
     let before = strokes();
     w.dispatch(UiAction::SetColor { rgba });
     until(
@@ -54,7 +54,7 @@ fn paint(w: &Rc<Workspace>, input: &mut RemoteInput, device: &str, rgba: [f32; 4
     );
     stroke(input, device, window_point(w, from), window_point(w, to));
     until(|| strokes() > before, "the stroke ends");
-    until(|| !w.gpu.borrow().as_ref().unwrap().session.engine().has_pending_document_edits(), "the stroke is captured");
+    until(|| !ui_session(&w).engine().has_pending_document_edits(), "the stroke is captured");
     pump(200);
 }
 
@@ -85,7 +85,7 @@ fn retouch_layers_journey(id: &str, device: &str) {
 
     run(&w, &mut input, device, CommandId::NewDodgeBurnLayer, &["Layer", "New", "New Dodge & Burn Layer"]);
     until(|| &*active(&w).name == "Dodge & Burn", "a Dodge & Burn layer is added and active");
-    until(|| !w.gpu.borrow().as_ref().unwrap().session.engine().has_pending_document_edits(), "the gray fill is captured");
+    until(|| !ui_session(&w).engine().has_pending_document_edits(), "the gray fill is captured");
     pump(300);
     assert_eq!(active(&w).properties.blend, layer_core::LayerBlend::SoftLight);
     for (p, before) in points.iter().zip(original) {
@@ -132,7 +132,7 @@ fn retouch_layers_journey(id: &str, device: &str) {
     }
     until(|| state(&w).layer_tools.frequency_separation.is_none(), "Apply closes the dialog");
     until(|| &*active(&w).name == "High", "High is active");
-    until(|| !w.gpu.borrow().as_ref().unwrap().session.engine().has_pending_document_edits(), "Low and High are baked");
+    until(|| !ui_session(&w).engine().has_pending_document_edits(), "Low and High are baked");
     pump(300);
     let doc = document(&w);
     assert_eq!(doc.layers.iter().map(|l| l.name.to_string()).collect::<Vec<_>>()[1..4], ["Frequency Separation", "High", "Low"]);

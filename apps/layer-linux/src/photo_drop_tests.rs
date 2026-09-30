@@ -259,7 +259,7 @@ fn native_multiple_photo_import_chooser() {
     for path in &paths {
         layer_color::photo::write_png(std::fs::File::create(path).unwrap(), &source).unwrap();
     }
-    let before = w.gpu.borrow().as_ref().unwrap().session.engine().document().layers.clone();
+    let before = ui_session(&w).engine().document().layers.clone();
     for apply in [false, true] {
         invoke(&w, CommandId::ImportImage);
         let chooser = super::new_photo::chooser();
@@ -282,7 +282,7 @@ fn native_multiple_photo_import_chooser() {
         until(|| !chooser.is_visible(), "native Return accepts the chooser");
         finish(&w);
         ready(&w);
-        let imported = w.gpu.borrow().as_ref().unwrap().session.engine().document().layers.clone();
+        let imported = ui_session(&w).engine().document().layers.clone();
         let photos: Vec<_> = imported.iter().filter(|layer| layer.source.is_some()).collect();
         assert_eq!(imported.len(), before.len() + 2);
         assert_eq!(photos.iter().map(|layer| layer.name.as_ref()).collect::<Vec<_>>(),
@@ -300,7 +300,7 @@ fn native_multiple_photo_import_chooser() {
             invoke(&w, CommandId::Undo);
             ready(&w);
         }
-        assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().layers, before);
+        assert_eq!(ui_session(&w).engine().document().layers, before);
     }
     println!("native chooser multiple selection: ordered retained sources, Cancel, Apply, save/reopen and one Undo passed");
     driver.input.finish();
@@ -330,12 +330,7 @@ fn native_photo_file_drops() {
     invoke(&w, CommandId::ZoomOut);
     ready(&w);
     let dir = PathBuf::from(std::env::var_os("LAYER_NATIVE_INPUT_DIR").unwrap());
-    let original = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let original = ui_session(&w)
         .engine()
         .document()
         .layers
@@ -388,12 +383,7 @@ fn native_photo_file_drops() {
         finish(&w);
         ready(&w);
         assert!(!w.image_drop_label.is_visible());
-        let doc = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let doc = ui_session(&w)
             .engine()
             .document()
             .clone();
@@ -434,11 +424,7 @@ fn native_photo_file_drops() {
         invoke(&w, CommandId::Undo);
         ready(&w);
         assert_eq!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .document()
                 .layers,
@@ -470,12 +456,7 @@ fn native_photo_file_drops() {
         finish(&w);
         ready(&w);
         assert!(!row.has_css_class(class));
-        let doc = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let doc = ui_session(&w)
             .engine()
             .document()
             .clone();
@@ -500,11 +481,7 @@ fn native_photo_file_drops() {
         driver.click_placement(&w, "canvas-bar-CancelTransform");
         ready(&w);
         assert_eq!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .document()
                 .layers,
@@ -529,11 +506,7 @@ fn native_photo_file_drops() {
             .is_some_and(|e| e.contains("Broken photo") && e.contains("No images were imported"))
     );
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers,
@@ -577,11 +550,7 @@ fn native_photo_file_drops() {
     assert_eq!(cancellations.get(), 1);
     w.window.disconnect(signal);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers,
@@ -639,22 +608,14 @@ fn native_photo_file_drops() {
         state(&w).host_error
     );
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .active_layer,
         group
     );
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers,
@@ -674,11 +635,7 @@ fn native_photo_file_drops() {
     );
     driver.release(false);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers,
@@ -703,11 +660,7 @@ fn native_photo_file_drops() {
     assert_eq!(project.document.layers, original);
     assert!(location.is_some());
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers,

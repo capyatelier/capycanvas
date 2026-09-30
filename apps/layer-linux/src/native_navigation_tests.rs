@@ -243,7 +243,7 @@ fn native_large_photo_navigation() {
     }
     let startup_ms = startup.elapsed().as_secs_f64() * 1000.;
     use layer_render::CanvasRenderer;
-    w.gpu.borrow_mut().as_mut().unwrap().session.renderer_mut().set_telemetry_enabled(true);
+    ui_session_mut(&w).renderer_mut().set_telemetry_enabled(true);
     let proof = super::proof::benchmark_proof(&w);
     let settle_ms = std::env::var("LAYER_NAVIGATION_SETTLE_MS")
         .ok().map(|v| v.parse::<u64>().unwrap()).unwrap_or(0);
@@ -273,21 +273,11 @@ fn native_large_photo_navigation() {
                 "delivery_bytes": std::fs::metadata(delivery).unwrap().len()})
         })
     });
-    let original = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let original = ui_session(&w)
         .engine()
         .document()
         .clone();
-    let stats = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let stats = ui_session(&w)
         .engine()
         .backend()
         .stats
@@ -367,7 +357,7 @@ fn native_large_photo_navigation() {
                 let from = [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
                 let to = viewport.map(|v| v as f32 * 0.5);
                 let requested_ns = glib::monotonic_time() as u64 * 1000;
-                let change = w.gpu.borrow_mut().as_mut().unwrap().session.gesture(
+                let change = ui_session_mut(&w).gesture(
                     from,
                     to,
                     scale / camera.zoom,
@@ -375,7 +365,7 @@ fn native_large_photo_navigation() {
                 );
                 assert!(change.is_ok(), "navigation failed: {change:?}");
                 w.changed(change);
-                assert!(!w.gpu.borrow().as_ref().unwrap().session.rendering_suspended(),
+                assert!(!ui_session(&w).rendering_suspended(),
                     "GPU worker stopped during {phase}, repeat {repeat}, step {step}");
                 requests.push(serde_json::json!({
                     "phase": phase, "repeat": repeat, "step": step,
@@ -398,8 +388,8 @@ fn native_large_photo_navigation() {
     while w.frame_timer.borrow().is_some() && Instant::now() < deadline { pump(5); }
     let settled_after_input_ms = (glib::monotonic_time() as u64 * 1000 - motion_end_ns) as f64 / 1e6;
     let idle = w.frame_timer.borrow().is_none();
-    let suspended = w.gpu.borrow().as_ref().unwrap().session.rendering_suspended();
-    let document_unchanged = w.gpu.borrow().as_ref().unwrap().session.engine().document() == &original;
+    let suspended = ui_session(&w).rendering_suspended();
+    let document_unchanged = ui_session(&w).engine().document() == &original;
     let stats = stats.lock().unwrap();
     let unchanged_work = stats.camera_work.first().is_some_and(|work|
         stats.camera_work.iter().all(|frame| frame[1] == work[1] && frame[4] == 0));
@@ -408,7 +398,7 @@ fn native_large_photo_navigation() {
             .camera_views
             .iter()
             .all(|v| v.2 == stats.camera_views[0].2);
-    let telemetry = w.gpu.borrow().as_ref().unwrap().session.engine().backend().telemetry();
+    let telemetry = ui_session(&w).engine().backend().telemetry();
     let mut report = serde_json::json!({
         "startup_ready_ms": startup_ms,
         "motion_begin_ns": motion_begin_ns, "motion_end_ns": motion_end_ns,
@@ -498,7 +488,7 @@ fn native_photo_thumbnail_finishes_after_idle_and_restores_on_undo() {
     assert_ne!(before, cleared);
     click(&command(&w, CommandId::Undo));
     assert_eq!(wait(&|bytes| bytes == before), before);
-    let mut restored = w.gpu.borrow().as_ref().unwrap().session.engine().document().clone();
+    let mut restored = ui_session(&w).engine().document().clone();
     // Undo publishes a new document revision while restoring exact artwork.
     assert!(restored.revision > original.revision);
     restored.revision = original.revision;

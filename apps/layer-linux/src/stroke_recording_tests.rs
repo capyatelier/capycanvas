@@ -19,10 +19,7 @@ fn native_stroke_recording() {
         pump(20);
         assert!(Instant::now() < deadline);
     }
-    let button = find_named(w.effects.stats.upcast_ref(), "stroke-recording")
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap();
+    let button = named::<gtk::Button>(w.effects.stats.upcast_ref(), "stroke-recording");
     assert_eq!(
         w.effects.stats.last_child().as_ref(),
         Some(button.upcast_ref())
@@ -83,11 +80,7 @@ fn native_stroke_recording() {
     pump(300);
     assert_eq!(button.label().as_deref(), Some("Save stroke recording"));
     assert!(
-        w.gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        ui_session_mut(&w)
             .stroke_recording()
             .status()
             .ready

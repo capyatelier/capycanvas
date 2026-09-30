@@ -31,7 +31,7 @@ pub(super) fn wait_proof(w: &Rc<Workspace>, prefix: &str) {
 }
 
 fn mode(w:&Rc<Workspace>,name:&str){
-    find_named(w.proof_panel.root.upcast_ref(),"proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap().set_active_name(Some(name));
+    named::<adw::ToggleGroup>(w.proof_panel.root.upcast_ref(),"proof-mode").set_active_name(Some(name));
 }
 fn settled(w:&Rc<Workspace>){
     let deadline=Instant::now()+Duration::from_secs(40);
@@ -39,7 +39,7 @@ fn settled(w:&Rc<Workspace>){
         let pending=find_named(root,"proof-preparing").is_some_and(|w|w.is_visible()) || find_named(root,"proof-profile-choose").is_some_and(|w|!w.is_sensitive());
         if !pending{break;}assert!(Instant::now()<deadline,"Proof preparation");
     }
-    let error=find_named(w.proof_panel.root.upcast_ref(),"proof-setup-error").unwrap().downcast::<gtk::Label>().unwrap();
+    let error=named::<gtk::Label>(w.proof_panel.root.upcast_ref(),"proof-setup-error");
     assert!(!error.is_visible(),"{}",error.text());
 }
 fn proof_choice(w:&Rc<Workspace>,name:&str)->gtk::DropDown{
@@ -63,17 +63,12 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     invoke(&w, CommandId::SoftProofSetup);mode(&w,"print");
     super::new_photo::profile_action(&w, "proof", "builtin-0");
     invoke(&w, CommandId::SoftProof);settled(&w);
-    assert_eq!(w.gpu.borrow().as_ref().unwrap().session.proof_panel_mode(), layer_ui::ProofMode::Off);
+    assert_eq!(ui_session(&w).proof_panel_mode(), layer_ui::ProofMode::Off);
     assert_eq!(snapshot(&w), original);
-    assert!(!w.gpu.borrow().as_ref().unwrap().session.state().soft_proof);
+    assert!(!ui_session(&w).state().soft_proof);
     wait_proof(&w, "Normal");
     let apply = |recipe| {
-        let change = w
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        let change = ui_session_mut(&w)
             .set_proof_recipe(Some(recipe));
         w.changed(change);
     };
@@ -109,11 +104,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     assert_eq!(snapshot(&w), failed_document);
     assert!(w.proof.cache_info().is_none());
     assert!(
-        !w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        !ui_session(&w)
             .rendering_suspended()
     );
     invoke(&w, CommandId::SoftProofSetup);mode(&w,"print");
@@ -125,11 +116,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     mode(&w,"print");
     wait_proof(&w, "Proof: Latest");
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .color
@@ -157,12 +144,7 @@ pub(super) fn benchmark_proof(w: &Rc<Workspace>) -> Option<serde_json::Value> {
     }
     let before = process_memory();
     let start = Instant::now();
-    let change = w
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    let change = ui_session_mut(&w)
         .set_proof_recipe(Some(recipe));
     w.changed(change);
     wait_proof(w, "Proof:");
@@ -280,10 +262,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         "profile library manager",
     );
     let manager = w.window.visible_dialog().unwrap();
-    let list = find_named(manager.upcast_ref(), "profile-library-list")
-        .unwrap()
-        .downcast::<gtk::ListBox>()
-        .unwrap();
+    let list = named::<gtk::ListBox>(manager.upcast_ref(), "profile-library-list");
     assert!(list.row_at_index(0).is_some());
     assert!(list.row_at_index(1).is_none());
     pump(350);
@@ -291,10 +270,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     super::new_photo::profile_manager_action(&w, 0, "show");
     response(&w, "close");
     // Hiding survives reopening the manager without changing the chosen bytes.
-    let menu = find_named(setup.upcast_ref(), "proof-profile-choose")
-        .unwrap()
-        .downcast::<gtk::MenuButton>()
-        .unwrap();
+    let menu = named::<gtk::MenuButton>(setup.upcast_ref(), "proof-profile-choose");
     menu.popup();
     pump(300);
     let model = menu
@@ -323,10 +299,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     assert_eq!(profile_name(&w, "proof-profile"), "sRGB");
     profile_action(&w, "proof", "saved-0");
     assert_eq!(profile_name(&w, "proof-profile"), expected);
-    let menu = find_named(setup.upcast_ref(), "proof-profile-choose")
-        .unwrap()
-        .downcast::<gtk::MenuButton>()
-        .unwrap();
+    let menu = named::<gtk::MenuButton>(setup.upcast_ref(), "proof-profile-choose");
     menu.popup();
     pump(300);
     assert!(
@@ -370,10 +343,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         "profile library manager",
     );
     let manager = w.window.visible_dialog().unwrap();
-    let list = find_named(manager.upcast_ref(), "profile-library-list")
-        .unwrap()
-        .downcast::<gtk::ListBox>()
-        .unwrap();
+    let list = named::<gtk::ListBox>(manager.upcast_ref(), "profile-library-list");
     super::new_photo::profile_manager_action(&w, 0, "remove");
     until(
         || list.row_at_index(0).is_none(),
@@ -402,12 +372,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         settled(&w);
         finish(&w);
         wait_proof(&w, "Proof:");
-        let proof = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let proof = ui_session(&w)
             .engine()
             .document()
             .proof
@@ -492,7 +457,7 @@ fn native_embedded_proof_replacement_preserves_local_copy_and_saves_one_profile(
     std::fs::write(&library,b"not a directory").unwrap();
     profile_action(&w,"proof","builtin-0");
     let deadline=Instant::now()+Duration::from_secs(40);
-    loop {pump(20);let issue=find_named(w.proof_panel.root.upcast_ref(),"proof-setup-error").unwrap().downcast::<gtk::Label>().unwrap();
+    loop {pump(20);let issue=named::<gtk::Label>(w.proof_panel.root.upcast_ref(),"proof-setup-error");
         if issue.is_visible(){assert!(issue.text().starts_with("Could not save the previous proof profile"));break;}
         assert!(Instant::now()<deadline,"profile preservation error");
     }
@@ -624,12 +589,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
             .bytes,
         normal.bytes
     );
-    let recipe = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let recipe = ui_session(&w)
         .engine()
         .document()
         .proof
@@ -672,11 +632,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     invoke(&w, CommandId::Undo);
     ready(&w);
     assert!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .proof
@@ -685,11 +641,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     invoke(&w, CommandId::Redo);
     ready(&w);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .proof
@@ -812,10 +764,10 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     invoke(&restored,CommandId::ExportDocument);
     super::new_photo::export_page(&restored,"color");
     let dialog=restored.window.visible_dialog().unwrap();
-    find_named(dialog.upcast_ref(),"export-print-profile").unwrap().downcast::<adw::ActionRow>().unwrap().emit_by_name::<()>("activated",&[]);
+    named::<adw::ActionRow>(dialog.upcast_ref(),"export-print-profile").emit_by_name::<()>("activated",&[]);
     let deadline=Instant::now()+Duration::from_secs(30);
     while !find_named(dialog.upcast_ref(),"export-print-profile").unwrap().is_sensitive(){pump(20);assert!(Instant::now()<deadline);}
-    assert_eq!(super::new_photo::profile_name(&restored,"export-space"),restored.gpu.borrow().as_ref().unwrap().session.engine().document().proof.as_ref().unwrap().name);
+    assert_eq!(super::new_photo::profile_name(&restored,"export-space"),ui_session(&restored).engine().document().proof.as_ref().unwrap().name);
     assert_eq!(combo(&restored,"export-format").selected(),1);
     super::new_photo::capture_ui(&restored,&output,"print-profile-delivery.png");response(&restored,"cancel");finish(&restored);
 
@@ -893,10 +845,7 @@ fn native_open_and_profile_pickers_remember_separate_folders() {
     profile_action(&other, "proof", "manage");
     pump(250);
     let manager = other.window.visible_dialog().unwrap();
-    find_named(manager.upcast_ref(), "profile-library-import")
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap()
+    named::<gtk::Button>(manager.upcast_ref(), "profile-library-import")
         .emit_clicked();
     let file = chooser();
     assert_eq!(
@@ -1027,10 +976,10 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
             assert!(hit==arc || hit.is_ancestor(&arc),"{name}: visible arc must receive input");
         }
         let before=snapshot(&w);
-        let control=find_named(w.proof_panel.root.upcast_ref(),"sdr-appearance-exposure").unwrap().downcast::<gtk::Scale>().unwrap();
+        let control=named::<gtk::Scale>(w.proof_panel.root.upcast_ref(),"sdr-appearance-exposure");
         control.set_value(-1.);pump(50);
         let edited=snapshot(&w);assert_ne!(edited,before);
-        let mode=find_named(w.proof_panel.root.upcast_ref(),"proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
+        let mode=named::<adw::ToggleGroup>(w.proof_panel.root.upcast_ref(),"proof-mode");
         mode.set_active_name(Some("off"));pump(50);assert!(!state(&w).preview_sdr);assert_eq!(snapshot(&w),edited);
         mode.set_active_name(Some("sdr"));pump(300);assert!(state(&w).preview_sdr);
         super::new_photo::capture_ui(&w,output,&format!("{}-sdr.png",preset.name()));
@@ -1051,7 +1000,7 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         drag.update([f64::from(w.surface.width())*0.5-f64::from(bounds.x()+10.),150.]);
         assert!(state(&w).workspace.layout.floating.iter().any(|f| matches!(&f.root, DockNode::Tabs {panels,..} if panels.contains(&Panel::Proof))),"Proof tab drags without a hold");
         drag.end();pump(250);
-        assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition.exposure,-1.);
+        assert_eq!(ui_session(&w).engine().document().sdr_rendition.exposure,-1.);
         assert_eq!(snapshot(&w),edited);
         super::new_photo::capture_ui(&w,output,&format!("{}-floating.png",preset.name()));
         invoke(&w,CommandId::Undo);pump(100);
@@ -1107,7 +1056,7 @@ fn native_proof_toggle_remembers_mode_and_reveals_hidden_panel() {
     pump(150);
     check(ProofMode::Print);
     assert!(w.proof_panel.root.is_mapped(), "enabling reveals the active Proof tab");
-    let selector = find_named(w.proof_panel.root.upcast_ref(), "proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
+    let selector = named::<adw::ToggleGroup>(w.proof_panel.root.upcast_ref(), "proof-mode");
     assert_eq!(selector.active_name().as_deref(), Some("print"));
     assert_eq!(snapshot(&w), saved, "view changes never enter document history");
     w.window.destroy();

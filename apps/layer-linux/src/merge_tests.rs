@@ -46,7 +46,7 @@ fn native_merge_down_from_ctrl_e_and_the_layer_menu() {
         {"key": 0x65, "down": false}, {"key": 0xffe3, "down": false}
     ]));
     until(|| document(&w).layers.len() + 1 == before.layers.len(), "Ctrl+E merges down");
-    until(|| !w.gpu.borrow().as_ref().unwrap().session.engine().has_pending_document_edits(), "the merge runs");
+    until(|| !ui_session(&w).engine().has_pending_document_edits(), "the merge runs");
     pump(300);
     let merged = shown(&w, center);
     assert!(crossing.iter().zip(merged).all(|(a, b)| a.abs_diff(b) <= 1), "{crossing:?} {merged:?}");

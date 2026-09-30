@@ -44,21 +44,12 @@ fn native_photo_filter_investigation() {
     w.window.set_default_size(1400, 950);
     w.window.present();
     settled(&w);
-    let stats = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let stats = ui_session(&w)
         .engine()
         .backend()
         .stats
         .clone();
-    w.gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    ui_session_mut(&w)
         .renderer_mut()
         .set_telemetry_enabled(true);
     *stats.lock().unwrap() = Default::default();

@@ -28,8 +28,7 @@ fn patch_texture(widget: &gtk::Widget) -> gdk::Texture {
     widget.downcast_ref::<crate::display_color::ColorPatch>().unwrap().imp().textures.borrow().as_ref().unwrap()[0].clone()
 }
 fn paint_patch(w: &Workspace, slot: ColorSlot) -> gtk::Widget {
-    find_named(w.color_panel.root.upcast_ref(), &format!("color-{slot:?}")).unwrap()
-        .downcast::<gtk::Button>().unwrap().child().unwrap()
+    named::<gtk::Button>(w.color_panel.root.upcast_ref(), &format!("color-{slot:?}")).child().unwrap()
 }
 #[test]
 #[ignore = "Wayland/GPU; optional private native input and LAYER_EXPECT_HDR=1"]
@@ -84,16 +83,10 @@ fn native_hdr_picker_intensity_shape_and_input() {
         });
         pump(200);
         let root = &w.color_panel.root;
-        let scale = find_named(root.upcast_ref(), "color-hdr-intensity-ramp")
-            .unwrap()
-            .downcast::<crate::hdr_color_scale::HdrColorScale>()
-            .unwrap();
-        let wheel = find_named(root.upcast_ref(), "color-wheel")
-            .unwrap()
-            .downcast::<crate::tool_panels::ColorWheel>()
-            .unwrap();
+        let scale = named::<crate::hdr_color_scale::HdrColorScale>(root.upcast_ref(), "color-hdr-intensity-ramp");
+        let wheel = named::<crate::tool_panels::ColorWheel>(root.upcast_ref(), "color-wheel");
         assert_eq!(scale.is_visible(), hdr);
-        let pencil = find_named(root.upcast_ref(), "color-edit-button").unwrap().downcast::<gtk::Button>().unwrap();
+        let pencil = named::<gtk::Button>(root.upcast_ref(), "color-edit-button");
         let swap = find_named(root.upcast_ref(), "color-swap").unwrap();
         assert_eq!([pencil.width(), pencil.height()], [swap.width(), swap.height()]);
         let pencil_bounds = pencil.compute_bounds(root).unwrap();
@@ -151,7 +144,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
                 assert!((peak(texture) - expected).abs() < 0.005, "HDR alpha {alpha}: {} != {expected}", peak(texture));
             }
         }
-        let entry = find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().downcast::<adw::EntryRow>().unwrap();
+        let entry = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-ev");
         assert_eq!(entry.text().parse::<f32>().unwrap(), 2.);
         entry.set_text("3");
         pump(60);
@@ -169,7 +162,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
             }
             let headroom = w.picker_headroom();
             for h in [1., headroom] {
-                w.gpu.borrow_mut().as_mut().unwrap().session.renderer_mut().display_headroom = h;
+                ui_session_mut(&w).renderer_mut().display_headroom = h;
                 w.changed(Ok(layer_ui::UiChange { regions: layer_ui::regions::SETTINGS, ..Default::default() }));
                 pump(80);
                 assert_eq!(patch_texture(&adjusted_preview).color_state() == gdk::ColorState::rec2100_linear(), h > 1.);
@@ -181,7 +174,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
         entry.set_text("2");
         entry.set_text("NaN");
         assert!(!find_button(dialog.upcast_ref(), "Use Color").unwrap().is_sensitive());
-        let red = find_named(dialog.upcast_ref(), "edit-color-value-0").unwrap().downcast::<adw::EntryRow>().unwrap();
+        let red = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-value-0");
         red.set_text("1");
         assert!(!find_button(dialog.upcast_ref(), "Use Color").unwrap().is_sensitive());
         entry.set_text("3");
@@ -195,7 +188,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
         assert_eq!(state(&w).colors, original, "Untouched Edit Color retains exact state");
         pencil.emit_clicked();
         pump(100);
-        find_named(w.window.visible_dialog().unwrap().upcast_ref(), "edit-color-ev").unwrap().downcast::<adw::EntryRow>().unwrap().set_text("3");
+        named::<adw::EntryRow>(w.window.visible_dialog().unwrap().upcast_ref(), "edit-color-ev").set_text("3");
         response(&w, "apply");
         assert_eq!(state(&w).colors.hdr_intensity(), 3.);
         scale.set_value(0.);
@@ -383,7 +376,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
                 let dialog = w.window.visible_dialog().expect("Double-click opens Edit Color");
                 assert_eq!(dialog.widget_name(), "edit-color-dialog");
                 assert!(find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().is_visible());
-                let red = find_named(dialog.upcast_ref(), "edit-color-value-0").unwrap().downcast::<adw::EntryRow>().unwrap().text().parse::<f32>().unwrap();
+                let red = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-value-0").text().parse::<f32>().unwrap();
                 assert!((red - original.linear_in(RgbSpace::Srgb).unwrap()[0]).abs() < 1e-5, "Editor belongs to the double-clicked swatch");
                 response(&w, "apply");
                 assert_eq!(if slot == ColorSlot::Foreground { state(&w).colors.foreground } else { state(&w).colors.background }, original);
@@ -406,10 +399,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
                     .unwrap()
                     .is_visible()
             );
-            let sw = find_named(sr.upcast_ref(), "color-wheel")
-                .unwrap()
-                .downcast::<crate::tool_panels::ColorWheel>()
-                .unwrap();
+            let sw = named::<crate::tool_panels::ColorWheel>(sr.upcast_ref(), "color-wheel");
             for shape in [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle] {
                 sdr.dispatch(UiAction::SetColor {
                     rgba: [0.1, 0.2, 0.3, 1.],
@@ -463,11 +453,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
             let original = state(&w).colors.definition();
             let headroom = w.picker_headroom();
             for h in [1., headroom] {
-                w.gpu
-                    .borrow_mut()
-                    .as_mut()
-                    .unwrap()
-                    .session
+                ui_session_mut(&w)
                     .renderer_mut()
                     .display_headroom = h;
                 w.changed(Ok(layer_ui::UiChange {

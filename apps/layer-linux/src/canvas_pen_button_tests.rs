@@ -22,21 +22,13 @@ fn native_canvas_pen_buttons() {
     let r = [p[0] + 100., p[1]];
     let camera = state(&d.w).camera;
     let stats =
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .backend()
             .stats
             .clone();
     let initial =
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .metrics()
             .committed_strokes;
@@ -74,11 +66,7 @@ fn native_canvas_pen_buttons() {
                 ]));
             }
             assert_eq!(
-                d.w.gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                ui_session(&d.w)
                     .engine()
                     .metrics()
                     .committed_strokes,
@@ -95,11 +83,7 @@ fn native_canvas_pen_buttons() {
             }
             expected += 1;
             assert_eq!(
-                d.w.gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                ui_session(&d.w)
                     .engine()
                     .metrics()
                     .committed_strokes,
@@ -168,7 +152,7 @@ fn native_canvas_pen_buttons() {
     d.input.perform(serde_json::json!([{"pen":"up"}]));
     pump(250);
     assert_eq!(
-        d.w.gpu.borrow().as_ref().unwrap().session.engine().metrics().committed_strokes,
+        ui_session(&d.w).engine().metrics().committed_strokes,
         expected + 1,
         "a bound side button cannot split the stroke"
     );
@@ -210,7 +194,7 @@ fn native_canvas_touch_taps() {
     }
     d.input.perform(serde_json::json!([{"pen":"down","point":p}, {"pen":"move","point":q}, {"pen":"up"}, {"pen":"leave"}]));
     pump(300);
-    assert!(d.w.gpu.borrow().as_ref().unwrap().session.command(CommandId::Undo).enabled);
+    assert!(ui_session(&d.w).command(CommandId::Undo).enabled);
     let painted = history(&d.w);
     let camera = state(&d.w).camera;
     let tap = |d: &mut Driver, fingers: usize| {
@@ -225,10 +209,10 @@ fn native_canvas_touch_taps() {
         pump(250);
     };
     tap(&mut d, 2);
-    assert!(!d.w.gpu.borrow().as_ref().unwrap().session.command(CommandId::Undo).enabled, "two-finger tap undoes");
+    assert!(!ui_session(&d.w).command(CommandId::Undo).enabled, "two-finger tap undoes");
     assert_ne!(history(&d.w), painted);
     tap(&mut d, 3);
-    assert!(d.w.gpu.borrow().as_ref().unwrap().session.command(CommandId::Undo).enabled, "three-finger tap redoes");
+    assert!(ui_session(&d.w).command(CommandId::Undo).enabled, "three-finger tap redoes");
     assert_eq!(state(&d.w).camera.translation, camera.translation);
     assert_eq!(state(&d.w).camera.zoom, camera.zoom);
     d.input.perform(serde_json::json!([
@@ -239,7 +223,7 @@ fn native_canvas_touch_taps() {
         {"touch":"up","slot":0}
     ]));
     pump(250);
-    assert!(d.w.gpu.borrow().as_ref().unwrap().session.command(CommandId::Undo).enabled, "a pinch is not a tap");
+    assert!(ui_session(&d.w).command(CommandId::Undo).enabled, "a pinch is not a tap");
     assert_ne!(state(&d.w).camera.zoom, camera.zoom);
     d.finish();
 }
@@ -248,7 +232,7 @@ fn native_canvas_touch_taps() {
 #[ignore = "isolated native-input.js --native-test=native_remote_keys"]
 fn native_remote_keys() {
     let mut d = Driver::new("art.capycanvas.RemoteKeys");
-    let enabled = |w: &Workspace, command| w.gpu.borrow().as_ref().unwrap().session.command(command).enabled;
+    let enabled = |w: &Workspace, command| ui_session(&w).command(command).enabled;
     d.w.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts });
     d.w.dispatch(UiAction::Preferences {
         action: PreferenceAction::BeginShortcut { id: CommandId::Undo.shortcut_id() },
@@ -297,7 +281,7 @@ fn native_shortcut_page() {
     };
     let root = |d: &Driver| d.w.window.clone().upcast::<gtk::Widget>();
     let named = |d: &Driver, name: &str| find_named(&root(d), name).unwrap_or_else(|| panic!("{name}"));
-    let page = |d: &Driver| d.w.gpu.borrow().as_ref().unwrap().session.preferences().unwrap().shortcut_page;
+    let page = |d: &Driver| ui_session(&d.w).preferences().unwrap().shortcut_page;
     for _ in 0..4 {
         d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Shortcuts });
         pump(100);
@@ -372,7 +356,7 @@ fn native_shortcut_page() {
     assert!(named(&d, "shortcut-command.Undo").is_mapped());
     assert!(find_named(&root(&d), "shortcut-command.Redo").is_none_or(|w| !w.is_mapped()));
     shot(&d, "key-search");
-    let editor = |d: &Driver| d.w.gpu.borrow().as_ref().unwrap().session.preferences().unwrap().shortcut_editor;
+    let editor = |d: &Driver| ui_session(&d.w).preferences().unwrap().shortcut_editor;
     let recording = |d: &Driver| find_named(&root(d), "shortcut-recording").is_some_and(|w| w.is_mapped());
     let key = |d: &mut Driver, code: u32| {
         d.input.perform(serde_json::json!([{"key":code,"down":true},{"key":code,"down":false}]));
@@ -418,7 +402,7 @@ fn native_shortcut_page() {
     key(&mut d, 0xff1b);
     pump(300);
     assert!(editor(&d).is_none() && find_named(&root(&d), "shortcut-editor").is_none_or(|w| !w.is_mapped()));
-    let modifier = |d: &Driver| d.w.gpu.borrow().as_ref().unwrap().session.preferences().unwrap().modifier_editor;
+    let modifier = |d: &Driver| ui_session(&d.w).preferences().unwrap().modifier_editor;
     search.set_text("");
     pump(300);
     named(&d, "shortcut-category-Modifier keys").emit_by_name::<()>("activated", &[]);
@@ -450,7 +434,7 @@ fn native_shortcut_page() {
     shot(&d, "modifier-picker");
     key(&mut d, 0xff1b);
     pump(300);
-    assert!(d.w.gpu.borrow().as_ref().unwrap().session.preferences().unwrap().shortcut_page.picker.is_none(), "Escape closes the picker");
+    assert!(ui_session(&d.w).preferences().unwrap().shortcut_page.picker.is_none(), "Escape closes the picker");
     assert!(named(&d, "modifier-page").is_mapped(), "and stays on the key's page");
     named(&d, "modifier-action-selection").emit_by_name::<()>("activated", &[]);
     pump(400);

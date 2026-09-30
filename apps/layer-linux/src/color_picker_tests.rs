@@ -95,11 +95,7 @@ fn native_color_picker_input() {
     assert_eq!(state(&d.w).layer_tools.tool, previous);
     assert_eq!(state(&d.w).colors, original);
     let revision =
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .document()
             .revision;
@@ -112,11 +108,7 @@ fn native_color_picker_input() {
         assert!(state(&d.w).color_picker.preview.is_some());
         assert_eq!(state(&d.w).colors, original);
         assert!(
-            d.w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&d.w)
                 .color_picker_overlay()
                 .is_some()
         );
@@ -164,11 +156,7 @@ fn native_color_picker_input() {
             "source selection preserves temporary picking"
         );
         assert!(
-            d.w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&d.w)
                 .color_picker_overlay()
                 .unwrap()
                 .layer
@@ -186,11 +174,7 @@ fn native_color_picker_input() {
         d.input
             .perform(serde_json::json!([{"point":[810,479]},{"point":[820,479]}]));
         assert!(
-            !d.w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            !ui_session(&d.w)
                 .color_picker_overlay()
                 .unwrap()
                 .layer
@@ -220,11 +204,7 @@ fn native_color_picker_input() {
     assert_eq!(state(&d.w).layer_tools.tool, previous);
     assert_ne!(state(&d.w).colors, original);
     assert_eq!(
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .document()
             .revision,
@@ -284,11 +264,7 @@ fn native_color_picker_input() {
         picker_dropdown(&mut d, "color-picker-source", "Selected layer", false);
         d.input.perform(serde_json::json!([{"point":[820,479]}]));
         assert!(
-            d.w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&d.w)
                 .color_picker_overlay()
                 .unwrap()
                 .classic
@@ -321,11 +297,7 @@ fn native_color_picker_input() {
         .perform(serde_json::json!([{"pen":"move","point":[780,440]}]));
     assert_eq!(state(&d.w).colors, pen_before);
     assert!(
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .color_picker_overlay()
             .is_some()
     );
@@ -334,11 +306,7 @@ fn native_color_picker_input() {
     assert_ne!(state(&d.w).colors, pen_before);
     assert_eq!(state(&d.w).layer_tools.tool, previous);
     assert_eq!(
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .document()
             .revision,
@@ -353,11 +321,7 @@ fn native_color_picker_input() {
     assert_eq!(state(&d.w).layer_tools.tool, previous);
     d.input.perform(serde_json::json!([{"touch":"down","point":[820,529]},{"wait_ms":700},{"touch":"move","point":[860,530]}]));
     let ring =
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .color_picker_overlay()
             .unwrap();
     assert_eq!(ring.center, ring.sample);
@@ -369,11 +333,7 @@ fn native_color_picker_input() {
         .perform(serde_json::json!([{"touch":"down","slot":1,"point":[1000,600]}]));
     assert!(state(&d.w).color_picker.layer);
     assert!(
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .color_picker_overlay()
             .unwrap()
             .layer
@@ -386,11 +346,7 @@ fn native_color_picker_input() {
     d.input.perform(serde_json::json!([{"touch":"up"}]));
     assert_eq!(state(&d.w).layer_tools.tool, previous);
     assert_eq!(
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .document()
             .revision,
@@ -414,7 +370,7 @@ fn native_color_picker_input() {
             {"pen":"move","point":[820,479]}
         ]));
         assert!(state(&d.w).layer_tools.tool.picks_color());
-        let ring = d.w.gpu.borrow().as_ref().unwrap().session.color_picker_overlay().unwrap();
+        let ring = ui_session(&d.w).color_picker_overlay().unwrap();
         let scale = d.w.area.scale_factor() as f32;
         assert_eq!(ring.sample, [820. * scale, 479. * scale], "old hold must not own the picker");
         d.input.perform(serde_json::json!([{"touch":"up"},{"pen":"leave"}]));
@@ -446,10 +402,7 @@ fn native_color_picker_input() {
     });
     pump(400);
     assert!(d.w.color_panel.root.is_mapped());
-    let wheel = find_named(d.w.color_panel.root.upcast_ref(), "color-wheel")
-        .unwrap()
-        .downcast::<crate::tool_panels::ColorWheel>()
-        .unwrap();
+    let wheel = named::<crate::tool_panels::ColorWheel>(d.w.color_panel.root.upcast_ref(), "color-wheel");
     let committed = state(&d.w).colors.clone();
     d.input.key('i' as u32);
     d.input.perform(serde_json::json!([{"point":[820,479]}]));
@@ -457,11 +410,7 @@ fn native_color_picker_input() {
     assert_eq!(state(&d.w).colors, committed);
     d.capture_canvas("color-picker-wheel-preview.png");
     let stats =
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .backend()
             .stats
@@ -560,11 +509,7 @@ fn native_color_picker_preview_pacing() {
         rgba: [0.78, 0.58, 0.23, 1.],
     });
     let stats =
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .backend()
             .stats
@@ -615,10 +560,7 @@ fn native_color_picker_preview_pacing() {
             },
         });
         pump(400);
-        let wheel = find_named(d.w.color_panel.root.upcast_ref(), "color-wheel")
-            .unwrap()
-            .downcast::<crate::tool_panels::ColorWheel>()
-            .unwrap();
+        let wheel = named::<crate::tool_panels::ColorWheel>(d.w.color_panel.root.upcast_ref(), "color-wheel");
         d.input.key('i' as u32);
         d.input.perform(serde_json::json!([{"point":[750,445]}]));
         *stats.lock().unwrap() = Default::default();

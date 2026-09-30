@@ -137,11 +137,7 @@ fn native_workspace_drag_edges() {
                 input.perform(serde_json::json!([event("move", center)]));
                 pump(200);
                 let moving = || {
-                    w.gpu
-                        .borrow()
-                        .as_ref()
-                        .unwrap()
-                        .session
+                    ui_session(&w)
                         .workspace_update()
                         .drag
                         .unwrap()

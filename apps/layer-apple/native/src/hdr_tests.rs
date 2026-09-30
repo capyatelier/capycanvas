@@ -6,24 +6,6 @@ use std::{
     os::fd::AsRawFd,
     time::{Duration, Instant},
 };
-fn file() -> std::fs::File {
-    let p = std::env::temp_dir().join(format!(
-        "capy-apple-hdr-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&p)
-        .unwrap();
-    std::fs::remove_file(p).unwrap();
-    f
-}
 fn proof(app: &App, action: Value) -> Value {
     app.request(2, json!({"type":"proof_panel","action":action}))
         .unwrap()
@@ -186,7 +168,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         // Exact archive/recovery bytes, including the saved rendition.
         let save = ProjectJob(unsafe { capy_apple_project_task(app.0, 2, std::ptr::null()) });
         assert!(!save.0.is_null());
-        let mut archive = file();
+        let mut archive = fixtures::tempfile();
         assert_eq!(
             unsafe { capy_project_write(save.0, archive.as_raw_fd()) },
             0,
@@ -234,7 +216,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
                 "{:?}",
                 export.error()
             );
-            let mut output = file();
+            let mut output = fixtures::tempfile();
             assert_eq!(
                 unsafe { capy_project_write(export.0, output.as_raw_fd()) },
                 0,

@@ -96,11 +96,7 @@ fn measured_events(
     ready(w);
     until(
         || {
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .backend()
                 .frames_idle()
@@ -181,13 +177,8 @@ fn native_large_photo_placement_workflow() {
         ready(&w);
         photo
     });
-    let initial_layers = w.gpu.borrow().as_ref().unwrap().session.engine().document().layers.clone();
-    let stats = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let initial_layers = ui_session(&w).engine().document().layers.clone();
+    let stats = ui_session(&w)
         .engine()
         .backend()
         .stats
@@ -360,11 +351,7 @@ fn native_large_photo_placement_workflow() {
     invoke(&w, CommandId::Undo);
     ready(&w);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers,
@@ -439,7 +426,7 @@ fn native_large_photo_placement_workflow() {
             assert!(canvas_hit(&w, [center[0] - 90., center[1]]));
             assert!(canvas_hit(&w, [center[0] + 90., center[1]]));
             layer_render::CanvasRenderer::set_telemetry_enabled(
-                w.gpu.borrow_mut().as_mut().unwrap().session.renderer_mut(), true);
+                ui_session_mut(&w).renderer_mut(), true);
             let before = layer(&w);
             let counters = stats.lock().unwrap().material_samples.last().copied().unwrap_or_default();
             let mut events = vec![json!({"point": [center[0] - 90., center[1]]}), json!({"down": true})];
@@ -459,7 +446,7 @@ fn native_large_photo_placement_workflow() {
             result["status"] = json!(w.status.text().as_str());
             result["host_error"] = json!(state(&w).host_error);
             result["input_pending"] = json!(w.input.has_pending());
-            result["engine_metrics"] = json!(format!("{:?}", w.gpu.borrow().as_ref().unwrap().session.engine().metrics()));
+            result["engine_metrics"] = json!(format!("{:?}", ui_session(&w).engine().metrics()));
             super::super::new_photo::capture_ui(&w, &output, &format!("{label}-after.png"));
             std::fs::write(output.join(format!("{label}-motion.json")), serde_json::to_vec(&result).unwrap()).unwrap();
             if !native_size {

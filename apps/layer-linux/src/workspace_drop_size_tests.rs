@@ -133,11 +133,7 @@ fn native_workspace_drop_sizes() {
                     let center = [850., 450.];
                     input.perform(serde_json::json!([event("move", center)]));
                     let moving = || {
-                        w.gpu
-                            .borrow()
-                            .as_ref()
-                            .unwrap()
-                            .session
+                        ui_session(&w)
                             .workspace_update()
                             .drag
                             .unwrap()

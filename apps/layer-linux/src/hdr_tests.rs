@@ -49,13 +49,11 @@ fn appearance(w: &Rc<Workspace>) -> gtk::Window {
     w.window.clone().upcast()
 }
 fn appearance_button(window: &gtk::Window, name: &str) {
-    find_named(window.upcast_ref(), &format!("sdr-appearance-{name}")).unwrap()
-        .downcast::<gtk::Button>().unwrap().emit_clicked();
+    named::<gtk::Button>(window.upcast_ref(), &format!("sdr-appearance-{name}")).emit_clicked();
     pump(100);
 }
 fn appearance_exposure(window: &gtk::Window, value: f64) {
-    let control = find_named(window.upcast_ref(), "sdr-appearance-exposure").unwrap()
-        .downcast::<gtk::Scale>().unwrap();
+    let control = named::<gtk::Scale>(window.upcast_ref(), "sdr-appearance-exposure");
     control.set_value(value);
     pump(100);
 }
@@ -190,13 +188,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
             .unwrap() as u32,
     );
     for (i, value) in ["8", "2", "1", "100"].iter().enumerate() {
-        find_named(
-            photo.window.visible_dialog().unwrap().upcast_ref(),
-            &format!("edit-color-value-{i}"),
-        )
-        .unwrap()
-        .downcast::<adw::EntryRow>()
-        .unwrap()
+        named::<adw::EntryRow>(photo.window.visible_dialog().unwrap().upcast_ref(), &format!("edit-color-value-{i}"))
         .set_text(value);
     }
     capture_ui(&photo, &directory, "hdr-color-entry.png");
@@ -207,7 +199,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
         .linear_in(RgbSpace::Srgb)
         .unwrap();
     assert!((entered[0] - 8.).abs() < 2e-5);
-    let intensity = find_named(photo.color_panel.root.upcast_ref(), "color-hdr-intensity-ramp").unwrap().downcast::<crate::hdr_color_scale::HdrColorScale>().unwrap();
+    let intensity = named::<crate::hdr_color_scale::HdrColorScale>(photo.color_panel.root.upcast_ref(), "color-hdr-intensity-ramp");
     let previous = state(&photo).colors.foreground;
     photo.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
         color: layer_core::color::RgbColor::from_linear(RgbSpace::Srgb, [65504., 2., 1., 1.]).unwrap(),
@@ -239,7 +231,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     let default = project(&photo).document.sdr_rendition;
     invoke(&photo, CommandId::SdrRendition);
     let window = appearance(&photo);
-    let highlight=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color").unwrap().downcast::<gtk::Scale>().unwrap();
+    let highlight=named::<gtk::Scale>(photo.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color");
     assert!(highlight.is_mapped());
     highlight.set_value(0.65);pump(50);
     assert_eq!(project(&photo).document.sdr_rendition.highlight_color,0.65);
@@ -249,7 +241,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     invoke(&photo,CommandId::Undo);ready(&photo);
     appearance_exposure(&window,-2.);
     assert_eq!(project(&photo).document.sdr_rendition.exposure,-2.);
-    let mode=find_named(photo.proof_panel.root.upcast_ref(),"proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
+    let mode=named::<adw::ToggleGroup>(photo.proof_panel.root.upcast_ref(),"proof-mode");
     let saved=project(&photo).document.sdr_rendition;
     mode.set_active_name(Some("off"));pump(50);assert!(!state(&photo).preview_sdr);
     assert_eq!(project(&photo).document.sdr_rendition,saved);
@@ -317,7 +309,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     finish(&photo);
     assert!(!state(&photo).document_file.modified);
     assert!(!state(&photo).hdr_display_available);
-    assert!(!photo.gpu.borrow().as_ref().unwrap().session.command(CommandId::PreviewSdr).enabled);
+    assert!(!ui_session(&photo).command(CommandId::PreviewSdr).enabled);
     assert!(!state(&photo).document_file.modified);
     assert_eq!(pixels(&photo), painted);
     capture_ui(&photo, &directory, "hdr-sdr-preview.png");
@@ -406,11 +398,11 @@ fn native_hdr_export_preflight_rejects_range_and_allows_explicit_clipping() {
     invoke(&w, CommandId::ExportDocument);
     combo(&w, "export-output").set_selected(1);
     let dialog = w.window.visible_dialog().unwrap();
-    let status = find_named(dialog.upcast_ref(), "color-preview-status").unwrap().downcast::<gtk::Label>().unwrap();
+    let status = named::<gtk::Label>(dialog.upcast_ref(), "color-preview-status");
     let deadline = Instant::now() + Duration::from_secs(30);
     while !status.text().contains("exceed") { pump(20); assert!(Instant::now() < deadline, "{}", status.text()); }
     assert!(!super::new_photo::export_enabled(&w));
-    let clip = find_named(dialog.upcast_ref(), "export-hdr-clip").unwrap().downcast::<adw::SwitchRow>().unwrap();
+    let clip = named::<adw::SwitchRow>(dialog.upcast_ref(), "export-hdr-clip");
     assert!(find_named(dialog.upcast_ref(), "export-clipping-group").unwrap().is_mapped(),"range warning must still expose clipping choice");
     clip.set_active(true);
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -468,18 +460,18 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     let dialog = w.window.visible_dialog().unwrap();
     assert!(!dialog.is::<adw::AlertDialog>());
     assert!(!find_named(dialog.upcast_ref(), "export-intent").unwrap().is_mapped());
-    let scroll = find_named(dialog.upcast_ref(), "export-main-scroll").unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
+    let scroll = named::<gtk::ScrolledWindow>(dialog.upcast_ref(), "export-main-scroll");
     let adjustment = scroll.vadjustment();
     assert!(adjustment.upper() <= adjustment.page_size() + 1., "main page requires scrolling: {} / {}", adjustment.upper(), adjustment.page_size());
     capture_ui(&w, &output, "export-sdr-main.png");
     super::new_photo::export_page(&w, "size");
     combo(&w, "export-size").set_selected(1);
     for name in ["export-width", "export-height"] {
-        find_named(dialog.upcast_ref(), name).unwrap().downcast::<adw::SpinRow>().unwrap().set_value(100.);
+        named::<adw::SpinRow>(dialog.upcast_ref(), name).set_value(100.);
     }
     capture_ui(&w, &output, "export-size.png");
     super::new_photo::export_page(&w, "main");
-    let size = find_named(dialog.upcast_ref(), "export-open-size").unwrap().downcast::<adw::ActionRow>().unwrap();
+    let size = named::<adw::ActionRow>(dialog.upcast_ref(), "export-open-size");
     assert_eq!(size.subtitle().as_deref(), Some("100 × 67 px"));
     super::new_photo::export_page(&w, "color");
     combo(&w, "export-depth").set_selected(1);
@@ -519,15 +511,14 @@ fn native_hdr_export_preview_preserves_master_and_tracks_display() {
     w.window.present(); ready(&w); pump(300);
     let original = snapshot(&w);
     let physical = std::env::var_os("LAYER_EXPECT_HDR").is_some();
-    let headroom = w.gpu.borrow().as_ref().unwrap().session.engine().backend().display_headroom;
+    let headroom = ui_session(&w).engine().backend().display_headroom;
     if physical {
         assert!(headroom > 1.);
         // Temporary canvas SDR viewing must not replace the export master.
         invoke(&w, CommandId::PreviewSdr); ready(&w);
     }
     invoke(&w, CommandId::ExportDocument);
-    let picture = |name: &str| find_named(w.window.visible_dialog().unwrap().upcast_ref(), name)
-        .unwrap().downcast::<gtk::Picture>().unwrap();
+    let picture = |name: &str| named::<gtk::Picture>(w.window.visible_dialog().unwrap().upcast_ref(), name);
     let texture = |name: &str| picture(name).paintable().and_downcast::<gdk::Texture>().unwrap();
     let wait = || {
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -576,11 +567,11 @@ fn native_hdr_export_preview_preserves_master_and_tracks_display() {
         std::fs::create_dir_all(&directory).unwrap();
         capture_ui(&w, &directory, "hdr-export-preview.png");
         // Inject a capability transition, not a change to OS display settings.
-        w.gpu.borrow_mut().as_mut().unwrap().session.renderer_mut().display_headroom = 1.;
+        ui_session_mut(&w).renderer_mut().display_headroom = 1.;
         pump(400); wait();
         assert_ne!(texture("color-preview-before").color_state(), gdk::ColorState::rec2100_linear());
         assert_eq!(picture("color-preview-before").alternative_text().as_deref(), Some("Master (SDR preview)"));
-        w.gpu.borrow_mut().as_mut().unwrap().session.renderer_mut().display_headroom = headroom;
+        ui_session_mut(&w).renderer_mut().display_headroom = headroom;
         pump(400); wait();
         assert_eq!(texture("color-preview-before").color_state(), gdk::ColorState::rec2100_linear());
     }
@@ -617,8 +608,8 @@ fn native_gainmap_export() {
         assert_eq!(combo(&w,"export-output").selected(),if transparent{3}else{2});
         let dialog=w.window.visible_dialog().unwrap();
         assert!(!find_named(dialog.upcast_ref(),"export-format").unwrap().is_visible());
-        let toggle=find_named(dialog.upcast_ref(),"export-rendition-view").unwrap().downcast::<adw::ToggleGroup>().unwrap();
-        let picture=find_named(dialog.upcast_ref(),"color-preview-after").unwrap().downcast::<gtk::Picture>().unwrap();
+        let toggle=named::<adw::ToggleGroup>(dialog.upcast_ref(),"export-rendition-view");
+        let picture=named::<gtk::Picture>(dialog.upcast_ref(),"color-preview-after");
         let hdr=picture.paintable().unwrap();toggle.set_active_name(Some("sdr"));pump(30);assert_ne!(picture.paintable().unwrap(),hdr);toggle.set_active_name(Some("hdr"));pump(30);assert_eq!(picture.paintable().unwrap(),hdr);
         capture_ui(&w,&output,if transparent{"avif-main.png"}else{"jpeg-main.png"});
         let name=if transparent{"Transparent edited HDR.avif"}else{"Opaque edited HDR.jpg"};
@@ -628,7 +619,7 @@ fn native_gainmap_export() {
         if transparent {
             invoke(&w,CommandId::ExportDocument);combo(&w,"export-output").set_selected(2);
             pump(700);assert!(!super::new_photo::export_enabled(&w));
-            let dialog=w.window.visible_dialog().unwrap();let flatten=find_named(dialog.upcast_ref(),"export-flatten").unwrap().downcast::<adw::SwitchRow>().unwrap();assert!(flatten.is_visible());flatten.set_active(true);wait();capture_ui(&w,&output,"jpeg-flatten.png");response(&w,"cancel");finish(&w);
+            let dialog=w.window.visible_dialog().unwrap();let flatten=named::<adw::SwitchRow>(dialog.upcast_ref(),"export-flatten");assert!(flatten.is_visible());flatten.set_active(true);wait();capture_ui(&w,&output,"jpeg-flatten.png");response(&w,"cancel");finish(&w);
         }
         assert_eq!(snapshot(&w),original);w.window.destroy();pump(100);
     }
@@ -753,7 +744,7 @@ fn native_proof_dial_composited_motion() {
         let name=format!("motion-{i:02}");
         input.perform(serde_json::json!([{"point":to},{"wait_ms":24},{"capture":name}]));
         let (after,next_stride)=load(&name);assert_eq!(stride,next_stride);
-        let recipe=w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition;
+        let recipe=ui_session(&w).engine().document().sdr_rendition;
         let fraction=layer_ui::proof_panel::sdr_tone_pad().fractions(layer_ui::proof_panel::sdr_pad_values(recipe));
         let marker=at(g.field.disc_marker(fraction.map(|f| f as f32)));
         let mut changed=0;
@@ -794,7 +785,7 @@ fn native_proof_dial_pointer_input() {
     let field=find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();
     let g=layer_ui::parameter_pad::ParameterDialGeometry::new(field.width().min(field.height()) as f32).unwrap();
     let at=|point:[f32;2]| {let p=field.compute_point(&w.window,&gtk::graphene::Point::new(point[0],point[1])).unwrap();[p.x(),p.y()]};
-    let rendition=||w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition;
+    let rendition=||ui_session(&w).engine().document().sdr_rendition;
     let mut input=RemoteInput::new().settle_ms(80).timeout_secs(20);
     input.ready();
     for touch in [false,true] {
@@ -820,7 +811,7 @@ fn native_proof_dial_pointer_input() {
         }
     }
     // Double-click color resets to 30%, not zero, through real GTK delivery.
-    let color=find_named(w.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color").unwrap().downcast::<gtk::Scale>().unwrap();
+    let color=named::<gtk::Scale>(w.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color");
     color.set_value(0.8);pump(50);
     let point=at(g.arcs[1].point(0.6));
     input.perform(serde_json::json!([{"point":point,"down":true},{"down":false},{"down":true},{"down":false}]));

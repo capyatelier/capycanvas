@@ -5,11 +5,7 @@ use layer_color::DocumentColorChange;
 use layer_core::{Document, Project, color::*};
 
 fn document(w: &Rc<Workspace>) -> Document {
-    w.gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    ui_session(&w)
         .engine()
         .document()
         .clone()
@@ -184,23 +180,13 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
             },
         ),
     ] {
-        let source = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let source = ui_session(&w)
             .capture_project_recovery()
             .unwrap();
         let expected =
             layer_color::prepare_document_color(&source, change, 16 * 1024 * 1024, || false)
                 .unwrap();
-        let checkpoint = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let checkpoint = ui_session(&w)
             .engine()
             .checkpoint();
         invoke(&w, command);
@@ -236,11 +222,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         exact_document(document(&w), &source.document);
         assert_mode(&w, source.document.color);
         assert_eq!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .checkpoint(),
             checkpoint
@@ -279,12 +261,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     ready(&w);
     // Cancel a prepared GPU candidate, including its in-flight command, and
     // wait for destruction before observing the unchanged live document.
-    let project = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let project = ui_session(&w)
         .capture_project_recovery()
         .unwrap();
     let candidate = layer_color::prepare_document_color(
@@ -392,11 +369,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     w.wake();
     until(
         || {
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .rendering_suspended()
         },
         "color recovery suspension",

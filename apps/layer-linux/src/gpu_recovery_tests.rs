@@ -54,7 +54,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         },
         "canvas startup",
     );
-    if w.gpu.borrow().as_ref().unwrap().session.engine().document().color.depth.is_float() {
+    if ui_session(&w).engine().document().color.depth.is_float() {
         w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
             color: layer_core::color::RgbColor::from_linear(
                 layer_core::color::RgbSpace::ProPhoto, [8., -0.125, 2., 1.]).unwrap(),
@@ -103,7 +103,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     }
     until(
         || {
-            let stats = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
+            let stats = ui_session(&w).renderer_stats();
             !stats.samples.is_empty()
                 && !["Unavailable", "—"].contains(&stats.rows[1].value.as_str())
         },
@@ -141,12 +141,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         .block_on(read_canvas_pixels(&w, 8001))
         .unwrap();
     let snapshot_before = snapshot_pixels(&w);
-    let checkpoint = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let checkpoint = ui_session(&w)
         .engine()
         .checkpoint();
     if color.depth.is_float() {
@@ -157,11 +152,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     w.wake();
     until(
         || {
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .rendering_suspended()
         },
         "rendering suspended",
@@ -219,11 +210,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         assert_eq!(w.proof.cache_info(), proof_cache, "GPU recovery reuses the validated CPU transform");
     }
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .backend()
             .document_color(),
@@ -236,11 +223,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     assert_eq!(snapshot_pixels(&w), snapshot_before,
         "snapshot workers use the replacement canvas device after recovery");
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .checkpoint(),
         checkpoint

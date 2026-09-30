@@ -6,7 +6,7 @@ use layer_core::{
 };
 use std::{
     io::Seek,
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    os::fd::AsRawFd,
 };
 
 const CORRECTIONS: [(&str, &str, f64); 6] = [
@@ -258,19 +258,7 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
                     .count(),
                 6
             );
-            let path = std::env::temp_dir().join(format!(
-                "capy-corrections-{}-{platform}.capy",
-                std::process::id()
-            ));
-            let mut file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&path)
-                .unwrap();
-            std::fs::remove_file(path).unwrap();
+            let mut file = fixtures::tempfile();
             let save = ProjectJob::new(&app, false);
             assert_eq!(
                 unsafe { capy_project_write(save.0, file.as_raw_fd()) },

@@ -194,8 +194,7 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
         assert_eq!(app.pixels(), before);
         app.invoke("redo"); app.draw_until_idle(); check(&app, &painted);
         assert_eq!(app.pixels(), ink);
-        let file_path = std::env::temp_dir().join(format!("capy-61mp-{}-{platform}.capy", std::process::id()));
-        let mut file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&file_path).unwrap();
+        let mut file = fixtures::tempfile();
         {
             let save = ProjectJob::new(&app, false);
             assert_eq!(unsafe { capy_project_write(save.0, file.as_raw_fd()) }, 0, "{:?}", save.error());
@@ -221,7 +220,6 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
         owner.metal.install_renderer(&mut owner.host, native_renderer()).unwrap();
         app.draw_until_idle(); check(&app, &painted); assert_eq!(app.pixels(), ink);
         assert!(!unsafe { &*app.0 }.host.session.rendering_suspended());
-        std::fs::remove_file(file_path).unwrap();
         println!("PASS platform {platform}: 61 MP JPEG, G-Pen, opaque touched tiles with original samples, exact history/save/reopen and GPU loss/replacement");
     }
     assert_eq!(std::fs::read(path).unwrap(), bytes, "Original JPEG must remain unchanged");

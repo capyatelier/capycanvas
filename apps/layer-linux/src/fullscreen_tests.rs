@@ -8,10 +8,7 @@ fn native_fullscreen_header_clock_and_battery() {
     let w = Workspace::new(&app);
     w.window.present();
     until(|| w.gpu.borrow().is_some(), "canvas startup");
-    let clock = find_named(w.window.upcast_ref(), "system-clock")
-        .unwrap()
-        .downcast::<gtk::Label>()
-        .unwrap();
+    let clock = named::<gtk::Label>(w.window.upcast_ref(), "system-clock");
     until(
         || {
             find_named(w.window.upcast_ref(), "workspace-window-bar")
@@ -23,12 +20,7 @@ fn native_fullscreen_header_clock_and_battery() {
         !clock.is_mapped(),
         "windowed status does not occupy title-bar space"
     );
-    let menu = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let menu = ui_session(&w)
         .application_menu(ApplicationMenu::View);
     let item = menu
         .sections
@@ -42,7 +34,7 @@ fn native_fullscreen_header_clock_and_battery() {
         || {
             w.window.is_fullscreen()
                 && clock.is_mapped()
-                && w.gpu.borrow().as_ref().unwrap().session.state().fullscreen
+                && ui_session(&w).state().fullscreen
         },
         "fullscreen clock",
     );
@@ -50,11 +42,7 @@ fn native_fullscreen_header_clock_and_battery() {
     if let Ok(directory) = std::env::var("LAYER_TEST_ARTIFACTS") {
         until(
             || {
-                w.gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                ui_session(&w)
                     .engine()
                     .backend()
                     .startup
@@ -71,11 +59,7 @@ fn native_fullscreen_header_clock_and_battery() {
     );
     // Native window-manager changes must update the command checkmark too.
     assert!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .command(CommandId::Fullscreen)
             .selected
     );
@@ -102,12 +86,7 @@ fn native_fullscreen_header_clock_and_battery() {
             &format!("{preference} clock format"),
         );
     }
-    let reply = w
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    let reply = ui_session_mut(&w)
         .input(crate::input::key_input(
             gdk::Key::F11,
             true,
@@ -124,7 +103,7 @@ fn native_fullscreen_header_clock_and_battery() {
     );
     w.window.fullscreen();
     until(
-        || w.window.is_fullscreen() && w.gpu.borrow().as_ref().unwrap().session.state().fullscreen,
+        || w.window.is_fullscreen() && ui_session(&w).state().fullscreen,
         "fullscreen state",
     );
     let native = crate::system_status::SystemStatus::simulated_power();
@@ -199,22 +178,13 @@ fn native_fullscreen_header_clock_and_battery() {
         "leave fullscreen",
     );
     assert!(
-        !w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        !ui_session(&w)
             .command(CommandId::Fullscreen)
             .selected
     );
     // GTK visibility requires both a workspace component and fullscreen.
     // Removing/readding retains the live observer.
-    let id = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let id = ui_session(&w)
         .state()
         .workspace
         .layout

@@ -119,11 +119,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     pump(600);
     capture("startup-wait", [51; 3]);
     assert!(
-        !w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        !ui_session(&w)
             .engine()
             .backend()
             .startup
@@ -166,22 +162,14 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     new_photo::ready(&w);
     capture("switch-ready", [255; 3]);
 
-    w.gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    ui_session(&w)
         .engine()
         .backend()
         .fail_next_frame();
     w.wake();
     until(
         || {
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .rendering_suspended()
         },
         "failed GPU worker",
@@ -228,10 +216,7 @@ fn native_document_tabs_history_storage_and_close() {
     crate::open_workspace(&app, &windows, Some((project.clone(), None)), None);
     let w = windows.borrow()[0].clone();
     new_photo::ready(&w);
-    let plain_title = find_named(w.window.upcast_ref(), "single-document-title")
-        .unwrap()
-        .downcast::<gtk::Label>()
-        .unwrap();
+    let plain_title = named::<gtk::Label>(w.window.upcast_ref(), "single-document-title");
     assert_eq!(
         w.documents.root.visible_child_name().as_deref(),
         Some("title")
@@ -250,12 +235,7 @@ fn native_document_tabs_history_storage_and_close() {
     w.dispatch(UiAction::SetBrushSize { value: 42. });
     new_photo::invoke(&w, CommandId::ZoomIn);
     let original_view = state(&w).camera;
-    let original = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let original = ui_session(&w)
         .engine()
         .document()
         .clone();
@@ -264,10 +244,7 @@ fn native_document_tabs_history_storage_and_close() {
     // while the previous drawing has unsaved edits.
     new_photo::invoke(&w, CommandId::NewDocument);
     for (name, value) in [("new-document-width", 128.), ("new-document-height", 96.)] {
-        find_named(w.window.upcast_ref(), name)
-            .unwrap()
-            .downcast::<adw::SpinRow>()
-            .unwrap()
+        named::<adw::SpinRow>(w.window.upcast_ref(), name)
             .set_value(value);
     }
     new_photo::response(&w, "create");
@@ -310,7 +287,7 @@ fn native_document_tabs_history_storage_and_close() {
     new_photo::invoke(&w, CommandId::Undo);
     switch(&w, first);
     assert_eq!(
-        w.gpu.borrow().as_ref().unwrap().session.engine().document(),
+        ui_session(&w).engine().document(),
         &original
     );
     let view = state(&w).camera;
@@ -329,11 +306,7 @@ fn native_document_tabs_history_storage_and_close() {
     assert!(state(&w).document_file.modified);
     new_photo::invoke(&w, CommandId::Undo);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers
@@ -342,11 +315,7 @@ fn native_document_tabs_history_storage_and_close() {
     );
     new_photo::invoke(&w, CommandId::Redo);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers
@@ -354,12 +323,7 @@ fn native_document_tabs_history_storage_and_close() {
         original.layers.len()
     );
     // A native save traverses disk-backed tiles, including exact historical data.
-    let captured = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let captured = ui_session(&w)
         .capture_project_recovery()
         .unwrap();
     let mut bytes = Vec::new();
@@ -744,22 +708,14 @@ fn native_document_tabs_failed_renderer_remains_navigable() {
     new_photo::ready(&w);
     let second = w.documents.selected();
     let epoch = state(&w).document_file.epoch;
-    w.gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    ui_session(&w)
         .engine()
         .backend()
         .fail_next_frame();
     w.wake();
     until(
         || {
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .rendering_suspended()
         },
         "injected renderer failure",
@@ -769,11 +725,7 @@ fn native_document_tabs_failed_renderer_remains_navigable() {
     assert!(state(&w).document_file.modified);
     switch(&w, second);
     assert!(
-        !w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        !ui_session(&w)
             .rendering_suspended()
     );
     assert!(!state(&w).document_file.modified);
@@ -826,11 +778,7 @@ fn native_document_tabs_multiple_recovery_offers() {
             "recovery opens a tab before next offer",
         );
         assert_eq!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .document()
                 .width,
@@ -932,12 +880,7 @@ fn native_document_tabs_immediate_stroke_and_undo() {
             new_photo::invoke(&w, CommandId::Redo);
             new_photo::ready(&w);
         }
-        let document = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let document = ui_session(&w)
             .engine()
             .document()
             .clone();
@@ -1013,12 +956,7 @@ fn native_document_tabs_disk_failure_keeps_data() {
     assert!(error.contains("Free disk space"));
     assert_eq!(w.documents.len(), 2);
     switch(&w, 1);
-    let captured = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let captured = ui_session(&w)
         .capture_project_recovery()
         .unwrap();
     let mut saved = Vec::new();

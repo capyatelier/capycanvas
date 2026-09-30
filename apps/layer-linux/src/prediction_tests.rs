@@ -53,12 +53,7 @@ fn native_fullscreen_prediction() {
     }
     let camera = state(&w).camera;
     let m = camera.document_to_surface();
-    let diameter_px = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let diameter_px = ui_session(&w)
         .engine()
         .brush()
         .diameter
@@ -72,7 +67,7 @@ fn native_fullscreen_prediction() {
         "physical canvas dimensions: {:?}",
         camera.viewport
     );
-    let before = w.gpu.borrow().as_ref().unwrap().session.engine().metrics();
+    let before = ui_session(&w).engine().metrics();
     let start = Instant::now();
     let due = Rc::new(Cell::new(false));
     let timer = glib::timeout_add_local(
@@ -120,7 +115,7 @@ fn native_fullscreen_prediction() {
         }
     }
     timer.remove();
-    let after = w.gpu.borrow().as_ref().unwrap().session.engine().metrics();
+    let after = ui_session(&w).engine().metrics();
     assert!(after.engine_prediction_frames > before.engine_prediction_frames + 10);
     eprintln!(
         "native Smooth Motion viewport={:?} samples={samples} predicted_frames={}",
@@ -139,11 +134,7 @@ fn native_fullscreen_prediction() {
     );
     pump(150);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .metrics()
             .committed_strokes,

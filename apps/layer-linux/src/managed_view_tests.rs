@@ -95,12 +95,7 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
         },
     });
     pump(200);
-    let capture = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let capture = ui_session(&w)
         .engine()
         .backend()
         .capture_in(view)

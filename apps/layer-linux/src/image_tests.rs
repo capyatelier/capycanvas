@@ -13,7 +13,7 @@ const CONTROL: u32 = 0xffe3;
 fn settled(w: &Workspace) -> bool {
     let doc = document(w);
     let published = doc.layers.iter().all(|l| l.raster.try_data().is_some() && l.masks().all(|m| m.raster.try_data().is_some()));
-    published && !w.gpu.borrow().as_ref().unwrap().session.wants_continuous_frames()
+    published && !ui_session(&w).wants_continuous_frames()
 }
 
 fn undo(input: &mut RemoteInput) {

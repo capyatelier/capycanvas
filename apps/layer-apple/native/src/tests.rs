@@ -616,23 +616,11 @@ impl ProjectJob {
 #[test]
 fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
     use std::io::{Read, Seek};
-    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    use std::os::fd::AsRawFd;
     fn sendable<T: Send + Sync>() {}
     sendable::<CapyProjectTask>();
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!(
-            "capy-project-{}-{}.capy",
-            std::process::id(),
-            platform
-        ));
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .unwrap();
+        let mut file = fixtures::tempfile();
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
             Some(native_renderer());
@@ -770,28 +758,15 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         assert!(app.pixels() != original_pixels);
         assert_eq!(app.state()["document_file"]["modified"], false);
         drop(file);
-        std::fs::remove_file(path).unwrap();
     }
 }
 
 #[test]
 fn project_cancellation_and_invalid_input_preserve_live_artwork() {
     use std::io::{Seek, Write};
-    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    use std::os::fd::AsRawFd;
     for platform in [0, 1] {
-        let path = std::env::temp_dir().join(format!(
-            "capy-project-failure-{}-{}.capy",
-            std::process::id(),
-            platform
-        ));
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .unwrap();
+        let mut file = fixtures::tempfile();
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
             Some(native_renderer());
@@ -845,14 +820,13 @@ fn project_cancellation_and_invalid_input_preserve_live_artwork() {
             "Cancellation cannot retract publication"
         );
         drop(file);
-        std::fs::remove_file(path).unwrap();
     }
 }
 #[test]
 fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
     use std::{
         io::Seek,
-        os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+        os::fd::AsRawFd,
     };
     for platform in [0, 1] {
         let app = App::new(platform);
@@ -915,16 +889,7 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
         assert!(app.state()["document_file"]["modified"].as_bool().unwrap());
         assert!(app.state()["document_file"]["location"].is_null());
         drop(app);
-        let path =
-            std::env::temp_dir().join(format!("capy-export-{}-{platform}.png", std::process::id()));
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .unwrap();
+        let mut file = fixtures::tempfile();
         assert_eq!(
             unsafe { capy_project_write(export.0, file.as_raw_fd()) },
             0,
@@ -948,7 +913,6 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
         assert!(pixels.chunks_exact(4).zip(expected.chunks_exact(4)).all(|(a, b)| a[3] == b[3]));
         drop(reader);
         drop(file);
-        std::fs::remove_file(path).unwrap();
     }
 }
 

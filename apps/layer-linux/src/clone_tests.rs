@@ -12,11 +12,11 @@ use serde_json::json;
 const ALT: u32 = 0xffe9;
 
 fn session_source(w: &Workspace) -> layer_core::CloneSource {
-    w.gpu.borrow().as_ref().unwrap().session.engine().clone_source()
+    ui_session(&w).engine().clone_source()
 }
 
 fn strokes(w: &Workspace) -> u64 {
-    w.gpu.borrow().as_ref().unwrap().session.engine().metrics().committed_strokes
+    ui_session(&w).engine().metrics().committed_strokes
 }
 
 fn source_point(w: &Workspace) -> [f32; 2] {
@@ -354,7 +354,7 @@ fn native_navigation_and_queued_paint_during_healing() {
     let before = raster(&w);
     w.dispatch(UiAction::SetBrushSize { value: width * 0.15 });
     stroke(&mut input, "pen", window_point(&w, [width * 0.4, height * 0.5]), window_point(&w, [width * 0.8, height * 0.5]));
-    let pending = || w.gpu.borrow().as_ref().unwrap().session.engine().backend().has_pending_submission();
+    let pending = || ui_session(&w).engine().backend().has_pending_submission();
     until(pending, "the lifted stroke starts healing");
     w.dispatch(UiAction::Invoke { command: CommandId::Brush });
     w.dispatch(UiAction::SetBrushSize { value: 30. });

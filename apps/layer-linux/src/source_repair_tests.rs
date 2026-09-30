@@ -4,11 +4,7 @@ use super::*;
 use layer_core::color::{ColorProfile, RgbSpace};
 
 fn layer(w: &Rc<Workspace>, id: layer_core::LayerId) -> layer_core::Layer {
-    w.gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    ui_session(&w)
         .engine()
         .document()
         .layer(id)
@@ -107,10 +103,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
         .downcast::<adw::AlertDialog>()
         .unwrap();
     assert!(!dialog.is_response_enabled("apply"));
-    let error = find_named(dialog.upcast_ref(), "source-profile-error")
-        .unwrap()
-        .downcast::<gtk::Label>()
-        .unwrap();
+    let error = named::<gtk::Label>(dialog.upcast_ref(), "source-profile-error");
     assert!(error.is_visible());
     assert!(error.label().contains("RGB"), "{}", error.label());
     assert_eq!(snapshot(&w), clean);

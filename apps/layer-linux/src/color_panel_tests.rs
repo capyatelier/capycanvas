@@ -3,10 +3,7 @@ use super::*;
 
 pub(super) fn hue_guide(w: &Workspace) -> gtk::gdk::Texture {
     use gtk::subclass::prelude::ObjectSubclassIsExt;
-    let wheel = find_named(w.color_panel.root.upcast_ref(), "color-wheel")
-        .unwrap()
-        .downcast::<crate::tool_panels::ColorWheel>()
-        .unwrap();
+    let wheel = named::<crate::tool_panels::ColorWheel>(w.color_panel.root.upcast_ref(), "color-wheel");
     let cache = wheel.imp().ring.borrow();
     let (side, shape, space, view, texture) = cache.as_ref().expect("visible wheel caches its hue guide");
     assert_eq!(*shape, state(w).colors.shape);
@@ -292,10 +289,7 @@ fn native_color_panel_input() {
         screen_point(&widget, &w.window, [x, y])
     };
     let on_ring = |hue: f32| {
-        let wheel = find_named(root.upcast_ref(), "color-wheel")
-            .unwrap()
-            .downcast::<crate::tool_panels::ColorWheel>()
-            .unwrap();
+        let wheel = named::<crate::tool_panels::ColorWheel>(root.upcast_ref(), "color-wheel");
         let (size, origin) = wheel.drawing_bounds();
         let b = wheel.compute_bounds(&w.window).unwrap();
         let p = layer_ui::ColorWheelGeometry::new(size)
@@ -411,10 +405,7 @@ fn native_color_panel_input() {
         assert_eq!(state(&w).colors.foreground, before.background);
         assert_eq!(state(&w).colors.background, before.foreground);
         // Black has many valid field positions. Retain the actual drag position.
-        let wheel = find_named(root.upcast_ref(), "color-wheel")
-            .unwrap()
-            .downcast::<crate::tool_panels::ColorWheel>()
-            .unwrap();
+        let wheel = named::<crate::tool_panels::ColorWheel>(root.upcast_ref(), "color-wheel");
         let (size, origin) = wheel.drawing_bounds();
         let bounds = wheel.compute_bounds(&w.window).unwrap();
         let g = layer_ui::ColorWheelGeometry::new(size).unwrap();

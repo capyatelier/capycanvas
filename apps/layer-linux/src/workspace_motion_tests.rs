@@ -175,7 +175,7 @@ fn native_workspace_motion_input() {
                     )
                 })
                 .collect();
-            let worker_stats = w.gpu.borrow().as_ref().unwrap().session.engine().backend().stats.clone();
+            let worker_stats = ui_session(&w).engine().backend().stats.clone();
             *worker_stats.lock().unwrap() = Default::default();
             let mut events = events;
             if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
@@ -210,7 +210,7 @@ fn native_workspace_motion_input() {
                 "{touch}/{scenario}: retain all UI models during steady motion"
             );
             assert_eq!(w.publication.model_revision.get(), model);
-            let update = w.gpu.borrow().as_ref().unwrap().session.workspace_update();
+            let update = ui_session(&w).workspace_update();
             if let Some(group) = update.drag.as_ref().and_then(|d| d.group.as_ref()) {
                 let root = w
                     .groups

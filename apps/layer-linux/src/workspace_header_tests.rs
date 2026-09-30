@@ -406,11 +406,7 @@ fn native_workspace_ownership_input() {
     assert!(manager.error().is_none());
     let mut adopted = saved.entity.working.unwrap();
     let depth =
-        d.w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&d.w)
             .engine()
             .document()
             .color
@@ -670,11 +666,7 @@ fn native_header_catalog_preview_input() {
     let mut d = Driver::new("art.capycanvas.HeaderCatalog");
     let original = state(&d.w).workspace.layout.header;
     let capture =
-        d.w.gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        ui_session_mut(&d.w)
             .capture_workspace()
             .unwrap();
     for (touch, grip, held) in [
@@ -717,11 +709,7 @@ fn native_header_catalog_preview_input() {
         assert_eq!(layout.location(entry.id).unwrap().0, HeaderZone::Center);
         assert!(!d.w.dragging.get() && d.w.workspace_drag.borrow().is_none());
         assert_eq!(
-            d.w.gpu
-                .borrow_mut()
-                .as_mut()
-                .unwrap()
-                .session
+            ui_session_mut(&d.w)
                 .capture_workspace()
                 .unwrap()
                 .history,
@@ -783,11 +771,7 @@ fn native_header_catalog_preview_input() {
     d.click_name("header-edit-done");
     assert_eq!(state(&d.w).workspace.layout.header, preview);
     let saved =
-        d.w.gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        ui_session_mut(&d.w)
             .capture_workspace()
             .unwrap();
     assert_eq!(saved.history.generation, capture.history.generation + 1);
@@ -1526,7 +1510,7 @@ fn native_brush_drawer_input() {
     assert_eq!(state(&d.w).brush.diameter, 37.);
     d.click_name(&opener);
     assert!(state(&d.w).customization.drawer.is_some());
-    assert_eq!(d.w.gpu.borrow().as_ref().unwrap().session.command(CommandId::Brush).label, "Paint Brush");
+    assert_eq!(ui_session(&d.w).command(CommandId::Brush).label, "Paint Brush");
     d.finish();
 }
 
@@ -1573,7 +1557,7 @@ fn native_filter_drawer_input() {
     // Native hover exercises the GPU's prohibited cursor path.
     d.click_name(&opener);
     d.input.perform(serde_json::json!([{"point":[600.,400.]}]));
-    assert_eq!(d.w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().unwrap().segments[0].marker, 6.);
+    assert_eq!(ui_session_mut(&d.w).canvas_cursor().unwrap().segments[0].marker, 6.);
     d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } });
     let removable = state(&d.w).layer_properties.layer.unwrap();
     let layers = d.header_tool(ToolbarControl::Panel { panel: Panel::Layers });

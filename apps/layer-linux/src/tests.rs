@@ -179,8 +179,14 @@ fn process_memory() -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
+fn ui_session(w: &Workspace) -> std::cell::Ref<'_, layer_ui::UiSession<crate::render_thread::RenderWorker>> {
+    std::cell::Ref::map(w.gpu.borrow(), |gpu| &gpu.as_ref().unwrap().session)
+}
+fn ui_session_mut(w: &Workspace) -> std::cell::RefMut<'_, layer_ui::UiSession<crate::render_thread::RenderWorker>> {
+    std::cell::RefMut::map(w.gpu.borrow_mut(), |gpu| &mut gpu.as_mut().unwrap().session)
+}
 fn state(w: &Workspace) -> UiState {
-    w.gpu.borrow().as_ref().unwrap().session.state().clone()
+    ui_session(w).state().clone()
 }
 fn drag_divider(w: &Rc<Workspace>, id: u32, to: [f32; 2]) {
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
@@ -227,11 +233,7 @@ fn native_default_workspace() {
     pump(1600);
     until(
         || {
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .backend()
                 .startup
@@ -263,11 +265,7 @@ fn native_default_workspace() {
         native_pen_path(&w, &points);
     }
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .metrics()
             .committed_strokes,
@@ -280,12 +278,7 @@ fn native_default_workspace() {
     assert_eq!(initial.panels, DockLayout::editor_default().panels);
     let verify = || {
         let state = state(&w);
-        let layout = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let layout = ui_session(&w)
             .layout([w.surface.width() as f32, w.surface.height() as f32]);
         assert!(layout.work_area.width >= 64. && layout.work_area.height > 0.);
         for g in &layout.groups {
@@ -377,7 +370,7 @@ fn native_default_workspace() {
             }
             if panel == Panel::Stats {
                 pump(250);
-                let view = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
+                let view = ui_session(&w).renderer_stats();
                 let mut expected: Vec<_> = view.rows.iter().map(|row| row.label).collect();
                 expected.insert(view.chart_after_rows, "chart");
                 expected.push("Start stroke recording");
@@ -455,11 +448,7 @@ fn native_default_workspace() {
             }
             pump(230);
             assert!(
-                w.gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                ui_session(&w)
                     .command(id)
                     .selected,
                 "{id:?}"
@@ -516,7 +505,7 @@ fn native_default_workspace() {
             let button = find_named(&commands, &format!("tile-{tile}")).unwrap();
             assert_eq!(
                 button.is_sensitive(),
-                w.gpu.borrow().as_ref().unwrap().session.command(id).enabled
+                ui_session(&w).command(id).enabled
             );
         }
         let flipped = state(&w).camera;
@@ -604,11 +593,7 @@ fn native_document_files() {
             [25, 160, 220, 95]
         }
     });
-    w.gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    ui_session_mut(&w)
         .import_layer_source("Imported color", std::sync::Arc::unwrap_or_clone(image))
         .unwrap();
     w.refresh(regions::DOCUMENT | regions::COMMANDS);
@@ -666,12 +651,7 @@ fn native_document_files() {
     assert_eq!([before.width, before.height], [384, 256]);
     // A native surface/device replacement retains saved identity, exact raster
     // and undo roots. Hiding/unrealizing the picture exercises the GTK signals.
-    let checkpoint = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let checkpoint = ui_session(&w)
         .engine()
         .checkpoint();
     w.area.set_visible(false);
@@ -688,11 +668,7 @@ fn native_document_files() {
         .unwrap();
     assert_eq!(restored.bytes, before.bytes);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .checkpoint(),
         checkpoint
@@ -816,8 +792,7 @@ fn native_document_files() {
             // This codec matrix explicitly starts from the original Web choices.
             // Successful delivery now remembers the destination between sheets.
             new_photo::export_page(&w, "presets");
-            let reset = find_named(options.upcast_ref(), "export-preset-reset").unwrap()
-                .downcast::<adw::ButtonRow>().unwrap();
+            let reset = named::<adw::ButtonRow>(options.upcast_ref(), "export-preset-reset");
             reset.emit_by_name::<()>("activated", &[]);
             pump(100);
             until(|| reset.is_sensitive(), "reset export destination");
@@ -826,53 +801,40 @@ fn native_document_files() {
                 ("export-depth", "8-bit"),
                 ("export-background", "Keep transparency"),
             ] {
-                let row = find_named(options.upcast_ref(), name).unwrap()
-                    .downcast::<adw::ComboRow>().unwrap();
+                let row = named::<adw::ComboRow>(options.upcast_ref(), name);
                 assert_eq!(row.subtitle().as_deref(), Some(selected), "{name}");
             }
             if path == &tiff_path {
-                find_named(options.upcast_ref(), "export-preset").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap().set_selected(2);
-                assert_eq!(find_named(options.upcast_ref(), "export-format").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap().selected(), 1);
-                assert_eq!(find_named(options.upcast_ref(), "export-depth").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap().selected(), 1);
-                assert!(!find_named(options.upcast_ref(), "export-dither").unwrap()
-                    .downcast::<adw::SwitchRow>().unwrap().is_visible());
+                named::<adw::ComboRow>(options.upcast_ref(), "export-preset").set_selected(2);
+                assert_eq!(named::<adw::ComboRow>(options.upcast_ref(), "export-format").selected(), 1);
+                assert_eq!(named::<adw::ComboRow>(options.upcast_ref(), "export-depth").selected(), 1);
+                assert!(!named::<adw::SwitchRow>(options.upcast_ref(), "export-dither").is_visible());
                 new_photo::profile_action(&w, "export", "builtin-3");
             }
             if path == &jpeg_path {
-                find_named(options.upcast_ref(), "export-format").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap().set_selected(2);
-                let depth = find_named(options.upcast_ref(), "export-depth").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap();
+                named::<adw::ComboRow>(options.upcast_ref(), "export-format").set_selected(2);
+                let depth = named::<adw::ComboRow>(options.upcast_ref(), "export-depth");
                 assert_eq!(depth.selected(), 0);
                 assert!(!depth.is_sensitive());
-                let background = find_named(options.upcast_ref(), "export-background").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap();
+                let background = named::<adw::ComboRow>(options.upcast_ref(), "export-background");
                 assert_eq!(background.selected(), 0);
                 assert_eq!(background.model().unwrap().n_items(), 2);
                 background.set_selected(1);
                 assert!(new_photo::export_enabled(&w));
                 new_photo::profile_action(&w, "export", "builtin-1");
-                let quality = find_named(options.upcast_ref(), "export-jpeg-quality").unwrap()
-                    .downcast::<adw::SpinRow>().unwrap();
+                let quality = named::<adw::SpinRow>(options.upcast_ref(), "export-jpeg-quality");
                 assert!(quality.is_visible());
                 quality.set_value(95.);
-                let advanced = find_named(options.upcast_ref(), "export-advanced").unwrap()
-                    .downcast::<adw::ExpanderRow>().unwrap();
+                let advanced = named::<adw::ExpanderRow>(options.upcast_ref(), "export-advanced");
                 assert!(!advanced.is_expanded());
                 advanced.set_expanded(true);
-                let intent = find_named(options.upcast_ref(), "export-intent").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap();
-                let dither = find_named(options.upcast_ref(), "export-dither").unwrap()
-                    .downcast::<adw::SwitchRow>().unwrap();
+                let intent = named::<adw::ComboRow>(options.upcast_ref(), "export-intent");
+                let dither = named::<adw::SwitchRow>(options.upcast_ref(), "export-dither");
                 assert_eq!(intent.selected(), 0);
                 assert!(!dither.is_active());
                 dither.set_active(true);
                 pump(350);
-                let scroll = find_named(options.upcast_ref(), "export-color-scroll").unwrap()
-                    .downcast::<gtk::ScrolledWindow>().unwrap();
+                let scroll = named::<gtk::ScrolledWindow>(options.upcast_ref(), "export-color-scroll");
                 let adjustment = scroll.vadjustment();
                 adjustment.set_value(adjustment.upper() - adjustment.page_size());
                 pump(80);
@@ -883,7 +845,7 @@ fn native_document_files() {
             }
             if let Some((_, profile_path, _, channels)) = custom_exports.iter().find(|(p, _, _, _)| p == path) {
                 let export_enabled = || new_photo::export_enabled(&w);
-                let button = find_named(options.upcast_ref(), "export-profile-choose").unwrap().downcast::<gtk::MenuButton>().unwrap();
+                let button = named::<gtk::MenuButton>(options.upcast_ref(), "export-profile-choose");
                 let wait_profile = || {
                     let deadline = Instant::now() + Duration::from_secs(15);
                     while Instant::now() < deadline && !button.is_sensitive() { pump(5); }
@@ -914,8 +876,8 @@ fn native_document_files() {
                 chooser().response(gtk::ResponseType::Cancel);
                 wait_profile();
                 assert!(export_enabled());
-                let format = find_named(options.upcast_ref(), "export-format").unwrap().downcast::<adw::ComboRow>().unwrap();
-                let background = find_named(options.upcast_ref(), "export-background").unwrap().downcast::<adw::ComboRow>().unwrap();
+                let format = named::<adw::ComboRow>(options.upcast_ref(), "export-format");
+                let background = named::<adw::ComboRow>(options.upcast_ref(), "export-background");
                 if *channels == layer_core::color::source::SourceChannels::Cmyk {
                     assert_eq!(format.selected(), 1);
                     assert_eq!(background.selected(), 0);
@@ -928,7 +890,7 @@ fn native_document_files() {
                 } else {
                     format.set_selected(u32::from(path.extension().unwrap() == "tif"));
                 }
-                find_named(options.upcast_ref(), "export-depth").unwrap().downcast::<adw::ComboRow>().unwrap().set_selected(1);
+                named::<adw::ComboRow>(options.upcast_ref(), "export-depth").set_selected(1);
                 assert!(export_enabled());
                 if *channels == layer_core::color::source::SourceChannels::Rgba {
                     // Selected bytes are frozen; changing the file afterwards
@@ -989,10 +951,7 @@ fn native_document_files() {
         });
         pump(220);
         assert!(state(&w).document_file.busy);
-        let width = find_named(w.window.upcast_ref(), "new-document-width")
-            .unwrap()
-            .downcast::<adw::SpinRow>()
-            .unwrap();
+        let width = named::<adw::SpinRow>(w.window.upcast_ref(), "new-document-width");
         width.set_value(512.);
         capture_reference(
             &w,
@@ -1091,11 +1050,7 @@ fn native_startup_latency() {
         );
     };
     let strokes = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .metrics()
             .committed_strokes
@@ -1124,12 +1079,7 @@ fn native_startup_latency() {
         {
             first_canvas = Some(started.elapsed().as_secs_f64() * 1000.);
         }
-        let progress = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let progress = ui_session(&w)
             .engine()
             .backend()
             .startup;
@@ -1286,10 +1236,7 @@ fn native_nested_tool_drawers() {
             .tiles()
             .to_vec();
         let button = |id| {
-            find_named(&parent(), &format!("tile-{id}"))
-                .unwrap()
-                .downcast::<gtk::Button>()
-                .unwrap()
+            named::<gtk::Button>(&parent(), &format!("tile-{id}"))
         };
         click(&button(tiles[0].id));
         pump(80);
@@ -1479,12 +1426,7 @@ fn native_collapsed_columns() {
         });
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         w.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport });
-        let menu = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let menu = ui_session(&w)
             .context_menu(ContextTarget::Group { group: 8 })
             .unwrap();
         let collapse = menu
@@ -1620,10 +1562,7 @@ fn native_collapsed_columns() {
     });
     pump(250);
     let scrolling = || {
-        find_named(w.surface.upcast_ref(), "column-scroll-8")
-            .unwrap()
-            .downcast::<gtk::ScrolledWindow>()
-            .unwrap()
+        named::<gtk::ScrolledWindow>(w.surface.upcast_ref(), "column-scroll-8")
     };
     scrolling().vadjustment().set_value(280.);
     pump(120);
@@ -1735,10 +1674,7 @@ fn native_tool_drawers() {
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for id in &ids {
-            let button = find_named(w.surface.upcast_ref(), &format!("tile-{id}"))
-                .unwrap()
-                .downcast::<gtk::Button>()
-                .unwrap();
+            let button = named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{id}"));
             click(&button);
             if state(&w).customization.drawer.is_none() {
                 click(&button);
@@ -1753,10 +1689,7 @@ fn native_tool_drawers() {
             assert!(b.x() >= 0.0 && b.y() >= HEADER_HEIGHT);
             assert!(b.x() + b.width() <= viewport[0] && b.y() + b.height() <= viewport[1]);
             if *id == ids[0] {
-                let size = find_named(&drawer, "tool-setting-size")
-                    .unwrap()
-                    .downcast::<crate::number_control::NumberControl>()
-                    .unwrap();
+                let size = named::<crate::number_control::NumberControl>(&drawer, "tool-setting-size");
                 edit_number(&size, "12*3");
                 assert_eq!(state(&w).brush.diameter, 36.0);
                 assert_eq!(w.size_number.value(), 36.0);
@@ -1771,7 +1704,7 @@ fn native_tool_drawers() {
                     opacity: if theme == Theme::Dark { 0.9 } else { 1.0 },
                 });
                 pump(250);
-                let telemetry = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
+                let telemetry = ui_session(&w).renderer_stats();
                 assert_ne!(
                     telemetry
                         .rows
@@ -1823,10 +1756,7 @@ fn native_tool_drawers() {
             .iter()
             .position(|c| *c == ToolbarControl::Panel { panel })
             .unwrap();
-        find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[index]))
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap()
+        named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{}", ids[index]))
     };
     let filter_button = panel_tile(Panel::Adjustments);
     click(&filter_button);
@@ -1929,10 +1859,7 @@ fn native_tool_drawers() {
             viewport,
         });
         pump(150);
-        let button = find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[2]))
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap();
+        let button = named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{}", ids[2]));
         click(&button);
         pump(300);
         assert!(state(&w).customization.drawer.is_some());
@@ -2012,11 +1939,7 @@ fn native_selected_brushes() {
         ],
     );
     assert!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .selection
@@ -2064,12 +1987,7 @@ fn native_selected_brushes() {
     }
     // Selection limits stored paint; a layer mask clips the composed appearance,
     // including watercolor's live outside band.
-    let id = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let id = ui_session(&w)
         .engine()
         .document()
         .active_layer
@@ -2183,11 +2101,7 @@ fn native_connected_tools() {
         ],
     );
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .metrics()
             .committed_strokes,
@@ -2203,13 +2117,7 @@ fn native_connected_tools() {
     let reference_source = UiAction::Invoke { command: CommandId::SelectionReference };
     w.dispatch(reference_source);
     pump(100);
-    let tolerance = find_named(
-        &w.panel_widget(Panel::ToolSettings),
-        "tool-setting-tolerance",
-    )
-    .unwrap()
-    .downcast::<crate::number_control::NumberControl>()
-    .unwrap();
+    let tolerance = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-tolerance");
     edit_number(&tolerance, "15");
     native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
     pump(350);
@@ -2235,24 +2143,13 @@ fn native_connected_tools() {
         "the open line must actually leak before gap closing"
     );
     let setting = |id: &str| {
-        find_named(
-            &w.panel_widget(Panel::ToolSettings),
-            &format!("tool-setting-{id}"),
-        )
-        .unwrap()
-        .downcast::<crate::number_control::NumberControl>()
-        .unwrap()
+        named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"))
     };
     edit_number(&setting("gap_closing"), "12");
     edit_number(&setting("smoothing"), "100");
     native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
     pump(350);
-    let selection = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let selection = ui_session(&w)
         .engine()
         .document()
         .selection
@@ -2377,11 +2274,7 @@ fn native_ruler_tools() {
         command: CommandId::FitCanvas,
     });
     let ruler_count = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .rulers
@@ -2404,13 +2297,7 @@ fn native_ruler_tools() {
         };
         native_pen_path(&w, &path);
         assert_eq!(ruler_count(), index + 1);
-        let toggle = find_named(
-            &w.panel_widget(Panel::ToolSettings),
-            "tool-action-SnapRulers",
-        )
-        .unwrap()
-        .downcast::<gtk::CheckButton>()
-        .unwrap();
+        let toggle = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-SnapRulers");
         assert!(toggle.is_active());
         w.dispatch(UiAction::SelectBrush {
             id: layer_core::DefaultBrushPreset::GPen as u32,
@@ -2474,22 +2361,10 @@ fn native_ruler_tools() {
         pump(100);
         capture_reference(&w, &format!("{dir}/rulers-{theme:?}.png"), 1.);
     }
-    let show = find_named(
-        &w.panel_widget(Panel::ToolSettings),
-        "tool-action-ShowRulers",
-    )
-    .unwrap()
-    .downcast::<gtk::CheckButton>()
-    .unwrap();
+    let show = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-ShowRulers");
     show.set_active(false);
     pump(100);
-    let snap = find_named(
-        &w.panel_widget(Panel::ToolSettings),
-        "tool-action-SnapRulers",
-    )
-    .unwrap()
-    .downcast::<gtk::CheckButton>()
-    .unwrap();
+    let snap = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-SnapRulers");
     assert!(!snap.is_sensitive());
     capture_reference(&w, &format!("{dir}/rulers-hidden.png"), 1.);
     show.set_active(true);
@@ -2497,13 +2372,7 @@ fn native_ruler_tools() {
     assert!(snap.is_sensitive());
     // Select and delete a center; undo restores its guide without changing ink.
     native_pen_path(&w, &[[1470., 1120.], [1470., 1120.]]);
-    let delete = find_named(
-        &w.panel_widget(Panel::ToolSettings),
-        "tool-action-DeleteRuler",
-    )
-    .unwrap()
-    .downcast::<gtk::Button>()
-    .unwrap();
+    let delete = named::<gtk::Button>(&w.panel_widget(Panel::ToolSettings), "tool-action-DeleteRuler");
     click(&delete);
     pump(100);
     assert_eq!(ruler_count(), 2);
@@ -2580,11 +2449,7 @@ fn native_operation_tool() {
     });
     pump(200);
     let document = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .clone()
@@ -2615,13 +2480,7 @@ fn native_operation_tool() {
     assert!((value("transform_width") - 1.2).abs() < 0.01);
     assert!((value("transform_height") - 1.2).abs() < 0.01);
     let number = |id: &str| {
-        find_named(
-            &w.panel_widget(Panel::ToolSettings),
-            &format!("tool-setting-{id}"),
-        )
-        .unwrap()
-        .downcast::<crate::number_control::NumberControl>()
-        .unwrap()
+        named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"))
     };
     edit_number(&number("transform_angle"), "360/12");
     pump(150);
@@ -2825,16 +2684,10 @@ fn native_figure_tools() {
     });
     pump(100);
     assert_eq!(w.tool_set.group_buttons.borrow().len(), 3);
-    let width = find_named(&w.panel_widget(Panel::ToolSettings), "tool-setting-size")
-        .unwrap()
-        .downcast::<crate::number_control::NumberControl>()
-        .unwrap();
+    let width = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-size");
     edit_number(&width, "18");
     assert_eq!(state(&w).brush.diameter, 18.);
-    let opacity = find_named(&w.panel_widget(Panel::ToolSettings), "tool-setting-opacity")
-        .unwrap()
-        .downcast::<crate::number_control::NumberControl>()
-        .unwrap();
+    let opacity = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-opacity");
     edit_number(&opacity, "85");
     assert!((state(&w).brush.opacity - 0.85).abs() < 0.001);
     let send = |phase, p: [f32; 2]| {
@@ -2881,7 +2734,7 @@ fn native_figure_tools() {
         pump(40);
         let start = [830. + (index - 1) as f32 * 390., 300.];
         let end = [start[0] + 200., start[1] + 80.];
-        let before = w.gpu.borrow().as_ref().unwrap().session.engine().document().layers[0].raster.clone();
+        let before = ui_session(&w).engine().document().layers[0].raster.clone();
         send(PenPhase::Down, start);
         send(PenPhase::Move, end);
         keys.emit_by_name::<bool>(
@@ -2891,7 +2744,7 @@ fn native_figure_tools() {
         // Completed operations are baked and discarded. Check the constrained
         // guide before release, then require an actual committed raster edit.
         let mut guide = Vec::new();
-        w.gpu.borrow().as_ref().unwrap().session.append_layer_overlay(&mut guide);
+        ui_session(&w).append_layer_overlay(&mut guide);
         assert!(!guide.is_empty());
         let gpu = w.gpu.borrow();
         let camera = &gpu.as_ref().unwrap().session.state().camera;
@@ -2920,7 +2773,7 @@ fn native_figure_tools() {
             &[&gdk::Key::Shift_L, &0u32, &gdk::ModifierType::SHIFT_MASK],
         );
         new_photo::ready(&w);
-        let after = w.gpu.borrow().as_ref().unwrap().session.engine().document().layers[0].raster.clone();
+        let after = ui_session(&w).engine().document().layers[0].raster.clone();
         assert_ne!(after, before);
         assert!(after.host_backed());
         assert!(!w.status.is_visible(), "{}", w.status.text());
@@ -3001,10 +2854,7 @@ fn native_gradient_tool() {
     });
     pump(150);
     assert_eq!(w.tool_set.buttons.borrow().len(), 4);
-    let opacity = find_named(&w.panel_widget(Panel::ToolSettings), "tool-setting-opacity")
-        .unwrap()
-        .downcast::<crate::number_control::NumberControl>()
-        .unwrap();
+    let opacity = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-opacity");
     edit_number(&opacity, "80");
     assert!((state(&w).brush.opacity - 0.8).abs() < 0.001);
     let dir = "../../artifacts/familiar-workspace";
@@ -3137,10 +2987,7 @@ fn native_navigation_tools() {
     });
     pump(200);
     let tile = |id| {
-        find_named(w.surface.upcast_ref(), &format!("tile-{id}"))
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap()
+        named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{id}"))
     };
     let eye = tile(ids[0]);
     click(&eye);
@@ -3167,7 +3014,7 @@ fn native_navigation_tools() {
     for (actual, expected) in color.into_iter().zip([1.0, 0.0, 0.0, 1.0]) {
         assert!((actual - expected).abs() < 0.001, "raw color {color:?}");
     }
-    let startup_pending = !w.gpu.borrow().as_ref().unwrap().session.engine().backend().startup.complete;
+    let startup_pending = !ui_session(&w).engine().backend().startup.complete;
     let idle_start = Instant::now();
     while w.frame_timer.borrow().is_some() && idle_start.elapsed() < Duration::from_secs(5) {
         pump(5);
@@ -3229,12 +3076,7 @@ fn native_navigator_column_resize() {
     pump(1200);
     let original = state(&w).workspace;
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let stats = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let stats = ui_session(&w)
         .engine()
         .backend()
         .stats
@@ -3245,11 +3087,7 @@ fn native_navigator_column_resize() {
             visible
         );
         assert_eq!(
-            !w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            !ui_session(&w)
                 .engine()
                 .backend()
                 .overviews
@@ -3476,12 +3314,7 @@ fn native_navigator() {
         pump(250);
     }
     pump(400);
-    let original = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let original = ui_session(&w)
         .engine()
         .backend()
         .stats
@@ -3494,21 +3327,13 @@ fn native_navigator() {
         "live document overview must be presented by the worker"
     );
     assert_eq!(w.navigator_overviews.placements(&state(&w), 1.).len(), 1);
-    let doc_revision = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let doc_revision = ui_session(&w)
         .engine()
         .document()
         .revision;
     let zoom = state(&w).camera.zoom;
     let button = |id: CommandId| {
-        find_named(w.navigator.root.upcast_ref(), &format!("navigator-{id:?}"))
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap()
+        named::<gtk::Button>(w.navigator.root.upcast_ref(), &format!("navigator-{id:?}"))
     };
     for _ in 0..3 {
         click(&button(CommandId::ZoomIn));
@@ -3520,11 +3345,7 @@ fn native_navigator() {
     assert_eq!(state(&w).camera.flipped, [true, false]);
     assert!(button(CommandId::FlipHorizontal).has_css_class("selected-tool"));
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .backend()
             .stats
@@ -3535,11 +3356,7 @@ fn native_navigator() {
         "camera-only commands reuse the exact document composition"
     );
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .revision,
@@ -3609,10 +3426,7 @@ fn native_navigator() {
     });
     pump(150);
     click(
-        &find_named(w.surface.upcast_ref(), &format!("tile-{tile}"))
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap(),
+        &named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{tile}")),
     );
     pump(300);
     assert!(
@@ -3627,10 +3441,7 @@ fn native_navigator() {
     );
     capture_reference(&w, &format!("{dir}/navigator-drawer.png"), 1.0);
     click(
-        &find_named(w.surface.upcast_ref(), &format!("tile-{tile}"))
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap(),
+        &named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{tile}")),
     );
     pump(300);
     assert_eq!(w.navigator_overviews.placements(&state(&w), 1.).len(), 1);
@@ -3733,11 +3544,7 @@ fn native_navigator() {
     // No preview timer or GTK frame clock should keep an idle window rendering.
     pump(500);
     let frames = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .backend()
             .stats
@@ -3856,12 +3663,7 @@ fn native_tool_families() {
                             .count(),
                         1
                     );
-                    let snapshot = w
-                        .gpu
-                        .borrow()
-                        .as_ref()
-                        .unwrap()
-                        .session
+                    let snapshot = ui_session(&w)
                         .engine()
                         .configured_brush()
                         .clone();
@@ -3935,10 +3737,7 @@ fn native_tool_and_color_panels() {
     w.dispatch(UiAction::SelectBrush {
         id: layer_core::DefaultBrushPreset::WetWatercolor as u32,
     });
-    let flow = find_named(&w.panel_widget(Panel::ToolSettings), "tool-setting-flow")
-        .unwrap()
-        .downcast::<crate::number_control::NumberControl>()
-        .unwrap();
+    let flow = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-flow");
     edit_number(&flow, "25+10");
     assert!(
         (state(&w)
@@ -4090,7 +3889,7 @@ fn native_runtime_filter_packages() {
     pump(900);
     let load = |path: &str, mode| {
         crate::canvas::load_filter_directory(
-            &mut w.gpu.borrow_mut().as_mut().unwrap().session,
+            &mut ui_session_mut(&w),
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path),
             mode,
             true,
@@ -4123,11 +3922,7 @@ fn native_runtime_filter_packages() {
             [30, 160, 220, 255]
         }
     });
-    w.gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    ui_session_mut(&w)
         .import_layer_source("Runtime checker", std::sync::Arc::unwrap_or_clone(checker))
         .unwrap();
     w.wake();
@@ -4142,13 +3937,7 @@ fn native_runtime_filter_packages() {
         panel: Panel::Adjustments,
     });
     pump(300);
-    find_named(
-        w.effects.adjustments.upcast_ref(),
-        "adjustment-example:tent_blur",
-    )
-    .unwrap()
-    .downcast::<gtk::Button>()
-    .unwrap()
+    named::<gtk::Button>(w.effects.adjustments.upcast_ref(), "adjustment-example:tent_blur")
     .emit_clicked();
     pump(300);
     let view = state(&w).layer_properties;
@@ -4215,11 +4004,7 @@ fn native_adjustment_panels_review() {
             255,
         ]
     });
-    w.gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    ui_session_mut(&w)
         .import_layer_source("Color study", std::sync::Arc::unwrap_or_clone(study))
         .unwrap();
     w.refresh(regions::ALL);
@@ -4261,13 +4046,7 @@ fn native_adjustment_panels_review() {
     {
         show_adjustments();
         pump(80);
-        find_named(
-            w.effects.adjustments.upcast_ref(),
-            &format!("adjustment-{}", kind.id()),
-        )
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap()
+        named::<gtk::Button>(w.effects.adjustments.upcast_ref(), &format!("adjustment-{}", kind.id()))
         .emit_clicked();
         pump(180);
         assert!(!w.status.is_visible(), "{}", w.status.text());
@@ -4481,7 +4260,7 @@ fn native_adjustment_panels_review() {
         pump(20);
     }
     pump(250);
-    let stats = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
+    let stats = ui_session(&w).renderer_stats();
     assert!(!stats.samples.is_empty(), "live CPU samples");
     assert_ne!(stats.rows[1].value, "—", "live GPU timestamps");
     crate::capture(&w, &format!("{dir}/07-stats.png"));
@@ -4526,10 +4305,7 @@ fn native_layer_panel_review() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    let delete = find_named(w.layer_panel.root.upcast_ref(), "delete-selected-layers")
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap();
+    let delete = named::<gtk::Button>(w.layer_panel.root.upcast_ref(), "delete-selected-layers");
     let count = state(&w).layers.len();
     send(
         &w,
@@ -4641,11 +4417,7 @@ fn native_layer_panel_review() {
             [178, 124, 42, 255]
         }
     });
-    w.gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    ui_session_mut(&w)
         .import_layer_source("Fabric texture", std::sync::Arc::unwrap_or_clone(fabric))
         .unwrap();
     w.wake();
@@ -5233,7 +5005,7 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
         popup.popdown();
         if let Some(action) = action {
             let button = gtk::Button::new();
-            button.set_sensitive(w.gpu.borrow().as_ref().unwrap().session.command(id).enabled);
+            button.set_sensitive(ui_session(&w).command(id).enabled);
             button.connect_clicked(move |_| {
                 popup.activate_action(&action, None).unwrap();
             });
@@ -5732,12 +5504,7 @@ fn native_settings_typography() {
             pump(200);
             let content =
                 find_named(w.preferences.dialog.upcast_ref(), "preferences-content").unwrap();
-            let view = w
-                .gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            let view = ui_session(&w)
                 .preferences()
                 .unwrap();
             let page = view.pages.iter().find(|p| p.id == page).unwrap();
@@ -6339,12 +6106,7 @@ fn native_workspace_management() {
     menu.set_autohide(false);
     menu.set_pointing_to(Some(&gdk::Rectangle::new(350, 170, 1, 1)));
     let open_context = |target| {
-        let model = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let model = ui_session(&w)
             .context_menu(target)
             .unwrap();
         w.populate_workspace_menu(&menu, model);
@@ -6357,39 +6119,24 @@ fn native_workspace_management() {
         popup.activate_action(&action, None).unwrap();
         pump(150);
     };
-    let workspace_menu = find_named(w.window.upcast_ref(), "workspace-menu")
-        .unwrap()
-        .downcast::<gtk::PopoverMenu>()
-        .unwrap();
+    let workspace_menu = named::<gtk::PopoverMenu>(w.window.upcast_ref(), "workspace-menu");
     workspace_menu.set_autohide(false);
     let snapshot = |name: &str| {
         pump(120);
         capture_reference(&w, &format!("{dir}/{name}.png"), 1.0);
     };
     let prompt = || {
-        find_named(w.window.upcast_ref(), "toolbar-dialog")
-            .unwrap()
-            .downcast::<adw::AlertDialog>()
-            .unwrap()
+        named::<adw::AlertDialog>(w.window.upcast_ref(), "toolbar-dialog")
     };
     let confirm_prompt = || {
-        let label = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let label = ui_session(&w)
             .toolbar_prompt()
             .unwrap()
             .confirm_label;
         click(&find_button(prompt().upcast_ref(), label).unwrap());
         pump(180);
         assert!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .toolbar_prompt()
                 .is_none()
         );
@@ -6404,11 +6151,7 @@ fn native_workspace_management() {
             .unwrap()
     };
     let live = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .workspace_update()
             .drag
             .unwrap()
@@ -6465,10 +6208,7 @@ fn native_workspace_management() {
             &format!("{dir}/toolbar-menu-{theme:?}.png"),
         );
         activate(&menu, "Duplicate Tools toolbar…");
-        let name = find_named(w.window.upcast_ref(), "edit-toolbar-name")
-            .unwrap()
-            .downcast::<adw::EntryRow>()
-            .unwrap();
+        let name = named::<adw::EntryRow>(w.window.upcast_ref(), "edit-toolbar-name");
         assert_eq!(name.text(), "Tools Copy");
         name.set_text(Panel::Brushes.label());
         assert!(!prompt().is_response_enabled("confirm"));
@@ -6751,16 +6491,8 @@ fn native_workspace_management() {
         activate(&workspace_menu, "Painting toolbar");
         workspace_menu.popup();
         activate(&workspace_menu, "Manage Toolbars…");
-        let list = find_named(w.window.upcast_ref(), "managed-toolbars")
-            .unwrap()
-            .downcast::<gtk::ListBox>()
-            .unwrap();
-        let index = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let list = named::<gtk::ListBox>(w.window.upcast_ref(), "managed-toolbars");
+        let index = ui_session(&w)
             .toolbar_manager()
             .unwrap()
             .toolbars
@@ -6769,10 +6501,7 @@ fn native_workspace_management() {
             .unwrap();
         list.select_row(list.row_at_index(index as i32).as_ref());
         click(
-            &find_named(w.window.upcast_ref(), "delete-managed-toolbar")
-                .unwrap()
-                .downcast::<gtk::Button>()
-                .unwrap(),
+            &named::<gtk::Button>(w.window.upcast_ref(), "delete-managed-toolbar"),
         );
         assert!(prompt().body().contains("Undo Layout Change"));
         snapshot(&format!("delete-{theme:?}"));
@@ -6985,10 +6714,7 @@ fn native_panel_customization() {
         input.set_value(0.42);
         input.emit_by_name::<()>("value-changed", &[]);
         assert!((state(&w).brush.opacity - 0.42).abs() < 0.001);
-        let visible = find_named(inspector.upcast_ref(), "panel-visible-BrushOpacity")
-            .unwrap()
-            .downcast::<gtk::CheckButton>()
-            .unwrap();
+        let visible = named::<gtk::CheckButton>(inspector.upcast_ref(), "panel-visible-BrushOpacity");
         visible.set_active(true);
         pump(100);
         assert!(compact_opacity.is_visible());
@@ -7029,40 +6755,22 @@ fn native_panel_customization() {
         )
         .unwrap();
         pump(250);
-        let name = find_named(w.window.upcast_ref(), "toolbar-name")
-            .unwrap()
-            .downcast::<adw::EntryRow>()
-            .unwrap();
-        let confirm = find_named(w.window.upcast_ref(), "confirm-tools")
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap();
+        let name = named::<adw::EntryRow>(w.window.upcast_ref(), "toolbar-name");
+        let confirm = named::<gtk::Button>(w.window.upcast_ref(), "confirm-tools");
         assert!(!confirm.is_sensitive());
         name.set_text("Tools");
         assert!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .tool_picker()
                 .unwrap()
                 .error
                 .is_some()
         );
         name.set_text(&format!("Illustration {theme:?}"));
-        let search = find_named(w.window.upcast_ref(), "tool-search")
-            .unwrap()
-            .downcast::<gtk::SearchEntry>()
-            .unwrap();
+        let search = named::<gtk::SearchEntry>(w.window.upcast_ref(), "tool-search");
         search.set_text("pencil");
         pump(250);
-        let choices = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let choices = ui_session(&w)
             .tool_picker()
             .unwrap()
             .choices
@@ -7071,13 +6779,7 @@ fn native_panel_customization() {
             .collect::<Vec<_>>();
         assert!(!choices.is_empty());
         for choice in choices.iter().take(2) {
-            find_named(
-                w.window.upcast_ref(),
-                &format!("tool-choice-{}", serde_json::to_string(&choice.control).unwrap()),
-            )
-            .unwrap()
-            .downcast::<gtk::CheckButton>()
-            .unwrap()
+            named::<gtk::CheckButton>(w.window.upcast_ref(), &format!("tool-choice-{}", serde_json::to_string(&choice.control).unwrap()))
             .set_active(true);
         }
         assert!(confirm.is_sensitive());
@@ -7094,10 +6796,7 @@ fn native_panel_customization() {
         let toolbar = w.panel_widget(panel).downcast::<TileStrip>().unwrap();
         assert_eq!(toolbar.overflow(), gtk::Overflow::Hidden);
         let tile = layout.panel(panel).unwrap().tiles()[0].id;
-        let button = find_named(toolbar.upcast_ref(), &format!("tile-{tile}"))
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap();
+        let button = named::<gtk::Button>(toolbar.upcast_ref(), &format!("tile-{tile}"));
         click(&button);
         assert_eq!(
             state(&w).brush.preset,
@@ -7246,11 +6945,7 @@ fn native_panel_customization() {
         .unwrap();
         pump(150);
         assert!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .tool_picker()
                 .is_some()
         );
@@ -7315,11 +7010,7 @@ fn native_toolbar_manager() {
     let initial = state(&w).workspace;
     let send = |action| w.dispatch(UiAction::Customize { action });
     let model = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .toolbar_manager()
             .unwrap()
     };
@@ -7345,10 +7036,7 @@ fn native_toolbar_manager() {
             visible: false,
         });
         let before = serde_json::to_value(state(&w).workspace).unwrap();
-        let menu = find_named(w.window.upcast_ref(), "workspace-menu")
-            .unwrap()
-            .downcast::<gtk::PopoverMenu>()
-            .unwrap();
+        let menu = named::<gtk::PopoverMenu>(w.window.upcast_ref(), "workspace-menu");
         menu.set_autohide(false);
         menu.popup();
         pump(150);
@@ -7362,18 +7050,9 @@ fn native_toolbar_manager() {
         )
         .unwrap();
         pump(300);
-        let dialog = find_named(w.window.upcast_ref(), "toolbar-manager")
-            .unwrap()
-            .downcast::<adw::Dialog>()
-            .unwrap();
-        let list = find_named(dialog.upcast_ref(), "managed-toolbars")
-            .unwrap()
-            .downcast::<gtk::ListBox>()
-            .unwrap();
-        let delete = find_named(dialog.upcast_ref(), "delete-managed-toolbar")
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap();
+        let dialog = named::<adw::Dialog>(w.window.upcast_ref(), "toolbar-manager");
+        let list = named::<gtk::ListBox>(dialog.upcast_ref(), "managed-toolbars");
+        let delete = named::<gtk::Button>(dialog.upcast_ref(), "delete-managed-toolbar");
         assert_eq!(model().toolbars.len(), 3);
         assert!(!delete.is_sensitive());
         capture_reference(&w, &format!("{dir}/gtk-{theme:?}-initial.png"), 1.0);
@@ -7384,10 +7063,7 @@ fn native_toolbar_manager() {
         capture_reference(&w, &format!("{dir}/gtk-{theme:?}-selected.png"), 1.0);
         click(&delete);
         pump(200);
-        let prompt = find_named(w.window.upcast_ref(), "toolbar-dialog")
-            .unwrap()
-            .downcast::<adw::AlertDialog>()
-            .unwrap();
+        let prompt = named::<adw::AlertDialog>(w.window.upcast_ref(), "toolbar-dialog");
         assert_eq!(w.window.visible_dialog(), Some(prompt.clone().upcast()));
         assert!(prompt.body().contains("Painting"));
         capture_reference(&w, &format!("{dir}/gtk-{theme:?}-confirm.png"), 1.0);
@@ -7415,11 +7091,7 @@ fn native_toolbar_manager() {
         dialog.close();
         pump(300);
         assert!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .toolbar_manager()
                 .is_none()
         );
@@ -7525,12 +7197,7 @@ fn native_menu_sections() {
             .chain([ApplicationMenu::Primary])
         {
             let menu = open(id);
-            let expected = w
-                .gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            let expected = ui_session(&w)
                 .application_menu(id);
             check(&menu.menu_model().unwrap(), &expected.sections, matches!(id, ApplicationMenu::Primary | ApplicationMenu::Window));
             if id == ApplicationMenu::Select {
@@ -7562,32 +7229,19 @@ fn native_menu_sections() {
         &open(ApplicationMenu::Edit),
         CommandId::FillSelection.label(),
     );
-    let checkpoint = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let checkpoint = ui_session(&w)
         .engine()
         .checkpoint();
     activate(&open(ApplicationMenu::Edit), CommandId::ClearLayer.label());
     assert_ne!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .checkpoint(),
         checkpoint
     );
     activate(&open(ApplicationMenu::Edit), CommandId::Undo.label());
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .checkpoint(),
         checkpoint
@@ -7612,12 +7266,7 @@ fn native_menu_sections() {
     w.dispatch(UiAction::RestoreSettings { settings });
     for id in [ApplicationMenu::Primary, ApplicationMenu::Edit] {
         let menu = open(id);
-        let expected = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let expected = ui_session(&w)
             .application_menu(id);
         check(&menu.menu_model().unwrap(), &expected.sections, matches!(id, ApplicationMenu::Primary | ApplicationMenu::Window));
         menu.popdown();
@@ -7712,10 +7361,7 @@ fn native_panel_expansion() {
                 picked.is_ancestor(&root),
                 "configuration must be the actual raised group, not a popover"
             );
-            let check = find_named(root.upcast_ref(), "panel-visible-BrushColor")
-                .unwrap()
-                .downcast::<gtk::CheckButton>()
-                .unwrap();
+            let check = named::<gtk::CheckButton>(root.upcast_ref(), "panel-visible-BrushColor");
             check.set_active(true);
             pump(100);
             assert!(
@@ -8380,11 +8026,7 @@ fn native_preferences_and_shortcuts() {
                 "sidebar and settings content finish at the same height"
             );
             assert_eq!(
-                w.gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                ui_session(&w)
                     .preferences()
                     .unwrap()
                     .page,
@@ -8450,12 +8092,7 @@ fn native_preferences_and_shortcuts() {
             }
             if page == SettingsPage::About {
                 assert!(w.preferences.dialog.is_mapped());
-                let view = w
-                    .gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                let view = ui_session(&w)
                     .preferences()
                     .unwrap();
                 for row in view
@@ -8589,12 +8226,7 @@ fn native_preferences_and_shortcuts() {
         .unwrap();
     search.set_text("pressure response");
     pump(300);
-    let results = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let results = ui_session(&w)
         .preferences()
         .unwrap()
         .search_results;
@@ -8619,10 +8251,7 @@ fn native_preferences_and_shortcuts() {
         .is_sensitive()
     );
     feedback.set_active(true);
-    let prediction = find_named(
-        w.preferences.dialog.upcast_ref(),
-        "setting-platform-prediction",
-    ).unwrap().downcast::<adw::SwitchRow>().unwrap();
+    let prediction = named::<adw::SwitchRow>(w.preferences.dialog.upcast_ref(), "setting-platform-prediction");
     assert!(!prediction.is_sensitive());
     assert!(prediction.subtitle().is_none_or(|subtitle| subtitle.is_empty()));
     w.dispatch(UiAction::OpenSettings {
@@ -8737,11 +8366,7 @@ fn native_preferences_and_shortcuts() {
         "host acknowledged the saved snapshot"
     );
     assert!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .application_menu(ApplicationMenu::Edit)
             .sections
             .iter()
@@ -9084,8 +8709,7 @@ fn native_cursor_vectors() {
     };
     w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
     pump(200);
-    let toggle = find_named(w.window.upcast_ref(), "setting-hide-cursor-while-drawing")
-        .unwrap().downcast::<adw::SwitchRow>().unwrap();
+    let toggle = named::<adw::SwitchRow>(w.window.upcast_ref(), "setting-hide-cursor-while-drawing");
     assert!(toggle.is_active());
     toggle.set_active(false);
     assert!(!state(&w).settings.hide_cursor_while_drawing);
@@ -9094,14 +8718,10 @@ fn native_cursor_vectors() {
     w.dispatch(UiAction::CloseSettings);
     pump(200);
     w.cursor_input(Some(hover()));
-    assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_some());
+    assert!(ui_session_mut(&w).canvas_cursor().is_some());
     w.cursor_input(None);
     assert!(
-        w.gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        ui_session_mut(&w)
             .canvas_cursor()
             .is_none()
     );
@@ -9441,10 +9061,10 @@ fn native_backdrop_blur_capture() {
 }
 
 fn refine_busy(w: &Workspace) -> bool {
-    w.gpu.borrow().as_ref().unwrap().session.wants_continuous_frames()
+    ui_session(&w).wants_continuous_frames()
 }
 fn refine_preview_count(w: &Workspace) -> u64 {
-    w.gpu.borrow().as_ref().unwrap().session.renderer_stats().selection_previews
+    ui_session(&w).renderer_stats().selection_previews
 }
 fn finish_canvas_operation(w: &Rc<Workspace>) {
     let open = || matches!(state(w).layer_tools.tool, LayerCanvasTool::Transform | LayerCanvasTool::Crop);
@@ -9518,11 +9138,7 @@ fn native_frame_pacing() {
         native_pen_path(&w, &[[160., 128.], [1888., 1408.]]);
         pump(150);
         assert_eq!(
-            w.gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            ui_session(&w)
                 .engine()
                 .document()
                 .layers[0]
@@ -9560,11 +9176,7 @@ fn native_frame_pacing() {
             native_pen_path(&w, &[[1024., 768.], [1024., 768.]]);
             pump(300);
             assert!(matches!(
-                w.gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                ui_session(&w)
                     .engine()
                     .document()
                     .selection
@@ -9589,12 +9201,7 @@ fn native_frame_pacing() {
             w.surface.height() as f32
         ]
     );
-    let worker_stats = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let worker_stats = ui_session(&w)
         .engine()
         .backend()
         .stats
@@ -9688,12 +9295,7 @@ fn native_frame_pacing() {
                         [160., 128.],
                     ],
                 );
-                let id = w
-                    .gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
+                let id = ui_session(&w)
                     .engine()
                     .document()
                     .active_layer
@@ -9793,12 +9395,7 @@ fn native_frame_pacing() {
         // This benchmark measures steady-state presentation. Cold/background
         // compilation is covered separately by native_startup_latency.
         let startup_wait = Instant::now();
-        while !w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        while !ui_session(&w)
             .engine()
             .backend()
             .startup
@@ -9836,18 +9433,13 @@ fn native_frame_pacing() {
             }
         ));
         let mut dispatch_thread_cpu = Vec::with_capacity(4096);
-        let strokes_before = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let strokes_before = ui_session(&w)
             .engine()
             .metrics()
             .committed_strokes;
         *worker_stats.lock().unwrap() = Default::default();
         let camera = state(&w).camera;
-        let selection_before = w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.clone();
+        let selection_before = ui_session(&w).engine().document().selection.clone();
         let transform_path = match name {
             "Transform" | "Move" => {
                 let [x0, y0, x1, y1] = state(&w).canvas_bar.and_then(|b| b.anchor).expect("transform box or selection");
@@ -9855,7 +9447,7 @@ fn native_frame_pacing() {
                 Some((from, [(x1 - x0) * 0.17, (y1 - y0) * 0.13]))
             }
             "Crop" => {
-                let document = w.gpu.borrow().as_ref().unwrap().session.engine().document().clone();
+                let document = ui_session(&w).engine().document().clone();
                 let [width, height] = [document.width as f32, document.height as f32];
                 Some(([width, height], [width * 0.17, height * 0.13]))
             }
@@ -9881,7 +9473,7 @@ fn native_frame_pacing() {
         let mut refine_values = 0;
         let mut refine_revisions = 0;
         let mut refine_radius = f32::NAN;
-        let mut refine_revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+        let mut refine_revision = ui_session(&w).engine().document().revision;
         let refine_previews = refine_preview_count(&w);
         while start.elapsed() < Duration::from_secs(6) {
             if name == "Refine" {
@@ -9892,7 +9484,7 @@ fn native_frame_pacing() {
                     refine_values += 1;
                     w.dispatch(UiAction::Selection { action: SelectionAction::ResizeRadius { radius } });
                 }
-                let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+                let revision = ui_session(&w).engine().document().revision;
                 if revision != refine_revision {
                     refine_revision = revision;
                     refine_revisions += 1;
@@ -10011,7 +9603,7 @@ fn native_frame_pacing() {
         pump(150);
         if name == "Move" {
             assert_ne!(
-                w.gpu.borrow().as_ref().unwrap().session.engine().document().selection,
+                ui_session(&w).engine().document().selection,
                 selection_before,
                 "pacing must move the selected pixels: {:?}",
                 state(&w).notice
@@ -10261,12 +9853,7 @@ fn native_window_drag_input() {
         input.perform(serde_json::json!([{ "point": start }, { "down": true }, { "point": away }]));
         let bottom = global([viewport[0] * 0.5, viewport[1] - 2.]);
         input.perform(serde_json::json!([{ "point": bottom }]));
-        let preview = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        let preview = ui_session(&w)
             .workspace_update()
             .drag
             .unwrap()
@@ -10820,12 +10407,7 @@ fn native_tab_slide_input() {
             ];
             input.perform(serde_json::json!([{ "point": point }]));
             assert_eq!(state(&w).workspace.layout.floating.len(), 1);
-            let layout = w
-                .gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
+            let layout = ui_session(&w)
                 .layout([w.surface.width() as f32, w.surface.height() as f32]);
             let floated = layout
                 .groups
@@ -11904,12 +11486,7 @@ fn native_compositor_input() {
         }
     ));
     w.area.add_controller(motion);
-    let stats = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let stats = ui_session(&w)
         .engine()
         .backend()
         .stats
@@ -12040,11 +11617,7 @@ fn native_workspace_controls_docking_and_ink() {
         ]
     );
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .metrics()
             .committed_strokes,
@@ -12110,11 +11683,7 @@ fn native_workspace_controls_docking_and_ink() {
             flags: SampleFlags::PRIMARY,
         };
         stroke_points.push(view.input_transform().map(event.surface_position));
-        w.gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        ui_session_mut(&w)
             .pen(event)
             .unwrap();
         w.wake();
@@ -12127,11 +11696,7 @@ fn native_workspace_controls_docking_and_ink() {
         "ink must be visibly presented: {initial} -> {after_ink}"
     );
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .metrics()
             .committed_strokes,
@@ -12141,7 +11706,7 @@ fn native_workspace_controls_docking_and_ink() {
     // Presentation must follow the same top-left transform as input even
     // after an asymmetric pan/zoom/rotation (a centered fit hides a Y flip).
     let center = view.viewport.map(|v| v as f32 * 0.5);
-    let change = w.gpu.borrow_mut().as_mut().unwrap().session.gesture(
+    let change = ui_session_mut(&w).gesture(
         center,
         [center[0] + 30.0, center[1] + 45.0],
         1.1,
@@ -12156,13 +11721,7 @@ fn native_workspace_controls_docking_and_ink() {
     click(&command(&w, CommandId::Redo));
     assert!(white_pixels(&w) < initial - 500);
     let visibility = || {
-        find_named(
-            &w.layer_panel.root.clone().upcast(),
-            &format!("art-layer-{}", state(&w).layers[0].id),
-        )
-        .unwrap()
-        .downcast::<gtk::Box>()
-        .unwrap()
+        named::<gtk::Box>(&w.layer_panel.root.clone().upcast(), &format!("art-layer-{}", state(&w).layers[0].id))
         .first_child()
         .unwrap()
         .downcast::<gtk::Button>()
@@ -12411,11 +11970,7 @@ fn native_workspace_controls_docking_and_ink() {
     );
     assert!(w.frame_timer.borrow().is_none(), "resize presentation must settle");
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .metrics()
             .committed_strokes,
@@ -12613,12 +12168,7 @@ fn native_workspace_controls_docking_and_ink() {
     assert_eq!(state(&w).theme, Theme::Light);
     review(&w, "light", &stroke_points);
     let center = state(&w).camera.viewport.map(|v| v as f32 * 0.5);
-    let change = w
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    let change = ui_session_mut(&w)
         .gesture(center, center, 4.0, 0.0);
     w.changed(change);
     pump(150);
@@ -12723,6 +12273,11 @@ fn find_button(root: &gtk::Widget, label: &str) -> Option<gtk::Button> {
         child = w.next_sibling();
     }
     None
+}
+
+fn named<T: IsA<gtk::Widget>>(root: &gtk::Widget, name: &str) -> T {
+    find_named(root, name).and_then(|widget| widget.downcast().ok())
+        .unwrap_or_else(|| panic!("{name}: expected {}", std::any::type_name::<T>()))
 }
 
 fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
@@ -12931,12 +12486,7 @@ fn native_workspace_menu_input() {
         manager.active_id().as_deref(),
         Some(layer_workspace::DEFAULT_WORKSPACES[1].0)
     );
-    let document = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let document = ui_session(&w)
         .engine()
         .document()
         .clone();
@@ -12972,7 +12522,7 @@ fn native_workspace_menu_input() {
             preset.layout(Platform::Gtk)
         );
         assert_eq!(
-            w.gpu.borrow().as_ref().unwrap().session.engine().document(),
+            ui_session(&w).engine().document(),
             &document
         );
         capture_reference(
@@ -13204,12 +12754,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     wait_workspaces(&w);
     let id = w.workspaces.manager().unwrap().active_id().unwrap();
     let baseline = durable_layout(&state(&w).workspace.layout);
-    let document = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let document = ui_session(&w)
         .engine()
         .document()
         .clone();
@@ -13231,7 +12776,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     assert_ne!(moved, baseline);
     wait_saved(&w);
     assert_eq!(
-        w.gpu.borrow().as_ref().unwrap().session.engine().document(),
+        ui_session(&w).engine().document(),
         &document
     );
     w.window.close();
@@ -13349,12 +12894,7 @@ fn native_named_workspace_manager_library_and_history() {
         pump(100);
         assert!(!w.workspaces.busy());
     };
-    let drawing = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let drawing = ui_session(&w)
         .engine()
         .document()
         .clone();
@@ -13380,10 +12920,7 @@ fn native_named_workspace_manager_library_and_history() {
     });
     let customized = durable_layout(&state(&w).workspace.layout);
     let manager_list = || {
-        find_named(w.window.upcast_ref(), "workspace-manager-items")
-            .unwrap()
-            .downcast::<gtk::ListBox>()
-            .unwrap()
+        named::<gtk::ListBox>(w.window.upcast_ref(), "workspace-manager-items")
     };
     let select_item = |title: &str| {
         let list = manager_list();
@@ -13404,11 +12941,7 @@ fn native_named_workspace_manager_library_and_history() {
         }
     };
     let capture = || {
-        w.gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        ui_session_mut(&w)
             .capture_workspace()
             .unwrap()
     };
@@ -13468,10 +13001,7 @@ fn native_named_workspace_manager_library_and_history() {
                 *painting_before_preview.history.layout()
             );
             select_item("Inking");
-            let search = find_named(w.window.upcast_ref(), "workspace-manager-search")
-                .unwrap()
-                .downcast::<gtk::SearchEntry>()
-                .unwrap();
+            let search = named::<gtk::SearchEntry>(w.window.upcast_ref(), "workspace-manager-search");
             search.set_text("no matching item");
             pump(300);
             assert!(manager_list().selected_row().is_none());
@@ -13543,12 +13073,7 @@ fn native_named_workspace_manager_library_and_history() {
             .is_err()
     );
     // Exercise the actual modal and check both live and persisted state while browsing.
-    let original = w
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
+    let original = ui_session_mut(&w)
         .capture_workspace()
         .unwrap();
     let persisted_original = glib::MainContext::default()
@@ -13578,14 +13103,8 @@ fn native_named_workspace_manager_library_and_history() {
         );
         pump(100);
         let dialog = w.workspaces.ui.dialog.clone();
-        let list = find_named(dialog.upcast_ref(), "workspace-manager-items")
-            .unwrap()
-            .downcast::<gtk::ListBox>()
-            .unwrap();
-        let apply = find_named(dialog.upcast_ref(), "workspace-manager-apply")
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap();
+        let list = named::<gtk::ListBox>(dialog.upcast_ref(), "workspace-manager-items");
+        let apply = named::<gtk::Button>(dialog.upcast_ref(), "workspace-manager-apply");
         (dialog, list, apply)
     };
     for response in ["cancel", "restore"] {
@@ -13608,11 +13127,7 @@ fn native_named_workspace_manager_library_and_history() {
         pump(150);
         assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
         assert_eq!(
-            w.gpu
-                .borrow_mut()
-                .as_mut()
-                .unwrap()
-                .session
+            ui_session_mut(&w)
                 .capture_workspace()
                 .unwrap(),
             original
@@ -13667,12 +13182,7 @@ fn native_named_workspace_manager_library_and_history() {
         );
         pump(100);
         assert!(!w.workspaces.busy());
-        let after = w
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .session
+        let after = ui_session_mut(&w)
             .capture_workspace()
             .unwrap();
         if response == "cancel" {
@@ -13710,7 +13220,7 @@ fn native_named_workspace_manager_library_and_history() {
     assert!(find_button(w.window.upcast_ref(), "Switch to Workspace").is_some());
     assert!(find_named(w.window.upcast_ref(), "workspace-manager-new").is_some());
     assert_eq!(
-        w.gpu.borrow().as_ref().unwrap().session.engine().document(),
+        ui_session(&w).engine().document(),
         &drawing
     );
     let saved_before_close = saved(&painting);
@@ -13814,10 +13324,7 @@ fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
     assert_eq!(state(&second).brush.diameter, 73.);
     let window = first.clone();
     glib::timeout_add_local_once(Duration::from_millis(100), move || {
-        find_named(window.window.upcast_ref(), "workspace-item-name")
-            .unwrap()
-            .downcast::<gtk::Entry>()
-            .unwrap()
+        named::<gtk::Entry>(window.window.upcast_ref(), "workspace-item-name")
             .set_text("Recovered Painting");
         find_button(window.window.upcast_ref(), "Save and Switch")
             .unwrap()

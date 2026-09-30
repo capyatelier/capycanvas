@@ -28,12 +28,7 @@ pub(super) fn source() -> SourceImage {
     builder.finish().unwrap()
 }
 pub(super) fn snapshot(w: &Rc<Workspace>) -> Vec<u8> {
-    let project = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let project = ui_session(&w)
         .capture_project_recovery()
         .unwrap();
     let mut bytes = Vec::new();
@@ -68,8 +63,7 @@ pub(super) fn wait_layer_thumbnail(w: &Rc<Workspace>, id: u64) -> gtk::gdk::Text
         } else {
             let tile = layout.panels.iter().flat_map(|p| p.tiles())
                 .find(|tile| tile.control == control).expect("Layers control in the test workspace");
-            find_named(w.surface.upcast_ref(), &format!("tile-{}", tile.id))
-                .unwrap().downcast::<gtk::Button>().unwrap()
+            named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{}", tile.id))
         };
         click(&button);
     }
@@ -141,14 +135,14 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
         }
         invoke(&w, CommandId::ApplyTransform);
         ready(&w);
-        let active = w.gpu.borrow().as_ref().unwrap().session.engine().document().active_layer.0;
+        let active = ui_session(&w).engine().document().active_layer.0;
         wait_layer_thumbnail(&w, active);
         let saved = snapshot(&w);
         let reopened = layer_core::Project::read(std::io::Cursor::new(saved), Default::default()).unwrap();
         assert_eq!(reopened.document.layers[0].source.as_deref(), Some(&photo.source));
         invoke(&w, CommandId::Undo);
         ready(&w);
-        assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().layers.len(), 2);
+        assert_eq!(ui_session(&w).engine().document().layers.len(), 2);
 
         let provider = gtk::gdk::ContentProvider::for_bytes(mime, &glib::Bytes::from_owned(bytes));
         w.window.clipboard().set_content(Some(&provider)).unwrap();
@@ -158,7 +152,7 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
         source_is(&w, &photo.source);
         invoke(&w, CommandId::CancelTransform);
         ready(&w);
-        assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().layers.len(), 2);
+        assert_eq!(ui_session(&w).engine().document().layers.len(), 2);
 
         invoke(&w, CommandId::OpenDocument);
         let file = chooser();
@@ -234,11 +228,7 @@ fn native_profiled_place_paste_and_source_history() {
     invoke(&w, CommandId::ClearLayer);
     ready(&w);
     assert!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers[0]
@@ -262,11 +252,7 @@ fn native_profiled_place_paste_and_source_history() {
     invoke(&w, CommandId::Undo);
     ready(&w);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers
@@ -304,11 +290,7 @@ fn native_profiled_place_paste_and_source_history() {
     invoke(&w, CommandId::ApplyTransform);
     ready(&w);
     assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .layers

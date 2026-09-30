@@ -19,7 +19,7 @@ pub(super) fn start(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
 }
 
 pub(super) fn document(w: &Workspace) -> Document {
-    w.gpu.borrow().as_ref().unwrap().session.engine().document().clone()
+    ui_session(&w).engine().document().clone()
 }
 
 pub(super) fn window_point(w: &Workspace, [x, y]: [f32; 2]) -> [f32; 2] {
@@ -189,7 +189,7 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     let photo = layer_core::color::source::rgba8_source([width, height], |x, y| {
         if (x / 64 + y / 64) % 2 == 0 { [40, 170, 90, 255] } else { [230, 220, 60, 255] }
     });
-    w.gpu.borrow_mut().as_mut().unwrap().session
+    ui_session_mut(&w)
         .import_layer_source("Photo", std::sync::Arc::unwrap_or_clone(photo))
         .unwrap();
     w.refresh(regions::DOCUMENT | regions::COMMANDS);

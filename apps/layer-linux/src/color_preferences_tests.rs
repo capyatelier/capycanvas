@@ -29,10 +29,7 @@ fn choose(path: &std::path::Path) {
 }
 fn click_named(root: &gtk::Widget, name: &str) {
     click(
-        &find_named(root, name)
-            .unwrap()
-            .downcast::<gtk::Button>()
-            .unwrap(),
+        &named::<gtk::Button>(root, name),
     );
 }
 fn preferences(w: &Rc<Workspace>) {
@@ -75,13 +72,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
         ("photo-depth", 1),
         ("missing-profile", 1),
     ] {
-        let row = find_named(
-            w.preferences.dialog.upcast_ref(),
-            &format!("setting-{name}"),
-        )
-        .unwrap()
-        .downcast::<adw::ComboRow>()
-        .unwrap();
+        let row = named::<adw::ComboRow>(w.preferences.dialog.upcast_ref(), &format!("setting-{name}"));
         row.set_selected(selected);
         pump(50);
     }
@@ -106,13 +97,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     click_named(w.preferences.dialog.upcast_ref(), "color-drawing-defaults");
     dialog(&w, "drawing-defaults-dialog");
     combo(&w, "new-document-preset").set_selected(2);
-    let row = find_named(
-        w.window.visible_dialog().unwrap().upcast_ref(),
-        "new-document-width",
-    )
-    .unwrap()
-    .downcast::<adw::SpinRow>()
-    .unwrap();
+    let row = named::<adw::SpinRow>(w.window.visible_dialog().unwrap().upcast_ref(), "new-document-width");
     row.set_value(128.);
     response(&w, "create");
     finish(&w);
@@ -137,10 +122,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     let manager = dialog(&w, "profile-library-manager");
     click_named(manager.upcast_ref(), "profile-library-import");
     choose(&profile);
-    let list = find_named(manager.upcast_ref(), "profile-library-list")
-        .unwrap()
-        .downcast::<gtk::ListBox>()
-        .unwrap();
+    let list = named::<gtk::ListBox>(manager.upcast_ref(), "profile-library-list");
     until(|| list.row_at_index(0).is_some(), "profile library rows");
     capture_ui(&w, &output, "profile-library.png");
     response(&w, "close");
@@ -234,10 +216,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     preferences(&w);
     click_named(w.preferences.dialog.upcast_ref(), "color-profile-library");
     let manager = dialog(&w, "profile-library-manager");
-    let list = find_named(manager.upcast_ref(), "profile-library-list")
-        .unwrap()
-        .downcast::<gtk::ListBox>()
-        .unwrap();
+    let list = named::<gtk::ListBox>(manager.upcast_ref(), "profile-library-list");
     super::new_photo::profile_manager_action(&w, 0, "remove");
     until(
         || list.row_at_index(0).is_none(),

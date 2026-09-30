@@ -119,11 +119,7 @@ fn native_canvas_bar_input() {
     });
     pump(200);
     let revision = || {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
+        ui_session(&w)
             .engine()
             .document()
             .revision
@@ -330,7 +326,7 @@ fn native_canvas_bar_polygon_input() {
     );
     let remove = bar_widget(&w, "canvas-bar-RemoveSelectionPoint");
     native.click(center(&w, &remove));
-    until(|| w.gpu.borrow().as_ref().unwrap().session.state().canvas_bar.as_ref().is_some_and(|b| {
+    until(|| ui_session(&w).state().canvas_bar.as_ref().is_some_and(|b| {
         b.completion.iter().any(|i| matches!(&i.option, ToolOption::Action { state, .. } if state.id == CommandId::CompleteSelection && !state.enabled))
     }), "removing a point disables Finish");
     click(&mut native, canvas_point(&w, [700., 950.]));
@@ -338,7 +334,7 @@ fn native_canvas_bar_polygon_input() {
     until(|| finish.is_sensitive(), "Finish is available with three points");
     native.click(center(&w, &finish));
     until(
-        || w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.is_some(),
+        || ui_session(&w).engine().document().selection.is_some(),
         "Finish creates the selection",
     );
     until(
@@ -364,7 +360,7 @@ fn native_canvas_bar_distorts_a_pixel_selection() {
     w.dispatch(UiAction::Invoke { command: CommandId::ColorSelect });
     pump(200);
     let pixels = |w: &Workspace| {
-        w.gpu.borrow().as_ref().unwrap().session.engine().document().selection.as_ref()
+        ui_session(&w).engine().document().selection.as_ref()
             .is_some_and(|s| matches!(s.shape, layer_core::SelectionShape::Pixels(_)))
     };
     let mut native = remote_input();
@@ -373,7 +369,7 @@ fn native_canvas_bar_distorts_a_pixel_selection() {
     w.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate });
     w.dispatch(UiAction::Invoke { command: CommandId::TransformDistort });
     until(|| shown(&w) && transforming(&w), "the transform bar appears");
-    let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+    let revision = ui_session(&w).engine().document().revision;
     let anchor = anchor_in_window(&w);
     let corner = [anchor[2], anchor[1]];
     native.perform(json!([
@@ -385,7 +381,7 @@ fn native_canvas_bar_distorts_a_pixel_selection() {
     let apply = bar_widget(&w, "canvas-bar-ApplyTransform");
     native.click(center(&w, &apply));
     until(|| !transforming(&w), "Apply finishes once the resampled coverage returns");
-    let document = w.gpu.borrow().as_ref().unwrap().session.engine().document().clone();
+    let document = ui_session(&w).engine().document().clone();
     assert!(document.revision > revision, "Apply commits the distorted pixels");
     assert!(pixels(&w), "the selection follows the distortion as pixel coverage");
 }
@@ -429,7 +425,7 @@ fn native_canvas_bar_warps_a_selection() {
             other => panic!("Warp previews a mesh, not {other:?}"),
         }
     };
-    let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+    let revision = ui_session(&w).engine().document().revision;
     let node = |w: &Workspace, index: u32| {
         let p = mesh(w).node(index).unwrap();
         canvas_point(w, [p.x, p.y])
@@ -471,7 +467,7 @@ fn native_canvas_bar_warps_a_selection() {
     capture_reference(&w, &format!("{dir}/warp.png"), 1.);
     click(&mut native, &bar_widget(&w, "canvas-bar-ApplyTransform"));
     until(|| !transforming(&w), "Apply ends the warp");
-    let document = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+    let document = ui_session(&w).engine().document().revision;
     assert!(document > revision, "Apply commits the warped pixels");
 }
 
@@ -589,7 +585,7 @@ pub(super) fn choose_from_bar_menu(w: &Workspace, native: &mut RemoteInput, devi
 }
 
 pub(super) fn document(w: &Workspace) -> layer_core::Document {
-    w.gpu.borrow().as_ref().unwrap().session.engine().document().clone()
+    ui_session(&w).engine().document().clone()
 }
 
 /// Fill a lasso selection on `layer` and wait for its bar.

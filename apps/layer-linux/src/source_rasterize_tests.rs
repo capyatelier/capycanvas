@@ -36,11 +36,7 @@ fn source() -> SourceImage {
     builder.finish().unwrap()
 }
 fn current(w: &Rc<Workspace>, id: layer_core::LayerId) -> layer_core::Layer {
-    w.gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    ui_session(&w)
         .engine()
         .document()
         .layer(id)
@@ -97,12 +93,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     ready(&w);
     native_pen_path(&w, &[[30., 40.], [55., 40.], [95., 40.]]);
     ready(&w);
-    let overlay = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .session
+    let overlay = ui_session(&w)
         .engine()
         .document()
         .active_layer;
@@ -143,10 +134,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     pump(200);
     capture_ui(&w, &output, "source-before-after.png");
     assert!(
-        find_named(d.upcast_ref(), "rasterize-reduction")
-            .unwrap()
-            .downcast::<gtk::Label>()
-            .unwrap()
+        named::<gtk::Label>(d.upcast_ref(), "rasterize-reduction")
             .label()
             .contains("clipped")
     );
