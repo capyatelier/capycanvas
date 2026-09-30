@@ -110,25 +110,8 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                     );
                     // A second partial window frame cannot reuse a previous
                     // window as if it held the entire document.
-                    let mut scene = r.scene.take().unwrap();
                     let composed = r.metrics().composited_pixels;
-                    let mut encoder =
-                        submission::CommandEncoder::new(&r.device, &Default::default());
-                    scene
-                        .compose(
-                            &mut r,
-                            FramePacket {
-                                composite_all: false,
-                                ..packet(&layers, extent)
-                            },
-                            &[], PixelRect::new(253, 251, 279, 283),
-                            &mut encoder,
-                            None,
-                        )
-                        .unwrap();
-                    r.uploads.finish(&encoder);
-                    encoder.submit(&r.queue);
-                    r.scene = Some(scene);
+                    compose_region(&mut r, &layers, extent, PixelRect::new(253, 251, 279, 283));
                     assert!(r.metrics().composited_pixels - composed < u64::from(extent[0]) * u64::from(extent[1]),
                         "releasing temporary pixels must preserve damage metadata");
                     close(&pixels(&r), &expected);
@@ -249,23 +232,7 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
     // Metadata changes still invalidate the complete adjustment, even when a
     // caller supplies only a small paint rectangle in the same frame.
     layers[0].opacity = 0.13;
-    let mut scene = r.scene.take().unwrap();
-    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-    scene
-        .compose(
-            &mut r,
-            FramePacket {
-                composite_all: false,
-                ..packet(&layers, extent)
-            },
-            &[], PixelRect::new(259, 261, 263, 265),
-            &mut encoder,
-            None,
-        )
-        .unwrap();
-    r.uploads.finish(&encoder);
-    encoder.submit(&r.queue);
-    r.scene = Some(scene);
+    compose_region(&mut r, &layers, extent, PixelRect::new(259, 261, 263, 265));
     let changed = pixels(&r);
     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
     r.submit(packet(&layers, extent)).unwrap();
@@ -406,4 +373,14 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
             }
         }
     }
+}
+
+fn compose_region(r: &mut WgpuRasterizer, layers: &[Layer], extent: [u32; 2], damage: PixelRect) {
+    let mut scene = r.scene.take().unwrap();
+    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+    scene.compose(r, FramePacket { composite_all: false, ..packet(layers, extent) },
+        &[], damage, &mut encoder, None).unwrap();
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    r.scene = Some(scene);
 }

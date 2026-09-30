@@ -620,14 +620,7 @@ mod gpu_tests {
     fn native_publication_pipelines_follow_canvas_and_gate_brush() {
         let color = layer_core::color::DocumentColor::default();
         let reference = WgpuRasterizer::new_native_headless(color).unwrap();
-        let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
-            reference.adapter.clone(),
-            reference.device().clone(),
-            reference.queue.clone(),
-            color,
-        )
-        .unwrap();
-        renderer.finish_startup_cache();
+        let mut renderer = crate::test_support::staged_renderer(&reference, color);
         assert!(renderer.scene_pipelines.pipeline.iter().all(|p| !p.ready()));
         assert!(
             renderer
@@ -642,13 +635,7 @@ mod gpu_tests {
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         renderer.prepare_startup(&document, &brush, false).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while !renderer.poll_startup().unwrap().brush_ready {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "Native brush compilation timed out"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("Native brush compilation timed out"));
         let mut recolored = brush.clone();
         recolored.color_rgba_linear = [8., 0.25, 0.5, 1.];
         assert!(!renderer.startup_needs_update(&document, &recolored, false));
@@ -673,10 +660,7 @@ mod gpu_tests {
                 .kernel(&layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush), MaterialOperation::Coverage, coverage).ready(),
                 "G-Pen commit and prediction kernels must be ready before input is enabled");
         }
-        while !renderer.poll_startup().unwrap().complete {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.complete, format_args!("Startup compilation timed out"));
         assert!(renderer.regions.as_ref().is_none_or(|regions| regions.flood.pipelines().all(|p| !p.ready())),
             "unused region recipes must remain uncompiled");
         let transforms = renderer.transforms.as_ref().unwrap();
@@ -698,10 +682,7 @@ mod gpu_tests {
     fn edged_brushes_in_perceptual_documents_compile_their_deposit_before_pen_down() {
         let color = layer_core::color::DocumentColor::default();
         let reference = WgpuRasterizer::new_native_headless(color).unwrap();
-        let mut renderer =
-            WgpuRasterizer::from_wgpu_native_staged(reference.adapter.clone(), reference.device().clone(), reference.queue.clone(), color)
-                .unwrap();
-        renderer.finish_startup_cache();
+        let mut renderer = crate::test_support::staged_renderer(&reference, color);
         let mut document = Document::new("perceptual startup", 128, 128);
         document.blend_space = layer_core::BlendSpace::Perceptual;
         let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Airbrush);
@@ -709,10 +690,7 @@ mod gpu_tests {
         brush.rendering.wet_edge = 0.5;
         renderer.prepare_startup(&document, &brush, false).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while !renderer.poll_startup().unwrap().brush_ready {
-            assert!(std::time::Instant::now() < deadline, "compilation timed out");
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("compilation timed out"));
         let style = layer_render::DabStyle { blend_space: document.blend_space, ..layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush) };
         let plan = BrushPassPlan::for_device(&style, &renderer.device);
         assert!(plan.direct.is_none() && plan.material == MaterialOperation::Deposit);
@@ -725,19 +703,13 @@ mod gpu_tests {
     fn retouching_kernels_compile_before_pen_down() {
         let color = layer_core::color::DocumentColor::default();
         let reference = WgpuRasterizer::new_native_headless(color).unwrap();
-        let mut renderer =
-            WgpuRasterizer::from_wgpu_native_staged(reference.adapter.clone(), reference.device().clone(), reference.queue.clone(), color)
-                .unwrap();
-        renderer.finish_startup_cache();
+        let mut renderer = crate::test_support::staged_renderer(&reference, color);
         let document = Document::new("retouching startup", 128, 128);
         for preset in [layer_core::DefaultBrushPreset::CloneStamp, layer_core::DefaultBrushPreset::HealingBrush] {
             let brush = layer_core::default_brush(preset);
             renderer.prepare_startup(&document, &brush, false).unwrap();
             let deadline = std::time::Instant::now() + Duration::from_secs(30);
-            while !renderer.poll_startup().unwrap().brush_ready {
-                assert!(std::time::Instant::now() < deadline, "{preset:?} compilation timed out");
-                std::thread::sleep(Duration::from_millis(1));
-            }
+            crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("{preset:?} compilation timed out"));
             let style = layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush);
             let pipelines = &renderer.pipelines;
             let prediction = pipelines.dry_material.kernel(&style, MaterialOperation::Clone, false);

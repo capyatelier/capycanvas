@@ -374,10 +374,7 @@ mod tests {
             assert!(!renderer.poll_startup().unwrap().complete);
             renderer.finish_startup_cache();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            while !renderer.poll_startup().unwrap().complete {
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+            crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.complete, format_args!("Startup compilation timed out"));
             renderer.submit(packet).unwrap();
             assert_eq!(renderer.readback_srgb_rgba8().unwrap(), expected);
             if cache_features.is_empty() {

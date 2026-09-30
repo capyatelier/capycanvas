@@ -170,3 +170,18 @@ pub(crate) fn max_error_bytes(a: &[u8], b: &[u8]) -> f32 {
         .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
         .fold(0., f32::max)
 }
+
+pub(crate) fn staged_renderer(reference: &WgpuRasterizer, color: layer_core::color::DocumentColor) -> WgpuRasterizer {
+    let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
+        reference.adapter.clone(), reference.device().clone(), reference.queue.clone(), color).unwrap();
+    renderer.finish_startup_cache();
+    renderer
+}
+
+pub(crate) fn wait_startup(renderer: &mut WgpuRasterizer, deadline: std::time::Instant,
+    ready: impl Fn(StartupProgress) -> bool, message: std::fmt::Arguments<'_>) {
+    while !ready(renderer.poll_startup().unwrap()) {
+        assert!(std::time::Instant::now() < deadline, "{message}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}

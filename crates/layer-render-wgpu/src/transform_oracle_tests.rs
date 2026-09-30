@@ -361,20 +361,7 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
                 .map(f64::from);
                 let texels = pages(&r);
                 assert!(!texels.is_empty(), "the preview draws pages");
-                for ([x, y], actual) in texels {
-                    let expected: Vec<_> = oracle
-                        .moved(h, interpolation, x, y)
-                        .into_iter()
-                        .map(|moved| oracle.composed(x, y, moved, false))
-                        .collect();
-                    assert!(
-                        expected.iter().any(|e| e
-                            .iter()
-                            .zip(actual)
-                            .all(|(e, a)| (e - f64::from(a)).abs() <= 2e-4 + e.abs() * 2e-5)),
-                        "mode {mode} {interpolation:?} {map:?} at {x},{y}: {actual:?} not in {expected:?}"
-                    );
-                }
+                check_pages(&oracle, h, interpolation, false, texels, format_args!("mode {mode} {interpolation:?} {map:?}"));
                 r.set_transform_preview(None).unwrap();
                 frame(&mut r, &layer, false);
             }
@@ -416,20 +403,7 @@ fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
                 .unwrap();
                 frame(&mut r, &layer, false);
                 let h = Projective::from_affine(affine).0.map(f64::from);
-                for ([x, y], actual) in pages(&r) {
-                    let expected: Vec<_> = oracle
-                        .moved(h, interpolation, x, y)
-                        .into_iter()
-                        .map(|moved| oracle.composed(x, y, moved, true))
-                        .collect();
-                    assert!(
-                        expected.iter().any(|e| e
-                            .iter()
-                            .zip(actual)
-                            .all(|(e, a)| (e - f64::from(a)).abs() <= 2e-4 + e.abs() * 2e-5)),
-                        "mode {mode} {interpolation:?} {affine:?} at {x},{y}: {actual:?} not in {expected:?}"
-                    );
-                }
+                check_pages(&oracle, h, interpolation, true, pages(&r), format_args!("mode {mode} {interpolation:?} {affine:?}"));
                 r.set_transform_preview(None).unwrap();
                 frame(&mut r, &layer, false);
             }
@@ -920,4 +894,15 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     let exported = capture.read_region([0, 0, size, size]).unwrap();
     let placed = largest_difference(exported.iter().map(|p| p[0]), &expected);
     assert!(placed < 1e-3, "exact capture of a photo placed at an eighth: {placed} from the area reduction");
+}
+
+fn check_pages(oracle: &Oracle, map: [f64; 9], interpolation: Interpolation, keep_source: bool,
+    texels: Vec<([u32; 2], [f32; 4])>, context: std::fmt::Arguments<'_>) {
+    for ([x, y], actual) in texels {
+        let expected: Vec<_> = oracle.moved(map, interpolation, x, y).into_iter()
+            .map(|moved| oracle.composed(x, y, moved, keep_source)).collect();
+        assert!(expected.iter().any(|e| e.iter().zip(actual)
+            .all(|(e, a)| (e - f64::from(a)).abs() <= 2e-4 + e.abs() * 2e-5)),
+            "{context} at {x},{y}: {actual:?} not in {expected:?}");
+    }
 }

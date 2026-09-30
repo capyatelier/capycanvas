@@ -57,6 +57,9 @@ Mesh fixtures pass a previously constructed projective map to `MeshMap::fit`.
 Raster corruption fixtures retain their exact pixel descriptor.
 Renderer float fixtures share readback and presenter setup. Keep pooled and
 unpooled memory accounting separate, with each test's pixel and memory limits.
+Partial-region fixtures keep their damage bounds; transform oracles keep source
+and selection flags and tolerances. Startup fixtures retain readiness gates and
+deadlines across compilation phases.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
