@@ -81,6 +81,54 @@ the separate 33 ms target. Raw records are in
 The previous build's records are `settle-21-brush-{fast,slow}` and
 `settle-21-pauses-matched-resume.json`.
 
+### Current resumed contacts
+
+Measured on 2026-09-30 after the covered-pixel and composition changes at
+`c82970142`, with Perceptual blending, default workspace, Stats closed and
+thermal status zero. TCL uses the 12 MP photo, G-Pen 1024 px at Fit and a
+250 × 140 px path. Three runs each draw 25 contacts of 100 ms. Gaps of 100 ms
+put all 72 resumed contacts into pending refinement; 2,000 ms control gaps put
+none there. Initial contacts are excluded and the same contact indices are
+paired. The two-layer graph is identical in the front-biased and balanced
+builds; this run uses the balanced control APK documented in
+[the low-tier table](low-tier.md#painting-below-the-front-layer).
+
+| Contact latency | During refinement, run medians | After refinement, run medians |
+| --- | --- | --- |
+| Input queue | 1.41–2.29 ms | 0.19–0.20 ms |
+| First canvas submission | 17.64–21.11 ms | 13.07–15.96 ms |
+| GPU completion | 56.45–60.16 ms | 43.43–45.10 ms |
+
+Differences of run medians add 1.68–7.27 ms to submission and 11.36–16.73 ms
+to GPU completion. Taking the p95 of the individual paired contact differences
+adds 9.30 / 10.86 / 11.22 ms to submission and 20.02 / 21.08 / 27.59 ms to
+GPU completion. Submission remains within the one-frame refinement allowance;
+the GPU-completion increase exceeds it in all three runs. This percentile
+of paired differences is distinct from subtracting the two latency
+distributions' p95 values. These measurements are not physical pen-to-photon
+latency and do not identify how much comes from exact composition versus
+required raster publication.
+
+The current top-tier build also ran three ten-contact sequences: 61 MP photo,
+G-Pen 2048 px at Fit, 520 × 299 px path, with the same 100 ms versus 2,000 ms
+gaps. Twenty-five matched resumed contacts have median first-submission
+latencies of 30.87–44.66 ms during refinement versus 44.06–57.00 ms after
+settling; GPU completion is 50.47–68.55 ms versus 101.53–114.50 ms. Both
+retain SharedDemandRefresh, and the medians do not establish an added
+refinement penalty on this device. The long-gap control has a separate
+start-latency gap; its cause is unclassified. The top APK is the optimized
+`c452a0642` build identified in [the top-tier table](top-tier.md#current-g-pen-comparison).
+
+A preceding top-tier 25-contact sequence crashed in the second run after
+Adreno reported `kgsl_sharedmem_alloc()` failure for 16 KB, with SIGSEGV in
+`vulkan.adreno.so` during command-buffer initialization. A repeat of two
+25-contact runs with memory sampling passed. The allocation failure's cause
+and connection to refinement are unproven; it remains a robustness gap.
+
+Raw records: `artifacts/optimization-roi/all-layer-followup/current-{low,top}-{fast,slow}-{25,10}`
+for the corresponding tier, `current-pauses-paired.json`, failed
+`current-top-fast`, and diagnostic `current-top-fast-25-memory`.
+
 ### Healing finalization
 
 Healing advances through bounded GPU batches, including native raster validation

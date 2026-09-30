@@ -119,6 +119,14 @@ test-fixture rebase), optimized benchmark APK SHA-256
 `865b0dd05b8253b3b22eac806136023a5befeac5b642e5fddb2f3cd24194d047`.
 Raw records: `artifacts/optimization-roi/{current-main,final}-top-fit`.
 
+Current short-contact tests show a separate start-latency gap after two seconds
+of idle, despite longer settling not increasing the matched run medians.
+A 25-contact rapid sequence also encountered a GPU-driver allocation crash;
+a memory-sampled repeat passed. Neither the cause of the idle start delay nor
+the intermittent allocation failure is established. See
+[current resumed contacts](responsiveness.md#current-resumed-contacts) before
+treating settling time as harmless to subsequent drawing.
+
 ## Retouching with the integrated compositor
 
 Measured on 2026-09-29 on the reference tablet: 61 MP Perceptual photo,

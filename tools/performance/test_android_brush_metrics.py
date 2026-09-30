@@ -40,6 +40,15 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duration_ms"):
             validate_setup(self.info, self.requested)
 
+    def test_requires_the_paint_layer_at_the_requested_position(self):
+        self.requested["paint_layer_index"] = 3
+        self.info["state"]["layers"] = [dict(selected=i == 3) for i in range(6)]
+        validate_setup(self.info, self.requested)
+        for selected in ([0], [], [0, 3]):
+            self.info["state"]["layers"] = [dict(selected=i in selected) for i in range(6)]
+            with self.assertRaisesRegex(ValueError, "paint_layer_index"):
+                validate_setup(self.info, self.requested)
+
     def test_rejects_missing_or_unmatched_contact_timing(self):
         for key in ("pause_ms", "contact_ms", "settle_delay_ms"):
             self.requested[key] = 1100
