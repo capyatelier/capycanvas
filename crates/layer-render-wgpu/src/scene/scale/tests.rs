@@ -19,6 +19,7 @@ fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[
     for step in 0..=pages + 1 {
         if !r.has_pending_work() { break; }
         assert!(step < pages + 1, "refinement must finish within one visit per native page");
+        r.wait_idle().unwrap();
         let work = r.metrics.composited_pixels;
         r.submit(idle).unwrap();
         assert!(r.metrics.composited_pixels - work <= 4 * u64::from(PAGE_SIZE).pow(2));

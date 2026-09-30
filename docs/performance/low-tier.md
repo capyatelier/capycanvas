@@ -311,7 +311,7 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | 53.0 fresh updates/s (52.52–53.54); median completion gap p99 29.9 ms | **Not met** |
+| G-Pen (1) | Simple | 1024 px | 53.3 fresh updates/s (52.74–54.05); completion gap p99 29.35–37.29 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -355,23 +355,44 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 Measured on 2026-09-29: G-Pen 1024 px, Perceptual 12 MP photo, Fit at 15.97%,
 240 × 140 px trajectory, 16 ms prediction, three five-second strokes. Stats is
 closed, Navigator is visible and thermal status remains zero. Fresh updates
-count completed frames that consumed new real pen samples. The median is 52.97/s (52.52–53.54), below
-60/s. Completion-gap p99 is 29.02 / 29.88 / 31.58 ms; all three pass the
-33.3 ms gap limit.
+count completed frames that consumed new real pen samples. The median is
+53.32/s (52.74–54.05), below 60/s. Completion-gap p99 is
+29.36 / 37.29 / 29.35 ms; one run exceeds the 33.3 ms gap limit.
 
-The optimized release APK uses the renderer and host source of `dd0afc566`;
-SHA-256 `8f9a4f41a90f226bb223091d605df80e27cdfa98bb561f0047c8048bdbd2eef5`.
-Raw input, completion and environment records are in
-`artifacts/latency-investigation/settle-21-brush-continuous`.
-The preceding Healing build measured 53.14 / 54.35 / 53.92 fresh updates/s;
-neither set meets 60/s or qualifies stacked photos, native zoom or other brushes.
+The optimized release build allows foreground submission during two-page idle
+refinement and retains backpressure for required raster work; APK SHA-256
+`649f12d58147542a5a8925d7727d11907ceeafb68a7e68b135b3ef9539ca1d7f`.
+Raw records are `artifacts/latency-investigation/qualified-25-brush-continuous`.
+The preceding four-page build measured 52.97/s (52.52–53.54).
+Neither set meets 60/s or qualifies stacked photos, native zoom or other brushes.
 
-Matched resumed contacts add 3.08–5.53 ms median submission delay and
-13.60–15.95 ms median GPU-completion delay. Two of three comparisons exceed
-the one-frame added GPU p95 budget. One of three initial contacts in each set
-also exceeds 33 ms. Records are in
-`artifacts/latency-investigation/settle-21-brush-{fast,slow}`;
-[responsiveness](responsiveness.md) contains the matched results and protocol.
+Matched resumed contacts meet the one-frame added-submission p95 budget in all
+three runs; added GPU-completion p95 still fails in one run. See
+[responsiveness](responsiveness.md#resuming-during-refinement).
+Settling after continuous strokes takes 587–732 ms, compared with 483–581 ms
+in the preceding four-page build. Smaller idle batches improve interruption
+while increasing total settling time.
+
+Three further runs per case use eight translucent photo layers, the same
+1024 px brush and trajectory, and 50% or 100% zoom. Stats remains closed and
+Navigator visible. Thermal status is zero; at least 2,045 MiB system RAM stays
+available. These moving strokes do not meet 60/s.
+
+| Zoom | Fresh updates/s, median (range) | Completion gap p99, range | Settling after input |
+| --- | ---: | ---: | ---: |
+| 50% | 29.9 (29.71–30.12) | 41.53–43.28 ms | 858–932 ms |
+| 100% | 19.5 (19.43–19.53) | 61.79–65.31 ms | 662–741 ms |
+
+Elapsed render-owner callbacks have medians of 32–33 ms at 50% and 48–49 ms
+at 100%, while actual owner-thread CPU time is about 15 ms in both cases.
+Presentation calls account for 17–18 ms and 34–35 ms respectively. This
+distinguishes waiting from CPU execution; GPU execution and presentation
+scheduling still need separate attribution. The matching 100 ms paused contacts
+have median first-GPU-completion latency of 90–95 ms and 111–127 ms. Few or no
+fresh completions fall inside those short contact windows, so their per-second
+counts cannot be compared with continuous strokes. Paused settling is 732–845
+ms at 50% and 583–626 ms at 100%. Raw reports are
+`artifacts/latency-investigation/two-25-stack-{50,100}-{constant,pauses}`.
 
 ## Input during Healing finalization
 

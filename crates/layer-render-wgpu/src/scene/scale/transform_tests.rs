@@ -510,8 +510,10 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     frame.composite_all=false; frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
     let original = r.readback_srgb_rgba8().unwrap();
+    r.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
     r.prepare_moving_pixels(Some((id,part.clone())));
     r.submit(frame).unwrap();
+    r.background_ready.store(true, std::sync::atomic::Ordering::Release);
     let captures=r.test.source_captures.get(); let reduced=r.test.reduced_pages.get();
     assert_eq!(captures,1); assert!(reduced>0);
     for _ in 0..2 {r.submit(frame).unwrap();}

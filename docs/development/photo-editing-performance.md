@@ -21,7 +21,12 @@ Android allocation blocks are 16 MiB. Frequency Separation bakes Low once and
 constructs High from the quantized Low pages, including after eviction.
 
 The XP-Pen completes the 24 MP radius-8 journey within the peak-memory and free
-memory gates. Completion still takes about 10 seconds. Aim for 2–5 seconds:
+memory gates. On 2026-09-29, the two-page-refinement build peaks at 2,228 MiB PSS
+with at least 1,619 MiB available in the memory diagnostic. Three separate runs
+without PSS sampling take 10.14 / 10.29 / 10.80 seconds from Apply through drain,
+with at least 1,602 MiB available. Required raster work keeps submission
+backpressure; overlapping it can exceed the memory gate even when tracked
+renderer storage remains bounded. Aim for 2–5 seconds:
 the measured Gaussian kernel cost alone is about 0.81 seconds for 24 MP, with
 additional composition, conversion, capture and publication work. Repeated
 Apply and the complete merge/undo memory matrix remain to be qualified.

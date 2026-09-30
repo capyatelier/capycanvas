@@ -214,13 +214,17 @@ the next live tail returns to compact scratch. Save/undo history contains only
 committed native pixels. Idle display refinement composes those authoritative
 pixels; it never delays committing paint or adds work to undo history.
 
-Once the view and artwork stop changing, the renderer refines up to four native pages
+Once the view and artwork stop changing, the renderer refines up to two native pages
 per idle submission through the same region executor used by exact queries.
 It reduces the exact composite into the retained display window and overview,
 then updates the adjacent presentation mip. When a native hierarchy is resident,
 composition writes directly into it, batching pages that share a prepared source
 window into one command sequence. Only one refinement batch may remain in
-flight. Intermediate idle batches do not require a present; completion and new
+flight. Fresh artwork can prepare and submit behind that batch without waiting
+for its completion. Required raster work keeps submission backpressure, and
+each held batch owns its completion token. Dependent painting still waits for
+Healing publication.
+Intermediate idle batches do not require a present; completion and new
 artwork, navigation or overlays do. A skipped revision forces the next retained
 presentation to redraw the complete view. Native identity composition already
 contains exact pixels. Moving transform previews defer refinement until release.

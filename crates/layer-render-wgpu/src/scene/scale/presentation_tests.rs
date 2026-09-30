@@ -58,6 +58,7 @@ fn submit(r: &mut WgpuRasterizer, doc: &layer_core::Document, view: ViewState, a
     .unwrap();
     while r.has_pending_work() {
         assert!(std::time::Instant::now() < deadline, "display did not settle");
+        r.wait_idle().unwrap();
         r.submit(FramePacket { view, composite_all: false, ..packet(&doc.layers, [doc.width, doc.height]) }).unwrap();
     }
 }

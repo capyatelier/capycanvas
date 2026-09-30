@@ -106,19 +106,24 @@ are kept separate from the 10 s comparison table below.
 
 Measured on 2026-09-29 on the reference tablet: 61 MP Perceptual photo,
 512 px brushes, Fit zoom, 520 × 240 px trajectory, 16 ms prediction, three
-five-second strokes per brush. Stats is closed. Fresh
-updates count completed frames that consumed new real pen samples.
+five-second strokes per brush. Stats is closed and thermal status remains zero.
+Fresh updates count completed frames that consumed new real pen samples.
 
 | Brush | Fresh updates/s, median | Completion gap p99, median | Moving-stroke rate |
 | --- | ---: | ---: | --- |
-| Clone Stamp | 187.7 | 12.2 ms | Meets 120/s |
-| Healing Brush | 184.5 | 12.7 ms | Meets 120/s |
-| Spot Healing Brush | 192.2 | 10.1 ms | Meets 120/s |
+| Clone Stamp | 189.6 | 11.8 ms | Meets 120/s |
+| Healing Brush | 191.4 | 10.9 ms | Meets 120/s |
+| Spot Healing Brush | 193.3 | 12.1 ms | Meets 120/s |
 
-These measurements cover drawing. Clone settles in 643–664 ms; Healing in
-873–980 ms and Spot Healing in 807–925 ms. Completion after pen-up remains an
-open gate. They do not qualify presentation-paced navigation or the other
-brushes. The measured build integrates `64036b643` with `13720d303`, bounded
-bakes, the healing solver optimization and sparse stroke replay. Its APK SHA-256
-is `be9a9ad367b9a0215ea5f57ac9d14028818d1f029fe8787324b66d3d4ac71e48`.
-Raw reports are in `artifacts/integration/source-record-batch/top`.
+Clone settles in 389–824 ms; Healing in 1,525–1,885 ms and Spot Healing in
+3,033–3,437 ms. Cooperative Healing permits independent navigation while
+finalization continues; these strokes do not measure that interruption or
+physical scanout. All nine runs complete with at least 2,646 MiB system RAM
+available. Process PSS is not sampled during rate qualification.
+
+The optimized release build allows foreground submission during two-page idle
+refinement and keeps backpressure for required raster work; APK SHA-256
+`649f12d58147542a5a8925d7727d11907ceeafb68a7e68b135b3ef9539ca1d7f`.
+Raw reports are `artifacts/latency-investigation/qualified-25-top-retouch`.
+These successful runs do not establish that the earlier rare Adreno fault is
+fixed, or qualify the other brushes and presentation-paced navigation.

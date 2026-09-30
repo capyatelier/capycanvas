@@ -99,13 +99,13 @@ impl Cache {
         let texture = image.texture.clone();
         let view = image.view.clone();
         let mut seen = BTreeSet::new();
-        let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(4).collect();
+        let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(2).collect();
         let regions: Vec<_> = pages.iter().map(|c| page_rect(*c).intersect(PixelRect::full(self.plan.extent))).collect();
         r.ensure_exact_preview(encoder)?;
         let mut prepared = if bounded(packet.layers) {
             pages.first().map(|coordinate| {
                     PixelRect::new(coordinate[0] * PAGE_SIZE, coordinate[1] * PAGE_SIZE,
-                        (coordinate[0] + 4) * PAGE_SIZE, (coordinate[1] + 1) * PAGE_SIZE)
+                        (coordinate[0] + pages.len() as u32) * PAGE_SIZE, (coordinate[1] + 1) * PAGE_SIZE)
                         .intersect(PixelRect::full(self.plan.extent))
                 })
         } else { None };

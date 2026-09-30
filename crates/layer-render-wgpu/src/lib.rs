@@ -863,6 +863,7 @@ pub struct WgpuRasterizer {
     /// meshes has compiled in the background.
     awaiting_meshes: bool,
     background_ready: Arc<std::sync::atomic::AtomicBool>,
+    background_refinement: bool,
     moving_pixels: Option<(LayerId, layer_core::Selection)>,
     moving_layer: Option<LayerId>,
     #[cfg(test)]
@@ -1185,6 +1186,7 @@ impl WgpuRasterizer {
             document_damage: Vec::new(),
             awaiting_meshes: false,
             background_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            background_refinement: false,
             moving_pixels: None,
             moving_layer: None,
             #[cfg(test)]
@@ -3066,8 +3068,9 @@ fn outline_damage(a: Option<&layer_core::Selection>, b: Option<&layer_core::Sele
     })
 }
 impl WgpuRasterizer {
-    fn hold_background(&self) {
-        self.background_ready.store(false, std::sync::atomic::Ordering::Release);
+    fn hold_background(&mut self, refinement: bool) {
+        self.background_refinement = refinement;
+        self.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let ready = self.background_ready.clone();
         self.queue.on_submitted_work_done(move || ready.store(true, std::sync::atomic::Ordering::Release));
     }
@@ -3121,7 +3124,7 @@ impl CanvasRenderer for WgpuRasterizer {
             self.metrics.command_passes += encoder.pass_count();
             self.last_submission = Some(encoder.submit(&self.queue));
             self.telemetry.submitted(&self.queue);
-            self.hold_background();
+            self.hold_background(false);
             self.settling = Some(pending);
         } else {
             let mut packet = pending.frame.packet(self.document_extent);
@@ -3139,7 +3142,8 @@ impl CanvasRenderer for WgpuRasterizer {
             #[cfg(not(target_arch = "wasm32"))]
             let _ = self.device.poll(wgpu::PollType::Poll);
         }
-        self.settling.is_none() && self.background_ready.load(Ordering::Acquire) && self.raster_ready()
+        self.settling.is_none() && self.raster_ready()
+            && (self.background_ready.load(Ordering::Acquire) || self.background_refinement)
     }
     fn can_capture_raster(&self) -> bool {
         self.settling.is_none() && self.raster_ready()
@@ -3350,6 +3354,14 @@ impl CanvasRenderer for WgpuRasterizer {
 }
 impl WgpuRasterizer {
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
+        if !self.background_ready.load(std::sync::atomic::Ordering::Acquire)
+            && packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
+            && packet.dabs.is_empty() && packet.dab_batches.is_empty()
+            && native_commit.is_none() && self.transform_preview.is_none()
+            && self.moving_layer.is_none() && self.moving_pixels.is_none()
+            && self.artwork_frame.as_ref().is_some_and(|frame|
+                frame.view == packet.view && frame.same_artwork(packet, packet.view.background_rgba_linear))
+        { return Ok(()); }
         let display_request = scene::scale::request(self, packet)?;
         let mut trace_phase = performance_trace::Span::new(c"capy.prepare");
         if let Some(native) = &self.native_edit {
@@ -3869,7 +3881,7 @@ impl WgpuRasterizer {
             self.metrics.command_passes += encoder.pass_count();
             self.last_submission = Some(encoder.submit(&self.queue));
             self.telemetry.submitted(&self.queue);
-            self.hold_background();
+            self.hold_background(false);
             self.metrics.submissions = self.metrics.submissions.saturating_add(1);
             return Ok(());
         }
@@ -3888,7 +3900,7 @@ impl WgpuRasterizer {
             if let Some(commit) = native_commit {
                 self.finish_native_rasters(commit, false)?;
             }
-            self.hold_background();
+            self.hold_background(false);
             self.metrics.submissions = self.metrics.submissions.saturating_add(1);
             self.refresh_storage_metrics();
             if let Some(started) = started {
@@ -4241,6 +4253,7 @@ impl WgpuRasterizer {
         }
         let mut refined = false;
         if dirty.is_empty() && !animated && original_batches.is_empty() && packet.dabs.is_empty()
+            && self.background_ready.load(std::sync::atomic::Ordering::Acquire)
             && self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
             && self.artwork_frame.as_ref().is_some_and(|old|
                 old.view.document_to_surface == packet.view.document_to_surface
@@ -4282,7 +4295,7 @@ impl WgpuRasterizer {
         self.telemetry.submitted(&self.queue);
         self.last_submission = Some(submission.clone());
         if refined {
-            self.hold_background();
+            self.hold_background(true);
         }
         if let Some(commit) = native_commit {
             self.finish_native_rasters(commit, true)?;
