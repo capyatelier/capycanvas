@@ -1,9 +1,11 @@
+import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCanvasBar, GAP, PADDING } from "./canvas-bar.js";
 
-class FakeElement {
+class FakeElement extends SharedElement {
   constructor(tag, className = "") {
+    super();
     this.tagName = tag.toUpperCase(); this.className = className; this.children = []; this.parentNode = null;
     this.attributes = new Map(); this.dataset = {}; this.style = {}; this.hidden = false; this.disabled = false;
     this.listeners = {}; this.textContent = ""; this.title = ""; this.reads = 0; this.open = false;
@@ -17,9 +19,6 @@ class FakeElement {
       toggle: (value, force) => { const set = names(); const on = force ?? !set.has(value); if (on) set.add(value); else set.delete(value); write(set); return on; },
     };
   }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  addEventListener(type, listener) { (this.listeners[type] ??= []).push(listener); }
   dispatch(type, event = {}) { for (const listener of this.listeners[type] ?? []) listener({ type, target: this, preventDefault() { this.defaultPrevented = true; }, ...event }); }
   append(...nodes) { for (const node of nodes) { node.remove?.(); node.parentNode = this; this.children.push(node); } }
   before(...nodes) {

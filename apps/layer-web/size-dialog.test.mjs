@@ -1,10 +1,12 @@
+import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCanvasSizeUi } from "./canvas-size.js";
 import { createImageSizeUi } from "./image-size.js";
 
-class FakeElement {
+class FakeElement extends SharedElement {
   constructor(tag, className = "") {
+    super();
     this.tagName = tag.toUpperCase(); this.className = className; this.children = []; this.parentNode = null;
     this.attributes = new Map(); this.dataset = {}; this.listeners = {}; this.textContent = ""; this.disabled = false; this.open = false;
   }
@@ -15,15 +17,11 @@ class FakeElement {
       toggle: (name, force) => { const set = names(); if (force ?? !set.has(name)) set.add(name); else set.delete(name); this.className = [...set].join(" "); },
     };
   }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  addEventListener(type, listener) { (this.listeners[type] ??= []).push(listener); }
   dispatch(type, extra = {}) {
     const event = { type, target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra };
     for (let node = this; node; node = node.parentNode) for (const listener of node.listeners[type] ?? []) listener(event);
     return event;
   }
-  append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
   replaceWith(node) { const siblings = this.parentNode.children; node.parentNode = this.parentNode; siblings[siblings.indexOf(this)] = node; this.parentNode = null; }
   remove() { if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1); this.parentNode = null; }
   click() { if (!this.disabled) this.dispatch("click"); }
@@ -100,6 +98,33 @@ function harness({ create = createCanvasSizeUi, key = "canvas_size", data = "can
 const imageHarness = () => harness({ create: createImageSizeUi, key: "image_size", data: "imageSize", model: imageView });
 const choose = (select, value) => { select.value = value; select.dispatch("change"); };
 
+function applyTest(name, create, ready, invalid) {
+  test(`${name} keeps Apply disabled while the view cannot apply`, () => {
+    const h = create();
+    h.ui.refresh();
+    assert.equal(h.apply().disabled, true);
+    h.apply().click();
+    assert.deepEqual(h.sent, []);
+    h.set(ready);
+    assert.equal(h.apply().disabled, false);
+    assert.equal(h.message().textContent, ready.message);
+    h.apply().click();
+    assert.deepEqual(h.sent, [{ op: "apply" }]);
+    h.set(invalid);
+    assert.equal(h.apply().disabled, true);
+    assert.equal(h.message().textContent, invalid.message);
+  });
+}
+function cancelTest(name, create) {
+  test(`${name}'s Cancel and the Escape request both cancel through the session`, () => {
+    const h = create();
+    h.ui.refresh();
+    h.cancel().click();
+    assert.equal(h.dialog().dispatch("cancel").defaultPrevented, true, "the session closes the dialog, not the browser");
+    assert.deepEqual(h.sent, [{ op: "cancel" }, { op: "cancel" }]);
+  });
+}
+
 test("Canvas Size projects the shared view and closes when the view is gone", () => {
   const h = harness();
   h.ui.refresh();
@@ -124,21 +149,9 @@ test("Canvas Size projects the shared view and closes when the view is gone", ()
   assert.equal(h.dialog(), null);
 });
 
-test("Canvas Size keeps Apply disabled while the view cannot apply", () => {
-  const h = harness();
-  h.ui.refresh();
-  assert.equal(h.apply().disabled, true);
-  h.apply().click();
-  assert.deepEqual(h.sent, []);
-  h.set({ values: [900, 600], message: "New size: 900 × 600 px", can_apply: true });
-  assert.equal(h.apply().disabled, false);
-  assert.equal(h.message().textContent, "New size: 900 × 600 px");
-  h.apply().click();
-  assert.deepEqual(h.sent, [{ op: "apply" }]);
-  h.set({ values: [40000, 600], message: "The canvas can be at most 30000 px on each side", can_apply: false });
-  assert.equal(h.apply().disabled, true);
-  assert.equal(h.message().textContent, "The canvas can be at most 30000 px on each side");
-});
+applyTest("Canvas Size", harness,
+  { values: [900, 600], message: "New size: 900 × 600 px", can_apply: true },
+  { values: [40000, 600], message: "The canvas can be at most 30000 px on each side", can_apply: false });
 
 test("Canvas Size commits typed text before an anchor, unit, Relative or Apply action", () => {
   const h = harness();
@@ -208,13 +221,7 @@ test("Canvas Size rebuilds each field for the numeric range of a new unit or Rel
   assert.equal(h.check().checked, true);
 });
 
-test("Canvas Size's Cancel and the Escape request both cancel through the session", () => {
-  const h = harness();
-  h.ui.refresh();
-  h.cancel().click();
-  assert.equal(h.dialog().dispatch("cancel").defaultPrevented, true, "the session closes the dialog, not the browser");
-  assert.deepEqual(h.sent, [{ op: "cancel" }, { op: "cancel" }]);
-});
+cancelTest("Canvas Size", harness);
 
 test("Image Size projects the shared view, opens without taking the keyboard, and closes when the view is gone", () => {
   const h = imageHarness();
@@ -244,21 +251,9 @@ test("Image Size projects the shared view, opens without taking the keyboard, an
   assert.equal(h.dialog(), null);
 });
 
-test("Image Size keeps Apply disabled while the view cannot apply", () => {
-  const h = imageHarness();
-  h.ui.refresh();
-  assert.equal(h.apply().disabled, true);
-  h.apply().click();
-  assert.deepEqual(h.sent, []);
-  h.set({ values: [400, 300], message: "New size: 400 × 300 px", can_apply: true });
-  assert.equal(h.apply().disabled, false);
-  assert.equal(h.message().textContent, "New size: 400 × 300 px");
-  h.apply().click();
-  assert.deepEqual(h.sent, [{ op: "apply" }]);
-  h.set({ values: [40000, 30000], message: "The canvas can be at most 32768 px on each side", can_apply: false });
-  assert.equal(h.apply().disabled, true);
-  assert.equal(h.message().textContent, "The canvas can be at most 32768 px on each side");
-});
+applyTest("Image Size", imageHarness,
+  { values: [400, 300], message: "New size: 400 × 300 px", can_apply: true },
+  { values: [40000, 30000], message: "The canvas can be at most 32768 px on each side", can_apply: false });
 
 test("Image Size commits typed text before a unit, Constrain, Resample or Apply action", () => {
   const h = imageHarness();
@@ -319,10 +314,4 @@ test("Image Size rebuilds each field only when its numeric range changes", () =>
   assert.equal(h.select("Unit").value, "percent");
 });
 
-test("Image Size's Cancel and the Escape request both cancel through the session", () => {
-  const h = imageHarness();
-  h.ui.refresh();
-  h.cancel().click();
-  assert.equal(h.dialog().dispatch("cancel").defaultPrevented, true, "the session closes the dialog, not the browser");
-  assert.deepEqual(h.sent, [{ op: "cancel" }, { op: "cancel" }]);
-});
+cancelTest("Image Size", imageHarness);

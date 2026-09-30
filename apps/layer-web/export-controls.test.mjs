@@ -1,19 +1,17 @@
+import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chooseExport, SDR_FORMATS } from "./export-controls.js";
 import { exportFormats } from "./documents.js";
 
-class FakeElement {
+class FakeElement extends SharedElement {
   constructor(tag, className = "", text = "") {
+    super();
     this.tagName = tag.toUpperCase(); this.className = className; this.textContent = text ?? "";
     this.children = []; this.parentNode = null; this.attributes = new Map(); this.listeners = {};
     this.hidden = false; this.disabled = false; this.value = ""; this.style = {};
   }
   get options() { return this.children.filter(n => n.tagName === "OPTION"); }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  addEventListener(type, listener) { (this.listeners[type] ??= []).push(listener); }
-  append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   closest(selector) { for (let n = this; n; n = n.parentNode) if (n.tagName === selector.toUpperCase()) return n; return null; }
   querySelectorAll(selector) {

@@ -1,21 +1,19 @@
+import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createNotice, noticePlacement, TIMEOUT_MS, MARGIN, MAX_WIDTH } from "./notice.js";
 
-class FakeElement {
+class FakeElement extends SharedElement {
   constructor(tag, className = "") {
+    super();
     this.tagName = tag.toUpperCase(); this.className = className; this.children = []; this.parentNode = null;
     this.attributes = new Map(); this.style = {}; this.hidden = false; this.listeners = {}; this.textContent = "";
   }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  addEventListener(type, listener) { (this.listeners[type] ??= []).push(listener); }
   dispatch(type) {
     const event = { type, target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
     for (let node = this; node; node = node.parentNode) for (const listener of node.listeners[type] ?? []) listener(event);
     return event;
   }
-  append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
   click() { this.dispatch("click"); }
 }
 
