@@ -2,8 +2,8 @@
 //! compositor path that applies a layer's blend, at every document depth and
 //! in both blend spaces.
 use super::*;
-use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation};
-use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth};
+use layer_core::color::source::SourceImage;
+use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
 use layer_core::{BlendRange, BlendSpace, Document, EffectInstance, LayerBlend, Project};
 
 const EXTENT: [u32; 2] = [64, 32];
@@ -144,32 +144,7 @@ fn tolerance(depth: SampleDepth, value: f64) -> f64 {
 
 /// A layer from straight RGBA, quantized to the document's depth.
 fn source(depth: SampleDepth, pixel: impl Fn(u32, u32) -> [f32; 4]) -> Arc<SourceImage> {
-    let mut builder = SourceBuilder::new(
-        EXTENT,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth,
-            profile: ColorProfile::Builtin(RgbSpace::Srgb),
-            profile_assumed: false,
-        },
-        16 * 1024 * 1024,
-    )
-    .unwrap();
-    for y in 0..EXTENT[1] {
-        let mut row = Vec::new();
-        for x in 0..EXTENT[0] {
-            for v in pixel(x, y) {
-                match depth {
-                    SampleDepth::U8 => row.push((v.clamp(0., 1.) * 255.).round() as u8),
-                    SampleDepth::U16 => row.extend_from_slice(&((v.clamp(0., 1.) * 65535.).round() as u16).to_le_bytes()),
-                    SampleDepth::F16 => row.extend_from_slice(&layer_core::color::f16::from_f32(v).to_bits().to_le_bytes()),
-                    SampleDepth::F32 => row.extend_from_slice(&v.to_le_bytes()),
-                }
-            }
-        }
-        builder.push_row(&row).unwrap();
-    }
-    Arc::new(builder.finish().unwrap())
+    crate::test_support::depth_source(EXTENT, depth, RgbSpace::Srgb, 16 * 1024 * 1024, pixel)
 }
 
 /// Straight probe colors: extended in float documents.

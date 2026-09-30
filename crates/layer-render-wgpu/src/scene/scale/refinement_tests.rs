@@ -24,7 +24,7 @@ fn display_level_updates_share_one_compute_pass() {
 #[test]
 fn strokes_and_replays_repair_only_touched_pages() {
     use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase,
-        SampleFlags, ToolKind, ViewTransform, input_queue};
+        SampleFlags, ViewTransform, input_queue};
     for (enabled, preset, taper) in [(false, DefaultBrushPreset::GPen, 0.), (true, DefaultBrushPreset::GPen, 0.),
         (true, DefaultBrushPreset::CloneStamp, 0.), (true, DefaultBrushPreset::GPen, 1.)] {
         let mut doc = document_at([1537, 1025]);
@@ -63,13 +63,8 @@ fn strokes_and_replays_repair_only_touched_pages() {
             for i in 0..=32 {
                 let phase = if i == 0 { PenPhase::Down } else if i == 32 { PenPhase::Up } else { PenPhase::Move };
                 let t = i as f32 / 32.;
-                input.push(PenEvent {
-                    device_id: 1, sequence: (stroke * 33 + i) as u64 + 1, timestamp_ns: ((stroke * 33 + i) as u64 + 1) * 8_333_333,
-                    view_revision: 0,
-                    surface_position: layer_core::Point { x: (90. + 530. * t) / 8., y: (80. + 310. * t) / 8. },
-                    pressure: 0.8, tilt_radians: [0.; 2], twist_radians: 0., distance: 0., phase,
-                    tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
-                }).unwrap();
+                input.push(PenEvent { timestamp_ns: ((stroke * 33 + i) as u64 + 1) * 8_333_333, pressure: 0.8,
+                    ..crate::test_support::pen((stroke * 33 + i) as u64 + 1, phase, [(90. + 530. * t) / 8., (80. + 310. * t) / 8.], SampleFlags::PRIMARY) }).unwrap();
                 drain(&mut engine, false);
             }
             assert_eq!(engine.metrics().committed_strokes, stroke as u64 + 1);

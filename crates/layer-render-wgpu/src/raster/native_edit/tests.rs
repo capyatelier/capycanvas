@@ -1,7 +1,7 @@
 use super::*;
 use layer_core::color::{SampleDepth, RgbSpace};
 use layer_engine::{
-    CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
+    CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ViewTransform,
     input_queue,
 };
 use layer_render::ViewState;
@@ -36,23 +36,8 @@ fn stroke(
         .enumerate()
     {
         input
-            .push(PenEvent {
-                device_id: 1,
-                sequence: sequence + i as u64,
-                timestamp_ns: (sequence + i as u64) * 10_000_000,
-                view_revision: 0,
-                surface_position: layer_core::Point {
-                    x: x + i as f32 * 9.,
-                    y: 80.,
-                },
-                pressure: 0.37,
-                tilt_radians: [0.; 2],
-                twist_radians: 0.,
-                distance: 0.,
-                phase,
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
-            })
+            .push(PenEvent { timestamp_ns: (sequence + i as u64) * 10_000_000, pressure: 0.37,
+                    ..crate::test_support::pen(sequence + i as u64, phase, [x + i as f32 * 9., 80.], SampleFlags::PRIMARY) })
             .unwrap();
         flush(engine);
     }

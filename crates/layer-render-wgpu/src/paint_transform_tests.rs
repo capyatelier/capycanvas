@@ -107,50 +107,22 @@ fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pix
 
 #[test]
 fn bicubic_and_lanczos_transforms_clamp_overshoot_at_every_sample_depth() {
-    use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth, source::*};
+    use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
     let extent = [256, 256];
     for (depth, interpolation) in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32]
         .into_iter()
         .flat_map(|depth| [Interpolation::Bicubic, Interpolation::Lanczos].map(|i| (depth, i)))
     {
         let peak = if matches!(depth, SampleDepth::F16 | SampleDepth::F32) { 8. } else { 1. };
-        let mut builder = SourceBuilder::new(
-            [64, 64],
-            SourceInterpretation {
-                channels: SourceChannels::Rgba,
-                depth,
-                profile: ColorProfile::Builtin(RgbSpace::Srgb),
-                profile_assumed: false,
-            },
-            8 * 1024 * 1024,
-        )
-        .unwrap();
-        for y in 0..64u32 {
-            let row: Vec<u8> = (0..64u32)
-                .flat_map(|x| {
-                    let pixel: [f32; 4] = match (x / 3 + y / 5) % 3 {
-                        0 => [peak, peak, peak, 1.],
-                        1 => [0., 0., 0., 1.],
-                        _ => [0.; 4],
-                    };
-                    match depth {
-                        SampleDepth::U8 => pixel.map(|v| (v * 255.) as u8).to_vec(),
-                        SampleDepth::U16 => {
-                            pixel.into_iter().flat_map(|v| ((v * 65535.) as u16).to_le_bytes()).collect()
-                        }
-                        SampleDepth::F16 => layer_core::color::hdr::encode_pixel(pixel)
-                            .unwrap()
-                            .into_iter()
-                            .flat_map(u16::to_le_bytes)
-                            .collect(),
-                        SampleDepth::F32 => pixel.into_iter().flat_map(f32::to_le_bytes).collect(),
-                    }
-                })
-                .collect();
-            builder.push_row(&row).unwrap();
-        }
+        let source = crate::test_support::depth_source([64, 64], depth, RgbSpace::Srgb, 8 * 1024 * 1024, |x, y| {
+            match (x / 3 + y / 5) % 3 {
+                0 => [peak, peak, peak, 1.],
+                1 => [0., 0., 0., 1.],
+                _ => [0.; 4],
+            }
+        });
         let mut layer = Layer::paint(LayerId(1), "overshoot");
-        layer.source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+        layer.source = Some(source);
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
         let frame = |r: &mut WgpuRasterizer| {
             r.submit(FramePacket {

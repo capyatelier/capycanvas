@@ -44,27 +44,7 @@ fn document() -> Document {
 }
 fn document_at(extent: [u32; 2]) -> Document {
     let mut doc = Document::new("display composition oracle", extent[0], extent[1]);
-    let mut builder = SourceBuilder::new(
-        extent,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U8,
-            profile: Default::default(),
-            profile_assumed: false,
-        },
-        extent[0] as usize * extent[1] as usize * 16,
-    )
-    .unwrap();
-    for y in 0..extent[1] {
-        builder
-            .push_row(
-                &(0..extent[0])
-                    .flat_map(|x| [(x / 3) as u8, (y / 2) as u8, 80, 255])
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap();
-    }
-    doc.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
+    doc.layers[0].source = Some(rgba8_source(extent, |x, y| [(x / 3) as u8, (y / 2) as u8, 80, 255]));
     doc
 }
 
@@ -994,14 +974,8 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
     let extent = [33, 19];
     let mut doc = Document::new("nested composition", extent[0], extent[1]);
     let solid = |id, color: [u8; 4]| {
-        let mut source = SourceBuilder::new(extent, SourceInterpretation {
-            channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-            profile: Default::default(), profile_assumed: false,
-        }, 1 << 20).unwrap();
-        let row = color.repeat(extent[0] as usize);
-        for _ in 0..extent[1] { source.push_row(&row).unwrap(); }
         let mut layer = Layer::paint(LayerId(id), "solid");
-        layer.source = Some(Arc::new(source.finish().unwrap()));
+        layer.source = Some(rgba8_source(extent, |_, _| color));
         layer
     };
     let mut outer = Layer::paint(LayerId(10), "outer");

@@ -2,40 +2,14 @@
 //! its readers: export, presentation and exact readback.
 use super::*;
 use super::blend_modes::{Form, Rgba, blend, combine, held, linear, straight};
-use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation};
-use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth};
+use layer_core::color::source::SourceImage;
+use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
 use layer_core::{BlendSpace, Document, EffectInstance, LayerBlend, LayerMask, Project, Selection};
 
 const EXTENT: [u32; 2] = [300, 200];
 
 fn source(depth: SampleDepth, pixel: impl Fn(f32, f32) -> [f32; 4]) -> Arc<SourceImage> {
-    let mut builder = SourceBuilder::new(
-        EXTENT,
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth,
-            profile: ColorProfile::Builtin(RgbSpace::Srgb),
-            profile_assumed: false,
-        },
-        64 * 1024 * 1024,
-    )
-    .unwrap();
-    for y in 0..EXTENT[1] {
-        let mut row = Vec::new();
-        for x in 0..EXTENT[0] {
-            let (u, v) = (x as f32 / (EXTENT[0] - 1) as f32, y as f32 / (EXTENT[1] - 1) as f32);
-            for value in pixel(u, v) {
-                match depth {
-                    SampleDepth::U8 => row.push((value.clamp(0., 1.) * 255.).round() as u8),
-                    SampleDepth::U16 => row.extend_from_slice(&((value.clamp(0., 1.) * 65535.).round() as u16).to_le_bytes()),
-                    SampleDepth::F16 => row.extend_from_slice(&layer_core::color::f16::from_f32(value).to_bits().to_le_bytes()),
-                    SampleDepth::F32 => row.extend_from_slice(&value.to_le_bytes()),
-                }
-            }
-        }
-        builder.push_row(&row).unwrap();
-    }
-    Arc::new(builder.finish().unwrap())
+    crate::test_support::depth_source(EXTENT, depth, RgbSpace::Srgb, 64 * 1024 * 1024, |x, y| pixel(x as f32 / (EXTENT[0] - 1) as f32, y as f32 / (EXTENT[1] - 1) as f32))
 }
 
 fn polygon(points: &[[f32; 2]]) -> Selection {

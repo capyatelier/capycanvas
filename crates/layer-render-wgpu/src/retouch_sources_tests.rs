@@ -1,10 +1,11 @@
 use super::*;
+use crate::test_support::pen;
 use layer_core::{
     BrushSnapshot, Document, LayerMask, LayerOperation, LayerOperationKind, Point, Retouch,
     RetouchSource, color::source::rgba8_source,
 };
 use layer_engine::{
-    CanvasEngine, InputProducer, InstantFeedbackConfig, PenEvent, PenPhase, SampleFlags, ToolKind,
+    CanvasEngine, InputProducer, InstantFeedbackConfig, PenEvent, PenPhase, SampleFlags,
     ViewTransform, input_queue,
 };
 use layer_render::{RetouchPreparation, ViewState};
@@ -111,22 +112,6 @@ fn engine(doc: Document, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngi
     (input, engine)
 }
 
-fn pen(sequence: u64, phase: PenPhase, [x, y]: [f32; 2], flags: SampleFlags) -> PenEvent {
-    PenEvent {
-        device_id: 1,
-        sequence,
-        timestamp_ns: sequence * 8_000_000,
-        view_revision: 0,
-        surface_position: Point { x, y },
-        pressure: 1.,
-        tilt_radians: [0.; 2],
-        twist_radians: 0.,
-        distance: 0.,
-        phase,
-        tool: ToolKind::Pen,
-        flags,
-    }
-}
 
 fn draw(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<PenEvent>, event: PenEvent) {
     input.push(event).unwrap();

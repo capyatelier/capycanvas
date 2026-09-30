@@ -104,3 +104,44 @@ pub(crate) fn upload_page(r: &WgpuRasterizer, texture: &wgpu::Texture, bytes: &[
         texture.size(),
     );
 }
+
+pub(crate) fn pen(sequence: u64, phase: layer_engine::PenPhase, [x, y]: [f32; 2], flags: layer_engine::SampleFlags) -> layer_engine::PenEvent {
+    use layer_engine::{PenEvent, ToolKind};
+    PenEvent {
+        device_id: 1,
+        sequence,
+        timestamp_ns: sequence * 8_000_000,
+        view_revision: 0,
+        surface_position: layer_core::Point { x, y },
+        pressure: 1.,
+        tilt_radians: [0.; 2],
+        twist_radians: 0.,
+        distance: 0.,
+        phase,
+        tool: ToolKind::Pen,
+        flags,
+    }
+}
+
+pub(crate) fn depth_source(extent: [u32; 2], depth: layer_core::color::SampleDepth, space: layer_core::color::RgbSpace,
+    max_bytes: usize, pixel: impl Fn(u32, u32) -> [f32; 4]) -> Arc<layer_core::color::source::SourceImage> {
+    use layer_core::color::{SampleDepth, ColorProfile, source::*};
+    let mut builder = SourceBuilder::new(extent, SourceInterpretation {
+        channels: SourceChannels::Rgba, depth, profile: ColorProfile::Builtin(space), profile_assumed: false,
+    }, max_bytes).unwrap();
+    for y in 0..extent[1] {
+        let mut row = Vec::new();
+        for x in 0..extent[0] {
+            for value in pixel(x, y) {
+                match depth {
+                    SampleDepth::U8 => row.push((value.clamp(0., 1.) * 255.).round() as u8),
+                    SampleDepth::U16 => row.extend_from_slice(&((value.clamp(0., 1.) * 65535.).round() as u16).to_le_bytes()),
+                    SampleDepth::F16 => row.extend_from_slice(&layer_core::color::f16::from_f32(value).to_bits().to_le_bytes()),
+                    SampleDepth::F32 => row.extend_from_slice(&value.to_le_bytes()),
+                }
+            }
+        }
+        builder.push_row(&row).unwrap();
+    }
+    Arc::new(builder.finish().unwrap())
+}

@@ -48,6 +48,9 @@ Cursor tests observe a frame before asserting that no ink was deposited. Stroke
 selection tests check nonempty live batches; undo/redo compares raster identities.
 Presentation tests use the renderer's `create_target` for their surfaces; preserve
 each test's format and extent, and validate its usage flags on the test GPU.
+Renderer source fixtures use `test_support::depth_source` with their original
+budget and coordinate mapping. Pen fixtures override the shared event's timestamp
+and pressure where their cadence differs.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless

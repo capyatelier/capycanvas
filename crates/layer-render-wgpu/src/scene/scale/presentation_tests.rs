@@ -428,7 +428,7 @@ fn large_document_waits_for_mip_compilation_before_reporting_canvas_ready() {
 #[test]
 fn committed_contact_strokes_present_their_canonical_native_pixels() {
     use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase,
-        SampleFlags, ToolKind, ViewTransform, input_queue};
+        SampleFlags, ViewTransform, input_queue};
     for preset in [layer_core::DefaultBrushPreset::AntiquePen, layer_core::DefaultBrushPreset::BrushedInk] {
         let doc = layer_core::Document::new("canonical contact", 1024, 512);
         let v = view([0.5, 0., 0., 0.5, 0., 0.]);
@@ -442,15 +442,8 @@ fn committed_contact_strokes_present_their_canonical_native_pixels() {
         engine.set_brush(brush).unwrap();
         for i in 0..=32 {
             let t = i as f32 / 32.;
-            input.push(PenEvent {
-                device_id: 1, sequence: i + 1, timestamp_ns: (i + 1) * 8_333_333,
-                view_revision: 0,
-                surface_position: layer_core::Point { x: 40. + 240. * t, y: 120. + 50. * (t * std::f32::consts::TAU).sin() },
-                pressure: if i < 32 { 0.2 + 0.7 * (t * std::f32::consts::PI).sin() } else { 0. },
-                tilt_radians: [0.; 2], twist_radians: 0., distance: 0.,
-                phase: if i == 0 { PenPhase::Down } else if i == 32 { PenPhase::Up } else { PenPhase::Move },
-                tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
-            }).unwrap();
+            input.push(PenEvent { timestamp_ns: (i + 1) * 8_333_333, pressure: if i < 32 { 0.2 + 0.7 * (t * std::f32::consts::PI).sin() } else { 0. },
+                    ..crate::test_support::pen(i + 1, if i == 0 { PenPhase::Down } else if i == 32 { PenPhase::Up } else { PenPhase::Move }, [40. + 240. * t, 120. + 50. * (t * std::f32::consts::TAU).sin()], SampleFlags::PRIMARY) }).unwrap();
             let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
             loop {
                 engine.render_frame().unwrap();
@@ -479,7 +472,7 @@ fn committed_contact_strokes_present_their_canonical_native_pixels() {
 #[test]
 fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_backing() {
     use layer_engine::{
-        CanvasEngine, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform, input_queue,
+        CanvasEngine, PenEvent, PenPhase, SampleFlags, ViewTransform, input_queue,
     };
     let color = DocumentColor {
         space: RgbSpace::ProPhoto,
@@ -517,23 +510,8 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
         .enumerate()
     {
         input
-            .push(PenEvent {
-                device_id: 1,
-                sequence: i as u64 + 1,
-                timestamp_ns: (i as u64 + 1) * 10_000_000,
-                view_revision: 0,
-                surface_position: layer_core::Point {
-                    x: 245. + i as f32 * 18.,
-                    y: 80.,
-                },
-                pressure: 0.37,
-                tilt_radians: [0.; 2],
-                twist_radians: 0.,
-                distance: 0.,
-                phase,
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
-            })
+            .push(PenEvent { timestamp_ns: (i as u64 + 1) * 10_000_000, pressure: 0.37,
+                    ..crate::test_support::pen(i as u64 + 1, phase, [245. + i as f32 * 18., 80.], SampleFlags::PRIMARY) })
             .unwrap();
         flush(&mut engine);
     }

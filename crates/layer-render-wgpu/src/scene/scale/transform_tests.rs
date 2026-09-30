@@ -390,11 +390,7 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
 fn retained_transform_detail_still_filters_the_current_output_footprint() {
     let extent = [65,33];
     let mut doc = Document::new("transform reconstruction", extent[0], extent[1]);
-    let mut source = SourceBuilder::new(extent, SourceInterpretation { channels: SourceChannels::Rgba,
-        depth: SampleDepth::U8, profile: Default::default(), profile_assumed: false }, 1 << 20).unwrap();
-    let row: Vec<_> = (0..extent[0]).flat_map(|x| [if (x/3)%2 == 0 {255} else {0}, 0, 0, 255]).collect();
-    for _ in 0..extent[1] { source.push_row(&row).unwrap(); }
-    doc.layers[0].source = Some(Arc::new(source.finish().unwrap()));
+    doc.layers[0].source = Some(rgba8_source(extent, |x, _| [if (x/3)%2 == 0 {255} else {0}, 0, 0, 255]));
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut frame = packet(&doc.layers, extent);
     frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
@@ -448,12 +444,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
     let bounds = Rect { min: Point::default(), max: Point { x: 257., y: 129. } };
     let mut doc = document_at(extent);
     let id = doc.layers[0].id;
-    let mut builder = SourceBuilder::new(extent, SourceInterpretation { channels: SourceChannels::Rgba,
-        depth: SampleDepth::U8, profile: Default::default(), profile_assumed: false }, 1 << 20).unwrap();
-    for y in 0..extent[1] {
-        builder.push_row(&(0..extent[0]).flat_map(|x| [128, (x/2) as u8, y as u8, (64+x/2) as u8]).collect::<Vec<_>>()).unwrap();
-    }
-    doc.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
+    doc.layers[0].source = Some(rgba8_source(extent, |x, y| [128, (x/2) as u8, y as u8, (64+x/2) as u8]));
     let part = Selection::polygon([[20.5,15.25],[210.,22.],[240.,110.5],[38.,117.]]
         .map(|[x,y]| Point {x,y}).to_vec()).unwrap();
     let projective = Projective::rect_to_quad(bounds,
