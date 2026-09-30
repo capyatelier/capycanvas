@@ -16,6 +16,8 @@ File and conversion jobs use `inspection::on_worker` for named threads with an
 `CaptureControl` and never borrows a running job.
 JNI file, image-import and clipboard tasks use `UiSession::document_request`
 to look up the pending request before validating its kind.
+Photo profile prompts retain `ImportedDocument` and use its shared `interpret`
+method on the file worker before preparing the candidate session.
 
 ## Prerequisites
 

@@ -20,8 +20,12 @@ struct Environment {
     open: OpenEnvironment,
     source_name: String,
     working_space: layer_core::color::RgbSpace,
-    pending_photo: Option<layer_core::color::source::SourceImage>,
-    pending_metadata: layer_core::PhotoMetadata,
+    pending_import: Option<layer_ui::ImportedDocument>,
+}
+impl Environment {
+    fn new(open: OpenEnvironment, working_space: layer_core::color::RgbSpace, source_name: String) -> Self {
+        Self { open, working_space, source_name, pending_import: None }
+    }
 }
 enum Payload {
     Save(Option<Project>),
@@ -52,6 +56,12 @@ struct Task {
     gpu_generation: u64,
     open_control: layer_render_wgpu::snapshot::CaptureControl,
     payload: Payload,
+}
+impl Task {
+    fn new(owner: u64, epoch: u64, revision: u64, request: u32, gpu_generation: u64, payload: Payload) -> Self {
+        Self { owner, epoch, revision, request, gpu_generation, payload,
+            recovered: false, source: layer_ui::ImportSource::Master, place: None, open_control: Default::default() }
+    }
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_projectTask(
@@ -89,34 +99,25 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                     return Err("The document changed; review those changes before opening".into());
                 }
                 Payload::Open {
-                    environment: Some(Environment {
-                        open: OpenEnvironment::capture(session, admission, options)?,
-                        pending_photo: None,
-                        pending_metadata: Default::default(),
-                        working_space: session.engine().document().color.space,
-                        source_name: serde_json::from_str::<Option<DocumentLocation>>(&read(
+                    environment: Some(Environment::new(
+                        OpenEnvironment::capture(session, admission, options)?,
+                        session.engine().document().color.space,
+                        serde_json::from_str::<Option<DocumentLocation>>(&read(
                             &mut env, &location,
                         )?)
                         .map_err(error)?
                         .map(|location| location.name)
                         .unwrap_or_else(|| "Photo".into()),
-                    }),
+                    )),
                     candidate: None,
                 }
             }
             _ => return Err("This request does not transfer a project".into()),
         };
         Ok(Box::into_raw(Box::new(Task {
-            owner: a.window.documents.selected(),
-            epoch: session.state().document_file.epoch,
-            revision: session.engine().document().revision,
-            request: id as u32,
-            recovered: false,
-            source: layer_ui::ImportSource::Master,
             place,
-            gpu_generation: a.gpu_generation,
-            open_control: Default::default(),
-            payload,
+            ..Task::new(a.window.documents.selected(), session.state().document_file.epoch,
+                session.engine().document().revision, id as u32, a.gpu_generation, payload)
         })) as jlong)
     })();
     or_throw(&mut env, result, 0)
@@ -150,10 +151,9 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
                 if t.recovered { layer_ui::ImportIntent::Recovery } else if t.place.is_some() { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
                 &e.source_name, control.cancellation_flag())?;
             t.source = imported.source;
-            if let Some(source) = imported.interpretation_required(e.open.photo_policy) {
+            if imported.interpretation_required(e.open.photo_policy).is_some() {
                 e.source_name = imported.project.document.layers[0].name.to_string();
-                e.pending_photo = Some(source.clone());
-                e.pending_metadata = imported.project.document.metadata.clone();
+                e.pending_import = Some(imported);
                 *environment = Some(e);
                 return Ok(());
             }
@@ -161,11 +161,11 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
             imported.project
         }
         None => {
-            if let Some(source) = e.pending_photo.take() {
-                if e.open.photo_policy.needs_interpretation(&source) {
+            if let Some(imported) = e.pending_import.take() {
+                if imported.interpretation_required(e.open.photo_policy).is_some() {
                     return Err("Choose an image interpretation before opening".into());
                 }
-                e.open.photo_policy.photo_project(source, std::mem::take(&mut e.pending_metadata), &e.source_name)?
+                imported.project
             } else {
                 layer_ui::NewDocumentOptions {
                     extent: [width, height],
@@ -218,7 +218,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectProfilePrompt(
         Payload::Open {
             environment: Some(e),
             ..
-        } => e.pending_photo.as_ref().map(|s| &s.interpretation),
+        } => e.pending_import.as_ref().and_then(|i| i.project.document.layers.first())
+            .and_then(|l| l.source.as_ref()).map(|s| &s.interpretation),
         _ => None,
     };
     crate::android::string(&mut env, serde_json::to_string(&source).map_err(error))
@@ -239,12 +240,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAssumeProfile(
         else {
             return Err("Image interpretation is no longer pending".into());
         };
-        let source = e
-            .pending_photo
-            .as_ref()
-            .ok_or("Image interpretation is no longer pending")?;
-        e.pending_photo = Some(layer_color::assume_source_profile(source.clone(), profile)?);
-        Ok(())
+        e.pending_import.as_mut().ok_or("Image interpretation is no longer pending")?.interpret(profile)
     })();
     fail(&mut env, result);
 }
@@ -437,21 +433,13 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             "",
             layer_core::color::RgbSpace::Srgb,
         )?;
-        Ok(Box::into_raw(Box::new(Task {
-            owner: a.window.documents.selected(),
-            epoch,
-            revision,
-            request: id as u32,
-            recovered: false,
-            source: layer_ui::ImportSource::Master,
-            place: None,
-            gpu_generation: a.gpu_generation,
-            open_control: Default::default(),
-            payload: Payload::Export {
+        Ok(Box::into_raw(Box::new(Task::new(
+            a.window.documents.selected(), epoch, revision, id as u32, a.gpu_generation,
+            Payload::Export {
                 export: Box::new(export),
                 control: crate::inspection::control(cancel),
             },
-        })) as jlong)
+        ))) as jlong)
     })();
     or_throw(&mut env, result, 0)
 }
@@ -496,33 +484,24 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
         let payload = if opening != 0 {
             session.require_document_idle()?;
             Payload::Open {
-                environment: Some(Environment {
-                    open: OpenEnvironment::capture(
+                environment: Some(Environment::new(
+                    OpenEnvironment::capture(
                         session,
                         a.window.documents.admission(&session.retained_document_tiles()),
                         a.host.renderer_options(Some(a.cache_directory.clone().into())),
                     )?,
-                    source_name: "Recovered drawing".into(),
-                    working_space: session.engine().document().color.space,
-                    pending_photo: None,
-                    pending_metadata: Default::default(),
-                }),
+                    session.engine().document().color.space,
+                    "Recovered drawing".into(),
+                )),
                 candidate: None,
             }
         } else {
             Payload::Save(Some(session.capture_project_recovery()?))
         };
         Ok(Box::into_raw(Box::new(Task {
-            owner: a.window.documents.selected(),
-            epoch: session.state().document_file.epoch,
-            revision: session.engine().document().revision,
-            request: 0,
             recovered: true,
-            source: layer_ui::ImportSource::Master,
-            place: None,
-            gpu_generation: a.gpu_generation,
-            open_control: Default::default(),
-            payload,
+            ..Task::new(a.window.documents.selected(), session.state().document_file.epoch,
+                session.engine().document().revision, 0, a.gpu_generation, payload)
         })) as jlong)
     })();
     or_throw(&mut env, result, 0)
@@ -571,9 +550,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryFor(mut env:JNI
         let a=unsafe{app(handle)};let session=a.window.session(&a.host,id as u64)?;
         if session.recovery_document().busy {return Ok(0);}
         Ok(Box::into_raw(Box::new(Task{
-            owner:id as u64,epoch:session.state().document_file.epoch,revision:session.engine().document().revision,request:0,
-            recovered:true,source:layer_ui::ImportSource::Master,place:None,gpu_generation:a.gpu_generation,
-            open_control:Default::default(),payload:Payload::Save(Some(session.capture_project_recovery()?)),
+            recovered:true,..Task::new(id as u64,session.state().document_file.epoch,
+                session.engine().document().revision,0,a.gpu_generation,Payload::Save(Some(session.capture_project_recovery()?)))
         })) as jlong)
     })();or_throw(&mut env, result, 0)
 }
