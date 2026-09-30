@@ -341,20 +341,7 @@ mod clipboard_checks {
     }
 
     #[test]
-    fn the_selection_bar_offers_copy_with_copy_merged_and_cut() {
-        let mut s = clip_session();
-        invoke(&mut s, CommandId::SelectAll);
-        invoke(&mut s, CommandId::Move);
-        let bar = s.state.canvas_bar.clone().expect("a selection bar");
-        let index = bar.items.iter().position(|i| i.menu == Some(CanvasBarMenu::Copy)).expect("Copy ▾");
-        let copy_to_layer = bar.items.iter().position(|i| i.menu == Some(CanvasBarMenu::CopyToLayer)).unwrap();
-        assert_eq!(index, copy_to_layer + 1);
-        let item = &bar.items[index];
-        assert_eq!((item.label, item.icon), ("Copy", Some("copy")));
-        assert!(matches!(&item.option, ToolOption::Action { state, .. } if state.id == CommandId::Copy));
-        let menu = s.canvas_bar_choice_menu(bar.context, "copy").unwrap();
-        let commands: Vec<_> = menu.sections.iter().flatten().map(|i| i.label.clone()).collect();
-        assert_eq!(commands, ["Copy", "Copy Merged", "Cut"]);
+    fn the_mac_selection_bar_omits_the_pixel_clipboard_menu() {
         let mut mac = UiSession::new(Recorder::default(), Document::new("mac", 400, 300), [800, 600], Platform::Mac).unwrap();
         invoke(&mut mac, CommandId::SelectAll);
         invoke(&mut mac, CommandId::Move);

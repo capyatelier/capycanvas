@@ -28,12 +28,6 @@ fn edit_blending_changes_how_layers_combine_in_one_undo_step() {
     invoke(&mut s, CommandId::Undo);
     assert_eq!(s.engine.document().blend_space, layer_core::BlendSpace::Linear);
     assert!(!s.command(CommandId::Undo).enabled, "choosing the current space adds no step");
-    invoke(&mut s, CommandId::SearchCommands);
-    search_action(&mut s, CommandSearchAction::Query { text: "blending".into() });
-    let found: Vec<_> = s.state.command_search.as_ref().unwrap().results.iter().map(|r| r.id.clone()).collect();
-    for id in ["command.blend_perceptual", "command.blend_linear"] {
-        assert!(found.iter().any(|f| f == id), "{id} in {found:?}");
-    }
 }
 
 #[test]

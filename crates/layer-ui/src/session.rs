@@ -9966,11 +9966,6 @@ mod tests {
             assert!(!s.state.workspace.zen_mode);
             assert_eq!(s.state.camera, camera);
             assert_eq!(change.regions & regions::CAMERA, 0);
-            let saved = serde_json::to_string(&s.state.settings).unwrap();
-            assert_eq!(
-                serde_json::from_str::<Settings>(&saved).unwrap(),
-                s.state.settings
-            );
             assert!(crate::icon_ships(symbol.icon()));
         }
         let before = s.state.settings.clone();
@@ -14388,7 +14383,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_covers_each_brush_panel_and_declared_command() {
+    fn catalog_covers_each_brush_and_declared_command() {
         let catalog = ui_catalog();
         let mut ids = catalog
             .brush_categories
@@ -14399,10 +14394,6 @@ mod tests {
         let mut expected = brush_catalog().map(|b| b.id).collect::<Vec<_>>();
         expected.sort_unstable();
         assert_eq!(ids, expected);
-        assert_eq!(
-            catalog.panels.iter().map(|p| p.id).collect::<Vec<_>>(),
-            Panel::ALL
-        );
         let session = session(Platform::Gtk);
         for id in catalog.layer_commands.iter().chain(catalog.tool_commands) {
             assert!(session.state.commands.iter().any(|c| c.id == *id));

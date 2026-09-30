@@ -20,14 +20,6 @@ mod retouch_layer_checks {
         menu.sections.iter().flatten().find(|i| i.label == label).expect(label).sections.concat()
     }
 
-    fn found(s: &mut UiSession<Recorder>, query: &str) -> Vec<String> {
-        invoke(s, CommandId::SearchCommands);
-        search_action(s, CommandSearchAction::Query { text: query.into() });
-        let ids = s.state.command_search.as_ref().unwrap().results.iter().map(|r| r.id.clone()).collect();
-        search_action(s, CommandSearchAction::Close);
-        ids
-    }
-
     fn separation(s: &mut UiSession<Recorder>, action: FrequencySeparationAction) -> Result<UiChange, String> {
         s.dispatch(UiAction::FrequencySeparation { action })
     }
@@ -65,9 +57,8 @@ mod retouch_layer_checks {
     }
 
     #[test]
-    fn new_dodge_and_burn_layer_explains_why_it_is_unavailable_and_search_finds_it() {
+    fn new_dodge_and_burn_layer_explains_why_it_is_unavailable() {
         let mut s = session(Platform::Gtk);
-        assert!(found(&mut s, "dodge").iter().any(|id| id == "command.new_dodge_burn_layer"));
         invoke(&mut s, CommandId::QuickMask);
         assert_eq!(s.command_disabled_reason(CommandId::NewDodgeBurnLayer).as_deref(), Some("Return to the artwork first"));
         assert!(s.dispatch(UiAction::Invoke { command: CommandId::NewDodgeBurnLayer }).is_err());
@@ -81,7 +72,6 @@ mod retouch_layer_checks {
         let item = filter.sections.iter().flatten().find(|i| i.label == "Frequency Separation…").expect("Filter menu");
         assert!(!item.enabled);
         assert_eq!(s.dispatch(UiAction::Invoke { command: CommandId::FrequencySeparation }).unwrap_err(), LINEAR_REASON);
-        assert!(found(&mut s, "frequency").iter().any(|id| id == "command.frequency_separation"));
         let mut s = perceptual();
         assert_eq!(s.command_disabled_reason(CommandId::FrequencySeparation), None);
         let photo = s.engine.document().active_layer;

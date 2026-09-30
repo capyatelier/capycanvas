@@ -431,6 +431,7 @@ fn selection_bar_follows_selection_tools_commands_and_history() {
         ],
         "the selection bar follows its priority order"
     );
+    assert_eq!(bar.items.iter().find(|i| i.menu == Some(CanvasBarMenu::Copy)).unwrap().icon, Some("copy"));
     let menu = s.canvas_bar_menu(bar.context, bar.items.len()).unwrap();
     assert!(menu.sections.iter().flatten().any(|i| i.label.starts_with("Grow")), "More includes the Select menu");
     invoke(&mut s, CommandId::Brush);

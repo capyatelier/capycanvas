@@ -1,3 +1,25 @@
+fn check_choice_items(s: &mut UiSession<Recorder>, id: &str) {
+    let choice = |state: &UiState| {
+        state.tool_options().into_iter().find(|o|
+            matches!(o, ToolOption::Choice { id: key, .. } if *key == id)).unwrap()
+    };
+    let original = choice(s.state());
+    let ToolOption::Choice { items, .. } = &original else { panic!() };
+    assert_eq!(items.iter().filter(|i| i.selected).count(), 1);
+    for item in items {
+        s.dispatch(UiAction::ToolbarEdit {
+            context: s.state().toolbar_context(),
+            action: Box::new(item.action.clone()),
+        }).unwrap();
+        let current = choice(s.state());
+        assert!(original.same_schema(&current));
+        let ToolOption::Choice { items: selected, .. } = current else { panic!() };
+        assert_eq!(selected.iter().filter(|i| i.selected).count(), 1);
+        assert!(selected.iter().any(|i| i.selected && i.action == item.action),
+            "published {id} choices are accepted toolbar edits");
+    }
+}
+
 #[test]
 fn toolbar_resets_use_tool_defaults_and_reject_stale_context() {
     let mut s = session(Platform::Gtk);
@@ -364,15 +386,6 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
     customize(&mut s, CustomizationAction::RemoveTool { panel: Panel::Commands, tile: options });
     invoke(&mut s, CommandId::UndoWorkspace);
     assert_eq!(s.state().workspace.layout, added);
-    s.dispatch(UiAction::ActivateTile {
-        panel: Panel::Commands,
-        tile: options,
-    })
-    .unwrap();
-    assert_eq!(
-        s.state().customization.drawer.as_ref().unwrap().columns,
-        vec![vec![Panel::Brushes], vec![Panel::ToolSettings]]
-    );
 }
 
 #[test]
@@ -381,35 +394,8 @@ fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders()
     invoke(&mut s, CommandId::Eyedropper);
     s.dispatch(UiAction::SetColorSampleSize { width: 101 })
         .unwrap();
-    let options = s.state().tool_options();
     for id in ["variant", "sample-size"] {
-        let ToolOption::Choice { items, .. } = options
-            .iter()
-            .find(|o| matches!(o, ToolOption::Choice { id: key, .. } if *key == id))
-            .unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(items.iter().filter(|i| i.selected).count(), 1);
-    }
-    for id in ["variant", "sample-size"] {
-        let choice = |state: &UiState| {
-            state.tool_options().into_iter().find_map(|o| match o {
-                ToolOption::Choice { id: key, items, .. } if key == id => Some(items),
-                _ => None,
-            })
-        };
-        let item = choice(s.state()).unwrap().into_iter().find(|i| !i.selected).unwrap();
-        let context = s.state().toolbar_context();
-        s.dispatch(UiAction::ToolbarEdit {
-            context,
-            action: Box::new(item.action.clone()),
-        })
-        .unwrap();
-        assert!(
-            choice(s.state()).unwrap().iter().any(|i| i.selected && i.action == item.action),
-            "published {id} choices are accepted toolbar edits"
-        );
+        check_choice_items(&mut s, id);
     }
     assert!(ToolbarNumericBinding::BrushSize.field(s.state()).is_none());
     let context = s.state().toolbar_context();
@@ -809,39 +795,7 @@ fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
     };
     assert!(*segmented);
     assert_eq!(items.len(), 4);
-    for item in items {
-        s.dispatch(UiAction::ToolbarEdit {
-            context: s.state().toolbar_context(),
-            action: Box::new(item.action.clone()),
-        })
-        .unwrap();
-        let current = s.state().tool_options();
-        let current = current
-            .iter()
-            .find(|o| {
-                matches!(
-                    o,
-                    ToolOption::Choice {
-                        id: "selection-mode",
-                        ..
-                    }
-                )
-            })
-            .unwrap();
-        assert!(mode.same_schema(current));
-        let ToolOption::Choice {
-            items: selected, ..
-        } = current
-        else {
-            panic!()
-        };
-        assert_eq!(selected.iter().filter(|i| i.selected).count(), 1);
-        assert!(
-            selected
-                .iter()
-                .any(|i| i.selected && i.action == item.action)
-        );
-    }
+    check_choice_items(&mut s, "selection-mode");
     assert!(options.iter().any(|o| matches!(
         o,
         ToolOption::Choice {

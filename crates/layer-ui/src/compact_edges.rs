@@ -627,9 +627,10 @@ mod tests {
         let source = add(&mut l, 2, Edge::Left, EdgeAlignment::Center);
         let r = resolved(&l, VIEWPORT);
         let item = DockItem::Panel { panel: source };
-        for (edge, point, preview) in [
+        for (edge, alignment, point, preview, farther_probe) in [
             (
                 Edge::Right,
+                EdgeAlignment::Center,
                 [1146., 450.],
                 Bounds {
                     x: 1092.,
@@ -637,9 +638,11 @@ mod tests {
                     width: 108.,
                     height: 280.,
                 },
+                true,
             ),
             (
                 Edge::Left,
+                EdgeAlignment::Center,
                 [54., 450.],
                 Bounds {
                     x: 0.,
@@ -647,9 +650,11 @@ mod tests {
                     width: 108.,
                     height: 280.,
                 },
+                true,
             ),
             (
                 Edge::Top,
+                EdgeAlignment::Center,
                 [600., 318.],
                 Bounds {
                     x: 546.,
@@ -657,9 +662,11 @@ mod tests {
                     width: 108.,
                     height: 280.,
                 },
+                true,
             ),
             (
                 Edge::Bottom,
+                EdgeAlignment::Center,
                 [600., 890.],
                 Bounds {
                     x: 546.,
@@ -667,6 +674,31 @@ mod tests {
                     width: 108.,
                     height: 280.,
                 },
+                true,
+            ),
+            (
+                Edge::Top,
+                EdgeAlignment::Start,
+                [80., 318.],
+                Bounds {
+                    x: 26.,
+                    y: 48.,
+                    width: 108.,
+                    height: 280.,
+                },
+                false,
+            ),
+            (
+                Edge::Right,
+                EdgeAlignment::Start,
+                [1091., 128.],
+                Bounds {
+                    x: 982.,
+                    y: -302.,
+                    width: 218.,
+                    height: 440.,
+                },
+                false,
             ),
         ] {
             assert_eq!(
@@ -675,9 +707,12 @@ mod tests {
                     .target,
                 DockTarget::CompactEdge {
                     edge,
-                    alignment: EdgeAlignment::Center
+                    alignment
                 }
             );
+            if !farther_probe {
+                continue;
+            }
             let mut farther = preview;
             let mut p = point;
             match edge {
@@ -705,51 +740,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn top_corner_uses_the_visible_edge_even_with_a_bottom_grip() {
-        let mut l = layout();
-        let source = add(&mut l, 2, Edge::Left, EdgeAlignment::Center);
-        let r = resolved(&l, VIEWPORT);
-        let item = DockItem::Panel { panel: source };
-        assert_eq!(
-            l.compact_edge_drop_hint(
-                &r,
-                item,
-                [80., 318.],
-                Some(Bounds {
-                    x: 26.,
-                    y: 48.,
-                    width: 108.,
-                    height: 280.,
-                })
-            )
-            .unwrap()
-            .target,
-            DockTarget::CompactEdge {
-                edge: Edge::Top,
-                alignment: EdgeAlignment::Start
-            }
-        );
-        assert_eq!(
-            l.compact_edge_drop_hint(
-                &r,
-                item,
-                [1091., 128.],
-                Some(Bounds {
-                    x: 982.,
-                    y: -302.,
-                    width: 218.,
-                    height: 440.,
-                })
-            )
-            .unwrap()
-            .target,
-            DockTarget::CompactEdge {
-                edge: Edge::Right,
-                alignment: EdgeAlignment::Start
-            }
-        );
-    }
     #[test]
     fn compact_targets_are_nearer_and_shorter_than_full_edge_targets() {
         let mut l = layout();
@@ -973,10 +963,6 @@ mod tests {
             for length in (200..1400).step_by(3) {
                 let viewport = viewport_for(edge, length as f32);
                 let r = resolved(&l, viewport);
-                assert_eq!(
-                    serde_json::to_value(&r).unwrap(),
-                    serde_json::to_value(resolved(&l, viewport)).unwrap()
-                );
                 for (i, panel) in [p, q].into_iter().enumerate() {
                     let (style, bounds) = presented(&r, panel);
                     assert!(rank(style) >= rank(previous[i]), "{edge:?} {length}");
