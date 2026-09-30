@@ -330,6 +330,27 @@ mod tests {
     use super::*;
     use layer_ui::{CommandId, Platform, UiAction, WorkspaceState};
     use serde_json::Value;
+    struct FailedWriter;
+    impl std::io::Write for FailedWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("synthetic write failure"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn failed_take(host: &mut NativeHost, layout: bool) {
+        let mut serializer = serde_json::Serializer::with_formatter(FailedWriter, SnapshotFormatter);
+        assert!(host.take_snapshot_with(&mut serializer, layout).is_err());
+    }
+
+    fn assert_undo_redo(host: &mut NativeHost, read: fn(&mut NativeHost) -> Value, saved: &Value, committed: &Value) {
+        host.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace }).unwrap();
+        assert_eq!(&read(host)["state"]["workspace"], saved);
+        host.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace }).unwrap();
+        assert_eq!(read(host)["state"]["workspace"], committed["state"]["workspace"]);
+    }
 
     #[test]
     fn command_search_publications_retain_workspace_and_include_close() {
@@ -478,19 +499,7 @@ mod tests {
             resize_divider(&mut host, Up, 370.);
             let committed = layout_update(&mut host);
             assert_ne!(committed["state"]["workspace"], saved);
-            host.dispatch(UiAction::Invoke {
-                command: CommandId::UndoWorkspace,
-            })
-            .unwrap();
-            assert_eq!(layout_update(&mut host)["state"]["workspace"], saved);
-            host.dispatch(UiAction::Invoke {
-                command: CommandId::RedoWorkspace,
-            })
-            .unwrap();
-            assert_eq!(
-                layout_update(&mut host)["state"]["workspace"],
-                committed["state"]["workspace"]
-            );
+            assert_undo_redo(&mut host, layout_update, &saved, &committed);
         }
     }
 
@@ -604,21 +613,7 @@ mod tests {
         );
         resize_divider(&mut host, Down, 255.);
         resize_divider(&mut host, Move, 360.);
-        struct FailedWriter;
-        impl std::io::Write for FailedWriter {
-            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("synthetic write failure"))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let mut serializer =
-            serde_json::Serializer::with_formatter(FailedWriter, SnapshotFormatter);
-        assert!(
-            host.take_snapshot_with(&mut serializer, true)
-                .is_err()
-        );
+        failed_take(&mut host, true);
         let packet = layout_update(&mut host);
         assert!(packet.get("state").is_none());
         assert_eq!(packet["layout"], host.snapshot()["layout"]);
@@ -704,19 +699,7 @@ mod tests {
             update(&mut host);
             drag(&mut host, Up, [510., 410.]);
             let committed = update(&mut host);
-            host.dispatch(UiAction::Invoke {
-                command: CommandId::UndoWorkspace,
-            })
-            .unwrap();
-            assert_eq!(update(&mut host)["state"]["workspace"], saved);
-            host.dispatch(UiAction::Invoke {
-                command: CommandId::RedoWorkspace,
-            })
-            .unwrap();
-            assert_eq!(
-                update(&mut host)["state"]["workspace"],
-                committed["state"]["workspace"]
-            );
+            assert_undo_redo(&mut host, update, &saved, &committed);
         }
     }
 
@@ -777,22 +760,8 @@ mod tests {
 
     #[test]
     fn failed_serialization_keeps_full_camera_and_workspace_updates_pending() {
-        struct FailedWriter;
-        impl std::io::Write for FailedWriter {
-            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("synthetic write failure"))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let fail = |host: &mut NativeHost| {
-            let mut serializer =
-                serde_json::Serializer::with_formatter(FailedWriter, SnapshotFormatter);
-            assert!(host.take_snapshot_with(&mut serializer, false).is_err());
-        };
         let mut host = host(Platform::Mac);
-        fail(&mut host);
+        failed_take(&mut host, false);
         assert!(update(&mut host).get("state").is_some());
         host.dispatch(UiAction::Invoke {
             command: CommandId::ZoomIn,
@@ -805,13 +774,13 @@ mod tests {
             command: CommandId::ZoomIn,
         })
         .unwrap();
-        fail(&mut host);
+        failed_take(&mut host, false);
         assert!(update(&mut host).get("camera").is_some());
         host.dispatch(UiAction::Invoke {
             command: CommandId::ZenMode,
         })
         .unwrap();
-        fail(&mut host);
+        failed_take(&mut host, false);
         assert!(update(&mut host).get("state").is_some());
         assert!(host.take_update_bytes().unwrap().is_none());
     }

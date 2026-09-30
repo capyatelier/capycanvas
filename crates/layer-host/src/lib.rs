@@ -1033,6 +1033,26 @@ impl NativeHost {
 mod tests {
     use super::*;
 
+    fn gpu_host(platform: layer_ui::Platform, size: [u32; 2]) -> (layer_render_wgpu::WgpuRasterizer, NativeHost) {
+        let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
+        let mut host = NativeHost::new(platform).unwrap();
+        host.session = UiSession::from_project(
+            Renderer(Some(gpu.into())), layer_ui::new_drawing(size[0], size[1]).unwrap(),
+            None, [640, 480], platform,
+        ).unwrap();
+        host.startup = Default::default();
+        host.resize(640, 480, 1.).unwrap();
+        (reference, host)
+    }
+
+    fn frame_step(host: &mut NativeHost, clock: &std::cell::Cell<u64>, deadline: std::time::Instant) {
+        clock.set(clock.get() + 8_000_000);
+        host.prepare_canvas_frame(clock.get(), clock.get(), true).unwrap();
+        assert!(std::time::Instant::now() < deadline, "startup timed out");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+
     fn pointer(host: &mut NativeHost, id: u64, tool: u8, button: u8, records: &[f64], predicted: bool) -> Result<(), String> {
         host.pointer_batch(PointerBatch {
             id, tool, button, records, predicted,
@@ -1566,26 +1586,11 @@ mod tests {
 
     #[test]
     fn warp_opens_over_a_large_filled_selection() {
-        let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
-        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
-        host.session = UiSession::from_project(
-            Renderer(Some(gpu.into())),
-            layer_ui::new_drawing(6000, 4000).unwrap(),
-            None,
-            [640, 480],
-            layer_ui::Platform::Android,
-        )
-        .unwrap();
-        host.startup = Default::default();
-        host.resize(640, 480, 1.).unwrap();
+        let (_reference, mut host) = gpu_host(layer_ui::Platform::Android, [6000, 4000]);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let clock = std::cell::Cell::new(0);
         let frame = |host: &mut NativeHost| {
-            clock.set(clock.get() + 8_000_000);
-            host.prepare_canvas_frame(clock.get(), clock.get(), true).unwrap();
-            assert!(std::time::Instant::now() < deadline, "startup timed out");
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            frame_step(host, &clock, deadline);
         };
         while !host.startup.complete {
             frame(&mut host);
@@ -1607,26 +1612,11 @@ mod tests {
 
     #[test]
     fn a_contact_begun_as_a_transform_opens_is_replayed_whole_once_it_is_prepared() {
-        let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
-        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
-        host.session = UiSession::from_project(
-            Renderer(Some(gpu.into())),
-            layer_ui::new_drawing(256, 192).unwrap(),
-            None,
-            [640, 480],
-            layer_ui::Platform::Android,
-        )
-        .unwrap();
-        host.startup = Default::default();
-        host.resize(640, 480, 1.).unwrap();
+        let (_reference, mut host) = gpu_host(layer_ui::Platform::Android, [256, 192]);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let clock = std::cell::Cell::new(0);
         let frame = |host: &mut NativeHost| {
-            clock.set(clock.get() + 8_000_000);
-            host.prepare_canvas_frame(clock.get(), clock.get(), true).unwrap();
-            assert!(std::time::Instant::now() < deadline, "startup timed out");
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            frame_step(host, &clock, deadline);
         };
         while !host.startup.complete {
             frame(&mut host);
@@ -1679,19 +1669,7 @@ mod tests {
 
     #[test]
     fn a_stroke_once_painting_is_reported_ready_paints_while_background_shaders_compile() {
-        let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
-        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        host.session = UiSession::from_project(
-            Renderer(Some(gpu.into())),
-            layer_ui::new_drawing(256, 192).unwrap(),
-            None,
-            [640, 480],
-            layer_ui::Platform::Windows,
-        )
-        .unwrap();
-        host.startup = Default::default();
-        host.resize(640, 480, 1.).unwrap();
+        let (_reference, mut host) = gpu_host(layer_ui::Platform::Windows, [256, 192]);
         host.session.set_workspace_read_only(true);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let clock = std::cell::Cell::new(0);
@@ -1699,10 +1677,7 @@ mod tests {
             if busy {
                 host.session.renderer_mut().0.as_mut().unwrap().shader_input();
             }
-            clock.set(clock.get() + 8_000_000);
-            host.prepare_canvas_frame(clock.get(), clock.get(), true).unwrap();
-            assert!(std::time::Instant::now() < deadline, "startup timed out");
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            frame_step(host, &clock, deadline);
         };
         let published = |host: &mut NativeHost| {
             host.invalidate_snapshot();

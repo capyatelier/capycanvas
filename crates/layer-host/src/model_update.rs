@@ -126,6 +126,17 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
 
+    fn read(host: &mut NativeHost) -> Value {
+        serde_json::from_slice(&host.take_model_update_bytes().unwrap().unwrap()).unwrap()
+    }
+
+    fn expected_model(host: &NativeHost) -> Value {
+        let mut expected = host.snapshot();
+        expected["workspace_update"] = serde_json::to_value(host.session.workspace_update()).unwrap();
+        serde_json::from_slice(&serde_json::to_vec(&expected).unwrap()).unwrap()
+    }
+
+
     fn child<'v>(value: &'v mut Value, key: &Value) -> &'v mut Value {
         let key = key.as_str().unwrap();
         match value {
@@ -225,11 +236,7 @@ mod tests {
             let patch: Value = serde_json::from_slice(&bytes).unwrap();
             assert!(bytes.len() < 8 * 1024, "{command:?}: {} bytes", bytes.len());
             apply(&mut retained, patch);
-            let mut expected = host.snapshot();
-            expected["workspace_update"] =
-                serde_json::to_value(host.session.workspace_update()).unwrap();
-            let expected: Value =
-                serde_json::from_slice(&serde_json::to_vec(&expected).unwrap()).unwrap();
+            let expected = expected_model(&host);
             assert_eq!(retained, expected);
         }
     }
@@ -257,10 +264,6 @@ mod tests {
         use layer_ui::{CommandId, Platform, UiAction};
         let mut host = NativeHost::new(Platform::Android).unwrap();
         host.resize(2200, 1440, 1.75).unwrap();
-        let read = |host: &mut NativeHost| {
-            serde_json::from_slice::<Value>(&host.take_model_update_bytes().unwrap().unwrap())
-                .unwrap()
-        };
         let mut retained = read(&mut host);
         for command in [CommandId::SelectAll, CommandId::Deselect] {
             host.scroll([600., 400.], [0., 40.], 1.75, false, false)
@@ -277,11 +280,7 @@ mod tests {
                 "{command:?} sent a full model"
             );
             apply(&mut retained, patch);
-            let mut expected = host.snapshot();
-            expected["workspace_update"] =
-                serde_json::to_value(host.session.workspace_update()).unwrap();
-            let expected: Value =
-                serde_json::from_slice(&serde_json::to_vec(&expected).unwrap()).unwrap();
+            let expected = expected_model(&host);
             assert_eq!(retained, expected);
         }
     }
@@ -294,18 +293,8 @@ mod tests {
         host.resize(2200, 1440, 1.75).unwrap();
         host.dispatch(UiAction::Invoke { command: CommandId::Move }).unwrap();
         host.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 1, value: true } }).unwrap();
-        let read = |host: &mut NativeHost| {
-            serde_json::from_slice::<Value>(&host.take_model_update_bytes().unwrap().unwrap())
-                .unwrap()
-        };
         let mut retained = read(&mut host);
         assert_eq!(retained["state"]["notice"], Value::Null);
-        let expected = |host: &NativeHost| {
-            let mut expected = host.snapshot();
-            expected["workspace_update"] =
-                serde_json::to_value(host.session.workspace_update()).unwrap();
-            serde_json::from_slice::<Value>(&serde_json::to_vec(&expected).unwrap()).unwrap()
-        };
         let notice_paths = |patch: &Value| {
             patch["model_update"]
                 .as_array()
@@ -343,13 +332,13 @@ mod tests {
             "command objects keep their keys"
         );
         apply(&mut retained, patch);
-        assert_eq!(retained, expected(&host));
+        assert_eq!(retained, expected_model(&host));
         let id = retained["state"]["notice"]["id"].as_u64().unwrap();
         host.dispatch(UiAction::Notice { id, accept: false }).unwrap();
         let patch = read(&mut host);
         assert_eq!(notice_paths(&patch), [json!([["state", "notice"], null])], "{patch}");
         apply(&mut retained, patch);
-        assert_eq!(retained, expected(&host));
+        assert_eq!(retained, expected_model(&host));
     }
 
     #[test]
@@ -362,10 +351,6 @@ mod tests {
             Platform::Windows,
         ] {
             let mut host = NativeHost::new(platform).unwrap();
-            let read = |host: &mut NativeHost| {
-                serde_json::from_slice::<Value>(&host.take_model_update_bytes().unwrap().unwrap())
-                    .unwrap()
-            };
             let mut retained = read(&mut host);
             for size in [21., 32., 21.] {
                 host.dispatch(UiAction::SetBrushSize { value: size })
@@ -377,11 +362,7 @@ mod tests {
                         < serde_json::to_vec(&retained).unwrap().len() / 2
                 );
                 apply(&mut retained, patch);
-                let mut expected = host.snapshot();
-                expected["workspace_update"] =
-                    serde_json::to_value(host.session.workspace_update()).unwrap();
-                let expected: Value =
-                    serde_json::from_slice(&serde_json::to_vec(&expected).unwrap()).unwrap();
+                let expected = expected_model(&host);
                 assert_eq!(retained, expected);
                 assert!(host.take_model_update_bytes().unwrap().is_none());
             }
