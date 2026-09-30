@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.snapshots.SnapshotStateObserver
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
@@ -64,6 +65,30 @@ class AndroidHostTest {
     private fun state() = host.snapshot!!.getJSONObject("state")
     private fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
     private fun settle() { compose.waitForIdle(); SystemClock.sleep(120); compose.waitForIdle() }
+    @Test fun brushSizeUpdatesInvalidateOnlyTheirReaders() {
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "set_brush_size", "value" to 32))
+            val invalidated = mutableSetOf<String>()
+            val changed: (String) -> Unit = { invalidated.add(it) }
+            val observer = SnapshotStateObserver { callback -> compose.activity.runOnUiThread(callback) }
+            try {
+                compose.runOnIdle {
+                    observer.start()
+                    observer.observeReads("size", changed) { state().getJSONObject("brush").getDouble("diameter") }
+                    observer.observeReads("opacity", changed) { state().getJSONObject("brush").getDouble("opacity") }
+                    observer.observeReads("groups", changed) { state().getJSONObject("tool_set").getJSONArray("groups") }
+                }
+                action(obj("type" to "set_brush_size", "value" to 64))
+                compose.runOnIdle {
+                    assertEquals(setOf("size"), invalidated)
+                    assertEquals(64.0, state().getJSONObject("brush").getDouble("diameter"), 0.0)
+                }
+            } finally {
+                compose.runOnIdle { observer.stop(); observer.clear() }
+            }
+        }
+    }
     @Test fun nativeSdrTaggedColorsAndGradientEditor() {
         val color = obj("space" to "DisplayP3", "rgba" to JSONArray(listOf(1.0, .01, .23, 1.0)))
         action(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to "foreground", "color" to color)))

@@ -69,6 +69,45 @@ fn coverage(dab: &Dab, [x, y]: [usize; 2]) -> f64 {
 }
 
 #[test]
+fn uniform_stroke_colors_and_coverage_do_not_depend_on_contact_batching() {
+    for space in BlendSpace::ALL {
+        for (mode, blend) in [(DabMode::Paint, BrushBlendMode::Normal), (DabMode::Paint, BrushBlendMode::Overlay), (DabMode::Erase, BrushBlendMode::Normal)] {
+            for varying in [false, true] {
+                let dabs: Vec<_> = [0.2, 1., 0.4, 1.].into_iter().enumerate().map(|(i, alpha)| {
+                    soft([40. + i as f32 * 11., 48. + i as f32 * 6.],
+                        [0.2 + if varying { i as f32 * 0.2 } else { 0. }, 0.3, 0.8, alpha], 52., 0.3)
+                }).collect();
+                let draw = |chunk: usize| {
+                    let mut canvas = Canvas::new(DocumentColor::default(), space, vec![Layer::paint(LayerId(1), "Paint")]);
+                    canvas.fill(1, [0.3, 0.5, 0.1, 0.8]);
+                    let mut style = test_style(BrushExecution::Dry);
+                    style.blend_space = space;
+                    style.mode = mode;
+                    style.rendering.blend_mode = blend;
+                    style.rendering.accumulation = BrushAccumulation::Uniform;
+                    let damage = dabs.iter().fold(Rect::default(), |r, d| r.union(d.bounds()));
+                    let mut batch = DabBatch { stroke_id: StrokeId(2), ..crate::test_support::dab_batch(LayerId(1), style, damage) };
+                    for (i, contacts) in dabs.chunks(chunk).enumerate() {
+                        batch.dab_count = contacts.len() as u32;
+                        batch.stroke_start = i == 0;
+                        batch.stroke_end = (i + 1) * chunk >= dabs.len();
+                        canvas.r.submit(FramePacket { dabs: contacts, dab_batches: std::slice::from_ref(&batch),
+                            blend_space: space, ..packet(&canvas.layers, EXTENT) }).unwrap();
+                    }
+                    canvas.composite()
+                };
+                for (pixel, (a, b)) in draw(1).into_iter().zip(draw(dabs.len())).enumerate() {
+                    for channel in 0..4 {
+                        assert!((a[channel] - b[channel]).abs() < 2e-4,
+                            "{space:?} {mode:?} {blend:?} varying={varying} pixel={pixel} channel={channel}: {a:?} != {b:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn a_soft_black_edge_over_white_fades_on_the_documents_values() {
     for space in BlendSpace::ALL {
         let mut canvas = Canvas::new(DocumentColor::default(), space, vec![Layer::paint(LayerId(1), "Paint")]);

@@ -70,10 +70,12 @@ required level. A compact prediction cannot update
 a source level finer than its own sampling grid.
 
 The shared layer traversal builds an expression tree. Normal premultiplied
-source-over runs are balanced using associativity, with each layer's opacity
-applied before regrouping. Power-of-two grouping boundaries and empty layer
-positions preserve existing branches when painting starts; transparent operands
-require no image or blend pass. Group opacity, masks, clipping and non-normal blends
+source-over runs use associativity, with each layer's opacity applied before
+regrouping. The final operand stays above a balanced lower stack, so painting
+the front layer reuses the same lower composite at every layer count. Transparent
+paper adds no operand. Power-of-two grouping boundaries and empty layer positions
+preserve lower branches when painting starts; transparent operands require no
+image or blend pass. Group opacity, masks, clipping and non-normal blends
 remain expression boundaries. Exact and reduced composition share blend formulas
 and document-depth flags, including clipped layers and extended float colors.
 The document blend space invalidates composed branches and selects the shared
@@ -97,7 +99,9 @@ priority. No cached expression owns original image bytes or raster history.
 Evaluation visits the child needing more scratch first, reuses completed
 branches, and writes changed pages into a stable root image. An edit in a
 balanced normal run needs logarithmically many composition operations when
-its unchanged branches fit the budget. Placed sources and masks use the common transform
+its unchanged branches fit the budget. Separating the front operand adds at most
+one composition operation to a lower-layer edit; front-layer edits need one.
+Placed sources and masks use the common transform
 resampler. Their most magnified axis determines source resolution; an additional
 level of detail and up to four samples per axis limit placement-edge error.
 Unit-scale aligned inputs use one sample per pixel.

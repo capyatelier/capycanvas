@@ -340,7 +340,7 @@ accounting limits in the geometry section apply.
 
 Target: **60 completed updates/s** at the guaranteed size, on the 12 MP canvas.
 
-Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets.
+Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets.
 
 - The TCL's work area is 754 px wide, so the harness fits its 520 × 299 px
   ellipse down to 339 × 299 px, at 16.0% zoom.
@@ -348,18 +348,18 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | 53.3 fresh updates/s (52.74–54.05); completion gap p99 29.35–37.29 ms | **Not met** |
+| G-Pen (1) | Simple | 1024 px | 65.8 fresh updates/s (65.43–66.14); completion gap p99 26.57–27.10 ms | **Met for this stroke** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
 | Realistic Pen (31) | Simple | 1024 px | 28.3 updates/s (28.2–28.3); gap p99 63.4 ms | **Not met** |
 | Wet Ink (32) | Simple | 1024 px | 23.0 updates/s (22.9–23.1); gap p99 73.7 ms | **Not met** |
-| Pencil (2) | Simple | 1024 px | 15.0 updates/s (14.8–15.2); gap p99 99.6 ms | **Not met** |
+| Pencil (2) | Simple | 1024 px | 11.2 fresh updates/s (11.17–11.33); completion gap p99 111.62–112.88 ms | **Not met** |
 | Pointy Pencil (25) | Simple | 1024 px | 15.2 updates/s (15.2–15.3); gap p99 96.7 ms | **Not met** |
 | Shading Pencil (26) | Simple | 1024 px | 58.3 updates/s (56.2–59.8); gap p99 58.0 ms | **Not met** |
 | Charcoal (27) | Simple | 1024 px | 14.2 updates/s (14.2–14.3); gap p99 114.0 ms | **Not met** |
 | Chalk (6) | Simple | 1024 px | 10.4 updates/s (10.3–10.5); gap p99 131.3 ms | **Not met** |
-| Eraser (3) | Simple | 1024 px | 20.8 updates/s (20.7–21.1); gap p99 72.8 ms | **Not met** |
+| Eraser (3) | Simple | 1024 px | 30.1 fresh updates/s (30.07–30.32); completion gap p99 44.86–45.72 ms | **Not met** |
 | Airbrush (5) | Simple | 1024 px | 32.7 updates/s (32.4–33.1); gap p99 55.6 ms | **Not met** |
 | Marker (7) | Complex | 1024 px | 16.5 updates/s (16.5–16.6); gap p99 100.5 ms | **Not met** |
 | Blotty Ink (33) | Complex | 1024 px | 15.1 updates/s (15.0–15.1); gap p99 105.5 ms | **Not met** |
@@ -389,19 +389,35 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 ## Integrated compositor measurement
 
-Measured on 2026-09-29: G-Pen 1024 px, Perceptual 12 MP photo, Fit at 15.97%,
-240 × 140 px trajectory, 16 ms prediction, three five-second strokes. Stats is
-closed, Navigator is visible and thermal status remains zero. Fresh updates
-count completed frames that consumed new real pen samples. The median is
-53.32/s (52.74–54.05), below 60/s. Completion-gap p99 is
-29.36 / 37.29 / 29.35 ms; one run exceeds the 33.3 ms gap limit.
+Measured on 2026-09-30 against `829f1e223`: Perceptual 12 MP photo,
+240 × 140 px trajectory, 16 ms prediction, three five-second strokes after
+warm-up. Stats is closed, Navigator is visible and thermal status is zero.
+Fresh updates count completed frames that consumed new real pen samples.
+The candidate separates the front layer from the balanced lower composite and
+skips color reads for fully covered in-place uniform Normal pixels. It keeps
+the same formats, memory allowance and existing pipelines.
 
-The optimized release build allows foreground submission during two-page idle
-refinement and retains backpressure for required raster work; APK SHA-256
-`649f12d58147542a5a8925d7727d11907ceeafb68a7e68b135b3ef9539ca1d7f`.
-Raw records are `artifacts/latency-investigation/qualified-25-brush-continuous`.
-The preceding four-page build measured 52.97/s (52.52–53.54).
-Neither set meets 60/s or qualifies stacked photos, native zoom or other brushes.
+| Workload | Main fresh updates/s | Candidate fresh updates/s (range) | Candidate completion gap p99, range | Target |
+| --- | ---: | ---: | ---: | --- |
+| G-Pen 1024 px, one photo at Fit | 54.81 | 65.83 (65.43–66.14) | 26.57–27.10 ms | Meets 60/s for this stroke |
+| G-Pen 1024 px, eight photos at 50% | 29.72 | 35.87 (35.51–35.99) | 39.61–45.62 ms | Not met |
+| G-Pen 1024 px, eight photos at 100% | 19.52 | 27.07 (26.94–27.48) | 43.47–45.05 ms | Not met |
+| Pencil 1024 px, one photo at Fit | 11.14 | 11.17 (11.17–11.33) | 111.62–112.88 ms | Not met |
+| Eraser 1024 px, one photo at Fit | 30.06 | 30.10 (30.07–30.32) | 44.86–45.72 ms | Not met |
+
+The stacked rows have nine visible layers: eight translucent photos and one
+paint layer. They do not qualify the separate eight-paint-layer target. Fit is
+15.97%. Candidate allocator residency is 812 MiB at Fit, 1,069 MiB at 50% and
+1,008 MiB at 100%, within 2 MiB of the matched controls. G-Pen owner CPU p50 is
+10.24 / 14.19 / 12.23 ms; these are CPU times, not frame or GPU intervals.
+Settling is 578–601 / 871–984 / 695–731 ms. The size-class guarantee remains
+open because other brushes and trajectories are not qualified.
+
+Candidate: `63d6fede3` plus the front-stack, covered-pixel and field-observation
+changes; optimized benchmark APK SHA-256
+`f0b87ae5094b33d4383bfb3f9d0ab8d8699d1aa508ee7f6c1fe11edb6d261ad2`.
+Raw records are `artifacts/optimization-roi/{main,candidate1}-{fit,stack50,stack100}`
+and `{main,candidate1}-other-simple`.
 
 Matched resumed contacts meet the one-frame added-submission p95 budget in all
 three runs; added GPU-completion p95 still fails in one run. See
@@ -432,63 +448,29 @@ ms at 50% and 583–626 ms at 100%. Raw reports are
 
 ### GPU attribution with Stats closed
 
-Separate Android ATrace diagnostics on 2026-09-29 enable the existing bounded
-GPU timestamps without opening Stats. They preserve the camera and default
-workspace but add query overhead, so their rates do not qualify targets.
-Observations are matched to renderer frame IDs inside the input window; counter
-publication time can fall after motion. Values below are per-phase medians from
-one five-second stroke per configuration, with 242 / 148 / 98 drawing samples.
-GPU intervals include inter-submission scheduling gaps and are not hardware
-occupancy measurements. Independently aggregated medians need not add up.
+A separate five-second ATrace diagnostic of the candidate's eight-photo 100%
+case enables bounded GPU timestamps without opening Stats. Its 26.54 updates/s
+is diagnostic, not a rate qualification. Observations match renderer frame IDs
+inside the input window; independently aggregated medians do not add up, and
+GPU intervals include scheduling gaps rather than measuring hardware occupancy.
 
-| Configuration | Drawing GPU interval | Paint | Preview | Composition | Viewport GPU interval |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| One photo, Fit | 18.42 ms | 7.80 ms | 6.18 ms | 4.58 ms | 1.28 ms |
-| Eight photos, 50% | 30.19 ms | 7.06 ms | 8.18 ms | 15.37 ms | 3.78 ms |
-| Eight photos, 100% | 40.69 ms | 7.07 ms | 7.79 ms | 27.56 ms | 9.22 ms |
+| Phase | Median GPU interval |
+| --- | ---: |
+| Drawing, 134 observations | 26.77 ms |
+| Paint | 3.47 ms |
+| Prediction and uncommitted-contact preview | 7.71 ms |
+| Main composition, excluding paired mip interval | 10.10 ms |
+| Main mips | 6.50 ms |
+| Separate overview composition | 0.005 ms |
 
-The stacked configurations retain composition branches: eight at 50% and eleven
-at 100%, including the overview. Therefore these spans do not establish that all
-unchanged layers are recomposed. Source preparation, changed-region composition,
-mip reduction and overview work require further attribution. A linear-blending
-100% control still spends 26.68 ms in composition. Disabling extrapolation still
-spends 7.37 ms in preview: uncommitted real contacts also require a preview.
-Neither control establishes a path to 60/s.
-
-Two-page idle composition intervals have medians near 2.5 ms for the fitted
-single-photo case and 18 ms for the stacked cases. The single-photo span alone
-does not explain the matched added-completion p95 miss; scheduling and
-completion observation remain part of that investigation.
-
-Untraced checks of this diagnostic change allocate no timestamp resources and
-measure fresh updates/s of 53.85 (53.83–54.84), 29.85 (29.48–30.03) and
-19.54 (19.52–19.54) for Fit, 50% and 100%, respectively. All remain below 60/s.
-Build SHA-256:
-`4f5d2e999f0b338ae3c681c56218ef6b9346159f6cf28c762d6144a314010bfb`.
-Raw records are `artifacts/latency-investigation/phase-26-{fit,stack50,stack100,fast,slow}`,
-`phase-26-{linear100,no-prediction100}` and `phase-26-untraced-{fit,stack50,stack100}`.
-The frame-ID analysis is `analyze-phase-26.py`.
-
-Further subphase diagnostics retain the same workspace. Main composition,
-excluding its mip interval, has paired medians of 4.01 / 11.75 / 21.37 ms for
-Fit / 50% / 100%. Main mip intervals are 0.60 / 1.80 / 6.66 ms. Separate
-overview composition is 1.95 ms at 50% and 0.005 ms at 100%, where detail already
-supplies the overview. Source preparation outside the main view is about
-0.002 ms; source reductions inside main composition remain in that interval.
-The mip boundary flushes buffered blends before its timestamp. Earlier probe
-captures without that flush attribute some blends to mips and cannot establish
-the mip cost.
-
-These observations rule out separate overview composition as the main 100%
-bottleneck. Main source/blend work, changed-pixel count, mip traffic and viewport
-work need a quantitative work-removal model before a new algorithm is selected.
-They do not establish a hardware waiver or a guaranteed path to 60/s.
-Untraced three-stroke checks measure 53.76 (53.33–53.96),
-29.69 (29.67–29.71) and 19.50 (19.30–19.50) fresh updates/s, with no timestamp
-allocations. APK SHA-256:
-`3cdb3d409760b3257c22dbcbd60a3f23eb46d7448b6bcb14b94762ed7d8a2059`.
-Raw data: `artifacts/latency-investigation/phase-28-{fit,stack50,stack100}` and
-`phase-28-untraced-{fit,stack50,stack100}`; analysis: `analyze-phase-28.py`.
+The main mip rectangle contains 258.3 million base-level pixels across this
+stroke; changed output regions contain 213.3 million, or 82.6% of that area.
+There are typically 24 tiled output regions per update. Sparse mips could avoid
+17.4% of this base-level area, but their dispatch and merge cost is unmeasured.
+That area ratio neither establishes a GPU-time saving nor closes the 60/s gap.
+Main composition, preview and viewport work remain material costs. None of these
+measurements proves the target impossible or establishes a complete path to it.
+Raw records: `artifacts/optimization-roi/candidate1-stack100-diagnostic`.
 
 ## Input during Healing finalization
 

@@ -48,7 +48,7 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 
 Target: **120 completed updates/s** at the guaranteed size, on the 61 MP canvas.
 
-Measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets. The ellipse is 520 × 299 px at 16.5% zoom.
+Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets. The ellipse is 520 × 299 px at 16.5% zoom.
 
 **The 2026-09-22 G-Pen record used a different stroke.** It recorded 105.76
 updates/s for a 2000 px G-Pen.
@@ -63,7 +63,7 @@ are kept separate from the 10 s comparison table below.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 2048 px | 87.8 updates/s (86.9–88.4); gap p99 27.0 ms | **Not met** |
+| G-Pen (1) | Simple | 2048 px | 143.7 fresh updates/s (143.12–151.79); completion gap p99 23.97–26.94 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 2048 px | 61.8 updates/s (60.6–62.7); gap p99 33.6 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 2048 px | 189.3 updates/s (188.6–190.5); gap p99 10.6 ms | Met |
 | Antique Pen (30) | Simple | 2048 px | 82.0 updates/s (81.7–82.2); gap p99 26.4 ms | **Not met** |
@@ -101,6 +101,21 @@ are kept separate from the 10 s comparison table below.
 | Liquify Pinch (37) | Very complex | 512 px | 67.3 updates/s (66.1–67.4); gap p99 39.4 ms | **Not met** |
 | Liquify Expand (38) | Very complex | 512 px | 68.4 updates/s (66.7–69.2); gap p99 38.3 ms | **Not met** |
 | Liquify Crystals (39) | Very complex | 512 px | 41.6 updates/s (39.3–42.2); gap p99 70.0 ms | **Not met** |
+
+## Current G-Pen comparison
+
+Measured on 2026-09-30 against `829f1e223`: the tier photo beneath one paint
+layer, Perceptual blending, 2048 px G-Pen, Fit, 16 ms prediction, default
+workspace with Stats closed, warm-up and three five-second strokes. Thermal
+status is zero. The front-stack and covered-pixel candidate raises fresh input
+throughput from 104.08 to 143.72 updates/s. Completion-gap p99 is
+23.97–26.94 ms. The rate exceeds 120/s, but the 16.7 ms gap target remains open.
+This does not qualify the class or its other brushes.
+
+Candidate: `63d6fede3` plus front-stack, covered-pixel and field-observation
+changes, optimized benchmark APK SHA-256
+`f0b87ae5094b33d4383bfb3f9d0ab8d8699d1aa508ee7f6c1fe11edb6d261ad2`.
+Raw records: `artifacts/optimization-roi/main-top-fit` and `candidate1-top-fit`.
 
 ## Retouching with the integrated compositor
 

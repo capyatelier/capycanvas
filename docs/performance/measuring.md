@@ -136,6 +136,10 @@ timestamp so the mip interval excludes deferred blends. Match GPU observations
 to renderer frame IDs inside the input window; publication of timing counters
 can occur after motion has ended. Missing observations are skipped, never waited
 for, and do not represent zero cost.
+Trace counters report the main composite's changed output pixels, output regions
+and enclosing mip rectangle. Compare these on the same frames before replacing
+the rectangle with sparse mip work; pixel-area savings alone do not establish
+lower GPU time when the replacement needs more dispatches.
 Keep the whole stroke footprint inside the photo for sustained painting tests.
 Choose `--radius-x` and `--radius-y` from the photo's displayed bounds and brush
 radius; the default work-area ellipse can leave a small Fit-view canvas. Compare

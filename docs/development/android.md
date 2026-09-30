@@ -367,6 +367,10 @@ Where to look:
 - Publication: [`CanvasHost.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/CanvasHost.kt)
   runs the native session on its `capy-canvas` thread and applies model updates
   into [`ObservedModel`](../../apps/layer-android/app/src/main/java/art/capycanvas/ObservedModel.kt).
+  Brush fields and tool-panel fields retain their observed objects, so a size
+  change invalidates size readers without rebuilding opacity or group readers.
+  Add nested observation only for objects whose consumers read their fields;
+  consumers that remember a whole JSON object need its replacement identity.
   `CanvasHost.actionError` holds the open error dialog's text or the refusal
   being shown; tests check it.
 - Presentation: [`native/src/android.rs`](../../apps/layer-android/native/src/android.rs)

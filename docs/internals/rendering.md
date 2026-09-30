@@ -342,6 +342,10 @@ first time a dab deposits on it, lays the dabs over it, and decodes it once. Dry
 dabs are uploaded with their colors already encoded (`prepare_colors` in
 [`dry_material.rs`](../../crates/layer-render-wgpu/src/dry_material.rs)), so no
 pixel converts a dab's color.
+At native resolution, in-place uniform Normal deposition checks retained stroke
+coverage before reading color. Fully covered pixels keep their existing color;
+the coverage pass still copies their scalar coverage into its next output.
+Stroke starts, bristles and other blend modes retain their ordinary evaluation.
 Brush blend modes call the layer formulas in the same space, so an Overlay brush
 matches an Overlay layer. The brush's blend code carries the space (bit 8), a
 uniform, so no pipeline is specialized for it. Edged brushes that Linear light

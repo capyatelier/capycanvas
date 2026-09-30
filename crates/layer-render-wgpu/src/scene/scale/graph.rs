@@ -144,7 +144,8 @@ impl Graph {
         }
         let mut builder = Builder { packet, sources, effects: &self.effects, level: plan.level, space: r.device.working_space() };
         let output = stack::compose(&mut builder, packet.layers, None, None)?;
-        let mut root = Expression::over(&output);
+        let mut root = output.split_last().map_or_else(|| Expression::color([0.; 4]), |(front, back)|
+            Expression::combine(front.clone(), Expression::over(back), layer_core::LayerBlend::Normal, 0));
         for layer in packet.layers {
             if layer.mask.as_ref().is_some_and(|m| m.enabled && m.show_area) {
                 root = Expression::combine(builder.source(layer, true), root, layer_core::LayerBlend::Normal, 64);
@@ -191,8 +192,8 @@ impl Builder<'_> {
 impl stack::Compositor for Builder<'_> {
     type Image = Vec<Node>;
     fn clear(&mut self, paper: bool) -> Self::Image {
-        if !paper { return Vec::new(); }
         let p = self.packet.view.background_rgba_linear;
+        if !paper || p[3] == 0. { return Vec::new(); }
         vec![Expression::color(self.packet.blend_space.composite(self.space, [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]))]
     }
     fn discard(&mut self, _: Self::Image) {}

@@ -797,6 +797,8 @@ impl Cache {
         let output_bounds = self.output_plan().bounds;
         let [x, y, width, height] = paint_transform::texel_rect(copied.window_local(output_bounds), side);
         let mut written = PixelRect::new(x, y, x + width, y + height);
+        let mut written_pixels = written.area();
+        let mut written_regions = u64::from(!written.is_empty());
         let regions: Vec<_> = regions.into_iter().flat_map(|r| r.subtract(covered)).filter(|r| !r.is_empty()).collect();
         let tiled = bounded(packet.layers) && !(self.plan.level > 0 && root.fused_transform(r));
         let regions = if tiled {
@@ -845,6 +847,8 @@ impl Cache {
             assert!(matches!(output.slot(), Some(Slot::Root)));
             compositor.cache.valid.extend(page_coordinates(region));
             written = written.union(PixelRect::new(x, y, x + width, y + height));
+            written_pixels += u64::from(width) * u64::from(height);
+            written_regions += 1;
             r.metrics.composited_pixels += u64::from(width) * u64::from(height);
         }
         if let Some((finer, changed)) = finer {
@@ -873,6 +877,8 @@ impl Cache {
                     pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
                     drop(pass);
                     written = written.union(PixelRect::new(x, y, x + width, y + height));
+                    written_pixels += u64::from(width) * u64::from(height);
+                    written_regions += 1;
                 }
                 self.valid.extend(page_coordinates(region));
                 self.refined.extend(finer.refined.iter().copied().filter(|c| page_rect(*c).intersect(region) == page_rect(*c).intersect(self.plan.bounds)));
@@ -884,6 +890,11 @@ impl Cache {
             self.refined.clone_from(&self.valid);
         }
         let phase = if finer.is_some() { 12 } else { 11 };
+        if finer.is_none() {
+            crate::performance_trace::counter(c"Capy main mip box pixels", written.area());
+            crate::performance_trace::counter(c"Capy main mip changed pixels", written_pixels);
+            crate::performance_trace::counter(c"Capy main mip regions", written_regions);
+        }
         if crate::performance_trace::enabled() { commands.flush(r, encoder)?; }
         r.telemetry.phase_begin(phase, &r.device, &r.queue, encoder);
         self.reduce_output(r, encoder, written, commands)?;

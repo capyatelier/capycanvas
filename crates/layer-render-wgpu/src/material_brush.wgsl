@@ -937,10 +937,19 @@ fn dry_block_pixel(id: vec2<u32>, offset: vec2<u32>, result: MaterialOutput) -> 
         vec4<f32>(textureLoad(stroke_coverage_texture, vec2<i32>(p), 0).r, 0.0, 0.0, 1.0), vec4<f32>(0.0));
 }
 
+fn saturated_dry_coverage(p: vec2<i32>) -> f32 {
+    if MATERIAL_IN_PLACE && style.operation.z == 1u && style.canvas_opacity.w < 0.5
+        && contact_uniform() && brush_normal() && !bristles_enabled() {
+        return dry_coverage(p);
+    }
+    return 0.0;
+}
+
 @compute @workgroup_size(32, 2)
 fn compute_color(@builtin(global_invocation_id) id: vec3<u32>) {
     let block = style.operation.z;
     if any(id.xy * block >= vec2<u32>(256u)) { return; }
+    if saturated_dry_coverage(vec2<i32>(id.xy)) >= 1.0 { return; }
     let result = dry_block_result(id.xy);
     for (var y = 0u; y < block; y += 1u) {
         for (var x = 0u; x < block; x += 1u) {
@@ -956,6 +965,11 @@ fn compute_color(@builtin(global_invocation_id) id: vec3<u32>) {
 fn compute_coverage(@builtin(global_invocation_id) id: vec3<u32>) {
     let block = style.operation.z;
     if any(id.xy * block >= vec2<u32>(256u)) { return; }
+    let coverage = saturated_dry_coverage(vec2<i32>(id.xy));
+    if coverage >= 1.0 {
+        textureStore(material_coverage_output, vec2<i32>(id.xy), vec4<f32>(coverage, 0.0, 0.0, 1.0));
+        return;
+    }
     let result = dry_block_result(id.xy);
     for (var y = 0u; y < block; y += 1u) {
         for (var x = 0u; x < block; x += 1u) {

@@ -296,6 +296,7 @@ impl WgpuRasterizer {
         }
         let operation = BrushPassPlan::for_device(&batch.style, &self.device).material;
         let pipelines = self.dry_material_pipeline(batch);
+        crate::performance_trace::counter(c"Capy dry material in place", u64::from(pipelines.in_place));
         let texture_key = Self::texture_set_key(&batch.style);
         let textures = self
             .texture_sets

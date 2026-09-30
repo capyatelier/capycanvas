@@ -1117,6 +1117,58 @@ fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
 }
 
 #[test]
+fn front_layer_edits_reuse_the_lower_stack_independent_of_paper_and_layer_count() {
+    fn blends(node: &graph::Node, target: LayerId) -> Option<u32> {
+        use graph::Expression;
+        match node.as_ref() {
+            Expression::Source { id, .. } => (*id == target).then_some(0),
+            Expression::Opacity { input, .. } => blends(input, target),
+            Expression::Combine { front, back, .. } => blends(front, target)
+                .or_else(|| blends(back, target)).map(|n| n + 1),
+            _ => None,
+        }
+    }
+    let mut doc = document();
+    let photo = doc.layers[0].clone();
+    let extent = [doc.width, doc.height];
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference = true;
+    for count in [2, 3, 4, 7, 8, 15, 16] {
+        doc.layers = (0..count).map(|i| {
+            let mut layer = photo.clone();
+            layer.id = LayerId(100 + i);
+            layer.opacity = 0.17 + i as f32 * 0.02;
+            layer
+        }).collect();
+        doc.layers.insert(0, Layer::paint(LayerId(200), "paint"));
+        let mut dab = crate::tests::test_dab([97., 97.], [0.9, 0.02, 0.1, 0.7], 1.);
+        dab.radii = [21.; 2];
+        let batch = dab_batch(LayerId(200), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        for (space, paper) in layer_core::BlendSpace::ALL.into_iter().flat_map(|space| [0., 0.7].map(|paper| (space, paper))) {
+            let mut frame = packet(&doc.layers, extent);
+            frame.blend_space = space;
+            frame.composite_all = false;
+            frame.reset_layers = true;
+            frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+            frame.view.background_rgba_linear = [0.17, 0.39, 0.81, paper];
+            r.submit(frame).unwrap();
+            exact.submit(frame).unwrap();
+            frame.reset_layers = false;
+            frame.dabs = std::slice::from_ref(&dab);
+            frame.dab_batches = std::slice::from_ref(&batch);
+            r.submit(frame).unwrap();
+            exact.submit(frame).unwrap();
+            let cache = r.scale_display.as_ref().unwrap();
+            assert_eq!(blends(cache.graph.root.as_ref().unwrap(), LayerId(200)), Some(1), "{count} static layers, {space:?}");
+            let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
+            assert!(error[0] < 0.003 && error[1] < 0.025, "{count} static layers, {space:?}: {error:?}");
+            assert_presentation_mip(&r);
+        }
+    }
+}
+
+#[test]
 fn identity_edits_recompose_only_damaged_pages() {
     let doc = document_at([1024, 768]);
     let dabs: Vec<_> = [[125., 125.], [893., 125.], [893., 637.], [125., 637.]].into_iter().map(|p| {
