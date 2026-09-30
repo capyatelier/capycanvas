@@ -21,23 +21,18 @@ struct PaletteColor {
     color: RgbColor,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PaletteFormat {
-    Capycolor,
-    Aco,
-    Swatches,
-    Ase,
-    Gpl,
+crate::variants! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum PaletteFormat {
+        Capycolor,
+        Aco,
+        Swatches,
+        Ase,
+        Gpl,
+    }
 }
 impl PaletteFormat {
-    pub const ALL: [Self; 5] = [
-        Self::Capycolor,
-        Self::Aco,
-        Self::Swatches,
-        Self::Ase,
-        Self::Gpl,
-    ];
     pub const IMPORT_EXTENSIONS: [&'static str; 9] = [
         "capycolor",
         "aco",

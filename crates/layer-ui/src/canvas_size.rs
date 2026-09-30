@@ -20,33 +20,24 @@ impl CanvasSizeUnit {
     }
 }
 
-/// Where the current image stays when the canvas changes size, in reading order.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CanvasAnchor {
-    TopLeft,
-    Top,
-    TopRight,
-    Left,
-    #[default]
-    Center,
-    Right,
-    BottomLeft,
-    Bottom,
-    BottomRight,
+crate::variants! {
+    /// Where the current image stays when the canvas changes size, in reading order.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CanvasAnchor {
+        TopLeft,
+        Top,
+        TopRight,
+        Left,
+        #[default]
+        Center,
+        Right,
+        BottomLeft,
+        Bottom,
+        BottomRight,
+    }
 }
 impl CanvasAnchor {
-    pub const ALL: [Self; 9] = [
-        Self::TopLeft,
-        Self::Top,
-        Self::TopRight,
-        Self::Left,
-        Self::Center,
-        Self::Right,
-        Self::BottomLeft,
-        Self::Bottom,
-        Self::BottomRight,
-    ];
     /// Column and row in the 3×3 picker.
     pub fn cell(self) -> [u32; 2] {
         let index = self as u32;

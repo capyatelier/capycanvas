@@ -48,6 +48,9 @@ toolkit, OS handles, filesystem, async runtime, or thread requirement. Target
 bindings live in the app that uses them; no separate binding framework/crate is
 needed for the Rust GTK and Wasm clients.
 
+Picker enums can use `variants!` to keep declaration-order `ALL` arrays with
+their definitions, preserving fixed-size arrays and variant attributes.
+
 `ui_catalog()` describes built-in panels, tool and layer commands,
 brush categories/presets, and [numeric input kind, limits, mapping, units and precision](numeric-controls.md). GTK consumes
 the same typed constants exposed to DOM through the Wasm catalog; hosts supply

@@ -2,26 +2,20 @@
 //! not quantize or reinterpret the retained paint definition.
 use super::*;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ColorInputModel {
-    #[default]
-    DocumentRgb,
-    LinearRgb,
-    SrgbHex,
-    Hsv,
-    Hls,
-    Oklch,
+crate::variants! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ColorInputModel {
+        #[default]
+        DocumentRgb,
+        LinearRgb,
+        SrgbHex,
+        Hsv,
+        Hls,
+        Oklch,
+    }
 }
 impl ColorInputModel {
-    pub const ALL: [Self; 6] = [
-        Self::DocumentRgb,
-        Self::LinearRgb,
-        Self::SrgbHex,
-        Self::Hsv,
-        Self::Hls,
-        Self::Oklch,
-    ];
     pub fn name(self) -> &'static str {
         match self {
             Self::DocumentRgb => "Document RGB",

@@ -4,6 +4,16 @@
 //! dispatch typed actions, refresh changed regions, and feed pen records through
 //! the separate input path. No toolkit, executor, callbacks, or pixel copies.
 
+macro_rules! variants {
+    ($(#[$attr:meta])* $vis:vis enum $name:ident { $($(#[$variant_attr:meta])* $variant:ident),+ $(,)? }) => {
+        $(#[$attr])* $vis enum $name { $($(#[$variant_attr])* $variant),+ }
+        impl $name {
+            pub const ALL: [Self; [$(stringify!($variant)),+].len()] = [$(Self::$variant),+];
+        }
+    };
+}
+pub(crate) use variants;
+
 mod camera;
 mod document_tabs;
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
