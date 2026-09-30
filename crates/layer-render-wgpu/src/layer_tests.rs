@@ -76,13 +76,7 @@ fn pixel(r: &mut WgpuRasterizer, x: usize, y: usize) -> [u8; 4] {
 fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_damage() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-    let make_target = || r.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("retained scene viewport regression"),
-        size: wgpu::Extent3d { width: 512, height: 512, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-        format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST, view_formats: &[],
-    });
+    let make_target = || crate::create_target(&r.device, [512, 512], format, "retained scene viewport regression").0;
     let target = make_target();
     let reference = make_target();
     let buffered = make_target();

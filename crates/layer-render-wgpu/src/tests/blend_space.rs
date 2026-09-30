@@ -263,16 +263,7 @@ fn black_at_half_opacity_over_white_is_middle_gray_only_when_blending_perceptual
             let mut srgb = vec![0; EXTENT[0] as usize * EXTENT[1] as usize * 4];
             r.copy_rgba8_srgb(&mut srgb, EXTENT[0] as usize * 4).unwrap();
             assert!((f32::from(srgb[center]) - expected).abs() <= 1., "{depth:?} {space:?}: read back {}", srgb[center]);
-            let target = r.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("presented gray"),
-                size: wgpu::Extent3d { width: EXTENT[0], height: EXTENT[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
+            let target = crate::create_target(&r.device, [EXTENT[0], EXTENT[1]], wgpu::TextureFormat::Rgba8UnormSrgb, "presented gray").0;
             let mut presenter = crate::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
             presenter.present(&r, &target.create_view(&Default::default()), view, [0.2, 0.3, 0.4, 1.]).unwrap();
             let presented = crate::layer_tests::page_bytes(&r, &target);

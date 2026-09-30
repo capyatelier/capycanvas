@@ -551,16 +551,7 @@ fn replacing_a_displayed_preview_repaints_only_around_either_outline() {
         ..from_bytes(&binary(|x, y| (x0..x1).contains(&x) && (2..6).contains(&y)))
     };
     let device = r.device.clone();
-    let texture = |label| device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d { width: 128, height: 128, depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
+    let texture = |label| crate::create_target(&device, [128, 128], wgpu::TextureFormat::Rgba8UnormSrgb, label).0;
     let (retained, fresh) = (texture("retained outline"), texture("fresh outline"));
     let presenter = |r: &WgpuRasterizer| crate::ViewportPresenter::for_surface(r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
     let mut kept = presenter(&r);

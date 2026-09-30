@@ -1,16 +1,7 @@
 use super::*;
 
 fn target(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
-    r.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("crop shield"),
-        size: wgpu::Extent3d { width: 128, height: 128, depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    })
+    crate::create_target(&r.device, [128, 128], format, "crop shield").0
 }
 
 #[test]

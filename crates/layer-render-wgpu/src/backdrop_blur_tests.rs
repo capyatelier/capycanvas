@@ -7,16 +7,7 @@ use layer_render::{CanvasRenderer, FramePacket, ViewState};
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn texture(r: &WgpuRasterizer, size: [u32; 2]) -> wgpu::Texture {
-    r.device().create_texture(&wgpu::TextureDescriptor {
-        label: Some("backdrop test surface"),
-        size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    })
+    crate::create_target(r.device(), [size[0], size[1]], FORMAT, "backdrop test surface").0
 }
 
 fn view(size: [u32; 2], x: f32) -> ViewState {

@@ -46,6 +46,8 @@ frame timestamps and commit assertions. Collapsed resize fixtures retain the
 nested and outside handle coordinates, width checks and cancellation points.
 Cursor tests observe a frame before asserting that no ink was deposited. Stroke
 selection tests check nonempty live batches; undo/redo compares raster identities.
+Presentation tests use the renderer's `create_target` for their surfaces; preserve
+each test's format and extent, and validate its usage flags on the test GPU.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless

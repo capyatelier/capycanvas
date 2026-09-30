@@ -87,20 +87,7 @@ fn selection_paint_overlay_is_coverage_scaled_and_excluded_from_artwork() {
         protected: false,
         saved_protected: false,
     }));
-    let target = r.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("selection overlay reference"),
-        size: wgpu::Extent3d {
-            width: 128,
-            height: 128,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
+    let target = crate::create_target(&r.device, [128, 128], wgpu::TextureFormat::Rgba8UnormSrgb, "selection overlay reference").0;
     let mut presenter = crate::ViewportPresenter::for_surface(
         &r,
         wgpu::TextureFormat::Rgba8UnormSrgb,

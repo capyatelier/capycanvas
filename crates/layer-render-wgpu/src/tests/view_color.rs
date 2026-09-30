@@ -88,20 +88,7 @@ fn close(actual: &[u8], expected: [u8; 4], context: &str) {
     );
 }
 fn texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
-    r.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("SDR viewing reference"),
-        size: wgpu::Extent3d {
-            width: 256,
-            height: 256,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    })
+    crate::create_target(&r.device, [256, 256], format, "SDR viewing reference").0
 }
 
 #[test]
@@ -179,14 +166,7 @@ fn native_surface_rotation_preserves_artwork_cursor_and_clipped_overview() {
     let mut reference = Vec::new();
     for turns in 0..4 {
         let [width, height] = if turns % 2 == 0 { [192, 128] } else { [128, 192] };
-        let target = r.device().create_texture(&wgpu::TextureDescriptor {
-            label: Some("rotated viewport reference"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let target = crate::create_target(r.device(), [width, height], wgpu::TextureFormat::Rgba8UnormSrgb, "rotated viewport reference").0;
         presenter.set_surface_rotation(turns);
         presenter.present(&r, &target.create_view(&Default::default()), view, [0.04, 0.08, 0.2, 1.]).unwrap();
         let actual = crate::layer_tests::page_bytes(&r, &target);
