@@ -376,12 +376,7 @@ impl DockLayout {
             return Err("Move individual stack members".into());
         }
         let moving = self.node(column).ok_or("Unknown column")?.clone();
-        let before = self.workspace(
-            viewport[0],
-            viewport[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let before = self.resolved(viewport);
         match target {
             DockTarget::Edge {
                 edge: Edge::Left | Edge::Right,
@@ -488,12 +483,7 @@ impl DockLayout {
                 next.replace_column_root(group, id);
             }
             DockTarget::Split { group, edge } => {
-                let after = next.workspace(
-                    viewport[0],
-                    viewport[1],
-                    crate::HEADER_HEIGHT,
-                    crate::STATUS_HEIGHT,
-                );
+                let after = next.resolved(viewport);
                 let width = subtree_bounds(
                     next.node(group)
                         .ok_or("The target column no longer exists")?,
@@ -690,12 +680,7 @@ impl DockLayout {
             .iter()
             .position(|b| b.id == id && matches!(b.edge, Edge::Left | Edge::Right))
             .ok_or("This divider has no side column")?;
-        let resolved = self.workspace(
-            viewport[0],
-            viewport[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let resolved = self.resolved(viewport);
         if let Some(member) = resolved.open_column_at_divider(id) {
             let mut tree = self.node(member).ok_or("Unknown open column")?.clone();
             let height = resolved.collapsed.iter().find_map(|c| c.open.as_ref()
@@ -762,12 +747,7 @@ impl DockLayout {
         {
             return Err("This group has no collapsible column".into());
         }
-        let before = self.workspace(
-            viewport[0],
-            viewport[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let before = self.resolved(viewport);
         let node = self.node(root).ok_or("The column no longer exists")?;
         let bounds = subtree_bounds(node, &before).ok_or("The column is not visible")?;
         let width = if collapsed {
@@ -802,12 +782,7 @@ impl DockLayout {
         Ok(())
     }
     pub(crate) fn column_width_before_resize(&self, root: u32, viewport: [f32; 2]) -> Option<f32> {
-        let geometry = self.workspace(
-            viewport[0],
-            viewport[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let geometry = self.resolved(viewport);
         subtree_bounds(self.node(root)?, &geometry).map(|b| b.width)
     }
 
@@ -867,12 +842,7 @@ impl DockLayout {
         position: [f32; 2],
         viewport: [f32; 2],
     ) -> Option<ResizeCollapse> {
-        let geometry = self.workspace(
-            viewport[0],
-            viewport[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let geometry = self.resolved(viewport);
         let divider = geometry
             .dividers
             .iter()
@@ -1215,7 +1185,7 @@ mod tests {
     use super::*;
     const VIEW: [f32; 2] = [1600., 1000.];
     fn geometry(layout: &DockLayout) -> ResolvedLayout {
-        layout.workspace(VIEW[0], VIEW[1], crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
+        layout.resolved(VIEW)
     }
 
     #[test]

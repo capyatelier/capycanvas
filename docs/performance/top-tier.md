@@ -144,3 +144,19 @@ refinement and keeps backpressure for required raster work; APK SHA-256
 Raw reports are `artifacts/latency-investigation/qualified-25-top-retouch`.
 These successful runs do not establish that the earlier rare Adreno fault is
 fixed, or qualify the other brushes and presentation-paced navigation.
+
+## Shared layout regression comparison
+
+GTK release checks on 2026-09-30 use the NVIDIA RTX PRO 6000 Blackwell Max-Q,
+Vulkan 615.71.09 and a private 120 Hz display. Each mouse/touch scenario runs
+three 5.5-second gestures, with a further alternating repeat. The before build
+is `0d5b6dda`; the candidate shares default-chrome layout calls through an inline
+helper. These input-paced desktop checks do not qualify the reference tablet or
+61 MP canvas. Reports: `artifacts/simplification-cleanup/performance/m27/`.
+
+| Check | Before | After |
+| --- | --- | --- |
+| Floating group presentation, mouse median | 99.491 fps | 99.492 fps |
+| Floating group presentation, touch median | 99.645 fps | 99.643 fps |
+| Largest dispatch p95 in alternating repeat | 0.0730 ms | 0.0740 ms |
+| Largest placement p95 in alternating repeat | 0.00966 ms | 0.00982 ms |

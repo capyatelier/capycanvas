@@ -1403,12 +1403,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Measure once in logical workspace units; all hosts use the same chrome
     /// insets, docking topology, and tile allocation rules.
     pub fn layout(&self, viewport: [f32; 2]) -> ResolvedLayout {
-        self.state.workspace.layout.workspace(
-            viewport[0],
-            viewport[1],
-            HEADER_HEIGHT,
-            STATUS_HEIGHT,
-        )
+        self.state.workspace.layout.resolved(viewport)
     }
     /// Layout-aware hosts retain controls at content_revision and apply these
     /// live dimensions on their display clock. Gesture completion remains full.
@@ -2897,12 +2892,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if changed & LAYOUT != 0
                     && let Some(before) = workspace_before.as_ref()
                 {
-                    let geometry = before.layout.workspace(
-                        viewport[0],
-                        viewport[1],
-                        HEADER_HEIGHT,
-                        STATUS_HEIGHT,
-                    );
+                    let geometry = before.layout.resolved(viewport);
                     self.state
                         .workspace
                         .layout
@@ -12592,7 +12582,7 @@ mod tests {
         ));
         assert_eq!(drawer.columns, vec![vec![Panel::Properties]]);
         let layout = &s.state.workspace.layout;
-        let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
+        let resolved = layout.resolved(viewport);
         let column = &resolved.collapsed[0];
         let expected = column
             .groups

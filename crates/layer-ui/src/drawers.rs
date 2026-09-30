@@ -487,7 +487,7 @@ impl ContentDrawer {
         {
             return None;
         }
-        let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
+        let resolved = layout.resolved(viewport);
         let (mut anchor, edge, axis) = if let DrawerAnchor::Header { id } = self.anchor {
             layout.header.entry(id).ok()?;
             let anchor = layout
@@ -864,12 +864,7 @@ mod tests {
             for viewport in [VIEWPORT, [640.0, 480.0], [320.0, 240.0]] {
                 for heights in [[80.0, 120.0], [700.0, 3000.0]] {
                     let Some(p) = d.placement(&layout, viewport, &heights) else {
-                        let resolved = layout.workspace(
-                            viewport[0],
-                            viewport[1],
-                            HEADER_HEIGHT,
-                            STATUS_HEIGHT,
-                        );
+                        let resolved = layout.resolved(viewport);
                         let source = resolved
                             .groups
                             .iter()

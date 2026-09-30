@@ -73,7 +73,9 @@ asynchronous storage transport rather than reconstructing layout decisions from
 widgets. Routine workspace operations pause input without disabling or
 restyling the editor.
 
-`UiSession::layout` supplies the standard workspace rectangles.
+`UiSession::layout` supplies the standard workspace rectangles through
+`DockLayout::resolved`. Shared layout operations use that default-chrome helper;
+hosts with measured chrome use `DockLayout::workspace`.
 `UiSession::drop_hint` validates a proposed target with the same transactional
 move used on drop; hosts do not clone and probe the layout themselves.
 

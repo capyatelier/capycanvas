@@ -135,12 +135,7 @@ impl DockLayout {
             .filter_map(|p| moving.group_for(p.id).map(|_| p.id))
             .collect();
         let collapsed = self.collapsed.iter().find(|c| c.root == source).unwrap().clone();
-        let geometry = self.workspace(
-            viewport[0],
-            viewport[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let geometry = self.resolved(viewport);
         let mut next = self.clone();
         next.detach(&panels);
         next.reclaim_removed_columns(self, &geometry);
