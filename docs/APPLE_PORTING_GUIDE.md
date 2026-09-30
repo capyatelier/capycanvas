@@ -104,8 +104,8 @@ commands are in [macOS and iPadOS development](development/apple.md).
   handlers; use the UIKit text field with priority key commands. Give it an
   explicit height and assign fonts and placeholders only when they change, or
   size invalidation can loop.
-- **Coverage audit.** Keep `apps/layer-apple/command-coverage.json` in sync with
-  the command catalog and run the audit in the
+- **Coverage audit.** Keep the expected unavailable commands and native handler
+  references in `apps/layer-apple/command-coverage.json` current. Run the audit in the
   [Apple guide](development/apple.md#command-coverage-audit).
 
 ## Writing XCTest journeys

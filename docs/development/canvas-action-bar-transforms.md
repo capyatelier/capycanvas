@@ -368,7 +368,7 @@ Shared Rust and GTK first, then Web and Android, then Apple and Windows ([Apple 
 | --- | --- | --- |
 | F1 | Web | Headless Chrome journeys in `test.mjs` for pen, touch and mouse; the `set_glass` spy; `workspace-motion.sh web` for real input; `device.test.mjs` on Android Chrome |
 | F2 | Android | Non-focusable menus first, so no menu opened from the bar blurs the window. Stylus, finger and mouse `MotionEvent` journeys; screenshots in light and dark |
-| F3 | Apple (macOS, iPadOS) | XCUITests on macOS and a physical iPad; Pencil through the UIKit fixtures in `apps/layer-apple/tests`; `command-coverage.json` |
+| F3 | Apple (macOS, iPadOS) | XCUITests on macOS and a physical iPad; Pencil through the UIKit fixtures in `apps/layer-apple/tests`; shared catalog audit in the [Apple guide](apple.md#command-coverage-audit) |
 | F4 | Windows | Fix the Zen glass return first. UI Automation with `RowPointerDriver.cs` for mouse, touch and pen |
 
 **G. Qualification and documentation**

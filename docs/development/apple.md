@@ -217,9 +217,9 @@ is adopted for either.
 
 ### Command coverage audit
 
-`command-coverage.json` classifies every shared command, panel control,
-preference and property kind with Apple handler and check references. The audit
-fails on catalog or availability drift and on unresolved tool choices:
+`command-coverage.json` records expected unavailable commands and handler/check
+references for panel controls, preferences and properties. The audit checks
+catalog entries, availability and resolved tool choices:
 
 ```sh
 cargo run --locked -p layer-host --example inventory -- --gpu > "$TMPDIR/capy-inventory.json"
