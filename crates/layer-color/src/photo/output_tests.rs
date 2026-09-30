@@ -41,10 +41,6 @@ fn webp_interpretation(channels: SourceChannels, depth: SampleDepth) -> SourceIn
     }
 }
 
-fn webp_options(available: u64) -> WebpEncodeOptions {
-    WebpEncodeOptions::from_memory_budget(PhotoMemoryBudget::from_available_memory(available))
-}
-
 fn riff_chunk<'a>(file: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
     let mut at = 12;
     while at + 8 <= file.len() {
@@ -71,7 +67,7 @@ fn lossless_webp_round_trips_pixels_alpha_profile_and_resolution() {
             .map(|i| (i * 37 % 251 + i / row_bytes * 3) as u8)
             .collect();
         let mut output = Vec::new();
-        write_webp_rows(&mut output, extent, &interpretation, &crate::photo::DeliveryMetadata::resolution(Some(resolution)), webp_options(1 << 30), |y, row| {
+        write_webp_rows(&mut output, extent, &interpretation, &crate::photo::DeliveryMetadata::resolution(Some(resolution)), PhotoMemoryBudget::from_available_memory(1 << 30).encode_bytes, |y, row| {
             row.copy_from_slice(&expected[y as usize * row_bytes..][..row_bytes]);
             Ok(())
         })
@@ -95,7 +91,7 @@ fn lossless_webp_round_trips_pixels_alpha_profile_and_resolution() {
         assert_eq!(photo.source.resolution, Some(resolution));
         assert_eq!(super::test_support::rows(&photo.source).concat(), expected);
         let mut bare = Vec::new();
-        write_webp_rows(&mut bare, [1, 1], &interpretation, &Default::default(), webp_options(1 << 30), |_, row| {
+        write_webp_rows(&mut bare, [1, 1], &interpretation, &Default::default(), PhotoMemoryBudget::from_available_memory(1 << 30).encode_bytes, |_, row| {
             row.fill(200);
             Ok(())
         })
@@ -116,7 +112,7 @@ fn webp_refuses_oversize_unsupported_over_budget_and_cancelled_output() {
         ([64, 64], rgba.clone(), 1024, "memory budget"),
     ] {
         let mut output = Vec::new();
-        let error = write_webp_rows(&mut output, extent, &interpretation, &Default::default(), webp_options(available), |_, _| {
+        let error = write_webp_rows(&mut output, extent, &interpretation, &Default::default(), PhotoMemoryBudget::from_available_memory(available).encode_bytes, |_, _| {
             panic!("a refused export requested pixels")
         })
         .unwrap_err();
@@ -125,7 +121,7 @@ fn webp_refuses_oversize_unsupported_over_budget_and_cancelled_output() {
     }
     let admitted = 64 * 64 * 12 + profile_bytes(&rgba.profile).unwrap().len();
     let fits = |available: usize| {
-        write_webp_rows(Vec::new(), [64, 64], &rgba, &Default::default(), WebpEncodeOptions { codec_bytes: available }, |_, row| {
+        write_webp_rows(Vec::new(), [64, 64], &rgba, &Default::default(), available, |_, row| {
             row.fill(9);
             Ok(())
         })
@@ -134,7 +130,7 @@ fn webp_refuses_oversize_unsupported_over_budget_and_cancelled_output() {
     assert!(fits(admitted - 1).unwrap_err().contains("memory budget"));
     let mut output = Vec::new();
     super::test_support::assert_provider_failure("Export cancelled", |provider| {
-        write_webp_rows(&mut output, [513, 257], &rgba, &Default::default(), webp_options(1 << 30), provider)
+        write_webp_rows(&mut output, [513, 257], &rgba, &Default::default(), PhotoMemoryBudget::from_available_memory(1 << 30).encode_bytes, provider)
     });
     assert!(output.is_empty(), "nothing is encoded after a cancellation");
 }

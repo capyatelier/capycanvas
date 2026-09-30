@@ -327,7 +327,7 @@ fn round_trips(delivery: &DeliveryMetadata) -> Vec<(&'static str, DecodedPhoto)>
     write_jpeg_rows(&mut jpeg, extent, &rgb, delivery, JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()), fill).unwrap();
     files.push(("JPEG", jpeg));
     let mut webp = Vec::new();
-    write_webp_rows(&mut webp, extent, &rgba, delivery, WebpEncodeOptions::from_memory_budget(PhotoMemoryBudget::current()), fill).unwrap();
+    write_webp_rows(&mut webp, extent, &rgba, delivery, PhotoMemoryBudget::current().encode_bytes, fill).unwrap();
     files.push(("WebP", webp));
     let mut pq = Vec::new();
     write_hdr_png_rows(&mut pq, extent, RgbSpace::Srgb, delivery, true, hdr).unwrap();

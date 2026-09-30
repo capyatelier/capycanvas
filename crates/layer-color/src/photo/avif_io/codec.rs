@@ -43,22 +43,7 @@ impl Drop for Picture {
 }
 impl Picture {
     pub fn plane_extent(&self, plane: usize) -> [u32; 2] {
-        if plane == 0 {
-            self.extent
-        } else {
-            [
-                if self.layout == 1 || self.layout == 2 {
-                    self.extent[0].div_ceil(2)
-                } else {
-                    self.extent[0]
-                },
-                if self.layout == 1 {
-                    self.extent[1].div_ceil(2)
-                } else {
-                    self.extent[1]
-                },
-            ]
-        }
+        super::plane_extent(self.extent, self.layout, plane)
     }
     pub fn sample(&self, plane: usize, x: u32, y: u32) -> u16 {
         assert!(plane < 3 && (plane == 0 || self.layout != 0));

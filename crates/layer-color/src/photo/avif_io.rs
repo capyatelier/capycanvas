@@ -41,22 +41,7 @@ impl RawImage {
         Ok(())
     }
     fn plane_extent(&self, plane: usize) -> [u32; 2] {
-        if plane == 0 {
-            self.extent
-        } else {
-            [
-                if matches!(self.layout, 1 | 2) {
-                    self.extent[0].div_ceil(2)
-                } else {
-                    self.extent[0]
-                },
-                if self.layout == 1 {
-                    self.extent[1].div_ceil(2)
-                } else {
-                    self.extent[1]
-                },
-            ]
-        }
+        plane_extent(self.extent, self.layout, plane)
     }
     fn sample(&self, plane: usize, x: u32, y: u32) -> u16 {
         let x = if plane != 0 && matches!(self.layout, 1 | 2) {
@@ -70,6 +55,24 @@ impl RawImage {
             y
         };
         self.pixels[y as usize * self.extent[0] as usize + x as usize][plane]
+    }
+}
+fn plane_extent(extent: [u32; 2], layout: u32, plane: usize) -> [u32; 2] {
+    if plane == 0 {
+        extent
+    } else {
+        [
+            if matches!(layout, 1 | 2) {
+                extent[0].div_ceil(2)
+            } else {
+                extent[0]
+            },
+            if layout == 1 {
+                extent[1].div_ceil(2)
+            } else {
+                extent[1]
+            },
+        ]
     }
 }
 fn pixels(extent: [u32; 2], budget: usize) -> Result<Vec<[u16; 4]>, String> {

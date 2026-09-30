@@ -37,6 +37,7 @@ Native defaults refresh available memory for each operation. iOS queries
 targets use `sysinfo` available memory and its reported cgroup limit where
 available. Hosts with additional process limits should supply the smaller
 remaining allowance explicitly. Zero headroom stays zero.
+Lossless WebP row output takes the budget's `encode_bytes` directly.
 
 Browsers have no reliable cross-browser query for remaining process memory.
 When no measurement is available, the fallback assumes 512 MiB of headroom:

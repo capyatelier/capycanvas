@@ -11,20 +11,6 @@ pub const WEBP_SIZE_LIMIT: &str = "WebP export is limited to 16,384 pixels per s
 const WEBP_ENCODE_BYTES_PER_PIXEL: usize = 12;
 const MEMORY_ERROR: &str = "WebP exceeds the codec memory budget; use a smaller image";
 
-/// Lossless WebP output admission. Hosts can pass their current process memory
-/// allowance instead of relying on a native query or the browser fallback.
-#[derive(Clone, Copy, Debug)]
-pub struct WebpEncodeOptions {
-    pub codec_bytes: usize,
-}
-impl WebpEncodeOptions {
-    pub fn from_memory_budget(budget: PhotoMemoryBudget) -> Self {
-        Self {
-            codec_bytes: budget.encode_bytes,
-        }
-    }
-}
-
 /// Encodes straight 8-bit RGB or RGBA rows as lossless VP8L, with ICC, Exif and
 /// XMP chunks. The encoder needs the whole frame: rows are gathered
 /// first, so provider errors (a cancelled capture) stop before encoding, but
@@ -34,7 +20,7 @@ pub fn write_webp_rows(
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
     metadata: &DeliveryMetadata,
-    options: WebpEncodeOptions,
+    codec_bytes: usize,
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
@@ -55,7 +41,7 @@ pub fn write_webp_rows(
     let admission = (extent[0] as usize * extent[1] as usize)
         .checked_mul(WEBP_ENCODE_BYTES_PER_PIXEL)
         .and_then(|bytes| bytes.checked_add(icc.len() + exif.len() + xmp.len()));
-    if admission.is_none_or(|bytes| bytes > options.codec_bytes) {
+    if admission.is_none_or(|bytes| bytes > codec_bytes) {
         return Err(MEMORY_ERROR.into());
     }
     let len = row_bytes * extent[1] as usize;

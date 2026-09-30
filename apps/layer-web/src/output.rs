@@ -575,7 +575,7 @@ pub async fn raster_worker_output(
                 extent,
                 target,
                 &delivery,
-                layer_color::photo::WebpEncodeOptions::from_memory_budget(raster_project::photo_memory_budget()),
+                raster_project::photo_memory_budget().encode_bytes,
                 rows,
             ),
         }

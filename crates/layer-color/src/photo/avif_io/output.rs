@@ -257,24 +257,11 @@ fn preview_rendition(
         .and_then(|n| n.checked_sub(usize::try_from(scratch).ok()?))
         .ok_or(MEMORY)?;
     let source = read_rendition(std::io::Cursor::new(bytes), limits, cancel, hdr)?.source;
-    let decoder =
-        crate::WorkingDecoder::new(&source.interpretation, RgbSpace::Srgb, Default::default())?;
-    let mut preview = crate::AreaPreview::new(source.extent, bounds)?;
-    let mut row = vec![0; source.row_bytes()];
-    let mut pixels = vec![[0.; 4]; source.extent[0] as usize];
     let mut rows = source.rows();
-    for y in 0..source.extent[1] {
+    crate::preview_encoded_rows(source.extent, bounds, RgbSpace::Srgb, &source.interpretation, |y, row| {
         check_cancel(cancel)?;
-        rows.read(y, &mut row)?;
-        decoder.decode_pixels(&row, &mut pixels)?;
-        for p in &mut pixels {
-            for c in 0..3 {
-                p[c] *= p[3];
-            }
-        }
-        preview.push(&pixels)?;
-    }
-    preview.finish()
+        rows.read(y, row)
+    })
 }
 
 pub(in crate::photo) fn preview(

@@ -167,9 +167,7 @@ impl SnapshotRenderer {
                 extent,
                 target,
                 &metadata,
-                layer_color::photo::WebpEncodeOptions::from_memory_budget(
-                    layer_color::photo::PhotoMemoryBudget::current(),
-                ),
+                layer_color::photo::PhotoMemoryBudget::current().encode_bytes,
                 row,
             )
         })
