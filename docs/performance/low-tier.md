@@ -39,17 +39,17 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Pixel resize after placing the photo at 45% size | 60 | Screen 58.6 presents/s, p99 16.8 ms; renderer 224.6 completed updates/s | Current drag comparison below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
 | Move tool layer drag | 60 | | |
-| Move selected pixels: whole image | 60 | Screen 59.1 presents/s, p99 16.8 ms; renderer 86.6 completed updates/s | Transform damage build below, `move-all-drag` |
-| Move selected pixels: partial selection | 60 | Screen 59.5 presents/s, p99 16.7 ms; renderer 101.3 completed updates/s | Transform damage build below, `move-part-drag` |
-| Move selected pixels: Leave Copy | 60 | Screen 59.2 presents/s, p99 16.9 ms; renderer 73.3 completed updates/s | Transform damage build below, `move-part-leave-copy-drag` |
+| Move selected pixels: whole image | 60 | Screen 59.1 presents/s, p99 16.8 ms; renderer 81.0 completed updates/s | Two-page-refinement qualification below, `move-all-drag` |
+| Move selected pixels: partial selection | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 134.2 completed updates/s | Two-page-refinement qualification below, `move-part-drag` |
+| Move selected pixels: Leave Copy | 60 | Screen 59.3 presents/s, p99 16.7 ms; renderer 131.1 completed updates/s | Two-page-refinement qualification below, `move-part-leave-copy-drag` |
 | Marquee, Lasso or Polygon drag | 60 | | |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
 | Pointwise adjustment slider: Exposure | 60, soft | **Not met.** Screen 52.7 presents/s, p99 33.4 ms; renderer 30.8 completed updates/s | Pointwise graph comparison below |
 | Pointwise chain: Levels, Vibrance, Exposure slider | 60, soft | **Not met.** Screen 57.3 presents/s, p99 33.3 ms; renderer 25.1 completed updates/s, with a 13.9–31.7 range | Pointwise graph comparison below |
 | Other pointwise adjustment sliders | 60, soft | | |
-| Gaussian Blur slider, small radius | 60, soft | **Not met.** Screen 41.6 presents/s, p99 33.5 ms; renderer 30.4 completed updates/s | Spatial graph comparison below |
-| Gaussian Blur slider, large radius | 60, soft | **Not met.** Screen 28.7 presents/s, p99 66.6 ms; renderer 17.7 completed updates/s | Spatial graph comparison below |
+| Gaussian Blur slider, small radius | 60, soft | **Not met.** Screen 50.0 presents/s, p99 33.4 ms; renderer 23.5 completed updates/s | Two-page-refinement qualification below, Navigator open |
+| Gaussian Blur slider, large radius | 60, soft | **Not met.** Screen 42.7 presents/s, p99 50.0 ms; renderer 15.5 completed updates/s | Two-page-refinement qualification below, Navigator open |
 | Other neighbourhood filter sliders: Unsharp Mask, Edge-Preserving Smooth | 60, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 60, soft | | |
 | Fill layer or gradient-fill edit | 60, soft | | |
@@ -130,6 +130,43 @@ Their records are `present-18-crop` and `present-18-navigator`, including its
 `extra` directory. The open-Navigator screen medians span 59.35–59.49/s,
 with p99 intervals 16.74–16.92 ms. Earlier default-panel records retained
 Navigator and are not evidence for a closed-panel workload.
+
+### Two-page-refinement qualification
+
+Measured 2026-09-29 on the 12 MP Perceptual photo at Fit, Navigator open, Stats
+closed, default glass and three warmed five-second gestures per row. Thermal
+status remains zero. This is the build used for the current brush and retouching
+records, APK SHA-256
+`ab0d8facb88f67cfc8da05284c70a639f4e7b0815aaed35ed79029e7365f4333`:
+unminified Java for the white-box harness, optimized release Rust. Screen
+observations use SurfaceFlinger actual-present times; they include native controls
+and do not independently establish canvas scanout. No allocator or PSS sampler
+runs during qualification. Available memory remains above 1 GiB.
+
+| Journey | Completed updates/s, median | Completion gap p99, median | Screen presents/s, median | Screen interval p99, median |
+| --- | ---: | ---: | ---: | ---: |
+| Move whole image | 81.02 | 16.37 ms | 59.12 | 16.82 ms |
+| Move partial selection | 134.19 | 12.36 ms | 59.44 | 16.85 ms |
+| Move partial selection, Leave Copy | 131.10 | 14.52 ms | 59.26 | 16.74 ms |
+| Placed-photo translation | 95.68 | 17.51 ms | 59.48 | 16.94 ms |
+| Placed-photo resize, bar hidden | 87.13 | 18.18 ms | 59.38 | 16.92 ms |
+| Placed-photo resize, bar visible | 88.50 | 17.50 ms | 59.48 | 16.95 ms |
+| Pixel translation | 80.64 | 16.10 ms | 59.34 | 16.91 ms |
+| Pixel resize: Free | 72.79 | 17.16 ms | 59.42 | 16.82 ms |
+| Pixel transform: Distort | 63.80 | 17.85 ms | 59.42 | 16.86 ms |
+| Pixel transform: Warp | 62.44 | 18.64 ms | 59.45 | 16.73 ms |
+| Gaussian Blur, small radius | 23.48 | 71.39 ms | 49.95 | 33.37 ms |
+| Gaussian Blur, large radius | 15.51 | 124.01 ms | 42.67 | 49.98 ms |
+
+The Move, placement and transform screen-cadence measurements pass. Navigator-open
+Distort, Free and visible-bar placement remain below the old matched control's
+77.33 / 78.80 / 90.59 completed updates/s. Both Gaussian rows fail the soft motion
+target; no hardware calculation grants a waiver. The older spatial-filter
+comparison uses a different camera and panel configuration. These runs contain
+Gaussian sliders; they do not requalify the Exposure rows.
+
+Raw records are `artifacts/latency-investigation/two-25-geometry`;
+the analysis is `two-25-geometry-summary.txt`.
 
 ### Warp contour qualification
 
@@ -386,13 +423,51 @@ available. These moving strokes do not meet 60/s.
 Elapsed render-owner callbacks have medians of 32–33 ms at 50% and 48–49 ms
 at 100%, while actual owner-thread CPU time is about 15 ms in both cases.
 Presentation calls account for 17–18 ms and 34–35 ms respectively. This
-distinguishes waiting from CPU execution; GPU execution and presentation
-scheduling still need separate attribution. The matching 100 ms paused contacts
+distinguishes waiting from CPU execution. The matching 100 ms paused contacts
 have median first-GPU-completion latency of 90–95 ms and 111–127 ms. Few or no
 fresh completions fall inside those short contact windows, so their per-second
 counts cannot be compared with continuous strokes. Paused settling is 732–845
 ms at 50% and 583–626 ms at 100%. Raw reports are
 `artifacts/latency-investigation/two-25-stack-{50,100}-{constant,pauses}`.
+
+### GPU attribution with Stats closed
+
+Separate Android ATrace diagnostics on 2026-09-29 enable the existing bounded
+GPU timestamps without opening Stats. They preserve the camera and default
+workspace but add query overhead, so their rates do not qualify targets.
+Observations are matched to renderer frame IDs inside the input window; counter
+publication time can fall after motion. Values below are per-phase medians from
+one five-second stroke per configuration, with 242 / 148 / 98 drawing samples.
+GPU intervals include inter-submission scheduling gaps and are not hardware
+occupancy measurements. Independently aggregated medians need not add up.
+
+| Configuration | Drawing GPU interval | Paint | Preview | Composition | Viewport GPU interval |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| One photo, Fit | 18.42 ms | 7.80 ms | 6.18 ms | 4.58 ms | 1.28 ms |
+| Eight photos, 50% | 30.19 ms | 7.06 ms | 8.18 ms | 15.37 ms | 3.78 ms |
+| Eight photos, 100% | 40.69 ms | 7.07 ms | 7.79 ms | 27.56 ms | 9.22 ms |
+
+The stacked configurations retain composition branches: eight at 50% and eleven
+at 100%, including the overview. Therefore these spans do not establish that all
+unchanged layers are recomposed. Source preparation, changed-region composition,
+mip reduction and overview work require further attribution. A linear-blending
+100% control still spends 26.68 ms in composition. Disabling extrapolation still
+spends 7.37 ms in preview: uncommitted real contacts also require a preview.
+Neither control establishes a path to 60/s.
+
+Two-page idle composition intervals have medians near 2.5 ms for the fitted
+single-photo case and 18 ms for the stacked cases. The single-photo span alone
+does not explain the matched added-completion p95 miss; scheduling and
+completion observation remain part of that investigation.
+
+Untraced checks of this diagnostic change allocate no timestamp resources and
+measure fresh updates/s of 53.85 (53.83–54.84), 29.85 (29.48–30.03) and
+19.54 (19.52–19.54) for Fit, 50% and 100%, respectively. All remain below 60/s.
+Build SHA-256:
+`4f5d2e999f0b338ae3c681c56218ef6b9346159f6cf28c762d6144a314010bfb`.
+Raw records are `artifacts/latency-investigation/phase-26-{fit,stack50,stack100,fast,slow}`,
+`phase-26-{linear100,no-prediction100}` and `phase-26-untraced-{fit,stack50,stack100}`.
+The frame-ID analysis is `analyze-phase-26.py`.
 
 ## Input during Healing finalization
 

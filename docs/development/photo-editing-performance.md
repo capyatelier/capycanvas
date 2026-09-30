@@ -57,3 +57,21 @@ Apply and the complete merge/undo memory matrix remain to be qualified.
 - **GTK Transform** on `photo24` presents below 120 fps. This was already so before M2.
 - **GTK window resize** under the test runner's `color-mgmt` presents at 45–55 Hz in headless Mutter.
 - **Pass Through groups:** checkpoints stay on a group's direct children, so a Pass Through group recomposes more of its surroundings than needed.
+
+## 5. Cold shader readiness on GTK
+
+The 61 MP navigation fixture has a 9504 × 6336 U16 ProPhoto document, 31 empty
+paint layers and five effects, on a private 1600 × 1000 at 120 Hz Mutter display.
+Three alternating old/current pairs on 2026-09-29 use a fresh private
+`XDG_CACHE_HOME` and NVIDIA shader-cache path for every run. All six journeys
+pass. Old readiness is 6.25 / 6.30 / 6.33 seconds; the two-page-refinement build
+is 8.47 / 9.65 / 9.73 seconds. Renderer-owned storage falls from about 2,245 to
+1,321 MiB. Neither storage figure is process PSS.
+
+`startup_ready_ms` waits for all queued shaders, pending edits and frame work to
+finish. It is not the time to the first visible photo and cannot directly qualify
+that response target. The cold readiness regression remains open; attribute
+document-critical compilation separately from optional background compilation
+before changing startup requirements. Shared user shader caches cannot establish
+a cold comparison. Records are
+`artifacts/latency-investigation/two-25-private-startup-{old,current}-{0,1,2}.json`.

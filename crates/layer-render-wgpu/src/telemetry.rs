@@ -41,7 +41,7 @@ impl Telemetry {
         encoder: &mut wgpu::CommandEncoder,
         frame: u64,
     ) {
-        if !self.enabled || !self.supported {
+        if !(self.enabled || crate::performance_trace::enabled()) || !self.supported {
             return;
         }
         let gpu = self.gpu.get_mut().unwrap();
@@ -74,7 +74,7 @@ impl Telemetry {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
     ) {
-        if !self.enabled || !self.supported || !crate::performance_trace::enabled() {
+        if !self.supported || !crate::performance_trace::enabled() {
             return;
         }
         let gpu = self.gpu.get_mut().unwrap();

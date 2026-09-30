@@ -123,10 +123,12 @@ smudge and Liquify presets. The photo opens as a Perceptual document;
 `--blending linear` measures it in linear light. The benchmark draws a 200 Hz
 stylus ellipse at Fit zoom, three 10 s strokes, with the default 16 ms
 prediction.
-Qualification runs keep the default workspace. `--stats` opens Stats and enables
-GPU timestamp sampling; use it with `--trace` for phase attribution. Record these
-diagnostic runs separately: the panel and timing queries add work. Older runs
-without a `stats_panel` field always opened Stats.
+Qualification runs keep the default workspace. `--trace` enables bounded GPU
+timestamps and phase attribution without opening Stats. `--stats` opens Stats
+and enables timestamp sampling even without a trace. Record diagnostic runs
+separately: timing queries add work, and opening the panel also changes the work
+area and Fit camera. Older runs without a `stats_panel` field always opened
+Stats.
 Keep the whole stroke footprint inside the photo for sustained painting tests.
 Choose `--radius-x` and `--radius-y` from the photo's displayed bounds and brush
 radius; the default work-area ellipse can leave a small Fit-view canvas. Compare
