@@ -16,7 +16,6 @@ mod imp {
         pub slider: OnceCell<gtk::Scale>,
         pub spin: OnceCell<gtk::SpinButton>,
         pub steps: OnceCell<[gtk::Button; 2]>,
-        pub interacting: Cell<bool>,
         pub compact: Cell<bool>,
         pub readout_scale: Cell<f64>,
         pub value_label: OnceCell<gtk::Label>,
@@ -33,7 +32,6 @@ mod imp {
         pub width_reserve: OnceCell<gtk::Widget>,
         pub popover: OnceCell<gtk::Popover>,
         pub popover_control: OnceCell<super::NumberControl>,
-        pub interaction_end_pending: Cell<bool>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for NumberControl {
@@ -53,9 +51,6 @@ mod imp {
             SIGNALS.get_or_init(|| {
                 vec![
                     glib::subclass::Signal::builder("value-changed").build(),
-                    glib::subclass::Signal::builder("interaction")
-                        .param_types([u32::static_type()])
-                        .build(),
                 ]
             })
         }
@@ -181,9 +176,6 @@ impl NumberControl {
             attrs.insert(gtk::pango::AttrFloat::new_scale(scale));
             label.set_attributes(Some(&attrs));
         }
-    }
-    pub fn value_button(&self) -> gtk::Button {
-        self.imp().display.get().unwrap().clone()
     }
     pub fn set_slider_visible(&self, visible: bool) {
         if let Some(slider) = self.imp().slider.get() {
@@ -534,74 +526,8 @@ impl NumberControl {
             control.imp().slider.set(slider).unwrap();
         }
         control.set_value(spec.min);
-        // Observe native input without claiming the sequence from GtkRange or
-        // GtkSpinButton. Hosts may coalesce the resulting value changes into a
-        // single undo step; the widget still owns native dragging/repetition.
-        let events = gtk::EventControllerLegacy::new();
-        events.set_propagation_phase(gtk::PropagationPhase::Capture);
-        events.connect_event(glib::clone!(
-            #[weak]
-            control,
-            #[upgrade_or]
-            glib::Propagation::Proceed,
-            move |_, event| {
-                use gtk::gdk::EventType as E;
-                match event.event_type() {
-                    E::ButtonPress
-                        if event
-                            .downcast_ref::<gtk::gdk::ButtonEvent>()
-                            .is_some_and(|e| e.button() == 1) =>
-                    {
-                        control.begin_interaction()
-                    }
-                    E::TouchBegin => control.begin_interaction(),
-                    E::ButtonRelease
-                        if event
-                            .downcast_ref::<gtk::gdk::ButtonEvent>()
-                            .is_some_and(|e| e.button() == 1) =>
-                    {
-                        control.defer_interaction_end()
-                    }
-                    E::TouchEnd => control.defer_interaction_end(),
-                    E::TouchCancel => control.end_interaction(true),
-                    E::KeyPress => {
-                        if let Some(e) = event.downcast_ref::<gtk::gdk::KeyEvent>() {
-                            match e.keyval() {
-                                gtk::gdk::Key::Escape => control.end_interaction(true),
-                                gtk::gdk::Key::Left
-                                | gtk::gdk::Key::Right
-                                | gtk::gdk::Key::Up
-                                | gtk::gdk::Key::Down
-                                | gtk::gdk::Key::Page_Up
-                                | gtk::gdk::Key::Page_Down => control.begin_interaction(),
-                                _ => (),
-                            }
-                        }
-                    }
-                    E::KeyRelease => {
-                        if event.downcast_ref::<gtk::gdk::KeyEvent>().is_some_and(|e| {
-                            matches!(
-                                e.keyval(),
-                                gtk::gdk::Key::Left
-                                    | gtk::gdk::Key::Right
-                                    | gtk::gdk::Key::Up
-                                    | gtk::gdk::Key::Down
-                                    | gtk::gdk::Key::Page_Up
-                                    | gtk::gdk::Key::Page_Down
-                            )
-                        }) {
-                            control.defer_interaction_end();
-                        }
-                    }
-                    _ => (),
-                }
-                glib::Propagation::Proceed
-            }
-        ));
-        control.add_controller(events);
         control.connect_unmap(|control| {
             control.cancel_edit();
-            control.end_interaction(true);
         });
         control
     }
@@ -702,9 +628,7 @@ impl NumberControl {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_, _, dy| {
-                control.begin_interaction();
                 control.apply(NumericOperation::Step { steps: -dy });
-                control.defer_interaction_end();
                 glib::Propagation::Stop
             }
         ));
@@ -760,49 +684,6 @@ impl NumberControl {
             false,
             glib::closure_local!(move |s: Self| f(&s)),
         );
-    }
-    pub fn is_interacting(&self) -> bool {
-        self.imp().interacting.get()
-    }
-    pub fn connect_interaction(&self, f: impl Fn(&Self, layer_ui::ContactPhase) + 'static) {
-        self.connect_closure(
-            "interaction",
-            false,
-            glib::closure_local!(move |s: Self, phase: u32| {
-                f(
-                    &s,
-                    match phase {
-                        0 => layer_ui::ContactPhase::Down,
-                        1 => layer_ui::ContactPhase::Up,
-                        _ => layer_ui::ContactPhase::Cancel,
-                    },
-                );
-            }),
-        );
-    }
-    fn defer_interaction_end(&self) {
-        self.imp().interaction_end_pending.set(true);
-        glib::idle_add_local_once(glib::clone!(
-            #[weak(rename_to=control)]
-            self,
-            move || if control.imp().interaction_end_pending.replace(false) {
-                control.end_interaction(false);
-            }
-        ));
-    }
-    fn begin_interaction(&self) {
-        if self.imp().interaction_end_pending.replace(false) {
-            self.end_interaction(false);
-        }
-        if !self.imp().interacting.replace(true) {
-            self.emit_by_name::<()>("interaction", &[&0u32]);
-        }
-    }
-    fn end_interaction(&self, cancel: bool) {
-        self.imp().interaction_end_pending.set(false);
-        if self.imp().interacting.replace(false) {
-            self.emit_by_name::<()>("interaction", &[&if cancel { 2u32 } else { 1u32 }]);
-        }
     }
     /// Accept text typed into the field that it has not committed yet.
     pub fn commit_text(&self) {

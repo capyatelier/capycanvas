@@ -13,7 +13,6 @@ mod imp {
         pub tabbed: Cell<bool>,
         pub style: Cell<TileStyle>,
         pub tiles: RefCell<Vec<ToolbarTile>>,
-        pub projection: RefCell<Option<layer_ui::TileLayout>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for TileStrip {
@@ -67,16 +66,14 @@ mod imp {
                 Axis::Horizontal
             };
             let children = self.children.borrow();
-            let layout = self.projection.borrow().clone().unwrap_or_else(|| {
-                toolbar_tile_layout(
-                    width as f32,
-                    height as f32,
-                    axis,
-                    &self.tiles.borrow(),
-                    !self.tabbed.get(),
-                    self.style.get(),
-                )
-            });
+            let layout = toolbar_tile_layout(
+                width as f32,
+                height as f32,
+                axis,
+                &self.tiles.borrow(),
+                !self.tabbed.get(),
+                self.style.get(),
+            );
             let allocate = crate::workspace::allocate_at;
             for (child, bounds) in children.iter().zip(layout.tiles) {
                 if let Some(component) =
@@ -153,12 +150,6 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl TileStrip {
-    pub fn set_projection(&self, layout: layer_ui::TileLayout) {
-        if self.imp().projection.borrow().as_ref() != Some(&layout) {
-            *self.imp().projection.borrow_mut() = Some(layout);
-            self.queue_allocate();
-        }
-    }
     pub fn set_tiles(&self, tiles: &[ToolbarTile]) {
         *self.imp().tiles.borrow_mut() = tiles.to_vec();
         self.queue_allocate();

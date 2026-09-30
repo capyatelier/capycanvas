@@ -56,6 +56,10 @@ private-compositor runner:
 bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_modes
 ```
 
+Numeric widget changes use `native_number_controls`, `native_slider_feedback`
+and the toolbar component mouse/touch, pen and value-control journeys. They cover
+both themes, editing, slider feedback, popovers and toolbar allocation.
+
 [`workspace-motion.sh`](../../tools/performance/workspace-motion.sh) builds the
 release tests, starts a private D-Bus session, headless Mutter and PipeWire, and
 prints the run directory that holds its logs, input records and fresh storage.
