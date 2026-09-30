@@ -21,10 +21,6 @@ fn command_catalog_covers_live_commands_and_keeps_legacy_bindings() {
             assert!(!ids.iter().any(|v| **v == id), "retired {command:?}");
         }
     }
-    assert_eq!(
-        catalog.iter().find(|d| d.id == "canvas.pan").unwrap().kind,
-        CommandKind::Held
-    );
     assert!(s.execute_catalog_command("canvas.pan", None).is_err());
     assert!(s.execute_catalog_command("complete_request", None).is_err());
 }
@@ -295,7 +291,6 @@ fn command_opener_works_from_text_focus_without_stealing_plain_typing() {
         .into_iter()
         .find(|d| d.id == "command.undo")
         .unwrap();
-    assert_eq!(undo.history, CommandHistory::Native);
     assert!(!undo.enabled, "text focus must not silently undo artwork");
     // A popup may own the opener's release; closing cannot leave repeat stuck.
     search_action(&mut s, CommandSearchAction::Close);

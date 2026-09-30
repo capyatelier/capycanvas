@@ -68,15 +68,6 @@ impl ToolCategory {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandKind {
-    Instant,
-    Toggle,
-    Parameter,
-    Held,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandFocus {
@@ -84,28 +75,6 @@ pub enum CommandFocus {
     Canvas,
     Palette,
     Text,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandHistory {
-    /// The existing dispatcher/form owns history policy for this operation.
-    Inherit,
-    None,
-    Document,
-    Workspace,
-    Palette,
-    Native,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandTarget {
-    Application,
-    Document,
-    ActiveLayer,
-    Workspace,
-    Palette,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -124,10 +93,6 @@ pub struct CommandDescriptor {
     /// Concise behavior/scope help, or the menu location when available.
     /// Empty when there is nothing useful beyond the label; never filler.
     pub description: String,
-    pub kind: CommandKind,
-    pub target: CommandTarget,
-    pub history: CommandHistory,
-    pub repeat: bool,
     pub enabled: bool,
     pub disabled_reason: Option<String>,
     pub selected: bool,
@@ -271,99 +236,6 @@ fn entry(
         _ => label.to_owned(),
     };
     let label = presentation_label.as_str();
-    let kind = if selected.is_some() {
-        CommandKind::Toggle
-    } else {
-        CommandKind::Instant
-    };
-    let target = match &action {
-        UiAction::Layer { .. } => CommandTarget::ActiveLayer,
-        UiAction::Customize { .. }
-        | UiAction::WorkspaceManager { .. }
-        | UiAction::Invoke { command: CommandId::ShowCanvasActionBar } => CommandTarget::Workspace,
-        UiAction::Color {
-            action: ColorAction::Library { .. },
-        } => CommandTarget::Palette,
-        UiAction::Invoke {
-            command:
-                CommandId::Settings
-                | CommandId::KeyboardShortcuts
-                | CommandId::About
-                | CommandId::Website
-                | CommandId::SourceCode
-                | CommandId::SearchCommands
-                | CommandId::NewWindow,
-        } => CommandTarget::Application,
-        _ => CommandTarget::Document,
-    };
-    let history = match &action {
-        UiAction::Layer {
-            action: LayerAction::Tool { .. },
-        } => CommandHistory::None,
-        UiAction::Layer { .. } | UiAction::Effect { .. } | UiAction::Selection { .. } => {
-            CommandHistory::Document
-        }
-        UiAction::Invoke {
-            command:
-                CommandId::Undo
-                | CommandId::Redo
-                | CommandId::AddLayer
-                | CommandId::DeleteLayer
-                | CommandId::RaiseLayer
-                | CommandId::LowerLayer
-                | CommandId::ClearLayer
-                | CommandId::FillSelection
-                | CommandId::MaskSelection
-                | CommandId::UseReferenceBelow
-                | CommandId::ClearSelected
-                | CommandId::ClearOutside
-                | CommandId::CopySelectionToLayer
-                | CommandId::CutSelectionToLayer
-                | CommandId::RevertToOriginal
-                | CommandId::MergeDown
-                | CommandId::MergeGroup
-                | CommandId::MergeVisible
-                | CommandId::FlattenImage
-                | CommandId::StampVisible
-                | CommandId::NewDodgeBurnLayer
-                | CommandId::BlendPerceptual
-                | CommandId::BlendLinear
-                | CommandId::LoadSelectionLayer
-                | CommandId::InvertSelectionLayer
-                | CommandId::InvertLayerMask
-                | CommandId::LayerMaskEnabled
-                | CommandId::ApplyLayerMask
-                | CommandId::CropCanvasToSelection
-                | CommandId::RotateImageLeft
-                | CommandId::RotateImageRight
-                | CommandId::RotateImage180
-                | CommandId::FlipImageHorizontal
-                | CommandId::FlipImageVertical
-                | CommandId::Trim
-                | CommandId::RevealAll
-                | CommandId::SelectAll
-                | CommandId::Deselect
-                | CommandId::InvertSelection,
-        } => CommandHistory::Document,
-        UiAction::Invoke {
-            command: CommandId::UndoWorkspace | CommandId::RedoWorkspace | CommandId::ShowCanvasActionBar,
-        }
-        | UiAction::Customize { .. } => CommandHistory::Workspace,
-        UiAction::Color {
-            action:
-                ColorAction::Library {
-                    action:
-                        ColorLibraryAction::UndoReorder { .. } | ColorLibraryAction::RedoReorder { .. },
-                },
-        } => CommandHistory::Palette,
-        _ => CommandHistory::Inherit,
-    };
-    let repeat = matches!(
-        &action,
-        UiAction::Invoke {
-            command: CommandId::Undo | CommandId::Redo
-        } | UiAction::StepToolSetting { .. }
-    );
     let shortcut = settings
         .action_keys(&action, platform)
         .into_iter()
@@ -433,10 +305,6 @@ fn entry(
             label: label.into(),
             category: category.into(),
             description: action_description(&action).into(),
-            kind,
-            target,
-            history,
-            repeat,
             enabled,
             disabled_reason: None,
             selected: selected.unwrap_or(false),
@@ -913,7 +781,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             platform,
         );
         pan.descriptor.id = "canvas.pan".into();
-        pan.descriptor.kind = CommandKind::Held;
         pan.descriptor.description =
             "Temporarily pan the view; release to return to the tool.".into();
         pan.descriptor.shortcut = settings.shortcut_label("canvas.pan", platform);
@@ -942,7 +809,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let mut held = entry(&definition.label, "Canvas", *action, enabled, None, settings, platform);
                     held.descriptor.disabled_reason = reason;
                     held.descriptor.id = definition.id.clone();
-                    held.descriptor.kind = CommandKind::Held;
                     held.descriptor.description = if momentary {
                         format!("Turn on {target} until you release the key.")
                     } else {
@@ -1019,8 +885,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         "Restore the previous color order in this palette."
                     }
                     .into();
-                    e.descriptor.target = CommandTarget::Palette;
-                    e.descriptor.history = CommandHistory::Palette;
                     e.descriptor.enabled =
                         self.state.colors.library.can_undo_reorder(palette, redo);
                     e.descriptor.disabled_reason =
@@ -1037,7 +901,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if let Some(e) = entries.iter_mut().find(|e| e.descriptor.id == id) {
                     e.descriptor.label = label.into();
                     e.descriptor.category = "Text editing".into();
-                    e.descriptor.history = CommandHistory::Native;
                     e.descriptor.enabled = false;
                     e.descriptor.disabled_reason =
                         Some("Close command search to undo or redo in the text field".into());
@@ -1449,7 +1312,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .iter()
             .filter_map(|entry| {
                 let d = &entry.descriptor;
-                if d.kind == CommandKind::Held || d.id == "command.search_commands" {
+                if entry.action.is_none() || d.id == "command.search_commands" {
                     return None;
                 }
                 if d.category == "Brushes" && matches!(terms.trim(), "brush" | "brushes") {
@@ -1668,7 +1531,6 @@ fn parameter_entry(
     let mut item = entry(&format!("{label}…"), category, action, enabled, None, settings, platform);
     item.search.push_str(" set adjust");
     item.descriptor.id = id;
-    item.descriptor.kind = CommandKind::Parameter;
     // Compact toolbar readouts round to tenths, which would misstate
     // bounds such as a pressure minimum of 0.25. Keep schema precision.
     let number = |value| {

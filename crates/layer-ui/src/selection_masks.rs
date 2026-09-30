@@ -18,7 +18,6 @@ pub enum SelectionMenu {
 pub struct SelectionDisplayOptions {
     pub outline: bool,
     pub overlay: bool,
-    pub protected: bool,
     pub color: [f32; 4],
 }
 impl Default for SelectionDisplayOptions {
@@ -26,7 +25,6 @@ impl Default for SelectionDisplayOptions {
         Self {
             outline: true,
             overlay: true,
-            protected: true,
             color: [1., 0., 0., 0.5],
         }
     }

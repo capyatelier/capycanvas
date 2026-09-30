@@ -70,8 +70,7 @@ roll, as Apple documents in
   get new identities. A correction never overwrites an explicit later edit of the
   same point.
 - Retention is bounded (4096 UIKit observations, 8192 engine tokens). On
-  overflow the oldest token is released with its last known values;
-  `EngineMetrics` counts corrected samples and expired estimates. Blur and
+  overflow the oldest token is released with its last known values. Blur and
   cancellation release the contact's tokens.
 
 ## Checks

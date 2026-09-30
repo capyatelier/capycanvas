@@ -305,7 +305,7 @@ Each command also publishes `disabled_reason`: the text
 is always present, so a retained-model diff changes one field rather than
 replacing the command object. The reason stays steady with `enabled` during a
 contact. Hosts show it as the tooltip, hover text or tap response of a disabled
-control; the native hosts' lazy `canvas_bar_reason` query returns the same text.
+control.
 
 Canvas gestures that would change nothing say why through `UiState.notice`,
 published under `regions::HOST`:

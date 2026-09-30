@@ -9,7 +9,7 @@ use crate::brush::{
 };
 use crate::feedback::{
     FeedbackConfigError, InstantFeedbackConfig, MAX_FINALIZATION_LAG_MICROS, PredictionState,
-    TipSource, finalized_count, surface_distance,
+    TipSource, finalized_count,
 };
 use crate::input::{
     InputConsumer, PenEvent, PenPhase, PressureCurve, SampleFlags, StrokeBuilder, ToolKind,
@@ -60,17 +60,10 @@ const MAX_SMUDGE_DAMAGE_DIAMETERS_SQUARED: f32 = 4.0;
 pub struct EngineMetrics {
     pub input_events: u64,
     pub last_consumed_paint_ns: u64,
-    pub stale_transform_fallbacks: u64,
     pub frames: u64,
     pub committed_strokes: u64,
-    pub feedback_frames: u64,
     pub platform_prediction_frames: u64,
     pub engine_prediction_frames: u64,
-    pub preview_dabs: u64,
-    pub last_endpoint_correction_surface_px: f32,
-    pub maximum_endpoint_correction_surface_px: f32,
-    pub corrected_input_samples: u64,
-    pub expired_input_estimates: u64,
 }
 
 /// Why a stroke starting now would not paint as the brush is configured.
@@ -147,7 +140,6 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     contact_settings: Option<ContactSettings>,
     view: ViewState,
     transforms: VecDeque<ViewTransform>,
-    document_view_revision: u64,
     /// The live clone stroke's document offset.
     clone_stroke: Option<[f32; 2]>,
     retouch_points: Vec<layer_core::Point>,
@@ -292,7 +284,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             raster_dirty: false,
             animation_origin_ns: None,
             animation_time: 0.,
-            document_view_revision: 0,
             metrics: EngineMetrics::default(),
         })
     }
@@ -1126,19 +1117,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         // canvas composition is document-space and remains reusable.
     }
 
-    /// Publish a prepared document into an existing editor. Preparation uses
-    /// its own clock/view; neither may leak into the interactive session.
-    pub fn start_document_view(&mut self, view: ViewState, input_transform: ViewTransform) {
-        self.transforms.clear();
-        self.queued_contacts.clear();
-        self.contact_settings = None;
-        self.estimates.clear();
-        self.document_view_revision = input_transform.revision;
-        self.animation_origin_ns = None;
-        self.animation_time = 0.;
-        self.set_view(view, input_transform);
-    }
-
     pub fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), B::Error> {
         self.view.width_px = width;
         self.view.height_px = height;
@@ -1664,9 +1642,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn process_event(&mut self, event: PenEvent) -> Result<(), EngineError<B::Error>> {
-        if event.view_revision < self.document_view_revision {
-            return Ok(());
-        }
         self.metrics.input_events = self.metrics.input_events.saturating_add(1);
         if matches!(event.phase, PenPhase::Down | PenPhase::Move) && !event.flags.contains(SampleFlags::PREDICTED) {
             self.metrics.last_consumed_paint_ns = self.metrics.last_consumed_paint_ns.max(event.timestamp_ns);
@@ -1681,8 +1656,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .find(|item| item.revision == event.view_revision)
             .copied()
             .unwrap_or_else(|| {
-                self.metrics.stale_transform_fallbacks =
-                    self.metrics.stale_transform_fallbacks.saturating_add(1);
                 *self
                     .transforms
                     .back()
@@ -2205,14 +2178,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         if self.dabs.len() > start {
             self.push_active_preview(start);
-            let correction =
-                surface_distance(modeled_endpoint, endpoint, self.view.document_to_surface);
-            self.metrics.feedback_frames = self.metrics.feedback_frames.saturating_add(1);
-            self.metrics.last_endpoint_correction_surface_px = correction;
-            self.metrics.maximum_endpoint_correction_surface_px = self
-                .metrics
-                .maximum_endpoint_correction_surface_px
-                .max(correction);
             match estimate.source {
                 TipSource::Platform => {
                     self.metrics.platform_prediction_frames =
@@ -2249,10 +2214,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 damage,
             },
         );
-        self.metrics.preview_dabs = self
-            .metrics
-            .preview_dabs
-            .saturating_add((self.dabs.len() - start) as u64);
     }
 
     fn build_full_scene(&mut self) {
@@ -2582,6 +2543,7 @@ mod tests {
     include!("canvas_fullscreen_tests.rs");
     include!("recording/canvas_tests.rs");
     use super::*;
+    use crate::feedback::surface_distance;
     use crate::input::{InputProducer, SampleFlags, ToolKind, input_queue};
     use crate::test_support::{event, view};
     use layer_core::{AssetId, DefaultBrushPreset, Point, default_brush};
@@ -3151,33 +3113,6 @@ mod tests {
         assert_eq!(canvas.metrics().committed_strokes, 1);
         assert!(canvas.undo().unwrap());
         assert!(canvas.redo().unwrap());
-    }
-
-    #[test]
-    fn document_adoption_restarts_animation_and_rejects_previous_view_input() {
-        let (mut input, mut canvas) = engine("adoption", 128, 128);
-        canvas.render_frame_at(0).unwrap();
-        canvas.start_document_view(
-            view(128, 128),
-            ViewTransform {
-                revision: 9,
-                ..ViewTransform::IDENTITY
-            },
-        );
-        input.push(event(1, PenPhase::Down, 20.)).unwrap();
-        input.push(event(2, PenPhase::Up, 40.)).unwrap();
-        canvas.render_frame_at(900_000_000_000).unwrap();
-        assert_eq!(canvas.backend().time_seconds, 0.);
-        assert!(
-            canvas
-                .document()
-                .target_raster(canvas.document().active_target())
-                .unwrap()
-                .is_empty()
-        );
-        canvas.render_frame_at(901_000_000_000).unwrap();
-        assert_eq!(canvas.backend().time_seconds, 1.);
-        assert_eq!(canvas.animation_time(), 1.);
     }
 
     #[test]
@@ -4526,7 +4461,6 @@ mod tests {
             input.push(correction).unwrap();
             engine.render_frame().unwrap();
             assert_eq!(engine.builder.real_points()[0].pressure, 0.2);
-            assert_eq!(engine.metrics().corrected_input_samples, 1);
             assert!(
                 engine.backend().saw_reset,
                 "rebuild corrected persistent ink"
@@ -4595,7 +4529,6 @@ mod tests {
         assert!((second.points[0].pressure - 0.512).abs() < 1e-6);
         assert_eq!(engine.brush().diameter, 7.);
         assert_eq!(engine.settings.pressure.gamma, 1.);
-        assert_eq!(engine.metrics.stale_transform_fallbacks, 0);
         assert!(engine.queued_contacts.is_empty());
         assert!(engine.undo().unwrap());
         assert!(engine.undo().unwrap());
@@ -4660,7 +4593,6 @@ mod tests {
             assert_eq!(corrected.pressure, 0.9);
             assert_eq!(corrected.tilt, [0.2, -0.3]);
             assert_eq!(corrected.twist, 1.7);
-            assert_eq!(engine.metrics.stale_transform_fallbacks, 0);
             let mut up = event(3, PenPhase::Up, -480.);
             up.surface_position.y = -284.;
             up.view_revision = 31;
@@ -5471,7 +5403,6 @@ mod tests {
         producer.push(predicted).unwrap();
         engine.render_frame().unwrap();
         assert!(engine.backend().preview.is_empty());
-        assert_eq!(engine.metrics().feedback_frames, 0);
     }
 
     #[test]

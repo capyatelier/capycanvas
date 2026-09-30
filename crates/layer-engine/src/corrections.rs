@@ -34,7 +34,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         // bound also protects hosts whose input driver stops sending updates.
         if self.estimates.len() >= 8192 {
             self.estimates.pop_first();
-            self.metrics.expired_input_estimates += 1;
         }
         self.estimates.insert(
             (event.device_id, event.sequence),
@@ -97,7 +96,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 }
             }
             if changed {
-                self.metrics.corrected_input_samples += 1;
                 if active {
                     if estimate.index == 0 {
                         self.reanchor_clone_stroke();

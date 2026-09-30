@@ -84,7 +84,7 @@ pub use art_layers::{
 mod application_menu;
 #[path = "command_catalog.rs"]
 mod command_catalog;
-pub use command_catalog::{COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandHistory, CommandKind, CommandParameter, CommandSearchAction, CommandSearchView, CommandTarget, ToolCategory};
+pub use command_catalog::{COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandParameter, CommandSearchAction, CommandSearchView, ToolCategory};
 #[path = "document_files.rs"]
 mod document_files;
 #[path = "workspace_session.rs"]
@@ -5380,7 +5380,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             },
             can_delete: doc.can_delete_layers(&[l.id]),
             can_alpha_lock: art_layers::LayerControls::for_layer(doc, l).alpha_lock,
-            editable: l.kind == LayerKind::Paint,
             visible: l.visible,
             opacity: l.opacity,
             selected: !self.selection_masks.quick() && self.layer_interaction.selected.contains(&l.id),
@@ -9495,7 +9494,6 @@ mod tests {
         assert!(s.state.layer_tools.controls.edit_lock);
         assert!(!s.state.layer_tools.controls.mask);
         assert!(!s.state.layer_tools.controls.blend);
-        assert!(!s.state.layer_tools.controls.move_layer);
         for (seq, phase) in [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Up)] {
             s.pen(event(&s, seq, phase, 1.)).unwrap();
         }

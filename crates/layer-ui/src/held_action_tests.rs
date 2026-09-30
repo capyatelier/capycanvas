@@ -318,7 +318,6 @@ fn catalog_lists_held_and_step_bindings() {
     let mut s = session(Platform::Gtk);
     let catalog = s.command_catalog();
     let held = catalog.iter().find(|d| d.id == "hold.eyedropper").unwrap();
-    assert_eq!(held.kind, CommandKind::Held);
     assert_eq!(held.shortcut, "Alt");
     let step = catalog.iter().find(|d| d.id == "tool_setting.size.increase").unwrap();
     assert_eq!(step.shortcut, "]");

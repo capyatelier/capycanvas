@@ -970,8 +970,13 @@ fn bundled_library_refresh_waits_without_migrating_document_filters() {
             categories: catalog.categories().to_vec(),
             filters: vec![definition],
         };
-        app.request(2, json!({"type":"load_filter_package", "manifest":serde_json::to_string(&package).unwrap(),
-            "modules":{}, "mode":"replace", "library":true})).unwrap();
+        let host = &mut unsafe { &mut *app.0 }.host;
+        let change = host.session.load_effect_library(
+            &serde_json::to_string(&package).unwrap(),
+            |name| Err(format!("Missing filter module: {name}")),
+            layer_core::EffectInstallMode::Replace,
+        ).unwrap();
+        host.dirty |= change.canvas_wake;
         assert_eq!(unsafe { capy_apple_project_ready(app.0) }, 1);
         let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while app.state()["filter_load"]["pending"] == true {

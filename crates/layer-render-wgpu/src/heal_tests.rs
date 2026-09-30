@@ -289,7 +289,6 @@ fn settling_preserves_sources_while_navigation_and_queued_paint_wait_for_publica
         flush(&mut engine);
         assert!(root.try_data().is_some_and(|data| data.is_ok()));
         assert_eq!(engine.metrics().committed_strokes, 2);
-        assert_eq!(engine.metrics().stale_transform_fallbacks, 0);
         assert!(engine.undo().unwrap());
         flush(&mut engine);
         assert!(engine.undo().unwrap());

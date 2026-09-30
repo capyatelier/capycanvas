@@ -57,7 +57,6 @@ pub struct NativeHost {
     pub logical: [f32; 2],
     pub dirty: bool,
     pub chrome_hidden: bool,
-    pub canvas_bar_hidden: bool,
     keep_zen_button: bool,
     pan_cursor: bool,
     pub error: Option<String>,
@@ -116,7 +115,6 @@ impl NativeHost {
             logical: [1.0, 1.0],
             dirty: true,
             chrome_hidden: false,
-            canvas_bar_hidden: false,
             keep_zen_button: false,
             pan_cursor: false,
             error: None,
@@ -305,7 +303,6 @@ impl NativeHost {
         let previous = self.session.state().revision;
         let reply = self.session.input(input)?;
         self.chrome_hidden = reply.chrome_hidden;
-        self.canvas_bar_hidden = self.session.canvas_bar_hold() % 2 == 1;
         self.keep_zen_button = reply.keep_zen_button;
         self.pan_cursor = reply.pan_cursor;
         self.apply_change(previous, reply.change);
@@ -662,16 +659,6 @@ impl NativeHost {
             ExportValidate { recipe: layer_ui::ExportRecipe },
             ExportDraft { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction },
             Header { request: header::HeaderRequest },
-            FilterPackageModules {
-                manifest: String,
-            },
-            LoadFilterPackage {
-                manifest: String,
-                modules: std::collections::BTreeMap<String, std::sync::Arc<str>>,
-                mode: layer_core::EffectInstallMode,
-                #[serde(default)]
-                library: bool,
-            },
             Catalog,
             ApplicationMenu {
                 menu: layer_ui::ApplicationMenu,
@@ -702,10 +689,6 @@ impl NativeHost {
             CanvasBarChoiceMenu {
                 context: layer_ui::CanvasBarContext,
                 id: String,
-            },
-            CanvasBarReason {
-                context: layer_ui::CanvasBarContext,
-                command: layer_ui::CommandId,
             },
             ZoomMenu,
             LayerMenu {
@@ -792,29 +775,6 @@ impl NativeHost {
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Header { request } => self.header_request(request),
-            Query::FilterPackageModules { manifest } => {
-                json!(layer_core::EffectPackage::parse(&manifest)?.module_names()?)
-            }
-            Query::LoadFilterPackage {
-                manifest,
-                modules,
-                mode,
-                library,
-            } => {
-                let read = |name: &str| {
-                    modules
-                        .get(name)
-                        .cloned()
-                        .ok_or_else(|| format!("Missing filter module: {name}"))
-                };
-                let change = if library {
-                    self.session.load_effect_library(&manifest, read, mode)
-                } else {
-                    self.session.load_effect_package(&manifest, read, mode)
-                }?;
-                self.dirty |= change.canvas_wake;
-                json!(self.session.state().filter_load)
-            }
             Query::Catalog => json!(layer_ui::ui_catalog()),
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
@@ -863,7 +823,6 @@ impl NativeHost {
             Query::CanvasBarLayout { measure } => json!(self.session.canvas_bar_layout(&measure)),
             Query::CanvasBarMenu { context, shown } => json!(self.session.canvas_bar_menu(context, shown)),
             Query::CanvasBarChoiceMenu { context, id } => json!(self.session.canvas_bar_choice_menu(context, &id)),
-            Query::CanvasBarReason { context, command } => json!(self.canvas_bar_reason(context, command)),
             Query::ZoomMenu => json!(self.session.zoom_menu()),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::LayerBlendMenu { id } => json!(self.session.layer_blend_menu(id)?),
@@ -1064,16 +1023,6 @@ impl NativeHost {
             }
         };
         Ok(result)
-    }
-
-    fn canvas_bar_reason(&self, context: layer_ui::CanvasBarContext, command: layer_ui::CommandId) -> Option<String> {
-        let bar = self.session.state().canvas_bar.as_ref().filter(|bar| bar.context == context)?;
-        bar.items
-            .iter()
-            .chain(&bar.completion)
-            .any(|item| matches!(&item.option, layer_ui::ToolOption::Action { state, .. } if state.id == command))
-            .then(|| self.session.command_disabled_reason(command))
-            .flatten()
     }
 
     fn workspace_drop(
@@ -1509,8 +1458,6 @@ mod tests {
         let menu = app.query(json!({"type": "canvas_bar_menu", "context": bar.context, "shown": 0})).unwrap();
         assert!(menu["sections"].is_array());
         assert_eq!(menu, json!(app.session.canvas_bar_menu(bar.context, 0)));
-        let reason = json!({"type": "canvas_bar_reason", "context": bar.context, "command": "apply_transform"});
-        assert_eq!(app.query(reason).unwrap(), json!(app.session.command_disabled_reason(CommandId::ApplyTransform)));
         let choice = app
             .query(json!({"type": "canvas_bar_choice_menu", "context": bar.context, "id": "transform-interpolation"}))
             .unwrap();
@@ -1546,25 +1493,6 @@ mod tests {
         assert!(error.starts_with("WebP export is limited to 16,384 pixels per side."), "{error}");
         let png = ExportRecipe { format: ExportFormat::Png, ..enlarged };
         assert!(app.query(json!({"type": "export_validate", "recipe": png})).is_ok());
-    }
-
-    #[test]
-    fn canvas_contacts_report_the_hidden_canvas_bar() {
-        use layer_ui::CommandId;
-        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
-        app.resize(2560, 1600, 2.0).unwrap();
-        app.dispatch(UiAction::Invoke { command: CommandId::RectangleSelect }).unwrap();
-        app.dispatch(UiAction::Invoke { command: CommandId::SelectAll }).unwrap();
-        let bar = app.session.state().canvas_bar.clone().expect("selection bar");
-        for (tool, phase) in [(0, 1.), (0, 2.), (0, 3.), (3, 1.), (3, 4.), (1, 1.), (1, 3.)] {
-            app.pointer(1, tool, 0, &[800., 600., 1., 0., 0., 0., 0., 1., phase], false)
-                .unwrap();
-            assert_eq!(app.canvas_bar_hidden, phase < 3., "tool {tool} phase {phase}");
-        }
-        let reason = app
-            .query(json!({"type": "canvas_bar_reason", "context": bar.context, "command": "apply_transform"}))
-            .unwrap();
-        assert!(reason.is_null(), "only commands on the bar have reasons");
     }
 
     #[test]

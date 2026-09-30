@@ -20,6 +20,28 @@ otherwise.
 | Cold launch with an empty shader cache → ready | 10 s | About 18 s in instrumented runs | Huion: 3.50 s to all shaders; workspace 2.34 s ([shader readiness](../internals/shared-shader-readiness.md), 2026-09-25) | |
 | Open the tier photo → first frame | 3 / 4 / 6 s | | | |
 
+## Supplemental cleanup comparison
+
+Measured on Huion KP1202 on 2026-09-29: benchmark release APKs, 4248 × 2832,
+G-Pen 18 px, prediction enabled, default workspace with Navigator, OS-injected
+240 Hz stylus samples, three warmed five-second strokes per build.
+Baseline source is `ea7d5a23`; APK SHA-256 is
+`cdba34b28d2ebef62a52e28f18055b8a2b0be2c09ebca0839f2d237cff95e99b`.
+The unread-metadata cleanup APK SHA-256 is
+`a59fa1c30bf260f8edec0bbf0354bfd342d55f9ba2eaab6a55e0ee717342072b`.
+
+| Metric | Baseline | Cleanup |
+| --- | ---: | ---: |
+| Median fresh completed canvas updates/s | 231.4 | 230.7 |
+| Median per-run p99 completion gap | 9.41 ms | 9.70 ms |
+| Input to GPU completion p99 | 14.48 ms | 13.49 ms |
+
+A repeated baseline reached 232.1 fresh updates/s. Owner CPU p99 varied from
+3.58 to 4.34 ms across baseline batches; cleanup was 4.05 ms. The samples
+show no change beyond the observed run spread. These completed updates do not
+measure display cadence or physical pen latency, and this small brush on Huion
+does not qualify any reference-tier brush target.
+
 ## Resuming during refinement
 
 Measured on 2026-09-29 on the TCL: 12 MP Perceptual reference photo at Fit,

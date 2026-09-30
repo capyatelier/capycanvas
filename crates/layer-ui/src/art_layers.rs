@@ -95,7 +95,6 @@ pub struct LayerControls {
     pub edit_lock: bool,
     pub clip: bool,
     pub mask: bool,
-    pub move_layer: bool,
     pub fill: bool,
 }
 /// Only a paint layer's mask can be baked into its pixels.
@@ -120,7 +119,6 @@ impl LayerControls {
                 && unlocked
                 && (l.properties.clipped || doc.clipping_base(l.id).is_some()),
             mask: editable && unlocked,
-            move_layer: l.kind != LayerKind::Background && unlocked,
             fill: l.kind == LayerKind::Paint && unlocked && !doc.active_mask,
         }
     }

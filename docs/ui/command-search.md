@@ -83,8 +83,8 @@ Undo/Redo to color reorder history; the search entry taking focus cannot switch
 that history domain. `Commit` carries current native text so a serial host can
 submit immediately after typing without executing a stale result snapshot.
 Text-field history remains with the native editor: search explains that context
-instead of silently executing artwork Undo. History metadata can explicitly
-delegate to dispatch for forms and operations whose outcome determines history.
+instead of silently executing artwork Undo. The existing action dispatcher and
+forms own history; catalog entries carry presentation and availability.
 
 Search builds an index when opened and performs no I/O or thumbnail work while
 typing. `COMMAND_SEARCH` changes leave workspace model/content revisions alone.

@@ -25,7 +25,7 @@ M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_POR
 
 - **Shared UI state** (*Windows*):
   - present `UiState.notice` and answer `UiAction::Notice`;
-  - read `CommandState.disabled_reason`, then retire `canvas_bar_reason`;
+  - read `CommandState.disabled_reason`;
   - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
   - draw a `checkable: false` action unpressed even when its command is selected.
 - **M2** (*Windows*):

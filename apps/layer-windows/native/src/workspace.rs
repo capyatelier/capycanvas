@@ -1,6 +1,4 @@
-//! CPU-only queries for native workspace projections. The general host query
-//! API also installs filter packages; that mutating route is deliberately not
-//! available through the optional workspace queue.
+//! CPU-only queries for native workspace projections.
 use crate::previews::CapyPreview;
 use layer_host::NativeHost;
 use serde_json::{Value, json};
