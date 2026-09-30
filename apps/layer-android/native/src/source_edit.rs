@@ -5,16 +5,9 @@ use jni::{
     objects::{JClass, JString},
     sys::{jboolean, jbyteArray, jint, jlong, jstring},
 };
-use layer_core::color::{ColorProfile, RgbSpace};
+use layer_core::color::ColorProfile;
 use layer_host::tasks::SourceTask;
-use layer_render_wgpu::snapshot::CaptureControl;
-struct Task {
-    task: SourceTask,
-    control: CaptureControl,
-}
-unsafe fn task<'a>(handle: jlong) -> &'a mut Task {
-    unsafe { &mut *(handle as *mut Task) }
-}
+type Task = crate::inspection::Task<SourceTask>;
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_sourceTask(
     mut env: JNIEnv,
@@ -23,20 +16,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceTask(
     id: jint,
     cancel: jlong,
 ) -> jlong {
-    let result = (|| {
-        let a = unsafe { app(handle) };
-        Ok(Box::into_raw(Box::new(Task {
-            task: SourceTask::capture(&a.host.session, Some(id as u32), RgbSpace::Srgb)?,
-            control: crate::inspection::control(cancel),
-        })) as jlong)
-    })();
-    match result {
-        Ok(h) => h,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            0
-        }
-    }
+    crate::inspection::capture_task(&mut env, handle, id, cancel, SourceTask::capture)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_sourceWork(
@@ -48,7 +28,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceWork(
     let result = (|| {
         let profile: Option<ColorProfile> =
             serde_json::from_str(&read(&mut env, &profile)?).map_err(error)?;
-        let t = unsafe { task(handle) };
+        let t = unsafe { crate::inspection::borrow::<Task>(handle) };
         t.task.work(profile, || t.control.is_cancelled())
     })();
     fail(&mut env, result)
@@ -62,7 +42,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourcePrepareComparison(
 ) {
     let result = (|| {
         let a = unsafe { app(handle) };
-        let t = unsafe { task(job) };
+        let t = unsafe { crate::inspection::borrow::<Task>(job) };
         t.task.prepare(&a.host, t.control.is_cancelled())
     })();
     fail(&mut env, result)
@@ -74,18 +54,10 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceCompare(
     handle: jlong,
 ) -> jstring {
     let result = (|| {
-        let t = unsafe { task(handle) };
-        std::thread::scope(|scope| {
-            std::thread::Builder::new()
-                .name("capy-source".into())
-                .stack_size(8 * 1024 * 1024)
-                .spawn_scoped(scope, || {
-                    t.task.compare(t.control.clone())?;
-                    serde_json::to_string(&t.task.details()?).map_err(error)
-                })
-                .map_err(error)?
-                .join()
-                .map_err(|_| "Source comparison worker failed".to_string())?
+        let t = unsafe { crate::inspection::borrow::<Task>(handle) };
+        crate::inspection::on_worker("capy-source", "Source comparison worker failed", move || {
+            t.task.compare(t.control.clone())?;
+            serde_json::to_string(&t.task.details()?).map_err(error)
         })
     })();
     string(&mut env, result)
@@ -97,7 +69,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourcePreview(
     handle: jlong,
     after: jboolean,
 ) -> jbyteArray {
-    crate::color_edit::preview_bytes(&mut env, unsafe { task(handle) }.task.previews(), after)
+    crate::color_edit::preview_bytes(&mut env, unsafe { crate::inspection::borrow::<Task>(handle) }.task.previews(), after)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_sourceAdopt(
@@ -108,14 +80,12 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceAdopt(
 ) {
     let result = (|| {
         let a = unsafe { app(handle) };
-        let t = unsafe { task(job) };
+        let t = unsafe { crate::inspection::borrow::<Task>(job) };
         t.task.adopt(&mut a.host, t.control.is_cancelled(), || true)
     })();
     fail(&mut env, result)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_sourceFree(_: JNIEnv, _: JClass, handle: jlong) {
-    if handle != 0 {
-        drop(unsafe { Box::from_raw(handle as *mut Task) })
-    }
+    unsafe { crate::inspection::release::<Task>(handle) };
 }

@@ -697,20 +697,22 @@ pub(crate) fn fail(env: &mut JNIEnv, result: Result<(), String>) {
         let _ = env.throw_new("java/lang/IllegalStateException", message);
     }
 }
-pub(crate) fn string(env: &mut JNIEnv, result: Result<String, String>) -> jstring {
+pub(crate) fn or_throw<T>(env: &mut JNIEnv, result: Result<T, String>, fallback: T) -> T {
     match result {
-        Ok(value) => match env.new_string(value) {
-            Ok(value) => value.into_raw(),
-            Err(e) => {
-                fail(env, Err(error(e)));
-                std::ptr::null_mut()
-            }
-        },
-        Err(e) => {
-            fail(env, Err(e));
-            std::ptr::null_mut()
-        }
+        Ok(value) => value,
+        Err(message) => { fail(env, Err(message)); fallback }
     }
+}
+pub(crate) fn string(env: &mut JNIEnv, result: Result<String, String>) -> jstring {
+    let result = result.and_then(|value| env.new_string(value).map(|value| value.into_raw()).map_err(error));
+    or_throw(env, result, std::ptr::null_mut())
+}
+pub(crate) fn argb_array(env: &mut JNIEnv, rgba: &[u8]) -> Result<jintArray, String> {
+    let pixels: Vec<i32> = rgba.chunks_exact(4)
+        .map(|p| i32::from_be_bytes([p[3], p[0], p[1], p[2]])).collect();
+    let array = env.new_int_array(pixels.len() as i32).map_err(error)?;
+    env.set_int_array_region(&array, 0, &pixels).map_err(error)?;
+    Ok(array.into_raw())
 }
 pub(crate) fn read(env: &mut JNIEnv, value: &JString) -> Result<String, String> {
     env.get_string(value).map(Into::into).map_err(error)
@@ -1170,13 +1172,7 @@ pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
             .map_err(error)?;
         Ok(values.into_raw())
     })();
-    match result {
-        Ok(value) => value,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    or_throw(&mut env, result, std::ptr::null_mut())
 }
 
 /// Stateless numeric math is independent of the render-owned session. Safe to
@@ -1308,14 +1304,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorFieldPixels(
         if !valid {
             return Err("Unsupported color field raster".into());
         }
-        let pixels: Vec<i32> = rgba
-            .chunks_exact(4)
-            .map(|p| i32::from_be_bytes([p[3], p[0], p[1], p[2]]))
-            .collect();
-        let array = env.new_int_array(pixels.len() as i32).map_err(error)?;
-        env.set_int_array_region(&array, 0, &pixels)
-            .map_err(error)?;
-        Ok(array.into_raw())
+        argb_array(&mut env, &rgba)
     })();
     match result {
         Ok(array) => array,
@@ -1343,11 +1332,5 @@ pub extern "system" fn Java_art_capycanvas_Native_strokeRecordingData(
                 .map(|a| a.into_raw())
                 .map_err(error)
         });
-    match result {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    or_throw(&mut env, result, std::ptr::null_mut())
 }

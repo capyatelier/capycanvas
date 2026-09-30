@@ -109,6 +109,10 @@ are your task, and remove an entry when you fix it.
   `toolbarManagerSelectsConfirmsDeletesAndRestores`,
   `filterLayerIconsUsePackagedNames` and
   `toolbarConfigurationAndGroupCollapseUseTheSharedDefault`.
+- Android `AndroidRasterTest#hdrBlackIntensityMarkerVisible` intermittently
+  keeps the last EV value when the test cancels its drag.
+- Android `AndroidRasterTest#profileLibraryKeepsExactCopiesAndPresetOwnership`
+  intermittently times out waiting for profile-library buttons.
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
 - Headless Web `--toolbar-components`, `--tonal-selection`, `--editor`, `--hdr`,

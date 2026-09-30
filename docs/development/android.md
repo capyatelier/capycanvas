@@ -8,6 +8,13 @@ a `SurfaceView`. The canvas needs Vulkan shared-demand presentation with
 swapchain-maintenance present fences; a driver without them shows a canvas
 initialization error instead of a canvas.
 
+JNI result handling lives in `native/src/android.rs`: `or_throw` reports
+`IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
+pixels for Kotlin.
+File and conversion jobs use `inspection::on_worker` for named threads with an
+8 MiB stack; call it from an IO worker. Task cancellation owns a separate
+`CaptureControl` and never borrows a running job.
+
 ## Prerequisites
 
 Install Java 17 or newer, Node.js, Rust, Android Studio or the Android command-line tools,

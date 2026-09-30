@@ -1,7 +1,7 @@
 //! Android scheduling around the shared drawing collection. Parked editors have
 //! no renderer. One bounded worker drains retirement before activation.
 use crate::{
-    android::{app, error, fail, read, string},
+    android::{app, error, fail, or_throw, read, string},
     app::App,
 };
 use jni::{
@@ -64,13 +64,7 @@ pub extern "system" fn Java_art_capycanvas_Native_documentSwitch(
         a.blank_presented = false;
         Ok(Box::into_raw(Box::new(activation)) as jlong)
     })();
-    match result {
-        Ok(id) => id,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            0
-        }
-    }
+    or_throw(&mut env, result, 0)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_documentResumeWork(

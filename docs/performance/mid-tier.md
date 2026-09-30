@@ -71,6 +71,29 @@ Raw frame data, Chrome traces and fixture details are in
 
 Target: **90 completed updates/s** at the guaranteed size, on the 24 MP canvas.
 
+### JNI cleanup comparison
+
+Measured on 2026-09-30 on the MovinkPad 11: 6000 × 4000, G-Pen 1024 px at Fit,
+default workspace with Navigator, prediction enabled and OS-injected 240 Hz input.
+Each batch contains three warmed five-second strokes; batches alternate builds.
+Baseline source is `c993253ca`, APK SHA-256
+`a59fa1c30bf260f8edec0bbf0354bfd342d55f9ba2eaab6a55e0ee717342072b`.
+The JNI cleanup builds on `829f1e223`, APK SHA-256
+`3a05ab028cc7bafb409313ad23741c403b643c277dfc235a4f2fb30194599e24`.
+
+| Metric | Baseline | JNI cleanup | Repeated baseline | Repeated cleanup |
+| --- | ---: | ---: | ---: | ---: |
+| Median fresh completed canvas updates/s | 166.1 | 164.4 | 166.2 | 165.7 |
+| Median per-run p99 fresh completion gap | 14.92 ms | 14.98 ms | 14.74 ms | 14.71 ms |
+| Input to GPU completion p99 | 28.01 ms | 27.97 ms | 27.82 ms | 27.48 ms |
+| Owner CPU p99 | 6.20 ms | 6.01 ms | 6.08 ms | 5.95 ms |
+
+Individual rates overlap: baseline 163.2–169.6 and cleanup 164.1–170.0 updates/s.
+This empty-canvas 1024 px workload meets the 90 updates/s and 22.2 ms gap criteria;
+the 2048 px guarantee and display-paced motion need their own measurements.
+
+### Retained-photo brush measurements
+
 Measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets. The ellipse is 520 × 299 px at 16.0% zoom.
 
 | Brush (id) | Class | Size | Measured | Status |

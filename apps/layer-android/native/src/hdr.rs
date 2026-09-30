@@ -1,5 +1,5 @@
 //! HDR display status, proof control and mapped picker fields for Kotlin.
-use crate::android::{app, error, fail, read, string};
+use crate::android::{app, argb_array, error, fail, or_throw, read, string};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
@@ -53,23 +53,8 @@ pub extern "system" fn Java_art_capycanvas_Native_proofTexture(
     edge: jint,
 ) -> jni::sys::jintArray {
     let bytes = layer_ui::proof_panel::sdr_direction_texture(edge.clamp(1, 512) as u32);
-    let pixels: Vec<i32> = bytes
-        .chunks_exact(4)
-        .map(|p| i32::from_be_bytes([p[3], p[0], p[1], p[2]]))
-        .collect();
-    let result = (|| {
-        let array = env.new_int_array(pixels.len() as i32).map_err(error)?;
-        env.set_int_array_region(&array, 0, &pixels)
-            .map_err(error)?;
-        Ok(array.into_raw())
-    })();
-    match result {
-        Ok(a) => a,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    let result = argb_array(&mut env, &bytes);
+    or_throw(&mut env, result, std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]
@@ -91,20 +76,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorFieldMapped(
         if !state.render_field_mapped(size as u32, rendition, &mut bytes) {
             return Err("Invalid picker field".into());
         }
-        let pixels: Vec<i32> = bytes
-            .chunks_exact(4)
-            .map(|p| i32::from_be_bytes([p[3], p[0], p[1], p[2]]))
-            .collect();
-        let array = env.new_int_array(pixels.len() as i32).map_err(error)?;
-        env.set_int_array_region(&array, 0, &pixels)
-            .map_err(error)?;
-        Ok(array.into_raw())
+        argb_array(&mut env, &bytes)
     })();
-    match result {
-        Ok(v) => v,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    or_throw(&mut env, result, std::ptr::null_mut())
 }

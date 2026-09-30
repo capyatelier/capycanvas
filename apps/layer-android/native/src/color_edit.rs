@@ -1,22 +1,14 @@
 //! Color changes prepare immutable backing and a complete private GPU canvas on
 //! IO. The render owner publishes renderer + document/history in one turn.
-use crate::android::{app, error, fail, read, string};
+use crate::android::{app, error, fail, or_throw, read, string};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
     sys::{jboolean, jbyteArray, jint, jlong, jstring},
 };
-use layer_core::color::RgbSpace;
 use layer_host::tasks::{ColorTask, Preview};
-use layer_render_wgpu::snapshot::CaptureControl;
 
-struct Task {
-    task: ColorTask,
-    control: CaptureControl,
-}
-unsafe fn task<'a>(handle: jlong) -> &'a mut Task {
-    unsafe { &mut *(handle as *mut Task) }
-}
+type Task = crate::inspection::Task<ColorTask>;
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_colorTask(
     mut env: JNIEnv,
@@ -25,20 +17,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorTask(
     id: jint,
     cancel: jlong,
 ) -> jlong {
-    let result = (|| {
-        let a = unsafe { app(handle) };
-        Ok(Box::into_raw(Box::new(Task {
-            task: ColorTask::capture(&a.host.session, Some(id as u32), RgbSpace::Srgb)?,
-            control: crate::inspection::control(cancel),
-        })) as jlong)
-    })();
-    match result {
-        Ok(handle) => handle,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            0
-        }
-    }
+    crate::inspection::capture_task(&mut env, handle, id, cancel, ColorTask::capture)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_colorWork(
@@ -50,18 +29,10 @@ pub extern "system" fn Java_art_capycanvas_Native_colorWork(
 ) -> jstring {
     let result = (|| {
         let choice = serde_json::from_str(&read(&mut env, &choice)?).map_err(error)?;
-        let t = unsafe { task(handle) };
-        std::thread::scope(|scope| {
-            std::thread::Builder::new()
-                .name("capy-color".into())
-                .stack_size(8 * 1024 * 1024)
-                .spawn_scoped(scope, move || {
-                    t.task.work(choice, copy != 0, t.control.clone())?;
-                    serde_json::to_string(&t.task.details()).map_err(error)
-                })
-                .map_err(error)?
-                .join()
-                .map_err(|_| "Color worker failed".to_string())?
+        let t = unsafe { crate::inspection::borrow::<Task>(handle) };
+        crate::inspection::on_worker("capy-color", "Color worker failed", move || {
+            t.task.work(choice, copy != 0, t.control.clone())?;
+            serde_json::to_string(&t.task.details()).map_err(error)
         })
     })();
     string(&mut env, result)
@@ -80,13 +51,7 @@ pub(crate) fn preview_bytes(env: &mut JNIEnv, previews: &[Preview], after: jbool
             .map(|a| a.into_raw())
             .map_err(error)
     })();
-    match result {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            fail(env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    or_throw(env, result, std::ptr::null_mut())
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_colorPreview(
@@ -95,7 +60,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorPreview(
     handle: jlong,
     after: jboolean,
 ) -> jbyteArray {
-    preview_bytes(&mut env, unsafe { task(handle) }.task.previews(), after)
+    preview_bytes(&mut env, unsafe { crate::inspection::borrow::<Task>(handle) }.task.previews(), after)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_colorAdopt(
@@ -106,7 +71,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorAdopt(
 ) {
     let result = (|| {
         let a = unsafe { app(handle) };
-        let t = unsafe { task(job) };
+        let t = unsafe { crate::inspection::borrow::<Task>(job) };
         t.task
             .adopt(&mut a.host, t.control.is_cancelled(), || true)?;
         a.project_adopted();
@@ -116,9 +81,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorAdopt(
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_colorFree(_: JNIEnv, _: JClass, handle: jlong) {
-    if handle != 0 {
-        drop(unsafe { Box::from_raw(handle as *mut Task) });
-    }
+    unsafe { crate::inspection::release::<Task>(handle) };
 }
 
 #[unsafe(no_mangle)]
@@ -132,7 +95,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorWriteCopy(
     use std::os::fd::FromRawFd;
     let file = unsafe { std::fs::File::from_raw_fd(fd) };
     let result = (|| {
-        let t = unsafe { task(handle) };
+        let t = unsafe { crate::inspection::borrow::<Task>(handle) };
         let mut output = std::io::BufWriter::new(file);
         t.task.write_copy(&mut output, t.control.is_cancelled())?;
         output.flush().map_err(error)?;

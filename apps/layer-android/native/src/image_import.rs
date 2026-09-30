@@ -1,6 +1,6 @@
 //! Provider descriptors are decoded on the file worker. Nothing enters the live
 //! document until the complete, interpreted batch passes identity checks.
-use crate::android::{app, error, fail, read, string};
+use crate::android::{app, error, fail, or_throw, read, string};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
@@ -23,9 +23,6 @@ struct Batch {
     context: Context,
     control: layer_render_wgpu::snapshot::CaptureControl,
     images: layer_ui::ImageImportBatch,
-}
-unsafe fn batch<'a>(handle: jlong) -> &'a mut Batch {
-    unsafe { &mut *(handle as *mut Batch) }
 }
 fn active(a: &crate::app::App, id: u32) -> Result<(), String> {
     if a.host.session.state().requests.iter().any(|r| {
@@ -103,13 +100,7 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportTask(
                 a.host.session.engine().document().color.space, Default::default()),
         })) as jlong)
     })();
-    match result {
-        Ok(handle) => handle,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            0
-        }
-    }
+    or_throw(&mut env, result, 0)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_imageImportRead(
@@ -120,13 +111,13 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportRead(
     name: JString,
 ) {
     if fd < 0 {
-        unsafe { batch(handle) }.images.invalidate();
+        unsafe { crate::inspection::borrow::<Batch>(handle) }.images.invalidate();
         fail(&mut env, Err("Missing image descriptor".into()));
         return;
     }
     // Take descriptor ownership even if this batch has already failed.
     let file = unsafe { File::from_raw_fd(fd) };
-    let b = unsafe { batch(handle) };
+    let b = unsafe { crate::inspection::borrow::<Batch>(handle) };
     let result = (|| {
         let name = read(&mut env, &name)?;
         let name = name
@@ -147,7 +138,7 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportProfilePrompt(
     _: JClass,
     handle: jlong,
 ) -> jstring {
-    let b = unsafe { batch(handle) };
+    let b = unsafe { crate::inspection::borrow::<Batch>(handle) };
     string(
         &mut env,
         serde_json::to_string(&b.images.pending_source().map(|s| &s.interpretation)).map_err(error),
@@ -160,7 +151,7 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportAssumeProfile(
     handle: jlong,
     profile: JString,
 ) {
-    let b = unsafe { batch(handle) };
+    let b = unsafe { crate::inspection::borrow::<Batch>(handle) };
     let result = (|| {
         let profile = serde_json::from_str(&read(&mut env, &profile)?).map_err(error)?;
         b.images.interpret(profile, b.control.is_cancelled())
@@ -179,7 +170,7 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportAdopt(
 ) {
     let result = (|| {
         let a = unsafe { app(handle) };
-        let b = unsafe { batch(task) };
+        let b = unsafe { crate::inspection::borrow::<Batch>(task) };
         active(a, b.id)?;
         a.host
             .session

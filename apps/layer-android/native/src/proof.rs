@@ -1,6 +1,6 @@
 //! JNI ownership: App stays on the render Looper; Task is borrowed by exactly
 //! one IO job at a time. CaptureControl alone is shared with cancellation.
-use crate::android::{app, error, fail, read, string};
+use crate::android::{app, error, fail, or_throw, read, string};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
@@ -20,10 +20,6 @@ pub extern "system" fn Java_art_capycanvas_Native_presentationTimings(
 ) -> jstring {
     string(&mut env, Ok(unsafe { app(handle) }.presentation_timings(enabled != 0).to_string()))
 }
-unsafe fn task<'a>(id: jlong) -> &'a mut Task {
-    unsafe { &mut *(id as *mut Task) }
-}
-
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_proofTask(
     mut env: JNIEnv,
@@ -46,17 +42,11 @@ pub extern "system" fn Java_art_capycanvas_Native_proofTask(
             lut: None,
         })) as jlong)
     })();
-    match result {
-        Ok(id) => id,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            0
-        }
-    }
+    or_throw(&mut env, result, 0)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_proofWork(mut env: JNIEnv, _: JClass, id: jlong) {
-    let t = unsafe { task(id) };
+    let t = unsafe { crate::inspection::borrow::<Task>(id) };
     let result = t
         .job
         .build(|| t.control.is_cancelled())
@@ -70,7 +60,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofCheck(
     handle: jlong,
     id: jlong,
 ) {
-    let t = unsafe { task(id) };
+    let t = unsafe { crate::inspection::borrow::<Task>(id) };
     fail(
         &mut env,
         if t.control.is_cancelled() {
@@ -86,7 +76,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofPreservation(
     _: JClass,
     id: jlong,
 ) -> jbyteArray {
-    match unsafe { task(id) }.job.preservation() {
+    match unsafe { crate::inspection::borrow::<Task>(id) }.job.preservation() {
         None => std::ptr::null_mut(),
         Some(bytes) => match env.byte_array_from_slice(bytes) {
             Ok(v) => v.into_raw(),
@@ -106,7 +96,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofApply(
     preserved: jboolean,
 ) {
     let result = (|| {
-        let (a, t) = unsafe { (app(handle), task(id)) };
+        let (a, t) = unsafe { (app(handle), crate::inspection::borrow::<Task>(id)) };
         if t.control.is_cancelled() {
             return Err("Proof preparation cancelled".into());
         }
@@ -130,7 +120,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofFailed(
 ) {
     let result = (|| {
         let message = read(&mut env, &message)?;
-        let (a, t) = unsafe { (app(handle), task(id)) };
+        let (a, t) = unsafe { (app(handle), crate::inspection::borrow::<Task>(id)) };
         a.host.proof.fail(&a.host.session, &t.job, message);
         Ok(())
     })();

@@ -1,6 +1,6 @@
 //! File workers own transfer jobs, never the live editor. Only adoption and
 //! checkpoint acknowledgement return to the render Looper.
-use crate::android::{app, error, fail, read};
+use crate::android::{app, error, fail, or_throw, read};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
@@ -53,10 +53,6 @@ struct Task {
     open_control: layer_render_wgpu::snapshot::CaptureControl,
     payload: Payload,
 }
-unsafe fn task<'a>(handle: jlong) -> &'a mut Task {
-    unsafe { &mut *(handle as *mut Task) }
-}
-
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_projectTask(
     mut env: JNIEnv,
@@ -130,13 +126,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             payload,
         })) as jlong)
     })();
-    match result {
-        Ok(value) => value,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            0
-        }
-    }
+    or_throw(&mut env, result, 0)
 }
 
 // Configure before starting the worker; cancellation subsequently touches only
@@ -145,7 +135,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
 pub extern "system" fn Java_art_capycanvas_Native_projectOpenControl(
     _: JNIEnv, _: JClass, handle: jlong, control: jlong,
 ) {
-    unsafe { task(handle) }.open_control = crate::inspection::control(control);
+    unsafe { crate::inspection::borrow::<Task>(handle) }.open_control = crate::inspection::control(control);
 }
 fn check_open(t: &Task) -> Result<(), String> {
     if t.open_control.is_cancelled() { Err("Opening cancelled".into()) } else { Ok(()) }
@@ -231,7 +221,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectProfilePrompt(
     _: JClass,
     handle: jlong,
 ) -> jni::sys::jstring {
-    let source = match &unsafe { task(handle) }.payload {
+    let source = match &unsafe { crate::inspection::borrow::<Task>(handle) }.payload {
         Payload::Open {
             environment: Some(e),
             ..
@@ -252,7 +242,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAssumeProfile(
         let Payload::Open {
             environment: Some(e),
             ..
-        } = &mut unsafe { task(handle) }.payload
+        } = &mut unsafe { crate::inspection::borrow::<Task>(handle) }.payload
         else {
             return Err("Image interpretation is no longer pending".into());
         };
@@ -281,7 +271,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectOptions(
         let Payload::Open {
             environment: Some(environment),
             ..
-        } = &mut unsafe { task(handle) }.payload
+        } = &mut unsafe { crate::inspection::borrow::<Task>(handle) }.payload
         else {
             return Err("New drawing task is no longer configurable".into());
         };
@@ -302,35 +292,26 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
     height: jint,
 ) {
     let input = (fd >= 0).then(|| unsafe { File::from_raw_fd(fd) });
-    let t = unsafe { task(handle) };
-    // JVM worker stacks are small; shader translation gets a bounded native stack.
-    let result = std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .name("capy-project".into())
-            .stack_size(8 * 1024 * 1024)
-            .spawn_scoped(scope, move || match &mut t.payload {
-                Payload::Save(project) => {
-                    let project = project.take().ok_or("Save already encoded")?;
-                    let mut out = BufWriter::new(input.ok_or("Missing project output")?);
-                    project.write(&mut out)?;
-                    out.flush().map_err(error)?;
-                    out.get_ref().sync_all().map_err(error)
-                }
-                Payload::Export { export, control } => {
-                    let out = input.ok_or("Missing export output")?;
-                    export.write(&out, control.clone())?;
-                    out.sync_all().map_err(error)
-                }
-                Payload::Open { .. } => {
-                    prepare(t, input, width.max(0) as u32, height.max(0) as u32)
-                }
-                Payload::Retired { .. } | Payload::Placed { .. } => {
-                    Err("Project already prepared or adopted".into())
-                }
-            })
-            .map_err(error)?
-            .join()
-            .map_err(|_| "Project worker failed".to_string())?
+    let t = unsafe { crate::inspection::borrow::<Task>(handle) };
+    let result = crate::inspection::on_worker("capy-project", "Project worker failed", move || match &mut t.payload {
+        Payload::Save(project) => {
+            let project = project.take().ok_or("Save already encoded")?;
+            let mut out = BufWriter::new(input.ok_or("Missing project output")?);
+            project.write(&mut out)?;
+            out.flush().map_err(error)?;
+            out.get_ref().sync_all().map_err(error)
+        }
+        Payload::Export { export, control } => {
+            let out = input.ok_or("Missing export output")?;
+            export.write(&out, control.clone())?;
+            out.sync_all().map_err(error)
+        }
+        Payload::Open { .. } => {
+            prepare(t, input, width.max(0) as u32, height.max(0) as u32)
+        }
+        Payload::Retired { .. } | Payload::Placed { .. } => {
+            Err("Project already prepared or adopted".into())
+        }
     });
     fail(&mut env, result);
 }
@@ -345,7 +326,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
 ) {
     let result = (|| {
         let a = unsafe { app(handle) };
-        let t = unsafe { task(transfer) };
+        let t = unsafe { crate::inspection::borrow::<Task>(transfer) };
         check_open(t)?;
         let location: Option<DocumentLocation> =
             serde_json::from_str(&read(&mut env, &location)?).map_err(error)?;
@@ -488,13 +469,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             },
         })) as jlong)
     })();
-    match result {
-        Ok(value) => value,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            0
-        }
-    }
+    or_throw(&mut env, result, 0)
 }
 
 /// Configure the private output copy before the worker starts.
@@ -508,7 +483,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportOptions(
     let result = (|| {
         let selected: layer_ui::ExportRecipe =
             serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
-        let Payload::Export { export, .. } = &mut unsafe { task(handle) }.payload else {
+        let Payload::Export { export, .. } = &mut unsafe { crate::inspection::borrow::<Task>(handle) }.payload else {
             return Err("Export task is no longer configurable".into());
         };
         export.configure(selected)
@@ -566,13 +541,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
             payload,
         })) as jlong)
     })();
-    match result {
-        Ok(task) => task,
-        Err(error) => {
-            fail(&mut env, Err(error));
-            0
-        }
-    }
+    or_throw(&mut env, result, 0)
 }
 
 /// File worker only. The shared Unix writer fsyncs the complete sibling file,
@@ -586,7 +555,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectPublish(
 ) {
     let result = (|| {
         let path = read(&mut env, &path)?;
-        let Payload::Save(project) = &mut unsafe { task(handle) }.payload else {
+        let Payload::Save(project) = &mut unsafe { crate::inspection::borrow::<Task>(handle) }.payload else {
             return Err("Not a recovery save".into());
         };
         let project = project.take().ok_or("Recovery already encoded")?;
@@ -600,7 +569,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectPublish(
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_projectParkReady(mut env:JNIEnv,_:JClass,handle:jlong,transfer:jlong)->jboolean {
     let result=(|| {
-        let a=unsafe{app(handle)};let t=unsafe{task(transfer)};
+        let a=unsafe{app(handle)};let t=unsafe{crate::inspection::borrow::<Task>(transfer)};
         if t.owner!=a.window.documents.selected() || t.epoch!=a.host.session.state().document_file.epoch || t.revision!=a.host.session.engine().document().revision || t.gpu_generation!=a.gpu_generation {
             return Err("The drawing changed while opening; try again".into());
         }
@@ -608,7 +577,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectParkReady(mut env:JNIEn
             a.host.session.complete_document_request(t.request,Ok(true))?;
         }
         a.window.park_ready(&a.host)
-    })();match result{Ok(ready)=>u8::from(ready),Err(e)=>{fail(&mut env,Err(e));0}}
+    })();or_throw(&mut env, result.map(|ready| u8::from(ready)), 0)
 }
 
 /// Capture before handing an immutable recovery write to the serialized worker.
@@ -622,7 +591,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryFor(mut env:JNI
             recovered:true,source:layer_ui::ImportSource::Master,place:None,gpu_generation:a.gpu_generation,
             open_control:Default::default(),payload:Payload::Save(Some(session.capture_project_recovery()?)),
         })) as jlong)
-    })();match result{Ok(task)=>task,Err(e)=>{fail(&mut env,Err(e));0}}
+    })();or_throw(&mut env, result, 0)
 }
 
 /// Shared native-drawing/photo classification for external drop routing. Actual

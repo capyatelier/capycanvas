@@ -1,7 +1,7 @@
 //! Pixel copies: frozen on the render Looper, composed and encoded on a file
 //! worker. The window keeps the clip; Kotlin shares its PNG through a
 //! FileProvider URI whose clip description carries the nonce.
-use crate::android::{app, error, fail, read, string};
+use crate::android::{app, error, fail, or_throw, read, string};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
@@ -10,31 +10,20 @@ use jni::{
 use layer_host::clipboard::ClipTask;
 use layer_ui::{DocumentRequest, HostRequestKind, PixelClip};
 
-unsafe fn task<'a>(handle: jlong) -> &'a ClipTask {
-    unsafe { &*(handle as *const ClipTask) }
-}
-unsafe fn clip<'a>(handle: jlong) -> &'a PixelClip {
-    unsafe { &*(handle as *const PixelClip) }
-}
-
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_clipTask(mut env: JNIEnv, _: JClass, handle: jlong, id: jint) -> jlong {
     let a = unsafe { app(handle) };
-    match ClipTask::capture(&mut a.host.session, id as u32) {
-        Ok(task) => Box::into_raw(Box::new(task)) as jlong,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            0
-        }
-    }
+    let result = ClipTask::capture(&mut a.host.session, id as u32)
+        .map(|task| Box::into_raw(Box::new(task)) as jlong);
+    or_throw(&mut env, result, 0)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_clipTaskLarge(_: JNIEnv, _: JClass, handle: jlong) -> jboolean {
-    jboolean::from(unsafe { task(handle) }.capture_details().large)
+    jboolean::from(unsafe { crate::inspection::borrow_ref::<ClipTask>(handle) }.capture_details().large)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_clipTaskProgress(mut env: JNIEnv, _: JClass, handle: jlong) -> jstring {
-    string(&mut env, Ok(unsafe { task(handle) }.capture_details().progress.into()))
+    string(&mut env, Ok(unsafe { crate::inspection::borrow_ref::<ClipTask>(handle) }.capture_details().progress.into()))
 }
 /// Worker: consumes the task and returns the finished clip.
 #[unsafe(no_mangle)]
@@ -47,13 +36,7 @@ pub extern "system" fn Java_art_capycanvas_Native_clipRun(
 ) -> jlong {
     let task = unsafe { Box::from_raw(handle as *mut ClipTask) };
     let result = read(&mut env, &nonce).and_then(|nonce| task.run(nonce, crate::inspection::control(control)));
-    match result {
-        Ok(clip) => Box::into_raw(Box::new(clip)) as jlong,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            0
-        }
-    }
+    or_throw(&mut env, result.map(|clip| Box::into_raw(Box::new(clip)) as jlong), 0)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_clipTaskFree(_: JNIEnv, _: JClass, handle: jlong) {
@@ -64,7 +47,7 @@ pub extern "system" fn Java_art_capycanvas_Native_clipTaskFree(_: JNIEnv, _: JCl
 /// Worker: write the clip's PNG for other applications.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_clipWritePng(mut env: JNIEnv, _: JClass, handle: jlong, path: JString) {
-    let result = read(&mut env, &path).and_then(|path| std::fs::write(path, &unsafe { clip(handle) }.png[..]).map_err(error));
+    let result = read(&mut env, &path).and_then(|path| std::fs::write(path, &unsafe { crate::inspection::borrow_ref::<PixelClip>(handle) }.png[..]).map_err(error));
     fail(&mut env, result);
 }
 /// Keep the clip for the window and complete its copy, which erases a Cut.

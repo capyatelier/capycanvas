@@ -1,5 +1,5 @@
 //! Stateless worker operations; Kotlin owns atomic application-file publication.
-use crate::android::{error, fail, read};
+use crate::android::{error, or_throw, read};
 use jni::{
     JNIEnv,
     objects::{JByteArray, JClass, JObject, JString},
@@ -37,13 +37,7 @@ pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
         }
         Ok(result.into_raw())
     })();
-    match result {
-        Ok(v) => v,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    or_throw(&mut env, result, std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]
@@ -94,11 +88,5 @@ pub extern "system" fn Java_art_capycanvas_Native_paletteFile(
             .map_err(error)?;
         Ok(result.into_raw())
     })();
-    match result {
-        Ok(v) => v,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    or_throw(&mut env, result, std::ptr::null_mut())
 }
