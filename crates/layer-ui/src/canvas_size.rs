@@ -265,9 +265,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn open_canvas_size(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
-        if let Some(reason) = self.canvas_geometry_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
         let mut draft = CanvasSizeDraft::new([doc.width, doc.height]);
         draft.update(doc, self.engine.geometry_limits());
@@ -291,9 +289,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CanvasSizeAction::Relative { relative } => draft.set_relative(relative),
             CanvasSizeAction::Anchor { anchor } => draft.anchor = anchor,
             CanvasSizeAction::Apply => {
-                if let Some(reason) = self.canvas_geometry_refusal() {
-                    return Err(reason.into());
-                }
+                refused(self.canvas_geometry_refusal())?;
                 let draft = self.canvas_size.as_ref().ok_or("Canvas Size is not open")?;
                 let doc = self.engine.document();
                 if draft.current != [doc.width, doc.height] {
@@ -320,9 +316,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// The canvas crops to the selection's nonzero coverage within it.
     pub(super) fn crop_canvas_to_selection(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
-        if let Some(reason) = self.crop_to_selection_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.crop_to_selection_refusal())?;
         let doc = self.engine.document();
         let bounds = doc.selection.as_ref().unwrap().coverage_bounds();
         const TOLERANCE: f32 = 1e-3;

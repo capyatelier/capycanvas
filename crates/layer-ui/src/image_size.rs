@@ -219,9 +219,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn open_image_size(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
-        if let Some(reason) = self.canvas_geometry_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
         let mut draft = ImageSizeDraft::new([doc.width, doc.height], doc.resolution);
         draft.update(doc, self.engine.geometry_limits());
@@ -264,9 +262,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Scale the image and set its resolution in one undo step.
     fn apply_image_size(&mut self) -> Result<(), String> {
-        if let Some(reason) = self.canvas_geometry_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.canvas_geometry_refusal())?;
         let draft = self.image_size.as_ref().ok_or("Image Size is not open")?;
         let doc = self.engine.document();
         if draft.current != [doc.width, doc.height] {

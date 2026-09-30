@@ -340,9 +340,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if self.painted_selections.gestures.len() >= 32 {
                 return Err("Selection capture is still catching up".into());
             }
-            if let Some(reason) = self.mask_brush_reason() {
-                return Err(reason.into());
-            }
+            refused(self.mask_brush_reason())?;
             let physical_eraser =
                 event.tool == ToolKind::Eraser || event.flags.contains(SampleFlags::INVERTED);
             let subtract = physical_eraser

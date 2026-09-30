@@ -194,9 +194,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn request_copy(&mut self, command: CommandId) -> Result<(), String> {
         self.require_document_idle()?;
-        if let Some(reason) = self.copy_refusal(command) {
-            return Err(reason.into());
-        }
+        refused(self.copy_refusal(command))?;
         self.clipboard_crop()?;
         self.request_document(DocumentRequest::Copy {
             merged: command == CommandId::CopyMerged,
@@ -226,9 +224,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             (_, true) => CommandId::Cut,
             _ => CommandId::Copy,
         };
-        if let Some(reason) = self.copy_refusal(command) {
-            return Err(reason.into());
-        }
+        refused(self.copy_refusal(command))?;
         let crop = self.clipboard_crop()?;
         let selection = self.engine.document().selection.clone();
         let canvas = [self.engine.document().width, self.engine.document().height];

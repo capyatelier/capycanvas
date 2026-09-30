@@ -120,9 +120,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// source, placement, mask, opacity and blend mode.
     pub(super) fn revert_to_original(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
-        if let Some(reason) = self.revert_to_original_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.revert_to_original_refusal())?;
         let document = self.engine.document();
         let mut layer = document.layer(document.active_layer).ok_or("Select a placed photo layer")?.clone();
         layer.raster = Default::default();

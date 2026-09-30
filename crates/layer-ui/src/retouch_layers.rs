@@ -74,9 +74,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn new_dodge_burn_layer(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
-        if let Some(reason) = self.dodge_burn_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.dodge_burn_refusal())?;
         let ids = std::array::from_fn(|_| self.engine.allocate_layer_id());
         let plan = self.engine.document().dodge_burn_plan(ids).map_err(refusal_text)?;
         self.insert_retouch_layers(plan)
@@ -111,9 +109,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn open_frequency_separation(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
-        if let Some(reason) = self.separation_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.separation_refusal())?;
         let parameter = SeparationFilters::radius_parameter(&self.effect_catalog).ok_or("Gaussian Blur is missing")?;
         let numeric = effects::number_control(parameter).ok_or("Gaussian Blur has no radius")?;
         let radius = DEFAULT_RADIUS.clamp(numeric.min as f32, numeric.max as f32);
@@ -147,9 +143,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             FrequencySeparationAction::Apply => {
                 self.require_document_idle()?;
-                if let Some(reason) = self.retouch_layer_refusal() {
-                    return Err(reason.into());
-                }
+                refused(self.retouch_layer_refusal())?;
                 let draft = self.close_frequency_separation().ok_or("Frequency Separation is not open")?;
                 let ids = std::array::from_fn(|_| self.engine.allocate_layer_id());
                 let plan = self.engine.document().separation_plan(draft.target, &draft.filters, ids).map_err(refusal_text)?;

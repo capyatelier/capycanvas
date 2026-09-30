@@ -1,6 +1,6 @@
 //! Operation-tool transaction and handles. Hosts paint the shared overlay and
 //! render ordinary tool controls; no platform owns transform math or history.
-use super::error;
+use super::{error, refused};
 use crate::*;
 use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerId, LayerKind, LayerOperationKind, MeshMap, Point, Projective, Rect, Selection, TransformMap};
 use std::sync::Arc;
@@ -455,9 +455,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// selection display previews it.
     pub(super) fn begin_outline_transform(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
-        if let Some(reason) = self.outline_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.outline_refusal())?;
         self.cancel_layer_gesture()?;
         let doc = self.engine.document();
         let selection = doc.selection.clone().ok_or("Make a selection first")?;

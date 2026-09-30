@@ -231,9 +231,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             return Ok(());
         }
-        if let Some(reason) = self.canvas_geometry_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.canvas_geometry_refusal())?;
         self.cancel_layer_gesture()?;
         let doc = self.engine.document();
         let canvas = [doc.width, doc.height];

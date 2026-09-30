@@ -121,9 +121,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn orient_image(&mut self, orientation: ImageOrientation) -> Result<(), String> {
         self.require_document_idle()?;
-        if let Some(reason) = self.canvas_geometry_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
         let geometry = CanvasGeometry::orient([doc.width, doc.height], orientation);
         self.apply_canvas_geometry(&geometry, Vec::new()).map_err(|e| e.to_string())
@@ -150,9 +148,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// way, a result that changes nothing is explained by a notice.
     pub(super) fn request_content_bounds(&mut self, purpose: ContentUse) -> Result<(), String> {
         self.require_content_idle(purpose)?;
-        if let Some(reason) = self.content_bounds_refusal(purpose) {
-            return Err(reason.into());
-        }
+        refused(self.content_bounds_refusal(purpose))?;
         let doc = self.engine.document();
         let request = ContentBoundsRequest::new(doc, purpose.scope());
         let revision = doc.revision;

@@ -37,9 +37,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Erase the drawing target's selected pixels, or with `outside` the
     /// pixels outside the selection. A placed photo keeps its original.
     pub(super) fn clear_selection(&mut self, outside: bool) -> Result<(), String> {
-        if let Some(reason) = self.clear_refusal() {
-            return Err(reason.into());
-        }
+        refused(self.clear_refusal())?;
         let document = self.engine.document();
         let target = document.drawing_content().ok_or("Select a drawing layer")?;
         let alpha_locked = document.layer(target).is_some_and(|l| l.properties.alpha_locked);
@@ -123,9 +121,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// source. The copy shares the source's pixels and placed photo, and the
     /// selection is consumed, with Reselect restoring it.
     pub(super) fn selection_to_layer(&mut self, cut: bool) -> Result<(), String> {
-        if let Some(reason) = self.selection_to_layer_refusal(cut) {
-            return Err(reason.into());
-        }
+        refused(self.selection_to_layer_refusal(cut))?;
         let Some(selection) = self.engine.document().selection.clone() else {
             return self.layer_action(LayerAction::DuplicateSelected);
         };

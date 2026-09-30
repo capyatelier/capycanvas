@@ -192,9 +192,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn use_reference_below(&mut self) -> Result<(), String> {
-        if let Some(reason) = self.use_reference_below_reason() {
-            return Err(reason.into());
-        }
+        refused(self.use_reference_below_reason())?;
         let id = self.reference_below().ok_or(NO_REFERENCE_BELOW)?.id;
         let mut references = self.engine.document().reference_layers.clone();
         references.insert(id);

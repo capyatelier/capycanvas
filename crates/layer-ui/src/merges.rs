@@ -65,9 +65,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Flatten Image asks, through the notice, before it discards hidden layers.
     pub(super) fn merge(&mut self, kind: MergeKind) -> Result<(), String> {
-        if let Some(reason) = self.merge_refusal(kind) {
-            return Err(reason.into());
-        }
+        refused(self.merge_refusal(kind))?;
         let hidden = if kind == MergeKind::Flatten { self.engine.document().flatten_discards() } else { 0 };
         if hidden == 0 {
             return self.bake(kind);
@@ -81,9 +79,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn bake(&mut self, kind: MergeKind) -> Result<(), String> {
-        if let Some(reason) = self.merge_refusal(kind) {
-            return Err(reason.into());
-        }
+        refused(self.merge_refusal(kind))?;
         let result = self.engine.allocate_layer_id();
         let coverage = self.engine.allocate_layer_id();
         let plan = self.engine.document().merge_plan(kind, result, coverage).map_err(refusal_text)?;

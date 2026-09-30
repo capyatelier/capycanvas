@@ -4611,34 +4611,26 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.select_brush(self.tools.tool(command.paint_tool().unwrap()))?;
                 Ok((BRUSH, false))
             }
-            CommandId::Undo => {
+            CommandId::Undo | CommandId::Redo => {
+                let redo = command == CommandId::Redo;
                 if self.operation.placing() || self.cropping() {
+                    if redo {
+                        return Err(if self.operation.placing() {
+                            "Apply or cancel the photo placement first"
+                        } else {
+                            "Apply or cancel the crop first"
+                        }.into());
+                    }
                     self.finish_transform(false)?;
                     return Ok((BRUSH | DOCUMENT | COMMANDS, true));
                 }
-                if self.engine.history_color(false) != self.engine.document().color {
-                    self.request_document(DocumentRequest::ColorHistory { redo: false })?;
+                if self.engine.history_color(redo) != self.engine.document().color {
+                    self.request_document(DocumentRequest::ColorHistory { redo })?;
                     return Ok((DOCUMENT | HOST, false));
                 }
                 self.canvas_bar.history_step();
-                let origin = self.engine.history_canvas_origin(false);
-                self.engine.undo().map_err(error)?;
-                if let Some(origin) = origin {
-                    self.follow_canvas_origin(origin);
-                    return Ok((CAMERA, true));
-                }
-                Ok((0, true))
-            }
-            CommandId::Redo => {
-                if self.operation.placing() { return Err("Apply or cancel the photo placement first".into()); }
-                if self.cropping() { return Err("Apply or cancel the crop first".into()); }
-                if self.engine.history_color(true) != self.engine.document().color {
-                    self.request_document(DocumentRequest::ColorHistory { redo: true })?;
-                    return Ok((DOCUMENT | HOST, false));
-                }
-                self.canvas_bar.history_step();
-                let origin = self.engine.history_canvas_origin(true);
-                self.engine.redo().map_err(error)?;
+                let origin = self.engine.history_canvas_origin(redo);
+                if redo { self.engine.redo() } else { self.engine.undo() }.map_err(error)?;
                 if let Some(origin) = origin {
                     self.follow_canvas_origin(origin);
                     return Ok((CAMERA, true));
@@ -5473,6 +5465,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 }
 
+#[inline(always)]
+fn refused(reason: Option<&'static str>) -> Result<(), String> {
+    reason.map_or(Ok(()), |reason| Err(reason.into()))
+}
 fn error(value: impl std::fmt::Display) -> String {
     value.to_string()
 }
