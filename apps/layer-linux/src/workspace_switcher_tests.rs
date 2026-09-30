@@ -521,19 +521,7 @@ fn click(w: &Workspace, input: &mut RemoteInput, widget: &gtk::Widget) {
     input.click(screen_point(widget, &w.window, [0.5, 0.5]));
 }
 fn switcher_buttons(w: &Workspace) -> Vec<gtk::ToggleButton> {
-    fn collect(widget: &gtk::Widget, buttons: &mut Vec<gtk::ToggleButton>) {
-        if let Some(button) = widget.downcast_ref::<gtk::ToggleButton>() {
-            buttons.push(button.clone());
-        }
-        let mut child = widget.first_child();
-        while let Some(node) = child {
-            collect(&node, buttons);
-            child = node.next_sibling();
-        }
-    }
-    let mut buttons = Vec::new();
-    collect(w.workspaces.switcher.upcast_ref(), &mut buttons);
-    buttons
+    descendants(w.workspaces.switcher.upcast_ref())
 }
 fn switcher_names(w: &Workspace) -> Vec<String> {
     switcher_buttons(w)
@@ -542,17 +530,7 @@ fn switcher_names(w: &Workspace) -> Vec<String> {
         .collect()
 }
 fn menu_button(widget: &gtk::Widget) -> Option<gtk::MenuButton> {
-    if let Some(menu) = widget.downcast_ref::<gtk::MenuButton>() {
-        return Some(menu.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(w) = child {
-        if let Some(menu) = menu_button(&w) {
-            return Some(menu);
-        }
-        child = w.next_sibling();
-    }
-    None
+    descendant(widget)
 }
 fn drag(
     w: &Workspace,

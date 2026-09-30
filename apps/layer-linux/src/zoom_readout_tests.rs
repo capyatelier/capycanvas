@@ -2,29 +2,7 @@
 //! levels, Actual Pixels and the typed field, with the canvas keeping focus.
 use super::*;
 
-pub(super) fn mapped_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
-    if root.is_mapped() && root.downcast_ref::<gtk::Label>().is_some_and(|l| l.text() == text) {
-        return Some(root.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        if let Some(found) = mapped_label(&widget, text) {
-            return Some(found);
-        }
-        child = widget.next_sibling();
-    }
-    None
-}
-
-fn descendants<T: IsA<gtk::Widget>>(root: &gtk::Widget) -> Vec<T> {
-    let mut found: Vec<T> = root.clone().downcast().into_iter().collect();
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        found.extend(descendants(&widget));
-        child = widget.next_sibling();
-    }
-    found
-}
+pub(super) use super::mapped_label;
 
 fn readout_text(w: &Workspace) -> String {
     w.view_info.root.child().and_downcast::<gtk::Label>().unwrap().text().to_string()

@@ -261,18 +261,8 @@ fn check_theme(w: &Rc<Workspace>, theme: Theme, output: &std::path::Path, input:
         )
         .unwrap();
         assert!(find_named(&root, &format!("expand-column-{}", column.id)).is_none());
-        fn separators(root: &gtk::Widget, lines: &mut Vec<gtk::Widget>) {
-            if root.is::<gtk::Separator>() {
-                lines.push(root.clone());
-            }
-            let mut child = root.first_child();
-            while let Some(widget) = child {
-                separators(&widget, lines);
-                child = widget.next_sibling();
-            }
-        }
-        let mut lines = Vec::new();
-        separators(&root, &mut lines);
+
+        let lines = descendants::<gtk::Separator>(&root);
         assert_eq!(lines.len(), column.groups.len().saturating_sub(1),
             "only separators between groups are painted");
         for (line, group) in lines.iter().zip(column.groups.iter().skip(1)) {

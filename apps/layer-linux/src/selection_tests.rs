@@ -71,13 +71,8 @@ fn native_quick_mask_input() {
     pump(500);
     let row = d.named("art-layer-0");
     let thumbnail = find_css(&row, "layer-thumbnail").unwrap();
-    fn picture(widget: &gtk::Widget) -> Option<gtk::Picture> {
-        if let Ok(p) = widget.clone().downcast::<gtk::Picture>() { return Some(p); }
-        let mut child = widget.first_child();
-        while let Some(w) = child { if let Some(p) = picture(&w) { return Some(p); } child = w.next_sibling(); }
-        None
-    }
-    assert!(picture(&thumbnail).unwrap().paintable().is_some(), "Quick Mask uses the normal GPU thumbnail");
+
+    assert!(descendant::<gtk::Picture>(&thumbnail).unwrap().paintable().is_some(), "Quick Mask uses the normal GPU thumbnail");
 
     for theme in [Theme::Light,Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme:Some(theme) }); pump(250);

@@ -68,19 +68,7 @@ pub(super) fn shown(w: &Workspace) -> bool {
     w.canvas_bar.root.is_mapped() && w.canvas_bar.visible_bounds().is_some()
 }
 
-pub(super) fn mapped_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
-    if root.is_mapped() && root.downcast_ref::<gtk::Label>().is_some_and(|l| l.text() == text) {
-        return Some(root.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        child = widget.next_sibling();
-        if let Some(found) = mapped_label(&widget, text) {
-            return Some(found);
-        }
-    }
-    None
-}
+pub(super) use super::mapped_label;
 
 fn transforming(w: &Workspace) -> bool {
     state(w).layer_tools.tool == LayerCanvasTool::Transform
@@ -470,7 +458,6 @@ fn native_canvas_bar_warps_a_selection() {
     let document = ui_session(&w).engine().document().revision;
     assert!(document > revision, "Apply commits the warped pixels");
 }
-
 
 #[test]
 #[ignore = "isolated compositor, GPU and native touch delivery"]
@@ -908,20 +895,6 @@ fn drag(native: &mut RemoteInput, device: Device, from: [f32; 2], to: [f32; 2]) 
     });
 }
 
-fn find_type<T: IsA<gtk::Widget>>(root: &gtk::Widget) -> Option<T> {
-    if let Some(found) = root.downcast_ref::<T>() {
-        return Some(found.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        child = widget.next_sibling();
-        if let Some(found) = find_type(&widget) {
-            return Some(found);
-        }
-    }
-    None
-}
-
 fn soft_edged(selection: &layer_core::Selection) -> bool {
     matches!(&selection.shape, layer_core::SelectionShape::Pixels(p) if p.coverage_format() == 2
         && p.words().iter().any(|w| (0..4).any(|i| !matches!((w >> (8 * i)) & 255, 0 | 255))))
@@ -955,7 +928,7 @@ fn native_canvas_bar_refine() {
         assert!(w.window.has_css_class(crate::preview_dialog::PreviewDialog::PREVIEW_CLASS), "the canvas stays undimmed");
         until(|| selection(&w).is_some_and(|s| soft_edged(&s)), "the default radius previews live");
         let previewed = selection(&w);
-        let slider = find_css(&field, "number-track").and_then(|t| find_type::<gtk::Scale>(&t)).expect("the value slider");
+        let slider = find_css(&field, "number-track").and_then(|t| descendant::<gtk::Scale>(&t)).expect("the value slider");
         let track = until_some(
             || {
                 let before = slider.compute_bounds(&w.window)?;

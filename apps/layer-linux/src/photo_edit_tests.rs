@@ -45,35 +45,7 @@ pub(super) fn shown(w: &Workspace, at: [f32; 2]) -> [u8; 4] {
     bytes[offset..offset + 4].try_into().unwrap()
 }
 
-pub(super) fn labelled(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
-    if root.is_mapped() && root.downcast_ref::<gtk::Label>().is_some_and(|l| l.text() == text) {
-        return Some(root.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        child = widget.next_sibling();
-        if let Some(found) = labelled(&widget, text) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn menu_button(root: &gtk::Widget, label: &str) -> Option<gtk::MenuButton> {
-    if let Some(button) = root.downcast_ref::<gtk::MenuButton>()
-        && button.label().as_deref() == Some(label)
-    {
-        return Some(button.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        child = widget.next_sibling();
-        if let Some(found) = menu_button(&widget, label) {
-            return Some(found);
-        }
-    }
-    None
-}
+pub(super) use super::mapped_label as labelled;
 
 /// Open a title bar menu with the mouse and click through `path`.
 pub(super) fn choose(w: &Workspace, input: &mut RemoteInput, menu: &str, path: &[&str]) {

@@ -509,16 +509,8 @@ fn native_column_stack_input() {
                 let bounds = root.compute_bounds(&w.surface).unwrap();
                 assert!((bounds.y() - column.bounds.y).abs() <= 1.);
                 assert!((bounds.height() - column.bounds.height).abs() <= 1.);
-                fn separators(root: &gtk::Widget) -> usize {
-                    let mut count = usize::from(root.is::<gtk::Separator>());
-                    let mut child = root.first_child();
-                    while let Some(widget) = child {
-                        count += separators(&widget);
-                        child = widget.next_sibling();
-                    }
-                    count
-                }
-                assert_eq!(separators(&root), column.groups.len().saturating_sub(1));
+
+                assert_eq!(widgets(&root).filter(|widget| widget.is::<gtk::Separator>()).count(), column.groups.len().saturating_sub(1));
                 for icon in column.groups.iter().flat_map(|g| &g.icons) {
                     let tile = w
                         .columns

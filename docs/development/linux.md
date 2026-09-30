@@ -122,7 +122,7 @@ GDK_BACKEND=wayland GSK_RENDERER=vulkan G_DEBUG=fatal-criticals RUST_BACKTRACE=1
   -- --ignored --exact --test-threads=1 --nocapture
 ```
 
-Reuse `native_test_app`, `named::<T>`, `ui_session`, `ui_session_mut` and `pump`
+Reuse `native_test_app`, `named::<T>`, `widgets`, `descendant`, `ui_session`, `ui_session_mut` and `pump`
 to drive real GTK dialogs. Wait for workspace readiness and for operations to finish before
 asserting, and check persistence by reopening, not only by reading rows.
 

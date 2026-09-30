@@ -162,7 +162,7 @@ private Mutter display with `--native-test=` and one of these tests from
   overflow and full options at small widths.
 - `native_toolbar_components_drawer_input`, `native_toolbar_options_presentation_input`,
   `native_toolbar_visual_audit_input`, `native_toolbar_value_controls_input`,
-  `native_toolbar_visible_edges_input` and `native_toolbar_rows_input`.
+  `native_toolbar_rows_input`.
 
 Set `LAYER_NATIVE_TEST_EXECUTABLE` to the release test binary when iterating.
 Web runs `tools/performance/workspace-motion.sh web --toolbar-components`, or

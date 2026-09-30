@@ -133,24 +133,7 @@ impl Driver {
         self.click(&self.named(name));
     }
     fn label(&self, text: &str) -> gtk::Widget {
-        fn find(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
-            if root.is_mapped()
-                && root
-                    .downcast_ref::<gtk::Label>()
-                    .is_some_and(|l| l.text() == text)
-            {
-                return Some(root.clone());
-            }
-            let mut child = root.first_child();
-            while let Some(w) = child {
-                child = w.next_sibling();
-                if let Some(found) = find(&w, text) {
-                    return Some(found);
-                }
-            }
-            None
-        }
-        find(self.w.window.upcast_ref(), text).unwrap_or_else(|| panic!("no visible label {text}"))
+        mapped_label(self.w.window.upcast_ref(), text).unwrap_or_else(|| panic!("no visible label {text}"))
     }
     fn click_label(&mut self, text: &str) {
         // Native menu pages animate and can scroll at short window heights.
@@ -559,16 +542,10 @@ fn native_header_drag_only_bank_input() {
     let mut d = Driver::new("art.capycanvas.HeaderDragOnly");
     let original = state(&d.w).workspace;
     d.edit();
-    fn inert(widget: &gtk::Widget) {
-        assert!(!widget.is::<gtk::Button>() && !widget.is::<gtk::MenuButton>());
-        assert!(
-            !widget.is_focusable(),
-            "bank components are not activation controls"
-        );
-        let mut child = widget.first_child();
-        while let Some(w) = child {
-            child = w.next_sibling();
-            inert(&w);
+    fn inert(root: &gtk::Widget) {
+        for widget in widgets(root) {
+            assert!(!widget.is::<gtk::Button>() && !widget.is::<gtk::MenuButton>());
+            assert!(!widget.is_focusable(), "bank components are not activation controls");
         }
     }
     // Neither a tap, a hold nor sub-slop motion adds anything or opens Tools.

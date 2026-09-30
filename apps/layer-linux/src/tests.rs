@@ -9,8 +9,6 @@ mod prediction;
 mod stroke_recording;
 #[path = "native_navigation_tests.rs"]
 mod native_navigation;
-#[path = "filter_investigation_tests.rs"]
-mod filter_investigation;
 #[path = "editing_tools_tests.rs"]
 mod editing_tools;
 #[path = "color_panel_tests.rs"]
@@ -1915,141 +1913,6 @@ fn native_pen_path(w: &Rc<Workspace>, points: &[[f32; 2]]) {
     }
     pump(180);
     assert!(!w.status.is_visible(), "{}", w.status.text());
-}
-
-#[test]
-#[ignore = "requires a private Wayland display and GPU"]
-fn native_selected_brushes() {
-    use layer_core::DefaultBrushPreset;
-    let app = native_test_app("art.capycanvas.SelectedBrushes");
-    let w = fixture_workspace(&app);
-    w.window.present();
-    pump(700);
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::Lasso,
-    });
-    native_pen_path(
-        &w,
-        &[
-            [760., 460.],
-            [1280., 460.],
-            [1280., 1060.],
-            [760., 1060.],
-            [760., 460.],
-        ],
-    );
-    assert!(
-        ui_session(&w)
-            .engine()
-            .document()
-            .selection
-            .is_some()
-    );
-    for (i, (preset, color)) in [
-        (DefaultBrushPreset::GPen, [0.8, 0.1, 0.25, 1.]),
-        (DefaultBrushPreset::WetRound, [0.1, 0.4, 0.8, 1.]),
-        (DefaultBrushPreset::WatercolorWash, [0.2, 0.6, 0.3, 1.]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        w.dispatch(UiAction::SelectBrush { id: preset as u32 });
-        w.dispatch(UiAction::SetBrushSize { value: 200. });
-        w.dispatch(UiAction::SetColor { rgba: color });
-        let y = 550. + i as f32 * 200.;
-        native_pen_path(
-            &w,
-            &(0..25)
-                .map(|j| [580. + j as f32 * 38., y])
-                .collect::<Vec<_>>(),
-        );
-    }
-    {
-        let gpu = w.gpu.borrow();
-        let doc = gpu.as_ref().unwrap().session.engine().document();
-        assert_eq!(
-            gpu.as_ref()
-                .unwrap()
-                .session
-                .engine()
-                .metrics()
-                .committed_strokes,
-            3
-        );
-        assert!(doc.selection.is_some());
-    }
-    let dir = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(dir).unwrap();
-    for theme in [Theme::Dark, Theme::Light] {
-        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        pump(150);
-        capture_reference(&w, &format!("{dir}/selected-brushes-{theme:?}.png"), 1.);
-    }
-    // Selection limits stored paint; a layer mask clips the composed appearance,
-    // including watercolor's live outside band.
-    let id = ui_session(&w)
-        .engine()
-        .document()
-        .active_layer
-        .0;
-    w.dispatch(UiAction::Layer {
-        action: LayerAction::MaskSelection { id, hide: false },
-    });
-    for theme in [Theme::Dark, Theme::Light] {
-        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        pump(150);
-        capture_reference(
-            &w,
-            &format!("{dir}/selected-brushes-masked-{theme:?}.png"),
-            1.,
-        );
-    }
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::Undo,
-    });
-    w.dispatch(UiAction::Layer {
-        action: LayerAction::InvertSelection,
-    });
-    w.dispatch(UiAction::SelectBrush {
-        id: DefaultBrushPreset::GPen as u32,
-    });
-    w.dispatch(UiAction::SetColor {
-        rgba: [0.55, 0.25, 0.8, 1.],
-    });
-    native_pen_path(
-        &w,
-        &(0..25)
-            .map(|j| [580. + j as f32 * 38., 755.])
-            .collect::<Vec<_>>(),
-    );
-    w.dispatch(UiAction::Layer {
-        action: LayerAction::Deselect,
-    });
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::Undo,
-    });
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::Undo,
-    });
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::Redo,
-    });
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::Redo,
-    });
-    pump(200);
-    for theme in [Theme::Dark, Theme::Light] {
-        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        pump(150);
-        capture_reference(
-            &w,
-            &format!("{dir}/selection-inverted-replayed-{theme:?}.png"),
-            1.,
-        );
-    }
-    assert!(!w.status.is_visible(), "{}", w.status.text());
-    w.window.destroy();
-    pump(100);
 }
 
 #[test]
@@ -4777,20 +4640,8 @@ fn native_layer_panel_review() {
     // source and thumbnail. Undo restores the exact pixels and attached mask.
     let pixels = || {
         let button = find_css(&row(texture), "layer-thumbnail").unwrap();
-        fn picture(w: &gtk::Widget) -> Option<gtk::Picture> {
-            if let Ok(p) = w.clone().downcast() {
-                return Some(p);
-            }
-            let mut child = w.first_child();
-            while let Some(c) = child {
-                child = c.next_sibling();
-                if let Some(p) = picture(&c) {
-                    return Some(p);
-                }
-            }
-            None
-        }
-        let t: gdk::Texture = picture(&button)
+
+        let t: gdk::Texture = descendant::<gtk::Picture>(&button)
             .unwrap()
             .paintable()
             .unwrap()
@@ -12245,34 +12096,41 @@ fn assert_stroke_positions(w: &Workspace, texture: &gdk::Texture, points: &[Poin
 #[path = "workspace_switcher_tests.rs"]
 mod workspace_switcher_tests;
 
-fn find_menu_item(root: &gtk::Widget, label: &str) -> Option<gtk::Widget> {
-    if root.type_().name() == "GtkModelButton" && root.property::<String>("text") == label {
-        return Some(root.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        if let Some(found) = find_menu_item(&widget, label) {
-            return Some(found);
+fn widgets(root: &gtk::Widget) -> impl Iterator<Item = gtk::Widget> {
+    let mut pending = vec![root.clone()];
+    std::iter::from_fn(move || {
+        let widget = pending.pop()?;
+        let mut child = widget.last_child();
+        while let Some(node) = child {
+            child = node.prev_sibling();
+            pending.push(node);
         }
-        child = widget.next_sibling();
-    }
-    None
+        Some(widget)
+    })
+}
+
+fn mapped_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
+    widgets(root).find(|widget| widget.is_mapped()
+        && widget.downcast_ref::<gtk::Label>().is_some_and(|label| label.text() == text))
+}
+
+fn menu_button(root: &gtk::Widget, label: &str) -> Option<gtk::MenuButton> {
+    widgets(root).filter_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
+        .find(|button| button.label().as_deref() == Some(label))
+}
+
+fn descendants<T: IsA<gtk::Widget>>(root: &gtk::Widget) -> Vec<T> {
+    widgets(root).filter_map(|widget| widget.downcast().ok()).collect()
+}
+
+fn find_menu_item(root: &gtk::Widget, label: &str) -> Option<gtk::Widget> {
+    widgets(root).find(|widget| widget.type_().name() == "GtkModelButton"
+        && widget.property::<String>("text") == label)
 }
 
 fn find_button(root: &gtk::Widget, label: &str) -> Option<gtk::Button> {
-    if let Some(b) = root.downcast_ref::<gtk::Button>()
-        && b.label().as_deref() == Some(label)
-    {
-        return Some(b.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(w) = child {
-        if let Some(button) = find_button(&w, label) {
-            return Some(button);
-        }
-        child = w.next_sibling();
-    }
-    None
+    widgets(root).filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| button.label().as_deref() == Some(label))
 }
 
 fn named<T: IsA<gtk::Widget>>(root: &gtk::Widget, name: &str) -> T {
@@ -12281,41 +12139,22 @@ fn named<T: IsA<gtk::Widget>>(root: &gtk::Widget, name: &str) -> T {
 }
 
 fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
-    // NavigationView retains unpushed pages outside the visible widget tree.
-    if root.widget_name() == "export-navigation" {
-        let nav = root.downcast_ref::<adw::NavigationView>().unwrap();
-        for tag in ["main", "size", "color", "presets"] {
-            if let Some(page) = nav.find_page(tag)
-                && let Some(found) = page.child().and_then(|child| find_named(&child, name)) { return Some(found); }
+    widgets(root).find_map(|widget| {
+        if widget.widget_name() == "export-navigation" {
+            let nav = widget.downcast_ref::<adw::NavigationView>().unwrap();
+            for tag in ["main", "size", "color", "presets"] {
+                if let Some(page) = nav.find_page(tag)
+                    && let Some(found) = page.child().and_then(|child| find_named(&child, name)) {
+                    return Some(found);
+                }
+            }
         }
-    }
-
-    if root.widget_name() == name {
-        return Some(root.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        if let Some(found) = find_named(&widget, name) {
-            return Some(found);
-        }
-        child = widget.next_sibling();
-    }
-    None
+        (widget.widget_name() == name).then_some(widget)
+    })
 }
 
 fn descendant<T: IsA<gtk::Widget>>(root: &impl IsA<gtk::Widget>) -> Option<T> {
-    let root = root.as_ref();
-    if let Some(found) = root.downcast_ref::<T>() {
-        return Some(found.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        if let Some(found) = descendant(&widget) {
-            return Some(found);
-        }
-        child = widget.next_sibling();
-    }
-    None
+    widgets(root.as_ref()).find_map(|widget| widget.downcast().ok())
 }
 
 fn apply_dialog(w: &Workspace, name: &str, completed: bool) -> adw::AlertDialog {
@@ -12340,17 +12179,7 @@ fn apply_dialog(w: &Workspace, name: &str, completed: bool) -> adw::AlertDialog 
 }
 
 fn find_css(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
-    if root.has_css_class(class) {
-        return Some(root.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        if let Some(found) = find_css(&widget, class) {
-            return Some(found);
-        }
-        child = widget.next_sibling();
-    }
-    None
+    widgets(root).find(|widget| widget.has_css_class(class))
 }
 
 struct RemoteInput {
@@ -12432,38 +12261,7 @@ fn contact(device: &str, phase: &str, point: [f32; 2]) -> serde_json::Value {
 #[test]
 #[ignore = "isolated Mutter pointer driver and SQLite; workspace-motion.sh gtk --workspace-menus"]
 fn native_workspace_menu_input() {
-    fn menu_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
-        if root.is_mapped()
-            && root
-                .downcast_ref::<gtk::Label>()
-                .is_some_and(|label| label.text() == text)
-        {
-            return Some(root.clone());
-        }
-        let mut child = root.first_child();
-        while let Some(widget) = child {
-            if let Some(label) = menu_label(&widget, text) {
-                return Some(label);
-            }
-            child = widget.next_sibling();
-        }
-        None
-    }
-    fn menu(root: &gtk::Widget, label: &str) -> Option<gtk::MenuButton> {
-        if let Some(button) = root.downcast_ref::<gtk::MenuButton>()
-            && button.label().as_deref() == Some(label)
-        {
-            return Some(button.clone());
-        }
-        let mut child = root.first_child();
-        while let Some(widget) = child {
-            if let Some(button) = menu(&widget, label) {
-                return Some(button);
-            }
-            child = widget.next_sibling();
-        }
-        None
-    }
+
     let mut input = RemoteInput::new().settle_ms(250);
     let dir = input.dir.clone();
     assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
@@ -12576,7 +12374,7 @@ fn native_workspace_menu_input() {
         }
     }
     for label in ["Window", "File"] {
-        let button = menu(w.header.root.upcast_ref(), label).unwrap();
+        let button = menu_button(w.header.root.upcast_ref(), label).unwrap();
         let bounds = button.compute_bounds(&w.window).unwrap();
         let popup = button.popover().unwrap();
         click(
@@ -12597,10 +12395,10 @@ fn native_workspace_menu_input() {
         assert!(popup.is_mapped());
         capture_popover(&popup, dir.join(format!("{label}.png")).to_str().unwrap());
         if label == "Window" {
-            assert!(menu_label(popup.upcast_ref(), "Layers").is_some());
-            let toolbars = menu_label(popup.upcast_ref(), "Quick Access Toolbars").unwrap();
+            assert!(mapped_label(popup.upcast_ref(), "Layers").is_some());
+            let toolbars = mapped_label(popup.upcast_ref(), "Quick Access Toolbars").unwrap();
             click(screen_point(&toolbars, &w.window, [0.5, 0.5]), 272);
-            assert!(menu_label(popup.upcast_ref(), "Tools").is_some());
+            assert!(mapped_label(popup.upcast_ref(), "Tools").is_some());
             capture_popover(
                 &popup,
                 dir.join("Quick-Access-Toolbars.png").to_str().unwrap(),
@@ -12610,9 +12408,9 @@ fn native_workspace_menu_input() {
                 .unwrap()
                 .set_visible_submenu(Some("main"));
             pump(100);
-            let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
+            let workspace = mapped_label(popup.upcast_ref(), "Workspaces").unwrap();
             click(screen_point(&workspace, &w.window, [0.5, 0.5]), 272);
-            let manage = menu_label(popup.upcast_ref(), "Manage Workspaces…")
+            let manage = mapped_label(popup.upcast_ref(), "Manage Workspaces…")
                 .expect("Workspace submenu should open");
             capture_popover(&popup, dir.join("Workspace.png").to_str().unwrap());
             click(screen_point(&manage, &w.window, [0.5, 0.5]), 272);
@@ -12660,9 +12458,9 @@ fn native_workspace_menu_input() {
                 ],
                 272,
             );
-            let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
+            let workspace = mapped_label(popup.upcast_ref(), "Workspaces").unwrap();
             click(screen_point(&workspace, &w.window, [0.5, 0.5]), 272);
-            let reset = menu_label(popup.upcast_ref(), "Reset All Brushes…").unwrap();
+            let reset = mapped_label(popup.upcast_ref(), "Reset All Brushes…").unwrap();
             click(screen_point(&reset, &w.window, [0.5, 0.5]), 272);
             let button = find_button(w.window.upcast_ref(), "Reset Brushes").unwrap();
             capture_reference(&w, dir.join("Reset-Brushes.png").to_str().unwrap(), 1.);

@@ -457,18 +457,10 @@ fn native_photo_thumbnail_finishes_after_idle_and_restores_on_undo() {
     let target = original.layers[0].id.0;
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
-    fn picture(root: &gtk::Widget) -> Option<gtk::Picture> {
-        if let Ok(picture) = root.clone().downcast() { return Some(picture); }
-        let mut child = root.first_child();
-        while let Some(widget) = child {
-            child = widget.next_sibling();
-            if let Some(picture) = picture(&widget) { return Some(picture); }
-        }
-        None
-    }
+
     let pixels = || -> Option<Vec<u8>> {
         let button = find_css(w.layer_panel.root.upcast_ref(), "layer-thumbnail")?;
-        let texture: gdk::Texture = picture(&button)?.paintable()?.downcast().ok()?;
+        let texture: gdk::Texture = descendant::<gtk::Picture>(&button)?.paintable()?.downcast().ok()?;
         let mut bytes = vec![0; (texture.width() * texture.height() * 4) as usize];
         texture.download(&mut bytes, texture.width() as usize * 4);
         Some(bytes)
