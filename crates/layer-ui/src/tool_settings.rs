@@ -12,68 +12,50 @@ pub struct ToolSettingAction {
     pub checkable: bool,
 }
 
-/// Mutually exclusive actions retain their bar or list presentation when compact.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolActionGroup {
-    SelectionMode,
-    SelectionSource,
-    TransformMode,
-    TransformInterpolation,
-    TransformWarpGrid,
-    CropRatio,
-    CropOverlay,
-    ColorMixing,
+macro_rules! tool_action_groups {
+    ($($group:ident: $id:literal, $label:literal, $segmented:literal, [$($command:ident),+];)+) => {
+        /// Mutually exclusive actions retain their bar or list presentation when compact.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum ToolActionGroup { $($group),+ }
+        impl ToolActionGroup {
+            pub fn segmented(self) -> bool {
+                match self { $(Self::$group => $segmented),+ }
+            }
+            pub fn id(self) -> &'static str {
+                match self { $(Self::$group => $id),+ }
+            }
+            pub fn label(self) -> &'static str {
+                match self { $(Self::$group => $label),+ }
+            }
+        }
+        impl ToolSettingAction {
+            pub fn group(self) -> Option<ToolActionGroup> {
+                match self.command {
+                    $($(crate::CommandId::$command)|+ => Some(ToolActionGroup::$group),)+
+                    _ => None,
+                }
+            }
+        }
+    };
 }
-impl ToolActionGroup {
-    pub fn segmented(self) -> bool {
-        matches!(self, Self::SelectionMode | Self::TransformMode)
-    }
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::SelectionMode => "selection-mode",
-            Self::SelectionSource => "selection-source",
-            Self::TransformMode => "transform-mode",
-            Self::TransformInterpolation => "transform-interpolation",
-            Self::TransformWarpGrid => "transform-warp-grid",
-            Self::CropRatio => "crop-ratio",
-            Self::CropOverlay => "crop-overlay",
-            Self::ColorMixing => "color-mixing",
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::SelectionMode | Self::TransformMode => "Mode",
-            Self::SelectionSource => "Source",
-            Self::TransformInterpolation => "Interpolation",
-            Self::TransformWarpGrid => "Grid",
-            Self::CropRatio => "Ratio",
-            Self::CropOverlay => "Overlay",
-            Self::ColorMixing => "Color mixing",
-        }
-    }
-}
-impl ToolSettingAction {
-    pub fn group(self) -> Option<ToolActionGroup> {
-        use crate::CommandId::*;
-        match self.command {
-            SelectionNew | SelectionAdd | SelectionSubtract | SelectionIntersect => {
-                Some(ToolActionGroup::SelectionMode)
-            }
-            SelectionVisible | SelectionEditing | SelectionReference => {
-                Some(ToolActionGroup::SelectionSource)
-            }
-            TransformFree | TransformUniform | TransformDistort | TransformWarp => Some(ToolActionGroup::TransformMode),
-            WarpGridThree | WarpGridFour | WarpGridFive => Some(ToolActionGroup::TransformWarpGrid),
-            TransformNearest | TransformBilinear | TransformBicubic | TransformLanczos => Some(ToolActionGroup::TransformInterpolation),
-            CropRatioFree | CropRatioOriginal | CropRatioSquare | CropRatioFourFive | CropRatioTwoThree
-            | CropRatioFiveSeven | CropRatioSixteenNine => Some(ToolActionGroup::CropRatio),
-            CropOverlayThirds | CropOverlayGrid | CropOverlayDiagonal | CropOverlayGolden => {
-                Some(ToolActionGroup::CropOverlay)
-            }
-            ColorMixOklab | ColorMixLinear | ColorMixClassic => Some(ToolActionGroup::ColorMixing),
-            _ => None,
-        }
-    }
+
+tool_action_groups! {
+    SelectionMode: "selection-mode", "Mode", true,
+        [SelectionNew, SelectionAdd, SelectionSubtract, SelectionIntersect];
+    SelectionSource: "selection-source", "Source", false,
+        [SelectionVisible, SelectionEditing, SelectionReference];
+    TransformMode: "transform-mode", "Mode", true,
+        [TransformFree, TransformUniform, TransformDistort, TransformWarp];
+    TransformInterpolation: "transform-interpolation", "Interpolation", false,
+        [TransformNearest, TransformBilinear, TransformBicubic, TransformLanczos];
+    TransformWarpGrid: "transform-warp-grid", "Grid", false,
+        [WarpGridThree, WarpGridFour, WarpGridFive];
+    CropRatio: "crop-ratio", "Ratio", false,
+        [CropRatioFree, CropRatioOriginal, CropRatioSquare, CropRatioFourFive, CropRatioTwoThree, CropRatioFiveSeven, CropRatioSixteenNine];
+    CropOverlay: "crop-overlay", "Overlay", false,
+        [CropOverlayThirds, CropOverlayGrid, CropOverlayDiagonal, CropOverlayGolden];
+    ColorMixing: "color-mixing", "Color mixing", false,
+        [ColorMixOklab, ColorMixLinear, ColorMixClassic];
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

@@ -50,6 +50,7 @@ needed for the Rust GTK and Wasm clients.
 
 Picker enums can use `variants!` to keep declaration-order `ALL` arrays with
 their definitions, preserving fixed-size arrays and variant attributes.
+Tool action groups declare their command members, label and bar/list presentation together.
 Tool groups declare their engine, label and medium icon together; their getters
 expand to constant matches.
 
