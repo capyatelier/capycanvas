@@ -4700,12 +4700,7 @@ mod tests {
         assert_eq!(panels, &[Panel::ToolSettings, Panel::Sizes]);
         assert_eq!(*active, Panel::ToolSettings);
         for viewport in [[1600., 1200.], [1200., 900.], [900., 640.], [640., 480.]] {
-            let r = layout.workspace(
-                viewport[0],
-                viewport[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            );
+            let r = resolve_layout(&layout, viewport);
             assert!(
                 r.work_area.width > 0. && r.work_area.height > 0.,
                 "{viewport:?}: {r:?}"
@@ -4753,14 +4748,7 @@ mod tests {
                     TileStyle::Small,
                 );
                 for b in t.tiles {
-                    assert!(
-                        b.x >= 0.
-                            && b.y >= 0.
-                            && b.x + b.width <= g.bounds.width + 0.01
-                            && b.y + b.height <= g.bounds.height + 0.01,
-                        "{viewport:?} {panel:?} {b:?} {:?}",
-                        g.bounds
-                    );
+                    assert_tile_fits(b, [g.bounds.width + 0.01, g.bounds.height + 0.01]);
                     assert!(b.intersection(t.grip.unwrap()).is_none());
                 }
             }
@@ -4908,13 +4896,7 @@ mod tests {
                     assert_eq!(layout.tiles.len(), tiles.len());
                     assert_eq!(layout.insertion.len(), tiles.len() + 1);
                     for (index, (tile, b)) in tiles.iter().zip(&layout.tiles).enumerate() {
-                        assert!(
-                            b.x >= 0.0
-                                && b.y >= 0.0
-                                && b.x + b.width <= width
-                                && b.y + b.height <= height,
-                            "{axis:?} {style:?} {b:?}"
-                        );
+                        assert_tile_fits(*b, [width, height]);
                         assert!(b.intersection(layout.grip.unwrap()).is_none());
                         assert_eq!(
                             if axis == Axis::Horizontal {
@@ -5107,12 +5089,7 @@ mod tests {
         for two_sections in [false, true] {
             for (index, merge) in (0..3).flat_map(|i| [(i, false), (i, true)]) {
                 let (mut layout, panels) = column_fixture(two_sections);
-                let before = layout.workspace(
-                    viewport[0],
-                    viewport[1],
-                    crate::HEADER_HEIGHT,
-                    crate::STATUS_HEIGHT,
-                );
+                let before = resolve_layout(&layout, viewport);
                 let removed = group(&before, panels[index]).width;
                 let original_width = group(&before, Panel::Brushes).width;
                 layout
@@ -5131,12 +5108,7 @@ mod tests {
                         },
                     )
                     .unwrap();
-                let after = layout.workspace(
-                    viewport[0],
-                    viewport[1],
-                    crate::HEADER_HEIGHT,
-                    crate::STATUS_HEIGHT,
-                );
+                let after = resolve_layout(&layout, viewport);
                 assert!(
                     (group(&after, Panel::Brushes).width
                         - if two_sections {
@@ -5197,12 +5169,7 @@ mod tests {
         layout.next_id = 115;
         layout.validate().unwrap();
         let viewport = [1800.0, 1800.0];
-        let before = layout.workspace(
-            viewport[0],
-            viewport[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let before = resolve_layout(&layout, viewport);
         layout
             .move_panel(
                 viewport,
@@ -5212,12 +5179,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let after = layout.workspace(
-            viewport[0],
-            viewport[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let after = resolve_layout(&layout, viewport);
         let removed = group(&before, panels[1]).width + WORKSPACE_SPACING;
         for panel in [Panel::Brushes, Panel::Sizes] {
             assert!(
@@ -5425,13 +5387,7 @@ mod tests {
                 ] {
                     layout.double_click_panel_handle(group, viewport).unwrap();
                     assert_eq!(layout.floating[0].toolbar_layout, mode);
-                    let g = layout
-                        .workspace(
-                            viewport[0],
-                            viewport[1],
-                            crate::HEADER_HEIGHT,
-                            crate::STATUS_HEIGHT,
-                        )
+                    let g = resolve_layout(&layout, viewport)
                         .groups
                         .into_iter()
                         .find(|g| g.id == group)
@@ -5459,12 +5415,7 @@ mod tests {
                         );
                     }
                     for b in &tiles.tiles {
-                        assert!(b.x >= 0.0 && b.y >= 0.0);
-                        assert!(
-                            b.x + b.width <= g.bounds.width && b.y + b.height <= g.bounds.height,
-                            "{viewport:?} {style:?} {mode:?}: {b:?} outside {:?}",
-                            g.bounds
-                        );
+                        assert_tile_fits(*b, [g.bounds.width, g.bounds.height]);
                         assert!(b.intersection(grip).is_none());
                     }
                     if viewport[0] == 1600.0 {
@@ -5499,14 +5450,7 @@ mod tests {
     #[test]
     fn toolbar_style_changes_refit_floats_and_single_lane_docks() {
         let viewport = [1600.0, 1200.0];
-        let resolve = |l: &DockLayout| {
-            l.workspace(
-                viewport[0],
-                viewport[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            )
-        };
+        let resolve = |l: &DockLayout| resolve_layout(l, viewport);
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
             let mut layout = DockLayout::default();
             layout
@@ -5623,14 +5567,7 @@ mod tests {
     #[test]
     fn docking_resets_toolbar_width_and_nested_tile_refits_preserve_neighbors() {
         let viewport = [1600.0, 2200.0];
-        let resolve = |l: &DockLayout| {
-            l.workspace(
-                viewport[0],
-                viewport[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            )
-        };
+        let resolve = |l: &DockLayout| resolve_layout(l, viewport);
         for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
             for edge in [Edge::Left, Edge::Right] {
                 for split in [false, true] {
@@ -5858,12 +5795,7 @@ mod tests {
                     layout
                         .move_panel(viewport, panel, DockTarget::Edge { edge, outer: true })
                         .unwrap();
-                    let resolved = layout.workspace(
-                        viewport[0],
-                        viewport[1],
-                        crate::HEADER_HEIGHT,
-                        crate::STATUS_HEIGHT,
-                    );
+                    let resolved = resolve_layout(&layout, viewport);
                     let g = resolved.groups.iter().find(|g| g.active == panel).unwrap();
                     let horizontal = edge.axis() == Axis::Vertical;
                     let (length, cross, along_size, cross_size) = if horizontal {
@@ -5892,11 +5824,7 @@ mod tests {
                     let tiles = g.tiles.as_ref().unwrap();
                     let grip = tiles.grip.unwrap();
                     for tile in &tiles.tiles {
-                        assert!(tile.x >= 0.0 && tile.y >= 0.0);
-                        assert!(
-                            tile.x + tile.width <= g.bounds.width
-                                && tile.y + tile.height <= g.bounds.height
-                        );
+                        assert_tile_fits(*tile, [g.bounds.width, g.bounds.height]);
                         assert!(tile.intersection(grip).is_none());
                     }
                 }
@@ -5907,14 +5835,7 @@ mod tests {
     #[test]
     fn floating_resize_targets_are_external_and_anchor_the_opposite_edges() {
         let viewport = [1600.0, 1200.0];
-        let resolve = |l: &DockLayout| {
-            l.workspace(
-                viewport[0],
-                viewport[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            )
-        };
+        let resolve = |l: &DockLayout| resolve_layout(l, viewport);
         let mut layout = DockLayout::default();
         layout
             .move_panel(
@@ -5990,12 +5911,7 @@ mod tests {
                         assert_eq!(layout.insertion.len(), count + 1);
                         for (i, tile) in layout.tiles.iter().enumerate() {
                             assert_eq!([tile.width, tile.height], style.size());
-                            assert!(
-                                tile.x >= 0.0
-                                    && tile.y >= 0.0
-                                    && tile.x + tile.width <= 1000.0
-                                    && tile.y + tile.height <= 800.0
-                            );
+                            assert_tile_fits(*tile, [1000.0, 800.0]);
                             assert!(
                                 layout.tiles[..i]
                                     .iter()
@@ -6056,12 +5972,7 @@ mod tests {
                     layout.panels, preferences,
                     "Docking preserves both panels' preferences"
                 );
-                let resolved = layout.workspace(
-                    viewport[0],
-                    viewport[1],
-                    crate::HEADER_HEIGHT,
-                    crate::STATUS_HEIGHT,
-                );
+                let resolved = resolve_layout(&layout, viewport);
                 let docked = resolved
                     .groups
                     .iter()
@@ -6092,12 +6003,7 @@ mod tests {
                         )
                         .unwrap();
                     assert_eq!(layout.panels, preferences);
-                    let resolved = layout.workspace(
-                        viewport[0],
-                        viewport[1],
-                        crate::HEADER_HEIGHT,
-                        crate::STATUS_HEIGHT,
-                    );
+                    let resolved = resolve_layout(&layout, viewport);
                     let separate = resolved
                         .groups
                         .iter()
@@ -6163,12 +6069,7 @@ mod tests {
     fn floating_groups_share_tabs_size_from_content_and_survive_hidden_docks() {
         let viewport = [1200.0, 900.0];
         let resolve = |layout: &DockLayout| {
-            layout.workspace(
-                viewport[0],
-                viewport[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            )
+            resolve_layout(&layout, viewport)
         };
         let mut layout = DockLayout {
             measurements: vec![
@@ -6298,12 +6199,7 @@ mod tests {
                     },
                 )
                 .unwrap();
-            let resolved = layout.workspace(
-                VIEWPORT[0],
-                VIEWPORT[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            );
+            let resolved = resolve_layout(&layout, VIEWPORT);
             let group = resolved
                 .groups
                 .iter()
@@ -6344,12 +6240,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let resolved = layout.workspace(
-            VIEWPORT[0],
-            VIEWPORT[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let resolved = resolve_layout(&layout, VIEWPORT);
         let ribbon = resolved
             .groups
             .iter()
@@ -6375,12 +6266,7 @@ mod tests {
             },
         ];
         layout.add_panel_to_group(Panel::Brushes, 8).unwrap();
-        let resolved = layout.workspace(
-            VIEWPORT[0],
-            VIEWPORT[1],
-            crate::HEADER_HEIGHT,
-            crate::STATUS_HEIGHT,
-        );
+        let resolved = resolve_layout(&layout, VIEWPORT);
         assert_eq!(
             resolved
                 .groups
@@ -6396,13 +6282,7 @@ mod tests {
             .resize_workspace(7, [divider.bounds.x + 83.0, divider.bounds.y], VIEWPORT)
             .unwrap();
         assert!(
-            layout
-                .workspace(
-                    VIEWPORT[0],
-                    VIEWPORT[1],
-                    crate::HEADER_HEIGHT,
-                    crate::STATUS_HEIGHT
-                )
+            resolve_layout(&layout, VIEWPORT)
                 .groups
                 .iter()
                 .find(|g| g.id == 8)
@@ -6431,12 +6311,7 @@ mod tests {
                 },
             }];
             let before = layout.clone();
-            let normal = layout.workspace(
-                viewport[0],
-                viewport[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            );
+            let normal = resolve_layout(&layout, viewport);
             let docked = normal.groups[0].bounds;
             let start = layout
                 .expanded_panel(viewport, Panel::Sizes, [340.0, 480.0], 0.0)
@@ -6638,12 +6513,7 @@ mod tests {
                 assert_eq!(f.default_width, Some(style.floating_width()));
                 assert_eq!(f.height, None);
                 assert!(!layout.fit_tab_groups.contains(&group));
-                let resolved = layout.workspace(
-                    VIEWPORT[0],
-                    VIEWPORT[1],
-                    crate::HEADER_HEIGHT,
-                    crate::STATUS_HEIGHT,
-                );
+                let resolved = resolve_layout(&layout, VIEWPORT);
                 let toolbar = resolved.groups.iter().find(|g| g.id == group).unwrap();
                 assert!(!toolbar.tabs_visible);
                 assert_eq!(toolbar.bounds.width, style.floating_width());
@@ -7038,11 +6908,7 @@ mod tests {
                 );
                 let grip = tiles.grip.unwrap();
                 for tile in &tiles.tiles {
-                    assert!(tile.x >= 0.0 && tile.y >= 0.0);
-                    assert!(
-                        tile.x + tile.width <= g.bounds.width
-                            && tile.y + tile.height <= g.bounds.height
-                    );
+                    assert_tile_fits(*tile, [g.bounds.width, g.bounds.height]);
                     assert!(if horizontal {
                         tile.x + tile.width + 2.0 <= grip.x
                     } else {
@@ -7227,26 +7093,11 @@ mod tests {
                     },
                 )
                 .unwrap();
-            let resolved = layout.workspace(
-                viewport[0],
-                viewport[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            );
+            let resolved = resolve_layout(&layout, viewport);
             let floating = resolved.groups.iter().find(|g| g.id == group).unwrap();
             assert!(floating.floating && floating.tabs_visible);
             for tile in &floating.tiles.as_ref().unwrap().tiles {
-                assert!(tile.x >= 0. && tile.y >= 0.);
-                assert!(
-                    tile.x + tile.width <= floating.bounds.width + 0.01,
-                    "{style:?}: {tile:?} overflows {:?}",
-                    floating.bounds
-                );
-                assert!(
-                    tile.y + tile.height <= floating.bounds.height - TAB_BAR_HEIGHT + 0.01,
-                    "{style:?}: {tile:?} overflows {:?}",
-                    floating.bounds
-                );
+                assert_tile_fits(*tile, [floating.bounds.width + 0.01, floating.bounds.height - TAB_BAR_HEIGHT + 0.01]);
             }
         }
     }
@@ -7404,12 +7255,7 @@ mod tests {
                 ..Default::default()
             };
             let bottom = viewport[1] - TILE_SIZE - WORKSPACE_SPACING;
-            let resolved = layout.workspace(
-                viewport[0],
-                viewport[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            );
+            let resolved = resolve_layout(&layout, viewport);
             assert_eq!(resolved.viewport, viewport);
             for divider in &resolved.dividers {
                 let mut inset = layout.clone();
@@ -7450,12 +7296,7 @@ mod tests {
             layout
                 .move_floating(group, [100., 5000.], viewport)
                 .unwrap();
-            let placed = layout.workspace(
-                viewport[0],
-                viewport[1],
-                crate::HEADER_HEIGHT,
-                crate::STATUS_HEIGHT,
-            );
+            let placed = resolve_layout(&layout, viewport);
             let bounds = placed.groups.iter().find(|g| g.id == group).unwrap().bounds;
             assert!(bounds.y + bounds.height <= bottom + 0.001);
             layout
@@ -7587,6 +7428,14 @@ mod tests {
                 );
             }
         }
+    }
+    fn assert_tile_fits(tile: Bounds, extent: [f32; 2]) {
+        assert!(tile.x >= 0. && tile.y >= 0.);
+        assert!(tile.x + tile.width <= extent[0] && tile.y + tile.height <= extent[1], "{tile:?} {extent:?}");
+    }
+
+    fn resolve_layout(layout: &DockLayout, viewport: [f32; 2]) -> ResolvedLayout {
+        layout.workspace(viewport[0], viewport[1], crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
     }
     fn group(layout: &ResolvedLayout, panel: Panel) -> Bounds {
         layout

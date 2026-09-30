@@ -141,22 +141,10 @@ fn catalog_invocation_rechecks_current_layer_and_preserves_history() {
         },
     );
     let active = s.engine.document().active_layer;
-    s.dispatch(UiAction::Layer {
-        action: LayerAction::Lock {
-            id: active.0,
-            value: true,
-        },
-    })
-    .unwrap();
+    layer(&mut s, LayerAction::Lock { id: active.0, value: true, });
     assert!(s.execute_catalog_command(&clear.id, None).is_err());
     search_action(&mut s, CommandSearchAction::Close);
-    s.dispatch(UiAction::Layer {
-        action: LayerAction::Lock {
-            id: active.0,
-            value: false,
-        },
-    })
-    .unwrap();
+    layer(&mut s, LayerAction::Lock { id: active.0, value: false, });
     let before = s.engine.document().layers.len();
     s.execute_catalog_command("command.add_layer", None)
         .unwrap();
@@ -441,10 +429,7 @@ fn equivalent_menu_actions_share_command_identities_and_explain_unavailability()
         invoke(&mut s, CommandId::ZoomIn);
     }
     assert_eq!(reason(&s, "command.zoom_in"), "Already at the maximum zoom");
-    s.dispatch(UiAction::Layer {
-        action: LayerAction::Lock { id: active, value: true },
-    })
-    .unwrap();
+    layer(&mut s, LayerAction::Lock { id: active, value: true });
     assert_eq!(reason(&s, "command.clear_layer"), "The active layer is locked");
     let generic = "Unavailable in the current tool or edit target";
     let unexplained: Vec<_> = s

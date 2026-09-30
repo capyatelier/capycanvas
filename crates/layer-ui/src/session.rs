@@ -392,19 +392,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .zen_mode;
         workspace
     }
-    pub fn set_platform(&mut self, platform: Platform) {
-        if self.state.platform != platform {
-            self.platform_prediction_available = None;
-        }
-        self.state.platform = platform;
-        self.refresh_feedback_config();
-        self.state.palette = self
-            .state
-            .settings
-            .palette(self.state.theme, platform, self.system_accent);
-        self.refresh_commands();
-        self.refresh_shortcuts();
-    }
+
     pub fn preferences(&self) -> Option<PreferencesView> {
         self.state.settings_open.then(|| {
             self.state.preferences.view(
@@ -7170,13 +7158,7 @@ mod tests {
             Arc::new(SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x44444444]).unwrap());
         let mut s = session(Platform::Gtk);
         let send = |s: &mut UiSession<Recorder>, phase| {
-            let mut e = event(s, 10, phase, 1.);
-            let m = s.state.camera.document_to_surface();
-            e.surface_position = Point {
-                x: m[0] * 48. + m[2] * 72. + m[4],
-                y: m[1] * 48. + m[3] * 72. + m[5],
-            };
-            s.pen(e).unwrap();
+            pen_at(s, 10, phase, [48., 72.]);
         };
         invoke(&mut s, CommandId::AutoSelect);
         assert_eq!(s.state.tool_set.subtools.len(), 8);
@@ -7414,13 +7396,7 @@ mod tests {
         assert!(s.command(CommandId::SnapRulers).checkable);
         let composites = s.renderer_mut().composites;
         let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
-            let m = s.state.camera.document_to_surface();
-            let mut e = event(s, 1, phase, 1.);
-            e.surface_position = Point {
-                x: m[0] * p[0] + m[2] * p[1] + m[4],
-                y: m[1] * p[0] + m[3] * p[1] + m[5],
-            };
-            s.pen(e).unwrap();
+            pen_at(s, 1, phase, p);
             s.frame(1, 1).unwrap();
             assert!(s.state.host_error.is_none(), "{:?}", s.state.host_error);
         };
@@ -7569,13 +7545,7 @@ mod tests {
         s.state.camera.flipped = [true, false];
         s.frame(1, 1).unwrap();
         let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
-            let m = s.state.camera.document_to_surface();
-            let mut e = event(s, 1, phase, 1.);
-            e.surface_position = Point {
-                x: m[0] * p[0] + m[2] * p[1] + m[4],
-                y: m[1] * p[0] + m[3] * p[1] + m[5],
-            };
-            s.pen(e).unwrap();
+            pen_at(s, 1, phase, p);
         };
         for index in 0..3 {
             let action = s.state.tool_set.groups[index].action.clone();
@@ -7667,23 +7637,7 @@ mod tests {
                         ((f.end.x - f.start.x).abs() - (f.end.y - f.start.y).abs()).abs() < 0.001
                     );
                 }
-                invoke(&mut s, CommandId::Undo);
-                s.frame(3, 3).unwrap();
-                assert_eq!(
-                    s.engine
-                        .document()
-                        .layer(id)
-                        .unwrap()
-                        .pending_operations
-                        .len(),
-                    before
-                );
-                invoke(&mut s, CommandId::Redo);
-                s.frame(4, 4).unwrap();
-                assert_eq!(
-                    s.engine.document().layer(id).unwrap().raster.identity(),
-                    committed
-                );
+                assert_operation_undo_redo(&mut s, id, before, committed, [3, 4]);
                 assert!(s.engine.backend().pending_operations.is_empty());
                 assert_eq!(s.renderer_mut().dabs, 0, "no brush stamping for figures");
             }
@@ -7817,13 +7771,7 @@ mod tests {
         s.state.camera.flipped = [true, false];
         s.frame(1, 1).unwrap();
         let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
-            let m = s.state.camera.document_to_surface();
-            let mut e = event(s, 1, phase, 1.0);
-            e.surface_position = Point {
-                x: m[0] * p[0] + m[2] * p[1] + m[4],
-                y: m[1] * p[0] + m[3] * p[1] + m[5],
-            };
-            s.pen(e).unwrap();
+            pen_at(s, 1, phase, p);
         };
         send(&mut s, PenPhase::Down, [30.0, 40.0]);
         for i in 0..100 {
@@ -7874,22 +7822,7 @@ mod tests {
         assert_eq!(selection.affine.map(first), Point::default());
         assert!(s.layer_interaction.path.is_empty());
         assert_eq!(s.renderer_mut().dabs, 0);
-        invoke(&mut s, CommandId::Undo);
-        s.frame(4, 4).unwrap();
-        assert!(
-            s.engine
-                .document()
-                .layer(id)
-                .unwrap()
-                .pending_operations
-                .is_empty()
-        );
-        invoke(&mut s, CommandId::Redo);
-        s.frame(5, 5).unwrap();
-        assert_eq!(
-            s.engine.document().layer(id).unwrap().raster.identity(),
-            committed
-        );
+        assert_operation_undo_redo(&mut s, id, 0, committed, [4, 5]);
         for cancel in [0, 1, 2] {
             send(&mut s, PenPhase::Down, [30.0, 40.0]);
             send(&mut s, PenPhase::Move, [90.0, 100.0]);
@@ -7938,14 +7871,7 @@ mod tests {
                 (ContactPhase::Up, [260.0, 340.0]),
             ] {
                 let reply = s
-                    .input(UiInput::Pointer {
-                        id: 1,
-                        phase,
-                        kind,
-                        button: PointerButton::Primary,
-                        position,
-                        time_ns: 0,
-                    })
+                    .input(pointer_input(1, phase, kind, PointerButton::Primary, position, 0))
                     .unwrap();
                 assert!(!reply.paint && reply.pan_cursor);
             }
@@ -7995,34 +7921,16 @@ mod tests {
 
     #[test]
     fn operation_controls_support_active_masks_and_linked_paint_without_host_logic() {
-        use layer_core::{LayerOperationKind, Point, Selection};
+        use layer_core::LayerOperationKind;
         for linked in [false, true] {
             let mut s = session(Platform::Gtk);
-            let area = Selection::polygon(vec![
-                Point { x: 100., y: 100. },
-                Point { x: 300., y: 100. },
-                Point { x: 300., y: 300. },
-                Point { x: 100., y: 300. },
-            ])
-            .unwrap();
+            let area = rectangle([100., 100., 300., 300.]);
             s.fill_selection(area.clone()).unwrap();
             s.layer_edit(layer_core::Edit::SetSelection(Some(area)))
                 .unwrap();
             let id = s.engine.document().active_layer;
-            s.dispatch(UiAction::Layer {
-                action: LayerAction::AddMask {
-                    id: id.0,
-                    replace: false,
-                },
-            })
-            .unwrap();
-            s.dispatch(UiAction::Layer {
-                action: LayerAction::LinkMask {
-                    id: id.0,
-                    value: linked,
-                },
-            })
-            .unwrap();
+            layer(&mut s, LayerAction::AddMask { id: id.0, replace: false, });
+            layer(&mut s, LayerAction::LinkMask { id: id.0, value: linked, });
             s.frame(1, 1).unwrap();
             let before = s.engine.document().layers.clone();
             assert!(s.engine.document().active_mask);
@@ -8080,15 +7988,9 @@ mod tests {
 
     #[test]
     fn window_blur_and_pen_cancel_keep_the_transform_and_roll_back_only_the_drag() {
-        use layer_core::{Point, Selection};
+        use layer_core::Point;
         let mut s = session(Platform::Gtk);
-        let selection = Selection::polygon(vec![
-            Point { x: 100., y: 100. },
-            Point { x: 300., y: 100. },
-            Point { x: 300., y: 300. },
-            Point { x: 100., y: 300. },
-        ])
-        .unwrap();
+        let selection = rectangle([100., 100., 300., 300.]);
         s.fill_selection(selection.clone()).unwrap();
         s.layer_edit(layer_core::Edit::SetSelection(Some(selection)))
             .unwrap();
@@ -8130,15 +8032,9 @@ mod tests {
 
     #[test]
     fn operation_controls_preview_cancel_apply_and_undo_share_one_transaction() {
-        use layer_core::{Affine, Point, Selection};
+        use layer_core::{Affine, Point};
         let mut s = session(Platform::Gtk);
-        let selection = Selection::polygon(vec![
-            Point { x: 100., y: 100. },
-            Point { x: 300., y: 100. },
-            Point { x: 300., y: 300. },
-            Point { x: 100., y: 300. },
-        ])
-        .unwrap();
+        let selection = rectangle([100., 100., 300., 300.]);
         s.fill_selection(selection.clone()).unwrap();
         s.layer_edit(layer_core::Edit::SetSelection(Some(selection.clone())))
             .unwrap();
@@ -8656,18 +8552,14 @@ mod tests {
 
     #[test]
     fn unchanged_library_refresh_does_not_validate_or_lock_document_commands() {
-        use layer_core::{EffectInstallMode, EffectPackage};
+        use layer_core::{EffectInstallMode};
         let mut s = session(Platform::Gtk);
         s.frame(0, 0).unwrap();
-        let package = EffectPackage {
-            format: 1,
-            categories: s.effect_catalog.categories().to_vec(),
-            filters: s.effect_catalog.filters().to_vec(),
-        };
+        let package = package_json(s.effect_catalog.categories().to_vec(), s.effect_catalog.filters().to_vec());
         let revision = s.state.filter_catalog_revision;
         let commands = [CommandId::NewDocument, CommandId::OpenDocument, CommandId::ExportDocument];
         let enabled = commands.map(|id| s.command(id).enabled);
-        let change = s.load_effect_library(&serde_json::to_string(&package).unwrap(),
+        let change = s.load_effect_library(&package,
             |_| panic!("inline sources"), EffectInstallMode::Merge).unwrap();
         assert!(!change.canvas_wake);
         assert_eq!(s.state.filter_catalog_revision, revision);
@@ -8679,7 +8571,7 @@ mod tests {
 
     #[test]
     fn background_readback_waits_for_contacts_and_pending_filters() {
-        use layer_core::{EffectInstallMode, EffectPackage};
+        use layer_core::{EffectInstallMode};
         let mut s = session(Platform::Gtk);
         s.frame(0, 0).unwrap();
         s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
@@ -8687,13 +8579,9 @@ mod tests {
         s.pen(event(&s, 2, PenPhase::Up, 1.0)).unwrap();
         s.frame(1, 1).unwrap();
         assert!(s.background_readback_idle());
-        let package = EffectPackage {
-            format: 1,
-            categories: s.effect_catalog.categories().to_vec(),
-            filters: vec![s.effect_catalog.get("unsharp_mask").unwrap().clone()],
-        };
+        let package = package_json(s.effect_catalog.categories().to_vec(), vec![s.effect_catalog.get("unsharp_mask").unwrap().clone()]);
         s.load_effect_package(
-            &serde_json::to_string(&package).unwrap(),
+            &package,
             |_| panic!("inline sources"),
             EffectInstallMode::Replace,
         )
@@ -8704,15 +8592,10 @@ mod tests {
 
     #[test]
     fn runtime_filter_publication_is_atomic_and_uses_current_values() {
-        use layer_core::{EffectInstallMode, EffectPackage, EffectValue};
+        use layer_core::{EffectInstallMode, EffectValue};
         use std::sync::Arc;
         let mut s = session(Platform::Gtk);
-        s.dispatch(UiAction::Effect {
-            action: EffectAction::Insert {
-                effect: "unsharp_mask".into(),
-            },
-        })
-        .unwrap();
+        insert_effect(&mut s, "unsharp_mask");
         s.frame(0, 0).unwrap();
         let id = s.engine.document().active_layer;
         let original = s
@@ -8727,12 +8610,8 @@ mod tests {
         Arc::make_mut(&mut definition.program).label = "Runtime sharpness".into();
         let parameters = Arc::make_mut(&mut Arc::make_mut(&mut definition.program).parameters);
         parameters[0].label = "Runtime radius".into();
-        let package = EffectPackage {
-            format: 1,
-            categories: s.effect_catalog.categories().to_vec(),
-            filters: vec![definition],
-        };
-        let json = serde_json::to_string(&package).unwrap();
+        let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
+        let json = package;
         let change = s
             .load_effect_package(
                 &json,
@@ -8819,7 +8698,7 @@ mod tests {
 
     #[test]
     fn runtime_filter_add_refreshes_catalog_and_shared_controls() {
-        use layer_core::{EffectCategory, EffectInstallMode, EffectPackage};
+        use layer_core::{EffectCategory, EffectInstallMode};
         use std::sync::Arc;
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session(platform);
@@ -8829,16 +8708,9 @@ mod tests {
             program.id = "test:runtime".into();
             program.label = "Runtime test".into();
             definition.category = "examples".into();
-            let package = EffectPackage {
-                format: 1,
-                categories: vec![EffectCategory {
-                    id: "examples".into(),
-                    label: "Examples".into(),
-                }],
-                filters: vec![definition],
-            };
+            let package = package_json(vec![EffectCategory { id: "examples".into(), label: "Examples".into(), }], vec![definition]);
             s.load_effect_package(
-                &serde_json::to_string(&package).unwrap(),
+                &package,
                 |_| panic!(),
                 EffectInstallMode::Add,
             )
@@ -8869,7 +8741,7 @@ mod tests {
     }
     #[test]
     fn runtime_filter_add_cannot_replace_a_document_only_program() {
-        use layer_core::{Edit, EffectInstallMode, EffectInstance, EffectPackage, Layer};
+        use layer_core::{Edit, EffectInstallMode, EffectInstance, Layer};
         use std::sync::Arc;
         let mut s = session(Platform::Gtk);
         let mut definition = s.effect_catalog.get("brightness_contrast").unwrap().clone();
@@ -8882,14 +8754,10 @@ mod tests {
         s.frame(0, 0).unwrap();
         let original = s.engine.document().layer(id).unwrap().effect.clone();
         Arc::make_mut(&mut definition.program).label = "Different definition".into();
-        let package = EffectPackage {
-            format: 1,
-            categories: s.effect_catalog.categories().to_vec(),
-            filters: vec![definition],
-        };
+        let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
         let error = s
             .load_effect_package(
-                &serde_json::to_string(&package).unwrap(),
+                &package,
                 |_| panic!(),
                 EffectInstallMode::Add,
             )
@@ -8902,7 +8770,7 @@ mod tests {
 
     #[test]
     fn clean_close_during_library_warmup_preserves_document_and_input_guards() {
-        use layer_core::{EffectInstallMode, EffectPackage};
+        use layer_core::{EffectInstallMode};
         for library in [false, true] {
             for dirty in [false, true] {
                 for interaction in [false, true] {
@@ -8915,12 +8783,8 @@ mod tests {
                     s.frame(0, 0).unwrap();
                     let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
                     std::sync::Arc::make_mut(&mut definition.program).label = "Changed library program".into();
-                    let package = EffectPackage {
-                        format: 1,
-                        categories: s.effect_catalog.categories().to_vec(),
-                        filters: vec![definition],
-                    };
-                    let manifest = serde_json::to_string(&package).unwrap();
+                    let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
+                    let manifest = package;
                     if library {
                         s.load_effect_library(&manifest, |_| panic!(), EffectInstallMode::Merge)
                             .unwrap();
@@ -8981,7 +8845,7 @@ mod tests {
 
     #[test]
     fn save_and_close_during_library_warmup_waits_for_the_saved_checkpoint() {
-        use layer_core::{EffectInstallMode, EffectPackage};
+        use layer_core::{EffectInstallMode};
         use std::sync::Arc;
         let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
@@ -8989,13 +8853,9 @@ mod tests {
         let document = s.engine.document().clone();
         let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
         Arc::make_mut(&mut definition.program).label = "New library version".into();
-        let package = EffectPackage {
-            format: 1,
-            categories: s.effect_catalog.categories().to_vec(),
-            filters: vec![definition],
-        };
+        let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
         s.load_effect_library(
-            &serde_json::to_string(&package).unwrap(),
+            &package,
             |_| panic!(),
             EffectInstallMode::Merge,
         )
@@ -9026,15 +8886,10 @@ mod tests {
 
     #[test]
     fn startup_filter_library_does_not_rewrite_saved_programs() {
-        use layer_core::{EffectInstallMode, EffectPackage};
+        use layer_core::{EffectInstallMode};
         use std::sync::Arc;
         let mut s = session(Platform::Gtk);
-        s.dispatch(UiAction::Effect {
-            action: EffectAction::Insert {
-                effect: "unsharp_mask".into(),
-            },
-        })
-        .unwrap();
+        insert_effect(&mut s, "unsharp_mask");
         s.frame(0, 0).unwrap();
         let document = s.engine.document().clone();
         let original = document
@@ -9048,13 +8903,9 @@ mod tests {
         let checkpoint = s.engine.checkpoint();
         let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
         Arc::make_mut(&mut definition.program).label = "New library version".into();
-        let package = EffectPackage {
-            format: 1,
-            categories: s.effect_catalog.categories().to_vec(),
-            filters: vec![definition],
-        };
+        let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
         s.load_effect_library(
-            &serde_json::to_string(&package).unwrap(),
+            &package,
             |_| panic!(),
             EffectInstallMode::Replace,
         )
@@ -9134,13 +8985,7 @@ mod tests {
     fn filter_insertion_preserves_clipping_stack_and_delete_capabilities() {
         let mut s = session(Platform::Gtk);
         for _ in 0..2 {
-            s.dispatch(UiAction::Layer {
-                action: LayerAction::New {
-                    group: false,
-                    clipped: true,
-                },
-            })
-            .unwrap();
+            layer(&mut s, LayerAction::New { group: false, clipped: true, });
         }
         let clips: Vec<_> = s
             .engine
@@ -9177,10 +9022,7 @@ mod tests {
                 assert_eq!(doc.clipping_base(*clip), Some(LayerId(1)));
             }
             assert!(s.state.layer_tools.can_delete);
-            s.dispatch(UiAction::Layer {
-                action: LayerAction::DeleteSelected,
-            })
-            .unwrap();
+            layer(&mut s, LayerAction::DeleteSelected);
             assert_eq!(s.engine.document().layers[0].id, top);
         }
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
@@ -9190,9 +9032,7 @@ mod tests {
     #[test]
     fn layer_row_selection_references_and_editing_are_independent() {
         let mut s = session(Platform::Gtk);
-        let send = |s: &mut UiSession<Recorder>, action| {
-            s.dispatch(UiAction::Layer { action }).unwrap();
-        };
+        let send = layer;
         send(
             &mut s,
             LayerAction::New {
@@ -9310,35 +9150,16 @@ mod tests {
             let mut target = paint;
             let mut lock = paint;
             if kind != "paint" {
-                s.dispatch(UiAction::Layer {
-                    action: LayerAction::New {
-                        group: true,
-                        clipped: false,
-                    },
-                })
-                .unwrap();
+                layer(&mut s, LayerAction::New { group: true, clipped: false, });
                 lock = s.engine.document().active_layer.0;
                 target = lock;
                 if kind == "inherited" {
-                    s.dispatch(UiAction::Layer {
-                        action: LayerAction::Drop {
-                            id: paint,
-                            target: lock,
-                            fraction: 0.5,
-                        },
-                    })
-                    .unwrap();
+                    layer(&mut s, LayerAction::Drop { id: paint, target: lock, fraction: 0.5, });
                     target = paint;
                 }
             }
             s.dispatch(property(target, 0.35)).unwrap();
-            s.dispatch(UiAction::Layer {
-                action: LayerAction::Lock {
-                    id: lock,
-                    value: true,
-                },
-            })
-            .unwrap();
+            layer(&mut s, LayerAction::Lock { id: lock, value: true, });
             let revision = s.engine.document().revision;
             for action in [
                 property(target, 0.55),
@@ -9374,13 +9195,7 @@ mod tests {
                     0.35
                 );
             }
-            s.dispatch(UiAction::Layer {
-                action: LayerAction::Lock {
-                    id: lock,
-                    value: false,
-                },
-            })
-            .unwrap();
+            layer(&mut s, LayerAction::Lock { id: lock, value: false, });
             s.dispatch(property(target, 0.55)).unwrap();
             assert_eq!(
                 s.engine.document().layer(LayerId(target)).unwrap().opacity,
@@ -9448,8 +9263,7 @@ mod tests {
     #[test]
     fn layer_context_preserves_checks_and_bulk_duplicate_keeps_clipping_stacks() {
         let mut s = session(Platform::Gtk);
-        let send =
-            |s: &mut UiSession<Recorder>, action| s.dispatch(UiAction::Layer { action }).unwrap();
+        let send = layer;
         send(
             &mut s,
             LayerAction::New {
@@ -9520,22 +9334,9 @@ mod tests {
                 })
                 .is_err()
         );
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::New {
-                group: false,
-                clipped: false,
-            },
-        })
-        .unwrap();
+        layer(&mut s, LayerAction::New { group: false, clipped: false, });
         let id = s.engine.document().active_layer.0;
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::Drop {
-                id,
-                target: 2,
-                fraction: 1.,
-            },
-        })
-        .unwrap();
+        layer(&mut s, LayerAction::Drop { id, target: 2, fraction: 1., });
         assert_eq!(s.state.layers.last().unwrap().id, 2);
         assert_eq!(s.state.layers[s.state.layers.len() - 2].id, id);
         s.engine
@@ -9553,8 +9354,7 @@ mod tests {
     #[test]
     fn copied_masks_are_independent_and_keep_their_canvas_position() {
         let mut s = session(Platform::Gtk);
-        let send =
-            |s: &mut UiSession<Recorder>, action| s.dispatch(UiAction::Layer { action }).unwrap();
+        let send = layer;
         send(
             &mut s,
             LayerAction::AddMask {
@@ -9614,13 +9414,7 @@ mod tests {
     fn layer_drop_preview_rejects_invalid_moves_and_does_not_create_history() {
         let mut s = session(Platform::Gtk);
         let original = s.engine.document().layers.clone();
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::New {
-                group: false,
-                clipped: false,
-            },
-        })
-        .unwrap();
+        layer(&mut s, LayerAction::New { group: false, clipped: false, });
         let id = s.engine.document().active_layer.0;
         let created = s.engine.document().layers.clone();
         assert_eq!(s.layer_drop_hint(id, 1, 0.0), None);
@@ -9635,27 +9429,13 @@ mod tests {
             Some(LayerDropPosition::Below)
         );
         assert_eq!(s.engine.document().layers, created);
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::Drop {
-                id,
-                target: 1,
-                fraction: 0.0,
-            },
-        })
-        .unwrap();
+        layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 0.0, });
         // The no-op drop must not consume Undo ahead of the preceding New layer.
         s.engine.undo().unwrap();
         assert_eq!(s.engine.document().layers, original);
         s.engine.redo().unwrap();
         assert_eq!(s.engine.document().layers, created);
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::Drop {
-                id,
-                target: 1,
-                fraction: 1.0,
-            },
-        })
-        .unwrap();
+        layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 1.0, });
         let moved = s.engine.document().layers.clone();
         assert_ne!(moved, created);
         s.engine.undo().unwrap();
@@ -9668,13 +9448,7 @@ mod tests {
     fn layer_drop_preview_shares_parent_lock_cycle_and_clipping_validation() {
         let mut s = session(Platform::Gtk);
         for _ in 0..2 {
-            s.dispatch(UiAction::Layer {
-                action: LayerAction::New {
-                    group: true,
-                    clipped: false,
-                },
-            })
-            .unwrap();
+            layer(&mut s, LayerAction::New { group: true, clipped: false, });
         }
         let child = s.engine.document().active_layer;
         let parent = s
@@ -9690,33 +9464,12 @@ mod tests {
             s.layer_drop_hint(1, child.0, 0.5),
             Some(LayerDropPosition::Into)
         );
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::Lock {
-                id: parent.0,
-                value: true,
-            },
-        })
-        .unwrap();
+        layer(&mut s, LayerAction::Lock { id: parent.0, value: true, });
         assert_eq!(s.layer_drop_hint(1, child.0, 0.5), None);
         assert_eq!(s.layer_drop_hint(child.0, 1, 0.0), None);
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::Lock {
-                id: parent.0,
-                value: false,
-            },
-        })
-        .unwrap();
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::Select { id: 1, mask: false },
-        })
-        .unwrap();
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::New {
-                group: false,
-                clipped: true,
-            },
-        })
-        .unwrap();
+        layer(&mut s, LayerAction::Lock { id: parent.0, value: false, });
+        layer(&mut s, LayerAction::Select { id: 1, mask: false });
+        layer(&mut s, LayerAction::New { group: false, clipped: true, });
         let clipped = s.engine.document().active_layer.0;
         // Both moving the base out and orphaning a clipped layer are rejected.
         assert_eq!(s.layer_drop_hint(1, child.0, 0.5), None);
@@ -9726,13 +9479,7 @@ mod tests {
     #[test]
     fn dropping_into_a_closed_group_expands_it_without_changing_edit_target() {
         let mut s = session(Platform::Gtk);
-        s.dispatch(UiAction::Layer {
-            action: LayerAction::New {
-                group: true,
-                clipped: false,
-            },
-        })
-        .unwrap();
+        layer(&mut s, LayerAction::New { group: true, clipped: false, });
         let group = s.engine.document().active_layer;
         for action in [
             LayerAction::Collapse { id: group.0 },
@@ -9743,7 +9490,7 @@ mod tests {
                 fraction: 0.5,
             },
         ] {
-            s.dispatch(UiAction::Layer { action }).unwrap();
+            layer(&mut s, action);
         }
         assert!(!s.layer_interaction.collapsed.contains(&group));
         assert_eq!(s.engine.document().active_layer, LayerId(1));
@@ -9878,9 +9625,7 @@ mod tests {
         let mut s = session(Platform::Gtk);
         let original = s.state.workspace.clone();
         let revision = s.engine.document().revision;
-        let edit = |s: &mut UiSession<Recorder>, action| {
-            s.dispatch(UiAction::Customize { action }).unwrap()
-        };
+        let edit = customize;
         let mut menu = s.workspace_menu();
         assert_eq!(menu.sections[0][0].label, "Customize Title Bar…");
         assert!(!format!("{menu:?}").contains("Show Menu Bar"));
@@ -10061,9 +9806,7 @@ mod tests {
     #[test]
     fn toolbar_manager_selects_hidden_toolbars_and_deletes_with_confirmation_and_undo() {
         let mut s = session(Platform::Gtk);
-        let edit = |s: &mut UiSession<Recorder>, action| {
-            s.dispatch(UiAction::Customize { action }).unwrap();
-        };
+        let edit = customize;
         edit(
             &mut s,
             CustomizationAction::DuplicateToolbar {
@@ -10354,13 +10097,7 @@ mod tests {
                         (PreferenceId::ZenShowCapy, capy),
                         (PreferenceId::ZenRevealAtEdges, edges),
                     ] {
-                        s.dispatch(UiAction::Preferences {
-                            action: PreferenceAction::Edit {
-                                id,
-                                value: PreferenceValue::Bool(value),
-                            },
-                        })
-                        .unwrap();
+                        preference(&mut s, PreferenceAction::Edit { id, value: PreferenceValue::Bool(value), });
                     }
                     let layout = s.state.workspace.layout.clone();
                     let camera = s.state.camera.clone();
@@ -11379,7 +11116,6 @@ mod tests {
                 .all(|item| !item.enabled)
         );
     }
-
 
     #[test]
     fn group_tab_presentation_selection_moves_and_history_are_shared() {
@@ -14360,14 +14096,7 @@ mod tests {
                     assert!(s.update_canvas_cursor(&mut view));
                     assert!(!view.segments.is_empty());
                     for phase in [ContactPhase::Down, ContactPhase::Move, end] {
-                        s.input(UiInput::Pointer {
-                            id: 1,
-                            phase,
-                            kind,
-                            button: PointerButton::Primary,
-                            position: [225.0, 300.0],
-                            time_ns: 0,
-                        })
+                        s.input(pointer_input(1, phase, kind, PointerButton::Primary, [225.0, 300.0], 0))
                         .unwrap();
                         let visible = !hide || phase == end;
                         assert_eq!(s.update_canvas_cursor(&mut view), visible);
@@ -14463,14 +14192,7 @@ mod tests {
                             assert!(s.update_canvas_cursor(&mut view));
                             assert_eq!(!view.segments.is_empty(), mode != CursorMode::None);
                             for phase in [ContactPhase::Down, ContactPhase::Move, end] {
-                                s.input(UiInput::Pointer {
-                                    id: 1,
-                                    phase,
-                                    kind,
-                                    button: PointerButton::Primary,
-                                    position: [225.0, 300.0],
-                                    time_ns: 0,
-                                })
+                                s.input(pointer_input(1, phase, kind, PointerButton::Primary, [225.0, 300.0], 0))
                                 .unwrap();
                                 let visible = !hide || phase == end || (erasing && outline);
                                 assert_eq!(
@@ -14530,18 +14252,7 @@ mod tests {
                     );
                     assert_eq!(!hover.segments.is_empty(), sight);
                     for phase in [ContactPhase::Down, ContactPhase::Move, end] {
-                        s.input(UiInput::Pointer {
-                            id: 1,
-                            phase,
-                            kind: if tool == ToolKind::Mouse {
-                                PointerKind::Mouse
-                            } else {
-                                PointerKind::Pen
-                            },
-                            button: PointerButton::Primary,
-                            position: [225.0, 300.0],
-                            time_ns: 0,
-                        })
+                        s.input(pointer_input(1, phase, if tool == ToolKind::Mouse { PointerKind::Mouse } else { PointerKind::Pen }, PointerButton::Primary, [225.0, 300.0], 0))
                         .unwrap();
                         let cursor = s.canvas_cursor();
                         assert_eq!(
@@ -16138,18 +15849,9 @@ mod tests {
         for tool in [LayerCanvasTool::Select, LayerCanvasTool::LassoFill] {
             let mut s = session(Platform::Gtk);
             invoke(&mut s, CommandId::SelectAll);
-            s.dispatch(UiAction::Layer {
-                action: LayerAction::New {
-                    group: false,
-                    clipped: false,
-                },
-            })
-            .unwrap();
+            layer(&mut s, LayerAction::New { group: false, clipped: false, });
             invoke(&mut s, CommandId::Undo);
-            s.dispatch(UiAction::Layer {
-                action: LayerAction::Tool { tool },
-            })
-            .unwrap();
+            layer(&mut s, LayerAction::Tool { tool });
             let selection = s.engine.document().selection.clone();
             let checkpoint = s.engine.checkpoint();
             let mut sequence = 0;

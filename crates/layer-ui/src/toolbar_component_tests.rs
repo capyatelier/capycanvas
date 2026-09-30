@@ -142,13 +142,7 @@ fn toolbar_options_follow_tools_and_preserve_completion_actions() {
         }
     }
     invoke(&mut s, CommandId::Brush);
-    let selection = layer_core::Selection::polygon(vec![
-        Point { x: 100., y: 100. },
-        Point { x: 300., y: 100. },
-        Point { x: 300., y: 300. },
-        Point { x: 100., y: 300. },
-    ])
-    .unwrap();
+    let selection = rectangle([100., 100., 300., 300.]);
     s.fill_selection(selection).unwrap();
     s.frame(1, 1).unwrap();
     invoke(&mut s, CommandId::ScaleRotate);

@@ -1,3 +1,4 @@
+use crate::session::test_support::tile_ids;
 use super::*;
 
 const VIEW: [f32; 2] = [1200., 900.];
@@ -10,13 +11,7 @@ fn empty_toolbar_groups_collapse_after_edits_without_losing_drop_anchors() {
     let panel = layout
         .add_toolbar(None, "Target", &[TOOL, DIVIDER, TOOL, DIVIDER, TOOL])
         .unwrap();
-    let ids = layout
-        .panel(panel)
-        .unwrap()
-        .tiles()
-        .iter()
-        .map(|t| t.id)
-        .collect::<Vec<_>>();
+    let ids = tile_ids(&layout, panel);
     let initial = layout.clone();
     // Removing the source temporarily brings these dividers together. Its
     // destination must survive until reinsertion makes the original group.
@@ -48,13 +43,7 @@ fn empty_toolbar_groups_collapse_after_edits_without_losing_drop_anchors() {
         )
         .unwrap();
     assert_eq!(
-        layout
-            .panel(panel)
-            .unwrap()
-            .tiles()
-            .iter()
-            .map(|t| t.id)
-            .collect::<Vec<_>>(),
+        tile_ids(&layout, panel),
         [ids[0], ids[1], ids[4], ids[2]]
     );
     let moved = layout.clone();
@@ -80,26 +69,14 @@ fn empty_toolbar_groups_collapse_after_edits_without_losing_drop_anchors() {
     layout = initial.clone();
     layout.remove_tool(panel, ids[2]).unwrap();
     assert_eq!(
-        layout
-            .panel(panel)
-            .unwrap()
-            .tiles()
-            .iter()
-            .map(|t| t.id)
-            .collect::<Vec<_>>(),
+        tile_ids(&layout, panel),
         [ids[0], ids[1], ids[4]]
     );
     layout
         .insert_tools(panel, Some(ids[4]), &[DIVIDER, DIVIDER])
         .unwrap();
     assert_eq!(
-        layout
-            .panel(panel)
-            .unwrap()
-            .tiles()
-            .iter()
-            .map(|t| t.id)
-            .collect::<Vec<_>>(),
+        tile_ids(&layout, panel),
         [ids[0], ids[1], ids[4]]
     );
     layout.validate().unwrap();
@@ -131,13 +108,7 @@ fn empty_toolbar_groups_collapse_after_edits_without_losing_drop_anchors() {
             )
             .unwrap();
         assert_eq!(
-            layout
-                .panel(panel)
-                .unwrap()
-                .tiles()
-                .iter()
-                .map(|t| t.id)
-                .collect::<Vec<_>>(),
+            tile_ids(&layout, panel),
             [ids[0], ids[1], ids[4]]
         );
         assert!(
@@ -164,13 +135,7 @@ fn consecutive_inserted_dividers_keep_the_first_id_and_nonempty_groups() {
         )
         .unwrap();
     assert_eq!(
-        layout
-            .panel(panel)
-            .unwrap()
-            .tiles()
-            .iter()
-            .map(|t| t.id)
-            .collect::<Vec<_>>(),
+        tile_ids(&layout, panel),
         [
             first_id,
             first_id + 2,

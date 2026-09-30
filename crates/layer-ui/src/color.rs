@@ -1391,6 +1391,10 @@ mod tests {
         assert_ne!(state.readout_values()[2], readout[2]);
         state.validate().unwrap();
     }
+    fn digit_cells(state: &ColorState) -> [String; 3] {
+        state.readout_layout_text().map(|text| text.chars()
+            .map(|c| if c.is_ascii_digit() || c == ' ' { '#' } else { c }).collect())
+    }
     #[test]
     fn readout_reserves_fixed_digit_cells_and_keeps_accessible_text_unpadded() {
         let mut state = ColorState::default();
@@ -1403,18 +1407,7 @@ mod tests {
             state
                 .set_rgba(from_components(values, ColorSpace::Hsv, 1.))
                 .unwrap();
-            let display = state.readout_layout_text();
-            let cells = display.map(|s| {
-                s.chars()
-                    .map(|c| {
-                        if c.is_ascii_digit() || c == ' ' {
-                            '#'
-                        } else {
-                            c
-                        }
-                    })
-                    .collect::<String>()
-            });
+            let cells = digit_cells(&state);
             assert_eq!(cells, ["###°", "###%", "###%"]);
             assert!(state.readout_text().iter().all(|s| !s.starts_with(' ')));
         }
@@ -1430,17 +1423,7 @@ mod tests {
             [0.2, 0.72, 0.58],
         ] {
             state.set_rgba([rgb[0], rgb[1], rgb[2], 1.]).unwrap();
-            let cells = state.readout_layout_text().map(|s| {
-                s.chars()
-                    .map(|c| {
-                        if c.is_ascii_digit() || c == ' ' {
-                            '#'
-                        } else {
-                            c
-                        }
-                    })
-                    .collect::<String>()
-            });
+            let cells = digit_cells(&state);
             assert_eq!(cells, ["###%", "#.###", "###°"]);
             assert!(state.readout_text().iter().all(|s| !s.starts_with(' ')));
         }

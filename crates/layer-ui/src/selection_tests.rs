@@ -2,13 +2,7 @@ mod selection_tools_checks {
     use super::*;
 
     fn send(s: &mut UiSession<Recorder>, phase: PenPhase, p: [f32; 2]) {
-        let mut e = event(s, 1, phase, 1.);
-        let m = s.state.camera.document_to_surface();
-        e.surface_position = Point {
-            x: m[0] * p[0] + m[2] * p[1] + m[4],
-            y: m[1] * p[0] + m[3] * p[1] + m[5],
-        };
-        s.pen(e).unwrap();
+        pen_at(s, 1, phase, p);
         s.frame(1, 1).unwrap();
         assert!(s.state.host_error.is_none(), "{:?}", s.state.host_error);
     }
@@ -244,10 +238,7 @@ mod selection_tools_checks {
             CommandId::SelectionReference,
         ] {
             if command == CommandId::SelectionReference {
-                s.dispatch(UiAction::Layer {
-                    action: LayerAction::ReferenceSelection,
-                })
-                .unwrap();
+                layer(&mut s, LayerAction::ReferenceSelection);
             }
             invoke(&mut s, command);
             click(&mut s, [40., 60.]);

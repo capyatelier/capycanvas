@@ -411,19 +411,7 @@ mod tests {
         s.eyedropper.poll(s.engine.backend_mut(), layer_core::color::RgbSpace::Srgb).unwrap();
         assert!(s.eyedropper.busy());
         let original = s.effect_catalog.clone();
-        let mut package = layer_core::EffectPackage {
-            format: 1,
-            categories: original.categories().to_vec(),
-            filters: original.filters().to_vec(),
-        };
-        std::sync::Arc::make_mut(&mut package.filters[0].program).label =
-            "Recovered candidate".into();
-        s.load_effect_library(
-            &serde_json::to_string(&package).unwrap(),
-            |_| panic!("resolved sources"),
-            layer_core::EffectInstallMode::Merge,
-        )
-        .unwrap();
+        stage_candidate_library(&mut s, &original, "Recovered candidate", "resolved sources");
         assert!(s.state.filter_load.pending);
         let original_validation = s.engine.backend().validation.as_ref().unwrap().clone();
         assert_eq!(original_validation.programs.len(), 1);
@@ -479,19 +467,7 @@ mod tests {
         let document = s.engine.document().clone();
         let imported = document.active_layer;
         let catalog = s.effect_catalog.clone();
-        let mut package = layer_core::EffectPackage {
-            format: 1,
-            categories: catalog.categories().to_vec(),
-            filters: catalog.filters().to_vec(),
-        };
-        std::sync::Arc::make_mut(&mut package.filters[0].program).label =
-            "Unpublished candidate".into();
-        s.load_effect_library(
-            &serde_json::to_string(&package).unwrap(),
-            |_| panic!("owned sources"),
-            layer_core::EffectInstallMode::Merge,
-        )
-        .unwrap();
+        stage_candidate_library(&mut s, &catalog, "Unpublished candidate", "owned sources");
         invoke(&mut s, CommandId::ScaleRotate);
         assert!(s.operation.active());
         assert!(s.state.filter_load.pending);

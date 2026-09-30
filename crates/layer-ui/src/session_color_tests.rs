@@ -348,15 +348,7 @@ fn figures_and_gradients_convert_both_portable_paints() {
     assert_eq!(figure.colors, expected);
     // Exercise the gradient through its public canvas-tool and contact path.
     s.cancel_layer_gesture().unwrap();
-    s.dispatch(UiAction::Layer {
-        action: LayerAction::Tool {
-            tool: LayerCanvasTool::Gradient {
-                radial: false,
-                transparent: false,
-            },
-        },
-    })
-    .unwrap();
+    layer(&mut s, LayerAction::Tool { tool: LayerCanvasTool::Gradient { radial: false, transparent: false, }, });
     let mut down = event(&s, 1, PenPhase::Down, 1.);
     down.surface_position = Point { x: 50., y: 50. };
     s.pen(down).unwrap();
@@ -608,7 +600,6 @@ fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
         s.capture_project_recovery().unwrap().validate(Default::default()).unwrap();
     }
 }
-
 
 #[test]
 fn proof_reveal_preserves_placement_and_opens_a_collapsed_drawer_idempotently() {

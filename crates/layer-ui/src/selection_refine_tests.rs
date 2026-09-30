@@ -5,21 +5,11 @@ mod selection_refine_checks {
     use std::sync::Arc;
 
     fn rectangle() -> Selection {
-        Selection::polygon(vec![
-            Point { x: 100., y: 100. },
-            Point { x: 300., y: 100. },
-            Point { x: 300., y: 300. },
-            Point { x: 100., y: 300. },
-        ])
-        .unwrap()
+        super::rectangle([100., 100., 300., 300.])
     }
     fn soft() -> Selection {
         let words: Vec<u32> = (0..100 * 400).map(|i| if (25..75).contains(&(i % 100)) { 0x8080_8080 } else { 0 }).collect();
         Selection::pixels(Arc::new(SelectionPixels::bytes([400, 400], [100, 0, 300, 400], words).unwrap()))
-    }
-    fn select(s: &mut UiSession<Recorder>, selection: Selection) {
-        s.layer_edit(layer_core::Edit::SetSelection(Some(selection))).unwrap();
-        s.frame(1, 1).unwrap();
     }
     fn mask(word: u32) -> Selection {
         Selection::pixels(Arc::new(SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![word]).unwrap()))

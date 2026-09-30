@@ -226,11 +226,7 @@ mod tonal_checks {
         let before = s.engine.document().selection.clone();
         s.interaction.modifiers.shift = true;
         let mut e = event(&s, 1, PenPhase::Down, 1.);
-        let m = s.state.camera.document_to_surface();
-        e.surface_position = Point {
-            x: m[0] * 80. + m[2] * 80. + m[4],
-            y: m[1] * 80. + m[3] * 80. + m[5],
-        };
+        e.surface_position = on_surface(&s, Point { x: 80., y: 80. });
         s.pen(e).unwrap();
         s.interaction.modifiers = Default::default();
         e.phase = PenPhase::Up;

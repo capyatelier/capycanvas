@@ -1,3 +1,12 @@
+fn u16_source(extent: [u32; 2], profile: layer_core::color::ColorProfile, profile_assumed: bool, max_bytes: usize, row: &[u8]) -> layer_core::color::source::SourceImage {
+    use layer_core::color::{SampleDepth, source::*};
+    let mut builder = SourceBuilder::new(extent, SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: SampleDepth::U16, profile, profile_assumed,
+    }, max_bytes).unwrap();
+    for _ in 0..extent[1] { builder.push_row(row).unwrap(); }
+    builder.finish().unwrap()
+}
+
 use layer_core::color::source::rgba8_source;
 use std::sync::Arc;
 
@@ -7,8 +16,7 @@ fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outs
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
         Document::new("touch placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
     session.place_layer_source("Photo", source, None).unwrap();
-    let input = |id, phase, position| UiInput::Pointer { id, phase, position,
-        kind: PointerKind::Touch, button: PointerButton::Primary, time_ns: 0 };
+    let input = |id, phase, position| pointer_input(id, phase, PointerKind::Touch, PointerButton::Primary, position, 0);
     assert!(!session.input(input(1, ContactPhase::Down, [10., 10.])).unwrap().paint);
     assert!(!session.input(input(2, ContactPhase::Down, [400., 300.])).unwrap().paint,
         "second contact joins camera navigation even over the photo");
@@ -176,13 +184,8 @@ fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
 
 #[test]
 fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
-    use layer_core::{Affine, color::{SampleDepth, source::*}};
-    let mut builder = SourceBuilder::new([600, 400], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U16,
-        profile: Default::default(), profile_assumed: false,
-    }, 8 * 1024 * 1024).unwrap();
-    for _ in 0..400 { builder.push_row(&[255; 600 * 8]).unwrap(); }
-    let source = builder.finish().unwrap();
+    use layer_core::Affine;
+    let source = u16_source([600, 400], Default::default(), false, 8 * 1024 * 1024, &[255; 600 * 8]);
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
         Document::new("placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
     let original = session.engine.document().clone();
@@ -239,27 +242,14 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
 
 #[test]
 fn retained_import_transform_clear_and_undo_keep_source_precision() {
-    use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
-    let mut builder = SourceBuilder::new(
-        [3, 2],
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U16,
-            profile: ColorProfile::Builtin(RgbSpace::DisplayP3),
-            profile_assumed: false,
-        },
-        1024 * 1024,
-    )
-    .unwrap();
+    use layer_core::color::{ColorProfile, RgbSpace};
     let row: Vec<u8> = [
         65535u16, 0, 1023, 1, 123, 45678, 32101, 0, 3, 65534, 65535, 32767,
     ]
     .into_iter()
     .flat_map(u16::to_le_bytes)
     .collect();
-    builder.push_row(&row).unwrap();
-    builder.push_row(&row).unwrap();
-    let source = builder.finish().unwrap();
+    let source = u16_source([3, 2], ColorProfile::Builtin(RgbSpace::DisplayP3), false, 1024 * 1024, &row);
     let mut session = session(Platform::Gtk);
     let before = session.engine.document().clone();
     assert!(
@@ -340,30 +330,19 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
 #[test]
 fn source_profile_repair_preserves_samples_and_baked_edits() {
     use layer_core::{
-        color::{ColorProfile, SampleDepth, RgbSpace, source::*},
+        color::{ColorProfile, RgbSpace},
         raster::*,
     };
     use std::sync::Arc;
-    let mut builder = SourceBuilder::new(
-        [1, 1],
-        SourceInterpretation {
-            channels: SourceChannels::Rgba,
-            depth: SampleDepth::U16,
-            profile: ColorProfile::Builtin(RgbSpace::Srgb),
-            profile_assumed: true,
-        },
-        1024 * 1024,
-    )
-    .unwrap();
     let samples: Vec<u8> = [65535u16, 12345, 54321, 1]
         .into_iter()
         .flat_map(u16::to_le_bytes)
         .collect();
-    builder.push_row(&samples).unwrap();
+    let source = u16_source([1, 1], ColorProfile::Builtin(RgbSpace::Srgb), true, 1024 * 1024, &samples);
     let mut session = session(Platform::Gtk);
     session.engine.backend_mut().tiled_sources = true;
     session
-        .import_layer_source("Original", builder.finish().unwrap())
+        .import_layer_source("Original", source)
         .unwrap();
     let id = session.engine.document().active_layer;
     let change = session.dispatch(UiAction::Layer {
@@ -629,13 +608,9 @@ fn source_admission_counts_aggregate_ownership_before_mutating_document_or_ids()
 #[test]
 fn source_workflow_requires_current_complete_comparison_and_preserves_original_samples() {
     use crate::SourceWorkflow;
-    use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
-    let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: SampleDepth::U16,
-        profile: ColorProfile::Builtin(RgbSpace::ProPhoto), profile_assumed: true,
-    }, 1024 * 1024).unwrap();
-    builder.push_row(&[1, 0, 2, 0, 3, 0, 0, 0, 4, 0, 5, 0, 6, 0, 255, 255]).unwrap();
-    let source = std::sync::Arc::new(builder.finish().unwrap());
+    use layer_core::color::{ColorProfile, RgbSpace, SampleDepth};
+    let source = std::sync::Arc::new(u16_source([2, 1], ColorProfile::Builtin(RgbSpace::ProPhoto), true, 1024 * 1024,
+        &[1, 0, 2, 0, 3, 0, 0, 0, 4, 0, 5, 0, 6, 0, 255, 255]));
     let mut document = Document::new("retained", 20, 20);
     document.layers[0].source = Some(source.clone());
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600], Platform::Gtk).unwrap();
@@ -676,17 +651,12 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
     assert!(workflow.identity.validate(&s, false, true).is_err());
 }
 
-
 #[test]
 fn unchanged_source_profile_on_painted_layer_does_not_claim_to_add_a_layer() {
     use layer_core::{color::{ColorProfile, RgbSpace, source::*}, raster::*};
-    let mut builder = SourceBuilder::new([1, 1], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: Default::default(),
-        profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
-    }, 1024 * 1024).unwrap();
-    builder.push_row(&[32, 64, 96, 255]).unwrap();
+    let source = rgba8_source([1, 1], |_, _| [32, 64, 96, 255]);
     let mut document = Document::new("painted source", 20, 20);
-    document.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    document.layers[0].source = Some(source);
     let descriptor = document.color.paint_descriptor();
     let tile = RasterTile::backed(TileBlob::encode(descriptor,
         &vec![55; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap());

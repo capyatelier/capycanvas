@@ -61,8 +61,7 @@ fn blend_menu_groups_every_mode_by_code_and_sets_it_in_one_step() {
             .collect();
         assert_eq!(checked, std::slice::from_ref(&item.label));
     }
-    s.dispatch(UiAction::Layer { action: LayerAction::Blend { id, value: layer_core::LayerBlend::Luminosity.code() } })
-        .unwrap();
+    layer(&mut s, LayerAction::Blend { id, value: layer_core::LayerBlend::Luminosity.code() });
     assert!(s.dispatch(UiAction::Layer { action: LayerAction::Blend { id, value: 25 } }).is_err());
     let blend = |s: &UiSession<Recorder>| s.engine.document().layer(LayerId(id)).unwrap().properties.blend;
     invoke(&mut s, CommandId::Undo);
@@ -162,10 +161,8 @@ fn the_pass_through_setting_picks_the_blend_of_every_new_group() {
     assert!(!Settings::restore(&serde_json::Value::Object(older).to_string()).pass_through_groups, "older settings read with it off");
     for on in [false, true] {
         let mut s = session(Platform::Gtk);
-        s.dispatch(UiAction::Preferences {
-            action: PreferenceAction::Edit { id: PreferenceId::PassThroughGroups, value: PreferenceValue::Bool(on) },
-        })
-        .unwrap();
+        preference(&mut s,
+            PreferenceAction::Edit { id: PreferenceId::PassThroughGroups, value: PreferenceValue::Bool(on) });
         assert_eq!(s.state.settings.pass_through_groups, on);
         let expected = if on { layer_core::LayerBlend::PassThrough } else { layer_core::LayerBlend::Normal };
         s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();

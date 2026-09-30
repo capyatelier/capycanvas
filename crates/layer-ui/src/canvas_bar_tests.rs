@@ -46,15 +46,8 @@ fn canvas_bar_avoids_floating_panels_and_stays_inside_the_area() {
 }
 
 fn filled_selection_session() -> UiSession<Recorder> {
-    use layer_core::Selection;
     let mut s = session(Platform::Gtk);
-    let selection = Selection::polygon(vec![
-        Point { x: 100., y: 100. },
-        Point { x: 300., y: 100. },
-        Point { x: 300., y: 300. },
-        Point { x: 100., y: 300. },
-    ])
-    .unwrap();
+    let selection = rectangle([100., 100., 300., 300.]);
     s.fill_selection(selection.clone()).unwrap();
     s.layer_edit(layer_core::Edit::SetSelection(Some(selection))).unwrap();
     s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
@@ -198,14 +191,7 @@ fn canvas_bar_keeps_its_view_during_a_handle_drag_and_follows_the_object_after()
 fn the_canvas_bar_hold_covers_contacts_camera_moves_and_floating_drags() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
-    let pointer = |phase| UiInput::Pointer {
-        id: 7,
-        phase,
-        kind: PointerKind::Mouse,
-        button: PointerButton::Primary,
-        position: [500., 500.],
-        time_ns: 0,
-    };
+    let pointer = |phase| pointer_input(7, phase, PointerKind::Mouse, PointerButton::Primary, [500., 500.], 0);
     let idle = s.canvas_bar_hold();
     assert_eq!(idle % 2, 0);
     s.input(pointer(ContactPhase::Down)).unwrap();
@@ -407,13 +393,7 @@ fn flipping_a_placement_stays_lossless_and_applies_as_one_step() {
 }
 
 fn rectangle_selection(s: &mut UiSession<Recorder>, [x0, y0, x1, y1]: [f32; 4]) {
-    let selection = layer_core::Selection::polygon(vec![
-        Point { x: x0, y: y0 },
-        Point { x: x1, y: y0 },
-        Point { x: x1, y: y1 },
-        Point { x: x0, y: y1 },
-    ])
-    .unwrap();
+    let selection = rectangle([x0, y0, x1, y1]);
     s.layer_edit(layer_core::Edit::SetSelection(Some(selection))).unwrap();
     s.frame(1, 1).unwrap();
 }
@@ -577,7 +557,7 @@ fn a_finger_reaches_the_handles_of_every_transform() {
     let [x0, y0, x1, y1] = s.transform_document_bounds().unwrap();
     let m = s.state.camera.document_to_surface();
     let surface = |x: f32, y: f32| [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
-    let touch = |id, phase, position| UiInput::Pointer { id, phase, kind: PointerKind::Touch, button: PointerButton::Primary, position, time_ns: 0 };
+    let touch = |id, phase, position| pointer_input(id, phase, PointerKind::Touch, PointerButton::Primary, position, 0);
     let inside = surface((x0 + x1) * 0.5, (y0 + y1) * 0.5);
     assert!(s.input(touch(1, ContactPhase::Down, inside)).unwrap().paint, "a finger inside the box moves it");
     s.input(touch(1, ContactPhase::Up, inside)).unwrap();

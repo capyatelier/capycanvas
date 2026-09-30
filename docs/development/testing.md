@@ -30,6 +30,10 @@ GPU and platform crates that a given machine may not be able to run.
 
 ## Shared Rust
 
+Use `session::test_support` for `layer-ui`'s Recorder fixtures, action dispatch,
+pointer records, selections and document-space pen input. Platform changes belong
+in that test fixture module; production sessions keep the host's platform.
+
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
 `RUST_TEST_THREADS` or `--test-threads` says otherwise. Some Linux drivers limit

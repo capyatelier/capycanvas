@@ -1,12 +1,5 @@
 fn finger(s: &mut UiSession<Recorder>, id: u64, phase: ContactPhase, position: [f32; 2], ms: u64) -> InputReply {
-    s.input(UiInput::Pointer {
-        id,
-        phase,
-        kind: PointerKind::Touch,
-        button: PointerButton::Primary,
-        position,
-        time_ns: 1_000_000_000 + ms * 1_000_000,
-    })
+    s.input(pointer_input(id, phase, PointerKind::Touch, PointerButton::Primary, position, 1_000_000_000 + ms * 1_000_000))
     .unwrap()
 }
 
@@ -76,14 +69,7 @@ fn taps_fail_when_held_moved_staggered_or_untimed() {
     finger(&mut s, 10, ContactPhase::Up, [300., 400.], 4050);
     assert_eq!(s.engine.document(), &painted, "cancellation is not a tap");
     for (id, phase) in [(10, ContactPhase::Down), (11, ContactPhase::Down), (10, ContactPhase::Up), (11, ContactPhase::Up)] {
-        s.input(UiInput::Pointer {
-            id,
-            phase,
-            kind: PointerKind::Touch,
-            button: PointerButton::Primary,
-            position: [300., 400.],
-            time_ns: 0,
-        })
+        s.input(pointer_input(id, phase, PointerKind::Touch, PointerButton::Primary, [300., 400.], 0))
         .unwrap();
     }
     assert_eq!(s.engine.document(), &painted);
@@ -95,23 +81,9 @@ fn taps_yield_to_pens_strokes_and_the_picker() {
     let painted = s.engine.document().clone();
     finger(&mut s, 10, ContactPhase::Down, [300., 400.], 0);
     finger(&mut s, 11, ContactPhase::Down, [400., 400.], 10);
-    s.input(UiInput::Pointer {
-        id: 1,
-        phase: ContactPhase::Down,
-        kind: PointerKind::Pen,
-        button: PointerButton::Primary,
-        position: [500., 500.],
-        time_ns: 1,
-    })
+    s.input(pointer_input(1, ContactPhase::Down, PointerKind::Pen, PointerButton::Primary, [500., 500.], 1))
     .unwrap();
-    s.input(UiInput::Pointer {
-        id: 1,
-        phase: ContactPhase::Up,
-        kind: PointerKind::Pen,
-        button: PointerButton::Primary,
-        position: [500., 500.],
-        time_ns: 2,
-    })
+    s.input(pointer_input(1, ContactPhase::Up, PointerKind::Pen, PointerButton::Primary, [500., 500.], 2))
     .unwrap();
     finger(&mut s, 10, ContactPhase::Up, [300., 400.], 50);
     finger(&mut s, 11, ContactPhase::Up, [400., 400.], 60);
@@ -377,14 +349,6 @@ fn stroke(s: &mut UiSession<Recorder>, first: u64) {
     s.frame(first + 3, first + 3).unwrap();
 }
 
-fn notice_text(s: &UiSession<Recorder>) -> Option<&str> {
-    s.state.notice.as_ref().map(|n| n.text.as_str())
-}
-
-fn layer(s: &mut UiSession<Recorder>, action: LayerAction) {
-    s.dispatch(UiAction::Layer { action }).unwrap();
-}
-
 #[test]
 fn refused_brush_strokes_raise_a_notice_and_paint_nothing() {
     let mut s = session(Platform::Gtk);
@@ -563,14 +527,7 @@ fn notices_reject_stale_answers_and_clear_at_the_next_contact() {
     stroke(&mut s, 10);
     assert!(s.state.notice.is_some());
     let reply = s
-        .input(UiInput::Pointer {
-            id: 7,
-            phase: ContactPhase::Down,
-            kind: PointerKind::Touch,
-            button: PointerButton::Primary,
-            position: [300., 300.],
-            time_ns: 0,
-        })
+        .input(pointer_input(7, ContactPhase::Down, PointerKind::Touch, PointerButton::Primary, [300., 300.], 0))
         .unwrap();
     assert_ne!(reply.change.regions & regions::HOST, 0);
     assert_eq!(s.state.notice, None, "a canvas contact clears the notice");

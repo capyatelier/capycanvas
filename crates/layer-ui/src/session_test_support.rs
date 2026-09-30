@@ -234,6 +234,9 @@ pub(crate) fn key(
     })
     .unwrap()
 }
+pub(crate) fn pointer_input(id: u64, phase: ContactPhase, kind: PointerKind, button: PointerButton, position: [f32; 2], time_ns: u64) -> UiInput {
+    UiInput::Pointer { id, phase, kind, button, position, time_ns }
+}
 pub(crate) fn pointer(
     s: &mut UiSession<Recorder>,
     id: u64,
@@ -241,14 +244,7 @@ pub(crate) fn pointer(
     position: [f32; 2],
     button: PointerButton,
 ) -> InputReply {
-    s.input(UiInput::Pointer {
-        id,
-        phase,
-        position,
-        button,
-        kind: PointerKind::Pen,
-        time_ns: 0,
-    })
+    s.input(pointer_input(id, phase, PointerKind::Pen, button, position, 0))
     .unwrap()
 }
 pub(crate) fn chrome(s: &mut UiSession<Recorder>, event: ChromeEvent, facts: ChromeFacts) -> InputReply {
@@ -261,6 +257,9 @@ pub(crate) fn chrome(s: &mut UiSession<Recorder>, event: ChromeEvent, facts: Chr
 }
 pub(crate) fn invoke(session: &mut UiSession<Recorder>, command: CommandId) -> UiChange {
     session.dispatch(UiAction::Invoke { command }).unwrap()
+}
+pub(crate) fn layer(s: &mut UiSession<Recorder>, action: LayerAction) {
+    s.dispatch(UiAction::Layer { action }).unwrap();
 }
 pub(crate) fn customize(s: &mut UiSession<Recorder>, action: CustomizationAction) -> UiChange {
     s.dispatch(UiAction::Customize { action }).unwrap()
@@ -315,4 +314,81 @@ pub(crate) fn record_shortcut(s: &mut UiSession<Recorder>, id: &str, name: &str,
     preference(s, PreferenceAction::BeginShortcut { id: id.into() });
     assert!(key(s, name, true, command, true).handled);
     key(s, name, false, command, true);
+}
+
+impl UiSession<Recorder> {
+    pub(crate) fn set_platform(&mut self, platform: Platform) {
+        if self.state.platform != platform {
+            self.platform_prediction_available = None;
+        }
+        self.state.platform = platform;
+        self.refresh_feedback_config();
+        self.state.palette = self
+            .state
+            .settings
+            .palette(self.state.theme, platform, self.system_accent);
+        self.refresh_commands();
+        self.refresh_shortcuts();
+    }
+}
+
+pub(crate) fn on_surface(s: &UiSession<Recorder>, p: Point) -> Point {
+    let m = s.state.camera.document_to_surface();
+    Point { x: m[0] * p.x + m[2] * p.y + m[4], y: m[1] * p.x + m[3] * p.y + m[5] }
+}
+
+pub(crate) fn pen_at(s: &mut UiSession<Recorder>, sequence: u64, phase: PenPhase, p: [f32; 2]) {
+    let mut e = event(s, sequence, phase, 1.);
+    e.surface_position = on_surface(s, Point { x: p[0], y: p[1] });
+    s.pen(e).unwrap();
+}
+
+pub(crate) fn tile_ids(layout: &DockLayout, panel: Panel) -> Vec<u32> {
+    layout.panel(panel).unwrap().tiles().iter().map(|tile| tile.id).collect()
+}
+
+pub(crate) fn rectangle([x0, y0, x1, y1]: [f32; 4]) -> layer_core::Selection {
+    layer_core::Selection::polygon(vec![
+        Point { x: x0, y: y0 }, Point { x: x1, y: y0 },
+        Point { x: x1, y: y1 }, Point { x: x0, y: y1 },
+    ]).unwrap()
+}
+
+pub(crate) fn select(s: &mut UiSession<Recorder>, selection: impl Into<Option<layer_core::Selection>>) {
+    s.layer_edit(layer_core::Edit::SetSelection(selection.into())).unwrap();
+    s.frame(1, 1).unwrap();
+}
+
+pub(crate) fn notice_text(s: &UiSession<Recorder>) -> Option<&str> {
+    s.state.notice.as_ref().map(|n| n.text.as_str())
+}
+
+pub(crate) fn package_json(categories: Vec<layer_core::EffectCategory>, filters: Vec<layer_core::EffectDefinition>) -> String {
+    serde_json::to_string(&layer_core::EffectPackage { format: 1, categories, filters }).unwrap()
+}
+
+pub(crate) fn insert_effect(s: &mut UiSession<Recorder>, effect: &str) {
+    s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: effect.into() } }).unwrap();
+}
+
+pub(crate) fn stage_candidate_library(s: &mut UiSession<Recorder>, catalog: &layer_core::EffectCatalog, label: &str, missing: &str) {
+    let mut filters = catalog.filters().to_vec();
+    std::sync::Arc::make_mut(&mut filters[0].program).label = label.into();
+    s.load_effect_library(&package_json(catalog.categories().to_vec(), filters),
+        |_| panic!("{missing}"), layer_core::EffectInstallMode::Merge).unwrap();
+}
+
+pub(crate) fn tile_anchor(layout: &DockLayout, control: ToolbarControl) -> TileAnchor {
+    layout.panels.iter().find_map(|panel| panel.tiles().iter()
+        .find(|tile| tile.control == control)
+        .map(|tile| TileAnchor { panel: panel.id, tile: tile.id })).unwrap()
+}
+
+pub(crate) fn assert_operation_undo_redo(s: &mut UiSession<Recorder>, layer: LayerId, queued: usize, committed: u64, frames: [u64; 2]) {
+    invoke(s, CommandId::Undo);
+    s.frame(frames[0], frames[0]).unwrap();
+    assert_eq!(s.engine.document().layer(layer).unwrap().pending_operations.len(), queued);
+    invoke(s, CommandId::Redo);
+    s.frame(frames[1], frames[1]).unwrap();
+    assert_eq!(s.engine.document().layer(layer).unwrap().raster.identity(), committed);
 }

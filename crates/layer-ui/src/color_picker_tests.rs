@@ -5,14 +5,7 @@ fn picker_pointer(
     kind: PointerKind,
     p: [f32; 2],
 ) -> InputReply {
-    s.input(UiInput::Pointer {
-        id,
-        phase,
-        kind,
-        button: PointerButton::Primary,
-        position: p,
-        time_ns: 0,
-    })
+    s.input(pointer_input(id, phase, kind, PointerButton::Primary, p, 0))
     .unwrap()
 }
 fn picker_reply(s: &mut UiSession<Recorder>, rgba: [f32; 4]) {
@@ -359,11 +352,7 @@ fn touch_release_cleans_up_even_when_normal_routing_is_blocked() {
             picker_pointer(&mut s, 1, ContactPhase::Down, PointerKind::Touch, [200., 200.]);
             s.state.settings_open = blocked == "settings";
             s.workspace_transition = blocked == "workspace transition";
-            let reply = s.input(UiInput::Pointer {
-                id: 1, phase: terminal, kind: PointerKind::Touch, button: PointerButton::Primary,
-                position: if blocked == "invalid position" { [f32::NAN; 2] } else { [200., 200.] },
-                time_ns: 0,
-            });
+            let reply = s.input(pointer_input(1, terminal, PointerKind::Touch, PointerButton::Primary, if blocked == "invalid position" { [f32::NAN; 2] } else { [200., 200.] }, 0));
             assert_eq!(reply.is_err(), blocked == "invalid position");
             assert!(!s.touch.is_active(), "{blocked}/{terminal:?}");
         }
@@ -407,23 +396,7 @@ fn color_picker_size_and_style_are_settings_and_navigator_stays_navigation() {
     let mut s = session(Platform::Gtk);
     s.state.workspace.layout = WorkspacePreset::Painter.layout(Platform::Gtk);
     invoke(&mut s, CommandId::Eyedropper);
-    let anchor = s
-        .state
-        .workspace
-        .layout
-        .panels
-        .iter()
-        .find_map(|panel| {
-            panel
-                .tiles()
-                .iter()
-                .find(|tile| tile.control == ToolbarControl::ColorPicker)
-                .map(|tile| TileAnchor {
-                    panel: panel.id,
-                    tile: tile.id,
-                })
-        })
-        .unwrap();
+    let anchor = tile_anchor(&s.state.workspace.layout, ToolbarControl::ColorPicker);
     let mut drawer = ContentDrawer::for_tile(&s.state.workspace.layout, anchor).unwrap();
     drawer.configure_picker(&s.state.workspace.layout);
     assert_eq!(drawer.columns, [vec![Panel::ToolSettings]]);
@@ -498,28 +471,7 @@ fn standalone_picker_restores_glass_and_categories_retain_both_tools() {
     assert!(!tool_state(s.state(), ToolbarControl::ColorPicker).1);
     for preset in [WorkspacePreset::Illustrator, WorkspacePreset::Photographer] {
         s.state.workspace.layout = preset.layout(Platform::Gtk);
-        let anchor = s
-            .state
-            .workspace
-            .layout
-            .panels
-            .iter()
-            .find_map(|panel| {
-                panel
-                    .tiles()
-                    .iter()
-                    .find(|tile| {
-                        tile.control
-                            == ToolbarControl::Command {
-                                command: CommandId::Eyedropper,
-                            }
-                    })
-                    .map(|tile| TileAnchor {
-                        panel: panel.id,
-                        tile: tile.id,
-                    })
-            })
-            .unwrap();
+        let anchor = tile_anchor(&s.state.workspace.layout, ToolbarControl::Command { command: CommandId::Eyedropper });
         let mut drawer = ContentDrawer::for_tile(&s.state.workspace.layout, anchor).unwrap();
         drawer.configure_picker(&s.state.workspace.layout);
         assert_eq!(

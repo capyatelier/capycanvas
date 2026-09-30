@@ -24,11 +24,6 @@ fn crop_frame(s: &UiSession<Recorder>) -> crop::CropFrame {
     s.operation.crop.as_ref().expect("an open crop").frame()
 }
 
-fn on_surface(s: &UiSession<Recorder>, p: Point) -> Point {
-    let m = s.state.camera.document_to_surface();
-    Point { x: m[0] * p.x + m[2] * p.y + m[4], y: m[1] * p.x + m[3] * p.y + m[5] }
-}
-
 fn crop_contact(s: &mut UiSession<Recorder>, sequence: u64, phase: PenPhase, at: Point, tool: layer_engine::ToolKind) {
     let mut e = event(s, sequence, phase, 1.);
     e.surface_position = on_surface(s, at);
@@ -189,14 +184,7 @@ fn handles_drag_immediately_with_every_device_and_a_finger_inside_pans() {
     let mut s = crop_session();
     invoke(&mut s, CommandId::Crop);
     s.frame(2, 2).unwrap();
-    let touch = |id, phase, position: Point| UiInput::Pointer {
-        id,
-        phase,
-        kind: PointerKind::Touch,
-        button: PointerButton::Primary,
-        position: [position.x, position.y],
-        time_ns: 0,
-    };
+    let touch = |id, phase, position: Point| pointer_input(id, phase, PointerKind::Touch, PointerButton::Primary, [position.x, position.y], 0);
     let corner = on_surface(&s, Point { x: 1000., y: 800. });
     assert!(s.input(touch(1, ContactPhase::Down, corner)).unwrap().paint, "a finger drags a handle");
     s.input(touch(1, ContactPhase::Up, corner)).unwrap();

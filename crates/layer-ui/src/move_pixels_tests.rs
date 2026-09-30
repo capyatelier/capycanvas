@@ -45,9 +45,6 @@ mod move_pixels_checks {
             })
             .collect()
     }
-    fn notice_text(s: &UiSession<Recorder>) -> Option<&str> {
-        s.state.notice.as_ref().map(|n| n.text.as_str())
-    }
 
     #[test]
     fn move_drags_selected_pixels_by_whole_pixels_and_the_selection_follows_in_one_step() {
@@ -160,14 +157,7 @@ mod move_pixels_checks {
     fn a_finger_on_the_selection_moves_it_and_elsewhere_navigates() {
         let mut s = filled_selection_session();
         invoke(&mut s, CommandId::Move);
-        let touch = |id, phase, position| UiInput::Pointer {
-            id,
-            phase,
-            kind: PointerKind::Touch,
-            button: PointerButton::Primary,
-            position,
-            time_ns: 0,
-        };
+        let touch = |id, phase, position| pointer_input(id, phase, PointerKind::Touch, PointerButton::Primary, position, 0);
         let [inside, outside] = [surface(&s, [200., 200.]), surface(&s, [600., 600.])];
         assert!(s.input(touch(1, ContactPhase::Down, inside)).unwrap().paint, "a finger on the selection drags it");
         s.input(touch(1, ContactPhase::Up, inside)).unwrap();

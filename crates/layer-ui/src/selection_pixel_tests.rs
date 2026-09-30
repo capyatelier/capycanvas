@@ -3,21 +3,6 @@ mod selection_pixel_checks {
     use layer_core::{LayerOperation, LayerOperationKind, Selection};
     use std::sync::Arc;
 
-    fn rectangle([x0, y0, x1, y1]: [f32; 4]) -> Selection {
-        Selection::polygon(vec![
-            Point { x: x0, y: y0 },
-            Point { x: x1, y: y0 },
-            Point { x: x1, y: y1 },
-            Point { x: x0, y: y1 },
-        ])
-        .unwrap()
-    }
-
-    fn select(s: &mut UiSession<Recorder>, selection: Selection) {
-        s.layer_edit(layer_core::Edit::SetSelection(Some(selection))).unwrap();
-        s.frame(1, 1).unwrap();
-    }
-
     /// Half coverage over `[x0, y0, x1, y1]`, in whole groups of four pixels.
     fn soft(extent: [u32; 2], [x0, y0, x1, y1]: [u32; 4]) -> Selection {
         let row = extent[0].div_ceil(4) as usize;
@@ -42,15 +27,10 @@ mod selection_pixel_checks {
     }
 
     fn photo_session() -> UiSession<Recorder> {
-        use layer_core::color::{SampleDepth, source::*};
-        let mut builder = SourceBuilder::new([40, 30], SourceInterpretation {
-            channels: SourceChannels::Rgba, depth: SampleDepth::U8,
-            profile: Default::default(), profile_assumed: false,
-        }, 1024 * 1024).unwrap();
-        for _ in 0..30 { builder.push_row(&[200; 160]).unwrap(); }
+        let source = layer_core::color::source::rgba8_source([40, 30], |_, _| [200; 4]);
         let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
             Document::new("photo", 200, 150), [800, 600], Platform::Gtk).unwrap();
-        s.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+        s.place_layer_source("Photo", Arc::unwrap_or_clone(source), None).unwrap();
         invoke(&mut s, CommandId::ApplyTransform);
         s.frame(1, 1).unwrap();
         s
@@ -394,13 +374,7 @@ mod selection_pixel_checks {
         s.frame(1, 1).unwrap();
         let layer = s.engine.document().active_layer;
         let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
-            let m = s.state.camera.document_to_surface();
-            let mut e = event(s, 1, phase, 1.);
-            e.surface_position = Point {
-                x: m[0] * p[0] + m[2] * p[1] + m[4],
-                y: m[1] * p[0] + m[3] * p[1] + m[5],
-            };
-            s.pen(e).unwrap();
+            pen_at(s, 1, phase, p);
             s.frame(1, 1).unwrap();
         };
         let pixels = |s: &UiSession<Recorder>| s.engine.document().layer(layer).unwrap().raster.identity();

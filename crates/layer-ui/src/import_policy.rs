@@ -290,6 +290,10 @@ mod tests {
             .unwrap();
         builder.finish().unwrap()
     }
+    fn open(bytes: &[u8], intent: ImportIntent, policy: PhotoOpenPolicy, name: &str) -> Result<ImportedDocument, String> {
+        read_import(std::io::Cursor::new(bytes), intent, policy, name,
+            Default::default(), Default::default(), &Default::default())
+    }
     #[test]
     fn source_kind_owns_master_location_profile_decision_and_photo_depth() {
         let source = source();
@@ -326,28 +330,8 @@ mod tests {
         assert_eq!(photo.project.document.color.depth, SampleDepth::U16);
         let mut native = Vec::new();
         photo.project.write(&mut native).unwrap();
-        assert!(
-            read_import(
-                std::io::Cursor::new(&native),
-                ImportIntent::Place,
-                policy,
-                "photo.png",
-                Default::default(),
-                Default::default(),
-                &Default::default()
-            )
-            .is_err()
-        );
-        let mut master = read_import(
-            std::io::Cursor::new(&native),
-            ImportIntent::Open,
-            policy,
-            "photo.png",
-            Default::default(),
-            Default::default(),
-            &Default::default(),
-        )
-        .unwrap();
+        assert!(open(&native, ImportIntent::Place, policy, "photo.png").is_err());
+        let mut master = open(&native, ImportIntent::Open, policy, "photo.png").unwrap();
         assert_eq!(master.source, ImportSource::Master);
         assert!(
             master
@@ -356,16 +340,7 @@ mod tests {
         );
         let mut png = Vec::new();
         layer_color::photo::write_png(&mut png, &source).unwrap();
-        let photo = read_import(
-            std::io::Cursor::new(&png),
-            ImportIntent::Open,
-            policy,
-            "misleading.capy",
-            Default::default(),
-            Default::default(),
-            &Default::default(),
-        )
-        .unwrap();
+        let photo = open(&png, ImportIntent::Open, policy, "misleading.capy").unwrap();
         assert_eq!(photo.source, ImportSource::Photo);
         assert_eq!(
             photo.project.document.layers[0]
@@ -382,18 +357,7 @@ mod tests {
                 .map(|(key, blob)| (key, blob.digest))
                 .collect::<Vec<_>>()
         );
-        assert!(
-            read_import(
-                std::io::Cursor::new(&png),
-                ImportIntent::Recovery,
-                policy,
-                "recovery.capy",
-                Default::default(),
-                Default::default(),
-                &Default::default()
-            )
-            .is_err()
-        );
+        assert!(open(&png, ImportIntent::Recovery, policy, "recovery.capy").is_err());
     }
     #[test]
     fn an_opened_photo_keeps_its_metadata_through_interpretation_and_saving() {
@@ -407,8 +371,8 @@ mod tests {
         let mut rows = source.rows();
         layer_color::photo::write_png_rows(&mut png, source.extent, &source.interpretation, &delivery, |y, row| rows.read(y, row)).unwrap();
         let policy = PhotoOpenPolicy { promote_to_16: false, missing_profile: MissingProfilePolicy::Ask };
-        let open = |intent| read_import(std::io::Cursor::new(&png), intent, policy, "photo.png", Default::default(), Default::default(), &Default::default());
-        let mut photo = open(ImportIntent::Open).unwrap();
+        let open_photo = |intent| open(&png, intent, policy, "photo.png");
+        let mut photo = open_photo(ImportIntent::Open).unwrap();
         let kept = photo.project.document.metadata.clone();
         assert!(kept.exif.as_ref().unwrap().windows(4).any(|w| w == b"Ada\0"));
         photo.interpret(ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();

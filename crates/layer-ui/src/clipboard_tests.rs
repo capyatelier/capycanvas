@@ -1,28 +1,13 @@
 mod clipboard_checks {
     use super::*;
     use layer_core::{
-        Edit, Layer, LayerBlend, LayerOperationKind, Selection,
+        Edit, Layer, LayerBlend, LayerOperationKind,
         color::{
             DocumentColor, RgbSpace, SampleDepth,
             source::{SourceKind, rgba8_source},
         },
     };
     use std::sync::Arc;
-
-    fn rectangle([x0, y0, x1, y1]: [f32; 4]) -> Selection {
-        Selection::polygon(vec![
-            Point { x: x0, y: y0 },
-            Point { x: x1, y: y0 },
-            Point { x: x1, y: y1 },
-            Point { x: x0, y: y1 },
-        ])
-        .unwrap()
-    }
-
-    fn select(s: &mut UiSession<Recorder>, selection: Option<Selection>) {
-        s.layer_edit(Edit::SetSelection(selection)).unwrap();
-        s.frame(1, 1).unwrap();
-    }
 
     fn clip_session() -> UiSession<Recorder> {
         let mut s = UiSession::new(

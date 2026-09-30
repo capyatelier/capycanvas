@@ -2188,6 +2188,7 @@ impl CustomizationState {
 
 #[cfg(test)]
 mod tests {
+    use crate::session::test_support::tile_ids;
     use super::*;
     const VIEWPORT: [f32; 2] = [1200.0, 900.0];
     const PEN: ToolbarControl = ToolbarControl::Command {
@@ -2358,13 +2359,7 @@ mod tests {
         let custom = layout
             .add_toolbar(Some(8), "Paint", &[PEN, ERASE, PEN])
             .unwrap();
-        let ids = layout
-            .panel(custom)
-            .unwrap()
-            .tiles()
-            .iter()
-            .map(|t| t.id)
-            .collect::<Vec<_>>();
+        let ids = tile_ids(&layout, custom);
         let move_to = |layout: &mut DockLayout, panel, tile, destination, before| {
             layout
                 .move_item(
@@ -2379,13 +2374,7 @@ mod tests {
         };
         move_to(&mut layout, custom, ids[0], custom, None);
         assert_eq!(
-            layout
-                .panel(custom)
-                .unwrap()
-                .tiles()
-                .iter()
-                .map(|t| t.id)
-                .collect::<Vec<_>>(),
+            tile_ids(&layout, custom),
             [ids[1], ids[2], ids[0]]
         );
         move_to(&mut layout, custom, ids[0], custom, Some(ids[1]));

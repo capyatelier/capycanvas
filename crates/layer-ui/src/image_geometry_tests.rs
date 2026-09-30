@@ -31,10 +31,6 @@ fn content_session(size: [u32; 2], tiles: &[([u32; 2], [u32; 4])]) -> UiSession<
     s
 }
 
-fn notice(s: &UiSession<Recorder>) -> Option<&str> {
-    s.state.notice.as_ref().map(|n| n.text.as_str())
-}
-
 fn size_of(s: &UiSession<Recorder>) -> [u32; 2] {
     [s.engine.document().width, s.engine.document().height]
 }
@@ -124,7 +120,7 @@ fn trim_shrinks_to_the_visible_pixels_and_reveal_all_brings_hidden_pixels_back()
     let found = all.scan(&Default::default(), layer_core::ScanBudget::Worker).unwrap().unwrap();
     assert_eq!([found.min.x, found.min.y, found.max.x, found.max.y], [0., 0., 542., 456.], "the pixels reach every edge");
     invoke(&mut s, CommandId::RevealAll);
-    assert_eq!(notice(&s), Some("Every pixel is already on the canvas"));
+    assert_eq!(notice_text(&s), Some("Every pixel is already on the canvas"));
     invoke(&mut s, CommandId::Undo);
     invoke(&mut s, CommandId::Undo);
     s.frame(14, 14).unwrap();
@@ -135,16 +131,16 @@ fn trim_shrinks_to_the_visible_pixels_and_reveal_all_brings_hidden_pixels_back()
 fn trim_and_fit_content_refuse_when_nothing_is_visible() {
     let mut s = content_session([600, 400], &[([0, 0], [0, 0, 0, 0])]);
     invoke(&mut s, CommandId::Trim);
-    assert_eq!(notice(&s), Some("There are no visible pixels to trim to"));
+    assert_eq!(notice_text(&s), Some("There are no visible pixels to trim to"));
     assert_eq!(s.command_disabled_reason(CommandId::CropFitContent).as_deref(), Some("Choose the Crop tool first"));
     invoke(&mut s, CommandId::Crop);
     assert!(!s.command(CommandId::Trim).enabled);
     assert_eq!(s.command_disabled_reason(CommandId::Trim).as_deref(), Some("Apply or cancel the crop first"));
     invoke(&mut s, CommandId::CropFitContent);
-    assert_eq!(notice(&s), Some("There are no visible pixels to fit the crop to"));
+    assert_eq!(notice_text(&s), Some("There are no visible pixels to fit the crop to"));
     let mut full = content_session([256, 256], &[([0, 0], [0, 0, 256, 256])]);
     invoke(&mut full, CommandId::Trim);
-    assert_eq!(notice(&full), Some("The visible pixels already reach every edge of the canvas"));
+    assert_eq!(notice_text(&full), Some("The visible pixels already reach every edge of the canvas"));
 }
 
 #[test]
@@ -181,5 +177,5 @@ fn a_large_scan_finishes_on_a_worker_and_a_changed_drawing_cancels_it() {
     s.layer_edit(layer_core::Edit::SetSelection(Some(selection))).unwrap();
     settle_bounds(&mut s);
     assert_eq!(size_of(&s), [1536, 1536]);
-    assert_eq!(notice(&s), Some("Reveal All stopped because the drawing changed"));
+    assert_eq!(notice_text(&s), Some("Reveal All stopped because the drawing changed"));
 }

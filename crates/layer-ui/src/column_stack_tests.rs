@@ -442,13 +442,7 @@ fn stack_member_drops_cancel_and_undo_in_one_step() {
         },
     ] {
         let mut s = session(Platform::Gtk);
-        customize(
-            &mut s,
-            CustomizationAction::SetColumnCollapsed {
-                group: 5,
-                collapsed: true,
-            },
-        );
+        set_collapsed(&mut s, 5, true);
         let before = crate::durable_layout(&s.state.workspace.layout);
         let resolved = s.layout(STACK_VIEW);
         let source_group = match item {
@@ -588,13 +582,7 @@ fn stack_fixture() -> (UiSession<Recorder>, u32, u32) {
     let mut columns = Vec::new();
     for panel in [Panel::Brushes, Panel::Layers] {
         let group = s.state.workspace.layout.panel_group(panel).unwrap();
-        customize(
-            &mut s,
-            CustomizationAction::SetColumnCollapsed {
-                group,
-                collapsed: true,
-            },
-        );
+        set_collapsed(&mut s, group, true);
         columns.push(
             s.state
                 .workspace
@@ -782,13 +770,7 @@ fn stack_reorder_and_gesture_cancellation_have_one_history_step() {
 fn opening_a_member_uses_all_ordinary_groups_and_switches_within_the_stack() {
     let (mut s, left, right) = stack_fixture();
     stack_move(&mut s, right, left, false);
-    customize(
-        &mut s,
-        CustomizationAction::SetColumnDrawers {
-            column: left,
-            drawers: false,
-        },
-    );
+    set_drawers(&mut s, left, false);
     let tree = s.state.workspace.layout.node(left).unwrap().clone();
     click_column(&mut s, Panel::Brushes);
     assert!(
@@ -844,20 +826,8 @@ fn opening_a_member_uses_all_ordinary_groups_and_switches_within_the_stack() {
 fn stack_preferences_and_members_persist_but_open_state_does_not() {
     let (mut s, left, right) = stack_fixture();
     stack_move(&mut s, right, left, false);
-    customize(
-        &mut s,
-        CustomizationAction::SetColumnDrawers {
-            column: right,
-            drawers: false,
-        },
-    );
-    customize(
-        &mut s,
-        CustomizationAction::SetColumnAutoHide {
-            column: right,
-            auto_hide: true,
-        },
-    );
+    set_drawers(&mut s, right, false);
+    set_auto_hide(&mut s, right, true);
     let before = crate::durable_layout(&s.state.workspace.layout);
     click_column(&mut s, Panel::Brushes);
     assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
@@ -873,20 +843,8 @@ fn stack_preferences_and_members_persist_but_open_state_does_not() {
 fn auto_hide_consumes_canvas_contact_and_preserves_popup_and_nested_drawer_contacts() {
     let (mut s, left, right) = stack_fixture();
     stack_move(&mut s, right, left, false);
-    customize(
-        &mut s,
-        CustomizationAction::SetColumnDrawers {
-            column: left,
-            drawers: false,
-        },
-    );
-    customize(
-        &mut s,
-        CustomizationAction::SetColumnAutoHide {
-            column: left,
-            auto_hide: true,
-        },
-    );
+    set_drawers(&mut s, left, false);
+    set_auto_hide(&mut s, left, true);
     click_column(&mut s, Panel::Brushes);
     let point = [900., 700.];
     for facts in [
@@ -943,13 +901,7 @@ fn auto_hide_consumes_canvas_contact_and_preserves_popup_and_nested_drawer_conta
 fn individual_panels_open_one_ordinary_drawer_per_stack() {
     let (mut s, left, right) = stack_fixture();
     stack_move(&mut s, right, left, false);
-    customize(
-        &mut s,
-        CustomizationAction::SetColumnDrawers {
-            column: left,
-            drawers: true,
-        },
-    );
+    set_drawers(&mut s, left, true);
     click_column(&mut s, Panel::Brushes);
     assert_eq!(s.state.customization.column_drawers.len(), 1);
     assert!(s.state.customization.column_drawers[0].tabs.is_some());
@@ -966,13 +918,7 @@ fn individual_panels_open_one_ordinary_drawer_per_stack() {
 #[test]
 fn ordinary_dividers_resize_open_columns_without_rebuilding_or_expanding_the_stack() {
     let (mut s, left, _) = stack_fixture();
-    customize(
-        &mut s,
-        CustomizationAction::SetColumnDrawers {
-            column: left,
-            drawers: false,
-        },
-    );
+    set_drawers(&mut s, left, false);
     click_column(&mut s, Panel::Brushes);
     let resolved = s.layout(STACK_VIEW);
     let ids: Vec<_> = resolved
@@ -1028,13 +974,7 @@ fn ordinary_dividers_resize_open_columns_without_rebuilding_or_expanding_the_sta
 #[test]
 fn adding_and_removing_groups_updates_member_identity_without_losing_panels() {
     let (mut s, left, right) = stack_fixture();
-    customize(
-        &mut s,
-        CustomizationAction::SetColumnDrawers {
-            column: right,
-            drawers: false,
-        },
-    );
+    set_drawers(&mut s, right, false);
     stack_move(&mut s, left, right, true);
     let group = s.state.workspace.layout.panel_group(Panel::Layers).unwrap();
     customize(
@@ -1096,13 +1036,7 @@ fn member_can_unstack_beside_its_own_stack_and_use_the_existing_expand_action() 
         stack_move(&mut s, right, left, false);
         let stack = s.state.workspace.layout.column_stack(left).column;
         if expand {
-            customize(
-                &mut s,
-                CustomizationAction::SetColumnCollapsed {
-                    group: right,
-                    collapsed: false,
-                },
-            );
+            set_collapsed(&mut s, right, false);
             assert!(
                 s.layout(STACK_VIEW)
                     .groups
@@ -1134,13 +1068,7 @@ fn cancelled_or_blurred_column_resize_restores_width_splits_and_open_member() {
     for blur in [false, true] {
         let (mut s, left, right) = stack_fixture();
         stack_move(&mut s, right, left, false);
-        customize(
-            &mut s,
-            CustomizationAction::SetColumnDrawers {
-                column: left,
-                drawers: false,
-            },
-        );
+        set_drawers(&mut s, left, false);
         click_column(&mut s, Panel::Brushes);
         let resolved = s.layout(STACK_VIEW);
         let dividers: Vec<_> = resolved
@@ -1213,13 +1141,7 @@ fn stack_validation_rejects_missing_overlapping_and_incomplete_members() {
 fn resetting_open_member_width_preserves_stack_membership_and_open_state() {
     let (mut s, left, right) = stack_fixture();
     stack_move(&mut s, right, left, false);
-    customize(
-        &mut s,
-        CustomizationAction::SetColumnDrawers {
-            column: left,
-            drawers: false,
-        },
-    );
+    set_drawers(&mut s, left, false);
     click_column(&mut s, Panel::Brushes);
     let resolved = s.layout(STACK_VIEW);
     let id = resolved
@@ -1259,13 +1181,7 @@ fn adopting_drawers_off_closes_existing_drawer_presentations() {
     for merge in [false, true] {
         let (mut s, left, right) = stack_fixture();
         s.state.workspace.layout.column_stack_mut(right).drawers = true;
-        customize(
-            &mut s,
-            CustomizationAction::SetColumnDrawers {
-                column: left,
-                drawers: false,
-            },
-        );
+        set_drawers(&mut s, left, false);
         click_column(&mut s, Panel::Layers);
         assert_eq!(s.state.customization.column_drawers.len(), 1);
         if merge {
@@ -1310,4 +1226,15 @@ fn same_order_drop_from_member_into_previous_column_is_not_cancelled() {
     assert_eq!(crate::durable_layout(&s.state.workspace.layout), before);
     invoke(&mut s, CommandId::RedoWorkspace);
     assert_eq!(crate::durable_layout(&s.state.workspace.layout), after);
+}
+
+fn set_drawers(s: &mut UiSession<Recorder>, column: u32, drawers: bool) {
+    customize(s, CustomizationAction::SetColumnDrawers { column, drawers });
+}
+fn set_auto_hide(s: &mut UiSession<Recorder>, column: u32, auto_hide: bool) {
+    customize(s, CustomizationAction::SetColumnAutoHide { column, auto_hide });
+}
+
+fn set_collapsed(s: &mut UiSession<Recorder>, group: u32, collapsed: bool) {
+    customize(s, CustomizationAction::SetColumnCollapsed { group, collapsed });
 }

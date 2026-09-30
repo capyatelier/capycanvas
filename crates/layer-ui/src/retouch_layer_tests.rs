@@ -150,10 +150,8 @@ mod retouch_layer_checks {
     #[test]
     fn frequency_separation_applies_low_and_high_in_an_isolated_group_in_one_undo_step() {
         let mut s = perceptual();
-        s.dispatch(UiAction::Preferences {
-            action: PreferenceAction::Edit { id: PreferenceId::PassThroughGroups, value: PreferenceValue::Bool(true) },
-        })
-        .unwrap();
+        preference(&mut s,
+            PreferenceAction::Edit { id: PreferenceId::PassThroughGroups, value: PreferenceValue::Bool(true) });
         let photo = s.engine.document().active_layer;
         s.engine.apply_edit(Edit::SetLayerOpacity { id: photo, opacity: 0.75 }).unwrap();
         let before = s.engine.document().layers.clone();

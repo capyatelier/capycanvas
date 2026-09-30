@@ -6,7 +6,7 @@ fn clone_session() -> UiSession<Recorder> {
 }
 
 fn contact(s: &mut UiSession<Recorder>, id: u64, kind: PointerKind, phase: ContactPhase, position: [f32; 2]) -> InputReply {
-    s.input(UiInput::Pointer { id, phase, kind, button: PointerButton::Primary, position, time_ns: 0 }).unwrap()
+    s.input(pointer_input(id, phase, kind, PointerButton::Primary, position, 0)).unwrap()
 }
 
 fn on_document(s: &UiSession<Recorder>, [x, y]: [f32; 2]) -> Point {

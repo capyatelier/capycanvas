@@ -12,17 +12,13 @@ fn filters() -> (UiSession<Recorder>, u32) {
     s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
     (s, id)
 }
-fn choose(s: &mut UiSession<Recorder>, effect: &str) {
-    s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: effect.into() } }).unwrap();
-}
-
 #[test]
 fn filter_drawer_replaces_the_selected_layer_after_reopening_and_cancel_is_undoable() {
     let (mut s, opener) = filters();
     assert_eq!(s.state.customization.drawer.as_ref().unwrap().columns,
         [vec![Panel::FilterTypes], vec![Panel::Adjustments], vec![Panel::Properties]]);
     assert!(s.state.adjustments.iter().all(|c| Some(&c.category) == s.state.filter_picker.category.as_ref()));
-    choose(&mut s, "brightness_contrast");
+    insert_effect(&mut s, "brightness_contrast");
     let id = s.engine.document().active_layer;
     assert_eq!(s.engine.document().layers.iter().map(|l| l.id).collect::<Vec<_>>(), [id, LayerId(1), LayerId(2)]);
     assert!(s.filter_drawer_open());
@@ -34,7 +30,7 @@ fn filter_drawer_replaces_the_selected_layer_after_reopening_and_cancel_is_undoa
     assert!(!s.filter_drawer_open());
     s.dispatch(UiAction::ActivateHeaderItem { id: opener }).unwrap();
     assert_eq!(s.engine.document().layer(id), Some(&edited));
-    choose(&mut s, "curves");
+    insert_effect(&mut s, "curves");
     assert_eq!(s.engine.document().active_layer, id);
     assert_eq!(s.engine.document().layers.len(), 3);
     assert_eq!(s.state.filter_picker.selected.as_deref(), Some("curves"));
@@ -58,12 +54,12 @@ fn the_filter_drawer_masks_a_new_effect_but_never_the_one_it_replaces() {
     ])
     .unwrap();
     s.layer_edit(layer_core::Edit::SetSelection(Some(selection.clone()))).unwrap();
-    choose(&mut s, "brightness_contrast");
+    insert_effect(&mut s, "brightness_contrast");
     let id = s.engine.document().active_layer;
     let mask = s.engine.document().layer(id).unwrap().mask.clone().expect("a new effect takes the selection");
     assert_eq!(mask.initial.as_ref(), Some(&selection));
     invoke(&mut s, CommandId::Reselect);
-    choose(&mut s, "curves");
+    insert_effect(&mut s, "curves");
     assert_eq!(s.engine.document().active_layer, id, "the drawer replaces the effect");
     assert_eq!(s.engine.document().layer(id).unwrap().mask, Some(mask), "and keeps its mask");
     assert_eq!(s.engine.document().selection, Some(selection), "replacing leaves the selection");
@@ -72,7 +68,7 @@ fn the_filter_drawer_masks_a_new_effect_but_never_the_one_it_replaces() {
 #[test]
 fn filters_resolve_drawing_without_borrowing_other_masks_or_entering_groups() {
     let (mut s, _) = filters();
-    choose(&mut s, "curves");
+    insert_effect(&mut s, "curves");
     let first = s.engine.document().active_layer;
     let mut doc = s.engine.document().clone();
     assert_eq!(doc.drawing_target(), Some(LayerId(1)));
@@ -108,7 +104,7 @@ fn filters_resolve_drawing_without_borrowing_other_masks_or_entering_groups() {
 #[test]
 fn strokes_through_a_selected_filter_keep_selection_and_undo_on_the_drawing_target() {
     let (mut s, _) = filters();
-    choose(&mut s, "curves");
+    insert_effect(&mut s, "curves");
     let filter = s.engine.document().active_layer;
     let stroke = |s: &mut UiSession<Recorder>| {
         for (sequence, phase) in [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Up)] {
@@ -210,7 +206,7 @@ fn animated_speed_changes_preserve_playback_phase_including_zero_and_restored_sp
 #[test]
 fn curve_points_detach_off_the_graph_until_release_and_commit_one_step() {
     let mut s = session(Platform::Gtk);
-    choose(&mut s, "curves");
+    insert_effect(&mut s, "curves");
     let layer = s.state.layer_properties.layer.unwrap();
     let curve = |s: &UiSession<Recorder>| match &s.state.layer_properties.controls.iter().find(|c| c.key == "curve_0").unwrap().value {
         layer_core::EffectValue::Curve(points) => points.clone(),
