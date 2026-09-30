@@ -112,10 +112,52 @@ fn engine(doc: Document, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngi
     (input, engine)
 }
 
-
 fn draw(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<PenEvent>, event: PenEvent) {
     input.push(event).unwrap();
     engine.render_frame().unwrap();
+}
+
+fn stroke(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<PenEvent>, sequence: u64, from: [f32; 2], to: [f32; 2]) {
+    draw(engine, input, pen(sequence, PenPhase::Down, from, SampleFlags::PRIMARY));
+    for i in 1..8 {
+        let t = i as f32 / 8.;
+        let at = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
+        draw(engine, input, pen(sequence + i, PenPhase::Move, at, SampleFlags::PRIMARY));
+    }
+    draw(engine, input, pen(sequence + 8, PenPhase::Up, to, SampleFlags::PRIMARY));
+    flush(engine);
+}
+
+fn corrected_replay(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<PenEvent>,
+    path: &[[f32; 2]], up: [f32; 2], late: bool) {
+    let estimated = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
+    let corrected = |mut event: PenEvent| {
+        event.pressure = 0.4;
+        event.surface_position.y += 6.;
+        event
+    };
+    let events: Vec<_> = path.iter().enumerate().map(|(i, &at)| {
+        let phase = if i == 0 { PenPhase::Down } else { PenPhase::Move };
+        pen(1 + i as u64, phase, at, if late { estimated } else { SampleFlags::PRIMARY })
+    }).collect();
+    for (i, event) in events.iter().enumerate() {
+        draw(engine, input, if late { *event } else { corrected(*event) });
+        if late && i == 1 {
+            let mut fix = corrected(events[0]);
+            fix.flags = SampleFlags(SampleFlags::CORRECTION.0 | SampleFlags::ESTIMATED.0);
+            draw(engine, input, fix);
+        }
+    }
+    draw(engine, input, pen(9, PenPhase::Up, up, SampleFlags::PRIMARY));
+    flush(engine);
+    if late {
+        for event in &events {
+            let mut fix = corrected(*event);
+            fix.flags = SampleFlags::CORRECTION;
+            draw(engine, input, fix);
+        }
+        flush(engine);
+    }
 }
 
 fn floats(bytes: &[u8]) -> Vec<[f32; 4]> {
@@ -411,44 +453,13 @@ fn contacts_neither_upload_nor_wait_and_a_miss_replays_after_pen_up() {
 
 #[test]
 fn stroke_start_pages_survive_estimated_samples_and_corrections() {
-    let estimated = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
     let path = [[80., 90.], [130., 110.], [190., 100.], [250., 140.]];
-    let corrected = |mut event: PenEvent| {
-        event.pressure = 0.4;
-        event.surface_position.y += 6.;
-        event
-    };
     let mut results = Vec::new();
     for late in [false, true] {
         let (mut input, mut engine) = engine(document(SIZE), true);
         engine.set_retouch(Some(RetouchSource::Editing));
         flush(&mut engine);
-        let events: Vec<_> = path
-            .iter()
-            .enumerate()
-            .map(|(i, &at)| {
-                let phase = if i == 0 { PenPhase::Down } else { PenPhase::Move };
-                pen(1 + i as u64, phase, at, if late { estimated } else { SampleFlags::PRIMARY })
-            })
-            .collect();
-        for (i, event) in events.iter().enumerate() {
-            draw(&mut engine, &mut input, if late { *event } else { corrected(*event) });
-            if late && i == 1 {
-                let mut fix = corrected(events[0]);
-                fix.flags = SampleFlags(SampleFlags::CORRECTION.0 | SampleFlags::ESTIMATED.0);
-                draw(&mut engine, &mut input, fix);
-            }
-        }
-        draw(&mut engine, &mut input, pen(9, PenPhase::Up, [260., 140.], SampleFlags::PRIMARY));
-        flush(&mut engine);
-        if late {
-            for event in &events {
-                let mut fix = corrected(*event);
-                fix.flags = SampleFlags::CORRECTION;
-                draw(&mut engine, &mut input, fix);
-            }
-            flush(&mut engine);
-        }
+        corrected_replay(&mut engine, &mut input, &path, [260., 140.], late);
         let (source, complete) = sample(engine.backend_mut(), [0, 0], [0.; 2]);
         assert!(complete);
         assert!(source.iter().all(|p| close(*p, premultiplied(FILL))), "late={late}: replays copy the restored start");

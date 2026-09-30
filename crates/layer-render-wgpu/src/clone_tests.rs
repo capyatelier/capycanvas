@@ -52,17 +52,6 @@ fn pixel(r: &WgpuRasterizer, layer: LayerId, x: u32, y: u32) -> [f32; 4] {
     layer_page(r, layer, [x / PAGE_SIZE, y / PAGE_SIZE])[((y % PAGE_SIZE) * PAGE_SIZE + x % PAGE_SIZE) as usize]
 }
 
-fn stroke(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<PenEvent>, sequence: u64, from: [f32; 2], to: [f32; 2]) {
-    draw(engine, input, pen(sequence, PenPhase::Down, from, SampleFlags::PRIMARY));
-    for i in 1..8 {
-        let t = i as f32 / 8.;
-        let at = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
-        draw(engine, input, pen(sequence + i, PenPhase::Move, at, SampleFlags::PRIMARY));
-    }
-    draw(engine, input, pen(sequence + 8, PenPhase::Up, to, SampleFlags::PRIMARY));
-    flush(engine);
-}
-
 fn source_at(engine: &mut CanvasEngine<WgpuRasterizer>, x: f32, y: f32, update: impl FnOnce(&mut CloneSource)) {
     let mut source = CloneSource::default();
     update(&mut source);
@@ -240,43 +229,12 @@ fn aligned_strokes_keep_one_offset_and_others_restart_at_the_source() {
 
 #[test]
 fn clone_replays_from_estimates_and_corrections_match_a_direct_stroke() {
-    let estimated = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
     let path = [[80., 90.], [350., 90.], [650., 140.], [650., 380.], [80., 380.], [80., 90.]];
-    let corrected = |mut event: PenEvent| {
-        event.pressure = 0.4;
-        event.surface_position.y += 6.;
-        event
-    };
     let mut results = Vec::new();
     for late in [false, true] {
         let (mut input, mut engine) = cloner(document(EXTENT), TARGET, RetouchSource::References, true);
         source_at(&mut engine, 400., 300., |_| {});
-        let events: Vec<_> = path
-            .iter()
-            .enumerate()
-            .map(|(i, &at)| {
-                let phase = if i == 0 { PenPhase::Down } else { PenPhase::Move };
-                pen(1 + i as u64, phase, at, if late { estimated } else { SampleFlags::PRIMARY })
-            })
-            .collect();
-        for (i, event) in events.iter().enumerate() {
-            draw(&mut engine, &mut input, if late { *event } else { corrected(*event) });
-            if late && i == 1 {
-                let mut fix = corrected(events[0]);
-                fix.flags = SampleFlags(SampleFlags::CORRECTION.0 | SampleFlags::ESTIMATED.0);
-                draw(&mut engine, &mut input, fix);
-            }
-        }
-        draw(&mut engine, &mut input, pen(9, PenPhase::Up, [80., 96.], SampleFlags::PRIMARY));
-        flush(&mut engine);
-        if late {
-            for event in &events {
-                let mut fix = corrected(*event);
-                fix.flags = SampleFlags::CORRECTION;
-                draw(&mut engine, &mut input, fix);
-            }
-            flush(&mut engine);
-        }
+        corrected_replay(&mut engine, &mut input, &path, [80., 96.], late);
         results.push(target_pages(engine.backend()));
     }
     assert!(results[0].iter().any(|(_, page)| page.iter().any(|p| p[3] > 0.)), "the clone painted");

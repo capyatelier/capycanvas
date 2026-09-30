@@ -97,17 +97,6 @@ fn broad_spot_healing_has_bounded_memory() {
     assert!(peak <= before + (1024 << 20), "healing scratch exceeds one GiB");
 }
 
-fn stroke(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<PenEvent>, sequence: u64, from: [f32; 2], to: [f32; 2]) {
-    draw(engine, input, pen(sequence, PenPhase::Down, from, SampleFlags::PRIMARY));
-    for i in 1..8 {
-        let t = i as f32 / 8.;
-        let at = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
-        draw(engine, input, pen(sequence + i, PenPhase::Move, at, SampleFlags::PRIMARY));
-    }
-    draw(engine, input, pen(sequence + 8, PenPhase::Up, to, SampleFlags::PRIMARY));
-    flush(engine);
-}
-
 fn source_at(engine: &mut CanvasEngine<WgpuRasterizer>, x: f32, y: f32) {
     engine.set_clone_source(CloneSource { point: Some(Point { x, y }), ..CloneSource::default() });
 }
@@ -369,46 +358,15 @@ fn healing_matches_tone_on_the_documents_values() {
 
 #[test]
 fn healing_replays_from_estimates_and_corrections_match_a_direct_stroke() {
-    let estimated = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
     let path = [[580., 190.], [630., 210.], [690., 200.], [750., 240.]];
-    let corrected = |mut event: PenEvent| {
-        event.pressure = 0.4;
-        event.surface_position.y += 6.;
-        event
-    };
     for preset in [DefaultBrushPreset::HealingBrush, DefaultBrushPreset::SpotHealingBrush] {
         let mut results = Vec::new();
         for late in [false, true] {
             let doc = photo(|x, y| grey(texture_and_gradient(x, y)));
             let (mut input, mut engine) = healer(doc, preset, 40., true);
             source_at(&mut engine, 200., 300.);
-            let events: Vec<_> = path
-                .iter()
-                .enumerate()
-                .map(|(i, &at)| {
-                    let phase = if i == 0 { PenPhase::Down } else { PenPhase::Move };
-                    pen(1 + i as u64, phase, at, if late { estimated } else { SampleFlags::PRIMARY })
-                })
-                .collect();
-            for (i, event) in events.iter().enumerate() {
-                draw(&mut engine, &mut input, if late { *event } else { corrected(*event) });
-                if late && i == 1 {
-                    let mut fix = corrected(events[0]);
-                    fix.flags = SampleFlags(SampleFlags::CORRECTION.0 | SampleFlags::ESTIMATED.0);
-                    draw(&mut engine, &mut input, fix);
-                }
-            }
-            draw(&mut engine, &mut input, pen(9, PenPhase::Up, [760., 246.], SampleFlags::PRIMARY));
-            flush(&mut engine);
-            if late {
-                for event in &events {
-                    let mut fix = corrected(*event);
-                    fix.flags = SampleFlags::CORRECTION;
-                    draw(&mut engine, &mut input, fix);
-                }
-                flush(&mut engine);
-                assert!(counts(&engine).heals >= 2, "{preset:?}: the correction heals again");
-            }
+            corrected_replay(&mut engine, &mut input, &path, [760., 246.], late);
+            if late { assert!(counts(&engine).heals >= 2, "{preset:?}: the correction heals again"); }
             results.push(target_pages(engine.backend()));
         }
         assert!(results[0].iter().any(|(_, page)| page.iter().any(|p| p[3] > 0.)), "{preset:?} painted");

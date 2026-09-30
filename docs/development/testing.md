@@ -51,6 +51,8 @@ each test's format and extent, and validate its usage flags on the test GPU.
 Renderer source fixtures use `test_support::depth_source` with their original
 budget and coordinate mapping. Pen fixtures override the shared event's timestamp
 and pressure where their cadence differs.
+Retouch replay fixtures keep each brush's path and pen-up position. Check source
+readiness and healing counts after replay settles, before collecting result pages.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
