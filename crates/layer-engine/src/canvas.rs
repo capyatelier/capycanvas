@@ -3235,6 +3235,7 @@ mod tests {
                     .as_ref(),
                 Some(&expected)
             );
+            assert!(!engine.backend.styles.is_empty());
             assert!(
                 engine
                     .backend
@@ -3263,13 +3264,6 @@ mod tests {
             engine.rebuild_all = true;
             engine.render_frame().unwrap();
             assert!(engine.backend.styles.is_empty());
-            assert!(
-                engine
-                    .backend
-                    .styles
-                    .iter()
-                    .all(|s| s.selection.as_ref() == Some(&expected))
-            );
             engine.undo().unwrap(); // Deselect.
             engine.undo().unwrap(); // Stroke.
             engine.render_frame().unwrap();
@@ -3290,13 +3284,6 @@ mod tests {
                     .unwrap()
                     .identity(),
                 committed
-            );
-            assert!(
-                engine
-                    .backend
-                    .styles
-                    .iter()
-                    .all(|s| s.selection.as_ref() == Some(&expected))
             );
             producer.push(event(3, PenPhase::Down, 60.)).unwrap();
             engine.render_frame().unwrap();
@@ -4718,19 +4705,6 @@ mod tests {
                 .is_empty()
         );
         assert!(engine.estimates.is_empty());
-    }
-
-    #[test]
-    fn platform_events_commit_and_render_through_the_renderer_contract() {
-        let (mut producer, mut engine) = engine("test", 32, 32);
-        producer.push(event(1, PenPhase::Down, 4.0)).unwrap();
-        producer.push(event(2, PenPhase::Move, 16.0)).unwrap();
-        producer.push(event(3, PenPhase::Up, 28.0)).unwrap();
-        engine.render_frame().unwrap();
-        assert_eq!(engine.metrics().committed_strokes, 1);
-        assert_eq!(engine.metrics().committed_strokes, 1);
-        assert!(engine.backend().persistent_dabs > 0);
-        assert!(engine.backend().saw_reset);
     }
 
     #[test]

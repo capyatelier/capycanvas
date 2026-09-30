@@ -271,7 +271,6 @@ mod tests {
     #[test]
     fn builtin_gamut_grid_roundtrips() {
         for space in RgbSpace::ALL {
-            let mut maximum = [0f64; 2];
             for r in 0..=20 {
                 for g in 0..=20 {
                     for b in 0..=20 {
@@ -286,11 +285,6 @@ mod tests {
                         // f32 hue quantization near a pure primary produces tiny
                         // linear residues. Adobe's toe-less gamma magnifies their
                         // encoded value, so check linear accuracy and less than a quarter code.
-                        for (a, b) in actual.into_iter().zip(rgb) {
-                            maximum[0] = maximum[0]
-                                .max((space.decode(a as f64) - space.decode(b as f64)).abs());
-                            maximum[1] = maximum[1].max((a - b).abs() as f64);
-                        }
                         assert!(
                             actual
                                 .into_iter()
@@ -307,10 +301,6 @@ mod tests {
                     }
                 }
             }
-            eprintln!(
-                "{space:?}: max linear {}, encoded {}",
-                maximum[0], maximum[1]
-            );
         }
     }
 

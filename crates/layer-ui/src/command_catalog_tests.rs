@@ -179,14 +179,10 @@ fn command_search_does_not_rebuild_workspace_models() {
     let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::SearchCommands);
     let revision = s.workspace_model_revision();
-    let start = std::time::Instant::now();
-    for _ in 0..100 {
-        for text in ["brush", "undo", "fit cnvs", "select color", "zzzzzz"] {
-            search_action(&mut s, CommandSearchAction::Query { text: text.into() });
-        }
+    for text in ["brush", "undo", "fit cnvs", "select color", "zzzzzz"] {
+        search_action(&mut s, CommandSearchAction::Query { text: text.into() });
+        assert_eq!(s.workspace_model_revision(), revision);
     }
-    assert_eq!(s.workspace_model_revision(), revision);
-    eprintln!("command search mean: {:?}", start.elapsed() / 500);
 }
 
 #[test]
@@ -443,25 +439,20 @@ fn equivalent_menu_actions_share_command_identities_and_explain_unavailability()
 }
 
 #[test]
-fn refresh_commands_stays_cheap_when_idle_transforming_and_painting() {
-    fn mean(s: &mut UiSession<Recorder>) -> std::time::Duration {
-        s.refresh_commands();
-        let start = std::time::Instant::now();
-        for _ in 0..2000 {
-            assert!(!s.refresh_commands());
-        }
-        start.elapsed() / 2000
-    }
+fn refresh_commands_preserves_unchanged_availability_in_each_edit_state() {
     let mut s = filled_selection_session();
-    let idle = mean(&mut s);
+    let unchanged = |s: &mut UiSession<Recorder>| {
+        s.refresh_commands();
+        assert!(!s.refresh_commands());
+    };
+    unchanged(&mut s);
     invoke(&mut s, CommandId::ScaleRotate);
-    let transforming = mean(&mut s);
+    unchanged(&mut s);
     invoke(&mut s, CommandId::CancelTransform);
     s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
     s.frame(2, 2).unwrap();
     assert!(s.require_idle().is_err());
-    let painting = mean(&mut s);
-    eprintln!("refresh_commands mean: idle {idle:?}, transforming {transforming:?}, painting {painting:?}");
+    unchanged(&mut s);
 }
 
 fn assert_published_reasons(s: &mut UiSession<Recorder>, state: &str) {

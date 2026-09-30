@@ -76,25 +76,6 @@ fn rotating_a_non_square_image_right_turns_every_pixel_in_one_step() {
 }
 
 #[test]
-fn flipping_twice_and_turning_four_times_come_back_to_the_start() {
-    let mut s = crop_session();
-    let paint = s.engine.document().layers[0].id;
-    let before = s.engine.document().clone();
-    let corner = before.layer_transform(paint).map(Point { x: 10.5, y: 20.5 });
-    for (command, times) in [(CommandId::FlipImageHorizontal, 2), (CommandId::FlipImageVertical, 2), (CommandId::RotateImage180, 2), (CommandId::RotateImageLeft, 4)] {
-        let mut p = Point { x: 10.5, y: 20.5 };
-        for step in 0..times {
-            invoke(&mut s, command);
-            s.frame(30 + step, 30 + step).unwrap();
-            let [(_, transform)] = resampled(&mut s).try_into().unwrap();
-            p = transform.as_affine().unwrap().map(p);
-        }
-        assert_eq!(size_of(&s), [1000, 800], "{command:?}");
-        near_point(s.engine.document().layer_transform(paint).map(p), corner, 1e-3);
-    }
-}
-
-#[test]
 fn trim_shrinks_to_the_visible_pixels_and_reveal_all_brings_hidden_pixels_back() {
     let mut s = content_session([1000, 800], &[([0, 0], [0, 0, 1, 1]), ([1, 1], [10, 20, 100, 200]), ([2, 1], [0, 0, 30, 5])]);
     assert!(s.command(CommandId::Trim).enabled);

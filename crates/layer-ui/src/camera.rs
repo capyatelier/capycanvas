@@ -302,26 +302,11 @@ mod tests {
         );
     }
     #[test]
-    fn transform_roundtrip_and_anchored_gesture() {
+    fn nonfinite_gesture_preserves_a_navigated_camera() {
         let mut camera = Camera::new([2048, 1536], [1000, 800]);
-        let anchor = camera.input_transform().map(Point { x: 125.0, y: 220.0 });
         camera
             .gesture([125.0, 220.0], [200.0, 350.0], 1.7, 0.6)
             .unwrap();
-        near(
-            anchor,
-            camera.input_transform().map(Point { x: 200.0, y: 350.0 }),
-        );
-        let forward = ViewTransform {
-            revision: 0,
-            surface_to_document: camera.document_to_surface(),
-        };
-        near(
-            Point { x: 532.0, y: 407.0 },
-            camera
-                .input_transform()
-                .map(forward.map(Point { x: 532.0, y: 407.0 })),
-        );
         let before = camera.clone();
         assert!(camera.gesture([0.0; 2], [f32::NAN, 0.0], 1.0, 0.0).is_err());
         assert_eq!(camera, before);

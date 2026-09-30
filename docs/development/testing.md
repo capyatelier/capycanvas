@@ -44,6 +44,8 @@ in the callers' control.
 Figure and gradient tests share `abandon_layer_drag` while retaining their own
 frame timestamps and commit assertions. Collapsed resize fixtures retain the
 nested and outside handle coordinates, width checks and cancellation points.
+Cursor tests observe a frame before asserting that no ink was deposited. Stroke
+selection tests check nonempty live batches; undo/redo compares raster identities.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
