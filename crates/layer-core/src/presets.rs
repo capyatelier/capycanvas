@@ -81,7 +81,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         | DefaultBrushPreset::BrushedInk => crate::contact_presets::contact_brush(preset),
         DefaultBrushPreset::Eraser => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
-            tip: BrushTip::AnalyticEllipse,
             color_rgba_linear: [0.0, 0.0, 0.0, 1.0],
             diameter: 180.0,
             opacity: 1.0,
@@ -89,7 +88,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             flow: 1.0,
             spacing: 0.08,
             seed: 0x4552_4153,
-            mappings: Arc::from([BrushMapping::pressure_size()]),
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Paintbrush => BrushSnapshot {
@@ -154,7 +152,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
                 accumulation: BrushAccumulation::Uniform,
                 ..Default::default()
             },
-            mappings: Arc::from([BrushMapping::pressure_size()]),
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Spray => BrushSnapshot {
@@ -210,7 +207,6 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
                 wetness: 0.08,
                 mix_space: ColorMixSpace::Oklab,
             },
-            mappings: Arc::from([BrushMapping::pressure_size()]),
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::WetRound => BrushSnapshot {
@@ -236,81 +232,20 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             mappings: Arc::from([BrushMapping::pressure_size(), pressure_flow(0.18, 0.72)]),
             ..BrushSnapshot::default()
         },
-        DefaultBrushPreset::LiquifyPush => BrushSnapshot {
-            diameter: 420.0,
-            hardness: 0.34,
-            flow: 1.0,
-            spacing: 0.08,
-            execution: BrushExecution::Liquify,
-            deform: BrushDeform {
-                mode: LiquifyMode::Push,
-                strength: 0.82,
-                pressure: 1.0,
-                momentum: 0.28,
-                distortion: 0.0,
-            },
-            mappings: Arc::from([BrushMapping::pressure_size()]),
-            ..BrushSnapshot::default()
-        },
-        DefaultBrushPreset::LiquifyTwirl => BrushSnapshot {
-            diameter: 620.0,
-            hardness: 0.22,
-            flow: 1.0,
-            spacing: 0.22,
-            execution: BrushExecution::Liquify,
-            deform: BrushDeform {
-                mode: LiquifyMode::TwirlClockwise,
-                strength: 0.72,
-                pressure: 1.0,
-                momentum: 0.0,
-                distortion: 0.0,
-            },
-            mappings: Arc::from([BrushMapping::pressure_size()]),
-            ..BrushSnapshot::default()
-        },
-        DefaultBrushPreset::LiquifyTwirlClockwise => BrushSnapshot {
-            deform: BrushDeform {
-                mode: LiquifyMode::TwirlCounterClockwise,
-                ..default_brush(DefaultBrushPreset::LiquifyTwirl).deform
-            },
-            ..default_brush(DefaultBrushPreset::LiquifyTwirl)
-        },
-        DefaultBrushPreset::LiquifyPinch | DefaultBrushPreset::LiquifyExpand => BrushSnapshot {
-            diameter: 520.0,
-            hardness: 0.3,
-            flow: 1.0,
-            spacing: 0.16,
-            execution: BrushExecution::Liquify,
-            deform: BrushDeform {
-                mode: if preset == DefaultBrushPreset::LiquifyPinch {
-                    LiquifyMode::Pinch
-                } else {
-                    LiquifyMode::Expand
-                },
-                strength: 0.5,
-                pressure: 1.0,
-                momentum: 0.0,
-                distortion: 0.0,
-            },
-            mappings: Arc::from([BrushMapping::pressure_size()]),
-            ..BrushSnapshot::default()
-        },
-        DefaultBrushPreset::LiquifyCrystals => BrushSnapshot {
-            diameter: 360.0,
-            hardness: 0.4,
-            flow: 1.0,
-            spacing: 0.1,
-            execution: BrushExecution::Liquify,
-            deform: BrushDeform {
-                mode: LiquifyMode::Crystals,
-                strength: 0.7,
-                pressure: 1.0,
-                momentum: 0.0,
-                distortion: 0.6,
-            },
-            mappings: Arc::from([BrushMapping::pressure_size()]),
-            ..BrushSnapshot::default()
-        },
+        DefaultBrushPreset::LiquifyPush => liquify(420.0, 0.34, 0.08, BrushDeform {
+            strength: 0.82, momentum: 0.28, ..Default::default()
+        }),
+        DefaultBrushPreset::LiquifyTwirl | DefaultBrushPreset::LiquifyTwirlClockwise => liquify(620.0, 0.22, 0.22, BrushDeform {
+            mode: if preset == DefaultBrushPreset::LiquifyTwirl { LiquifyMode::TwirlClockwise } else { LiquifyMode::TwirlCounterClockwise },
+            strength: 0.72, ..Default::default()
+        }),
+        DefaultBrushPreset::LiquifyPinch | DefaultBrushPreset::LiquifyExpand => liquify(520.0, 0.3, 0.16, BrushDeform {
+            mode: if preset == DefaultBrushPreset::LiquifyPinch { LiquifyMode::Pinch } else { LiquifyMode::Expand },
+            ..Default::default()
+        }),
+        DefaultBrushPreset::LiquifyCrystals => liquify(360.0, 0.4, 0.1, BrushDeform {
+            mode: LiquifyMode::Crystals, strength: 0.7, distortion: 0.6, ..Default::default()
+        }),
         DefaultBrushPreset::CloneStamp => retouching(BrushExecution::Clone, 160.0, 0.5),
         DefaultBrushPreset::HealingBrush => retouching(BrushExecution::Heal, 120.0, 0.5),
         DefaultBrushPreset::SpotHealingBrush => retouching(BrushExecution::SpotHeal, 60.0, 0.6),
@@ -329,29 +264,18 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         },
         DefaultBrushPreset::TexturedFlat => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
-            diameter: 360.0,
-            aspect: 0.62,
-            flow: 1.0,
-            opacity: 0.9,
-            spacing: 0.16,
-            hardness: 0.97,
-            execution: BrushExecution::Dry,
-            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.7, 1., 0.08)),
-            rendering: BrushRendering {
-                accumulation: BrushAccumulation::Uniform,
-                ..Default::default()
-            },
-            wet_mix: BrushWetMix::default(),
-            color_dynamics: BrushColorDynamics {
-                stroke_saturation_jitter: 0.035,
-                ..Default::default()
-            },
-            mappings: Arc::from([
-                BrushMapping::pressure_size(),
-                pressure_flow(0.22, 0.78),
-                direction_rotation(),
-            ]),
-            ..Default::default()
+            ..painter_brush(PainterBrushSpec {
+                diameter: 360.0,
+                aspect: 0.62,
+                flow: 1.0,
+                opacity: 0.9,
+                spacing: 0.16,
+                hardness: 0.97,
+                execution: BrushExecution::Dry,
+                grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.7, 1., 0.08)),
+                rendering: BrushRendering { accumulation: BrushAccumulation::Uniform, ..Default::default() },
+                wet_mix: BrushWetMix::default(),
+            })
         },
         DefaultBrushPreset::DryScumble => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
@@ -382,60 +306,33 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         },
         DefaultBrushPreset::PastelBlock => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
-            diameter: 280.0,
-            aspect: 0.58,
-            flow: 0.85,
-            opacity: 0.78,
-            spacing: 0.14,
-            hardness: 0.9,
-            execution: BrushExecution::Dry,
-            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 5.2, 1., -0.13)),
-            // A broad pastel contact lays a bounded film into the tooth.
-            // Separate strokes still build density; dwelling within one stroke
-            // does not repeatedly integrate the same opaque contact.
-            rendering: BrushRendering {
-                accumulation: BrushAccumulation::Uniform,
-                ..BrushRendering::default()
-            },
-            wet_mix: BrushWetMix::default(),
-            color_dynamics: BrushColorDynamics {
-                stroke_saturation_jitter: 0.035,
-                ..Default::default()
-            },
-            mappings: Arc::from([
-                BrushMapping::pressure_size(),
-                pressure_flow(0.22, 0.78),
-                direction_rotation(),
-            ]),
-            ..Default::default()
+            ..painter_brush(PainterBrushSpec {
+                diameter: 280.0,
+                aspect: 0.58,
+                flow: 0.85,
+                opacity: 0.78,
+                spacing: 0.14,
+                hardness: 0.9,
+                execution: BrushExecution::Dry,
+                grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 5.2, 1., -0.13)),
+                rendering: BrushRendering { accumulation: BrushAccumulation::Uniform, ..Default::default() },
+                wet_mix: BrushWetMix::default(),
+            })
         },
         DefaultBrushPreset::TransparentGlaze => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
-            diameter: 520.0,
-            aspect: 0.52,
-            flow: 0.25,
-            opacity: 0.62,
-            spacing: 0.08,
-            hardness: 0.68,
-            execution: BrushExecution::Dry,
-            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.9, 1., 0.0)),
-            // One translucent film per stroke, with additional glaze layers
-            // deposited by subsequent strokes.
-            rendering: BrushRendering {
-                accumulation: BrushAccumulation::Uniform,
-                ..BrushRendering::default()
-            },
-            wet_mix: BrushWetMix::default(),
-            color_dynamics: BrushColorDynamics {
-                stroke_saturation_jitter: 0.035,
-                ..Default::default()
-            },
-            mappings: Arc::from([
-                BrushMapping::pressure_size(),
-                pressure_flow(0.22, 0.78),
-                direction_rotation(),
-            ]),
-            ..Default::default()
+            ..painter_brush(PainterBrushSpec {
+                diameter: 520.0,
+                aspect: 0.52,
+                flow: 0.25,
+                opacity: 0.62,
+                spacing: 0.08,
+                hardness: 0.68,
+                execution: BrushExecution::Dry,
+                grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.9, 1., 0.0)),
+                rendering: BrushRendering { accumulation: BrushAccumulation::Uniform, ..Default::default() },
+                wet_mix: BrushWetMix::default(),
+            })
         },
         DefaultBrushPreset::OpaqueGouache => painter_brush(PainterBrushSpec {
             diameter: 410.0,
@@ -552,6 +449,11 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
 
 /// A retouching brush: a round tip whose stroke coverage is uniform, so each
 /// pixel takes the source once however many dabs cross it.
+fn liquify(diameter: f32, hardness: f32, spacing: f32, deform: BrushDeform) -> BrushSnapshot {
+    BrushSnapshot { diameter, hardness, spacing, deform, flow: 1.0,
+        execution: BrushExecution::Liquify, ..Default::default() }
+}
+
 fn retouching(execution: BrushExecution, diameter: f32, hardness: f32) -> BrushSnapshot {
     BrushSnapshot {
         contact: Some(BrushContact { linear_edge: true, ..BrushContact::default() }),
@@ -564,7 +466,6 @@ fn retouching(execution: BrushExecution, diameter: f32, hardness: f32) -> BrushS
             accumulation: BrushAccumulation::Uniform,
             ..BrushRendering::default()
         },
-        mappings: Arc::from([BrushMapping::pressure_size()]),
         stabilization: BrushStabilization { pressure_fall_micros: 80_000, ..BrushStabilization::default() },
         ..BrushSnapshot::default()
     }
@@ -625,7 +526,7 @@ fn watercolor_brush(spec: PainterBrushSpec, transport: BrushTransport) -> BrushS
     brush
 }
 
-fn canvas_grain(asset: &'static str, scale: f32, depth: f32, rotation: f32) -> BrushGrain {
+pub(crate) fn canvas_grain(asset: &'static str, scale: f32, depth: f32, rotation: f32) -> BrushGrain {
     BrushGrain {
         asset: AssetId::from(asset),
         behavior: BrushGrainBehavior::Canvas,

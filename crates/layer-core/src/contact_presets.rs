@@ -35,14 +35,7 @@ pub(crate) fn bristle_paintbrush() -> BrushSnapshot {
         flow: 1.,
         color_rgba_linear: [0.12, 0.025, 0.012, 1.],
         seed: 0x4252_4953,
-        grain: Some(BrushGrain {
-            asset: AssetId::from(CONTACT_PAPER_TEXTURE_ASSET),
-            behavior: BrushGrainBehavior::Canvas,
-            scale: 1.25,
-            depth: 0.6,
-            rotation_radians: 0.,
-            offset_jitter: 0.,
-        }),
+        grain: Some(crate::presets::canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.25, 0.6, 0.0)),
         contact: Some(BrushContact {
             bristles: Some(BrushBristles::default()),
             paper: 1.,
@@ -93,14 +86,7 @@ pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         brush.flow = 0.65;
         brush.spacing = 0.13;
         brush.rendering.accumulation = BrushAccumulation::Flow;
-        brush.grain = Some(BrushGrain {
-            asset: AssetId::from(CONTACT_PAPER_TEXTURE_ASSET),
-            behavior: BrushGrainBehavior::Canvas,
-            scale: 1.8,
-            depth: 1.0,
-            rotation_radians: 0.0,
-            offset_jitter: 0.0,
-        });
+        brush.grain = Some(crate::presets::canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.8, 1.0, 0.0));
         brush.mappings = Arc::from([BrushMapping {
             output_scale: 0.55,
             output_bias: 0.45,

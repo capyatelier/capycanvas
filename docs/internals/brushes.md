@@ -20,6 +20,7 @@ captured for a stroke. It includes the tip, spacing, sensor mappings, color and
 rendering behavior. Built-in definitions live in
 [`presets.rs`](../../crates/layer-core/src/presets.rs); shared tool controls expose
 the editable settings.
+Preset constructors share liquify settings, painter mappings and canvas grain.
 
 *Dynamics* map a changing input to a brush property. Pressure might change size or
 opacity; tilt can change the shape or rotation of a mark. Input availability varies
