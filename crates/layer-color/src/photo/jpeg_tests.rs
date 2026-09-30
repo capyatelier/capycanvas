@@ -125,28 +125,13 @@ fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success()
         );
         assert!(bytes.is_empty());
     }
-    let mut calls = 0;
     let mut bytes = Vec::new();
-    let error = write_jpeg_rows(
-        &mut bytes,
-        source.extent,
-        &source.interpretation,
-        &Default::default(),
-        JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()),
-        |y, row| {
-            assert_eq!(y, calls);
-            calls += 1;
-            if y == 3 {
-                Err("cancelled row provider".into())
-            } else {
-                row.fill(0);
-                Ok(())
-            }
-        },
-    )
-    .unwrap_err();
-    assert_eq!(calls, 4);
-    assert_eq!(error, "cancelled row provider");
+    super::test_support::assert_provider_failure("cancelled row provider", |provider| {
+        write_jpeg_rows(
+            &mut bytes, source.extent, &source.interpretation, &Default::default(),
+            JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()), provider,
+        )
+    });
     assert!(read_photo(Cursor::new(bytes), DecodeLimits::default()).is_err());
     let mut bytes = Vec::new();
     write_jpeg(&mut bytes, &source, 100).unwrap();

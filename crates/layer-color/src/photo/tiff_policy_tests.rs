@@ -12,9 +12,6 @@ use tiff::{
 fn classic_and_big_tiff_interleaved_strips_decode_all_lossless_codec_variants() {
     let values: Vec<u16> = (0..33 * 17 * 3).map(|i| (i * 137) as u16).collect();
     let profile = profile_bytes(&ColorProfile::Builtin(RgbSpace::AdobeRgb)).unwrap();
-    let directory = std::env::temp_dir().join(format!("capy-tiff-policy-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    eprintln!("TIFF policy fixtures: {}", directory.display());
     for big in [false, true] {
         for compression in [
             Compression::Uncompressed,
@@ -48,7 +45,6 @@ fn classic_and_big_tiff_interleaved_strips_decode_all_lossless_codec_variants() 
                 Compression::Deflate(_) => "zip",
                 Compression::Packbits => "packbits",
             };
-            std::fs::write(directory.join(format!("{big}-{name}.tif")), file.get_ref()).unwrap();
             let source = read_photo(Cursor::new(file.into_inner()), Default::default())
                 .unwrap_or_else(|e| panic!("big={big} codec={name}: {e}"));
             assert_eq!(source.extent, [33, 17]);

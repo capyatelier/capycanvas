@@ -201,13 +201,11 @@ fn rust_avif_synthetic_hdr_matches_libavif() {
         let actual = hdr_pixels(&photo.source);
         let expected = f16_pixels(expected);
         assert_eq!(actual.len(), expected.len());
-        let mut largest = 0f32;
         for (i, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
             for c in 0..3 {
                 // libavif's delivery utility clips negative RGB. The
                 // editing source intentionally retains out-of-gamut values.
                 let error = (actual[c].max(0.) - expected[c]).abs();
-                largest = largest.max(error);
                 assert!(
                     error < 0.004,
                     "{name} pixel {i} channel={c}: {actual:?} != {expected:?}"
@@ -215,7 +213,6 @@ fn rust_avif_synthetic_hdr_matches_libavif() {
             }
             assert!((actual[3] - expected[3]).abs() < 0.001);
         }
-        eprintln!("{name}: native gain-map reference max error {largest}");
     }
 }
 

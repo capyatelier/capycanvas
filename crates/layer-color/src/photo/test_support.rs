@@ -54,3 +54,16 @@ pub(crate) fn exif_output(resolution: layer_core::ImageResolution) -> Result<Vec
     let block = super::DeliveryMetadata::resolution(Some(resolution)).exif([1, 1])?.unwrap();
     Ok([b"Exif\0\0".as_slice(), &block].concat())
 }
+
+pub(crate) fn assert_provider_failure(error: &str, write: impl FnOnce(&mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>) -> Result<(), String>) {
+    let mut calls = 0;
+    let result = write(&mut |y, row| {
+        assert_eq!(y, calls);
+        calls += 1;
+        if y == 3 { return Err(error.into()); }
+        row.fill(0);
+        Ok(())
+    });
+    assert_eq!(result.unwrap_err(), error);
+    assert_eq!(calls, 4, "rows stop at the cancelled one");
+}

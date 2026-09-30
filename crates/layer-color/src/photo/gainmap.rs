@@ -392,10 +392,6 @@ mod tests {
                 .unwrap();
                 assert_eq!(stats.clipped_channels, 0);
                 let p = hdr[0];
-                eprintln!(
-                    "UNIFIED_GAINMAP {format:?} color={highlight_color} hdr={p:?} base={:?}",
-                    base[0]
-                );
                 assert!(
                     (p[0] / p[3] - 8.).abs() < 0.10
                         && (p[1] / p[3]).abs() < 0.07
@@ -577,7 +573,6 @@ mod tests {
             );
             assert_eq!(source.interpretation.depth, SampleDepth::F16);
             let mut expected = vec![[0.; 4]; 64];
-            let mut largest = 0f32;
             for (y, actual) in hdr_pixels(&source).chunks_exact(64).enumerate() {
                 row(y as u32, &mut expected, transparent).unwrap();
                 for (v, p) in actual.iter().zip(&expected) {
@@ -585,16 +580,11 @@ mod tests {
                     if p[3] > 0. {
                         for c in 0..3 {
                             let e = (v[c] - p[c] / p[3]).abs();
-                            largest = largest.max(e);
                             assert!(e < 0.16, "{format:?} {y}: {v:?} vs {p:?}, {e}");
                         }
                     }
                 }
             }
-            eprintln!(
-                "{format:?}: {} bytes, largest absolute HDR channel error {largest}",
-                encoded.len()
-            );
         }
     }
     #[test]
@@ -608,12 +598,11 @@ mod tests {
             for (contrast,balance) in [(0.5,-1.),(2.,1.)] {
                 let recipe=SdrRendition{contrast,balance,headroom:guide.peak.log2(),..Default::default()};
                 let (_,hdr,base,stats)=preview_gainmap_rows(extent,extent,RgbSpace::Srgb,recipe,&guide,format,100,None,&cancel,read).unwrap();assert_eq!(stats.clipped_channels,0);
-                let mut max_error=0f32;
                 for (x,y) in [(12,12),(20,20),(44,12),(52,20)] {
                     let mut row=vec![[0.;4];64];read(y,&mut row).unwrap();let p=row[x];let i=y as usize*64+x;
                     let expected=recipe.mapper(RgbSpace::Srgb,RgbSpace::Srgb).map_local_premultiplied(p,[x as f32+0.5,y as f32+0.5],&guide);
                     for c in 0..3 {
-                        let e=(hdr[i][c]-p[c]).abs()/alpha;max_error=max_error.max(e);
+                        let e=(hdr[i][c]-p[c]).abs()/alpha;
                         // Lossy 8-bit RGB JPEG gains amplify code error across the
                         // gain range. Bound reconstruction separately from SDR base.
                         assert!(e < 0.03+0.04*p[c]/alpha,"{format:?} HDR {hdr:?} expected={p:?}");
@@ -625,7 +614,7 @@ mod tests {
                     }
                     assert!((hdr[i][3]-alpha).abs()<0.001);
                 }
-                eprintln!("LOCAL_GAINMAP {format:?} contrast={contrast} balance={balance} sampled_max_hdr_error={max_error}");bases.push(base);
+                bases.push(base);
             }
             assert!(bases[0].iter().zip(&bases[1]).any(|(a,b)|(a[0]-b[0]).abs()/alpha>0.1),"Contrast/Balance must change the encoded SDR base");
         }

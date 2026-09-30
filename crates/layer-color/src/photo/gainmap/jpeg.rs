@@ -350,13 +350,11 @@ mod tests {
     fn assert_hdr(source: SourceImage) {
         assert_eq!(source.extent, EXTENT);
         assert_eq!(source.interpretation.depth, SampleDepth::F16);
-        let mut largest = 0f32;
         for (i, actual) in hdr_pixels(&source).into_iter().enumerate() {
             let (x, y) = (i as u32 % EXTENT[0], i as u32 / EXTENT[0]);
             let expected = pixel(x, y);
             for c in 0..3 {
                 let error = (actual[c] - expected[c]).abs();
-                largest = largest.max(error);
                 assert!(
                     error < 0.13 + 0.035 * expected[c],
                     "({x},{y}) {actual:?} != {expected:?}"
@@ -364,7 +362,6 @@ mod tests {
             }
             assert_eq!(actual[3], 1.);
         }
-        eprintln!("portable JPEG largest HDR error: {largest}");
     }
     fn hide_namespace(bytes: &mut [u8], namespace: &[u8]) {
         for at in 0..bytes.len().saturating_sub(namespace.len()) {

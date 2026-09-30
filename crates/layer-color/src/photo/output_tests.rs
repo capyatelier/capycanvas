@@ -21,23 +21,14 @@ fn invalid_output_is_rejected_before_writing_and_provider_failure_stops_rows() {
             assert!(result.is_err());
             assert!(output.into_inner().is_empty());
         }
-        let mut calls = 0;
-        let provider = |y, row: &mut [u8]| {
-            calls += 1;
-            if y == 3 {
-                return Err("cancelled row provider".into());
-            }
-            row.fill(0);
-            Ok(())
-        };
         let mut output = Cursor::new(Vec::new());
-        let result = if tiff {
-            write_tiff_rows(&mut output, [513, 257], &interpretation, &Default::default(), provider)
-        } else {
-            write_png_rows(&mut output, [513, 257], &interpretation, &Default::default(), provider)
-        };
-        assert_eq!(result.unwrap_err(), "cancelled row provider");
-        assert_eq!(calls, 4);
+        super::test_support::assert_provider_failure("cancelled row provider", |provider| {
+            if tiff {
+                write_tiff_rows(&mut output, [513, 257], &interpretation, &Default::default(), provider)
+            } else {
+                write_png_rows(&mut output, [513, 257], &interpretation, &Default::default(), provider)
+            }
+        });
     }
 }
 
@@ -141,18 +132,9 @@ fn webp_refuses_oversize_unsupported_over_budget_and_cancelled_output() {
     };
     assert!(fits(admitted).is_ok());
     assert!(fits(admitted - 1).unwrap_err().contains("memory budget"));
-    let mut calls = 0;
     let mut output = Vec::new();
-    let error = write_webp_rows(&mut output, [513, 257], &rgba, &Default::default(), webp_options(1 << 30), |y, row| {
-        calls += 1;
-        if y == 3 {
-            return Err("Export cancelled".into());
-        }
-        row.fill(0);
-        Ok(())
-    })
-    .unwrap_err();
-    assert_eq!(error, "Export cancelled");
-    assert_eq!(calls, 4, "rows stop at the cancelled one");
+    super::test_support::assert_provider_failure("Export cancelled", |provider| {
+        write_webp_rows(&mut output, [513, 257], &rgba, &Default::default(), webp_options(1 << 30), provider)
+    });
     assert!(output.is_empty(), "nothing is encoded after a cancellation");
 }

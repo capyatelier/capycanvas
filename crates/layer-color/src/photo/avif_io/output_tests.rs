@@ -32,7 +32,6 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
             (1, 1.25, 0.10), (25, 0.75, 0.075), (60, 0.30, 0.025),
             (90, 0.035, 0.004), (99, 0.02, 0.002), (100, 0.01, 0.001),
         ] {
-            let started = std::time::Instant::now();
             let (bytes, stats) = encode(
                 extent,
                 RgbSpace::Srgb,
@@ -47,7 +46,6 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
                 rows,
             )
             .unwrap();
-            let encode_ms = started.elapsed().as_secs_f64() * 1000.;
             assert_eq!(stats.clipped_channels, 0);
             let hdr = super::super::read(Cursor::new(&bytes), Default::default(), &cancel)
                 .unwrap()
@@ -61,7 +59,6 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
             assert_eq!(base.interpretation.depth, SampleDepth::U16);
             assert_eq!(hdr.resolution, Some(layer_core::ImageResolution::ppi(300)));
             let sdr = source_rows(&base).concat();
-            let mut maximum = 0f32;
             let mut squared = 0f64;
             let mut samples = 0u64;
             for (i, actual) in hdr_pixels(&hdr).into_iter().enumerate() {
@@ -70,7 +67,6 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
                 if expected[3] > 0. {
                     for c in 0..3 {
                         let error = (actual[c] - expected[c] / expected[3]).abs();
-                        maximum = maximum.max(error);
                         squared += f64::from(error).powi(2);
                         samples += 1;
                         assert!(
@@ -89,24 +85,6 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
                 );
             }
             assert!((squared / samples as f64).sqrt() < rms_error);
-            eprintln!(
-                "AVIF quality: {}",
-                serde_json::json!({"extent": extent, "quality": quality, "bytes": bytes.len(),
-                    "encode_ms": encode_ms, "hdr_max_abs": maximum, "hdr_rmse": (squared / samples as f64).sqrt()})
-            );
-            if let Some(directory) = std::env::var_os("LAYER_AVIF_OUTPUT") {
-                let directory = std::path::PathBuf::from(directory);
-                std::fs::create_dir_all(&directory).unwrap();
-                let stem = format!("{}x{}-q{quality}", extent[0], extent[1]);
-                std::fs::write(directory.join(format!("{stem}.avif")), &bytes).unwrap();
-                for (name, source) in [("hdr", &hdr), ("base", &base)] {
-                    std::fs::write(
-                        directory.join(format!("{stem}.{name}")),
-                        source_rows(source).concat(),
-                    )
-                    .unwrap();
-                }
-            }
         }
     }
 }
