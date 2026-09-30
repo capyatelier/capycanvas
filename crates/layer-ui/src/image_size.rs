@@ -2,7 +2,7 @@
 //! its print resolution, from a shared dialog model. Paint layers and masks
 //! resample on the GPU; placed photos, selections, guides and effect
 //! distances scale as metadata. Hosts only present the view.
-use super::canvas_size::{CanvasSizeUnit, CanvasUnitChoice, number};
+use super::canvas_size::{CanvasSizeUnit, CanvasUnitChoice, number, set_size_unit};
 use super::*;
 use layer_core::Edit;
 use layer_core::{CanvasGeometry, ImageResolution, Interpolation};
@@ -143,40 +143,18 @@ impl ImageSizeDraft {
         Some([self.pixels(0)?, self.pixels(1)?])
     }
 
-    fn round(&self, value: f64) -> f64 {
-        match self.unit {
-            CanvasSizeUnit::Pixels => value.round(),
-            CanvasSizeUnit::Percent => (value * 100.).round() / 100.,
-        }
-    }
-
     /// Set one side; with Constrain proportions the other follows.
     fn set(&mut self, axis: usize, value: f64) {
-        self.values[axis] = self.round(value);
+        self.values[axis] = self.unit.round(value);
         if self.constrain {
             let other = 1 - axis;
             self.values[other] = match self.unit {
                 CanvasSizeUnit::Percent => self.values[axis],
-                CanvasSizeUnit::Pixels => self.round(
+                CanvasSizeUnit::Pixels => self.unit.round(
                     self.values[axis] * f64::from(self.current[other]) / f64::from(self.current[axis]),
                 ),
             };
         }
-    }
-
-    fn set_unit(&mut self, unit: CanvasSizeUnit) {
-        if unit == self.unit {
-            return;
-        }
-        for axis in 0..2 {
-            let current = f64::from(self.current[axis]);
-            self.values[axis] = match unit {
-                CanvasSizeUnit::Percent => self.values[axis] / current * 100.,
-                CanvasSizeUnit::Pixels => self.values[axis] * current / 100.,
-            };
-        }
-        self.unit = unit;
-        self.values = self.values.map(|v| self.round(v));
     }
 
     fn resolution_changed(&self) -> bool {
@@ -239,7 +217,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         match action {
             ImageSizeAction::Width { value } => draft.set(0, finite(value)?),
             ImageSizeAction::Height { value } => draft.set(1, finite(value)?),
-            ImageSizeAction::Unit { unit } => draft.set_unit(unit),
+            ImageSizeAction::Unit { unit } => set_size_unit(draft.current, &mut draft.values, &mut draft.unit, unit),
             ImageSizeAction::Resolution { value } => {
                 draft.view.resolution_numeric.validate(finite(value)? as f32, draft.view.resolution_label)?;
                 draft.resolution = value.round();

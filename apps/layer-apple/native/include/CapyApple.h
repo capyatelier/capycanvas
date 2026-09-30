@@ -91,10 +91,8 @@ bool capy_apple_proof_texture(uint32_t edge, uint8_t *bytes, size_t count);
    Caller owns side*side*4 writable bytes. Returns 1 on success, 0 invalid.
    No session access or retained pointers; safe on the UI thread. */
 int32_t capy_apple_color_field(uint32_t side, float hue, uint32_t shape, const char *rgb_space, bool guide, uint8_t *rgba, size_t count);
-/* request: 0 action, 1 UI input, 2 query, 3 compatibility snapshot, 4 numeric control,
- * 5 incremental update (full models or workspace/camera presentation),
- * 6 workspace controller start/input/tick replying {view,wake,refresh}, or capture (SQLite stays on its worker),
- * 7 layout-aware incremental update (retains controls across live resizing).
+/* request: 0 action, 1 UI input, 2 query, 6 workspace control or capture, 7 layout-aware incremental update.
+   Workspace start/input/tick replies {view,wake,refresh}; SQLite stays on its worker.
    Returned JSON is owned; release using capy_apple_string_free. NULL is either
    no changed snapshot or failure (consult capy_apple_error). */
 char *capy_apple_request(CapyApple *app, uint32_t request, const char *json);

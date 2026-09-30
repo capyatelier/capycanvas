@@ -18,6 +18,12 @@ impl CanvasSizeUnit {
             Self::Percent => "Percent",
         }
     }
+    pub(super) fn round(self, value: f64) -> f64 {
+        match self {
+            Self::Pixels => value.round(),
+            Self::Percent => (value * 100.).round() / 100.,
+        }
+    }
 }
 
 crate::variants! {
@@ -118,6 +124,21 @@ pub(super) fn number(min: f64, max: f64, digits: u32, unit: &str) -> NumericCont
     }
 }
 
+pub(super) fn set_size_unit(current: [u32; 2], values: &mut [f64; 2], unit: &mut CanvasSizeUnit, next: CanvasSizeUnit) {
+    if next == *unit {
+        return;
+    }
+    for axis in 0..2 {
+        let current = f64::from(current[axis]);
+        values[axis] = match next {
+            CanvasSizeUnit::Percent => values[axis] / current * 100.,
+            CanvasSizeUnit::Pixels => values[axis] * current / 100.,
+        };
+    }
+    *unit = next;
+    *values = values.map(|v| next.round(v));
+}
+
 impl CanvasSizeDraft {
     fn new(current: [u32; 2]) -> Self {
         Self {
@@ -170,28 +191,6 @@ impl CanvasSizeDraft {
             }),
             size,
         }
-    }
-
-    fn round(&self, value: f64) -> f64 {
-        match self.unit {
-            CanvasSizeUnit::Pixels => value.round(),
-            CanvasSizeUnit::Percent => (value * 100.).round() / 100.,
-        }
-    }
-
-    fn set_unit(&mut self, unit: CanvasSizeUnit) {
-        if unit == self.unit {
-            return;
-        }
-        for axis in 0..2 {
-            let current = f64::from(self.current[axis]);
-            self.values[axis] = match unit {
-                CanvasSizeUnit::Percent => self.values[axis] / current * 100.,
-                CanvasSizeUnit::Pixels => self.values[axis] * current / 100.,
-            };
-        }
-        self.unit = unit;
-        self.values = self.values.map(|v| self.round(v));
     }
 
     fn set_relative(&mut self, relative: bool) {
@@ -283,9 +282,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let draft = self.canvas_size.as_mut().ok_or("Canvas Size is not open")?;
         let finite = |value: f64| if value.is_finite() { Ok(value) } else { Err("Enter a number") };
         match action {
-            CanvasSizeAction::Width { value } => draft.values[0] = draft.round(finite(value)?),
-            CanvasSizeAction::Height { value } => draft.values[1] = draft.round(finite(value)?),
-            CanvasSizeAction::Unit { unit } => draft.set_unit(unit),
+            CanvasSizeAction::Width { value } => draft.values[0] = draft.unit.round(finite(value)?),
+            CanvasSizeAction::Height { value } => draft.values[1] = draft.unit.round(finite(value)?),
+            CanvasSizeAction::Unit { unit } => set_size_unit(draft.current, &mut draft.values, &mut draft.unit, unit),
             CanvasSizeAction::Relative { relative } => draft.set_relative(relative),
             CanvasSizeAction::Anchor { anchor } => draft.anchor = anchor,
             CanvasSizeAction::Apply => {

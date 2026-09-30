@@ -881,15 +881,15 @@ fn display_rgb(space: RgbSpace, display: RgbSpace, rgb: [f32; 3]) -> [f32; 3] {
         .map(|v| v.clamp(0., 1.) as f32)
 }
 
+#[inline]
+fn raster_len(side: u32) -> Option<usize> {
+    (side as usize).checked_mul(side as usize)?.checked_mul(4)
+}
+
 /// Opaque display pixels for hosts that cache the hue guide instead of using a
 /// native conic gradient. The host clips its antialiased ring silhouette.
 pub fn render_hue_guide_in(side: u32, shape: ColorShape, space: RgbSpace, display: RgbSpace, rgba: &mut [u8]) -> bool {
-    if side == 0
-        || (side as usize)
-            .checked_mul(side as usize)
-            .and_then(|n| n.checked_mul(4))
-            != Some(rgba.len())
-    {
+    if side == 0 || raster_len(side) != Some(rgba.len()) {
         return false;
     }
     let geometry = ColorWheelGeometry::new(side as f32).unwrap();
@@ -943,13 +943,7 @@ fn render_hsv_field_in(
     display: RgbSpace,
     rgba: &mut [u8],
 ) -> bool {
-    if side == 0
-        || !hue.is_finite()
-        || (side as usize)
-            .checked_mul(side as usize)
-            .and_then(|n| n.checked_mul(4))
-            != Some(rgba.len())
-    {
+    if side == 0 || !hue.is_finite() || raster_len(side) != Some(rgba.len()) {
         return false;
     }
     let geometry = ColorWheelGeometry::new(side as f32).unwrap();
@@ -979,13 +973,7 @@ fn render_hls_field_in(
     display: RgbSpace,
     rgba: &mut [u8],
 ) -> bool {
-    let Some(length) = (side as usize)
-        .checked_mul(side as usize)
-        .and_then(|n| n.checked_mul(4))
-    else {
-        return false;
-    };
-    if side == 0 || !hue.is_finite() || rgba.len() != length {
+    if side == 0 || !hue.is_finite() || raster_len(side) != Some(rgba.len()) {
         return false;
     }
     rgba.fill(0);
@@ -1023,13 +1011,7 @@ fn render_okhsv_disc_in(
     display: RgbSpace,
     rgba: &mut [u8],
 ) -> bool {
-    if side == 0
-        || !hue.is_finite()
-        || (side as usize)
-            .checked_mul(side as usize)
-            .and_then(|n| n.checked_mul(4))
-            != Some(rgba.len())
-    {
+    if side == 0 || !hue.is_finite() || raster_len(side) != Some(rgba.len()) {
         return false;
     }
     let g = ColorWheelGeometry::new(side as f32).unwrap();
