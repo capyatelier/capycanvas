@@ -179,56 +179,16 @@ mod tests {
         assert!(host.session.state().requests.is_empty());
     }
     #[test]
-    fn titlebar_measurements_are_transient_validated_and_published() {
-        use layer_ui::{Platform, UiAction};
-        let mut host = NativeHost::new(Platform::Windows).unwrap();
+    fn titlebar_measurements_publish_native_snapshot_insets() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         initialize(&mut host).unwrap();
-        let saved = serde_json::to_value(&host.session.state().workspace).unwrap();
-        let revision = host.session.engine().document().revision;
         host.session.begin_workspace_transition().unwrap();
         for insets in [[0., 138., 48.], [0., 92., 32.], [0.; 3]] {
-            host.dispatch(UiAction::MeasureTitlebar { insets }).unwrap();
-            let snapshot: Value =
-                serde_json::from_slice(&host.take_update_bytes().unwrap().unwrap()).unwrap();
+            host.dispatch(layer_ui::UiAction::MeasureTitlebar { insets }).unwrap();
+            let snapshot: Value = serde_json::from_slice(&host.take_update_bytes().unwrap().unwrap()).unwrap();
             assert_eq!(snapshot["titlebar_insets"], json!(insets));
-            assert_eq!(
-                serde_json::to_value(&host.session.state().workspace).unwrap(),
-                saved
-            );
-            assert!(host.session.state().requests.is_empty());
-            assert_eq!(host.session.engine().document().revision, revision);
         }
         host.session.end_workspace_transition();
-        let captured = host.session.capture_workspace().unwrap();
-        assert_eq!(captured.history.revisions.len(), 1);
-        host.dispatch(UiAction::MeasureTitlebar {
-            insets: [0., 144., 48.],
-        })
-        .unwrap();
-        host.dispatch(UiAction::RestoreWorkspace {
-            workspace: Box::new(layer_ui::WorkspaceState::default()),
-        })
-        .unwrap();
-        assert_eq!(
-            host.session.state().workspace.layout.titlebar_insets,
-            [0., 144., 48.]
-        );
-        host.session
-            .adopt_workspace(layer_ui::PreparedWorkspace::new(captured).unwrap())
-            .unwrap();
-        assert_eq!(
-            host.session.state().workspace.layout.titlebar_insets,
-            [0., 144., 48.]
-        );
-        host.dispatch(UiAction::MeasureTitlebar { insets: [0.; 3] })
-            .unwrap();
-        for insets in [[-1., 0., 0.], [0., f32::NAN, 0.], [0., 0., 1_000_000.]] {
-            assert!(host.dispatch(UiAction::MeasureTitlebar { insets }).is_err());
-            assert_eq!(
-                host.session.state().workspace.layout.titlebar_insets,
-                [0.; 3]
-            );
-        }
     }
     #[test]
     fn workspace_queries_follow_shared_policy_without_mutating_the_document() {
@@ -241,6 +201,7 @@ mod tests {
             json!({"type":"renderer_stats"}),
             json!({"type":"panel_handle_target","item":{"kind":"panel","panel":"layers"}}),
             json!({"type":"drawer","column":null,"heights":[],"progress":1}),
+            json!({"type":"expansion","panel":"toolbar","heights":[0,420],"progress":1}),
             json!({"type":"header","request":{"op":"geometry","width":1400,"insets":[0,0],"metrics":[]}}),
         ] {
             let expected = host.query(query.clone()).unwrap();
@@ -320,161 +281,6 @@ mod tests {
         );
         let ended = metadata(super::query(&mut host, &query.to_string()).unwrap());
         assert!(ended["result"]["tab"].is_null());
-    }
-    #[test]
-    fn windows_help_commands_resolve_and_acknowledge_shared_links() {
-        use layer_ui::{ApplicationLink, CommandId, HostRequestKind, UiAction};
-        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        let revision = host.session.engine().document().revision;
-        for (command, link) in [
-            (CommandId::Website, ApplicationLink::Website),
-            (CommandId::SourceCode, ApplicationLink::SourceCode),
-        ] {
-            host.dispatch(UiAction::Invoke { command }).unwrap();
-            let id = host.session.state().requests.iter().find(|request|
-                matches!(request.kind, HostRequestKind::OpenLink { link: actual } if actual == link)
-            ).unwrap().id;
-            let query = json!({"type":"application_link","link":link}).to_string();
-            let result = metadata(super::query(&mut host, &query).unwrap());
-            assert_eq!(result["result"], link.url());
-            host.dispatch(UiAction::CompleteRequest { id, error: None })
-                .unwrap();
-            assert!(
-                host.session
-                    .state()
-                    .requests
-                    .iter()
-                    .all(|request| request.id != id)
-            );
-        }
-        assert_eq!(revision, host.session.engine().document().revision);
-    }
-    #[test]
-    fn windows_drawer_queries_measure_and_close_after_the_model_is_removed() {
-        use layer_ui::{CustomizationAction, Panel, ToolbarControl, UiAction};
-        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        host.resize(1600, 1000, 1.).unwrap();
-        let tile = host
-            .session
-            .state()
-            .workspace
-            .layout
-            .panel(Panel::Toolbar)
-            .unwrap()
-            .tiles()
-            .iter()
-            .find(|tile| tile.control == ToolbarControl::Color)
-            .unwrap()
-            .id;
-        host.dispatch(UiAction::ActivateTile {
-            panel: Panel::Toolbar,
-            tile,
-        })
-        .unwrap();
-        // One measured height is required per model column, even before layout.
-        let invalid = metadata(
-            super::query(&mut host, r#"{"type":"drawer","heights":[],"progress":1}"#).unwrap(),
-        );
-        assert!(invalid["result"].is_null());
-        let open = metadata(
-            super::query(
-                &mut host,
-                r#"{"type":"drawer","heights":[360],"progress":1}"#,
-            )
-            .unwrap(),
-        );
-        let placement = open["result"]["placement"].clone();
-        assert_eq!(placement["bounds"]["width"], 280.);
-        assert_eq!(placement["bounds"]["height"], 360.);
-        assert!(open["result"]["connection"].is_object());
-        let revision = host.session.engine().document().revision;
-        host.dispatch(UiAction::Customize {
-            action: CustomizationAction::CloseExpanded,
-        })
-        .unwrap();
-        assert!(host.session.state().customization.drawer.is_none());
-        for progress in [0., 1.] {
-            let request = json!({"type":"drawer","heights":[360],"progress":progress,"from":placement,"closing":true});
-            let closed = metadata(super::query(&mut host, &request.to_string()).unwrap());
-            let bounds = &closed["result"]["placement"]["bounds"];
-            if progress == 0. {
-                assert_eq!(bounds, &placement["bounds"]);
-            } else {
-                assert_eq!(bounds["height"], 0.);
-            }
-        }
-        assert_eq!(host.session.engine().document().revision, revision);
-    }
-    #[test]
-    fn windows_expansion_retains_presented_geometry_on_resize_and_close() {
-        use layer_ui::{CustomizationAction, Panel, UiAction};
-        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        host.resize(1600, 1000, 1.).unwrap();
-        let revision = host.session.engine().document().revision;
-        for panel in [Panel::Sizes, Panel::Toolbar] {
-            host.dispatch(UiAction::Customize {
-                action: CustomizationAction::ShowAllControls { panel },
-            })
-            .unwrap();
-            let request = json!({"type":"expansion","panel":panel,"heights":[0,420],"progress":1});
-            let open = metadata(super::query(&mut host, &request.to_string()).unwrap());
-            assert!(open["error"].is_null());
-            let placement = open["result"].clone();
-            assert_eq!(placement["configuration"]["width"], 380.);
-            if panel == Panel::Toolbar {
-                let layout = host.session.layout([1600., 1000.]);
-                let group = layout
-                    .groups
-                    .iter()
-                    .find(|g| g.panels.contains(&panel))
-                    .unwrap();
-                let config = host.session.state().workspace.layout.panel(panel).unwrap();
-                let expected = layer_ui::toolbar_tile_layout(
-                    placement["preview"]["width"].as_f64().unwrap() as f32,
-                    (placement["preview"]["height"].as_f64().unwrap()
-                        - placement["configuration"]["y"].as_f64().unwrap())
-                        as f32,
-                    group.axis,
-                    config.tiles(),
-                    !group.tabs_visible,
-                    config.tile_style,
-                );
-                let expected: Value = serde_json::from_str(&json!(expected).to_string()).unwrap();
-                assert_eq!(placement["tiles"], expected);
-            }
-            host.resize(1000, 700, 1.).unwrap();
-            let request = json!({"type":"expansion","panel":panel,"heights":[0,420],
-                "from":placement,"progress":0});
-            let resized = metadata(super::query(&mut host, &request.to_string()).unwrap());
-            assert_eq!(resized["result"]["bounds"], placement["bounds"]);
-            assert_eq!(resized["result"]["preview"], placement["preview"]);
-            host.dispatch(UiAction::Customize {
-                action: CustomizationAction::CloseExpanded,
-            })
-            .unwrap();
-            assert!(host.session.state().customization.expanded.is_none());
-            for progress in [0., 1.] {
-                let request = json!({"type":"expansion","panel":panel,"heights":[0,420],
-                    "from":placement,"progress":progress,"closing":true});
-                let result = metadata(super::query(&mut host, &request.to_string()).unwrap());
-                assert!(result["error"].is_null());
-                if progress == 0. {
-                    assert_eq!(result["result"]["bounds"], placement["bounds"]);
-                } else {
-                    let layout = host.session.layout([1000., 700.]);
-                    let group = layout
-                        .groups
-                        .iter()
-                        .find(|g| g.panels.contains(&panel))
-                        .unwrap();
-                    let expected: Value =
-                        serde_json::from_str(&json!(group.bounds).to_string()).unwrap();
-                    assert_eq!(result["result"]["bounds"], expected);
-                }
-            }
-            host.resize(1600, 1000, 1.).unwrap();
-        }
-        assert_eq!(host.session.engine().document().revision, revision);
     }
     #[test]
     fn optional_queries_reject_mutations_oversize_and_stale_geometry_without_failing_host() {

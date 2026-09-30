@@ -141,6 +141,9 @@ been verified.
 
 ## Test
 
+Drawer and expansion query lifecycle tests live in `layer-host`. Windows
+workspace tests cover native snapshot insets and the JSON/CPU packet boundary.
+
 | Where | Checks |
 | --- | --- |
 | Linux or Windows | `cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib` and `cargo clippy --locked -p layer-windows --all-targets -- -D warnings` |

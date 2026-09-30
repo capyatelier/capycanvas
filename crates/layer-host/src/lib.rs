@@ -1178,6 +1178,69 @@ mod tests {
         }
     }
     #[test]
+    fn drawer_queries_measure_and_close_after_the_model_is_removed() {
+        use layer_ui::{CustomizationAction, Panel, ToolbarControl};
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.resize(1600, 1000, 1.).unwrap();
+        let tile = host.session.state().workspace.layout.panel(Panel::Toolbar).unwrap().tiles()
+            .iter().find(|t| t.control == ToolbarControl::Color).unwrap().id;
+        host.dispatch(UiAction::ActivateTile { panel: Panel::Toolbar, tile }).unwrap();
+        assert!(host.query(json!({"type":"drawer","heights":[],"progress":1})).unwrap().is_null());
+        let open = host.query(json!({"type":"drawer","heights":[360],"progress":1})).unwrap();
+        let placement = open["placement"].clone();
+        assert_eq!(placement["bounds"]["width"], 280.);
+        assert_eq!(placement["bounds"]["height"], 360.);
+        assert!(open["connection"].is_object());
+        let revision = host.session.engine().document().revision;
+        host.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded }).unwrap();
+        assert!(host.session.state().customization.drawer.is_none());
+        for progress in [0., 1.] {
+            let closed = host.query(json!({"type":"drawer","heights":[360],"progress":progress,"from":placement,"closing":true})).unwrap();
+            if progress == 0. { assert_eq!(closed["placement"]["bounds"], placement["bounds"]); }
+            else { assert_eq!(closed["placement"]["bounds"]["height"], 0.); }
+        }
+        assert_eq!(host.session.engine().document().revision, revision);
+    }
+
+    #[test]
+    fn expansion_retains_presented_geometry_on_resize_and_close() {
+        use layer_ui::{CustomizationAction, Panel};
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.resize(1600, 1000, 1.).unwrap();
+        let revision = host.session.engine().document().revision;
+        for panel in [Panel::Sizes, Panel::Toolbar] {
+            host.dispatch(UiAction::Customize { action: CustomizationAction::ShowAllControls { panel } }).unwrap();
+            let placement = host.query(json!({"type":"expansion","panel":panel,"heights":[0,420],"progress":1})).unwrap();
+            assert_eq!(placement["configuration"]["width"], 380.);
+            if panel == Panel::Toolbar {
+                let layout = host.session.layout([1600., 1000.]);
+                let group = layout.groups.iter().find(|g| g.panels.contains(&panel)).unwrap();
+                let config = host.session.state().workspace.layout.panel(panel).unwrap();
+                let expected = layer_ui::toolbar_tile_layout(placement["preview"]["width"].as_f64().unwrap() as f32,
+                    (placement["preview"]["height"].as_f64().unwrap() - placement["configuration"]["y"].as_f64().unwrap()) as f32,
+                    group.axis, config.tiles(), !group.tabs_visible, config.tile_style);
+                assert_eq!(placement["tiles"], json!(expected));
+            }
+            host.resize(1000, 700, 1.).unwrap();
+            let resized = host.query(json!({"type":"expansion","panel":panel,"heights":[0,420],"from":placement,"progress":0})).unwrap();
+            assert_eq!(resized["bounds"], placement["bounds"]);
+            assert_eq!(resized["preview"], placement["preview"]);
+            host.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded }).unwrap();
+            assert!(host.session.state().customization.expanded.is_none());
+            for progress in [0., 1.] {
+                let result = host.query(json!({"type":"expansion","panel":panel,"heights":[0,420],"from":placement,"progress":progress,"closing":true})).unwrap();
+                if progress == 0. { assert_eq!(result["bounds"], placement["bounds"]); }
+                else {
+                    let layout = host.session.layout([1000., 700.]);
+                    assert_eq!(result["bounds"], json!(layout.groups.iter().find(|g| g.panels.contains(&panel)).unwrap().bounds));
+                }
+            }
+            host.resize(1600, 1000, 1.).unwrap();
+        }
+        assert_eq!(host.session.engine().document().revision, revision);
+    }
+
+    #[test]
     fn android_drawer_queries_follow_collapsed_toolbar_measurements() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         app.resize(2880, 1800, 1.75).unwrap();
