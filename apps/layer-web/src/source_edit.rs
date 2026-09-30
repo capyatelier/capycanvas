@@ -30,14 +30,7 @@ impl WebSourceCandidate {
     pub fn previews(&self) -> Result<JsValue, JsValue> {
         let result = js_sys::Array::new();
         for p in &self.previews {
-            let entry = js_sys::Object::new();
-            js_sys::Reflect::set(&entry, &js("extent"), &serialize(&p.extent)?)?;
-            js_sys::Reflect::set(
-                &entry,
-                &js("pixels"),
-                &js_sys::Uint8Array::from(p.srgb_bytes().map_err(js)?.as_slice()),
-            )?;
-            result.push(&entry);
+            result.push(&output::preview_value(p)?);
         }
         Ok(result.into())
     }

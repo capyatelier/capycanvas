@@ -628,7 +628,7 @@ pub async fn raster_worker_output(
     Ok(result)
 }
 
-fn preview_value(
+pub(super) fn preview_value(
     preview: &layer_render_wgpu::snapshot::SnapshotPreview,
 ) -> Result<JsValue, JsValue> {
     let value = js_sys::Object::new();

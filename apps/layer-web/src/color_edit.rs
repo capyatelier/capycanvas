@@ -19,14 +19,7 @@ impl WebColorCandidate {
     pub fn previews(&self) -> Result<JsValue, JsValue> {
         let result = js_sys::Array::new();
         for preview in &self.previews {
-            let entry = js_sys::Object::new();
-            js_sys::Reflect::set(&entry, &js("extent"), &serialize(&preview.extent)?)?;
-            js_sys::Reflect::set(
-                &entry,
-                &js("pixels"),
-                &js_sys::Uint8Array::from(preview.srgb_bytes().map_err(js)?.as_slice()),
-            )?;
-            result.push(&entry);
+            result.push(&output::preview_value(preview)?);
         }
         Ok(result.into())
     }

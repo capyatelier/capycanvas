@@ -22,12 +22,6 @@ impl WebClip {
     pub fn png(&self) -> js_sys::Uint8Array {
         js_sys::Uint8Array::from(&self.clip.png[..])
     }
-    pub fn nonce(&self) -> String {
-        self.clip.nonce.clone()
-    }
-    pub fn extent(&self) -> Vec<u32> {
-        self.clip.source.extent.to_vec()
-    }
 }
 
 #[wasm_bindgen]

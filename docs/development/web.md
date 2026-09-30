@@ -42,6 +42,9 @@ Rust owns editor behavior; JavaScript owns browser events, controls and services
 The session runs on the browser event loop, without a worker thread or shared
 memory.
 
+Color, retained-source and output previews share `output::preview_value` for
+their extent and sRGB pixel array.
+
 ## Tests
 
 Pure unit tests need no browser or GPU:
