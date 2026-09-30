@@ -405,7 +405,7 @@ the same formats, memory allowance and existing pipelines.
 | Pencil 1024 px, one photo at Fit | 11.14 | 11.14 (11.08–11.36) | 107.46–113.63 ms | Not met |
 | Eraser 1024 px, one photo at Fit | 30.06 | 29.91 (29.71–29.95) | 44.67–45.06 ms | Not met |
 
-The stacked rows have nine visible layers: eight translucent photos and one
+The stacked rows have nine visible layers: one opaque photo, seven translucent copies and one
 paint layer. They do not qualify the separate eight-paint-layer target. Fit is
 15.97%. Candidate allocator residency is 812 MiB at Fit, 1,069 MiB at 50% and
 1,008 MiB at 100%, within 2 MiB of the matched controls. G-Pen owner CPU p50 is
@@ -430,6 +430,41 @@ are `artifacts/latency-investigation/two-25-stack-{50,100}-{constant,pauses}`.
 This does not qualify interruption after the current shader and graph changes.
 Smaller idle batches improve interruption while increasing total settling time;
 Fit settling is 590–613 ms here versus 478–544 ms on the current main control.
+
+### Painting below the front layer
+
+Measured on 2026-09-30 on `c82970142` with a benchmark-only paint-position
+control. Both optimized release builds keep the covered-pixel shader guard,
+transparent-paper removal, memory budget and two-page refinement. The control
+changes only the root from `combine(front, over(back))` to `over(all)`.
+These are three warmed five-second strokes per position: 12 MP Perceptual
+photo, G-Pen 1024 px, 100% zoom, 240 × 140 px path, Stats closed, default
+workspace and thermal status zero. Paint stays above the opaque bottom photo;
+the other photos have 35% opacity.
+
+| Visible layers | Paint position | Balanced root, fresh updates/s | Front-biased root, fresh updates/s | Front-biased completion gap p99, range |
+| --- | --- | ---: | ---: | ---: |
+| Eight: seven photos and paint | Top | 16.50 | 26.90 | 44.07–46.94 ms |
+| Eight: seven photos and paint | Middle | 16.48 | 13.54 | 81.76–88.15 ms |
+| Eight: seven photos and paint | Lowest above the opaque photo | 16.52 | 13.74 | 81.54–86.91 ms |
+| Nine: eight photos and paint | Lowest above the opaque photo | 13.72 | 13.71 | 82.20–85.18 ms |
+
+None meets the 60/s target. The isolated root bias costs 17–18% throughput
+on the middle and lower eight-layer cases. It reduces the top dependency path
+from three blends to one, while six other paths grow from three to four.
+Uniform edits across the eight operands therefore average 3.5 rather than 3
+blends. Nine operands already have the same root shape with either construction.
+The earlier front-only rates do not establish a benefit for drawing on all
+layers. Pixel-correctness and logarithmic-work tests do not establish that
+tradeoff either. These results compare root shapes with identical other
+optimizations, not lower-layer performance against the older main APK.
+
+APK SHA-256: front-biased
+`882a013a1209f542caf0442f056ab14143fac58722dfdc0de027ec0f8240d50e`;
+balanced `9e3e455bc1446a4e414582791ed288e755c984736e197f6e39c19e962a3d3f88`.
+Raw records and source provenance:
+`artifacts/optimization-roi/all-layer-followup/tree-comparison.json` and
+`{biased,balanced}-{7,8}-{top,middle,lower}` for the listed cases.
 
 ### GPU attribution with Stats closed
 

@@ -335,7 +335,10 @@ count camera-only frames. Brush preview PNGs load off the UI thread and share a
 bounded cache across panel lifetimes.
 `--radius-x` and `--radius-y` set the ellipse radii in surface pixels;
 `--photo-layers` creates 1–32 photos with translucent duplicates. The runner
-checks the observed trajectory, layer count, brush, prediction and requested
+places paint at the top by default. `--paint-layer-index` moves it to the given
+zero-based position from the top, above the opaque base photo so strokes remain
+visible. Compare top, middle and lower edits when changing composition reuse.
+The runner checks the observed trajectory, layer count, selected layer position, brush, prediction and requested
 zoom before starting the timed window, including when reusing completed output.
 `--blending linear` or `--blending perceptual` selects the document's blend space
 and verifies the selected shared command; omitting it keeps the imported default.
