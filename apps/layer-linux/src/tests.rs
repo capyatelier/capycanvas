@@ -222,6 +222,17 @@ fn fixture_workspace(app: &adw::Application) -> Rc<Workspace> {
     w
 }
 
+fn artifact_dir(path: &str) -> &str {
+    std::fs::create_dir_all(path).unwrap();
+    path
+}
+
+fn save_snapshot(w: &Workspace, wait: u64, path: impl FnOnce() -> std::path::PathBuf) {
+    let _ = crate::snapshot(w);
+    pump(wait);
+    crate::snapshot(w).save_to_png(path()).unwrap();
+}
+
 fn tool_settings_workspace(w: &Rc<Workspace>, commands: &[CommandId], hide_sizes: bool, below_brushes: bool) -> WorkspaceState {
     let mut workspace = state(w).workspace;
     if hide_sizes { workspace.layout.set_panel_visible(Panel::Sizes, false).unwrap(); }
@@ -285,8 +296,7 @@ fn native_default_workspace() {
             .committed_strokes,
         3
     );
-    let output = "../../artifacts/familiar-workspace/default";
-    std::fs::create_dir_all(output).unwrap();
+    let output = artifact_dir("../../artifacts/familiar-workspace/default");
     let initial = state(&w).workspace.layout;
     assert_eq!(initial.bands, DockLayout::editor_default().bands);
     assert_eq!(initial.panels, DockLayout::editor_default().panels);
@@ -1203,8 +1213,7 @@ fn native_nested_tool_drawers() {
     pump(1800);
     let original = layer_ui::WorkspaceState::default();
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let output = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(output).unwrap();
+    let output = artifact_dir("../../artifacts/familiar-workspace");
     for (theme, group) in [(Theme::Dark, 5), (Theme::Light, 8)] {
         let mut workspace = original.clone();
         workspace
@@ -1423,8 +1432,7 @@ fn native_collapsed_columns() {
     pump(1800);
     let original_workspace = layer_ui::WorkspaceState::default();
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let output = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(output).unwrap();
+    let output = artifact_dir("../../artifacts/familiar-workspace");
     let press = |name: &str| {
         let button = find_named(w.surface.upcast_ref(), name)
             .unwrap_or_else(|| panic!("Missing {name}"))
@@ -1683,8 +1691,7 @@ fn native_tool_drawers() {
         workspace: Box::new(workspace),
     });
     pump(200);
-    let output = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(output).unwrap();
+    let output = artifact_dir("../../artifacts/familiar-workspace");
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for id in &ids {
@@ -2024,8 +2031,7 @@ fn native_connected_tools() {
         "{:?}",
         pixels.bounds()
     );
-    let dir = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/familiar-workspace");
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(120);
@@ -2114,8 +2120,7 @@ fn native_ruler_tools() {
             .rulers
             .len()
     };
-    let dir = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/familiar-workspace");
     for index in 0..3 {
         w.dispatch(UiAction::Invoke {
             command: CommandId::Ruler,
@@ -2315,8 +2320,7 @@ fn native_operation_tool() {
         original.revision,
         "preview does not edit history"
     );
-    let dir = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/familiar-workspace");
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(150);
@@ -2484,8 +2488,7 @@ fn native_figure_tools() {
         w.input.send(&w, e);
         pump(30);
     };
-    let dir = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/familiar-workspace");
     for row in 0..3 {
         let group = w.tool_set.group_buttons.borrow()[row].clone();
         click(&group);
@@ -2631,8 +2634,7 @@ fn native_gradient_tool() {
     let opacity = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-opacity");
     edit_number(&opacity, "80");
     assert!((state(&w).brush.opacity - 0.8).abs() < 0.001);
-    let dir = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/familiar-workspace");
     for (index, name) in [
         "linear-colors",
         "linear-clear",
@@ -2804,8 +2806,7 @@ fn native_navigation_tools() {
     );
     drop(gpu);
     eprintln!("sampling settled after {:.3} ms additional wait (startup pending: {startup_pending})", idle_start.elapsed().as_secs_f64() * 1000.);
-    let dir = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/familiar-workspace");
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(200);
@@ -3163,8 +3164,7 @@ fn native_navigator() {
         viewport: size,
     });
     pump(200);
-    let dir = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/familiar-workspace");
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::RestoreSettings {
             settings: Settings {
@@ -3383,8 +3383,7 @@ fn native_tool_families() {
         workspace: Box::new(workspace),
     });
     pump(150);
-    let output = "../../artifacts/familiar-workspace";
-    std::fs::create_dir_all(output).unwrap();
+    let output = artifact_dir("../../artifacts/familiar-workspace");
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for tool in layer_ui::Tool::ALL {
@@ -3723,8 +3722,7 @@ fn native_runtime_filter_packages() {
         state(&w).layer_properties.controls[0].value,
         layer_core::EffectValue::Number(9.)
     );
-    let dir = "../../artifacts/ui/runtime-filters-gtk";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/runtime-filters-gtk");
     crate::capture(&w, &format!("{dir}/runtime-properties.png"));
     w.window.close();
     pump(80);
@@ -3773,8 +3771,7 @@ fn native_adjustment_panels_review() {
     w.refresh(regions::ALL);
     w.wake();
     pump(300);
-    let dir = "../../artifacts/ui/adjustments-gtk";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/adjustments-gtk");
     show_adjustments();
     pump(900);
     crate::capture(&w, &format!("{dir}/01-adjustments.png"));
@@ -4084,8 +4081,7 @@ fn native_layer_panel_review() {
     w.dispatch(UiAction::SelectLayer { id: 2 });
     assert!(delete.is_sensitive());
     w.dispatch(UiAction::SelectLayer { id: 1 });
-    let dir = "../../artifacts/ui/layers-gtk";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/layers-gtk");
     w.dispatch(UiAction::SetTheme {
         theme: Some(Theme::Dark),
     });
@@ -4872,8 +4868,7 @@ fn native_toolbar_sizing() {
     w.window.present();
     pump(700);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let dir = "../../artifacts/ui/workspace-management/gtk";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/workspace-management/gtk");
     let initial = state(&w).workspace;
     let placement = || {
         w.resolved()
@@ -4967,8 +4962,7 @@ fn native_zen_icons() {
             value: PreferenceValue::Bool(true),
         },
     });
-    let dir = "../../artifacts/ui/zen-icons";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/zen-icons");
     let zen = command(&w, CommandId::ZenMode);
     let image = zen.child().and_downcast::<gtk::Image>().unwrap();
     let bounds = zen.compute_bounds(&w.surface).unwrap();
@@ -5098,8 +5092,7 @@ fn native_group_tab_styles() {
             target: DockTarget::Tab { group, index: None },
         });
     }
-    let dir = "../../artifacts/ui/group-tab-styles";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/group-tab-styles");
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for style in TabStyle::ALL {
@@ -5246,8 +5239,7 @@ fn native_settings_typography() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(600);
-    let dir = "../../artifacts/ui/settings-audit";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/settings-audit");
     for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for page in SettingsPage::ALL {
@@ -5511,8 +5503,7 @@ fn native_floating_gestures() {
             .root
             .clone()
     };
-    let dir = "../../artifacts/ui/workspace-management/gtk";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/workspace-management/gtk");
     let initial = bounds();
     let handles = w
         .resolved()
@@ -5837,8 +5828,7 @@ fn native_workspace_management() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(600);
-    let dir = "../../artifacts/ui/workspace-management/gtk";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/workspace-management/gtk");
     let initial = state(&w).workspace;
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let send = |action| {
@@ -6283,8 +6273,7 @@ fn native_panel_customization() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(600);
-    let dir = "../../artifacts/ui/customization";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/customization");
     let send = |action| w.dispatch(UiAction::Customize { action });
     // Presentation checks have no Wayland input serial for a popup grab. Keep
     // this control/snapshot test independent of external desktop focus changes;
@@ -6765,8 +6754,7 @@ fn native_toolbar_manager() {
             .toolbar_manager()
             .unwrap()
     };
-    let dir = "../../artifacts/ui/toolbar-manager";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/toolbar-manager");
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(initial.clone()),
@@ -6874,8 +6862,7 @@ fn native_menu_sections() {
     workspace.layout.header.add(HeaderZone::Left, None, &[HeaderItem::Menu]).unwrap();
     w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
     pump(300);
-    let dir = "../../artifacts/ui/menus";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/menus");
     let open = |id: ApplicationMenu| {
         let popup = w
             .popovers
@@ -7039,8 +7026,7 @@ fn native_panel_expansion() {
     w.window.present();
     pump(600);
     let initial = state(&w).workspace;
-    let dir = "../../artifacts/ui/customization";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/customization");
     let tap_tab = |panel| {
         let tab = w
             .groups
@@ -7280,8 +7266,7 @@ fn native_hidden_tabs() {
     pump(700);
     let initial = state(&w).workspace;
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let dir = "../../artifacts/ui/workspace-management/gtk";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/workspace-management/gtk");
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(initial.clone()),
@@ -7686,8 +7671,7 @@ fn native_preferences_and_shortcuts() {
     w.window.present();
     pump(100);
     assert_eq!(windows.borrow().len(), 1);
-    let dir = "../../artifacts/ui/preferences";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/preferences");
     assert_eq!(w.preferences.dialog.content_width(), 1000);
     w.dispatch(UiAction::OpenSettings {
         page: SettingsPage::Appearance,
@@ -8368,8 +8352,7 @@ fn native_number_controls() {
     percent.set_text("75%");
     percent.emit_activate();
     assert_eq!(alpha.value(), 0.75);
-    let dir = "../../artifacts/ui/numeric";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/ui/numeric");
     for (theme, scheme) in [
         ("dark", adw::ColorScheme::ForceDark),
         ("light", adw::ColorScheme::ForceLight),

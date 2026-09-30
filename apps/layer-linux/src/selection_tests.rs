@@ -59,8 +59,7 @@ fn native_quick_mask_input() {
     assert!(selection(&d).is_none(), "entering is display state only");
     assert_eq!(state(&d.w).layer_properties.controls.len(),3);
     d.w.dispatch(UiAction::SetBrushSize { value: 80. });
-    let _=crate::snapshot(&d.w); pump(100);
-    crate::snapshot(&d.w).save_to_png(output.join("quick-mask-before.png")).unwrap();
+    save_snapshot(&d.w, 100, || output.join("quick-mask-before.png"));
     canvas_drag(&mut d, [600.,600.], [900.,600.], false);
     let first = wait_selection(&d);
     assert!(byte_pixel(&first,750,600) > 200);
@@ -76,8 +75,7 @@ fn native_quick_mask_input() {
 
     for theme in [Theme::Light,Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme:Some(theme) }); pump(250);
-        let _ = crate::snapshot(&d.w); pump(100);
-        crate::snapshot(&d.w).save_to_png(output.join(format!("quick-mask-{theme:?}.png"))).unwrap();
+        save_snapshot(&d.w, 100, || output.join(format!("quick-mask-{theme:?}.png")));
         let capture=ui_session(&d.w).engine().backend().capture().unwrap();
         let tinted=capture.bytes.chunks_exact(4).filter(|p|p[0]>p[1].saturating_add(30) && p[0]>p[2].saturating_add(30)).count();
         assert!(tinted>100,"{theme:?} mask overlay disappeared: {tinted} pixels");
@@ -87,8 +85,7 @@ fn native_quick_mask_input() {
     d.click_name(&properties); pump(150);
     d.number(&d.named("property-mask_opacity"), "40");
     assert_eq!(state(&d.w).layer_properties.controls.iter().find(|c| c.key=="mask_opacity").unwrap().value,layer_core::EffectValue::Number(0.4));
-    let _ = crate::snapshot(&d.w); pump(100);
-    crate::snapshot(&d.w).save_to_png(output.join("quick-mask-properties.png")).unwrap();
+    save_snapshot(&d.w, 100, || output.join("quick-mask-properties.png"));
     d.click_name(&properties); d.click_name(&layers); pump(100);
     d.click_name("selection-load-0"); pump(100);
     d.click_name(&layers); pump(100);
@@ -126,8 +123,7 @@ fn native_quick_mask_input() {
 
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
     d.click_name(&layers); pump(150);
-    let _ = crate::snapshot(&d.w); pump(100);
-    crate::snapshot(&d.w).save_to_png(output.join("selection-layer.png")).unwrap();
+    save_snapshot(&d.w, 100, || output.join("selection-layer.png"));
     d.w.window.destroy(); pump(80);
 }
 fn pixel(s: &layer_core::Selection, x: u32, y: u32) -> u32 {
@@ -156,8 +152,7 @@ fn native_selection_brush_input() {
     assert_eq!(state(&d.w).tool_actions.len(),3);
     for theme in [Theme::Light,Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme {theme:Some(theme)}); pump(250);
-        let _=crate::snapshot(&d.w); pump(100);
-        crate::snapshot(&d.w).save_to_png(output.join(format!("selection-brush-{theme:?}.png"))).unwrap();
+        save_snapshot(&d.w, 100, || output.join(format!("selection-brush-{theme:?}.png")));
     }
     let tablet=std::env::var("WAYLAND_DISPLAY").is_ok_and(|s|s=="layer-bench-tablet");
     if tablet {
@@ -194,8 +189,7 @@ fn native_selection_brush_input() {
     actions.push(serde_json::json!({"down":false}));
     d.input.perform(serde_json::Value::Array(actions));
     wait_value(&d,750,750,128);
-    let _=crate::snapshot(&d.w); pump(100);
-    crate::snapshot(&d.w).save_to_png(output.join("selection-brush-canvas.png")).unwrap();
+    save_snapshot(&d.w, 100, || output.join("selection-brush-canvas.png"));
 }
 
 #[test]
@@ -669,7 +663,7 @@ fn native_tonal_selection_input() {
     assert!(preset_height<=150.,"preset controls use {preset_height}px");
     eprintln!("Tonal preset: controls {preset_height}px; drawer {}px",d.named("tool-drawer").height());
     assert_shared_icons(&d.named("tool-drawer"));
-    let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-presets.png")).unwrap();
+    save_snapshot(&d.w, 100, || output.join("tonal-presets.png"));
     d.click_name(&opener);
     d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);assert!(selection(&d).is_none(),"one undo includes slider refinements");
     d.w.dispatch(UiAction::Invoke {command:CommandId::Redo});pump(100);assert_eq!(selection(&d),Some(refined.clone()));
@@ -699,12 +693,12 @@ fn native_tonal_selection_input() {
     assert!(track.width()>=range.width() as f32*0.7,"track uses the space released by the endpoint boxes");
     eprintln!("Tonal range widths: low {}px, track {}px, high {}px",low.width(),track.width(),high.width());
     eprintln!("Tonal Custom: controls {custom_height}px; drawer {}px",d.named("tool-drawer").height());
-    let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-custom.png")).unwrap();
+    save_snapshot(&d.w, 100, || output.join("tonal-custom.png"));
     d.input.key(b'q' as u32);wait_tonal(&d);
     assert!(state(&d.w).layer_tools.quick_mask);
     assert_eq!(selection(&d),Some(sampled.clone()));
     if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
-    let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-quick-mask.png")).unwrap();
+    save_snapshot(&d.w, 100, || output.join("tonal-quick-mask.png"));
     let image=ui_session(&d.w).engine().backend().capture().unwrap();
     assert!(image.bytes.chunks_exact(4).filter(|p|p[0]>p[1].saturating_add(30)).count()>100);
     d.click_name(&opener);
@@ -724,7 +718,7 @@ fn native_tonal_selection_input() {
     d.click_name(&opener);d.click_name("tool-choice-tonal-tones-0");wait_tonal(&d);
     let mask=saved(&d);assert!(byte_pixel(&mask,700,700)>240 && byte_pixel(&mask,1250,700)>240);
     assert_eq!(byte_pixel(&mask,1000,700),0);assert_eq!(selection(&d),Some(sampled.clone()));
-    let _=crate::snapshot(&d.w);pump(100);crate::snapshot(&d.w).save_to_png(output.join("tonal-selection-layer.png")).unwrap();
+    save_snapshot(&d.w, 100, || output.join("tonal-selection-layer.png"));
     assert_eq!(selection(&d),Some(sampled));
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
     d.w.window.destroy();pump(80);

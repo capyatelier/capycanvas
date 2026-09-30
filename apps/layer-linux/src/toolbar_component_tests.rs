@@ -1678,8 +1678,7 @@ fn native_tonal_toolbar_input() {
         }
         assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Choice {id:"tonal-tones",items,..} if items[4].selected)));
         assert!(ui_session(&d.w).engine().document().selection.is_some());
-        let _=crate::snapshot(&d.w);pump(120);
-        crate::snapshot(&d.w).save_to_png(d.input.dir.join(format!("tonal-toolbar-{edge:?}.png"))).unwrap();
+        save_snapshot(&d.w, 120, || d.input.dir.join(format!("tonal-toolbar-{edge:?}.png")));
         if edge==Edge::Left {d.click_name(&format!("tile-{options}"));pump(100);}
     }
     d.click_name(&format!("tile-{options}"));pump(150);
@@ -1691,8 +1690,7 @@ fn native_tonal_toolbar_input() {
     let softness=find_named(&drawer,"tool-setting-tonal_softness").unwrap();d.number(&softness,"75");ready(&d);
     assert_eq!(state(&d.w).tool_settings.iter().find(|f|f.id=="tonal_softness").unwrap().value,0.75);
     assert!(state(&d.w).tool_actions.iter().all(|a|a.group().is_some()));
-    let _=crate::snapshot(&d.w);pump(120);
-    crate::snapshot(&d.w).save_to_png(d.input.dir.join("tonal-toolbar-overflow.png")).unwrap();
+    save_snapshot(&d.w, 120, || d.input.dir.join("tonal-toolbar-overflow.png"));
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
     // A floating-point document adds Bright HDR, with Custom still last.
     let project=new_drawing_at(2048,1536,layer_core::color::SampleDepth::F16);
@@ -1708,8 +1706,7 @@ fn native_tonal_toolbar_input() {
     assert!(bar.height()<=36);
     d.click_name("tool-choice-tonal-tones-5");ready(&d);
     assert!(d.named("tool-choice-tonal-tones-5").downcast_ref::<gtk::ToggleButton>().unwrap().is_active());
-    let _=crate::snapshot(&d.w);pump(120);
-    crate::snapshot(&d.w).save_to_png(d.input.dir.join("tonal-hdr-presets.png")).unwrap();
+    save_snapshot(&d.w, 120, || d.input.dir.join("tonal-hdr-presets.png"));
     d.click_name("tool-choice-tonal-tones-6");ready(&d);
     assert!(d.named("tool-setting-tonal_lower").is_mapped());
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
@@ -1758,8 +1755,7 @@ fn tonal_toolbar_range_input(pen: bool) {
     d.number(&lower, "-7.2"); ready(&d);
     d.number(&upper, "2.3"); ready(&d);
     assert_eq!(bounds(&d), [-7.2, 2.3], "new context keeps both endpoints live");
-    let _ = crate::snapshot(&d.w); pump(120);
-    crate::snapshot(&d.w).save_to_png(d.input.dir.join("tonal-toolbar-custom.png")).unwrap();
+    save_snapshot(&d.w, 120, || d.input.dir.join("tonal-toolbar-custom.png"));
 
     // The complete range is available in the narrow bar's existing overflow.
     d.w.dispatch(UiAction::MovePanel { panel: Panel::Commands, target: DockTarget::Edge { edge: Edge::Left, outer: true }, viewport: [1600., 1000.] }); pump(180);

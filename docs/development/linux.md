@@ -61,6 +61,8 @@ and the toolbar component mouse/touch, pen and value-control journeys. They cove
 both themes, editing, slider feedback, popovers and toolbar allocation.
 Tool-settings journeys share `tool_settings_workspace` for toolbar commands and
 panel placement; restore actions, waits and interaction assertions stay in callers.
+Artifact helpers preserve literal paths and each capture's warm-up wait; held
+warm textures and theme loops remain in their callers.
 
 [`workspace-motion.sh`](../../tools/performance/workspace-motion.sh) builds the
 release tests, starts a private D-Bus session, headless Mutter and PipeWire, and

@@ -141,8 +141,7 @@ fn native_canvas_bar_input() {
         },
         "the bar registers its glass region",
     );
-    let dir = "../../artifacts/canvas-action-bar";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/canvas-action-bar");
     let before = revision();
     let modes = bar_widget(&w, "canvas-bar-choice-transform-mode");
     let segment = |index: usize| {
@@ -449,8 +448,7 @@ fn native_canvas_bar_warps_a_selection() {
         );
         until(|| shown(&w), "the bar returns after the drag");
     }
-    let dir = "../../artifacts/canvas-action-bar";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/canvas-action-bar");
     pump(300);
     capture_reference(&w, &format!("{dir}/warp.png"), 1.);
     click(&mut native, &bar_widget(&w, "canvas-bar-ApplyTransform"));
@@ -789,8 +787,7 @@ fn native_canvas_bar_modes() {
     let notice = w.notice.root.compute_bounds(&w.window).unwrap();
     let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
     assert!(notice.y() + notice.height() <= bar.y(), "the notice sits above the bottom-edge bar: {notice:?} {bar:?}");
-    let dir = "../../artifacts/canvas-action-bar";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/canvas-action-bar");
     capture_reference(&w, &format!("{dir}/mask-mode-notice.png"), 1.);
     native.finish();
     w.window.close();
@@ -913,8 +910,7 @@ fn native_canvas_bar_refine() {
     w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
     let paint = layer_core::LayerId(document(&w).active_layer.0);
     let selection = |w: &Workspace| document(w).selection;
-    let dir = "../../artifacts/canvas-action-bar";
-    std::fs::create_dir_all(dir).unwrap();
+    let dir = artifact_dir("../../artifacts/canvas-action-bar");
     let mut native = remote_input();
     for device in [Device::Mouse, Device::Touch, Device::Pen] {
         filled_selection(&w, paint.0);
@@ -1058,8 +1054,7 @@ fn native_move_drags_selected_pixels() {
             tap_bar(&w, &mut native, device, CommandId::MoveLeaveCopy, || leave(&w) == leave_copy, "Leave Copy toggles on the bar");
         }
         if let (Device::Mouse, true) = (device, leave_copy) {
-            let dir = "../../artifacts/move-selection";
-            std::fs::create_dir_all(dir).unwrap();
+            let dir = artifact_dir("../../artifacts/move-selection");
             for theme in [layer_ui::Theme::Light, layer_ui::Theme::Dark] {
                 w.dispatch(UiAction::SetTheme { theme: Some(theme) });
                 pump(300);

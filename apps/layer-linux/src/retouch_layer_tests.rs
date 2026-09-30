@@ -63,9 +63,7 @@ fn snapshots(w: &Rc<Workspace>, name: &str) {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(300);
         if let Some(dir) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
-            let _ = crate::snapshot(w);
-            pump(100);
-            crate::snapshot(w).save_to_png(std::path::Path::new(&dir).join(format!("{name}-{theme:?}.png"))).unwrap();
+            save_snapshot(w, 100, || std::path::Path::new(&dir).join(format!("{name}-{theme:?}.png")));
         }
     }
 }
