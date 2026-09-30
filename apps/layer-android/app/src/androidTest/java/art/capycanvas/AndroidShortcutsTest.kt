@@ -156,12 +156,15 @@ class AndroidShortcutsTest {
         compose.onNodeWithTag("settings-page-title").assertTextEquals("Alt")
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         fun editor() = preferences().getJSONObject("modifier_editor")
-        assertTrue("Alt depends on the tool", editor().getBoolean("per_tool") && editor().array("actions").length() == 10)
+        val contexts = page().array("contexts").objects().filter { !it.isNull("category") }.map { it.getString("category") }
+        fun categories() = editor().array("actions").objects().map { it.getString("category") }
+        assertTrue(contexts.isNotEmpty())
+        assertTrue("Alt depends on the tool", editor().getBoolean("per_tool") && categories() == contexts)
         capture("modifier-key")
         tap("modifier-same")
         compose.waitUntil(10_000) { !editor().getBoolean("per_tool") && editor().array("actions").length() == 1 }
         tap("modifier-same")
-        compose.waitUntil(10_000) { editor().getBoolean("per_tool") && editor().array("actions").length() == 10 }
+        compose.waitUntil(10_000) { editor().getBoolean("per_tool") && categories() == contexts }
         tap("modifier-action-selection")
         compose.waitUntil(10_000) { page().objectOrNull("picker") != null }
         compose.onNodeWithTag("action-picker-title").assertTextEquals("Alt · Selection tools")

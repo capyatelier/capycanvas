@@ -656,12 +656,6 @@ pub enum PreferenceAction {
     },
     CloseModifierKey,
     AddModifierKey,
-    /// No category sets every kind of tool; an empty action does nothing.
-    SetModifierKeyAction {
-        key: KeyChord,
-        category: Option<ToolCategory>,
-        action: String,
-    },
     ModifierKeyPerTool {
         key: KeyChord,
         per_tool: bool,
@@ -1751,11 +1745,6 @@ impl PreferencesState {
                     existing: false,
                     notice: String::new(),
                 });
-            }
-            PreferenceAction::SetModifierKeyAction { key, category, action } => {
-                crate::shortcut_page::set_modifier(settings, platform, &key, category, &action)?;
-                self.shortcut_page.modifier_picker = None;
-                self.shortcut_page.picker = None;
             }
             PreferenceAction::ModifierKeyPerTool { key, per_tool } => {
                 if !per_tool {

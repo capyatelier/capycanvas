@@ -3436,24 +3436,13 @@ fn native_tool_families() {
     pump(800);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let mut workspace = state(&w).workspace;
-    let toolbar = workspace
-        .layout
-        .panels
-        .iter_mut()
-        .find(|p| p.id == Panel::Toolbar)
-        .unwrap();
+    let toolbar = workspace.layout.panels.iter_mut().find(|p| p.id == Panel::Toolbar).unwrap();
     if let layer_ui::PanelContent::Toolbar { tiles, .. } = &mut toolbar.content {
-        *tiles = layer_ui::Tool::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(i, tool)| layer_ui::ToolbarTile {
-                id: i as u32 + 1,
-                control: layer_ui::ToolbarControl::Command {
-                    command: tool.command(),
-                },
-            })
-            .collect();
+        tiles.clear();
     }
+    workspace.layout.insert_tools(Panel::Toolbar, None, &layer_ui::Tool::ALL.map(|tool| {
+        layer_ui::ToolbarControl::Command { command: tool.command() }
+    })).unwrap();
     workspace
         .layout
         .move_panel(

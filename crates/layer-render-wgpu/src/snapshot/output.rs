@@ -50,47 +50,6 @@ impl SnapshotRenderer {
         })
     }
 
-    /// Exact edited D65 luminance peak for the saved SDR range.
-    /// Traverse bounded bands; coverage is not brightness and hidden RGB is ignored.
-    pub fn hdr_headroom(&mut self) -> Result<f32, String> {
-        let mut peak = 1f32;
-        self.hdr_rows(|extent, space, read| {
-            let m = layer_core::color::hdr::to_bt2020(space);
-            let mut row = vec![[0.; 4]; extent[0] as usize];
-            for y in 0..extent[1] {
-                read(y, &mut row)?;
-                for p in &row {
-                    if p[3] > 0. {
-                        let v = layer_core::color::rgb::apply(
-                            m,
-                            [
-                                p[0] as f64 / p[3] as f64,
-                                p[1] as f64 / p[3] as f64,
-                                p[2] as f64 / p[3] as f64,
-                            ],
-                        );
-                        if v.iter().any(|c| !c.is_finite()) {
-                            return Err("Cannot measure non-finite HDR data".into());
-                        }
-                        let measured = v.into_iter()
-                            .zip(layer_core::color::hdr::BT2020_LUMA)
-                            .map(|(v,w)|v*f64::from(w)).sum::<f64>();
-                        peak = peak.max(measured as f32);
-                    }
-                }
-            }
-            Ok(Default::default())
-        })?;
-        let headroom = peak.log2();
-        if headroom > 16. {
-            return Err(
-                "Edited HDR range exceeds the SDR mapper's 16-stop range. Adjust exposure first."
-                    .into(),
-            );
-        }
-        Ok(headroom)
-    }
-
     pub(super) fn hdr_rows(
         &mut self,
         consume: impl FnOnce(

@@ -194,7 +194,7 @@ pub struct UiSession<R: CanvasRenderer> {
     source_preview_revisions: source_edit::PreviewRevisions,
     effect_catalog: layer_core::EffectCatalog,
     pending_filters: Option<filter_loading::Pending>,
-    tools: tools::ToolMemory,
+    tools: tools::WorkspaceToolMemory,
     files: document_files::DocumentFiles,
 }
 
@@ -245,7 +245,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut colors = ColorState::default();
         colors.set_rgb_space(engine.document().color.space)?;
         colors.set_document_depth(engine.document().color.depth)?;
-        let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
+        let brush = tools::WorkspaceToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
         engine.set_brush(brush.clone()).map_err(error)?;
         engine.set_paint_color(colors.definition());
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
@@ -298,7 +298,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             next_request: 1,
             layer_interaction: Default::default(),
             source_preview_revisions: Default::default(),
-            tools: tools::ToolMemory::default(),
+            tools: tools::WorkspaceToolMemory::default(),
             files: document_files::DocumentFiles::default(),
             state: UiState {
                 soft_proof: false,
@@ -4930,8 +4930,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn select_brush(&mut self, id: u32) -> Result<(), String> {
         let preset = preset(id)?;
         self.cancel_layer_gesture()?;
-        self.tools
-            .remember(self.state.brush.preset, self.engine.configured_brush());
+        self.tools.remember(self.state.brush.preset);
         let brush = self.tools.brush_in(preset, self.engine.document().color.space);
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.layer_interaction.tool = LayerCanvasTool::Paint;
@@ -4962,8 +4961,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.set_brush(brush).map_err(error)?;
         self.engine.set_paint_color(self.state.colors.definition());
         self.engine.set_tool(tool);
-        self.tools
-            .remember(self.state.brush.preset, self.engine.configured_brush());
+        self.tools.remember(self.state.brush.preset);
         self.refresh_tools();
         Ok(())
     }
@@ -16263,7 +16261,8 @@ mod tests {
         key(&mut s, "shift_l", true, false, false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
         key(&mut s, "shift_l", false, false, false);
-        preference(&mut s, PreferenceAction::SetModifierKeyAction { key: shift, category: None, action: "command.Hand".into() });
+        preference(&mut s, PreferenceAction::OpenModifierPicker { key: shift, category: None });
+        preference(&mut s, PreferenceAction::ChooseAction { id: "command.Hand".into() });
         s.dispatch(UiAction::CloseSettings).unwrap();
         assert!(
             !key(&mut s, "k", true, false, true).handled,

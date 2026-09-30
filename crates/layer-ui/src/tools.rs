@@ -626,9 +626,8 @@ pub struct WorkspaceToolMemory {
     sculpt: Option<u32>,
     pub overrides: BTreeMap<u32, BTreeMap<String, f32>>,
 }
-pub(crate) type ToolMemory = WorkspaceToolMemory;
 impl WorkspaceToolMemory {
-    pub fn remember(&mut self, id: u32, _brush: &BrushSnapshot) {
+    pub fn remember(&mut self, id: u32) {
         let group = group(id);
         self.tools.insert(group.tool(), id);
         self.groups.insert(group, id);

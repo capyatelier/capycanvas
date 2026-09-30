@@ -98,6 +98,7 @@ with Shift, Ctrl or Alt, including letters, F13–F24, gamepad and tablet pad
 buttons. Escape stays free to cancel recording. A key is either a shortcut or a
 modifier key, never both; recording one against the other offers Reassign, and
 recording an existing modifier key opens it.
+Hosts choose modifier actions through `OpenModifierPicker` and `ChooseAction`.
 
 The table is derived from the keymap until the artist edits it, then stored
 whole in `hold_keys`. While drawing, every fully held entry is in effect; a

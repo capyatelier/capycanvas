@@ -234,7 +234,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.tools.overrides.is_empty() {
             return Ok(UiChange::default());
         }
-        let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().color.space);
+        let mut brush = tools::WorkspaceToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().color.space);
         self.state.colors.load_paint(&mut brush, self.engine.document().color.space)?;
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.tools.overrides.clear();

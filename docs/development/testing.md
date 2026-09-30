@@ -44,6 +44,8 @@ in the callers' control.
 Figure and gradient tests share `abandon_layer_drag` while retaining their own
 frame timestamps and commit assertions. Collapsed resize fixtures retain the
 nested and outside handle coordinates, width checks and cancellation points.
+Toolbar fixtures allocate tiles through `insert_tools`. Modifier fixtures compare
+their rows with the shortcut page's tool contexts.
 Cursor tests observe a frame before asserting that no ink was deposited. Stroke
 selection tests check nonempty live batches; undo/redo compares raster identities.
 Presentation tests use the renderer's `create_target` for their surfaces; preserve

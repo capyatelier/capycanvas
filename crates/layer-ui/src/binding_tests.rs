@@ -75,7 +75,8 @@ fn mode_keys_toggle_on_tap_and_last_only_while_held_in_use() {
     preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
     held_key(&mut s, "Shift_L", false, Modifiers { shift: true, ..Modifiers::default() });
     let shift = KeyChord::new("shift", Modifiers::default());
-    preference(&mut s, PreferenceAction::SetModifierKeyAction { key: shift, category: None, action: "command.SnapRulers".into() });
+    preference(&mut s, PreferenceAction::OpenModifierPicker { key: shift, category: None });
+    preference(&mut s, PreferenceAction::ChooseAction { id: "command.SnapRulers".into() });
     s.dispatch(UiAction::CloseSettings).unwrap();
     held_key(&mut s, "Shift_L", true, Modifiers::default());
     assert_ne!(s.command(CommandId::SnapRulers).selected, snapping, "a modifier key can hold a mode");
