@@ -3,36 +3,25 @@ use crate::*;
 use layer_core::{BrushSnapshot, DefaultBrushPreset};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Tool {
-    #[default]
-    Pen,
-    Pencil,
-    Brush,
-    Eraser,
-    Airbrush,
-    Decoration,
-    Blend,
-    Liquify,
-    Clone,
-    Heal,
-    SpotHeal,
+crate::variants! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Tool {
+        #[default]
+        Pen,
+        Pencil,
+        Brush,
+        Eraser,
+        Airbrush,
+        Decoration,
+        Blend,
+        Liquify,
+        Clone,
+        Heal,
+        SpotHeal,
+    }
 }
 impl Tool {
-    pub const ALL: [Self; 11] = [
-        Self::Pen,
-        Self::Pencil,
-        Self::Brush,
-        Self::Eraser,
-        Self::Airbrush,
-        Self::Decoration,
-        Self::Blend,
-        Self::Liquify,
-        Self::Clone,
-        Self::Heal,
-        Self::SpotHeal,
-    ];
     pub fn command(self) -> CommandId {
         match self {
             Self::Pen => CommandId::Pen,
@@ -101,101 +90,47 @@ impl ToolFamily {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolGroup {
-    Pen,
-    Marker,
-    Pencil,
-    Pastel,
-    Paint,
-    Watercolor,
-    Oil,
-    Eraser,
-    Airbrush,
-    Spray,
-    Decoration,
-    Blend,
-    Liquify,
-    Clone,
-    Heal,
-    SpotHeal,
+macro_rules! tool_groups {
+    ($($group:ident: $tool:ident, $label:literal, $icon:literal;)+) => {
+        crate::variants! {
+            #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+            #[serde(rename_all = "snake_case")]
+            pub enum ToolGroup { $($group),+ }
+        }
+        impl ToolGroup {
+            pub fn tool(self) -> Tool {
+                match self { $(Self::$group => Tool::$tool),+ }
+            }
+            pub fn label(self) -> &'static str {
+                match self { $(Self::$group => $label),+ }
+            }
+            /// Identity of the medium, independent of its parent drawing engine.
+            pub fn icon(self) -> &'static str {
+                match self { $(Self::$group => $icon),+ }
+            }
+        }
+    };
+}
+
+tool_groups! {
+    Pen: Pen, "Pen", "pen";
+    Marker: Pen, "Marker", "marker";
+    Pencil: Pencil, "Pencil", "pencil";
+    Pastel: Pencil, "Pastel", "pastel";
+    Paint: Brush, "Paint", "paint";
+    Watercolor: Brush, "Watercolor", "watercolor";
+    Oil: Brush, "Oil paint", "oil-paint";
+    Eraser: Eraser, "Eraser", "eraser";
+    Airbrush: Airbrush, "Airbrush", "airbrush";
+    Spray: Airbrush, "Spray", "spray";
+    Decoration: Decoration, "Texture", "decoration";
+    Blend: Blend, "Blend", "blend";
+    Liquify: Liquify, "Liquify", "liquify";
+    Clone: Clone, "Clone", "clone";
+    Heal: Heal, "Heal", "heal";
+    SpotHeal: SpotHeal, "Spot Heal", "spot-heal";
 }
 impl ToolGroup {
-    pub const ALL: [Self; 16] = [
-        Self::Pen,
-        Self::Marker,
-        Self::Pencil,
-        Self::Pastel,
-        Self::Paint,
-        Self::Watercolor,
-        Self::Oil,
-        Self::Eraser,
-        Self::Airbrush,
-        Self::Spray,
-        Self::Decoration,
-        Self::Blend,
-        Self::Liquify,
-        Self::Clone,
-        Self::Heal,
-        Self::SpotHeal,
-    ];
-    pub fn tool(self) -> Tool {
-        match self {
-            Self::Pen | Self::Marker => Tool::Pen,
-            Self::Pencil | Self::Pastel => Tool::Pencil,
-            Self::Paint | Self::Watercolor | Self::Oil => Tool::Brush,
-            Self::Eraser => Tool::Eraser,
-            Self::Airbrush | Self::Spray => Tool::Airbrush,
-            Self::Decoration => Tool::Decoration,
-            Self::Blend => Tool::Blend,
-            Self::Liquify => Tool::Liquify,
-            Self::Clone => Tool::Clone,
-            Self::Heal => Tool::Heal,
-            Self::SpotHeal => Tool::SpotHeal,
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Pen => "Pen",
-            Self::Marker => "Marker",
-            Self::Pencil => "Pencil",
-            Self::Pastel => "Pastel",
-            Self::Paint => "Paint",
-            Self::Watercolor => "Watercolor",
-            Self::Oil => "Oil paint",
-            Self::Eraser => "Eraser",
-            Self::Airbrush => "Airbrush",
-            Self::Spray => "Spray",
-            Self::Decoration => "Texture",
-            Self::Blend => "Blend",
-            Self::Liquify => "Liquify",
-            Self::Clone => "Clone",
-            Self::Heal => "Heal",
-            Self::SpotHeal => "Spot Heal",
-        }
-    }
-    /// Identity of the medium, independent of its parent drawing engine.
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::Pen => "pen",
-            Self::Marker => "marker",
-            Self::Pencil => "pencil",
-            Self::Pastel => "pastel",
-            Self::Paint => "paint",
-            Self::Watercolor => "watercolor",
-            Self::Oil => "oil-paint",
-            Self::Eraser => "eraser",
-            Self::Airbrush => "airbrush",
-            Self::Spray => "spray",
-            Self::Decoration => "decoration",
-            Self::Blend => "blend",
-            Self::Liquify => "liquify",
-            Self::Clone => "clone",
-            Self::Heal => "heal",
-            Self::SpotHeal => "spot-heal",
-        }
-    }
     fn default_preset(self) -> u32 {
         PRESETS.iter().find(|p| p.2 == self).unwrap().0 as u32
     }

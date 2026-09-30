@@ -50,6 +50,8 @@ needed for the Rust GTK and Wasm clients.
 
 Picker enums can use `variants!` to keep declaration-order `ALL` arrays with
 their definitions, preserving fixed-size arrays and variant attributes.
+Tool groups declare their engine, label and medium icon together; their getters
+expand to constant matches.
 
 `ui_catalog()` describes built-in panels, tool and layer commands,
 brush categories/presets, and [numeric input kind, limits, mapping, units and precision](numeric-controls.md). GTK consumes
