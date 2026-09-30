@@ -222,6 +222,22 @@ fn fixture_workspace(app: &adw::Application) -> Rc<Workspace> {
     w
 }
 
+fn tool_settings_workspace(w: &Rc<Workspace>, commands: &[CommandId], hide_sizes: bool, below_brushes: bool) -> WorkspaceState {
+    let mut workspace = state(w).workspace;
+    if hide_sizes { workspace.layout.set_panel_visible(Panel::Sizes, false).unwrap(); }
+    if !commands.is_empty() {
+        let controls: Vec<_> = commands.iter().map(|&command| ToolbarControl::Command { command }).collect();
+        workspace.layout.insert_tools(Panel::Toolbar, None, &controls).unwrap();
+    }
+    workspace.layout.set_panel_visible(Panel::ToolSettings, true).unwrap();
+    if below_brushes {
+        let group = workspace.layout.panel_group(Panel::Brushes).unwrap();
+        workspace.layout.move_panel([w.surface.width() as f32, w.surface.height() as f32],
+            Panel::ToolSettings, DockTarget::Split { group, edge: Edge::Bottom }).unwrap();
+    }
+    workspace
+}
+
 #[test]
 #[ignore = "private Wayland display and GPU: shipped editor preset"]
 fn native_default_workspace() {
@@ -1922,26 +1938,7 @@ fn native_connected_tools() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    let mut workspace = state(&w).workspace;
-    workspace
-        .layout
-        .insert_tools(
-            Panel::Toolbar,
-            None,
-            &[
-                ToolbarControl::Command {
-                    command: CommandId::AutoSelect,
-                },
-                ToolbarControl::Command {
-                    command: CommandId::Fill,
-                },
-            ],
-        )
-        .unwrap();
-    workspace
-        .layout
-        .set_panel_visible(Panel::ToolSettings, true)
-        .unwrap();
+    let workspace = tool_settings_workspace(&w, &[CommandId::AutoSelect, CommandId::Fill], false, false);
     w.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(workspace),
     });
@@ -2102,33 +2099,7 @@ fn native_ruler_tools() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    let mut workspace = state(&w).workspace;
-    workspace
-        .layout
-        .insert_tools(
-            Panel::Toolbar,
-            None,
-            &[ToolbarControl::Command {
-                command: CommandId::Ruler,
-            }],
-        )
-        .unwrap();
-    workspace
-        .layout
-        .set_panel_visible(Panel::ToolSettings, true)
-        .unwrap();
-    let group = workspace.layout.panel_group(Panel::Brushes).unwrap();
-    workspace
-        .layout
-        .move_panel(
-            [w.surface.width() as f32, w.surface.height() as f32],
-            Panel::ToolSettings,
-            DockTarget::Split {
-                group,
-                edge: Edge::Bottom,
-            },
-        )
-        .unwrap();
+    let workspace = tool_settings_workspace(&w, &[CommandId::Ruler], false, true);
     w.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(workspace),
     });
@@ -2256,27 +2227,7 @@ fn native_operation_tool() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    let mut workspace = state(&w).workspace;
-    workspace
-        .layout
-        .set_panel_visible(Panel::Sizes, false)
-        .unwrap();
-    workspace
-        .layout
-        .set_panel_visible(Panel::ToolSettings, true)
-        .unwrap();
-    let group = workspace.layout.panel_group(Panel::Brushes).unwrap();
-    workspace
-        .layout
-        .move_panel(
-            [w.surface.width() as f32, w.surface.height() as f32],
-            Panel::ToolSettings,
-            DockTarget::Split {
-                group,
-                edge: Edge::Bottom,
-            },
-        )
-        .unwrap();
+    let workspace = tool_settings_workspace(&w, &[], true, true);
     w.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(workspace),
     });
@@ -2492,33 +2443,7 @@ fn native_figure_tools() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    let mut workspace = state(&w).workspace;
-    workspace
-        .layout
-        .insert_tools(
-            Panel::Toolbar,
-            None,
-            &[ToolbarControl::Command {
-                command: CommandId::Figure,
-            }],
-        )
-        .unwrap();
-    workspace
-        .layout
-        .set_panel_visible(Panel::ToolSettings, true)
-        .unwrap();
-    let group = workspace.layout.panel_group(Panel::Brushes).unwrap();
-    workspace
-        .layout
-        .move_panel(
-            [w.surface.width() as f32, w.surface.height() as f32],
-            Panel::ToolSettings,
-            DockTarget::Split {
-                group,
-                edge: Edge::Bottom,
-            },
-        )
-        .unwrap();
+    let workspace = tool_settings_workspace(&w, &[CommandId::Figure], false, true);
     w.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(workspace),
     });
@@ -2678,21 +2603,7 @@ fn native_gradient_tool() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    let mut workspace = state(&w).workspace;
-    workspace
-        .layout
-        .insert_tools(
-            Panel::Toolbar,
-            None,
-            &[ToolbarControl::Command {
-                command: CommandId::Gradient,
-            }],
-        )
-        .unwrap();
-    workspace
-        .layout
-        .set_panel_visible(Panel::ToolSettings, true)
-        .unwrap();
+    let workspace = tool_settings_workspace(&w, &[CommandId::Gradient], false, false);
     w.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(workspace),
     });

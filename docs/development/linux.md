@@ -59,6 +59,8 @@ bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_m
 Numeric widget changes use `native_number_controls`, `native_slider_feedback`
 and the toolbar component mouse/touch, pen and value-control journeys. They cover
 both themes, editing, slider feedback, popovers and toolbar allocation.
+Tool-settings journeys share `tool_settings_workspace` for toolbar commands and
+panel placement; restore actions, waits and interaction assertions stay in callers.
 
 [`workspace-motion.sh`](../../tools/performance/workspace-motion.sh) builds the
 release tests, starts a private D-Bus session, headless Mutter and PipeWire, and
