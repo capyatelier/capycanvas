@@ -1,3 +1,4 @@
+use crate::test_support::floats;
 use super::*;
 use crate::test_support::pen;
 use layer_core::{
@@ -158,13 +159,6 @@ fn corrected_replay(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut Input
         }
         flush(engine);
     }
-}
-
-fn floats(bytes: &[u8]) -> Vec<[f32; 4]> {
-    bytes
-        .chunks_exact(16)
-        .map(|p| std::array::from_fn(|i| f32::from_le_bytes(p[i * 4..i * 4 + 4].try_into().unwrap())))
-        .collect()
 }
 
 /// What a clone reads for the target page at `page`, each pixel shifted by

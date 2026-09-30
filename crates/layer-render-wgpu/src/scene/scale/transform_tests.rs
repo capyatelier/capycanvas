@@ -406,8 +406,7 @@ fn retained_transform_detail_still_filters_the_current_output_footprint() {
         else { assert_eq!(r.test.reduced_pages.get(), work, "the immutable source is not recaptured on scale oscillations"); }
         if scale == 1. {
             let actual = display_pixels(&r);
-            let error = actual.iter().flatten().zip(original.iter().flatten())
-                .map(|(a,b)| (a-b).abs()).fold(0.,f32::max);
+            let error = crate::test_support::max_error(&actual, &original);
             let mismatch: Vec<_> = actual.iter().zip(&original).enumerate().filter(|(_, (a,b))| a.iter().zip(b.iter()).any(|(a,b)| (a-b).abs()>1e-5)).take(8).collect();
             assert!(error < 1e-5, "restored identity must reconstruct the original averaged pixels: {error}: {mismatch:?}");
         }
@@ -471,9 +470,8 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
                     renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
                 }
                 if preview.transform.is_identity() {
-                    let largest = display_pixels(&r).iter().flatten().zip(original_display.iter().flatten())
-                        .map(|(a,b)|(a-b).abs()).fold(0.,f32::max);
                     let actual=display_pixels(&r);
+                    let largest = crate::test_support::max_error(&actual, &original_display);
                     let mismatches:Vec<_>=actual.iter().zip(&original_display).enumerate().filter(|(_, (a,b))|a.iter().zip(b.iter()).any(|(a,b)|(a-b).abs()>1e-5)).take(8).collect();
                     assert!(largest<1e-5, "an unchanged transform preserves displayed coverage: {largest} keep={keep_source} selection={} {mismatches:?}", selection.is_some());
                 }

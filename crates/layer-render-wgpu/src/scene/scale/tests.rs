@@ -1,3 +1,4 @@
+use crate::test_support::float_pixels as pixels;
 use super::*;
 use crate::test_support::{dab_batch, packet};
 use layer_core::color::{SampleDepth, source::*};
@@ -121,7 +122,7 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
         exact.submit(FramePacket { composite_all: true, ..frame }).unwrap();
         let actual = display_pixels(&r);
         let expected = display_pixels(&fresh);
-        let error = actual.iter().flatten().zip(expected.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+        let error = crate::test_support::max_error(&actual, &expected);
         assert!(error < 2e-5, "step={step} {space:?} {placement:?} level={level}: {error}");
         let cache = r.scale_display.as_ref().unwrap();
         assert!(cache.graph.storage_bytes() > 0);
@@ -133,7 +134,7 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
         }
         if level == 0 {
             let reference = pixels(&exact, crate::test_support::document_texture(&exact));
-            let error = actual.iter().flatten().zip(reference.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+            let error = crate::test_support::max_error(&actual, &reference);
             assert!(error < 2e-5, "native {space:?}: {error}");
         }
         let mut actual = vec![0; extent[0] as usize * extent[1] as usize * 4];
@@ -187,9 +188,7 @@ fn native_graph_admits_a_full_4k_view_with_bounded_scratch() {
         assert_eq!(cache.plan.level, 0);
         assert!(cache.graph.root.is_some());
         assert!(scene.scale_sources.entries.values().all(|s| !s.levels.contains_key(&0)));
-        let bytes = cache.storage_bytes() + scene.scale_sources.storage_bytes()
-            + scene.scale_commands.as_ref().unwrap().storage_bytes()
-            + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+        let bytes = resident_bytes_with_pool(cache, scene);
         assert!(bytes <= crate::scene::scale::CACHE_BYTES, "layers={count}, bytes={bytes}");
         assert!(scene.used.iter().all(|used| !used));
     }
@@ -197,15 +196,7 @@ fn native_graph_admits_a_full_4k_view_with_bounded_scratch() {
 
 #[test]
 fn reduced_photo_stacks_use_bounded_working_tiles() {
-    let mut doc = document_at([65, 33]);
-    doc.width = 9504; doc.height = 6336;
-    for index in 0..4 {
-        let mut layer = doc.layers[0].clone();
-        layer.id = LayerId(40 + index);
-        layer.opacity = 0.35;
-        layer.properties.blend = layer_core::LayerBlend::SoftLight;
-        doc.layers.insert(0, layer);
-    }
+    let doc = reduced_photo_stack();
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut frame = packet(&doc.layers, [doc.width, doc.height]);
     frame.view.width_px = 1500;
@@ -217,9 +208,7 @@ fn reduced_photo_stacks_use_bounded_working_tiles() {
     let scene = r.scene.as_ref().unwrap();
     assert!(cache.output.is_empty() && cache.pixels.root().is_some(), "working images stay tile-sized");
     assert!(scene.pool.iter().all(|p| p.texture.width() == PAGE_SIZE && p.texture.height() == PAGE_SIZE));
-    let bytes = cache.storage_bytes() + scene.scale_sources.storage_bytes()
-        + scene.scale_commands.as_ref().unwrap().storage_bytes()
-        + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+    let bytes = resident_bytes_with_pool(cache, scene);
     assert!(bytes <= crate::scene::scale::CACHE_BYTES, "resident bytes={bytes}");
 
 }
@@ -245,15 +234,7 @@ fn partial_reduced_views_admit_the_visible_window() {
 
 #[test]
 fn rotated_reduced_stacks_admit_bounded_source_working_storage() {
-    let mut doc = document_at([65, 33]);
-    doc.width = 9504; doc.height = 6336;
-    for index in 0..4 {
-        let mut layer = doc.layers[0].clone();
-        layer.id = LayerId(40 + index);
-        layer.opacity = 0.35;
-        layer.properties.blend = layer_core::LayerBlend::SoftLight;
-        doc.layers.insert(0, layer);
-    }
+    let doc = reduced_photo_stack();
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut frame = packet(&doc.layers, [doc.width, doc.height]);
     frame.view.width_px = 1600; frame.view.height_px = 1000;
@@ -266,9 +247,7 @@ fn rotated_reduced_stacks_admit_bounded_source_working_storage() {
     r.submit(frame).unwrap();
     let cache = r.scale_display.as_ref().unwrap();
     let scene = r.scene.as_ref().unwrap();
-    let bytes = cache.storage_bytes() + scene.scale_sources.storage_bytes()
-        + scene.scale_commands.as_ref().unwrap().storage_bytes()
-        + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+    let bytes = resident_bytes_with_pool(cache, scene);
     assert!(bytes <= crate::scene::scale::CACHE_BYTES, "resident bytes={bytes}");
 
     assert!(scene.used.iter().all(|used| !used));
@@ -328,9 +307,7 @@ fn streamed_sources_match_cached_pixels_through_masks_paint_and_admission_change
                 "state {state}, [{x}, {y}]: {pixel:?} != {expected:?}");
         }
         let scene = streamed.scene.as_ref().unwrap();
-        let bytes = full.storage_bytes() + scene.scale_sources.storage_bytes()
-            + scene.scale_commands.as_ref().unwrap().storage_bytes()
-            + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+        let bytes = resident_bytes_with_pool(full, scene);
         assert!(bytes <= crate::scene::scale::CACHE_BYTES, "state {state}, bytes {bytes}");
         assert!(scene.used.iter().all(|used| !used));
 
@@ -381,15 +358,7 @@ fn streamed_sources_reuse_valid_finer_pages_without_native_decoding() {
 
 #[test]
 fn source_window_growth_remains_admitted_during_rotated_pans() {
-    let mut doc = document_at([65, 33]);
-    doc.width = 9504; doc.height = 6336;
-    for index in 0..4 {
-        let mut layer = doc.layers[0].clone();
-        layer.id = LayerId(40 + index);
-        layer.opacity = 0.35;
-        layer.properties.blend = layer_core::LayerBlend::SoftLight;
-        doc.layers.insert(0, layer);
-    }
+    let doc = reduced_photo_stack();
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     for step in 0..24 {
         let angle = step as f32 / 23. * std::f32::consts::TAU;
@@ -404,9 +373,7 @@ fn source_window_growth_remains_admitted_during_rotated_pans() {
         assert!(r.scale_display.is_some());
         let cache = r.scale_display.as_ref().unwrap();
         let scene = r.scene.as_ref().unwrap();
-        let bytes = cache.storage_bytes() + scene.scale_sources.storage_bytes()
-            + scene.scale_commands.as_ref().unwrap().storage_bytes()
-            + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>();
+        let bytes = resident_bytes_with_pool(cache, scene);
         assert!(bytes <= crate::scene::scale::CACHE_BYTES, "step {step}: {bytes}");
     }
 }
@@ -460,10 +427,8 @@ fn view_windows_reuse_overlap_and_preserve_global_sampling() {
         frame.composite_all = false;
         frame.view.width_px = 192;
         frame.view.height_px = 128;
-        let mut presenter = crate::present::ViewportPresenter::for_surface(
-            &r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
-        let mut reference_presenter = crate::present::ViewportPresenter::for_surface(
-            &whole, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+        let mut presenter = crate::test_support::float_presenter(&r);
+        let mut reference_presenter = crate::test_support::float_presenter(&whole);
         let surface = |renderer: &WgpuRasterizer, presenter: &mut crate::present::ViewportPresenter, view| {
             let (texture, target) = create_color_target(&renderer.device, [192, 128], "composition viewport oracle");
             presenter.present(renderer, &target, view, [0.2; 4]).unwrap();
@@ -509,7 +474,7 @@ fn view_windows_reuse_overlap_and_preserve_global_sampling() {
             assert_eq!(complete.plan.level, cache.plan.level);
             assert!(quality(&display_pixels(&whole), &oracle, complete.plan)[2] < 2e-5);
             let reference = surface(&whole, &mut reference_presenter, frame.view);
-            let error = actual.iter().flatten().zip(reference.iter().flatten()).map(|(a,b)| (a-b).abs()).fold(0., f32::max);
+            let error = crate::test_support::max_error(&actual, &reference);
             assert!(error < 0.0001, "window presentation detail={detail} view={i} plan={:?} error={error}", cache.plan);
         }
         let dab = crate::tests::test_dab([1980., 1480.], [0.9, 0.2, 0.1, 1.], 0.7);
@@ -583,7 +548,6 @@ fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
                 assert_eq!(cache.plan.level, level);
 
                 let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
-                eprintln!("placed pose={pose} level={level} mask={enabled}: {error:?}");
                 assert!(error[0] < 0.004 && error[1] < 0.04, "pose={pose} level={level}: {error:?}");
                 assert_presentation_mip(&r);
                 let mut actual = vec![0; (extent[0] * extent[1] * 4) as usize];
@@ -617,7 +581,6 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
         let sources = &r.scene.as_ref().unwrap().scale_sources;
         assert!(sources.storage_bytes() < 8 << 20, "small output retains bounded source windows: {}", sources.storage_bytes());
         let source = &sources.entries[&doc.layers[0].id];
-        eprintln!("source window step={step} bytes={} native_page_updates={}", sources.storage_bytes(), source.updates);
         let images: Vec<_> = source.levels.values().map(|l| l.image.texture.clone()).collect();
         if step == 1 || step == 3 {
             assert_eq!(source.updates, updates, "motion inside the retained window reuses source pixels");
@@ -800,10 +763,8 @@ fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     exact.test.reference = true;
-    let mut exact_presenter = crate::ViewportPresenter::for_surface(
-        &exact, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
-    let mut presenter = crate::ViewportPresenter::for_surface(
-        &r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut exact_presenter = crate::test_support::float_presenter(&exact);
+    let mut presenter = crate::test_support::float_presenter(&r);
     let render = |r: &WgpuRasterizer, presenter: &mut crate::ViewportPresenter, view: layer_render::ViewState| {
         let (texture, target) = create_color_target(&r.device, [view.width_px, view.height_px], "deferred presentation oracle");
         presenter.present(r, &target, view, [1.; 4]).unwrap();
@@ -827,16 +788,6 @@ fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
             assert!(r.scale_display.as_ref().unwrap().output.is_empty());
             assert!(r.scale_display.as_ref().unwrap().pixels.next().is_none());
             let actual = render(&r, &mut presenter, frame.view);
-            let image = materialized_display(&r);
-            let mut cache = r.scale_display.take().unwrap();
-            let root = cache.placed.take().unwrap();
-            cache.pixels = hierarchy::Pixels::Window { root: Some(image), next: None };
-            let mut commands = Commands::new(&r);
-            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            cache.reduce_output(&mut r, &mut encoder, PixelRect::full(cache.plan.size), &mut commands).unwrap();
-            r.uploads.finish(&encoder); encoder.submit(&r.queue);
-            r.scale_display = Some(cache);
-            let materialized = render(&r, &mut presenter, frame.view);
             let mut high = frame.view;
             high.width_px *= 8; high.height_px *= 8;
             high.document_to_surface = high.document_to_surface.map(|n| n * 8.);
@@ -855,15 +806,10 @@ fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
                 }}
                 value.map(|c| c / count)
             }).collect();
-            let cache = r.scale_display.as_mut().unwrap();
-            cache.placed = Some(root); cache.output.clear(); cache.used.clear(); cache.pixels = Default::default();
             let mut errors: Vec<_> = actual.iter().zip(&expected).map(|(a,b)| a.iter().zip(b).map(|(a,b)| (a-b).abs()).fold(0., f32::max)).collect();
             errors.sort_by(f32::total_cmp);
             let mean = errors.iter().sum::<f32>() / errors.len() as f32;
             let p99 = errors[errors.len() * 99 / 100];
-            let mut prior: Vec<_> = materialized.iter().zip(&expected).map(|(a,b)| a.iter().zip(b).map(|(a,b)| (a-b).abs()).fold(0., f32::max)).collect();
-            prior.sort_by(f32::total_cmp);
-            eprintln!("deferred placement={placement:?} camera={camera:?}: mean={mean} p99={p99} max={}; materialized mean={} p99={}", errors.last().unwrap(), prior.iter().sum::<f32>() / prior.len() as f32, prior[prior.len() * 99 / 100]);
             assert!(mean < 0.004 && p99 < 0.04);
         }
     }
@@ -964,7 +910,7 @@ fn placed_compact_prediction_keeps_the_most_magnified_source_axis() {
         r.submit(frame).unwrap();
         let actual = display_pixels(&r);
         let changed: Vec<_> = actual.iter().zip(&baseline).enumerate().filter(|(_, (a,b))| a != b).collect();
-        let error = actual.iter().flatten().zip(baseline.iter().flatten()).map(|(a,b)| (a-b).abs()).fold(0., f32::max);
+        let error = crate::test_support::max_error(&actual, &baseline);
         assert!(changed.is_empty(), "pose={placement:?} differing={} max={error} first={:?}", changed.len(), changed.first());
     }
 }
@@ -1072,7 +1018,7 @@ fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
             let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
             assert!(error[0] < 0.003 && error[1] < 0.025, "step={step} kind={kind:?}: {error:?}");
             assert_presentation_mip(&r);
-            assert!(cache.storage_bytes() + scene.scale_sources.storage_bytes() + scene.scale_commands.as_ref().unwrap().storage_bytes() <= crate::scene::scale::CACHE_BYTES);
+            assert!(resident_bytes(cache, scene) <= crate::scene::scale::CACHE_BYTES);
         }
     }
     for step in 0..4 {
@@ -1206,7 +1152,7 @@ fn placed_page_edge_edits_match_rebuilding_the_entire_display() {
     let expected = display_pixels(&rebuilt);
     let actual = display_pixels(&incremental);
     assert_ne!(actual, original);
-    let error = actual.iter().flatten().zip(expected.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+    let error = crate::test_support::max_error(&actual, &expected);
     assert!(error < 1e-6, "a filtered source page reaches pixels beyond its mapped bounds: {error}");
 }
 
@@ -1252,14 +1198,6 @@ fn masks_refresh_coverage_properties_and_paint_without_exact_display() {
         assert_eq!(a, b, "mask state={state} exact query");
 
     }
-}
-fn pixels(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
-    crate::layer_tests::page_bytes(r, texture)
-        .chunks_exact(16)
-        .map(|p| {
-            std::array::from_fn(|i| f32::from_le_bytes(p[i * 4..i * 4 + 4].try_into().unwrap()))
-        })
-        .collect()
 }
 fn display_pixels(r: &WgpuRasterizer) -> Vec<[f32; 4]> {
     pixels(r, &materialized_display(r).texture)
@@ -1415,38 +1353,12 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
 
     assert!(!r.scene.as_ref().unwrap().scale_sources.entries.contains_key(&doc.layers[0].id));
     assert!(r.scale_display.as_ref().unwrap().storage_bytes() < 1 << 20);
-    let mut presenter = ViewportPresenter::for_surface(
-        &r,
-        wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb,
-    )
-    .unwrap();
-    let (_, target) = create_color_target(
-        &r.device,
-        [p.view.width_px, p.view.height_px],
-        "display oracle viewport",
-    );
-    presenter.present(&r, &target, p.view, [0.; 4]).unwrap();
     let original = display_pixels(&r);
     let reference = pixels(&exact, crate::test_support::document_texture(&exact));
     let plan = r.scale_display.as_ref().unwrap().plan;
-    for y in 0..plan.size[1] {
-        for x in 0..plan.size[0] {
-            let mut sum = [0.; 4];
-            let mut n = 0.;
-            for yy in y * 8..((y + 1) * 8).min(extent[1]) {
-                for xx in x * 8..((x + 1) * 8).min(extent[0]) {
-                    for c in 0..4 {
-                        sum[c] += reference[(yy * extent[0] + xx) as usize][c];
-                    }
-                    n += 1.;
-                }
-            }
-            for c in 0..4 {
-                assert!((original[(y * plan.size[0] + x) as usize][c] - sum[c] / n).abs() < 1e-5);
-            }
-        }
-    }
+    assert_eq!(plan.level, 3);
+    assert_eq!(plan.bounds, PixelRect::full(extent));
+    assert!(quality(&original, &reference, plan)[2] < 1e-5);
     let mut dab = crate::tests::test_dab([255., 129.], [0.9, 0.02, 0.1, 0.7], 1.);
     dab.radii = [45.; 2];
     let batch = dab_batch(
@@ -1483,7 +1395,6 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
             &pixels(&exact, crate::test_support::document_texture(&exact)),
             coarse.plan,
         );
-        eprintln!("{kind:?} display mean/p99/max channel error: {error:?}");
         assert!(
             error[0] < 0.003,
             "large brush preview must remain close to exact reduction"
@@ -1757,7 +1668,6 @@ fn photographic_preview_and_committed_display_quality() {
                 cache.plan,
                 |color| linear_color(color, space, doc.color.space),
             );
-            eprintln!("photo {zoom} {space:?} {diameter}px {kind:?} mean/p99/max linear channel error: {errors:?}");
             assert!(
                 errors[0] < 0.003 && errors[1] < 0.03,
                 "photographic display quality regressed"
@@ -1870,3 +1780,24 @@ fn unchanged_navigation_derives_and_reuses_a_bounded_neighbor_level() {
 
 #[path = "transform_tests.rs"]
 mod transforms;
+
+fn reduced_photo_stack() -> Document {
+    let mut doc = document_at([65, 33]);
+    doc.width = 9504; doc.height = 6336;
+    for index in 0..4 {
+        let mut layer = doc.layers[0].clone();
+        layer.id = LayerId(40 + index);
+        layer.opacity = 0.35;
+        layer.properties.blend = layer_core::LayerBlend::SoftLight;
+        doc.layers.insert(0, layer);
+    }
+    doc
+}
+
+fn resident_bytes(cache: &crate::scene::scale::Cache, scene: &crate::scene::Scene) -> u64 {
+    cache.storage_bytes() + scene.scale_sources.storage_bytes() + scene.scale_commands.as_ref().unwrap().storage_bytes()
+}
+
+fn resident_bytes_with_pool(cache: &crate::scene::scale::Cache, scene: &crate::scene::Scene) -> u64 {
+    resident_bytes(cache, scene) + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>()
+}

@@ -200,8 +200,7 @@ fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
         for layer in &mut flat { layer.properties.parent = None; }
         let expected = draw(&flat);
         let full = draw(&doc.layers);
-        let error = |a: &[[f32; 4]], b: &[[f32; 4]]| a.iter().flatten().zip(b.iter().flatten())
-            .map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+        let error = crate::test_support::max_error;
         assert!(error(&full, &expected) < 2e-5, "nested pass through equals ungrouping");
         let mut hidden = doc.layers.clone(); hidden[0].visible = false;
         let backdrop = draw(&hidden);
@@ -261,8 +260,7 @@ fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
         r.scale_display.as_mut().unwrap().graph = Default::default();
         r.submit(frame).unwrap();
         let full = display_pixels(&r);
-        let difference = incremental.iter().flatten().zip(full.iter().flatten())
-            .map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+        let difference = crate::test_support::max_error(&incremental, &full);
         assert!(difference < 1e-5, "halo at {center:?}: {difference}");
         let error = quality(&full, &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
         assert!(error[0] < 0.003 && error[1] < 0.03, "spatial quality at {center:?}: {error:?}");

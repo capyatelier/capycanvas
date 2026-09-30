@@ -260,9 +260,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
         let misses = r.metrics().source_tile_misses;
         if let Some(before) = source_misses { assert_eq!(misses, before, "moving reuses source pixels"); }
         else { source_misses = Some(misses); }
-        let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
-            .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
-            .fold(0.0f32, f32::max);
+        let maximum = crate::test_support::max_error_bytes(&images[0], &images[1]);
         assert!(maximum < 0.0001, "pose {step}: live pixel error {maximum}");
     }
     for (opacity, mode, mask) in [(1., DabMode::Paint, false), (0.63, DabMode::Paint, false),
@@ -302,9 +300,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
                 }
                 images.push(page_bytes(&r, crate::test_support::document_texture(&r)));
             }
-            let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
-                .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
-                .fold(0.0f32, f32::max);
+            let maximum = crate::test_support::max_error_bytes(&images[0], &images[1]);
             assert!(maximum < 0.0001, "prediction={prediction}, {mode:?}, opacity={opacity}: {maximum}");
             if let Some(before) = &baseline {
                 if prediction { assert!(&images[0] != before, "prediction changes live pixels"); }
@@ -328,9 +324,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
                 images.push(page_bytes(&r, crate::test_support::document_texture(&r)));
             }
             assert!(images[0] != baseline.unwrap(), "mask painting changes live pixels");
-            let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
-                .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
-                .fold(0.0f32, f32::max);
+            let maximum = crate::test_support::max_error_bytes(&images[0], &images[1]);
             assert!(maximum < 0.0001, "transformed mask damage matches rebuilt composition: {maximum}");
         }
     }

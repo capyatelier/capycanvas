@@ -1,3 +1,4 @@
+use crate::test_support::float_pixels as pixels;
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace};
 use layer_render::{ViewState, ColorSampleArea, ColorSampleRequest, ColorSampleSource};
@@ -63,15 +64,6 @@ fn submit(r: &mut WgpuRasterizer, doc: &layer_core::Document, view: ViewState, a
     }
 }
 
-fn pixels(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
-    crate::layer_tests::page_bytes(r, texture)
-        .chunks_exact(16)
-        .map(|p| {
-            std::array::from_fn(|i| f32::from_le_bytes(p[i * 4..i * 4 + 4].try_into().unwrap()))
-        })
-        .collect()
-}
-
 fn present(
     r: &WgpuRasterizer,
     presenter: &mut ViewportPresenter,
@@ -108,8 +100,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let mut r = bounded_renderer(doc.color).unwrap();
     let v = view([0.125, 0., 0., 0.125, 0., 0.]);
     submit(&mut r, &doc, v, true);
-    let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut presenter = crate::test_support::float_presenter(&r);
     let before = present(&r, &mut presenter, v);
     let texture = r.scale_display.as_ref().unwrap().texture().clone();
     let metrics = r.metrics();
@@ -146,8 +137,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let mut reference = bounded_renderer(doc.color).unwrap();
     reference.test.exact_display = true;
     submit(&mut reference, &abandoned, v, true);
-    let mut oracle = ViewportPresenter::for_surface(&reference, wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut oracle = crate::test_support::float_presenter(&reference);
     close(&present(&r, &mut presenter, v), &present(&reference, &mut oracle, v));
     assert_eq!(r.readback_srgb_rgba8().unwrap(), reference.readback_srgb_rgba8().unwrap());
 }
@@ -178,18 +168,8 @@ fn visible_detail_matches_dense_composition_through_pan_wrap_rotation_and_resize
     dense.test.exact_display = true;
     let mut cached = bounded_renderer(doc.color).unwrap();
 
-    let mut a = ViewportPresenter::for_surface(
-        &dense,
-        wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb,
-    )
-    .unwrap();
-    let mut b = ViewportPresenter::for_surface(
-        &cached,
-        wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb,
-    )
-    .unwrap();
+    let mut a = crate::test_support::float_presenter(&dense);
+    let mut b = crate::test_support::float_presenter(&cached);
     for (index, matrix) in [
         [1., 0., 0., 1., 0., 0.],
         [1., 0., 0., 1., -100., -100.],
@@ -275,18 +255,8 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
     dense.test.exact_display = true;
     let mut r = bounded_renderer(doc.color).unwrap();
 
-    let mut a = ViewportPresenter::for_surface(
-        &dense,
-        wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb,
-    )
-    .unwrap();
-    let mut b = ViewportPresenter::for_surface(
-        &r,
-        wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb,
-    )
-    .unwrap();
+    let mut a = crate::test_support::float_presenter(&dense);
+    let mut b = crate::test_support::float_presenter(&r);
     let v = view([1., 0., 0., 1., -233., -111.]);
     let mut first = Vec::new();
     for step in 0..5 {
@@ -322,12 +292,7 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
     let mut recovered = bounded_renderer(doc.color).unwrap();
 
     submit(&mut recovered, &doc, v, true);
-    let mut p = ViewportPresenter::for_surface(
-        &recovered,
-        wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb,
-    )
-    .unwrap();
+    let mut p = crate::test_support::float_presenter(&recovered);
     close(&first, &present(&recovered, &mut p, v));
 }
 
@@ -459,8 +424,7 @@ fn committed_contact_strokes_present_their_canonical_native_pixels() {
             assert!(std::time::Instant::now() < deadline, "committed stroke did not settle");
         }
         assert_eq!(engine.metrics().committed_strokes, 1);
-        let mut presenter = ViewportPresenter::for_surface(engine.backend(),
-            wgpu::TextureFormat::Rgba32Float, SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+        let mut presenter = crate::test_support::float_presenter(engine.backend());
         let live = present(engine.backend(), &mut presenter, v);
         let doc = engine.document().clone();
         submit(engine.backend_mut(), &doc, v, true);
@@ -498,12 +462,7 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
         }
     };
     flush(&mut engine);
-    let mut p = ViewportPresenter::for_surface(
-        engine.backend(),
-        wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb,
-    )
-    .unwrap();
+    let mut p = crate::test_support::float_presenter(engine.backend());
     let blank = present(engine.backend(), &mut p, v);
     for (i, phase) in [PenPhase::Down, PenPhase::Move, PenPhase::Up]
         .into_iter()
@@ -540,12 +499,7 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
     drop(p);
     flush(&mut engine);
 
-    let mut p = ViewportPresenter::for_surface(
-        engine.backend(),
-        wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb,
-    )
-    .unwrap();
+    let mut p = crate::test_support::float_presenter(engine.backend());
     close(&painted, &present(engine.backend(), &mut p, v));
     let restored = engine.document().layers[0].raster.wait_data().unwrap();
     for (key, bytes) in exact {
@@ -592,10 +546,8 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
 
         r.set_complete_display_allowance(64 * 1024 * 1024);
     }
-    let mut a = ViewportPresenter::for_surface(&incremental, wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
-    let mut b = ViewportPresenter::for_surface(&reference, wgpu::TextureFormat::Rgba32Float,
-        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut a = crate::test_support::float_presenter(&incremental);
+    let mut b = crate::test_support::float_presenter(&reference);
     let v = centered_view([doc.width, doc.height], [320, 240], 0.4, 0.);
     fn find(doc: &mut layer_core::Document, id: LayerId) -> &mut Layer {
         doc.layers.iter_mut().find(|l| l.id == id).unwrap()

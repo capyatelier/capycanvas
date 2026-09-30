@@ -1,3 +1,4 @@
+use crate::test_support::float_pixels as pixels;
 use super::*;
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 
@@ -56,14 +57,6 @@ fn upload(r: &WgpuRasterizer, extent: [u32; 2], pixels: &[[f32; 4]]) -> wgpu::Te
         texture.size(),
     );
     texture
-}
-fn pixels(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
-    crate::layer_tests::page_bytes(r, texture)
-        .chunks_exact(16)
-        .map(|p| {
-            std::array::from_fn(|i| f32::from_le_bytes(p[i * 4..i * 4 + 4].try_into().unwrap()))
-        })
-        .collect()
 }
 
 fn mip_pixels(r: &WgpuRasterizer, image: &Image, level: u32) -> Vec<[f32; 4]> {

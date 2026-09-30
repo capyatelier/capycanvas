@@ -145,3 +145,28 @@ pub(crate) fn depth_source(extent: [u32; 2], depth: layer_core::color::SampleDep
     }
     Arc::new(builder.finish().unwrap())
 }
+
+pub(crate) fn floats(bytes: &[u8]) -> Vec<[f32; 4]> {
+    bytes
+        .chunks_exact(16)
+        .map(|p| std::array::from_fn(|i| f32::from_le_bytes(p[i * 4..i * 4 + 4].try_into().unwrap())))
+        .collect()
+}
+
+pub(crate) fn float_pixels(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
+    floats(&crate::layer_tests::page_bytes(r, texture))
+}
+
+pub(crate) fn float_presenter(r: &WgpuRasterizer) -> ViewportPresenter {
+    ViewportPresenter::for_surface(r, wgpu::TextureFormat::Rgba32Float, SdrSurfaceColor::ExtendedLinearSrgb).unwrap()
+}
+
+pub(crate) fn max_error(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
+    a.iter().flatten().zip(b.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0., f32::max)
+}
+
+pub(crate) fn max_error_bytes(a: &[u8], b: &[u8]) -> f32 {
+    a.chunks_exact(4).zip(b.chunks_exact(4))
+        .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
+        .fold(0., f32::max)
+}
