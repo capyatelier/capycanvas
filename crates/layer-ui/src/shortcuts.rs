@@ -238,8 +238,7 @@ impl KeyChord {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ShortcutAction {
     Action {
         action: Box<UiAction>,
@@ -260,8 +259,7 @@ impl ShortcutAction {
         matches!(self, Self::Pan | Self::Hold { .. } | Self::Momentary { .. })
     }
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum BindingScope {
     #[default]
     Application,
@@ -271,9 +269,6 @@ pub enum BindingScope {
     },
 }
 impl BindingScope {
-    pub fn is_application(&self) -> bool {
-        *self == Self::Application
-    }
     pub fn specificity(&self) -> u8 {
         match self {
             Self::Application => 0,
@@ -378,17 +373,14 @@ fn holdable(target: &str) -> bool {
         || target.strip_prefix("brush.").is_some_and(|id| brush_catalog().any(|b| b.id.to_string() == id))
         || command(target).is_some_and(|c| CommandId::TOOLS.contains(&c) || MOMENTARY_COMMANDS.contains(&c))
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShortcutDefinition {
     pub id: String,
     pub label: String,
     pub action: ShortcutAction,
-    #[serde(default)]
     pub repeat: bool,
-    #[serde(default, skip_serializing_if = "BindingScope::is_application")]
     pub scope: BindingScope,
     /// Held variants name the press action they belong to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]

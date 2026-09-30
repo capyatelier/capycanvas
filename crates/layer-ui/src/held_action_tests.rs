@@ -256,15 +256,7 @@ fn scoped_bindings_conflict_whenever_their_tools_overlap() {
 }
 
 #[test]
-fn stored_bindings_without_scopes_keep_their_meaning() {
-    let definition: ShortcutDefinition = serde_json::from_value(serde_json::json!({
-        "id": "command.Undo",
-        "label": "Undo",
-        "action": { "kind": "action", "action": { "type": "invoke", "command": "undo" } },
-    }))
-    .unwrap();
-    assert_eq!(definition.scope, BindingScope::Application);
-    assert!(serde_json::to_value(&definition).unwrap().get("scope").is_none());
+fn settings_json_defaults_include_pan_and_modifier_bindings() {
     let settings: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
     assert_eq!(settings.keys("hold.eyedropper"), vec![KeyChord::new("alt", Modifiers::default())]);
     assert_eq!(settings.keys("canvas.pan"), vec![KeyChord::new(" ", Modifiers::default())]);

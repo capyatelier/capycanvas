@@ -56,6 +56,8 @@ and Affinity. It changes only groups made afterwards.
 [`shortcuts.rs`](../../crates/layer-ui/src/shortcuts.rs) associates key chords with
 typed editor actions. Shared code handles defaults, user overrides and conflicts.
 A shortcut invokes the same command as a toolbar or menu item.
+Settings store user chords and modifier maps. Generated shortcut definitions are
+runtime values; hosts receive the shortcut page and row views.
 
 The host translates native keyboard events and preserves normal widget behavior.
 Typing in a text field must not accidentally trigger a canvas shortcut. Platform
