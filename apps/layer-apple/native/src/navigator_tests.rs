@@ -175,12 +175,8 @@ fn navigator_geometry_and_gestures_preserve_document_pixels_and_history() {
         app.invoke("flip_horizontal");
         let viewport = [264., 200.];
         let state = app.state();
-        let source =
-            CString::new(json!([state["camera"], [2048, 1536], viewport]).to_string()).unwrap();
-        let output = unsafe { capy_apple_navigator_geometry(source.as_ptr()) };
-        let geometry: Value =
-            serde_json::from_slice(unsafe { CStr::from_ptr(output) }.to_bytes()).unwrap();
-        unsafe { capy_apple_string_free(output) };
+        let geometry = stateless(capy_apple_navigator_geometry,
+            json!([state["camera"], [2048, 1536], viewport]).to_string());
         assert_eq!(
             geometry,
             app.request(2, json!({"type":"navigator","viewport":viewport}))

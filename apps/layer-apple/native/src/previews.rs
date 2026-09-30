@@ -62,27 +62,12 @@ pub unsafe extern "C" fn capy_apple_glass_regions(app: *mut CapyApple, json: *co
 /// The returned JSON is owned and uses the ordinary string-free function.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_navigator_geometry(json: *const c_char) -> *mut c_char {
-    catch_unwind(|| {
-        let result = (|| {
-            if json.is_null() {
-                return Err("Missing Navigator geometry".to_string());
-            }
-            let source = unsafe { CStr::from_ptr(json) }
-                .to_str()
-                .map_err(|e| e.to_string())?;
-            let (camera, document, viewport): (layer_ui::Camera, [u32; 2], [f32; 2]) =
-                serde_json::from_str(source).map_err(|e| e.to_string())?;
-            serde_json::to_value(layer_ui::NavigatorGeometry::new(
-                &camera, document, viewport,
-            ))
+    unsafe { stateless_json(json, "Missing Navigator geometry", |source| {
+        let (camera, document, viewport): (layer_ui::Camera, [u32; 2], [f32; 2]) =
+            serde_json::from_str(source).map_err(|e| e.to_string())?;
+        serde_json::to_value(layer_ui::NavigatorGeometry::new(&camera, document, viewport))
             .map_err(|e| e.to_string())
-        })();
-        let value = result.unwrap_or_else(|error| serde_json::json!({"error":error}));
-        CString::new(value.to_string())
-            .map(CString::into_raw)
-            .unwrap_or(std::ptr::null_mut())
-    })
-    .unwrap_or(std::ptr::null_mut())
+    }) }
 }
 
 pub struct CapyFilterPreviews {

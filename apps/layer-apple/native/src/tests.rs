@@ -2,6 +2,15 @@
 use super::*;
 use serde_json::{Value, json};
 
+fn stateless(call: unsafe extern "C" fn(*const c_char) -> *mut c_char, request: impl Into<Vec<u8>>) -> Value {
+    let source = CString::new(request).unwrap();
+    let output = unsafe { call(source.as_ptr()) };
+    assert!(!output.is_null());
+    let value = serde_json::from_slice(unsafe { CStr::from_ptr(output) }.to_bytes()).unwrap();
+    unsafe { capy_apple_string_free(output) };
+    value
+}
+
 struct App(*mut CapyApple);
 #[path = "color_tests.rs"]
 mod color;
@@ -1469,14 +1478,7 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
 
 #[test]
 fn stateless_color_forms_preserve_tagged_precision_and_convert_previews() {
-    let resolve = |request: Value| {
-        let request = CString::new(request.to_string()).unwrap();
-        let response = unsafe { capy_apple_color_ui(request.as_ptr()) };
-        assert!(!response.is_null());
-        let value: Value = serde_json::from_slice(unsafe { CStr::from_ptr(response) }.to_bytes()).unwrap();
-        unsafe { capy_apple_string_free(response) };
-        value
-    };
+    let resolve = |request: Value| stateless(capy_apple_color_ui, request.to_string());
     for space in layer_core::color::RgbSpace::ALL {
         let color = layer_core::color::RgbColor::new(space, [-0.12, 1.2, 31234. / 65535., 213. / 65535.]).unwrap();
         let mut form = resolve(json!({"type":"form","request":{"color":color,"document_space":"ProPhoto"}}));
@@ -1516,17 +1518,8 @@ fn stateless_color_forms_preserve_tagged_precision_and_convert_previews() {
 #[test]
 fn stateless_numeric_input_uses_shared_policy_without_a_session() {
     let control = serde_json::to_value(layer_ui::ui_catalog()).unwrap()["layer_opacity"].clone();
-    let resolve = |operation| {
-        let json =
-            CString::new(json!({"control":control,"value":1.,"operation":operation}).to_string())
-                .unwrap();
-        let output = unsafe { capy_apple_numeric(json.as_ptr()) };
-        assert!(!output.is_null());
-        let result: Value =
-            serde_json::from_slice(unsafe { CStr::from_ptr(output) }.to_bytes()).unwrap();
-        unsafe { capy_apple_string_free(output) };
-        result
-    };
+    let resolve = |operation| stateless(capy_apple_numeric,
+        json!({"control":control,"value":1.,"operation":operation}).to_string());
     assert_eq!(
         resolve(json!({"type":"expression","text":"25+25"}))["value"],
         0.5

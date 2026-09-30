@@ -62,6 +62,8 @@ unpooled memory accounting separate, with each test's pixel and memory limits.
 Partial-region fixtures keep their damage bounds; transform oracles keep source
 and selection flags and tolerances. Startup fixtures retain readiness gates and
 deadlines across compilation phases.
+Apple stateless ABI fixtures share string ownership while retaining each entry
+point's errors and independent color precision checks.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
