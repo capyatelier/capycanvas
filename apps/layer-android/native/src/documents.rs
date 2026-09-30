@@ -9,7 +9,7 @@ use jni::{
 use layer_core::Project;
 use layer_host::{Renderer, export::ExportTask, open::OpenEnvironment, window::OpenAdoption};
 use layer_render_wgpu::WgpuRasterizer;
-use layer_ui::{DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
+use layer_ui::{DocumentLocation, DocumentRequest, UiSession};
 use std::{
     fs::File,
     io::{BufWriter, Write},
@@ -68,15 +68,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
         let admission = a.window.documents.admission(&a.host.session.retained_document_tiles());
         let options = a.host.renderer_options(Some(a.cache_directory.clone().into()));
         let session = &mut a.host.session;
-        let request = session
-            .state()
-            .requests
-            .iter()
-            .find_map(|r| match &r.kind {
-                HostRequestKind::Document { request } if r.id == id as u32 => Some(request.clone()),
-                _ => None,
-            })
-            .ok_or("The document request is no longer active")?;
+        let request = session.document_request(id as u32)
+            .map_err(|_| "The document request is no longer active")?.clone();
         let place = matches!(request, DocumentRequest::Place | DocumentRequest::Paste { .. })
             .then_some(session.engine().document().active_target());
         let payload = match request {
@@ -345,8 +338,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
                 return Err("Image is not prepared".into());
             };
             let previous = s.state().revision;
-            if !s.state().requests.iter().any(|r| r.id == t.request && matches!(r.kind,
-                HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste { .. } })) {
+            if !matches!(s.document_request(t.request), Ok(DocumentRequest::Place | DocumentRequest::Paste { .. })) {
                 return Err("Image import is no longer active".into());
             }
             s.place_layer_source(name, source.as_ref().ok_or("Image already placed")?.clone(), None)?;
@@ -430,15 +422,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
     let result = (|| {
         let a = unsafe { app(handle) };
         a.host.session.require_document_idle()?;
-        if !a.host.session.state().requests.iter().any(|r| {
-            r.id == id as u32
-                && matches!(
-                    r.kind,
-                    HostRequestKind::Document {
-                        request: DocumentRequest::Export { .. }
-                    }
-                )
-        }) {
+        if !matches!(a.host.session.document_request(id as u32), Ok(DocumentRequest::Export { .. })) {
             return Err("Export is no longer active".into());
         }
         a.host.prepare_canvas_frame(now as u64, now as u64, true)?;

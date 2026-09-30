@@ -283,7 +283,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
-    pub(super) fn document_request(&self, id: u32) -> Result<&DocumentRequest, String> {
+    pub fn document_request(&self, id: u32) -> Result<&DocumentRequest, String> {
         if self.files.pending.as_ref().map(|p| p.0) != Some(id) {
             return Err("Unknown document request".into());
         }

@@ -14,6 +14,8 @@ pixels for Kotlin.
 File and conversion jobs use `inspection::on_worker` for named threads with an
 8 MiB stack; call it from an IO worker. Task cancellation owns a separate
 `CaptureControl` and never borrows a running job.
+JNI file, image-import and clipboard tasks use `UiSession::document_request`
+to look up the pending request before validating its kind.
 
 ## Prerequisites
 

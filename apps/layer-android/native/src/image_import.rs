@@ -6,7 +6,7 @@ use jni::{
     objects::{JClass, JString},
     sys::{jint, jlong, jstring},
 };
-use layer_ui::{DocumentRequest, HostRequestKind, ImagePlacementContext};
+use layer_ui::{DocumentRequest, ImagePlacementContext};
 use std::{
     fs::File,
     io::BufReader,
@@ -25,15 +25,7 @@ struct Batch {
     images: layer_ui::ImageImportBatch,
 }
 fn active(a: &crate::app::App, id: u32) -> Result<(), String> {
-    if a.host.session.state().requests.iter().any(|r| {
-        r.id == id
-            && matches!(
-                r.kind,
-                HostRequestKind::Document {
-                    request: DocumentRequest::Place | DocumentRequest::Paste { .. }
-                }
-            )
-    }) {
+    if matches!(a.host.session.document_request(id), Ok(DocumentRequest::Place | DocumentRequest::Paste { .. })) {
         Ok(())
     } else {
         Err("The image import request is no longer active".into())
@@ -183,10 +175,10 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportAdopt(
         }
         let previous = a.host.session.state().revision;
         let sources = b.images.take_sources(b.control.is_cancelled())?;
-        let mode = a.host.session.state().requests.iter().find_map(|r| match &r.kind {
-            HostRequestKind::Document { request: DocumentRequest::Paste { mode } } if r.id == b.id => Some(*mode),
+        let mode = match a.host.session.document_request(b.id) {
+            Ok(DocumentRequest::Paste { mode }) => Some(*mode),
             _ => None,
-        });
+        };
         match mode {
             Some(mode) => a.host.session.paste_layer_sources(sources, mode, &b.context.placement)?,
             None => a.host.session.place_layer_sources(sources, b.context.placement.center, b.context.placement.destination)?,

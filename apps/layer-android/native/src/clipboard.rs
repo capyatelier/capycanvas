@@ -8,7 +8,7 @@ use jni::{
     sys::{jboolean, jint, jlong, jstring},
 };
 use layer_host::clipboard::ClipTask;
-use layer_ui::{DocumentRequest, HostRequestKind, PixelClip};
+use layer_ui::{DocumentRequest, PixelClip};
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_clipTask(mut env: JNIEnv, _: JClass, handle: jlong, id: jint) -> jlong {
@@ -84,17 +84,10 @@ pub extern "system" fn Java_art_capycanvas_Native_clipNonce(mut env: JNIEnv, _: 
 pub extern "system" fn Java_art_capycanvas_Native_pasteClip(mut env: JNIEnv, _: JClass, handle: jlong, id: jint) {
     let result = (|| {
         let a = unsafe { app(handle) };
-        let mode = a
-            .host
-            .session
-            .state()
-            .requests
-            .iter()
-            .find_map(|r| match &r.kind {
-                HostRequestKind::Document { request: DocumentRequest::Paste { mode } } if r.id == id as u32 => Some(*mode),
-                _ => None,
-            })
-            .ok_or("The paste request is no longer active")?;
+        let Ok(DocumentRequest::Paste { mode }) = a.host.session.document_request(id as u32) else {
+            return Err("The paste request is no longer active".into());
+        };
+        let mode = *mode;
         let clip = a.window.documents.clip.clone().ok_or("Nothing was copied in this window")?;
         let previous = a.host.session.state().revision;
         a.host.session.paste_clip(&clip, mode)?;
