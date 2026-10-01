@@ -88,31 +88,41 @@ pub fn draw_with_brush(engine: &mut Engine, input: &mut InputProducer<PenEvent>,
     for i in 0..10u64 {
         let t = i as f32 / 9.;
         let timestamp_ns = start + i * 8_000_000;
-        input
-            .push(PenEvent {
-                device_id: 1,
-                sequence: i,
-                timestamp_ns,
-                view_revision: 0,
-                surface_position: Point { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t },
-                pressure: 0.8,
-                tilt_radians: [0., 0.],
-                twist_radians: 0.,
-                distance: 0.,
-                phase: match i {
-                    0 => PenPhase::Down,
-                    9 => PenPhase::Up,
-                    _ => PenPhase::Move,
-                },
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
-            })
-            .unwrap();
-        engine.render_frame_at(timestamp_ns).unwrap();
-        while engine.has_pending_input() {
-            std::thread::yield_now();
-            engine.render_frame_at(timestamp_ns).unwrap();
-        }
+        input.push(pen_sample(i, 9, timestamp_ns,
+            Point { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t })).unwrap();
+        drain_input(engine, timestamp_ns, false);
     }
 }
 
+pub fn pen_sample(index: u64, last: u64, timestamp_ns: u64, surface_position: Point) -> PenEvent {
+    PenEvent {
+        device_id: 1,
+        sequence: index,
+        timestamp_ns,
+        view_revision: 0,
+        surface_position,
+        pressure: 0.8,
+        tilt_radians: [0., 0.],
+        twist_radians: 0.,
+        distance: 0.,
+        phase: if index == 0 {
+            PenPhase::Down
+        } else if index == last {
+            PenPhase::Up
+        } else {
+            PenPhase::Move
+        },
+        tool: ToolKind::Pen,
+        flags: SampleFlags::PRIMARY,
+    }
+}
+
+pub fn drain_input(engine: &mut Engine, timestamp_ns: u64, wait_idle: bool) {
+    engine.render_frame_at(timestamp_ns).unwrap();
+    if wait_idle { engine.backend_mut().wait_idle().unwrap(); }
+    while engine.has_pending_input() {
+        if !wait_idle { std::thread::yield_now(); }
+        engine.render_frame_at(timestamp_ns).unwrap();
+        if wait_idle { engine.backend_mut().wait_idle().unwrap(); }
+    }
+}

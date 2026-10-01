@@ -53,6 +53,8 @@ each test's format and extent, and validate its usage flags on the test GPU.
 Renderer source fixtures use `test_support::depth_source` with their original
 budget and coordinate mapping. Pen fixtures override the shared event's timestamp
 and pressure where their cadence differs.
+Integration pen fixtures share sample construction and input draining; callers
+retain pressure axes, sequence numbers, cadence and GPU-wait policy.
 Retouch replay fixtures keep each brush's path and pen-up position. Check source
 readiness and healing counts after replay settles, before collecting result pages.
 Mesh fixtures pass a previously constructed projective map to `MeshMap::fit`.

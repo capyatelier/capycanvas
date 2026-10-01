@@ -1,8 +1,9 @@
 //! Compare live painting with exact raster restoration after saving and reopening.
 //! File workers await queue-ordered tile capture while input remains responsive.
+mod support;
 use layer_core::*;
 use layer_engine::{
-    CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
+    CanvasEngine, InputProducer, PenEvent, ViewTransform,
     input_queue,
 };
 use layer_render::ViewState;
@@ -99,38 +100,18 @@ fn draw(
     let scale = engine.view().document_to_surface[0];
     for i in 0..10 {
         let timestamp_ns = start + i * 8_000_000;
-        input
-            .push(PenEvent {
-                device_id: 1,
-                sequence: i,
-                timestamp_ns,
-                view_revision: 0,
-                surface_position: Point {
-                    x: (40. + i as f32 * 32.) * scale,
-                    y: (y + (i as f32 * 0.8).sin() * 20.) * scale,
-                },
-                pressure: 0.3 + i as f32 * 0.07,
-                tilt_radians: [0.2, -0.1],
-                twist_radians: 0.3,
-                distance: 0.,
-                phase: if i == 0 {
-                    PenPhase::Down
-                } else if i == 9 {
-                    PenPhase::Up
-                } else {
-                    PenPhase::Move
-                },
-                tool: ToolKind::Pen,
-                flags: SampleFlags::PRIMARY,
-            })
-            .unwrap();
-        engine.render_frame_at(timestamp_ns).unwrap();
-        while engine.has_pending_input() {
-            std::thread::yield_now();
-            engine.render_frame_at(timestamp_ns).unwrap();
-        }
+        let mut event = support::pen_sample(i, 9, timestamp_ns, Point {
+            x: (40. + i as f32 * 32.) * scale,
+            y: (y + (i as f32 * 0.8).sin() * 20.) * scale,
+        });
+        event.pressure = 0.3 + i as f32 * 0.07;
+        event.tilt_radians = [0.2, -0.1];
+        event.twist_radians = 0.3;
+        input.push(event).unwrap();
+        support::drain_input(engine, timestamp_ns, false);
     }
 }
+
 fn fixture() -> Project {
     let mut doc = Document::new("editable-project-test", SIZE[0], SIZE[1]);
     doc.layers[1].visible = false;

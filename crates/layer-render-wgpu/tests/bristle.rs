@@ -1,7 +1,8 @@
 //! Bristle paintbrush invariants, exercised through real input and GPU painting.
+mod support;
 use layer_core::*;
 use layer_engine::{
-    CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
+    CanvasEngine, InstantFeedbackConfig, SampleFlags, ViewTransform,
     input_queue,
 };
 use layer_render::ViewState;
@@ -62,39 +63,20 @@ fn paint_at(
     for i in 0..=samples.min(until) {
         time += 4_000_000;
         let pose = pose(i as f32 / samples as f32);
-        input
-            .push(PenEvent {
-                device_id: 1,
-                sequence: time,
-                timestamp_ns: time,
-                view_revision: 0,
-                surface_position: Point { x: pose.position[0], y: pose.position[1] },
-                pressure: pose.pressure,
-                tilt_radians: pose.tilt,
-                twist_radians: pose.twist.unwrap_or(0.),
-                distance: 0.,
-                phase: if i == 0 {
-                    PenPhase::Down
-                } else if i == samples {
-                    PenPhase::Up
-                } else {
-                    PenPhase::Move
-                },
-                tool: ToolKind::Pen,
-                flags: if pose.twist.is_some() {
-                    SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::BARREL_TWIST.0)
-                } else {
-                    SampleFlags::PRIMARY
-                },
-            })
-            .unwrap();
+        let mut event = support::pen_sample(i, samples, time,
+            Point { x: pose.position[0], y: pose.position[1] });
+        event.sequence = time;
+        event.pressure = pose.pressure;
+        event.tilt_radians = pose.tilt;
+        event.twist_radians = pose.twist.unwrap_or(0.);
+        event.flags = if pose.twist.is_some() {
+            SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::BARREL_TWIST.0)
+        } else {
+            SampleFlags::PRIMARY
+        };
+        input.push(event).unwrap();
         if i % cadence == 0 || i == samples || i == until {
-            engine.render_frame_at(time).unwrap();
-            engine.backend_mut().wait_idle().unwrap();
-            while engine.has_pending_input() {
-                engine.render_frame_at(time).unwrap();
-                engine.backend_mut().wait_idle().unwrap();
-            }
+            support::drain_input(&mut engine, time, true);
         }
     }
     engine.backend_mut().readback_srgb_rgba8().unwrap()
