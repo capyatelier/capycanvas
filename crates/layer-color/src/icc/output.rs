@@ -50,11 +50,7 @@ impl WorkingEncoder {
         }
         let output = open(&destination.profile)?;
         let actual = channels(&output)?;
-        let valid = match destination.channels {
-            SourceChannels::Rgb | SourceChannels::Rgba => actual == ProfileChannels::Rgb,
-            SourceChannels::Gray | SourceChannels::GrayAlpha => actual == ProfileChannels::Gray,
-            SourceChannels::Cmyk => actual == ProfileChannels::Cmyk,
-        };
+        let valid = channels_compatible(destination.channels, actual, false);
         if !valid {
             return Err("Output channels disagree with the destination profile".into());
         }

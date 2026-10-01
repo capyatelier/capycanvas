@@ -271,15 +271,7 @@ pub(super) fn preview(
     matte: Option<[f32; 3]>,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
-) -> Result<
-    (
-        [u32; 2],
-        Vec<[f32; 4]>,
-        Vec<[f32; 4]>,
-        crate::OutputStatistics,
-    ),
-    String,
-> {
+) -> Result<GainMapPreview, String> {
     let options = options.into();
     let (bytes, stats) = encode(
         extent, space, rendition, guide, options.quality, &Default::default(), matte, true, options.memory, cancel, read,

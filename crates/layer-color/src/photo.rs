@@ -27,7 +27,7 @@ mod xmp;
 mod orientation;
 mod png_io;
 pub(crate) use gainmap::GainMapMetadata;
-pub use gainmap::{GainMapEncodeOptions, GainMapFormat, preview_gainmap_rows, write_gainmap_rows};
+pub use gainmap::{GainMapEncodeOptions, GainMapFormat, GainMapPreview, preview_gainmap_rows, write_gainmap_rows};
 pub use hdr_png::{preview_hdr_rows, write_hdr_png_rows};
 mod bmp_io;
 mod gif_io;
@@ -242,13 +242,7 @@ fn interpretation(
 
 fn check_channels(channels: SourceChannels, profile: &ColorProfile) -> Result<(), String> {
     let actual = profile_channels(profile)?;
-    let compatible = match channels {
-        SourceChannels::Rgb | SourceChannels::Rgba => actual == ProfileChannels::Rgb,
-        SourceChannels::Gray | SourceChannels::GrayAlpha => {
-            actual == ProfileChannels::Gray || matches!(profile, ColorProfile::Builtin(_))
-        }
-        SourceChannels::Cmyk => actual == ProfileChannels::Cmyk,
-    };
+    let compatible = crate::icc::channels_compatible(channels, actual, matches!(profile, ColorProfile::Builtin(_)));
     if compatible {
         Ok(())
     } else {

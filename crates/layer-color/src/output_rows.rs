@@ -44,7 +44,7 @@ pub fn encode_working_rows_with_guide(
         return Err("Local SDR rendition requires image analysis".into());
     }
     let encoder = WorkingEncoder::new(working, target, options)?.with_sdr_gamut(rendition);
-    let mapper = rendition.map(|r| r.mapper(working, working));
+    let mapper = rendition.zip(guide).map(|(r, guide)| (r.mapper(working, working), guide));
     let mut resampler = (source_extent != extent)
         .then(|| RowResampler::new(source_extent, extent))
         .transpose()?;
@@ -56,15 +56,13 @@ pub fn encode_working_rows_with_guide(
         } else {
             read(y, &mut pixels)?;
         }
-        if let Some(r) = mapper {
+        if let Some((r, guide)) = mapper {
             for (x, pixel) in pixels.iter_mut().enumerate() {
-                if let Some(guide) = guide {
-                    let position = [
-                        (x as f32 + 0.5) * guide.document_extent[0] as f32 / extent[0] as f32,
-                        (y as f32 + 0.5) * guide.document_extent[1] as f32 / extent[1] as f32,
-                    ];
-                    *pixel = r.tone_local_premultiplied(*pixel, position, guide);
-                } else { *pixel = r.tone_premultiplied(*pixel); }
+                let position = [
+                    (x as f32 + 0.5) * guide.document_extent[0] as f32 / extent[0] as f32,
+                    (y as f32 + 0.5) * guide.document_extent[1] as f32 / extent[1] as f32,
+                ];
+                *pixel = r.tone_local_premultiplied(*pixel, position, guide);
             }
         }
         statistics.clipped_channels += encoder

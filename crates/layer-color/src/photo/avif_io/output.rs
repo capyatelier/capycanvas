@@ -1,6 +1,6 @@
 //! Shared AVIF gain-map export and previews of the delivered file.
 use super::*;
-use crate::photo::gainmap::{LogGain, render_pair};
+use crate::photo::gainmap::{GainMapPreview, LogGain, render_pair};
 use layer_core::color::hdr;
 
 const MEMORY: &str =
@@ -274,15 +274,7 @@ pub(in crate::photo) fn preview(
     matte: Option<[f32; 3]>,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
-) -> Result<
-    (
-        [u32; 2],
-        Vec<[f32; 4]>,
-        Vec<[f32; 4]>,
-        crate::OutputStatistics,
-    ),
-    String,
-> {
+) -> Result<GainMapPreview, String> {
     let options = options.into();
     let (bytes, stats) = encode(
         extent,

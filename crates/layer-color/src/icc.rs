@@ -1,8 +1,16 @@
 use layer_core::color::{ColorProfile, ConversionOptions, RenderingIntent, RgbSpace};
+use layer_core::color::source::SourceChannels;
 use moxcms::{ColorProfile as Profile, DataColorSpace, Layout, ToneReprCurve};
 use std::sync::Arc;
 
 pub use layer_core::color::ProfileChannels;
+pub(crate) fn channels_compatible(source: SourceChannels, profile: ProfileChannels, builtin: bool) -> bool {
+    match source {
+        SourceChannels::Rgb | SourceChannels::Rgba => profile == ProfileChannels::Rgb,
+        SourceChannels::Gray | SourceChannels::GrayAlpha => profile == ProfileChannels::Gray || builtin,
+        SourceChannels::Cmyk => profile == ProfileChannels::Cmyk,
+    }
+}
 pub use layer_core::color::source::MAX_PROFILE_BYTES as MAX_ICC_BYTES;
 
 mod profiles;

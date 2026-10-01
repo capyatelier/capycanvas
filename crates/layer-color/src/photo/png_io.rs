@@ -191,7 +191,6 @@ fn interpretation_from_tags(info: &png::Info<'_>) -> Result<(ColorProfile, bool)
     }
     if let Some(icc) = &info.icc_profile {
         let profile = ColorProfile::Icc(icc.to_vec().into());
-        profile_channels(&profile)?;
         return Ok((profile, false));
     }
     if info.srgb.is_some() {

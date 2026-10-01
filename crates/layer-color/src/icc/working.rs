@@ -79,12 +79,12 @@ impl WorkingDecoder {
         let output = linear_profile(destination)?;
         // Go straight from source samples to linear destination coordinates.
         // An intermediate encoded/bounded sRGB image would lose wide-gamut RGB.
-        match (channels(&input)?, source.channels) {
-            (ProfileChannels::Rgb, SourceChannels::Rgb | SourceChannels::Rgba)
-            | (ProfileChannels::Rgb, SourceChannels::Gray | SourceChannels::GrayAlpha)
-                if matches!(source.profile, ColorProfile::Builtin(_))
-                    || matches!(source.channels, SourceChannels::Rgb | SourceChannels::Rgba) =>
-            {
+        let actual = channels(&input)?;
+        if !channels_compatible(source.channels, actual, matches!(source.profile, ColorProfile::Builtin(_))) {
+            return Err("Source channels disagree with the embedded ICC profile".into());
+        }
+        match actual {
+            ProfileChannels::Rgb => {
                 if let Some(matrix) = MatrixTransform::new(&input, &output, options)? {
                     let maximum = source.depth.maximum() as f32;
                     let transfer = (0..=source.depth.maximum()).map(|code| {
@@ -96,13 +96,12 @@ impl WorkingDecoder {
                     &input, &output, options,
                 )?))
             }
-            (ProfileChannels::Gray, SourceChannels::Gray | SourceChannels::GrayAlpha) => Ok(
+            ProfileChannels::Gray => Ok(
                 DecoderKind::Gray(CompiledTransform::new(&input, &output, options)?),
             ),
-            (ProfileChannels::Cmyk, SourceChannels::Cmyk) => Ok(DecoderKind::Cmyk(
+            ProfileChannels::Cmyk => Ok(DecoderKind::Cmyk(
                 CompiledTransform::new(&input, &output, options)?,
             )),
-            _ => Err("Source channels disagree with the embedded ICC profile".into()),
         }
     }
 

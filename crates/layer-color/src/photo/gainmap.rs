@@ -219,6 +219,8 @@ pub fn write_gainmap_rows(
     Ok(stats)
 }
 
+pub type GainMapPreview = ([u32; 2], Vec<[f32; 4]>, Vec<[f32; 4]>, crate::OutputStatistics);
+
 pub fn preview_gainmap_rows(
     extent: [u32; 2],
     bounds: [u32; 2],
@@ -230,15 +232,7 @@ pub fn preview_gainmap_rows(
     matte: Option<[f32; 3]>,
     cancelled: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
-) -> Result<
-    (
-        [u32; 2],
-        Vec<[f32; 4]>,
-        Vec<[f32; 4]>,
-        crate::OutputStatistics,
-    ),
-    String,
-> {
+) -> Result<GainMapPreview, String> {
     if bounds.into_iter().any(|n| !(1..=1024).contains(&n)) {
         return Err("Invalid preview dimensions".into());
     }

@@ -21,6 +21,9 @@ Camera JPEGs with an MPF directory containing a baseline primary photograph and
 only large thumbnails open the primary photograph. Unknown auxiliary image
 types and multi-frame JPEG images remain unsupported. JPEG and AVIF support
 SDR-base HDR gain maps through the shared Rust reconstruction path.
+`GainMapPreview` carries the preview size, HDR pixels, SDR pixels and delivery
+statistics. Photo admission and working codecs share channel/profile checks;
+built-in gray output becomes a gray profile before validation.
 
 ## Available-memory budgets
 
