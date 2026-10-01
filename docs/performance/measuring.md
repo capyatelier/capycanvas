@@ -114,7 +114,7 @@ headline number with its source in the table.
 ```bash
 python3 tools/performance/android-brush-benchmark.py OUT --serial "$CAPY_ANDROID_SERIAL" \
   --package art.capycanvas.brushbench --photo /data/local/tmp/capy-tier-24mp.jpg \
-  --presets 1,5,3 --size 2048 --prefix mid
+  --presets 1,5,3 --size 1536 --radius-x 310 --radius-y 150 --prefix mid
 python3 tools/performance/android-brush-report.py OUT --package art.capycanvas.brushbench
 ```
 

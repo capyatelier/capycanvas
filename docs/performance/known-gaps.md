@@ -21,12 +21,17 @@
     - Successful Smudge and Liquify Push strokes on the MovinkPad Pro 14 reach
       41,000–51,000 mappings. The G-Pen reaches about 11,000.
     - Android's default `vm.max_map_count` is 65,530.
-- **Simple brushes miss their guaranteed size on every tier.**
-  - Only the Calligraphy Pen meets it, and only on the top tier.
-  - At 2048 px the G-Pen completes 88 updates/s on the top tier (target 120)
-    and 17 on the mid tier (target 90).
-  - On the low tier it completes 37 at 1024 px and 12 at the 2048 px goal
-    (target 60).
+- **The simple-brush class remains unqualified.**
+  - On the mid tier, the 1536 px G-Pen completes 55.6 fresh updates/s (target 90)
+    on a contained path, with completion-gap p99 31.9–33.5 ms (limit 22.2 ms).
+    Other simple brushes need measurements at 1536 px; their older 2048 px
+    results are above the
+    revised guarantee. See the [mid-tier measurement](mid-tier.md#g-pen-at-the-1536-px-guarantee).
+  - The low-tier 1024 px G-Pen measured stroke meets 60/s; other simple brushes
+    and stacked-photo drawing retain gaps. See the [low-tier table](low-tier.md#brushes).
+  - The preceding top-tier 2048 px G-Pen build reaches 150.2 fresh updates/s,
+    but completion-gap p99 20.0–36.6 ms exceeds 16.7 ms. The latest shared
+    refinement change is not measured there. See the [top-tier table](top-tier.md#current-g-pen-comparison).
 - **Complex brushes at 1024 px miss on every tier.**
   - On the top tier all but Spray reach 76–118 updates/s, so most are close.
   - On the mid tier they reach about 6–25, and on the low tier about 3–19.

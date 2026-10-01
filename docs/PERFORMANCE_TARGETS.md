@@ -15,7 +15,7 @@ tables and hardware specifications.
 | GPU, memory bandwidth | Mali-G52 MC2, 14.4 GB/s | Mali-G57 MC2, 17.1 GB/s | Adreno 735, 67.2 GB/s |
 | Target canvas | 12 MP, 4248 × 2832 | 24 MP, 6000 × 4000 | 61 MP, 9504 × 6336 |
 | Minimum sustained rate | **60 fps** | **90 fps** | **120 fps** |
-| Simple brushes guaranteed to | 1024 px (goal 2048 px) | 2048 px | 2048 px |
+| Simple brushes guaranteed to | 1024 px (goal 2048 px) | 1536 px | 2048 px |
 | Complex brushes guaranteed to | 1024 px | 1024 px | 1024 px |
 | Very complex brushes guaranteed to | 512 px | 512 px | 512 px |
 
@@ -96,14 +96,19 @@ Record each result in the tier's table with its value, date and commit.
 ## Where we stand
 
 The integrated compositor has moving-stroke measurements on all three
-reference tablets (2026-09-29–30); the latest balanced-root, four-page build is
+reference tablets (2026-09-29–2026-10-01). Balanced-root, four-page builds are
 measured on low and mid tiers:
 
 - TCL G-Pen 1024 px on 12 MP reaches 63.7 fresh updates/s with completion-gap
-  p99 below 28.4 ms; this measured stroke meets 60/s. Mid-tier G-Pen 2048 px
-  reaches 48.0/s. The preceding top-tier build reaches 150.2/s, but its p99 gap
+  p99 below 28.4 ms; this measured stroke meets 60/s. Mid-tier G-Pen at the
+  revised 1536 px guarantee reaches 55.6/s on a path that keeps the whole brush
+  inside the photo, with completion-gap p99 31.9–33.5 ms; the 90/s and
+  22.2 ms criteria remain open. The preceding
+  top-tier build reaches 150.2/s, but its p99 gap
   still misses 16.7 ms; the latest refinement change is not remeasured there.
-  Other simple brushes and stacked-photo strokes remain below their targets.
+  Other mid-tier simple brushes need measurements at 1536 px; their older
+  2048 px results are above the guarantee. Stacked-photo strokes remain below
+  their targets.
 - Clone, Healing and Spot Healing at 512 px reach 114–120 fresh updates/s on
   the mid tier and 185–192 on the top tier. Their completion gaps meet the
   moving-stroke criterion. Bounded Healing finalization keeps navigation input

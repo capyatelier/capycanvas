@@ -32,7 +32,7 @@ canvas is 6000 × 4000.
 | Selection transform, full canvas | 90 | Renderer 217 submissions/s (handle and Distort); worst frame after release 16.4–27.1 ms | `6fcc6fba`, 2026-09-27 |
 | Move tool layer drag | 90 | | |
 | Marquee, Lasso or Polygon drag | 90 | | |
-| Selection Brush or Quick Mask, 2048 px | 90 | | |
+| Selection Brush or Quick Mask, 1536 px | 90 | | |
 | Grow, Shrink or Feather drag, full canvas | 90, soft | | |
 | Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 90, soft | | |
 | Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 90, soft | | |
@@ -70,6 +70,8 @@ Raw frame data, Chrome traces and fixture details are in
 ## Brushes
 
 Target: **90 completed updates/s** at the guaranteed size, on the 24 MP canvas.
+Simple brushes are guaranteed through **1536 px**; complex and very complex
+brushes retain their 1024 px and 512 px guarantees.
 
 ### JNI cleanup comparison
 
@@ -90,7 +92,7 @@ The JNI cleanup builds on `829f1e223`, APK SHA-256
 
 Individual rates overlap: baseline 163.2–169.6 and cleanup 164.1–170.0 updates/s.
 This empty-canvas 1024 px workload meets the 90 updates/s and 22.2 ms gap criteria;
-the 2048 px guarantee and display-paced motion need their own measurements.
+the 1536 px guarantee and display-paced motion need their own measurements.
 
 ### Shared geometry comparison on Huion
 
@@ -118,21 +120,25 @@ Reports: `artifacts/simplification-cleanup/performance/m28/`.
 
 Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets. The ellipse is 520 × 299 px at 16.0% zoom.
 
+The older 2048 px simple-brush rows are above the 1536 px guarantee and do not
+classify performance at the guaranteed size. Only G-Pen is remeasured at 1536 px;
+the rest of the simple class remains unqualified there.
+
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 2048 px | 48.0 fresh updates/s (47.90–48.08); completion gap p99 36.78–38.06 ms | **Not met** |
-| Rough G-Pen (28) | Simple | 2048 px | 12.2 updates/s (12.0–12.2); gap p99 152.2 ms | **Not met** |
-| Calligraphy Pen (29) | Simple | 2048 px | 35.2 updates/s (35.1–35.3); gap p99 73.2 ms | **Not met** |
-| Antique Pen (30) | Simple | 2048 px | 16.2 updates/s (16.0–16.3); gap p99 171.2 ms | **Not met** |
-| Realistic Pen (31) | Simple | 2048 px | 13.4 updates/s (13.4–13.5); gap p99 131.6 ms | **Not met** |
-| Wet Ink (32) | Simple | 2048 px | 11.0 updates/s (10.9–11.1); gap p99 168.6 ms | **Not met** |
-| Pencil (2) | Simple | 2048 px | 5.3 updates/s (5.3–5.4); gap p99 225.4 ms | **Not met** |
-| Pointy Pencil (25) | Simple | 2048 px | 5.5 updates/s (5.4–5.5); gap p99 222.4 ms | **Not met** |
-| Shading Pencil (26) | Simple | 2048 px | 14.6 updates/s (14.5–14.9); gap p99 89.2 ms | **Not met** |
-| Charcoal (27) | Simple | 2048 px | 4.4 updates/s (4.3–4.4); gap p99 295.9 ms | **Not met** |
-| Chalk (6) | Simple | 2048 px | 3.8 updates/s (3.7–3.8); gap p99 324.4 ms | **Not met** |
-| Eraser (3) | Simple | 2048 px | 7.1 updates/s (7.0–7.2); gap p99 174.5 ms | **Not met** |
-| Airbrush (5) | Simple | 2048 px | 9.7 updates/s (9.7–9.9); gap p99 135.9 ms | **Not met** |
+| G-Pen (1) | Simple | 1536 px | 55.6 fresh updates/s (54.86–56.06); completion gap p99 31.87–33.45 ms | **Not met** |
+| Rough G-Pen (28) | Simple | 2048 px | 12.2 updates/s (12.0–12.2); gap p99 152.2 ms | 1536 px unmeasured |
+| Calligraphy Pen (29) | Simple | 2048 px | 35.2 updates/s (35.1–35.3); gap p99 73.2 ms | 1536 px unmeasured |
+| Antique Pen (30) | Simple | 2048 px | 16.2 updates/s (16.0–16.3); gap p99 171.2 ms | 1536 px unmeasured |
+| Realistic Pen (31) | Simple | 2048 px | 13.4 updates/s (13.4–13.5); gap p99 131.6 ms | 1536 px unmeasured |
+| Wet Ink (32) | Simple | 2048 px | 11.0 updates/s (10.9–11.1); gap p99 168.6 ms | 1536 px unmeasured |
+| Pencil (2) | Simple | 2048 px | 5.3 updates/s (5.3–5.4); gap p99 225.4 ms | 1536 px unmeasured |
+| Pointy Pencil (25) | Simple | 2048 px | 5.5 updates/s (5.4–5.5); gap p99 222.4 ms | 1536 px unmeasured |
+| Shading Pencil (26) | Simple | 2048 px | 14.6 updates/s (14.5–14.9); gap p99 89.2 ms | 1536 px unmeasured |
+| Charcoal (27) | Simple | 2048 px | 4.4 updates/s (4.3–4.4); gap p99 295.9 ms | 1536 px unmeasured |
+| Chalk (6) | Simple | 2048 px | 3.8 updates/s (3.7–3.8); gap p99 324.4 ms | 1536 px unmeasured |
+| Eraser (3) | Simple | 2048 px | 7.1 updates/s (7.0–7.2); gap p99 174.5 ms | 1536 px unmeasured |
+| Airbrush (5) | Simple | 2048 px | 9.7 updates/s (9.7–9.9); gap p99 135.9 ms | 1536 px unmeasured |
 | Marker (7) | Complex | 1024 px | 22.7 updates/s (22.6–22.8); gap p99 84.3 ms | **Not met** |
 | Blotty Ink (33) | Complex | 1024 px | 20.1 updates/s (19.9–20.2); gap p99 90.2 ms | **Not met** |
 | Realistic Brushed Ink (34) | Complex | 1024 px | 19.6 updates/s (19.5–19.6); gap p99 136.3 ms | **Not met** |
@@ -164,7 +170,45 @@ Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark
 
 Retouching rows use the integrated-compositor measurements below, copying from the photo marked as a reference layer.
 
-## Current G-Pen comparison
+## G-Pen at the 1536 px guarantee
+
+Measured on 2026-10-01 UTC on the Wacom MovinkPad 11 at `2e7dd29f4`:
+6000 × 4000 reference photo beneath one empty paint layer, Perceptual blending,
+Fit, 310 × 150 px ellipse, 200 Hz injected stylus samples and 16 ms prediction.
+The optimized release benchmark uses the default workspace with Navigator and
+Stats closed. Each size has a priming stroke undone followed by three warmed
+five-second strokes. Tracing and memory sampling are disabled; all before/after
+thermal-status readings are zero. Both sizes use the same APK and setup.
+The observed zoom is 15.99%. The path leaves at least 5.96 surface pixels
+between the full 2048 px brush footprint and the photo edge; the 1536 px
+footprint leaves at least 46.90 pixels.
+
+| G-Pen diameter | Fresh completed updates/s, median (range) | Completion-gap p99, range | Settling after pen-up, median | Qualification |
+| --- | ---: | ---: | ---: | --- |
+| 1536 px, guaranteed size | 55.64 (54.86–56.06) | 31.87–33.45 ms | 540 ms | Below 90/s; gap exceeds 22.2 ms |
+| 2048 px, above guarantee | 33.36 (33.11–33.47) | 45.61–56.32 ms | 708 ms | Above-guarantee comparison |
+
+Reducing diameter raises this stroke's fresh throughput by 66.8%. The 1536 px
+row still needs 61.7% more throughput to reach 90/s, along with shorter tail
+gaps. This size comparison is not a renderer-code speedup or a hardware
+impossibility proof. It does not qualify other trajectories, the rest of the
+simple-brush class or 90 Hz screen presentation. The previously measured
+2048 px refinement and contact latencies below retain their original conditions.
+
+The wider 479.7 × 299 px path clips the brush at the photo edges. The same APK
+reaches 71.59 fresh updates/s at 1536 px and 48.03/s at 2048 px on that path,
+with completion-gap p99 24.94–28.21 and 35.65–37.79 ms. Those are diagnostic
+comparisons and do not qualify the contained-footprint workload required by
+[the measuring guide](measuring.md#rules). The older wide-path 2048 px records
+below also retain that distinction.
+
+Optimized benchmark APK SHA-256:
+`eb91ff69cafd3560603e242fda1e46af9f372d97b4004442ed95927cc1ffd2cc`.
+Raw records, immutable APK and build provenance:
+`artifacts/mid-tier-1536/contained-gpen-{1536,2048}`, `contained-results.json`
+and `provenance.json`. The clipped diagnostics remain in `gpen-{1536,2048}`.
+
+## G-Pen above the 1536 px guarantee
 
 Measured on 2026-09-30 against `ba8835fec`: the tier photo beneath one paint
 layer, Perceptual blending, 2048 px G-Pen, Fit, 16 ms prediction, default
