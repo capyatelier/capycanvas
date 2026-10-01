@@ -241,10 +241,8 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
                     |color| linear_color(color, space, doc.color.space));
                 eprintln!("{space:?} placement={placement:?} selection={} step={step} error={error:?}", selection.is_some());
                 assert!(error[0] < 0.004 && error[1] < 0.06, "transform reduction quality {error:?}");
-                let mut a = vec![0; extent[0] as usize * extent[1] as usize * 4];
-                let mut b = a.clone();
-                r.copy_rgba8_srgb(&mut a, extent[0] as usize * 4).unwrap();
-                exact.copy_rgba8_srgb(&mut b, extent[0] as usize * 4).unwrap();
+                let a = r.readback_srgb_rgba8().unwrap();
+                let b = exact.readback_srgb_rgba8().unwrap();
                 assert_eq!(a, b, "exact queries evaluate native transform pixels");
                 assert_eq!(displayed, display_pixels(&r), "an exact query preserves the displayed approximation");
                 r.submit(frame).unwrap();

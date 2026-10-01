@@ -284,15 +284,6 @@ pub fn software_adapter_tests() -> bool {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GpuAdapterInfo {
-    pub name: String,
-    pub backend: u32,
-    pub device_type: u32,
-    pub vendor_id: u32,
-    pub device_id: u32,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GpuRasterError {
     Color(String),
     CaptureBudget { required: u64, limit: u64 },
@@ -1282,30 +1273,6 @@ impl WgpuRasterizer {
         &self.adapter
     }
 
-    pub fn adapter_info(&self) -> GpuAdapterInfo {
-        let info = self.adapter.get_info();
-        GpuAdapterInfo {
-            name: info.name,
-            backend: match info.backend {
-                wgpu::Backend::Vulkan => 1,
-                wgpu::Backend::Metal => 2,
-                wgpu::Backend::Dx12 => 3,
-                wgpu::Backend::Gl => 4,
-                wgpu::Backend::BrowserWebGpu => 5,
-                wgpu::Backend::Noop => 6,
-            },
-            device_type: match info.device_type {
-                wgpu::DeviceType::IntegratedGpu => 1,
-                wgpu::DeviceType::DiscreteGpu => 2,
-                wgpu::DeviceType::VirtualGpu => 3,
-                wgpu::DeviceType::Cpu => 4,
-                wgpu::DeviceType::Other => 5,
-            },
-            vendor_id: info.vendor,
-            device_id: info.device,
-        }
-    }
-
     /// Canvas submissions, excluding viewport-only cursor/navigation updates.
     pub fn submitted_updates(&self) -> u64 {
         self.metrics.submissions
@@ -1338,26 +1305,6 @@ impl WgpuRasterizer {
                 timeout: Some(READBACK_TIMEOUT),
             })
             .map_err(|error| GpuRasterError::WaitFailed(error.to_string()))?;
-        Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn copy_rgba8_srgb(
-        &mut self,
-        destination: &mut [u8],
-        stride: usize,
-    ) -> Result<(), GpuRasterError> {
-        let srgb = self.readback_srgb_rgba8()?;
-        let [width, height] = self.document_extent;
-        let row_bytes = width as usize * 4;
-        if stride < row_bytes || destination.len() < stride.saturating_mul(height as usize) {
-            return Err(GpuRasterError::InvalidImage);
-        }
-        for y in 0..height as usize {
-            let source = &srgb[y * row_bytes..(y + 1) * row_bytes];
-            let target = &mut destination[y * stride..y * stride + row_bytes];
-            target.copy_from_slice(source);
-        }
         Ok(())
     }
 

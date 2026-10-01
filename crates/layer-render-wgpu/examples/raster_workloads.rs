@@ -245,13 +245,7 @@ impl Canvas {
         Ok((cpu, complete))
     }
     fn export(&mut self) -> Result<Vec<u8>> {
-        let doc = self.engine.document();
-        let stride = doc.width as usize * 4;
-        let mut bytes = vec![0; stride * doc.height as usize];
-        self.engine
-            .backend_mut()
-            .copy_rgba8_srgb(&mut bytes, stride)?;
-        Ok(bytes)
+        Ok(self.engine.backend_mut().readback_srgb_rgba8()?)
     }
     fn undo_redo(&mut self) -> Result<()> {
         self.settle()?;

@@ -97,9 +97,7 @@ fn paint_at(
             }
         }
     }
-    let mut bytes = vec![0; extent[0] as usize * extent[1] as usize * 4];
-    engine.backend_mut().copy_rgba8_srgb(&mut bytes, extent[0] as usize * 4).unwrap();
-    bytes
+    engine.backend_mut().readback_srgb_rgba8().unwrap()
 }
 
 fn ink(bytes: &[u8], top: usize, bottom: usize) -> f64 {

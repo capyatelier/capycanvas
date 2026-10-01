@@ -82,12 +82,7 @@ fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
 }
 fn image(engine: &mut Engine, time: u64) -> Vec<u8> {
     engine.render_frame_at(time).unwrap();
-    let mut bytes = vec![0; (SIZE[0] * SIZE[1] * 4) as usize];
-    engine
-        .backend_mut()
-        .copy_rgba8_srgb(&mut bytes, SIZE[0] as usize * 4)
-        .unwrap();
-    bytes
+    engine.backend_mut().readback_srgb_rgba8().unwrap()
 }
 fn draw(
     engine: &mut Engine,

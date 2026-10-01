@@ -335,8 +335,7 @@ fn resizing_a_whole_layer_leaves_no_vacated_tiles() {
     settled(&mut engine, 1_000_000_000);
     let canvas = Rect { min: Point::default(), max: Point { x: half[0] as f32, y: half[1] as f32 } };
     assert_eq!(tiles(&engine, paint, raster::RasterPlane::Color), pages_of(canvas), "only the halved canvas keeps tiles");
-    let mut rgba = vec![0; (half[0] * half[1] * 4) as usize];
-    engine.backend_mut().copy_rgba8_srgb(&mut rgba, half[0] as usize * 4).unwrap();
+    let rgba = engine.backend_mut().readback_srgb_rgba8().unwrap();
     let first = &rgba[..4];
     assert!(first[3] > 0 && rgba.chunks(4).all(|p| p == first), "the halved fill stays uniform to the edges");
     assert!(engine.undo().unwrap());

@@ -66,9 +66,7 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
             ..packet(&layers, [333, 291])
         })
         .unwrap();
-        let mut bytes = vec![0; 333 * 291 * 4];
-        r.copy_rgba8_srgb(&mut bytes, 333 * 4).unwrap();
-        bytes
+        r.readback_srgb_rgba8().unwrap()
     };
     render(&mut r, true, &[], &[]);
     let incremental = render(&mut r, false, &[dab], &[batch]);

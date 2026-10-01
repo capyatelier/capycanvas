@@ -71,8 +71,7 @@ pub fn image(engine: &mut Engine, time: u64) -> Image {
         engine.render_frame_at(time).unwrap();
     }
     let size = [engine.document().width, engine.document().height];
-    let mut rgba = vec![0; (size[0] * size[1] * 4) as usize];
-    engine.backend_mut().copy_rgba8_srgb(&mut rgba, size[0] as usize * 4).unwrap();
+    let rgba = engine.backend_mut().readback_srgb_rgba8().unwrap();
     Image { size, rgba }
 }
 

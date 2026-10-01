@@ -448,11 +448,9 @@ impl Canvas {
             }
         }
         let [width, height] = self.engine.backend().document_extent();
-        let stride = width as usize * 4;
-        let mut rgba = vec![0; stride * height as usize];
-        self.engine
+        let rgba = self.engine
             .backend_mut()
-            .copy_rgba8_srgb(&mut rgba, stride)
+            .readback_srgb_rgba8()
             .map_err(|e| e.to_string())?;
         let file = BufWriter::new(File::create(path)?);
         let mut encoder = png::Encoder::new(file, width, height);
@@ -878,11 +876,11 @@ fn write_frame_samples(path: &Path, results: &[BenchResult]) -> Result<(), Box<d
 
 fn write_report(path: &Path, results: &[BenchResult]) -> Result<(), Box<dyn Error>> {
     let probe = Canvas::new().map_err(|error| format!("GPU probe failed: {error}"))?;
-    let gpu = probe.engine.backend().adapter_info();
+    let gpu = probe.engine.backend().adapter().get_info();
     let mode = document_mode();
     let mut report = format!(
         "# GPU raster benchmark — 4096×4096\n\n\
-         Adapter: `{}`; backend code {}; device type code {}.\n\n\
+         Adapter: `{}`; backend {:?}; device type {:?}.\n\n\
          Document: {mode}.\n\n\
          Release build with debug symbols. Each frame submits eight simulated coalesced pen samples to `CanvasEngine`, renders one frame, then waits for that submission to complete. Every scenario has at least 32 visible paint layers. Each repetition creates a fresh canvas, warms the exact scenario pipeline, undoes the warm-up stroke, and contributes every measured frame to the reported distribution. Setup, shader/pipeline creation, canvas allocation, scenario warm-up/undo, brush selection, layer creation, and PNG export are outside the timing window. Submit latency is the production non-blocking path; completed-work latency serializes each measured frame to isolate its GPU work. Concurrent system/GPU load is not controlled, so these are reproducible workload references rather than cross-machine scores.\n\n\
          | scenario | state features | repeats | frames | move completed p50 ms | move completed p95 ms | move completed p99 ms | pen-up completed p99 ms | max move ms | submit p95 ms | move/pen-up frames > 8.33 ms | dabs | conservative contact Mpx | composite visits Mpx | paint pages | coverage pages | material pages | preview pages | resident canvas MiB |\n\

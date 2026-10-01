@@ -197,8 +197,7 @@ fn export_and_readback_equal_the_live_composite_in_both_spaces() {
             for (i, (live, export)) in decoded(&live).into_iter().zip(export).enumerate() {
                 assert!((live - export).abs() <= 2e-5, "{depth:?} {space:?} value {i}: decoded composite {live} != export {export}");
             }
-            let mut srgb = vec![0; EXTENT[0] as usize * EXTENT[1] as usize * 4];
-            r.copy_rgba8_srgb(&mut srgb, EXTENT[0] as usize * 4).unwrap();
+            let srgb = r.readback_srgb_rgba8().unwrap();
             for (i, (code, export)) in srgb.iter().zip(floats(&exported(&r, &document)).chunks_exact(4).flat_map(|p| {
                 let a = p[3];
                 [p[0], p[1], p[2]].map(|c| if a > 0. { layer_core::color::srgb_encode(c / a) } else { 0. }).into_iter().chain([a])
@@ -234,8 +233,7 @@ fn black_at_half_opacity_over_white_is_middle_gray_only_when_blending_perceptual
             let export = capture.read_region([EXTENT[0] / 2, EXTENT[1] / 2, 1, 1]).unwrap()[0];
             let code = layer_core::color::srgb_encode(export[0]) * 255.;
             assert!((code - expected).abs() <= 1., "{depth:?} {space:?}: exported {code}, not {expected}");
-            let mut srgb = vec![0; EXTENT[0] as usize * EXTENT[1] as usize * 4];
-            r.copy_rgba8_srgb(&mut srgb, EXTENT[0] as usize * 4).unwrap();
+            let srgb = r.readback_srgb_rgba8().unwrap();
             assert!((f32::from(srgb[center]) - expected).abs() <= 1., "{depth:?} {space:?}: read back {}", srgb[center]);
             let target = crate::create_target(&r.device, [EXTENT[0], EXTENT[1]], wgpu::TextureFormat::Rgba8UnormSrgb, "presented gray").0;
             let mut presenter = crate::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();

@@ -137,10 +137,8 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
             let error = crate::test_support::max_error(&actual, &reference);
             assert!(error < 2e-5, "native {space:?}: {error}");
         }
-        let mut actual = vec![0; extent[0] as usize * extent[1] as usize * 4];
-        let mut expected = actual.clone();
-        r.copy_rgba8_srgb(&mut actual, extent[0] as usize * 4).unwrap();
-        exact.copy_rgba8_srgb(&mut expected, extent[0] as usize * 4).unwrap();
+        let actual = r.readback_srgb_rgba8().unwrap();
+        let expected = exact.readback_srgb_rgba8().unwrap();
         assert_eq!(actual, expected);
     }
 }
@@ -506,8 +504,7 @@ fn small_placed_source_remains_visible_beyond_its_local_extent() {
     r.submit(frame).unwrap();
     let display = display_pixels(&r);
     assert!(display.iter().any(|p| p[3] > 0.99 && p[2] > 0.05), "placed source contributes to presentation");
-    let mut exact = vec![0; (extent[0] * extent[1] * 4) as usize];
-    r.copy_rgba8_srgb(&mut exact, extent[0] as usize * 4).unwrap();
+    let exact = r.readback_srgb_rgba8().unwrap();
     let center = ((768 * extent[0] + 1024) * 4) as usize;
     assert_eq!(&exact[center..center + 4], &[42, 64, 80, 255]);
 }
@@ -550,10 +547,8 @@ fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
                 let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
                 assert!(error[0] < 0.004 && error[1] < 0.04, "pose={pose} level={level}: {error:?}");
                 assert_presentation_mip(&r);
-                let mut actual = vec![0; (extent[0] * extent[1] * 4) as usize];
-                let mut expected = actual.clone();
-                r.copy_rgba8_srgb(&mut actual, extent[0] as usize * 4).unwrap();
-                exact.copy_rgba8_srgb(&mut expected, extent[0] as usize * 4).unwrap();
+                let actual = r.readback_srgb_rgba8().unwrap();
+                let expected = exact.readback_srgb_rgba8().unwrap();
                 assert!(actual == expected, "exact placed export pose={pose} level={level} mask={enabled}");
             }
         }
@@ -1191,10 +1186,8 @@ fn masks_refresh_coverage_properties_and_paint_without_exact_display() {
         assert!(error[0] < 0.001 && error[1] < 0.015, "moving mask state={state}: {error:?}");
         assert_presentation_mip(&reduced);
         assert_settled(&mut reduced, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
-        let mut a = vec![0; (extent[0] * extent[1] * 4) as usize];
-        let mut b = a.clone();
-        reduced.copy_rgba8_srgb(&mut a, extent[0] as usize * 4).unwrap();
-        exact.copy_rgba8_srgb(&mut b, extent[0] as usize * 4).unwrap();
+        let a = reduced.readback_srgb_rgba8().unwrap();
+        let b = exact.readback_srgb_rgba8().unwrap();
         assert_eq!(a, b, "mask state={state} exact query");
 
     }
@@ -1399,12 +1392,8 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
             error[0] < 0.003,
             "large brush preview must remain close to exact reduction"
         );
-        let mut a = vec![0; (extent[0] * extent[1] * 4) as usize];
-        let mut b = a.clone();
-        r.copy_rgba8_srgb(&mut a, extent[0] as usize * 4).unwrap();
-        exact
-            .copy_rgba8_srgb(&mut b, extent[0] as usize * 4)
-            .unwrap();
+        let a = r.readback_srgb_rgba8().unwrap();
+        let b = exact.readback_srgb_rgba8().unwrap();
         assert_eq!(a, b, "display resolution must not change exact output");
     }
     r.submit(FramePacket {
@@ -1584,12 +1573,8 @@ fn display_and_native_evaluation_share_the_display_cache() {
         if !filtered {
             assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), 0);
         }
-        let mut a = vec![0; (extent[0] * extent[1] * 4) as usize];
-        let mut b = a.clone();
-        r.copy_rgba8_srgb(&mut a, extent[0] as usize * 4).unwrap();
-        exact
-            .copy_rgba8_srgb(&mut b, extent[0] as usize * 4)
-            .unwrap();
+        let a = r.readback_srgb_rgba8().unwrap();
+        let b = exact.readback_srgb_rgba8().unwrap();
         assert_eq!(a, b);
     }
 }
@@ -1672,13 +1657,8 @@ fn photographic_preview_and_committed_display_quality() {
                 errors[0] < 0.003 && errors[1] < 0.03,
                 "photographic display quality regressed"
             );
-            let mut actual = vec![0; bytes.len()];
-            let mut expected = actual.clone();
-            r.copy_rgba8_srgb(&mut actual, extent[0] as usize * 4)
-                .unwrap();
-            exact
-                .copy_rgba8_srgb(&mut expected, extent[0] as usize * 4)
-                .unwrap();
+            let actual = r.readback_srgb_rgba8().unwrap();
+            let expected = exact.readback_srgb_rgba8().unwrap();
             assert_eq!(
                 actual, expected,
                 "photographic exact output at {space:?} {diameter}px {kind:?}"

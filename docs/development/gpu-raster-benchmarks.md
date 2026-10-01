@@ -43,6 +43,9 @@ separate from the older canvas-residency counter and excludes source/history and
 driver allocations. A returned buffer can remain charged in its pending capture
 reservation until that job finishes, so the capture counter is conservative.
 
+The report names the GPU adapter, backend and device type. PNG output uses the
+renderer's explicit sRGB readback buffer directly.
+
 Normal scenario reports also write a sibling `*.frames.csv` containing every
 measured frame: scenario, color-space code (0 sRGB, 1 P3, 2 Adobe RGB, 3 ProPhoto),
 integer depth, one-based repetition/stroke/frame indices, pen-up flag, CPU and

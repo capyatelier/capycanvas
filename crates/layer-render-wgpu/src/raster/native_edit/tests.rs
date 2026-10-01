@@ -90,9 +90,7 @@ fn partial_bakes_back_tiles_without_publishing_the_layer() {
     let photo = document.layers[0].id;
     let (_, mut engine) = engine(document);
     let pixels = |engine: &mut CanvasEngine<WgpuRasterizer>| {
-        let mut bytes = vec![0; 1280 * 768 * 4];
-        engine.backend_mut().copy_rgba8_srgb(&mut bytes, 1280 * 4).unwrap();
-        bytes
+        engine.backend_mut().readback_srgb_rgba8().unwrap()
     };
     let original = pixels(&mut engine);
     engine.backend_mut().native_edit.as_mut().unwrap().color_cache_bytes = 4 << 20;

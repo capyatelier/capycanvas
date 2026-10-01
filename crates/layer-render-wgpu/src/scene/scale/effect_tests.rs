@@ -8,10 +8,8 @@ fn effect(id: u64, name: &str) -> Layer {
     layer
 }
 
-fn exact_pixels(r: &mut WgpuRasterizer, extent: [u32; 2]) -> Vec<u8> {
-    let mut bytes = vec![0; (extent[0] * extent[1] * 4) as usize];
-    r.copy_rgba8_srgb(&mut bytes, extent[0] as usize * 4).unwrap();
-    bytes
+fn exact_pixels(r: &mut WgpuRasterizer) -> Vec<u8> {
+    r.readback_srgb_rgba8().unwrap()
 }
 
 #[test]
@@ -59,7 +57,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
             assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), 0);
             let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), plan);
             assert!(error[0] < 0.002 && error[1] < 0.015, "level={level} state={state} error={error:?}");
-            assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+            assert_eq!(exact_pixels(&mut r), exact_pixels(&mut exact));
             r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
             assert_eq!(work, r.scene.as_ref().unwrap().scale_sources.entries[&paint].updates);
             assert_presentation_mip(&r);
@@ -77,7 +75,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
     let plan = r.scale_display.as_ref().unwrap().plan;
     let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), plan);
     assert!(error[0] < 0.002 && error[1] < 0.015, "partial paint error={error:?}");
-    assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+    assert_eq!(exact_pixels(&mut r), exact_pixels(&mut exact));
     }
 }
 
@@ -139,7 +137,7 @@ fn window_effects_preserve_document_coordinates_and_shifted_masks() {
             assert_presentation_mip(&r);
         }
     }
-    assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+    assert_eq!(exact_pixels(&mut r), exact_pixels(&mut exact));
 }
 
 #[test]
@@ -158,7 +156,7 @@ fn qualified_pointwise_catalog_uses_display_graph_and_keeps_native_output() {
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 3, "{}", fixture.program().id);
-        assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent), "{}", fixture.program().id);
+        assert_eq!(exact_pixels(&mut r), exact_pixels(&mut exact), "{}", fixture.program().id);
         assert!(display_pixels(&r).iter().flatten().all(|v| v.is_finite()));
     }
 }
@@ -264,7 +262,7 @@ fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
         assert!(difference < 1e-5, "halo at {center:?}: {difference}");
         let error = quality(&full, &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
         assert!(error[0] < 0.003 && error[1] < 0.03, "spatial quality at {center:?}: {error:?}");
-        assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+        assert_eq!(exact_pixels(&mut r), exact_pixels(&mut exact));
     }
     }
 }
@@ -294,7 +292,7 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
         let plan = r.scale_display.as_ref().unwrap().plan;
         let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), plan);
         assert!(error[0] < 0.004 && error[1] < 0.04, "level={level} sigma={sigma} clipped={clipped}: {error:?}");
-        assert_eq!(exact_pixels(&mut r, extent), exact_pixels(&mut exact, extent));
+        assert_eq!(exact_pixels(&mut r), exact_pixels(&mut exact));
         assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         let preparations = r.scene.as_ref().unwrap().effects.preparation_count();
         let work = r.metrics.composited_pixels;

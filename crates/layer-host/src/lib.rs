@@ -1897,13 +1897,12 @@ mod tests {
         assert!(host.last_pen.is_none());
         let checkpoint = host.session.engine().checkpoint();
         let before = host.session.engine().document().layers[0].raster.clone();
-        let mut before_pixels = vec![0; 64 * 48 * 4];
-        host.session
+        let before_pixels = host.session
             .renderer_mut()
             .0
             .as_mut()
             .unwrap()
-            .copy_rgba8_srgb(&mut before_pixels, 64 * 4)
+            .readback_srgb_rgba8()
             .unwrap();
         let camera = json!(host.session.state().camera);
         let paint_start = host.paint_start_sequence();
@@ -1930,13 +1929,12 @@ mod tests {
         );
         assert_ne!(host.session.engine().checkpoint(), checkpoint, "a prior save remains dirty after correction");
         assert_eq!(host.session.engine().metrics().committed_strokes, 1);
-        let mut after_pixels = vec![0; 64 * 48 * 4];
-        host.session
+        let after_pixels = host.session
             .renderer_mut()
             .0
             .as_mut()
             .unwrap()
-            .copy_rgba8_srgb(&mut after_pixels, 64 * 4)
+            .readback_srgb_rgba8()
             .unwrap();
         assert_ne!(
             after_pixels, before_pixels,
