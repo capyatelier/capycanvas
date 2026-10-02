@@ -269,7 +269,7 @@ impl Evaluator<'_> {
         let deferred = if direct && self.cache.plan.level > 0 && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
             && node.deferred(self.r) { Some(self.evaluate(node)?) } else { None };
         if matches!(deferred, Some(Value::Placed(_) | Value::Transform(_))) { return Ok(deferred.unwrap()); }
-        self.cache.pixels.ensure_root(self.r, self.cache.plan);
+        self.cache.pixels.ensure_root(self.r, self.cache.plan, "composition level");
         let image = self.cache.pixels.root().unwrap();
         let output = Target { view: image.view.clone(), slot: Some(Slot::Root), plan: image.plan };
         let value = match deferred { Some(value) => value, None => self.evaluate_into(node, Some(output.clone()))? };

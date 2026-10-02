@@ -40,14 +40,7 @@ impl Source {
                     1 << (plan.level - finer), (finer << 8) | 8]);
                 values[14] = ((previous.image.plan.bounds.min_x() as f32 - plan.bounds.min_x() as f32) / (1 << finer) as f32).to_bits();
                 values[15] = ((previous.image.plan.bounds.min_y() as f32 - plan.bounds.min_y() as f32) / (1 << finer) as f32).to_bits();
-                let offset = commands.record(r, encoder, values)?;
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("derive source level"), timestamp_writes: None,
-                });
-                pass.set_pipeline(&r.scene_pipelines.scale.reduce);
-                pass.set_bind_group(0, &commands.record_binding, &[offset]);
-                pass.set_bind_group(1, &binding, &[]);
-                pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+                commands.reduce(r, encoder, values, &binding, "derive source level")?;
             }
             for tile in completed { missing.remove(&tile); }
             if missing.is_empty() { break; }
@@ -394,14 +387,8 @@ impl Scene {
             ]);
             let default = if mask.inverted { 1. - mask.default_coverage } else { mask.default_coverage };
             values[8..12].fill(default.to_bits());
-            let offset = commands.record(r, encoder, values)?;
             let binding = Commands::binding(r, source.as_ref().unwrap_or(&r.empty_view), &r.empty_view, &output);
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("reduce changed mask pages"), timestamp_writes: None });
-            pass.set_pipeline(&r.scene_pipelines.scale.reduce);
-            pass.set_bind_group(0, &commands.record_binding, &[offset]);
-            pass.set_bind_group(1, &binding, &[]);
-            pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
-            drop(pass);
+            commands.reduce(r, encoder, values, &binding, "reduce changed mask pages")?;
         }
         Ok(changed)
     }

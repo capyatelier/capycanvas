@@ -54,9 +54,7 @@ impl Navigator {
         r.telemetry.phase_begin(13, &r.device, &r.queue, encoder);
         let result = (|| {
             if let Some(source) = source {
-                if let hierarchy::Pixels::Window { root, .. } = &mut cache.pixels {
-                    root.get_or_insert_with(|| Image::new(r, plan, "retained Navigator"));
-                }
+                cache.pixels.ensure_root(r, plan, "retained Navigator");
                 if source.plan == plan {
                     encoder.copy_texture_to_texture(source.texture.as_image_copy(), cache.texture().as_image_copy(),
                         wgpu::Extent3d { width: plan.size[0], height: plan.size[1], depth_or_array_layers: 1 });
@@ -64,15 +62,8 @@ impl Navigator {
                     let mut values = [0; 20];
                     values[..8].copy_from_slice(&[0, 0, plan.size[0], plan.size[1], plan.extent[0], plan.extent[1],
                         1 << (plan.level - source.plan.level), (source.plan.level << 8) | 8]);
-                    let offset = commands.record(r, encoder, values)?;
                     let binding = Commands::binding(r, &source.view, &r.empty_view, cache.view());
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("retain Navigator composition"), timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&r.scene_pipelines.scale.reduce);
-                    pass.set_bind_group(0, &commands.record_binding, &[offset]);
-                    pass.set_bind_group(1, &binding, &[]);
-                    pass.dispatch_workgroups(plan.size[0].div_ceil(8), plan.size[1].div_ceil(8), 1);
+                    commands.reduce(r, encoder, values, &binding, "retain Navigator composition")?;
                 }
             } else {
                 cache.valid.clear();

@@ -29,10 +29,10 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Brush-cursor hover | 60 | | |
 | Placed-photo translation | 60 | Navigator closed: screen 59.3 presents/s, p99 16.9 ms; renderer 122.9 completed updates/s | Earlier direct-presentation comparison below, `photo-translate-drag` |
 | Placed-photo corner resize | 60 | Navigator open: screen 59.4 presents/s, p99 ≤17.0 ms; renderer 104.2 fresh completed updates/s | Current drag comparison below |
-| Pixel transform corner resize: Free | 60 | Navigator open: screen 59.4 presents/s, p99 ≤16.8 ms; renderer 150.7 fresh completed updates/s | Current drag comparison below |
+| Pixel transform corner resize: Free | 60 | Navigator open: screen 59.5 presents/s, p99 ≤16.88 ms; renderer 149.7 fresh completed updates/s | Reduction-encoder cleanup verification below |
 | Pixel transform: Uniform, Skew or Rotate | 60 | | |
 | Pixel transform translation | 60 | Navigator closed: screen 59.5 presents/s, p99 16.7 ms; renderer 175.1 completed updates/s | Earlier direct-presentation comparison below, `photo-pixels-translate-drag` |
-| Pixel transform: Distort | 60 | Navigator open: screen 59.4 presents/s, p99 ≤16.9 ms; renderer 134.0 fresh completed updates/s | Current drag comparison below |
+| Pixel transform: Distort | 60 | Navigator open: screen 59.4 presents/s, p99 ≤16.89 ms; renderer 133.4 fresh completed updates/s | Reduction-encoder cleanup verification below |
 | Pixel transform: Perspective | 60 | | |
 | Pixel transform: Warp | 60 | Navigator open: screen 59.5 presents/s, p99 ≤16.9 ms; renderer 66.7 fresh completed updates/s | Current drag comparison below |
 | Crop corner drag | 60 | Navigator closed: screen 59.2 presents/s, p99 16.7 ms; renderer 130.1 completed updates/s | Earlier direct-presentation comparison below, `crop-handle-drag` |
@@ -162,9 +162,29 @@ main-image writes, but warm cached allocations remain, so it does not establish
 an allocation saving. Cost and memory records are in
 `artifacts/validation/{baseline-diagnostic,candidate-clock-diagnostic}`.
 
+### Reduction-encoder cleanup verification
+
+A matched check uses the retained-Navigator build above and the shared reduction
+encoder with identical Free/Distort fixtures, three warmed five-second gestures,
+Navigator open and thermal status zero. Before rebasing, Free changes from 149.74
+to 150.35 fresh completions/s; Distort from 132.94 to 133.16/s. That cleanup APK is
+`3c8ee7e43906e68dc06dc2bae43ce1ad8f748ba80991e098b5e3b0753e3c1be1`;
+raw runs are in `artifacts/validation/cleanup/{before,after}` in the same worktree.
+
+The final build includes upstream `cb1ad24fb` spatial composition and buffered
+Android presentation changes. Three new runs give Free 149.72 fresh completions/s
+(135.54–152.39) and Distort 133.36/s (132.97–133.69). Screen rates are 59.49 and
+59.40/s, with p99 gaps at most 16.88 and 16.89 ms. Fresh-completion gap p99 ranges
+are 9.75–19.82 and 9.97–10.46 ms. Both retain the screen-cadence target; differences
+from the saved before-build medians establish no throughput improvement. All slow
+Free samples remain in the records. Final APK SHA-256 is
+`74d3cf3bd7b06adabc74d321ffb95e6de386827093ab7d4b4f0edf41aee3d7af`;
+raw runs are in `artifacts/validation/cleanup/post-rebase/after`.
+
 ### Retained-Navigator navigation
 
-The same final APK completes three warmed five-second two-finger pans and pinches on the
+The retained-Navigator APK (`32cf373145f6`, before cleanup and buffered-presentation
+changes) completes three warmed five-second two-finger pans and pinches on the
 12 MP photo with a preparation stroke, Navigator open, Stats closed and 15.9703%
 Fit zoom. Pan reaches 59.83 fresh viewport completions/s and a median 59.43 screen
 presents/s; pinch reaches 59.90 and 59.40/s. Screen interval p99 ranges from
@@ -172,12 +192,12 @@ presents/s; pinch reaches 59.90 and 59.40/s. Screen interval p99 ranges from
 criterion, subject to the SurfaceFlinger accounting limit above. Fresh completion
 gap p99 is 19.09–19.62 ms for pan and 19.94–21.56 ms for pinch.
 
-The host's existing navigation policy uses FIFO without a retained surface
-target. The viewport harness captures presenter GPU timestamps in these runs;
+That build uses FIFO without a retained surface target. The viewport harness
+captures presenter GPU timestamps in these runs;
 fresh counts use completed host input calls. Records are in
 `artifacts/validation/candidate-clock-navigation`, including all three gesture
 windows per motion and `matched-summary.json`. These measurements establish
-current photo navigation, not a before/after speedup.
+photo navigation at that revision, not a before/after speedup.
 
 ### Retained-Navigator painting
 

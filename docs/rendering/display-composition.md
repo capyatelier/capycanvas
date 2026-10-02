@@ -180,7 +180,9 @@ texels on either side, shared by standalone and in-surface presenters. It copies
 or reduces a completed whole-document level when available. Direct roots evaluate
 through the same graph and resampler at thumbnail resolution, retaining a coarser
 prepared source level when the main view already uses one. Their main output
-stays virtual. The main canvas's coarse coverage remains independent.
+stays virtual. Navigator, coarse coverage, refinement and source/mask levels share
+the single-dispatch reduction encoder; paint-page batches retain their grouped
+passes. The main canvas's coarse coverage remains independent.
 Artwork, transform poses and temporary brush tails invalidate the retained image;
 camera geometry does not. Consecutive changes coalesce at 20 Hz using the frame's
 native timestamp. Zero-timestamp preparation and untimed flushes preserve the

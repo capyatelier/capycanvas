@@ -151,16 +151,8 @@ impl Cache {
         let [x, y, width, height] = paint_transform::texel_rect(covered.window_local(self.plan.bounds), 1 << self.plan.level);
         let mut values = [0; 20];
         values[..8].copy_from_slice(&[x, y, width, height, region.width(), region.height(), 1 << self.plan.level, 0]);
-        let offset = commands.record(r, encoder, values)?;
         let binding = Commands::binding(r, source, &r.empty_view, &self.pixels.root().unwrap().view);
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("reduce exact composition into display"), timestamp_writes: None,
-        });
-        pass.set_pipeline(&r.scene_pipelines.scale.reduce);
-        pass.set_bind_group(0, &commands.record_binding, &[offset]);
-        pass.set_bind_group(1, &binding, &[]);
-        pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
-        drop(pass);
+        commands.reduce(r, encoder, values, &binding, "reduce exact composition into display")?;
         let mut changed = PixelRect::new(x, y, x + width, y + height);
         if self.placed.is_some() {
             if self.next_exact_page().is_some() { return Ok(()); }

@@ -188,6 +188,19 @@ impl Commands {
         r.uploads.write_at(encoder, &self.records, u64::from(offset), bytes)?;
         Ok(offset)
     }
+    fn reduce(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
+        values: [u32; 20], binding: &wgpu::BindGroup, label: &str,
+    ) -> Result<(), GpuRasterError> {
+        let offset = self.record(r, encoder, values)?;
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(label), timestamp_writes: None,
+        });
+        pass.set_pipeline(&r.scene_pipelines.scale.reduce);
+        pass.set_bind_group(0, &self.record_binding, &[offset]);
+        pass.set_bind_group(1, binding, &[]);
+        pass.dispatch_workgroups(values[2].div_ceil(8), values[3].div_ceil(8), 1);
+        Ok(())
+    }
     fn compose(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, job: Composition) -> Result<(), GpuRasterError> {
         self.composition.push(job);
         if self.composition.len() >= 32 { self.flush(r, encoder)?; }
@@ -887,16 +900,8 @@ impl Cache {
                         1 << (self.plan.level - input_level), (input_level << 8) | 8]);
                     values[14] = ((finer_plan.bounds.min_x() >> input_level) as f32).to_bits();
                     values[15] = ((finer_plan.bounds.min_y() >> input_level) as f32).to_bits();
-                    let offset = commands.record(r, encoder, values)?;
                     let binding = Commands::binding(r, finer.next_view(), &r.empty_view, self.view());
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("derive overview from completed detail"), timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&r.scene_pipelines.scale.reduce);
-                    pass.set_bind_group(0, &commands.record_binding, &[offset]);
-                    pass.set_bind_group(1, &binding, &[]);
-                    pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
-                    drop(pass);
+                    commands.reduce(r, encoder, values, &binding, "derive overview from completed detail")?;
                     written = written.union(PixelRect::new(x, y, x + width, y + height));
                     written_pixels += u64::from(width) * u64::from(height);
                     written_regions += 1;
