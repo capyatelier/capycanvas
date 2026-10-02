@@ -24,6 +24,7 @@ struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 struct DisplayCache { scale: u32, coarse_scale: u32, next_scale: u32, padding: u32, window: vec4<u32> }
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
 @group(0) @binding(6) var kept: texture_2d<f32>;
+@group(0) @binding(13) var navigator: texture_2d<f32>;
 
 // The backing buffer follows the display's native orientation. All artwork,
 // cursor and UI geometry continues to use the host's logical viewport.
@@ -136,48 +137,6 @@ fn grid_artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
 fn canvas_linear(c: vec4<f32>) -> vec4<f32> {
     if camera.composite.x == 0. || c.a <= 0. { return c; }
     return vec4<f32>(sdr_decode(c.rgb / c.a, CANVAS_SPACE) * c.a, c.a);
-}
-fn coarse_area(uv: vec2<f32>, footprint: vec2<f32>, mapped:bool) -> vec4<f32> {
-    if !mapped && camera.placed_options.y==1. {
-        let extent=camera.offset_document.zw;
-        let dx=vec2(footprint.x*extent.x,0.);
-        let dy=vec2(0.,footprint.y*extent.y);
-        let u=vec2(dot(camera.placed_x.xy,dx),dot(camera.placed_y.xy,dx));
-        let v=vec2(dot(camera.placed_x.xy,dy),dot(camera.placed_y.xy,dy));
-        let grid=max(vec2(1u),vec2<u32>(ceil(vec2(length(u),length(v))/(4.*camera.placed_extent.z))));
-        if all(grid==vec2(1u)) {return placed_at(uv*extent,dx,dy,false);}
-        let count=vec2<f32>(grid);
-        var color=vec4(0.);
-        for(var y=0u;y<grid.y;y++) {for(var x=0u;x<grid.x;x++) {
-            let offset=(vec2(f32(x),f32(y))+.5)/count-.5;
-            color+=placed_at(uv*extent+offset.x*dx+offset.y*dy,dx/count.x,dy/count.y,false);
-        }}
-        return color/f32(grid.x*grid.y);
-    }
-    let scale = f32(select(cache.coarse_scale,cache.scale,mapped));
-    let extent = camera.offset_document.zw / scale;
-    let low = clamp((uv-footprint*.5)*extent, vec2(0.), extent);
-    let high = clamp((uv+footprint*.5)*extent, low, extent);
-    let start = vec2<u32>(floor(low));
-    let end = vec2<u32>(ceil(high));
-    var color = vec4(0.);
-    var weight = 0.;
-    for (var y = start.y; y < end.y; y++) {
-        for (var x = start.x; x < end.x; x++) {
-            let p = vec2(f32(x), f32(y));
-            let overlap = max(vec2(0.), min(high, p+1.) - max(low, p));
-            let area = overlap.x * overlap.y;
-            var sample:vec4<f32>;
-            if mapped {
-                let span=min(vec2(1.),extent-p)*scale;
-                let layer=mapped_color(2u,p*scale+span*.5,vec2(span.x,0.),vec2(0.,span.y),false,false,vec2(0.),vec2(0.),vec2(0.));
-                sample=presentation_color(layer,camera.mapped.options.x,camera.mapped.encoding.x,camera.mapped.backdrop,false);
-            } else {sample=textureLoad(coarse, vec2<i32>(i32(x), i32(y)), 0);}
-            color += sample * area;
-            weight += area;
-        }
-    }
-    return color / max(weight, .0000001);
 }
 
 fn selection_at(q: vec2<i32>) -> f32 {
@@ -443,13 +402,24 @@ fn segment_distance(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let d = b-a;
     return length(p-a-d*clamp(dot(p-a,d)/max(dot(d,d),.000001),0.,1.));
 }
-@fragment fn overview_fragment(v: OverviewVertex) -> @location(0) vec4<f32> {return overview_color(v,false);}
-@fragment fn mapped_overview_fragment(v: OverviewVertex) -> @location(0) vec4<f32> {return overview_color(v,true);}
-fn overview_color(v:OverviewVertex,mapped:bool)->vec4<f32> {
-    let footprint = fwidth(v.uv);
+@fragment fn overview_fragment(v: OverviewVertex) -> @location(0) vec4<f32> {
     let p = logical_surface(v.position.xy);
     if any(p < v.clip.xy) || any(p >= v.clip.xy+v.clip.zw) { discard; }
-    let paint = proof_artwork(canvas_linear(coarse_area(v.uv, footprint,mapped)),v.uv*camera.offset_document.zw);
+    let extent = camera.offset_document.zw;
+    let point = v.uv * extent;
+    let q = vec2(mip_coordinate(point.x, extent.x, camera.composite.y), mip_coordinate(point.y, extent.y, camera.composite.y));
+    let size = vec2<f32>(textureDimensions(navigator));
+    let uv = (q + .5) / size;
+    let footprint = fwidth(v.uv);
+    var sample = canvas_linear(textureSampleLevel(navigator, linear_sampler, uv, 0.));
+    if max(footprint.x * size.x, footprint.y * size.y) > 4. {
+        sample = vec4(0.);
+        for (var y = 0u; y < 4u; y++) { for (var x = 0u; x < 4u; x++) {
+            let offset = (vec2(f32(x), f32(y)) + .5) / 4. - .5;
+            sample += canvas_linear(textureSampleLevel(navigator, linear_sampler, uv + offset * footprint, 0.)) / 16.;
+        }}
+    }
+    let paint = proof_artwork(sample, point);
     var rgb = view_working_rgb(paint.rgb) + view_ui_rgb(v.background_scale.rgb) * (1.-paint.a);
     let edge = min(min(segment_distance(p,v.ab.xy,v.ab.zw),segment_distance(p,v.ab.zw,v.cd.xy)),
                    min(segment_distance(p,v.cd.xy,v.cd.zw),segment_distance(p,v.cd.zw,v.ab.xy)));

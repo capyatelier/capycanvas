@@ -280,7 +280,7 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     frame = packet(&doc.layers, extent);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
-    assert!(!r.has_pending_work());
+    assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r));
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
 }
 use layer_core::{Affine, EffectInstance, EffectValue, Point};
@@ -319,7 +319,7 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     r.submit(frame).unwrap();
     assert_eq!(r.scale_display.as_ref().unwrap().resident_bytes(), 0);
-    assert!(!r.has_pending_work());
+    assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r));
     let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     exact.test.reference = true;
     exact.submit(frame).unwrap();
@@ -352,7 +352,7 @@ fn native_filter_windows_share_display_storage_and_preserve_halos_during_navigat
             frame.view.document_to_surface = [zoom, 0., 0., zoom, x, -32.];
             r.submit(frame).unwrap(); exact.submit(frame).unwrap();
             assert!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Native);
-            assert!(!r.has_pending_work(), "native filters publish complete exact output");
+            assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r), "native filters publish complete exact output");
             assert!(r.metrics.image_window_submissions > 0);
             assert!(r.metrics.image_window_peak_bytes <= 8 * 1024 * 1024);
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));

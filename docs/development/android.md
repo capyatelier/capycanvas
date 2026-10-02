@@ -230,7 +230,7 @@ APK calls, so test-APK benchmarks use the unminified build.
   transparency (off to high) and restores it afterwards. Results appear in
   logcat under `CapyDragPerf` and `CapyResizePerf`.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
-  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation,effects,spatial-effects`,
+  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,composed_transform,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation,effects,spatial-effects`,
   `durationMs`, `width`, `height`, `blending` (`perceptual` or `linear`) and
   `transparency` (`off` to `high`) narrow or
   resize the run. `-e photo <readable-file>` uses a JPEG matching `width` and
@@ -270,6 +270,14 @@ APK calls, so test-APK benchmarks use the unminified build.
   motion measurement window. The output directory is
   cleared at the beginning of each invocation, so omitted scenarios cannot
   contribute results from an earlier run.
+  `-e labels <comma-separated labels>` limits the measured operations while
+  preserving fixture setup and priming. `composed_transform` resizes and distorts
+  a translucent photo over another photo, retaining a composed root.
+  `gpu_completed_hz` counts completions inside the gesture window, including
+  thumbnail-only refreshes. Raw `measurements` and `completions` permit matching
+  submissions to the latest completed host input call, excluding updates with no
+  newly consumed input. These counts do not establish distinct transform poses
+  or display cadence; use a SurfaceFlinger trace for the latter.
   Photo drags are marked by `capy-drag` trace sections; `capy.publish.native` and `capy.publish.parse`
   time each model publication; `-e composeTrace true` adds a section per
   composable, which slows the frames it attributes.
@@ -283,9 +291,11 @@ APK calls, so test-APK benchmarks use the unminified build.
 - **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with
   `-e viewportBenchmark true`. `-e width 4248 -e height 2832` selects the low-tier
   canvas; `-e canvasSize` supplies both dimensions when they are omitted.
+  `-e photo /data/local/tmp/FILE.jpg` places that photo before drawing and navigation.
   `-e passThrough true` adds a Pass Through group with a Black & White adjustment
   above a Solid Color fill. Warmup waits for shader readiness and the timed interval ends
-  with the gesture, before draining frames. `-e motion pan|pinch` measures navigation;
+  with the gesture, before draining frames. Navigation warms a matching gesture
+  and restores the camera before measurement. `-e motion pan|pinch` measures navigation;
   the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
   `intervalMs`, `durationMs`, `repeats`, `blending` and `label`. Pull
   `files/viewport-benchmark/` from the app's external storage and summarize it

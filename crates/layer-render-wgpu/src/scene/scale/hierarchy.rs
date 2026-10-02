@@ -14,9 +14,12 @@ impl Pixels {
     pub fn next(&self) -> Option<&Image> {
         match self { Self::Window { next, .. } => next.as_ref(), Self::Resident { levels, level } => Some(&levels[*level as usize + 1]) }
     }
+    pub fn ensure_root(&mut self, r: &WgpuRasterizer, plan: display_mips::Plan) {
+        if let Self::Window { root, .. } = self { root.get_or_insert_with(|| Image::new(r, plan, "composition level")); }
+    }
     pub fn ensure(&mut self, r: &WgpuRasterizer, plan: display_mips::Plan) {
-        if let Self::Window { root, next } = self {
-            root.get_or_insert_with(|| Image::new(r, plan, "composition level"));
+        self.ensure_root(r, plan);
+        if let Self::Window { next, .. } = self {
             next.get_or_insert_with(|| Image::new(r,
                 display_mips::Plan::window(plan.extent, plan.level + 1, plan.bounds), "adjacent composition level"));
         }

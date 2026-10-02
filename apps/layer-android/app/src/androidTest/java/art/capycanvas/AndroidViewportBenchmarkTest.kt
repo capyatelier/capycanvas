@@ -49,6 +49,12 @@ class AndroidViewportBenchmarkTest {
             }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             host.newDocument(args.getString("width")?.toInt() ?: size, args.getString("height")?.toInt() ?: size)
+            args.getString("photo")?.let { path ->
+                host.importImage(File(path))
+                waitFor { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") == "placement" }
+                scenario.onActivity { host.invoke("apply_transform") }
+                waitFor { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") != "placement" }
+            }
             scenario.onActivity { blending?.let { host.invoke("blend_$it") }; host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
             val preset = host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() }.first { it.getString("label") == "G-Pen" }.getInt("id")
             scenario.onActivity {
@@ -144,12 +150,17 @@ class AndroidViewportBenchmarkTest {
                 send(android.view.MotionEvent.ACTION_UP, 1, end)
             }
             stroke(0, 1500); SystemClock.sleep(800)
+            if (motion != "stroke") {
+                gesture(1500)
+                scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
+                SystemClock.sleep(800)
+            }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true }
-            val info = obj("label" to label, "motion" to motion, "repeats" to repeats, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
+            val info = obj("label" to label, "photo" to (args.getString("photo") ?: "generated"), "motion" to motion, "repeats" to repeats, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
                 "display" to native { JSONObject(Native.displayStatus(it)) })
             File(output, "$label-info.json").writeText(info.toString(2))
-            assertEquals("SharedDemandRefresh", info.getJSONObject("display").getString("present_mode"))
-            assertTrue(info.getJSONObject("display").getBoolean("retained_target"))
+            assertEquals(if (motion == "stroke") "SharedDemandRefresh" else "Fifo", info.getJSONObject("display").getString("present_mode"))
+            assertEquals(motion == "stroke", info.getJSONObject("display").getBoolean("retained_target"))
             assertTrue("Navigator survives document adoption", info.getJSONObject("display").getInt("overview_count") > 0)
             native { Native.presentationTimings(it, true) }
             repeat(repeats) { run ->

@@ -242,14 +242,14 @@ class AndroidFeatureParityTest {
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("collapsed").objects().none { it.getInt("id") == column } }
         compose.onNodeWithTag("tile-toolbar-$pen").assertIsDisplayed()
     }
-    private fun awaitNavigatorPixel(predicate: (Int) -> Boolean) {
+    private fun awaitNavigatorPixel(present: Boolean = true, predicate: (Int) -> Boolean) {
         compose.waitUntil(15_000) {
             val bounds = compose.onNodeWithTag("navigator-overview").fetchSemanticsNode().boundsInRoot
             val screenshot = instrumentation.uiAutomation.takeScreenshot()!!
             val image = screenshot.copy(Bitmap.Config.ARGB_8888, false)
             try { (bounds.left.toInt() until bounds.right.toInt() step 2).any { x ->
                 (bounds.top.toInt() until bounds.bottom.toInt() step 2).any { y -> predicate(image.getPixel(x,y)) }
-            } } finally { image.recycle(); screenshot.recycle() }
+            } == present } finally { image.recycle(); screenshot.recycle() }
         }
         assertNull(host.failure)
     }
@@ -329,38 +329,47 @@ class AndroidFeatureParityTest {
         capture("reset-layout-tab-drag")
     }
     @Test fun navigatorAndEyedropperUseActualGpuPixels() {
-        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.85, .12, .24, 1))))
-        action(obj("type" to "set_brush_size", "value" to 180))
-        action(obj("type" to "invoke", "command" to "pen"))
-        stroke(Offset(.5f,.55f), Offset(.65f,.55f))
-        awaitPixel(Offset(.575f,.55f)) { android.graphics.Color.red(it) > 150 && android.graphics.Color.green(it) < 80 }
-        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(0, 0, 1, 1))))
-        action(obj("type" to "invoke", "command" to "eyedropper"))
-        stroke(Offset(.575f,.55f))
-        compose.waitUntil(15_000) { state().getJSONObject("colors").getJSONObject("foreground").array("rgba").getDouble(0) > .7 || host.failure != null }
-        val rgba = state().getJSONObject("colors").getJSONObject("foreground").array("rgba")
-        assertEquals(.85, rgba.getDouble(0), .04); assertEquals(.12, rgba.getDouble(1), .04); assertEquals(.24, rgba.getDouble(2), .04)
-        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "navigator", "visible" to true)))
-        action(obj("type" to "move_panel", "panel" to "navigator", "target" to obj("kind" to "float", "position" to JSONArray(listOf(360, 100))), "viewport" to viewport()))
-        shown("navigator-overview")
-        awaitNavigatorPixel { android.graphics.Color.red(it) > 150 && android.graphics.Color.green(it) < 80 }
-        // The overview must update while contact remains down, with no idle
-        // readback/polling window between the canvas and Navigator.
-        action(obj("type" to "invoke", "command" to "pen"))
-        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1, .2, .9, 1))))
-        canvasEvent(android.view.MotionEvent.ACTION_DOWN, Offset(.5f,.7f))
-        canvasEvent(android.view.MotionEvent.ACTION_MOVE, Offset(.65f,.7f))
-        awaitNavigatorPixel { android.graphics.Color.blue(it) > 150 && android.graphics.Color.red(it) < 80 }
-        canvasEvent(android.view.MotionEvent.ACTION_UP, Offset(.65f,.7f))
-        compose.waitUntil(10_000) { state().array("commands").objects().first { it.getString("id") == "zoom_in" }.getBoolean("enabled") }
-        compose.waitForIdle()
-        val zoom = state().getJSONObject("camera").number("zoom")
-        compose.onNodeWithTag("navigator-zoom_in").performClick()
-        compose.waitUntil(10_000) { state().getJSONObject("camera").number("zoom") > zoom }
-        val before = state().getJSONObject("camera").toString()
-        compose.onNodeWithTag("navigator-overview").performTouchInput { swipe(center, center + Offset(40f,20f), 300) }
-        compose.waitUntil(10_000) { state().getJSONObject("camera").toString() != before }
-        capture("navigator")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            host.newDocument(1024, 768)
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.85, .12, .24, 1))))
+            action(obj("type" to "set_brush_size", "value" to 180))
+            action(obj("type" to "invoke", "command" to "pen"))
+            stroke(Offset(.5f,.55f), Offset(.65f,.55f))
+            awaitPixel(Offset(.575f,.55f)) { android.graphics.Color.red(it) > 150 && android.graphics.Color.green(it) < 80 }
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(0, 0, 1, 1))))
+            action(obj("type" to "invoke", "command" to "eyedropper"))
+            stroke(Offset(.575f,.55f))
+            compose.waitUntil(15_000) { state().getJSONObject("colors").getJSONObject("foreground").array("rgba").getDouble(0) > .7 || host.failure != null }
+            val rgba = state().getJSONObject("colors").getJSONObject("foreground").array("rgba")
+            assertEquals(.85, rgba.getDouble(0), .04); assertEquals(.12, rgba.getDouble(1), .04); assertEquals(.24, rgba.getDouble(2), .04)
+            action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "navigator", "visible" to true)))
+            action(obj("type" to "move_panel", "panel" to "navigator", "target" to obj("kind" to "float", "position" to JSONArray(listOf(360, 100))), "viewport" to viewport()))
+            shown("navigator-overview")
+            awaitNavigatorPixel { android.graphics.Color.red(it) > 150 && android.graphics.Color.green(it) < 80 }
+            action(obj("type" to "invoke", "command" to "pen"))
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1, .2, .9, 1))))
+            canvasEvent(android.view.MotionEvent.ACTION_DOWN, Offset(.5f,.7f))
+            canvasEvent(android.view.MotionEvent.ACTION_MOVE, Offset(.65f,.7f))
+            awaitNavigatorPixel { android.graphics.Color.blue(it) > 150 && android.graphics.Color.red(it) < 80 }
+            canvasEvent(android.view.MotionEvent.ACTION_UP, Offset(.65f,.7f))
+            compose.waitUntil(10_000) { state().array("commands").objects().first { it.getString("id") == "zoom_in" }.getBoolean("enabled") }
+            compose.waitForIdle()
+            val zoom = state().getJSONObject("camera").number("zoom")
+            compose.onNodeWithTag("navigator-zoom_in").performClick()
+            compose.waitUntil(10_000) { state().getJSONObject("camera").number("zoom") > zoom }
+            val before = state().getJSONObject("camera").toString()
+            compose.onNodeWithTag("navigator-overview").performTouchInput { swipe(center, center + Offset(40f,20f), 300) }
+            compose.waitUntil(10_000) { state().getJSONObject("camera").toString() != before }
+            capture("navigator-$theme")
+            action(obj("type" to "invoke", "command" to "undo"))
+            awaitNavigatorPixel(false) { android.graphics.Color.blue(it) > 150 && android.graphics.Color.red(it) < 80 }
+            action(obj("type" to "invoke", "command" to "redo"))
+            awaitNavigatorPixel { android.graphics.Color.blue(it) > 150 && android.graphics.Color.red(it) < 80 }
+            action(obj("type" to "invoke", "command" to "undo"))
+            awaitNavigatorPixel(false) { android.graphics.Color.blue(it) > 150 && android.graphics.Color.red(it) < 80 }
+            capture("navigator-history-$theme")
+        }
     }
 
     @Test fun drawingToolsRenderMoveFillGradientAndRulers() {

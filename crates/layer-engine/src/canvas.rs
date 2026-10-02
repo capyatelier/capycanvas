@@ -1384,7 +1384,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         self.composite_all |= rebuilt;
 
-        let time = timestamp_ns.map_or(0., |now| {
+        let time = timestamp_ns.filter(|now| *now != 0).map_or(self.animation_time, |now| {
             now.saturating_sub(*self.animation_origin_ns.get_or_insert(now)) as f32 * 1e-9
         });
         let bake = self.dabs.is_empty().then(|| bake_steps::BakeSteps::new(self.document(), &self.batches)).flatten();
@@ -2558,6 +2558,22 @@ mod tests {
             view(width, height),
             TRANSFORM,
         )
+    }
+
+    #[test]
+    fn frame_time_stays_precise_after_untimed_preparation_and_flushes() {
+        let (_, mut engine) = engine("Frame timing", 64, 64);
+        engine.render_frame_for(0, 0).unwrap();
+        let uptime = 30 * 24 * 60 * 60 * 1_000_000_000u64;
+        for step in 0..12 {
+            engine.render_frame_at(uptime + step * 16_666_667).unwrap();
+            let time = engine.backend().time_seconds;
+            assert!((time - step as f32 / 60.).abs() < 1e-6, "frame {step}: {time}");
+            engine.render_frame().unwrap();
+            assert_eq!(engine.backend().time_seconds, time);
+            engine.render_frame_for(0, 0).unwrap();
+            assert_eq!(engine.backend().time_seconds, time);
+        }
     }
 
     fn engine_with(

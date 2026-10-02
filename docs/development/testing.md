@@ -162,6 +162,9 @@ are your task, and remove an entry when you fix it.
   `toolbarManagerSelectsConfirmsDeletesAndRestores`,
   `filterLayerIconsUsePackagedNames` and
   `toolbarConfigurationAndGroupCollapseUseTheSharedDefault`.
+- Android `AndroidHostTest#touchNavigationHistoryCancellationAndSurfaceRecovery`
+  passes recovery and continued drawing, then cannot find the portrait Settings
+  label `Pen & Input` on TCL TAB 11 Gen 2.
 - Android `AndroidRasterTest#hdrBlackIntensityMarkerVisible` intermittently
   keeps the last EV value when the test cancels its drag.
 - Android `AndroidWorkspaceManagerTest#restoreStartingLayoutPlacesPalettesAfterColorAndProofAfterNavigator`

@@ -293,9 +293,9 @@ These rates do not qualify the 90 Hz tier: the panel presents at 60 Hz.
 SurfaceFlinger screen timestamps do not independently establish canvas scanout.
 
 Single-input affine and perspective previews sample their retained source
-directly into presentation when Navigator is closed. A visible Navigator shares
-a materialized composition with the main canvas to preserve area-filtered
-preview quality. Opening its panel also changes the Fit camera and work area;
+directly into presentation when Navigator is closed. In these measured builds, a
+visible Navigator shares a materialized composition with the main canvas to
+preserve area-filtered preview quality. Opening its panel also changes the Fit camera and work area;
 open/closed rates are different workloads, not an isolated panel-cost estimate.
 
 Closed-panel build: `e41ee80fe` plus direct transform presentation, Navigator

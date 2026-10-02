@@ -130,7 +130,9 @@ separately: timing queries add work, and opening the panel also changes the work
 area and Fit camera. Older runs without a `stats_panel` field always opened
 Stats.
 Display-graph traces split source preparation, main and overview composition,
-and their mip reductions. Main composition includes source updates performed
+and their mip reductions. Retained Navigator refreshes have a separate GPU phase,
+CPU span, pixel count, image age, pending flag and storage counter. Main
+composition includes source updates performed
 inside that view. Trace mode flushes queued composition records before the mip
 timestamp so the mip interval excludes deferred blends. Match GPU observations
 to renderer frame IDs inside the input window; publication of timing counters
@@ -183,8 +185,9 @@ See [Android development](../development/android.md#benchmarks).
 
 - Run `AndroidCanvasBarBenchmarkTest` with `-e width` and `-e height` set to the
   tier canvas.
-- Its "Hz" is renderer submissions. Its JSON also records `display_hz` and the UI
-  `FrameMetrics`.
+- Its "Hz" is renderer submissions. `gpu_completed_hz` counts completed canvas
+  updates, including retained Navigator refreshes, so it does not establish fresh
+  input throughput. Its JSON also records `display_hz` and the UI `FrameMetrics`.
 
 **Web on a tablet.** In your own tablet Chrome tab ([devices](../development/devices.md)),
 `tools/performance/web-pen.mjs` draws timed strokes over DevTools

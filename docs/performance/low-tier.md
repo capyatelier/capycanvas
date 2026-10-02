@@ -22,21 +22,21 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
-| Pan: Hand tool, one or two fingers | 60 | Generated group: screen 59.4 presents/s, p99 16.7 ms; renderer 59.8 completed updates/s. Photo coverage pending | Pass Through navigation below |
-| Pinch zoom | 60 | Generated group: screen 59.4 presents/s, p99 16.8 ms; renderer 59.8 completed updates/s. Photo coverage pending | Pass Through navigation below |
+| Pan: Hand tool, one or two fingers | 60 | Photo, two fingers, Navigator open: screen 59.43 presents/s, p99 ≤16.83 ms; viewport 59.83 fresh completed updates/s | Retained-Navigator navigation below |
+| Pinch zoom | 60 | Photo, Navigator open: screen 59.40 presents/s, p99 ≤16.83 ms; viewport 59.90 fresh completed updates/s | Retained-Navigator navigation below |
 | Two-finger rotate | 60 | | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
-| Placed-photo translation | 60 | Screen 59.3 presents/s, p99 16.9 ms; renderer 122.9 completed updates/s | Current drag comparison below, `photo-translate-drag` |
-| Placed-photo corner resize | 60 | Screen 59.4 presents/s, p99 16.7 ms; renderer 113.2 completed updates/s | Current drag comparison below, `photo-handle-drag-bar-hidden` |
-| Pixel transform corner resize: Free | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 169.6 completed updates/s | Current drag comparison below, `photo-pixels-handle-drag` |
+| Placed-photo translation | 60 | Navigator closed: screen 59.3 presents/s, p99 16.9 ms; renderer 122.9 completed updates/s | Earlier direct-presentation comparison below, `photo-translate-drag` |
+| Placed-photo corner resize | 60 | Navigator open: screen 59.4 presents/s, p99 ≤17.0 ms; renderer 104.2 fresh completed updates/s | Current drag comparison below |
+| Pixel transform corner resize: Free | 60 | Navigator open: screen 59.4 presents/s, p99 ≤16.8 ms; renderer 150.7 fresh completed updates/s | Current drag comparison below |
 | Pixel transform: Uniform, Skew or Rotate | 60 | | |
-| Pixel transform translation | 60 | Screen 59.5 presents/s, p99 16.7 ms; renderer 175.1 completed updates/s | Current drag comparison below, `photo-pixels-translate-drag` |
-| Pixel transform: Distort | 60 | Screen 59.5 presents/s, p99 16.8 ms; renderer 152.3 completed updates/s | Current drag comparison below, `photo-pixels-distort-drag` |
+| Pixel transform translation | 60 | Navigator closed: screen 59.5 presents/s, p99 16.7 ms; renderer 175.1 completed updates/s | Earlier direct-presentation comparison below, `photo-pixels-translate-drag` |
+| Pixel transform: Distort | 60 | Navigator open: screen 59.4 presents/s, p99 ≤16.9 ms; renderer 134.0 fresh completed updates/s | Current drag comparison below |
 | Pixel transform: Perspective | 60 | | |
-| Pixel transform: Warp | 60 | Screen 59.2 presents/s, p99 16.7 ms; renderer 70.0 completed updates/s | Current drag comparison below, `photo-pixels-warp-drag` |
-| Crop corner drag | 60 | Screen 59.2 presents/s, p99 16.7 ms; renderer 130.1 completed updates/s | Current drag comparison below, `crop-handle-drag` |
-| Pixel resize after placing the photo at 45% size | 60 | Screen 58.6 presents/s, p99 16.8 ms; renderer 224.6 completed updates/s | Current drag comparison below, `scaled-photo-pixels-handle-drag` |
+| Pixel transform: Warp | 60 | Navigator open: screen 59.5 presents/s, p99 ≤16.9 ms; renderer 66.7 fresh completed updates/s | Current drag comparison below |
+| Crop corner drag | 60 | Navigator closed: screen 59.2 presents/s, p99 16.7 ms; renderer 130.1 completed updates/s | Earlier direct-presentation comparison below, `crop-handle-drag` |
+| Pixel resize after placing the photo at 45% size | 60 | Navigator closed: screen 58.6 presents/s, p99 16.8 ms; renderer 224.6 completed updates/s | Earlier direct-presentation comparison below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
 | Move tool layer drag | 60 | | |
 | Move selected pixels: whole image | 60 | Screen 59.1 presents/s, p99 16.8 ms; renderer 81.0 completed updates/s | Two-page-refinement qualification below, `move-all-drag` |
@@ -59,7 +59,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Layer opacity scrub | 60 | | |
 | Layer reorder drag | 60 | | |
 | Navigation with 8 visible paint layers | 60 | | |
-| Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | | |
+| Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
 | Panel, tab, column or toolbar drag and docking | 60 | | |
 | Panel or column resize | 60 | | |
 | Drawer open and close | 60 | | |
@@ -72,6 +72,141 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 
 ## Current drag comparison
 
+Measured 2026-10-01 on the TCL reference tablet, 4248 × 2832 Perceptual photo,
+17.699% Fit zoom, Navigator open, Stats closed and default glass. Both builds
+use release Rust, the same work area and three warmed five-second gestures per
+row, with thermal status zero. The composed cases transform a translucent photo
+over another photo, where direct root presentation is ineligible.
+
+| Journey | Before, fresh completed updates/s | Retained Navigator, fresh completed updates/s | Speedup | Screen presents/s | Screen gap p99 across runs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pixel transform resize: Free | 73.28 | 150.69 | 2.06× | 59.44 | 16.70–16.84 ms |
+| Pixel transform: Distort | 64.52 | 133.97 | 2.08× | 59.41 | 16.70–16.86 ms |
+| Placed-photo corner resize | 91.28 | 104.20 | 1.14× | 59.37 | 16.70–16.96 ms |
+| Pixel transform: Warp | 62.45 | 66.66 | 1.07× | 59.45 | 16.71–16.88 ms |
+| Two-photo composed Free resize | 40.24 | 40.78 | 1.01× | 40.98 | 33.38–50.01 ms |
+| Two-photo composed Distort | 33.49 | 34.22 | 1.02× | 34.62 | 33.61–50.00 ms |
+
+Fresh counts match completed submissions to newly consumed host input, excluding
+thumbnail-only refreshes; they are not a distinct-transform-pose oracle. Raw
+completed rates are 151.09/s for Free and 133.97/s for Distort. Fresh completion
+gap p99 spans 9.35–10.01 ms and 9.33–9.96 ms, respectively. Median render-owner
+CPU time falls from 6.19 to 3.35 ms for Free and from 5.80 to 3.26 ms for Distort.
+
+The four single-photo rows meet the screen-cadence criteria. SurfaceFlinger
+actual-present records include native UI, and this tablet exposes no separate
+SurfaceView timeline, so they do not independently establish canvas scanout.
+The two-photo composed cases remain below the 60 Hz target. One composed-Free
+candidate run has a 55.65 ms completion-gap p99 and 50.01 ms screen-gap p99;
+the other two runs have approximately 30 ms and 33.4 ms respectively. The
+original samples remain in the comparison.
+
+Three additional full-sequence runs with only scheduler and ART tracing retain
+normal throughput: composed Free reaches 40.79, 40.81 and 41.23 fresh updates/s,
+with completion-gap p99 29.46–33.00 ms and screen-gap p99 33.36–33.38 ms.
+Across all six final-build runs its median is 40.80/s, versus the baseline's
+40.24/s. These traces contain no app scopes or GPU diagnostic queries. Their
+largest completion gaps overlap running and runnable render-owner time, with
+no overlapping app GC pause. This supports unchanged composed throughput but
+does not explain the original 55.65 ms tail or establish absence of a latency
+regression. Records and aligned scheduler intervals are in
+`artifacts/validation/candidate-clock-gc`.
+
+Baseline is `f820bb89c`, APK SHA-256
+`645a11a3c86d8d194910f66f50636c6066ac5dd9b5ba867c674ec40fbca879a7`.
+The retained-Navigator build includes the shared session-clock correction,
+APK SHA-256
+`32cf373145f6c356713098726015ebc8454fa46b85e27532ed628dcfa0a876b6`.
+Records, raw input/completion samples and complete presentation traces are in
+`artifacts/validation/{baseline-final,candidate-clock-final}` in the
+`navigator-implementation` worktree; its `candidate-clock-source.patch` records
+the measured source. Separate diagnostic captures include phase timing and
+memory; they do not qualify the rates above. These transform results do not
+establish a general brush improvement or qualify another tier.
+
+### Cost and expected throughput
+
+Separate captures of the same builds and motions isolate the removed work.
+Times below are mean GPU intervals; Navigator refreshes are included in total
+render time, and main mip generation is included in main composition.
+
+| GPU interval | Free before | Free retained | Distort before | Distort retained |
+| --- | ---: | ---: | ---: | ---: |
+| Main composition | 8.198 ms | 0.002 ms | 9.672 ms | 0.002 ms |
+| Main mip generation | 2.396 ms | None | 2.654 ms | None |
+| Total render | 8.243 ms | 0.158 ms | 9.643 ms | 0.175 ms |
+| Presentation | 5.039 ms | 6.206 ms | 5.418 ms | 7.052 ms |
+| Navigator, per refresh | — | 0.679 ms | — | 0.806 ms |
+
+Rendering and presentation execute sequentially on the same GPU queue. Using
+`1000 / (mean render ms + mean presentation ms)` gives an approximate remaining
+work ceiling of 157.1 updates/s for Free and 138.4/s for Distort. Qualification
+reaches 95.9% and 96.8% of those estimates. The model predicts 2.09× and 2.08×
+speedups, compared with the measured 2.06× and 2.08×. These are workload estimates,
+not hardware peak claims: intervals include scheduling gaps, bounded timestamp
+rings omit some observations, and presentation observations have no matching
+render submission ID. The baseline estimates of 75.3/s and 66.4/s are also close
+to its measured 73.3/s and 64.5/s.
+
+Navigator refreshes at 18.92 Hz for Free and 18.75 Hz for Distort. CPU refresh
+work averages 0.692 and 0.681 ms. After the first refresh, pending artwork age
+has p99 59.5 and 58.0 ms, with maxima 62.9 and 59.7 ms; both settle with no
+pending thumbnail. The shared session clock ignores zero-time preparation and
+preserves the last timestamp across untimed flushes, avoiding device-uptime
+rounding that previously reduced the nominal 20 Hz cadence.
+
+The retained image is 266 × 177 pixels, with 753,312 logical pixel bytes and
+32 bytes of geometry. Allocated GPU memory increases by 0.78 MiB for Free and
+0.80 MiB for Distort; reserved GPU memory is unchanged. This removes repeated
+main-image writes, but warm cached allocations remain, so it does not establish
+an allocation saving. Cost and memory records are in
+`artifacts/validation/{baseline-diagnostic,candidate-clock-diagnostic}`.
+
+### Retained-Navigator navigation
+
+The same final APK completes three warmed five-second two-finger pans and pinches on the
+12 MP photo with a preparation stroke, Navigator open, Stats closed and 15.9703%
+Fit zoom. Pan reaches 59.83 fresh viewport completions/s and a median 59.43 screen
+presents/s; pinch reaches 59.90 and 59.40/s. Screen interval p99 ranges from
+16.74–16.83 ms for pan and 16.76–16.83 ms for pinch. Both meet the screen-cadence
+criterion, subject to the SurfaceFlinger accounting limit above. Fresh completion
+gap p99 is 19.09–19.62 ms for pan and 19.94–21.56 ms for pinch.
+
+The host's existing navigation policy uses FIFO without a retained surface
+target. The viewport harness captures presenter GPU timestamps in these runs;
+fresh counts use completed host input calls. Records are in
+`artifacts/validation/candidate-clock-navigation`, including all three gesture
+windows per motion and `matched-summary.json`. These measurements establish
+current photo navigation, not a before/after speedup.
+
+### Retained-Navigator painting
+
+Matched three warmed five-second G-Pen strokes use the 12 MP photo, Perceptual
+blending, 1024 px size, 200 Hz input, prediction, Navigator open, Stats closed
+and default glass. Both builds use 15.9703% Fit zoom and the same 500 × 280 px
+ellipse. Its full brush footprint remains inside the photo. The eight-layer
+case has one drawing layer over seven photo layers, six at 35% opacity.
+
+| Stroke | Before, fresh updates/s | Retained Navigator, fresh updates/s | Before completion gap p99 | Retained completion gap p99 |
+| --- | ---: | ---: | ---: | ---: |
+| One photo at Fit | 60.92 (60.49–61.37) | 61.14 (60.69–61.70) | 27.02–28.18 ms | 28.98–29.50 ms |
+| Eight visible layers at Fit | 51.47 (49.46–51.68) | 50.12 (48.65–51.65) | 30.22–38.03 ms | 29.30–32.87 ms |
+
+The single-photo stroke meets the 60/s target. The eight-layer case remains
+below target; its median falls 2.6%, with overlapping run ranges and a lower
+worst p99 completion gap. This does not establish a general brush improvement.
+Earlier 100% zoom comparisons are separate workloads and do not qualify Fit.
+
+Optimized baseline APK SHA-256 is
+`cea0ded9608d7543f53da150275cf7593551eeeb1503c064a3d9ed71264e636a`;
+the final optimized APK is
+`0a3ca41f35806af34f642e46a8e10194746768abf3e5b6e724ceaa59eb333814`.
+Both use release Rust. Records are in
+`artifacts/validation/{baseline-brush,candidate-clock-brush}`, with native
+consumed-input traces, completed submissions, geometry and final screenshots.
+
+## Earlier direct-presentation comparison
+
 Measured 2026-09-29 on the 12 MP Perceptual reference photo at Fit: release Rust,
 default glass, Stats closed and three warmed five-second gestures per row.
 Thermal status is zero before and after all runs. Both renderers use the same
@@ -80,7 +215,7 @@ The harness explicitly sets Navigator visibility and asserts the overview count.
 Opening Navigator also changes the work area and Fit camera, so each comparison
 pairs the same panel configuration. Values are medians across runs.
 
-| Journey | Old, Navigator closed | Current, Navigator closed | Old, Navigator open | Current, Navigator open |
+| Journey | Before, Navigator closed | Direct presentation, Navigator closed | Before, Navigator open | Direct presentation, Navigator open |
 | --- | ---: | ---: | ---: | ---: |
 | Placed-photo translation | 96.45 | 122.86 | 83.30 | 98.48 |
 | Placed-photo corner resize, bar hidden | 94.82 | 113.20 | 82.37 | 89.27 |
@@ -92,9 +227,9 @@ pairs the same panel configuration. Values are medians across runs.
 | Crop corner drag | 129.23 | 130.05 | — | — |
 | Pixel resize after 45% placement | 117.78 | 224.55 | — | — |
 
-Values are GPU-completed nonempty updates/s. Single-input affine and perspective
-previews sample the retained source directly during presentation when Navigator
-is closed, avoiding the intermediate composition. With Navigator open, both
+Values are GPU-completed nonempty updates/s. In these earlier builds, single-input
+affine and perspective previews sample the retained source directly during
+presentation when Navigator is closed, avoiding the intermediate composition. With Navigator open, both
 views share the existing materialized composition and preserve preview quality.
 Placement drags also defer exact refinement until Apply or Cancel.
 
@@ -103,7 +238,7 @@ All 27 closed-Navigator gestures and all 21 open-Navigator gestures pass the
 58.64–59.46 presents/s, with interval p99 16.71–16.94 ms. The old Warp fails in
 both configurations. Closed-panel pixel transforms and placement exceed the old
 compositor, including crop after specializing presentation by source type.
-With Navigator open, Distort remains 17.4% slower, Free resize 8.0% slower
+In these builds with Navigator open, Distort is 17.4% slower, Free resize 8.0% slower
 and visible-bar placement resize 0.8% slower. Meeting screen cadence does not
 close these throughput gaps.
 
@@ -123,7 +258,7 @@ presentation, Navigator materialization and placement refinement scheduling,
 APK SHA-256
 `ede35aa5b23bd8770d1207929e1b633a25b481f7987eb7201645125a11e013e3`.
 Raw runs are in `artifacts/latency-investigation/{old-closed-fixed,deferred-9-closed-fixed}`
-and `old-navigator`. Current crop and open-Navigator rows include fragment
+and `old-navigator`. Later crop and open-Navigator rows include fragment
 materialization and source-specific main-view shader entries, APK SHA-256
 `1dbac0ef1dcf9208709ba3e7df71f0a028e99d6d25e4c60356e7413a270f1208`.
 Their records are `present-18-crop` and `present-18-navigator`, including its
@@ -158,8 +293,8 @@ runs during qualification. Available memory remains above 1 GiB.
 | Gaussian Blur, small radius | 23.48 | 71.39 ms | 49.95 | 33.37 ms |
 | Gaussian Blur, large radius | 15.51 | 124.01 ms | 42.67 | 49.98 ms |
 
-The Move, placement and transform screen-cadence measurements pass. Navigator-open
-Distort, Free and visible-bar placement remain below the old matched control's
+The Move, placement and transform screen-cadence measurements pass. In this build,
+Navigator-open Distort, Free and visible-bar placement are below the old matched control's
 77.33 / 78.80 / 90.59 completed updates/s. Both Gaussian rows fail the soft motion
 target; no hardware calculation grants a waiver. The older spatial-filter
 comparison uses a different camera and panel configuration. These runs contain
@@ -342,13 +477,14 @@ Target: **60 completed updates/s** at the guaranteed size, on the 12 MP canvas.
 
 Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets.
 
-- The TCL's work area is 754 px wide, so the harness fits its 520 × 299 px
-  ellipse down to 339 × 299 px, at 16.0% zoom.
+- The older fixtures fit their 520 × 299 px ellipse to 339 × 299 px in the
+  TCL's 754 px work area at 16.0% zoom. The current G-Pen row uses the 500 × 280 px path documented in the
+  retained-Navigator painting comparison above.
 - Simple brushes are measured at their guaranteed 1024 px.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | 63.7 fresh updates/s (63.53–63.90); completion gap p99 27.07–28.31 ms | **Met for this stroke** |
+| G-Pen (1) | Simple | 1024 px | 61.14 fresh updates/s (60.69–61.70); completion gap p99 28.98–29.50 ms | **Met for this stroke** |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |

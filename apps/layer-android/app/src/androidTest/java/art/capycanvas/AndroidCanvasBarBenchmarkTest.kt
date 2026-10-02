@@ -192,6 +192,7 @@ class AndroidCanvasBarBenchmarkTest {
             var mark = 0L
             var dispatched = 0L
             fun measure(label: String, operation: () -> Unit) {
+                if (args.getString("labels")?.split(',')?.let { label !in it } == true) return
                 mark = 0L
                 SystemClock.sleep(600)
                 host.measurementReport(true)
@@ -240,6 +241,7 @@ class AndroidCanvasBarBenchmarkTest {
                     "motion" to obj("begin_ns" to began, "end_ns" to operated,
                         "begin_boot_ns" to beganBoot, "end_boot_ns" to operatedBoot),
                     "drained_ns" to ended, "display_after_drain" to drained, "renderer_before" to rendererBefore,
+                    "measurements" to metrics, "completions" to completions,
                     "memory_before" to memoryBefore,
                     "memory_after" to if (memory) native { JSONObject(Native.rendererMemory(it)) } else null,
                     "renderer_after" to native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) },
@@ -249,6 +251,7 @@ class AndroidCanvasBarBenchmarkTest {
                     "anchor_before" to anchorBefore,
                     "anchor_after" to state().optJSONObject("canvas_bar")?.optJSONArray("anchor"),
                     "renderer_submitted_hz" to submitted.size / seconds,
+                    "gpu_completed_hz" to completedAt.size / seconds,
                     "renderer_cpu_callback_ms" to quantiles(submitted.map { it.getLong(10) / 1e6 }),
                     "renderer_owner_cpu_ms" to quantiles(submitted.map { it.getLong(17) / 1e6 }),
                     "gpu_submit_to_complete_ms" to quantiles(rows.map { (it.getLong(2) - it.getLong(1)) / 1e6 }),
@@ -459,6 +462,21 @@ class AndroidCanvasBarBenchmarkTest {
                 invoke("transform_warp")
                 primeTransform(1.0 / 3, "transform_warp")
                 measure("photo-pixels-warp-drag") { drag(anchorPoint(1.0 / 3), duration, wiggle) }
+                invoke("cancel_transform")
+            }
+            if (wanted("composed_transform")) {
+                newDocument()
+                place(photo())
+                invoke("apply_transform")
+                action(obj("type" to "layer", "action" to obj("op" to "duplicate_selected")))
+                action(obj("type" to "set_layer_opacity", "opacity" to .35))
+                invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
+                waitFor("composed transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
+                primeTransform()
+                measure("composed-photo-pixels-handle-drag") { drag(corner(), duration, wiggle) }
+                invoke("reset_transform")
+                primeTransform(mode = "transform_distort")
+                measure("composed-photo-pixels-distort-drag") { drag(corner(), duration, wiggle) }
                 invoke("cancel_transform")
             }
             if (wanted("cropped_photo")) {

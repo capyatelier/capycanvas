@@ -10,6 +10,8 @@ mod graph;
 mod effects;
 mod refinement;
 mod hierarchy;
+mod navigator;
+pub(crate) use navigator::Navigator;
 pub(crate) use sources::Sources;
 
 /// Device recipes survive level changes; display cache retirement drops pixels only.
@@ -227,6 +229,8 @@ pub(crate) struct Request {
     pub plan: display_mips::Plan,
     pub evaluation: Evaluation,
 }
+
+enum Destination<'a> { View, Overview(&'a Cache, PixelRect), Navigator }
 
 pub(crate) struct Cache {
     pub(super) submission_valid: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -491,7 +495,6 @@ impl Cache {
             return (cache, true);
         };
         let unchanged = unchanged && old.transform == r.transform_preview;
-        let materialize = matches!(old.placed, Some(Presentation::Mapped(_))) && Arc::strong_count(&r.overview_consumers) > 1;
         old.transform = r.transform_preview.clone();
         let hierarchy = old.hierarchy.take().filter(|c| old.plan.extent == plan.extent
             && (unchanged || !old.residency_checked || c.fits(r)));
@@ -509,12 +512,12 @@ impl Cache {
             old.hierarchy = hierarchy;
             old.admit_source_overlap(r, packet);
             old.unchanged = unchanged;
-            old.reuse_output = unchanged && old.ready && !materialize;
+            old.reuse_output = unchanged && old.ready;
             if let Some(overview) = &mut old.overview {
                 overview.unchanged = unchanged;
                 overview.reuse_output = unchanged && overview.ready;
             }
-            return (old, materialize);
+            return (old, false);
         }
         let reusable = old.spare.take().filter(|cache| matches(cache));
         let mut next = reusable.map(|cache| *cache)
@@ -730,13 +733,13 @@ impl Cache {
     ) -> Result<PixelRect, GpuRasterError> {
         r.telemetry.phase_begin(9, &r.device, &r.queue, encoding.encoder);
         let records = encoding.commands.cursor;
-        let mut changed = self.render_graph(scene, r, packet, dirty, encoding, None, tiles)?;
+        let mut changed = self.render_graph(scene, r, packet, dirty, encoding, Destination::View, tiles)?;
         r.telemetry.phase_end(9, encoding.encoder);
         crate::performance_trace::counter(c"Capy main composition records", u64::from(encoding.commands.cursor - records));
         if let Some(mut overview) = self.overview.take() {
             r.telemetry.phase_begin(10, &r.device, &r.queue, encoding.encoder);
             let records = encoding.commands.cursor;
-            let result = overview.render_graph(scene, r, packet, dirty, encoding, Some((self, changed)), tiles);
+            let result = overview.render_graph(scene, r, packet, dirty, encoding, Destination::Overview(self, changed), tiles);
             r.telemetry.phase_end(10, encoding.encoder);
             crate::performance_trace::counter(c"Capy overview composition records", u64::from(encoding.commands.cursor - records));
             self.overview = Some(overview);
@@ -747,11 +750,12 @@ impl Cache {
 
     fn render_graph(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        dirty: PixelRect, encoding: &mut Encoding<'_>, finer: Option<(&Cache, PixelRect)>, tiles: Option<&BTreeSet<[u32; 2]>>,
+        dirty: PixelRect, encoding: &mut Encoding<'_>, destination: Destination<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
         let Encoding { encoder, commands } = encoding;
         if self.reuse_output { return Ok(PixelRect::EMPTY); }
         let dirty = if self.unchanged { PixelRect::EMPTY } else { dirty };
+        let finer = match destination { Destination::Overview(cache, changed) => Some((cache, changed)), _ => None };
         let covered = finer.map_or(PixelRect::EMPTY, |(cache, _)| cache.plan.bounds);
         let visible: Vec<_> = packet
             .layers
@@ -815,7 +819,7 @@ impl Cache {
             self.used.fill(false);
             let mut compositor = Evaluator { cache: self, commands, scene, packet, r, encoder, region, tiled };
             let root = compositor.cache.graph.root.clone().expect("prepared composition graph");
-            let output = compositor.evaluate_root(&root, finer.is_none())?;
+            let output = compositor.evaluate_root(&root, matches!(destination, Destination::View))?;
             let presentation = match &output {
                 Value::Placed(value) if finer.is_none() => {
                     let coarse_level = source_coarse_level(value.plan);
@@ -889,16 +893,18 @@ impl Cache {
         {
             self.refined.clone_from(&self.valid);
         }
-        let phase = if finer.is_some() { 12 } else { 11 };
-        if finer.is_none() {
+        if matches!(destination, Destination::View) {
             crate::performance_trace::counter(c"Capy main mip box pixels", written.area());
             crate::performance_trace::counter(c"Capy main mip changed pixels", written_pixels);
             crate::performance_trace::counter(c"Capy main mip regions", written_regions);
         }
-        if crate::performance_trace::enabled() { commands.flush(r, encoder)?; }
-        r.telemetry.phase_begin(phase, &r.device, &r.queue, encoder);
-        self.reduce_output(r, encoder, written, commands)?;
-        r.telemetry.phase_end(phase, encoder);
+        if !matches!(destination, Destination::Navigator) {
+            let phase = if finer.is_some() { 12 } else { 11 };
+            if crate::performance_trace::enabled() { commands.flush(r, encoder)?; }
+            r.telemetry.phase_begin(phase, &r.device, &r.queue, encoder);
+            self.reduce_output(r, encoder, written, commands)?;
+            r.telemetry.phase_end(phase, encoder);
+        }
         Ok(if written.is_empty() { written } else { PixelRect::new(
             output_bounds.min_x() + written.min_x() * side, output_bounds.min_y() + written.min_y() * side,
             output_bounds.min_x() + written.max_x() * side, output_bounds.min_y() + written.max_y() * side,

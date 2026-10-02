@@ -101,6 +101,9 @@ first matching row and its error check, or leaves the default journey to the hos
 
 Setup that some journeys need:
 
+- `--workspace-rendering` checks Navigator GPU pixels at 1x and 2x, including
+  live pen strokes, brush-up convergence and artwork undo/redo in both themes.
+  Its screenshots include the painted document and Navigator.
 - `--workspace-store` checks IndexedDB against the native SQLite contract. Write
   the fixture from current Rust first:
   `CAPY_STORE_CONTRACT_FIXTURE="$PWD/artifacts/store-contract.json" cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`,

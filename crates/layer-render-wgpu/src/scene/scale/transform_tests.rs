@@ -2,7 +2,7 @@ use super::*;
 use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Point, Projective, Rect, Selection, TransformMap};
 
 #[test]
-fn navigator_consumers_share_transform_composition_until_closed_or_dropped() {
+fn navigator_visibility_preserves_direct_transform_presentation() {
     let doc = document();
     let extent = [doc.width, doc.height];
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
@@ -11,10 +11,13 @@ fn navigator_consumers_share_transform_composition_until_closed_or_dropped() {
     r.submit(frame).unwrap();
     frame.composite_all = false;
     let mut presenter = Some(crate::ViewportPresenter::for_renderer(&r, wgpu::TextureFormat::Rgba8Unorm));
+    let mut standalone = crate::ViewportPresenter::for_overview_surface(&r, wgpu::TextureFormat::Rgba8Unorm,
+        crate::SdrSurfaceColor::Srgb).unwrap();
     let overview = crate::OverviewPlacement {
         bounds: [0., 0., 100., 50.], clip: None, work_area: [[0.; 2]; 4],
         outline_linear: [0.; 3], background_linear: [1.; 3], scale: 1., opacity: 1.,
     };
+    standalone.set_overviews(&r, std::slice::from_ref(&overview));
     for (step, (visible, x)) in [(false, 10.), (true, 10.), (true, 20.), (false, 30.), (true, 40.), (false, 50.)].into_iter().enumerate() {
         if step == 5 { drop(presenter.take()); }
         else if let Some(presenter) = &mut presenter {
@@ -26,8 +29,8 @@ fn navigator_consumers_share_transform_composition_until_closed_or_dropped() {
         })).unwrap();
         r.submit(frame).unwrap();
         let cache = r.scale_display.as_ref().unwrap();
-        assert_eq!(matches!(cache.placed, Some(Presentation::Mapped(_))), !visible);
-        assert_eq!(cache.pixels.root().is_some(), visible);
+        assert!(matches!(cache.placed, Some(Presentation::Mapped(_))));
+        assert!(cache.pixels.root().is_none());
     }
 }
 
@@ -75,6 +78,7 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
         for map in [TransformMap::Affine(Affine([0.8, 0.12, -0.1, 0.9, 40., 0.])), TransformMap::Projective(projective)] {
             let preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id, moving: true,
                 selection: selected.then(|| selection.clone()), transform: ImageTransform { map, ..Default::default() } };
+            frame.time_seconds += 0.1;
             let work = r.metrics.composited_pixels;
             for renderer in [&mut r, &mut exact] {
                 renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
@@ -82,7 +86,8 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
             let cache = r.scale_display.as_ref().unwrap();
             assert!(matches!(cache.placed, Some(Presentation::Mapped(_))));
             assert!(cache.output.is_empty() && cache.pixels.root().is_none());
-            assert_eq!(work, r.metrics.composited_pixels);
+            let side = r.navigator.scale() as u32;
+            assert_eq!(r.metrics.composited_pixels - work, extent.map(|n| u64::from(n.div_ceil(side))).into_iter().product::<u64>());
             for (camera, overview) in [([0.19, 0., 0., 0.19, 8.25, 7.5], false),
                 ([0.17, 0.075, -0.075, 0.17, 37.5, 6.25], false), ([0.04, 0., 0., 0.04, 0., 0.], true)] {
                 let mut view = frame.view;
@@ -130,9 +135,10 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
                 prior_errors.sort_by(f32::total_cmp);
                 let prior_mean = prior_errors.iter().sum::<f32>() / prior_errors.len() as f32;
                 let prior_p99 = prior_errors[prior_errors.len()*99/100];
-                assert!((mean < 0.004 && p99 < 0.04) || (mean <= prior_mean * 1.05 + 0.0001 && p99 <= prior_p99 + 0.01),
+                assert!(if overview { mean < 0.06 && p99 < 0.25 } else {
+                    (mean < 0.004 && p99 < 0.04) || (mean <= prior_mean * 1.05 + 0.0001 && p99 <= prior_p99 + 0.01) },
                     "patterned={patterned} {space:?} selected={selected} overview={overview} camera={camera:?}: mean={mean} p99={p99}; prior={prior_mean}/{prior_p99}");
-                if !patterned && space == layer_core::BlendSpace::Linear {
+                if !overview && !patterned && space == layer_core::BlendSpace::Linear {
                     assert!(mean < 0.004 && p99 < 0.04, "linear area error: mean={mean} p99={p99}");
                 }
             }
@@ -170,7 +176,7 @@ fn pass_through_children_above_a_transform_keep_shared_display_composition() {
                 renderer.set_transform_preview(Some(&transform)).unwrap(); renderer.submit(frame).unwrap();
             }
 
-            if transform.moving { assert!(!r.has_pending_work()); }
+            if transform.moving { assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r)); }
             let cache = r.scale_display.as_ref().expect("group children stay on the display graph");
             let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
             assert!(error[0] < 0.004 && error[1] < 0.06, "{blend:?} step={step} error={error:?}");
@@ -233,7 +239,7 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
                 }
                 assert!(r.scale_display.is_some());
                 assert!(r.paint_layers.iter().all(|l| l.pages.is_empty()), "display motion does not allocate native preview pages");
-                assert!(!r.has_pending_work(), "moving transforms defer exact refinement");
+                assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r), "moving transforms defer exact refinement");
                 assert_eq!(r.test.source_captures.get(), 1);
                 let displayed = display_pixels(&r);
                 let exact_pixels = pixels(&exact, crate::test_support::document_texture(&exact));
@@ -318,7 +324,7 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
             renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
         }
         assert!(r.scale_display.is_some());
-        if moving { assert!(!r.has_pending_work()); }
+        if moving { assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r)); }
         let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
         assert!(error[0] < 0.004 && error[1] < 0.06, "scale={scale} moving={moving} {error:?}");
         assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());

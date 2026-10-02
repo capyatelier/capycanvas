@@ -91,8 +91,8 @@ pub struct ViewportPresenter {
     pipeline_layout: wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
     color: SdrSurfaceColor,
-    overview_pipeline: Option<[wgpu::RenderPipeline; 2]>,
-    overview_source: Option<std::sync::Arc<()>>,
+    overview_pipeline: Option<wgpu::RenderPipeline>,
+    navigator_view: Option<wgpu::TextureView>,
     overview_buffer: Option<wgpu::Buffer>,
     overviews: Vec<[f32; 24]>,
     overviews_changed: bool,
@@ -429,6 +429,7 @@ impl ViewportPresenter {
                 std::num::NonZeroU64::new(32),
             ),
             crate::bindings::texture(6, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
+            crate::bindings::texture(13, wgpu::ShaderStages::FRAGMENT, true),
             crate::bindings::buffer(
                 7,
                 wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
@@ -467,7 +468,7 @@ impl ViewportPresenter {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\nconst SCREEN_SAMPLE_STRIDE:u32={}u;\nconst CANVAS_SPACE:u32={}u;\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\nconst SCREEN_SAMPLE_STRIDE:u32={}u;\nconst CANVAS_SPACE:u32={}u;\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     format == wgpu::TextureFormat::Rgba16Float,
                     if color == SdrSurfaceColor::WindowsScrgb { 2.5375 } else { 1. },
                     color == SdrSurfaceColor::Bt2100Pq,
@@ -480,7 +481,6 @@ impl ViewportPresenter {
                     crate::view_color::hdr_shader(device.working_space(), color.primaries()),
                     include_str!("hdr_view.wgsl"),
                     include_str!("proof_view.wgsl"),
-                    include_str!("overview_sample.wgsl"),
                     concat!(include_str!("area_sample.wgsl"), "\n", include_str!("mapped_sample.wgsl"), "\n", include_str!("present.wgsl")).replace("resample.", "camera.mapped."),
                     include_str!("present_screen.wgsl")
                 )
@@ -584,7 +584,7 @@ impl ViewportPresenter {
             format,
             color,
             overview_pipeline: None,
-            overview_source: None,
+            navigator_view: None,
             overview_buffer: None,
             overviews: Vec::new(),
             overviews_changed: false,
@@ -614,9 +614,8 @@ impl ViewportPresenter {
                 wgpu::BlendComponent { src_factor:wgpu::BlendFactor::Zero, dst_factor:wgpu::BlendFactor::One, operation:wgpu::BlendOperation::Add }
             },
         };
-        self.overview_pipeline = Some(["overview_fragment", "mapped_overview_fragment"].map(|entry|
-            surface_pipeline(device, "in-surface document overviews", &self.pipeline_layout, &self.shader,
-                ["overview_vertex", entry], Some(instance.clone()), self.format, Some(blend))));
+        self.overview_pipeline = Some(surface_pipeline(device, "in-surface document overviews", &self.pipeline_layout, &self.shader,
+            ["overview_vertex", "overview_fragment"], Some(instance), self.format, Some(blend)));
     }
 
     /// Reuses the composition, bindings and current presentation pass. An
@@ -628,7 +627,6 @@ impl ViewportPresenter {
         }
         self.overviews.clear();
         self.overviews.extend(data);
-        self.overview_source = (!self.overviews.is_empty()).then(|| renderer.overview_consumers.clone());
         self.overviews_changed = true;
         if !self.overviews.is_empty() {
             self.prepare_overviews(renderer);
@@ -731,6 +729,7 @@ impl ViewportPresenter {
             || previous.screen != self.screen_options
             || self.overlays_changed
             || self.picker.changed()
+            || (!self.overviews.is_empty() && previous.navigator_revision != renderer.navigator.revision)
             || previous.overviews != self.overviews
             || self.backdrop.as_ref().is_some_and(|b| b.needs_refresh())
             || self.bind_group.is_none()
@@ -828,6 +827,7 @@ impl ViewportPresenter {
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
         let Some(cache) = &renderer.scale_display else { return Ok(()); };
+        let navigator = renderer.navigator.view().unwrap_or(&renderer.empty_view);
         let composite = cache.view();
         let coarse = cache.coarse_view();
         let next = cache.next_view();
@@ -838,6 +838,7 @@ impl ViewportPresenter {
         let saved = renderer.selection_previews.texture.as_ref().unwrap_or(&self.empty_saved_selection);
         let selection_changed = self.selection_buffer.as_ref() != Some(coverage);
         let bindings_changed = self.bind_group.is_none()
+            || self.navigator_view.as_ref() != Some(navigator)
             || self.saved_selection_buffer.as_ref() != Some(saved)
             || self.document_extent != renderer.document_extent
             || self.composite_view.as_ref() != Some(composite)
@@ -863,7 +864,9 @@ impl ViewportPresenter {
                 self.local_buffer.as_entire_binding(),
                 wgpu::BindingResource::TextureView(saved),
                 self.screen_uniform.as_entire_binding(),
+                wgpu::BindingResource::TextureView(navigator),
             ]));
+            self.navigator_view = Some(navigator.clone());
             self.document_extent = renderer.document_extent;
             self.selection_buffer = Some(coverage.clone());
             self.saved_selection_buffer = Some(saved.clone());
@@ -924,6 +927,7 @@ impl ViewportPresenter {
             *value = f32::from_le_bytes(bytes.try_into().unwrap());
         }
         data[60] = f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual);
+        data[61] = renderer.navigator.scale();
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(&data))
@@ -1055,39 +1059,18 @@ impl ViewportPresenter {
                         ),
                     );
                 }
-            } else if previous.revision != renderer.composite_revision {
+            } else if previous.navigator_revision != renderer.navigator.revision {
                 for o in &self.overviews {
-                    // Artwork damage has the same document coordinates in the
-                    // Navigator. Preserve its unchanged pixels too, including
-                    // the costly area-filtered samples of zoomed-out artwork.
-                    let overview_view = ViewState {
-                        document_to_surface: [
-                            o[2] / self.document_extent[0] as f32,
-                            0.,
-                            0.,
-                            o[3] / self.document_extent[1] as f32,
-                            o[0],
-                            o[1],
-                        ],
-                        ..view
-                    };
-                    let area = crate::present_damage::damage(
-                        renderer.composite_damage,
-                        overview_view,
-                        self.quarter_turns,
-                    )
-                    .intersect(crate::present_damage::surface_bounds(
-                        [o[20], o[21], o[22], o[23]],
-                        view,
-                        self.quarter_turns,
-                    ));
-                    crate::present_damage::add_region(&mut regions, area);
+                    crate::present_damage::add_region(&mut regions,
+                        crate::present_damage::surface_bounds([o[0], o[1], o[2], o[3]], view, self.quarter_turns)
+                            .intersect(crate::present_damage::surface_bounds([o[20], o[21], o[22], o[23]], view, self.quarter_turns)));
                 }
             }
             let previous = &mut self.history;
             previous.valid = true;
             previous.revision = renderer.composite_revision;
             previous.artwork_revision = renderer.artwork_revision;
+            previous.navigator_revision = renderer.navigator.revision;
             previous.selection_revision = renderer.selection_paint_revision;
             previous.outline_revision = renderer.display_selection_revision;
             previous.hdr = self.hdr_options;
@@ -1231,7 +1214,7 @@ impl ViewportPresenter {
                 }
             }
             if !self.overviews.is_empty() {
-                pass.set_pipeline(&self.overview_pipeline.as_ref().unwrap()[usize::from(data[53] == 2.)]);
+                pass.set_pipeline(self.overview_pipeline.as_ref().unwrap());
                 pass.set_vertex_buffer(0, self.overview_buffer.as_ref().unwrap().slice(..));
                 pass.draw(0..6, 0..self.overviews.len() as u32);
             }

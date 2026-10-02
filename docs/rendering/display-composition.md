@@ -107,12 +107,10 @@ Interior samples use the hardware linear sampler. Boundary samples account
 for partially filled source texels and the smaller final output cell. Masks retain their default coverage outside their local image.
 A normal placed layer over a constant backdrop keeps its source and transform
 until another layer needs its pixels. If it reaches the root unchanged, the
-presenter samples it directly into the surface and navigator. This avoids an
+presenter samples it directly into the surface. This avoids an
 intermediate canvas image and a second resampling step. Its neighboring source
 levels share the scene's validity and memory allowance. Other stacks materialize
 their result and derive an adjacent output mip for trilinear presentation.
-Navigator sampling subdivides footprints that span more than four coarse-source
-texels along either axis.
 
 The expression graph fills a padded, page-aligned viewport window at the selected
 resolution. Retained root and branch images have viewport bounds; pointwise
@@ -132,7 +130,7 @@ bounded working tiles and placement gathers separately. Panning reuses valid
 overlap and renders only newly required or changed pages. Shared sparse contact
 plans restrict pointwise edits to touched pages, including retired prediction
 pages. Spatial and global programs retain their dependency propagation. A full-document
-overview serves the navigator and pixels outside the window. Covered overview
+overview serves pixels outside the window. Covered overview
 regions derive from completed detail; uncovered regions use reduced composition,
 avoiding duplicate exact-source work.
 The overview remains coarser than the window, including at reduced zoom.
@@ -162,17 +160,31 @@ transforms reconstruct prefiltered color from a retained mip pyramid. Each outpu
 footprint selects detail from its local Jacobian; partial edge cells use their
 actual centers. Finer transaction inputs persist across scale oscillations.
 An affine or perspective transform with one input over a constant backdrop can
-reach the presenter directly when no Navigator consumes the composition. The viewport samples that pyramid
-with its own rotated footprints, sharing the graph's resampling functions.
-Interior pixels need one trilinear sample; pixels crossing source or layer edges
-use eight samples per axis. The Navigator averages composed samples at the
-display grid resolution, including fractional edge cells. This preserves the
-order of filtering, encoding and blending on the first frame after a Navigator
-opens. A presenter with visible overviews holds a source lease; subsequent
-artwork frames materialize the graph once for both consumers. Closing the
-Navigator or dropping its presenter releases the lease, allowing direct
-presentation again. Reconstructing the whole grid inside each Navigator frame
-duplicates composition work and is slower on the tablet GPUs.
+reach the presenter directly, including with Navigator visible. The viewport
+samples that pyramid with its own rotated footprints, sharing the graph's
+resampling functions. Interior pixels need one trilinear sample; pixels crossing
+source or layer edges use eight samples per axis.
+
+Navigator uses one renderer-owned retained whole-document image, at most 512
+texels on either side, shared by standalone and in-surface presenters. It copies
+or reduces a completed whole-document level when available. Direct roots evaluate
+through the same graph and resampler at thumbnail resolution, retaining a coarser
+prepared source level when the main view already uses one. Their main output
+stays virtual. The main canvas's coarse coverage remains independent.
+Artwork, transform poses and temporary brush tails invalidate the retained image;
+camera geometry does not. Consecutive changes coalesce at 20 Hz using the frame's
+native timestamp. Zero-timestamp preparation and untimed flushes preserve the
+session clock. Pending pixels request a following frame. When that frame has
+no new artwork change, it submits the final coarse refresh immediately, before
+idle refinement, including after pen-up, Apply, Cancel and history changes. It
+needs no timer polling between deadlines or new input to converge. Discarded GPU
+commands invalidate the image and keep a retry pending. Document replacement,
+blend-space changes and renderer replacement rebuild it before presentation.
+Navigator presentation samples bilinearly, using a bounded 4 × 4 average in
+linear light for footprints wider than four preview texels. It applies the
+existing color and proof transforms to these coarse pixels; its camera outline,
+clip, orientation and input stay current.
+
 Partial selections and copies compose moved and
 retained inputs before presentation, preserving their correlated coverage.
 Switching to a materialized root invalidates the formerly virtual pixels.
@@ -346,9 +358,11 @@ A 32-layer test edits the beginning, middle and end of the stack, checks exact
 output agreement and bounds the command count while preserving untouched pages. Direct
 placement presentation is compared with supersampled exact output through
 rotated and nonuniform cameras. Direct transformed roots are compared with both
-supersampled native output and intermediate-image presentation, including small
-Navigator views, smooth ramps, fine color patterns, opacity and both blend spaces. Perceptual encoding and final
-surface averaging do not commute; those comparisons retain the existing
+supersampled native output and intermediate-image presentation, including smooth
+ramps, fine color patterns, opacity and both blend spaces.
+Navigator tests check coarse artwork, geometry, color and alpha, coalescing,
+final convergence, document replacement and abandoned submissions. Perceptual
+encoding and final surface averaging do not commute; those comparisons retain the existing
 transformed-source encoding rule. The tests
 assert that superseded presentation allocations are absent. Project tests cover
 all brush presets, save/reopen and exact undo/redo; the source-backed test also

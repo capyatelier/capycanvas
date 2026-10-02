@@ -66,6 +66,38 @@ export async function checkWorkspaceRendering({call,evaluate,settle}) {
   assert.ok(await compare(cameraBefore,await navCrop())>0,'Navigator updates the camera outline');
   await writeFile(`${dir}/web-navigator-${dpr}x.png`,Buffer.from(navDuring,'base64'));
   console.log(JSON.stringify({dpr,nativeNavigator:native,retainedPixels:true,cameraUpdate:true}));
+  await send({type:'move_group',group:43,target:{kind:'float',position:[1070,160]}});
+  await send({type:'invoke',command:'fit_canvas'});
+  await send({type:'select_brush',id:1});await send({type:'set_brush_size',value:180});
+  const colors=async()=>{
+    const data=await navCrop();
+    return evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,'+${JSON.stringify(data)};await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(i,0,0);const a=x.getImageData(0,0,c.width,c.height).data;let red=0,blue=0;for(let n=0;n<a.length;n+=4){if(a[n]>150&&a[n+1]<100&&a[n+2]<100)red++;if(a[n+2]>150&&a[n]<100&&a[n+1]<100)blue++;}return{red,blue};})()`);
+  };
+  const awaitColors=async predicate=>{
+    const end=Date.now()+5000;let actual;
+    do {actual=await colors();if(predicate(actual))return actual;await evaluate('new Promise(r=>setTimeout(r,50))');}while(Date.now()<end);
+    assert.fail(`Navigator artwork did not converge: ${JSON.stringify(actual)}`);
+  };
+  const stroke=async(y,rgba,key)=>{
+    await send({type:'set_color',rgba});
+    const p=await evaluate(`(()=>{const c=layerApp.state().camera,r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(c.translation[0]+700*c.zoom)/devicePixelRatio,y:r.y+(c.translation[1]+${y}*c.zoom)/devicePixelRatio,dx:450*c.zoom/devicePixelRatio};})()`);
+    for(const [type,dx] of [['mousePressed',0],['mouseMoved',p.dx/2]]){
+      await call('Input.dispatchMouseEvent',{type,x:p.x+dx,y:p.y,button:'left',buttons:1,pointerType:'pen',force:1});await settle();
+    }
+    const held=await awaitColors(c=>c[key]>20);
+    await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:p.x+p.dx,y:p.y,button:'left',buttons:1,pointerType:'pen',force:1});
+    await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:p.x+p.dx,y:p.y,button:'left',buttons:0,pointerType:'pen',force:0});await settle();
+    await awaitColors(c=>c[key]>held[key]*1.2);
+  };
+  await stroke(640,[.85,.12,.24,1],'red');await stroke(890,[.1,.2,.9,1],'blue');
+  for(const theme of ['light','dark']){
+    await send({type:'set_theme',theme});await awaitColors(c=>c.red>20&&c.blue>20);
+    const artwork=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/web-navigator-artwork-${theme}-${dpr}x.png`,Buffer.from(artwork.data,'base64'));
+    await send({type:'invoke',command:'undo'});await awaitColors(c=>c.red>20&&c.blue===0);
+    await send({type:'invoke',command:'redo'});await awaitColors(c=>c.red>20&&c.blue>20);
+  }
+  await send({type:'invoke',command:'undo'});await send({type:'invoke',command:'undo'});await awaitColors(c=>c.red===0&&c.blue===0);
+  console.log(JSON.stringify({dpr,navigatorArtwork:true,brushUpConvergence:true,artworkUndoRedo:true,themes:['light','dark']}));
   // Use real host measurements and all pointer types for the clipped-preview
   // path, alongside the existing retained-pixel and cancellation checks.
   for (const device of ["mouse", "touch", "pen"]) for (const scenario of [

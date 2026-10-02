@@ -314,8 +314,10 @@ fn current_and_below_in(space: layer_core::BlendSpace) {
 }
 
 fn settle(r: &mut WgpuRasterizer, layers: &[Layer]) {
+    let mut frame = crate::test_support::packet(layers, [2560, 2560]);
+    frame.composite_all = false;
     for _ in 0..200 {
-        r.submit(crate::test_support::packet(layers, [2560, 2560])).unwrap();
+        r.submit(frame).unwrap();
         if !r.has_pending_work() {
             return;
         }

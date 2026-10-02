@@ -865,7 +865,7 @@ pub struct WgpuRasterizer {
     ui_preview_pipeline: Option<wgpu::RenderPipeline>,
     display_pipelines: Option<display_mips::Pipelines>,
     scale_display: Option<scene::scale::Cache>,
-    overview_consumers: Arc<()>,
+    navigator: scene::scale::Navigator,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     artwork_revision: u64,
@@ -1190,7 +1190,7 @@ impl WgpuRasterizer {
             filter_source_epoch: 0,
             display_pipelines: None,
             scale_display: None,
-            overview_consumers: Arc::new(()),
+            navigator: Default::default(),
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
             artwork_revision: 0,
@@ -2075,7 +2075,7 @@ impl WgpuRasterizer {
         self.metrics.retouch_storage_bytes =
             self.retouch.as_ref().map_or(0, |retouch| retouch.storage_bytes());
         self.metrics.composite_storage_bytes =
-            self.scale_display.as_ref().map_or(0, scene::scale::Cache::storage_bytes);
+            self.scale_display.as_ref().map_or(0, scene::scale::Cache::storage_bytes) + self.navigator.storage_bytes();
     }
 
     fn ensure_upload_capacity(&mut self, dabs: usize, styles: usize) -> Result<(), GpuRasterError> {
@@ -3103,6 +3103,7 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn has_pending_work(&self) -> bool {
         self.settling.is_some() || self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
+            || self.navigator.pending()
             || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
     }
     fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
@@ -3297,7 +3298,7 @@ impl CanvasRenderer for WgpuRasterizer {
 }
 impl WgpuRasterizer {
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
-        if !self.background_ready.load(std::sync::atomic::Ordering::Acquire)
+        if !self.background_ready.load(std::sync::atomic::Ordering::Acquire) && !self.navigator.pending()
             && packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
             && packet.dabs.is_empty() && packet.dab_batches.is_empty()
             && native_commit.is_none() && self.transform_preview.is_none()
@@ -4194,8 +4195,14 @@ impl WgpuRasterizer {
             self.scene = Some(scene);
             self.composite_damage = published;
         }
+        let mut navigator = std::mem::take(&mut self.navigator);
+        let navigator_revision = navigator.revision;
+        let result = navigator.refresh(self, packet, !dirty.is_empty() || animated || !unchanged,
+            reset || blending_changed, &mut encoder);
+        self.navigator = navigator;
+        result?;
         let mut refined = false;
-        if dirty.is_empty() && !animated && original_batches.is_empty() && packet.dabs.is_empty()
+        if navigator_revision == self.navigator.revision && dirty.is_empty() && !animated && original_batches.is_empty() && packet.dabs.is_empty()
             && self.background_ready.load(std::sync::atomic::Ordering::Acquire)
             && self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
             && self.artwork_frame.as_ref().is_some_and(|old|
