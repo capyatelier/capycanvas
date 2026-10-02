@@ -60,6 +60,15 @@ foreach($line in $tree){
                 if($digest -ne '7fa429541e55b1509909e058f2d21a37467e4958ec713b357f6e0cf9dc4ee352'){throw 'Original Zune license checksum differs'}
                 Copy-Notice $notice "Cargo/$key/LICENSE-ZLIB"
             }
+            {$_ -in @('fluent-langneg-0.13.1','intl_pluralrules-7.0.2')} {
+                $expected=if($key -eq 'fluent-langneg-0.13.1'){'016fcc02048817d628b04b140c54db290fd9d29a5e8a55b77871194e810716ac'}else{'23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3'}
+                $notice=Join-Path $repo "tools/build/licenses/$key-MIT.txt"
+                $canonical=[Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($notice).Replace("`r`n","`n"))
+                $hash=[Security.Cryptography.SHA256]::Create()
+                try{$digest=[BitConverter]::ToString($hash.ComputeHash($canonical)).Replace('-','')}finally{$hash.Dispose()}
+                if($digest -ne $expected){throw "Original $key license checksum differs"}
+                Copy-Notice $notice "Cargo/$key/LICENSE-MIT"
+            }
             {$_ -in @('atomig-macro-0.4.0','simd_helpers-0.1.0')} {
                 Copy-Notice (Join-Path $repo "apps/layer-windows/packaging/notices/$key-MIT.txt") "Cargo/$key/LICENSE-MIT"
             }

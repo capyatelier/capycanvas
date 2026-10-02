@@ -30,3 +30,14 @@ The portable photo dependencies also require:
 Vendored crates use their actual source notices and manifests; registry copies
 are not substituted for patched sources. THIRD_PARTY_NOTICES.md retains the
 portable photo dependencies' full notices and AV1 patent statement.
+
+The Fluent dependency graph also requires these complete original MIT notices
+from tools/build/licenses, pinned by the collector and tools/build/about.toml:
+
+- fluent-langneg 0.13.1: [LICENSE-MIT at its recorded source revision](https://github.com/projectfluent/fluent-langneg-rs/blob/7fdc590466ea63ca2367ac10fb1b881fe561f1a8/LICENSE-MIT).
+  SHA-256: 016fcc02048817d628b04b140c54db290fd9d29a5e8a55b77871194e810716ac.
+- intl_pluralrules 7.0.2: [intl_pluralrules/LICENSE-MIT at its recorded source revision](https://github.com/zbraniecki/pluralrules/blob/d0715d5b7cca72e228d6e6c4de154bd30dfdd06a/intl_pluralrules/LICENSE-MIT).
+  SHA-256: 23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.
+
+The published type-map 0.5.1 archive already supplies its complete LICENSE-MIT
+and LICENSE-APACHE; the collector retains both, including the original authors.

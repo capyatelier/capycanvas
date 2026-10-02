@@ -150,3 +150,27 @@ license = "MIT OR Apache-2.0"
 path = "COPYRIGHT-RUST.txt"
 license = "MIT"
 checksum = "5ca77347e58205d3b543c04a9c5bdd11d20a9f3108a7b246640edffa999b5f35"
+
+# These published Fluent dependency archives omit their original notices.
+# Retrieve each complete MIT file at the archive's recorded source revision.
+[fluent-langneg.clarify]
+license = "Apache-2.0 OR MIT"
+[[fluent-langneg.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "016fcc02048817d628b04b140c54db290fd9d29a5e8a55b77871194e810716ac"
+
+[intl_pluralrules.clarify]
+license = "Apache-2.0 OR MIT"
+[[intl_pluralrules.clarify.git]]
+path = "intl_pluralrules/LICENSE-MIT"
+license = "MIT"
+checksum = "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+
+# Keep both original author notices in the archive's complete MIT file.
+[type-map.clarify]
+license = "MIT OR Apache-2.0"
+[[type-map.clarify.files]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "b47fb719a40d9ef9c8e3be525c41ce129c46d613cfc96a91bddd7c19dcebf7a1"
