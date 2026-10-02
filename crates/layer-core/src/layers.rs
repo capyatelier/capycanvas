@@ -30,6 +30,7 @@ pub fn target_offset(layers: &[Layer], id: LayerId) -> Point {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawingRefusal {
     NoLayer,
+    NonAffine,
     Locked,
     /// An effect layer draws on the layer below it, and that layer is locked.
     BaseLocked,
@@ -46,22 +47,14 @@ pub enum DrawingRefusal {
 /// Paint/mask-local pixels to document pixels. Groups retain their existing
 /// translation semantics. A linked mask follows the owner's placement while an
 /// unlinked mask stays in its independently translated document position.
-pub fn target_transform(layers: &[Layer], id: LayerId) -> Affine {
-    let Some(owner) = layers.iter().find(|l| {
-        l.id == id || l.mask.as_ref().is_some_and(|m| m.id == id)
-    }) else {
-        return Affine::IDENTITY;
-    };
-    if owner.id == id {
-        return owner.properties.placement.then(Affine::translation(target_offset(layers, id)));
-    }
-    let mask = owner.mask.as_ref().unwrap();
-    let world = target_offset(layers, owner.id);
-    mask.transform_in_parent(&owner.properties).then(Affine::translation(Point {
-        x: world.x - owner.properties.offset.x,
-        y: world.y - owner.properties.offset.y,
-    }))
+pub fn target_geometry(layers: &[Layer], id: LayerId) -> ImageTransform {
+    let Some(owner)=layers.iter().find(|l|l.id==id || l.mask.as_ref().is_some_and(|m|m.id==id)) else{return ImageTransform::default();};
+    if owner.id==id {return ImageTransform {placement:owner.properties.placement.post(Projective::from_affine(Affine::translation(target_offset(layers,id)))).unwrap_or_else(|| LayerPlacement::from_projective(Projective([f32::NAN;9]))),..Default::default()};}
+    let mask=owner.mask.as_ref().unwrap();let mut geometry=mask.geometry_in_parent(&owner.properties);
+    let world=target_offset(layers,owner.id);
+    geometry.placement=geometry.placement.post(Projective::from_affine(Affine::translation(Point{x:world.x-owner.properties.offset.x,y:world.y-owner.properties.offset.y}))).unwrap_or_else(||LayerPlacement::from_projective(Projective([f32::NAN;9])));geometry
 }
+pub fn affine_edit_transform(layers: &[Layer], id: LayerId) -> Option<Affine> {target_geometry(layers,id).as_affine()}
 
 /// The group whose own composite holds the layers below a layer whose parent
 /// is `parent`: the nearest of those groups that does not pass through, or
@@ -134,9 +127,9 @@ impl Layer {
     /// beyond the canvas stay hidden until the canvas grows over them again;
     /// placement never changes this extent or crops its backing.
     pub fn local_extent(&self, canvas: [u32; 2]) -> [u32; 2] {
-        let stored = self.properties.extent.unwrap_or_default();
+        let stored = self.properties.extent.unwrap_or(canvas);
         let source = self.source.as_ref().map_or([0; 2], |source| source.extent);
-        std::array::from_fn(|i| canvas[i].max(stored[i]).max(source[i]))
+        std::array::from_fn(|i| stored[i].max(source[i]))
     }
     /// Pending Apply mask keeps coverage alive until its submission completes.
     pub fn masks(&self) -> impl Iterator<Item = &LayerMask> {
@@ -224,18 +217,18 @@ mod organization_tests {
         let id = layer.id;
         layer.properties.parent = Some(group.id);
         layer.properties.offset = Point { x: 6., y: 9. };
-        layer.properties.placement = Affine([0.5, 0., 0., 0.5, -100., 50.]);
+        layer.properties.placement = LayerPlacement::from_affine(Affine([0.5, 0., 0., 0.5, -100., 50.]));
         let mut mask = LayerMask::reveal_all(LayerId(11), layer.properties.offset);
         mask.offset.x += 4.;
         layer.mask = Some(mask);
         doc.layers.push(group);
         let p = Point { x: 100., y: 200. };
-        assert_eq!(doc.layer_transform(id).map(p), Point { x: -24., y: 129. });
-        assert_eq!(doc.layer_transform(LayerId(11)).map(p), Point { x: -22., y: 129. });
+        assert_eq!(doc.affine_edit_transform(id).unwrap().map(p), Point { x: -24., y: 129. });
+        assert_eq!(doc.affine_edit_transform(LayerId(11)).unwrap().map(p), Point { x: -22., y: 129. });
         doc.layers[0].mask.as_mut().unwrap().linked = false;
-        assert_eq!(doc.layer_transform(LayerId(11)).map(p), Point { x: 130., y: 179. });
+        assert_eq!(doc.affine_edit_transform(LayerId(11)).unwrap().map(p), Point { x: 130., y: 179. });
         let mut invalid = doc.layers[0].clone();
-        invalid.properties.placement = Affine([0.; 6]);
+        invalid.properties.placement = LayerPlacement::from_affine(Affine([0.; 6]));
         assert!(doc.validate_layer(&invalid).is_err());
     }
     #[test]
@@ -765,7 +758,7 @@ pub struct LayerProperties {
     pub offset: Point,
     /// Persistent placement of local source AND raster pixels, before offset.
     /// Apply never resamples backing.
-    pub placement: Affine,
+    pub placement: LayerPlacement,
     pub alpha_locked: bool,
     pub locked: bool,
     pub clipped: bool,
@@ -791,7 +784,8 @@ pub struct LayerMask {
     pub enabled: bool,
     pub linked: bool,
     /// Independent geometry preserves the visible mask when linking changes.
-    pub placement: Affine,
+    pub placement: Projective,
+    pub extent: Option<[u32; 2]>,
     pub offset: Point,
     pub initial: Option<Selection>,
     pub default_coverage: f32,
@@ -906,7 +900,10 @@ impl LayerOperation {
             LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. } => {
                 self.placement == Affine::IDENTITY
             }
-            LayerOperationKind::Bake { offset, .. } | LayerOperationKind::FrequencyDetail { offset, .. } => {
+            LayerOperationKind::Bake { offset, .. } => {
+                self.placement == Affine::IDENTITY && offset.x.is_finite() && offset.y.is_finite()
+            }
+            LayerOperationKind::FrequencyDetail { offset, .. } => {
                 self.placement == Affine::IDENTITY
                     && offset.x.is_finite()
                     && offset.y.is_finite()
@@ -953,31 +950,24 @@ impl LayerOperation {
     }
 }
 impl LayerMask {
-    pub fn transform_in_parent(&self, owner: &LayerProperties) -> Affine {
+    pub fn local_extent(&self, fallback: [u32;2]) -> [u32;2] {self.extent.unwrap_or(fallback)}
+    pub fn geometry_in_parent(&self, owner: &LayerProperties) -> ImageTransform {
         if self.linked {
-            self.placement.then(Affine::translation(Point {
-                x: self.offset.x - owner.offset.x,
-                y: self.offset.y - owner.offset.y,
-            })).then(owner.placement).then(Affine::translation(owner.offset))
-        } else {
-            self.placement.then(Affine::translation(self.offset))
-        }
+            let pre=self.placement.then(Projective::from_affine(Affine::translation(Point{x:self.offset.x-owner.offset.x,y:self.offset.y-owner.offset.y}))).unwrap_or(Projective([f32::NAN;9]));
+            ImageTransform {placement:owner.placement.post(Projective::from_affine(Affine::translation(owner.offset))).unwrap_or_else(||LayerPlacement::from_projective(Projective([f32::NAN;9]))),source_from_owner:Some(pre.inverse().unwrap_or(Projective([f32::NAN;9]))),keep_source:false}
+        } else {ImageTransform {placement:LayerPlacement::from_projective(self.placement.then(Projective::from_affine(Affine::translation(self.offset))).unwrap_or(Projective([f32::NAN;9]))),..Default::default()}}
     }
-    /// Change future following behavior without moving/resampling current pixels.
     pub fn set_linked(&mut self, linked: bool, owner: &LayerProperties) -> Result<(), DocumentError> {
-        if self.linked == linked { return Ok(()); }
-        let current = self.transform_in_parent(owner);
-        let mut next = self.clone();
-        next.linked = linked;
-        next.placement = Affine::IDENTITY;
-        next.placement = current.then(next.transform_in_parent(owner).inverse()
-            .ok_or(DocumentError::InvalidLayerOperation("Invalid mask placement"))?);
-        next.validate()?;
-        *self = next;
-        Ok(())
+        if self.linked==linked{return Ok(());}
+        let invalid=DocumentError::InvalidLayerOperation("Apply the layer transform before changing mask linkage");
+        if owner.placement.as_affine().is_none() || self.geometry_in_parent(owner).as_affine().is_none() {return Err(invalid);}
+        let current=self.geometry_in_parent(owner).projective().ok_or_else(|| invalid.clone())?;
+        let mut next=self.clone();next.linked=linked;next.placement=Projective::IDENTITY;
+        let rest=next.geometry_in_parent(owner).projective().and_then(Projective::inverse).ok_or_else(|| invalid.clone())?;
+        next.placement=current.then(rest).ok_or_else(|| invalid.clone())?;next.validate()?;*self=next;Ok(())
     }
     fn validate(&self) -> Result<(), DocumentError> {
-        if !self.default_coverage.is_finite()
+        if self.extent.is_some_and(|e|e.contains(&0)||e.iter().any(|v|*v>crate::MAX_EXTENT)) || !self.default_coverage.is_finite()
             || !(0.0..=1.0).contains(&self.default_coverage)
             || !self.offset.x.is_finite()
             || !self.offset.y.is_finite()
@@ -1004,7 +994,8 @@ impl LayerMask {
             id,
             enabled: true,
             linked: true,
-            placement: Affine::IDENTITY,
+            placement: Projective::IDENTITY,
+            extent: None,
             offset,
             initial: None,
             default_coverage: 1.0,
@@ -1369,6 +1360,7 @@ impl Document {
         if let Some(mask) = &layer.mask
             && (self.active_mask || layer.kind == LayerKind::Effect)
         {
+            self.validate_content_write(mask.id)?;
             return Ok(mask.id);
         }
         while layer.kind == LayerKind::Effect {
@@ -1383,7 +1375,7 @@ impl Document {
         }
         match layer.kind {
             LayerKind::Paint if self.is_locked(layer.id) => Err(DrawingRefusal::BaseLocked),
-            LayerKind::Paint => Ok(layer.id),
+            LayerKind::Paint => {self.validate_content_write(layer.id)?;Ok(layer.id)},
             LayerKind::Group => Err(DrawingRefusal::Group),
             LayerKind::Background => Err(DrawingRefusal::Paper),
             LayerKind::Selection => Err(DrawingRefusal::SelectionLayer),
@@ -1433,15 +1425,70 @@ impl Document {
         }
         None
     }
+    pub fn retained_transform_targets(&self, roots: &[LayerId]) -> Result<Vec<LayerId>,DocumentError> {
+        if roots.is_empty() {return Err(DocumentError::InvalidLayerOperation("Select artwork to transform"));}
+        for id in roots {if self.layer(*id).is_none(){return Err(DocumentError::MissingLayer(*id));}}
+        let normalized=self.layer_roots(&roots.iter().copied().collect());
+        let roots=normalized.as_slice();
+        let mut members=BTreeSet::new();
+        for id in roots {
+            let root=self.layer(*id).ok_or(DocumentError::MissingLayer(*id))?;
+            if !matches!(root.kind,LayerKind::Paint|LayerKind::Group) {return Err(DocumentError::InvalidLayerOperation("Select paint layers or groups to transform"));}
+            let subtree=self.layer_subtrees(&[*id]);
+            if !self.layers.iter().any(|l|l.kind==LayerKind::Paint&&subtree.contains(&l.id)) {return Err(DocumentError::InvalidLayerOperation("This group has no paint layers"));}
+            members.extend(subtree);
+        }
+        for layer in self.layers.iter().filter(|l|members.contains(&l.id)) {
+            if self.is_locked(layer.id){return Err(DocumentError::ProtectedLayer(layer.id));}
+            if !layer.pending_operations.is_empty() || layer.mask.as_ref().is_some_and(|m|!m.pending_operations.is_empty()) {return Err(DocumentError::InvalidLayerOperation("Wait for the current edit"));}
+            if matches!(layer.kind,LayerKind::Background|LayerKind::Selection) || layer.effect.as_ref().is_some_and(|e|e.program.kind==EffectKind::Generator) {
+                return Err(DocumentError::InvalidLayerOperation("This selection contains content that cannot retain a transform"));
+            }
+        }
+        Ok(self.layers.iter().filter(|l|members.contains(&l.id)).map(|l|l.id).collect())
+    }
+    pub fn retained_transform_edit(&self, roots: &[LayerId], delta: Projective) -> Result<Edit,DocumentError> {
+        let targets:BTreeSet<_>=self.retained_transform_targets(roots)?.into_iter().collect();
+        if delta == Projective::IDENTITY { return Ok(Edit::Batch(Vec::new())); }
+        let invalid=||DocumentError::InvalidLayerOperation("Invalid retained transform");
+        if delta.inverse().is_none(){return Err(invalid());}
+        let mut layers=self.layers.clone();
+        for layer in layers.iter_mut().filter(|l|targets.contains(&l.id)) {
+            let old=self.layer(layer.id).unwrap();
+            if layer.kind==LayerKind::Paint {
+                let world=self.layer_offset(layer.id);let to=Projective::from_affine(Affine::translation(world));
+                let local_delta=to.then(delta).and_then(|m|m.then(to.inverse()?)).ok_or_else(invalid)?;
+                layer.properties.placement=old.properties.placement.post(local_delta).ok_or_else(invalid)?;
+                layer.properties.placement.validate_for(Rect::from_extent(old.local_extent([self.width,self.height])))?;
+            }
+            if let Some(mask)=layer.mask.as_mut() {
+                let original=old.mask.as_ref().unwrap();
+                if original.linked && layer.kind==LayerKind::Paint {continue;}
+                let desired=self.layer_geometry(mask.id).projective().and_then(|m|m.then(delta)).ok_or_else(invalid)?;
+                mask.placement=Projective::IDENTITY;
+                let rest=mask.geometry_in_parent(&layer.properties).projective().ok_or_else(invalid)?;
+                let ancestors=Point{x:self.layer_offset(old.id).x-old.properties.offset.x,y:self.layer_offset(old.id).y-old.properties.offset.y};
+                let rest=rest.then(Projective::from_affine(Affine::translation(ancestors))).ok_or_else(invalid)?;
+                mask.placement=desired.then(rest.inverse().ok_or_else(invalid)?).ok_or_else(invalid)?;
+                mask.validate()?;
+            }
+        }
+        Ok(Edit::Batch(layers.into_iter().zip(&self.layers).filter(|(a,b)|a!=*b).map(|(l,_)|Edit::ReplaceLayer(Box::new(l))).collect()))
+    }
     pub fn layer_offset(&self, id: LayerId) -> Point {
         target_offset(&self.layers, id)
     }
-    pub fn layer_transform(&self, id: LayerId) -> Affine {
-        target_transform(&self.layers, id)
+    pub fn layer_geometry(&self, id: LayerId) -> ImageTransform { target_geometry(&self.layers,id) }
+    pub fn affine_edit_transform(&self, id: LayerId) -> Option<Affine> { affine_edit_transform(&self.layers,id) }
+    pub fn validate_content_write(&self,id:LayerId)->Result<(),DrawingRefusal>{
+        let owner=self.target_owner(id).ok_or(DrawingRefusal::NoLayer)?;
+        if owner.id==id&&owner.kind!=LayerKind::Paint {return Err(match owner.kind {LayerKind::Group=>DrawingRefusal::Group,LayerKind::Background=>DrawingRefusal::Paper,LayerKind::Selection=>DrawingRefusal::SelectionLayer,_=>DrawingRefusal::EffectWithoutBase});}
+        if self.is_locked(id){return Err(DrawingRefusal::Locked);}
+        self.affine_edit_transform(id).ok_or(DrawingRefusal::NonAffine).map(|_|())
     }
     pub fn target_extent(&self, id: LayerId) -> [u32; 2] {
         let canvas = [self.width, self.height];
-        self.target_owner(id).map_or(canvas, |l| l.local_extent(canvas))
+        self.target_owner(id).map_or(canvas, |l| l.mask.as_ref().filter(|m|m.id==id).map_or_else(||l.local_extent(canvas),|m|m.local_extent(l.local_extent(canvas))))
     }
     pub fn is_locked(&self, id: LayerId) -> bool {
         let mut target = self.target_owner(id);
@@ -1496,6 +1543,7 @@ impl Document {
         }
         if let Some(mask) = &layer.mask {
             mask.validate()?;
+            mask.geometry_in_parent(&layer.properties).validate_for(Rect::from_extent(mask.local_extent(layer.local_extent([self.width,self.height]))))?;
         }
         if layer.properties.blend == LayerBlend::PassThrough && layer.kind != LayerKind::Group {
             return Err(DocumentError::InvalidLayerOperation("Only groups can use Pass Through"));
@@ -1526,8 +1574,8 @@ impl Document {
             || !(0.0..=1.0).contains(&layer.opacity)
             || !layer.properties.offset.x.is_finite()
             || !layer.properties.offset.y.is_finite()
-            || layer.properties.placement.inverse().is_none()
-            || (layer.properties.placement != Affine::IDENTITY
+            || layer.properties.placement.validate_for(Rect::from_extent(layer.local_extent([self.width,self.height]))).is_err()
+            || (layer.properties.placement.as_affine() != Some(Affine::IDENTITY)
                 && !matches!(layer.kind, LayerKind::Paint | LayerKind::Selection))
         {
             return Err(DocumentError::InvalidLayerOperation("Invalid layer value"));

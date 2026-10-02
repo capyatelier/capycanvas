@@ -11,21 +11,26 @@ impl BakeSteps {
     const SIDE: u32 = 1024;
 
     pub fn new(document: &Document, batches: &[DabBatch]) -> Option<Self> {
-        (!batches.is_empty() && batches.iter().all(|batch| {
-            let DabBatchKind::LayerOperation(index) = batch.kind else { return false };
-            document.layer(batch.layer_id).is_some_and(|layer| {
-                matches!(layer.pending_operations[index as usize].kind,
-                    LayerOperationKind::Bake { .. } | LayerOperationKind::FrequencyDetail { .. })
-            })
-        }) && batches.iter().any(|batch| {
+        batches.iter().any(|batch| Self::is_bake(document, batch) && (
             batch.damage.max.x - batch.damage.min.x > Self::SIDE as f32
                 || batch.damage.max.y - batch.damage.min.y > Self::SIDE as f32
-        })).then(Self::default)
+        )).then(Self::default)
+    }
+
+    fn is_bake(document: &Document, batch: &DabBatch) -> bool {
+        let DabBatchKind::LayerOperation(index) = batch.kind else { return false; };
+        document.target_owner(batch.layer_id).and_then(|layer| layer.target_operations(batch.layer_id))
+            .and_then(|operations| operations.get(index as usize)).is_some_and(|operation| matches!(operation.kind,
+                LayerOperationKind::Bake { .. } | LayerOperationKind::FrequencyDetail { .. }))
+    }
+    fn following(self, batches: &[DabBatch]) -> Option<Self> {
+        (self.batch + 1 < batches.len()).then_some(Self { batch: self.batch + 1, cursor: None })
     }
 
     pub fn next(self, document: &Document, batches: &[DabBatch]) -> (DabBatch, Option<Self>) {
         let mut batch = batches[self.batch].clone();
-        let extent = document.layer(batch.layer_id).unwrap().local_extent([document.width, document.height]);
+        if !Self::is_bake(document, &batch) { return (batch, self.following(batches)); }
+        let extent = document.target_extent(batch.layer_id);
         let min = [batch.damage.min.x, batch.damage.min.y].map(|v| v.max(0.) as u32 / 256 * 256);
         let max = [batch.damage.max.x.ceil() as u32, batch.damage.max.y.ceil() as u32];
         let max = [max[0].div_ceil(256).saturating_mul(256).min(extent[0]), max[1].div_ceil(256).saturating_mul(256).min(extent[1])];
@@ -36,9 +41,7 @@ impl BakeSteps {
             Some(Self { cursor: Some([end[0], y]), ..self })
         } else if end[1] < max[1] {
             Some(Self { cursor: Some([min[0], end[1]]), ..self })
-        } else if self.batch + 1 < batches.len() {
-            Some(Self { batch: self.batch + 1, cursor: None })
-        } else { None };
+        } else { self.following(batches) };
         (batch, next)
     }
 }

@@ -102,11 +102,11 @@ impl Sources {
         self.entries.retain(|id, _| wanted.contains(id));
     }
     fn update(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, layer: &Layer, is_mask: bool, batch_tiles: &[Vec<brush_tiles::BrushTile>]) {
-        let extent = layer.local_extent(packet.document_extent);
+        let extent = if is_mask { layer.mask.as_ref().unwrap().local_extent(layer.local_extent(packet.document_extent)) } else { layer.local_extent(packet.document_extent) };
         let (id, plane, image, mask) = if is_mask {
             (layer.mask.as_ref().unwrap().id, RasterPlane::Mask, None, metadata::mask_metadata(&layer.mask))
         } else { (layer.id, RasterPlane::Color, layer.source.clone(), None) };
-        let blend_space = if is_mask || r.moving_layer == Some(id) || layer_core::target_transform(packet.layers, id) != layer_core::Affine::IDENTITY {
+        let blend_space = if is_mask || r.moving_layer == Some(id) || !layer_core::target_geometry(packet.layers, id).is_identity() {
             layer_core::BlendSpace::Linear
         } else { packet.blend_space };
         let raw_material = !is_mask && mapped_material(r, packet, id);
@@ -243,12 +243,12 @@ impl Scene {
         &mut self, cache: &Cache, commands: &mut Commands, r: &mut WgpuRasterizer,
         packet: FramePacket<'_>, encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        let requested = cache.source_levels(r, packet, &self.scale_sources);
-        let budget = cache.source_budget(r, packet, commands, Some(&self.scale_sources));
+        let requested = cache.source_levels(r, packet, self);
+        let budget = cache.source_budget(r, packet, commands, Some(self));
         let reserved = self.scale_sources.retain_levels(&requested, budget);
         let mut remaining = budget.saturating_sub(reserved);
         for (layer, id) in targets(r, packet).collect::<Vec<_>>() {
-            if cache.streamed_sources && layer_core::target_transform(packet.layers, id) == layer_core::Affine::IDENTITY { continue; }
+            if cache.streamed_sources && layer_core::target_geometry(packet.layers, id).is_identity() { continue; }
             let Some((_, required)) = requested.get(&id).and_then(|levels| levels.first_key_value()) else { continue; };
             let source = &self.scale_sources.entries[&id];
             let existing = source.levels.range(..required.level).rev().find(|(_, level)| source.accepts(level));
@@ -293,7 +293,7 @@ impl Scene {
     pub(super) fn reduce_color_pages(
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, layer: &Layer, plan: display_mips::Plan,
-        output: &wgpu::TextureView, missing: &[[u32; 2]], placement: Option<layer_core::Affine>,
+        output: &wgpu::TextureView, missing: &[[u32; 2]], placement: Option<layer_core::ImageTransform>,
     ) -> Result<PixelRect, GpuRasterError> {
         let level = plan.level;
         let extent = if placement.is_some() { packet.document_extent } else { layer.local_extent(packet.document_extent) };
@@ -304,8 +304,8 @@ impl Scene {
                 let entry = &self.scale_sources.entries[&layer.id];
                 let mut scratch = None;
                 let (source, base, reduced_preview, over, empty) = if placement.is_some() || (entry.watercolor.is_some() && !entry.raw_material) {
-                    let (tile, pigment) = match placement {
-                        Some(placement) => self.placed_material_inputs(r, packet, layer, placement, tile)?,
+                    let (tile, pigment) = match &placement {
+                        Some(placement) => self.placed_material_inputs(r, packet, layer, placement.clone(), tile)?,
                         None => (self.local_color_tile(r, packet, layer, tile)?, r.empty_view.clone()),
                     };
                     scratch = Some(tile);

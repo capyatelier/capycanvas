@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::{preimage, receive_request};
-use layer_core::{Affine, ImageTransform, Interpolation, TransformMap};
+use layer_core::{Affine, ImageTransform, Interpolation, LayerPlacement};
 
 fn operation(id: u64, affine: Affine, selection: Option<Selection>) -> LayerOperation {
     let mut coverage = LayerMask::reveal_all(LayerId(id), Point::default());
@@ -9,9 +9,7 @@ fn operation(id: u64, affine: Affine, selection: Option<Selection>) -> LayerOper
     LayerOperation {
         placement: layer_core::Affine::IDENTITY,
         coverage,
-        kind: LayerOperationKind::Transform(ImageTransform {
-            map: TransformMap::Affine(affine),
-            interpolation: Interpolation::Nearest,
+        kind: LayerOperationKind::Transform(ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(affine) },
             ..Default::default()
         }),
     }
@@ -136,9 +134,7 @@ fn bicubic_and_lanczos_transforms_clamp_overshoot_at_every_sample_depth() {
             moving: false,
             layer: layer.id,
             selection: None,
-            transform: ImageTransform {
-                map: TransformMap::Affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])),
-                interpolation,
+            transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..LayerPlacement::from_affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])) },
                 ..Default::default()
             },
         }))
@@ -174,9 +170,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
         moving,
         layer: layer.id,
         selection: None,
-        transform: ImageTransform {
-            map: TransformMap::Affine(affine),
-            interpolation,
+        transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..LayerPlacement::from_affine(affine) },
             ..Default::default()
         },
     };
@@ -230,7 +224,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
 /// Previews of each map of a selection's `source` over paint and wetness,
 /// cutting the source or keeping it, match replaying it as an operation,
 /// cancelling restores the layer, and applying the last keeps its preview.
-fn live_previews_match_replay(maps: fn(Rect) -> Vec<TransformMap>, keep_source: bool) {
+fn live_previews_match_replay(maps: fn(Rect) -> Vec<LayerPlacement>, keep_source: bool) {
     use layer_core::DefaultBrushPreset::*;
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -270,10 +264,9 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<TransformMap>, keep_source: 
             transform: ImageTransform::default(),
         };
         for (n, map) in maps(source).into_iter().enumerate() {
-            preview.transform = ImageTransform {
-                map,
-                interpolation: Interpolation::Linear,
+            preview.transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Linear, ..map },
                 keep_source,
+                source_from_owner: None,
             };
             r.set_transform_preview(Some(&preview)).unwrap();
             frame(&mut r, layers, extent, &[], &[], false);
@@ -332,7 +325,7 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
             [[300., 300.], [60., 300.], [60., 60.], [300., 60.]],
         ]
         .map(|quad| {
-            TransformMap::Projective(layer_core::Projective::rect_to_quad(source, quad.map(|[x, y]| Point { x, y })).unwrap())
+            LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(source, quad.map(|[x, y]| Point { x, y })).unwrap())
         })
         .to_vec()
     }, false);
@@ -342,7 +335,7 @@ fn live_perspective_matches_replay_cancels_exactly_and_commits_without_jump() {
 fn moved_copies_that_keep_their_source_match_replay_and_commit_without_jump() {
     live_previews_match_replay(|_| {
         [[120., -40.], [-35., 16.], [250., 70.]]
-            .map(|[x, y]| TransformMap::Affine(Affine::translation(Point { x, y })))
+            .map(|[x, y]| LayerPlacement::from_affine(Affine::translation(Point { x, y })))
             .to_vec()
     }, true);
 }
@@ -476,7 +469,7 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
                 source: RegionSource::TransformedSelection {
                     layer: layer.id,
                     selection: std::sync::Arc::new(selection),
-                    map: TransformMap::Projective(map),
+                    map: LayerPlacement::from_projective(map),
                 },
                 position: [0, 0],
                 tolerance: 0.,
@@ -531,7 +524,7 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
                 ])
                 .unwrap(),
             ),
-            map: TransformMap::Projective(map),
+            map: LayerPlacement::from_projective(map),
         },
         position: [0, 0],
         tolerance: 0.,
@@ -565,7 +558,7 @@ fn warps(source: Rect) -> Vec<layer_core::MeshMap> {
 #[test]
 fn live_warps_match_replay_cancel_exactly_and_commit_without_jump() {
     live_previews_match_replay(|source| {
-        warps(source).into_iter().map(|mesh| TransformMap::Mesh(std::sync::Arc::new(mesh))).collect()
+        warps(source).into_iter().map(|mesh| layer_core::LayerPlacement { mesh: Some(std::sync::Arc::new(mesh)), ..Default::default() }).collect()
     }, false);
 }
 
@@ -584,9 +577,7 @@ fn mask_warps_commit_and_replay_as_previewed() {
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         frame(&mut r, &layer, &[], true);
         let original = mask_values(&r);
-        let transform = ImageTransform {
-            map: TransformMap::Mesh(std::sync::Arc::new(mesh)),
-            interpolation: Interpolation::Bicubic,
+        let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..layer_core::LayerPlacement { mesh: Some(std::sync::Arc::new(mesh)), ..Default::default() } },
             ..Default::default()
         };
         r.set_transform_preview(Some(&layer_render::TransformPreview {
@@ -644,7 +635,7 @@ fn pixel_selections_resample_through_warps_like_their_affine() {
         min: Point::default(),
         max: Point { x: extent[0] as f32, y: extent[1] as f32 },
     };
-    let resample = |r: &mut WgpuRasterizer, id: u64, map: TransformMap| {
+    let resample = |r: &mut WgpuRasterizer, id: u64, map: LayerPlacement| {
         let request = RegionRequest {
             contiguous: false,
             selection: None,
@@ -663,11 +654,11 @@ fn pixel_selections_resample_through_warps_like_their_affine() {
         assert_eq!(result.request_id, id);
         result.pixels
     };
-    let expected = resample(&mut r, 90, TransformMap::Affine(affine));
+    let expected = resample(&mut r, 90, LayerPlacement::from_affine(affine));
     let warped = resample(
         &mut r,
         91,
-        TransformMap::Mesh(std::sync::Arc::new(MeshMap::from_affine(bounds, [4, 3], affine).unwrap())),
+        layer_core::LayerPlacement { mesh: Some(std::sync::Arc::new(MeshMap::from_affine(bounds, [4, 3], affine).unwrap())), ..Default::default() },
     );
     assert_eq!(warped.extent(), extent);
     let byte = |words: &[u32], x: u32, y: u32| (words[(y * extent[0].div_ceil(4) + x / 4) as usize] >> ((x % 4) * 8)) & 255;

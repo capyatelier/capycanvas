@@ -262,7 +262,7 @@ class AndroidCanvasBarBenchmarkTest {
                 invoke("apply_transform")
                 val retained = saveProject("bake-retained.capy")
                 val owner = retained.getJSONObject("document").array("layers").objects().first {
-                    it.getString("kind") == "Paint" && it.getJSONObject("properties").getJSONArray("placement").let { pose ->
+                    it.getString("kind") == "Paint" && it.getJSONObject("properties").affinePlacement().let { pose ->
                         (0 until 6).map { pose.getDouble(it) } != listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
                     }
                 }.getLong("id")
@@ -299,7 +299,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val baked = saveProject("bake-completed.capy")
                 check(baked.getJSONObject("tiled_sources").array("images").length() == 0) { "The retained source remains after bake" }
                 val properties = baked.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties")
-                check((0 until 6).map { properties.getJSONArray("placement").getDouble(it) } == listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0))
+                check((0 until 6).map { properties.affinePlacement().getDouble(it) } == listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0))
                 check(raster(baked).getJSONObject("watercolor").toString() == style)
                 val planes = raster(baked).array("tiles").objects().map { it.getJSONObject("key").getString("plane") }
                 check("Color" in planes && "WatercolorWetness" in planes) { "Baked native material is missing" }
@@ -621,7 +621,29 @@ class AndroidCanvasBarBenchmarkTest {
                         ?.copyTo(File(output, "photo-translate-drag-${index + 1}.json"), overwrite = true)
                     recordProcessMemory("after-photo-motion-${index + 1}")
                 }
-                if (args.getString("labels") == "photo-translate-drag") {
+                if (args.getString("labels") in listOf("photo-retained-distort-drag", "photo-retained-warp-drag")) {
+                    val label = args.getString("labels")!!
+                    invoke("reset_transform")
+                    val warp = label == "photo-retained-warp-drag"
+                    invoke(if (warp) "transform_warp" else "transform_distort")
+                    SystemClock.sleep(800)
+                    repeat(translationRepeats) { index ->
+                        measure(label) {
+                            drag(if (warp) anchorPoint(1.0 / 3) else corner(), duration,
+                                if (args.getString("saveRetainedDiagnostic") == "true") { t ->
+                                    -120 * (t * 1000 / duration).coerceIn(0.0, 1.0) to -80 * (t * 1000 / duration).coerceIn(0.0, 1.0)
+                                } else wiggle)
+                        }
+                        File(output, "$label.json").takeIf { it.exists() }
+                            ?.copyTo(File(output, "$label-${index + 1}.json"), overwrite = true)
+                        recordProcessMemory("after-$label-${index + 1}")
+                    }
+                    if (args.getString("saveRetainedDiagnostic") == "true") {
+                        invoke("apply_transform")
+                        val saved = saveProject("retained-diagnostic.capy")
+                        File(output, "retained-diagnostic-manifest.json").writeText(saved.toString(2))
+                    } else if (args.getString("finalBake") == "true") finalBake() else invoke("cancel_transform")
+                } else if (args.getString("labels") == "photo-translate-drag") {
                     if (args.getString("finalBake") == "true") finalBake() else invoke("cancel_transform")
                     if (memory) {
                         SystemClock.sleep(2000)

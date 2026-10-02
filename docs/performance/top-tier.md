@@ -16,6 +16,8 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Brush-cursor hover | 120 | | |
 | Placed-photo drag (24 MP photo) | 120 | | |
 | Retained wet-photo Transform body drag (61 MP) | 120 | **Not met.** 36.3–37.0 renderer updates/s; presentation unmeasured | [Material transforms](#retained-wet-photo-transforms), 2026-10-02 |
+| Retained wet-photo Distort corner drag (61 MP) | 120 | **Not met.** 29.37 completed updates/s, warm median; presentation unmeasured | [Retained Distort and Warp](#retained-distort-and-warp), 2026-10-02 |
+| Retained wet-photo Warp node drag (61 MP) | 120 | **Not met.** 15.97 completed updates/s, warm median; presentation unmeasured | [Retained Distort and Warp](#retained-distort-and-warp), 2026-10-02 |
 | Pixel transform handle drag: Free, Uniform, Skew or Rotate | 120 | | |
 | Pixel transform: Distort or Perspective | 120 | | |
 | Pixel transform: Warp | 120 | | |
@@ -161,6 +163,61 @@ Records: `artifacts/testing/material/{android-box-hdr-final,android-box-reductio
 `android-watercolor-calibration`, `android-area-calibration`,
 `android-reduce-calibration` and `android-compose-calibration` directories
 in the photo-editing worktree. Low and mid reference tiers remain unmeasured.
+
+## Retained Distort and Warp
+
+Measured on 2026-10-02 on the Wacom MovinkPad Pro 14, using the private
+Android benchmark app with release Rust, a nondebuggable release-derived app,
+and R8 disabled for the separate instrumentation APK. Distort uses
+`7040f1be6` plus the retained-geometry changes; Warp uses `516a613cb` plus those
+changes and the footprint-cache correction. Both load the 9504 × 6336 native
+project normally, import the generated opaque photo, and paint a 400 px wet
+watercolor stroke. The saved U8/sRGB, Linear-blending input has fourteen Color
+and fourteen watercolor-wetness pages. Fit zoom is 0.16534 at a 2880 × 1800
+viewport. Each gesture moves a corner or node for five seconds; the table
+separates the first gesture from the following three.
+
+| Motion | First submitted / completed updates/s | Warm submitted / completed median | Warm completed range | Warm callback median range | Warm callback p99 range |
+| --- | --- | --- | --- | --- | --- |
+| Distort | 29.96 / 29.56 | 29.77 / 29.37 | 29.37–29.55 | 30.35–31.29 ms | 37.41–40.87 ms |
+| Warp | 16.78 / 16.38 | 16.37 / 15.97 | 15.96–16.18 | 55.88–56.47 ms | 74.39–75.48 ms |
+
+These are submitted drawing updates and GPU-completed updates during motion,
+not presented frames. Neither motion qualifies the 120 fps target.
+The four Warp postgesture samples observe 8,473–8,500 process mappings,
+2.679–2.687 GB tracked allocation, 2.762–2.770 GB reservation, and
+0.836–0.952 GB PSS. These measures overlap and finite samples do not establish
+absolute memory peaks.
+
+The initial near-unit Distort incorrectly requested full-resolution source
+sampling and reached only 0.40 updates/s. Corrected source-level admission and
+batched projective sampling reach the Distort result above. Warp additionally
+needed tighter conservative stretch and geometry accounting, a sparse mapped
+material region, canonical mesh reuse, source-plan reuse, batching, and reuse of
+immutable source footprints. Its measured composition falls from 5.16 s to
+8.81 ms; prepare falls to 0.56 ms. The final short trace has 3.764 million
+display pixels, approximately 93 command passes per update, six cold source
+misses, and no upload drains or raster restores during motion.
+
+Separate Stats attribution runs observe Distort main GPU median 30.8 ms and
+Warp approximately 40.4 ms for readings added between the before/after snapshots.
+The latter includes end updates; it is not a motion-only presentation measure.
+Warp command finishing and queue submission take median 27.7 and 20.1 ms in
+the ordinary short trace. The material cache uses absolute page coordinates;
+Color and wetness share mapped UV positions. A single UV target introduces
+render-to-compute dependencies between mapped pages. The remaining GPU and
+driver costs are consistent with that audited mesh sampling workload after the
+identified repeated CPU work is removed. This does not establish an absolute
+hardware limit or exclude future improvements.
+
+Distort APK SHA-256:
+`840bf66b4058daec17dda621ceffa07deef0188820eaa647fce66c8e5d5735f0`.
+Warp APK SHA-256:
+`878768b91230680d4c8b9bc627c8851d3fcef77e648f5b3c08645b9627393c05`.
+Raw records and source manifests remain in the photo-editing worktree under
+`artifacts/testing/material/p03-android-batch` and
+`artifacts/testing/material/p03-android-warp-footprint`. Low and mid reference
+tiers remain unmeasured.
 
 ## Brushes
 

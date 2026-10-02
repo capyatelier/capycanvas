@@ -6,7 +6,7 @@ pub(super) type Node = Arc<Expression>;
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum Expression {
     Color([u32; 4]),
-    Source { id: LayerId, placement: [u32; 6], extent: [u32; 2], outside: u32 },
+    Source { id: LayerId, placement: pixel_transform::GeometryKey, extent: [u32; 2], outside: u32 },
     Opacity { input: Node, opacity: u32 },
     Combine { front: Node, back: Node, blend: u32, flags: u32 },
     Effect { input: Node, chain: Vec<(LayerId, u64, u32)>, masks: Vec<Option<Node>>, radius: Option<u32> },
@@ -34,7 +34,7 @@ impl Expression {
         match self {
             Self::Color(_) => (0, 0),
             Self::Source { placement, .. } => {
-                let work = u32::from(*placement != layer_core::Affine::IDENTITY.0.map(f32::to_bits));
+                let work = u32::from(!placement.0.is_identity());
                 (work, work)
             }
             Self::Opacity { input, .. } => input.cost(),
@@ -58,10 +58,10 @@ impl Expression {
             Self::Color(_) => PixelRect::EMPTY,
             Self::Source { id, placement, .. } => sources.entries.get(id).map_or(plan.bounds, |source| {
                 if source.damage.is_empty() { return PixelRect::EMPTY; }
-                let placement = layer_core::Affine(placement.map(f32::from_bits));
-                if placement == layer_core::Affine::IDENTITY { return source.damage; }
-                let local = source.damage.expand(1 << source_level(plan.level, placement), source.extent);
-                pixel_rect(placement.bounds(local.to_rect()), plan.extent).expand(
+                let placement = placement.0.clone();
+                if placement.is_identity() { return source.damage; }
+                let local = source.damage.expand(1 << source_level(plan.level, &placement, source.extent), source.extent);
+                pixel_rect(placement.forward_bounds(local.to_rect()), plan.extent).expand(
                     source.watercolor.map_or(0, |w| w.radius()), plan.extent)
             }),
             Self::Opacity { input, .. } => input.damage(sources, plan),
@@ -99,8 +99,8 @@ impl Expression {
                 if let Some(transforms) = r.transforms.as_ref().filter(|t| t.display_source(*id)) {
                     return transforms.direct_source(*id);
                 }
-                r.paint_layers.iter().find(|l| l.id == *id).is_none_or(|l| l.watercolor.is_none())
-                    && (r.moving_layer == Some(*id) || *placement != layer_core::Affine::IDENTITY.0.map(f32::to_bits))
+                placement.0.as_affine().is_some() && r.paint_layers.iter().find(|l| l.id == *id).is_none_or(|l| l.watercolor.is_none())
+                    && (r.moving_layer == Some(*id) || !placement.0.is_identity())
             }
             Self::Opacity { input, .. } => input.deferred(r),
             Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(r),
@@ -200,8 +200,8 @@ impl Builder<'_> {
         let id = if mask { layer.mask.as_ref().unwrap().id } else { layer.id };
         if self.sources.is_some_and(|sources| !sources.entries.contains_key(&id)) { return Expression::color([0.; 4]); }
         let outside = layer.mask.as_ref().filter(|_| mask).map_or(0., |m| if m.inverted { 1. - m.default_coverage } else { m.default_coverage });
-        Arc::new(Expression::Source { id, placement: layer_core::target_transform(self.packet.layers, id).0.map(f32::to_bits),
-            extent: layer.local_extent(self.packet.document_extent), outside: outside.to_bits() })
+        Arc::new(Expression::Source { id, placement: pixel_transform::GeometryKey(layer_core::target_geometry(self.packet.layers, id)),
+            extent: if mask { layer.mask.as_ref().unwrap().local_extent(layer.local_extent(self.packet.document_extent)) } else { layer.local_extent(self.packet.document_extent) }, outside: outside.to_bits() })
     }
 }
 impl stack::Compositor for Builder<'_> {
@@ -293,7 +293,7 @@ impl Evaluator<'_> {
         } else { output };
         let result = match node.as_ref() {
             Expression::Color(c) => Value::Color(c.map(f32::from_bits)),
-            Expression::Source { id, placement, extent, outside } => self.source(*id, layer_core::Affine(placement.map(f32::from_bits)), *extent, f32::from_bits(*outside))?,
+            Expression::Source { id, placement, extent, outside } => self.source(*id, placement.0.clone(), *extent, f32::from_bits(*outside))?,
             Expression::Opacity { input, opacity } => self.evaluate(input)?.with_opacity(f32::from_bits(*opacity)),
             Expression::Combine { front, back, blend, flags } => {
                 let (front, back) = if front.cost().1 >= back.cost().1 {

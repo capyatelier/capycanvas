@@ -161,3 +161,5 @@ tool-tonal-mid-shadows = 중간 어두운 영역 · −5~−3.5스톱
 tool-tonal-midtones = 중간톤 · −3.5~−1.5스톱
 tool-tonal-shadows = 어두운 영역 · −5스톱 미만
 tool-tonal-tones = 톤 · 기준 흰색에 대한 스톱
+
+tool-action-group-transform-warp-split = 격자 분할

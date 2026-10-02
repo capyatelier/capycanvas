@@ -27,128 +27,86 @@ impl Interpolation {
     }
 }
 
-/// Source-to-destination geometry of one layer-local pixel transform.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum TransformMap {
-    Affine(Affine),
-    Projective(Projective),
-    Mesh(Arc<MeshMap>),
+pub struct LayerPlacement {
+    pub outer: Projective,
+    pub mesh: Option<Arc<MeshMap>>,
+    pub interpolation: Interpolation,
 }
-impl Default for TransformMap {
-    fn default() -> Self {
-        Self::Affine(Affine::IDENTITY)
+impl Default for LayerPlacement { fn default() -> Self { Self::IDENTITY } }
+impl LayerPlacement {
+    pub const IDENTITY: Self = Self { outer: Projective::IDENTITY, mesh: None, interpolation: Interpolation::Linear };
+    pub fn from_affine(map: Affine) -> Self { Self::from_projective(Projective::from_affine(map)) }
+    pub fn from_projective(outer: Projective) -> Self { Self { outer, ..Self::IDENTITY } }
+    pub fn as_affine(&self) -> Option<Affine> { self.mesh.is_none().then(|| self.outer.as_affine()).flatten() }
+    pub fn projective(&self) -> Option<Projective> { self.mesh.is_none().then_some(self.outer) }
+    pub fn map(&self, p: Point) -> Option<Point> { self.outer.map(match &self.mesh { Some(mesh) => mesh.map(p)?, None => p }) }
+    pub fn source_at(&self, point:Point, tolerance:f32)->Option<Point> {let inner=self.outer.inverse()?.map(point)?;match &self.mesh{Some(mesh)=>mesh.source_at(inner,tolerance/self.outer.magnification(mesh.drawn_bounds()).max(1e-6)),None=>Some(inner)}}
+    pub fn post(&self, map: Projective) -> Option<Self> { Some(Self { outer: self.outer.then(map)?, ..self.clone() }) }
+    pub fn validate_for(&self, source: Rect) -> Result<(), DocumentError> {
+        let covered = match &self.mesh { Some(mesh) if mesh.valid() => mesh.drawn_bounds(), Some(_) => return Err(DocumentError::InvalidLayerOperation("Invalid mesh")), None => source };
+        if self.outer.inverse().is_some() && self.outer.covers(covered) { Ok(()) }
+        else { Err(DocumentError::InvalidLayerOperation("Invalid layer placement")) }
     }
-}
-impl TransformMap {
-    /// The destination of a source point, if it has one.
-    pub fn map(&self, p: Point) -> Option<Point> {
-        match self {
-            Self::Affine(affine) => Some(affine.map(p)),
-            Self::Projective(projective) => projective.map(p),
-            Self::Mesh(mesh) => mesh.map(p),
-        }
+    pub fn forward_bounds(&self, source: Rect) -> Rect {
+        if source.is_empty() { return Rect::EMPTY; }
+        self.outer.bounds(self.mesh.as_ref().map_or(source, |m| m.drawn_bounds())).unwrap_or(Rect::UNBOUNDED)
     }
-    /// The map as a homography, unless it is a mesh.
-    pub fn projective(&self) -> Option<Projective> {
-        match self {
-            Self::Affine(affine) => Some(Projective::from_affine(*affine)),
-            Self::Projective(projective) => Some(*projective),
-            Self::Mesh(_) => None,
-        }
-    }
-}
-impl From<Projective> for TransformMap {
-    fn from(map: Projective) -> Self {
-        map.as_affine().map_or(Self::Projective(map), Self::Affine)
+    pub fn magnification(&self, source: Rect) -> f32 {
+        match &self.mesh { Some(mesh) => mesh.magnification() * self.outer.magnification(mesh.drawn_bounds()), None => self.outer.magnification(source) }
     }
 }
 
-/// Transient pixel-transform command. Holders never persist it.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ImageTransform {
-    pub map: TransformMap,
-    pub interpolation: Interpolation,
-    /// Place a copy of the selected pixels and leave the originals in place.
-    #[serde(default)]
+    pub placement: LayerPlacement,
+    pub source_from_owner: Option<Projective>,
     pub keep_source: bool,
 }
 impl ImageTransform {
-    pub fn affine(affine: Affine) -> Self {
-        Self {
-            map: TransformMap::Affine(affine),
-            ..Default::default()
-        }
+    pub fn affine(map: Affine) -> Self { Self { placement: LayerPlacement::from_affine(map), ..Default::default() } }
+    pub fn projective(&self) -> Option<Projective> {
+        self.source_from_owner.map_or(Some(Projective::IDENTITY), Projective::inverse)?.then(self.placement.projective()?)
     }
-    pub fn as_affine(&self) -> Option<Affine> {
-        match self.map {
-            TransformMap::Affine(affine) => Some(affine),
-            _ => None,
-        }
+    pub fn as_affine(&self) -> Option<Affine> { self.projective()?.as_affine() }
+    pub fn map(&self, p: Point) -> Option<Point> {
+        self.placement.map(match self.source_from_owner { Some(map) => map.inverse()?.map(p)?, None => p })
     }
-    pub fn is_identity(&self) -> bool {
-        self.map.projective().and_then(Projective::as_affine) == Some(Affine::IDENTITY)
-    }
-    /// Finite and invertible geometry that the renderer can resample. A
-    /// perspective map resamples only the source it covers, and a mesh only
-    /// its rectangle.
+    pub fn source_at(&self,point:Point,tolerance:f32)->Option<Point> {let owner=self.placement.source_at(point,tolerance)?;match self.source_from_owner{Some(m)=>m.map(owner),None=>Some(owner)}}
+    pub fn is_identity(&self) -> bool { self.as_affine() == Some(Affine::IDENTITY) }
     pub fn validate(&self) -> Result<(), DocumentError> {
-        let valid = match &self.map {
-            TransformMap::Mesh(mesh) => mesh.valid(),
-            map => map.projective().and_then(Projective::inverse).is_some(),
-        };
-        if valid {
-            Ok(())
-        } else {
+        if self.placement.outer.inverse().is_none() || self.placement.mesh.as_ref().is_some_and(|m| !m.valid())
+            || self.source_from_owner.is_some_and(|m| m.inverse().is_none()) {
             Err(DocumentError::InvalidLayerOperation("Invalid transform"))
-        }
+        } else { Ok(()) }
     }
-    /// The same motion expressed in another layer-local space, where `to` maps
-    /// this transform's space into it.
+    pub fn validate_for(&self, source: Rect) -> Result<(), DocumentError> {
+        self.validate()?;
+        let domain = self.source_from_owner.map_or(Some(source), |m| m.inverse()?.bounds(source))
+            .ok_or(DocumentError::InvalidLayerOperation("Invalid source placement"))?;
+        self.placement.validate_for(domain)
+    }
     pub fn conjugate(&self, to: Affine) -> Option<Self> {
-        let from = to.inverse()?;
-        let map = match &self.map {
-            TransformMap::Affine(affine) => TransformMap::Affine(from.then(*affine).then(to)),
-            TransformMap::Projective(projective) => TransformMap::Projective(
-                Projective::from_affine(from)
-                    .then(*projective)?
-                    .then(Projective::from_affine(to))?,
-            ),
-            TransformMap::Mesh(mesh) => TransformMap::Mesh(Arc::new(MeshMap {
-                frame: mesh.frame.then(to),
-                ..mesh.post(to)
-            })),
-        };
-        Some(Self { map, interpolation: self.interpolation, keep_source: self.keep_source })
+        to.inverse()?;
+        let to = Projective::from_affine(to);
+        let outer = self.placement.outer.then(to)?;
+        let source_from_owner = self.source_from_owner.unwrap_or(Projective::IDENTITY).then(to)?;
+        let mut result = Self { placement: LayerPlacement { outer, ..self.placement.clone() }, source_from_owner: Some(source_from_owner), keep_source: self.keep_source };
+        if result.placement.mesh.is_none() { result.placement.outer = result.projective()?; result.source_from_owner = None; }
+        Some(result)
     }
-    /// Bounds of the mapped source, without interpolation support. Unbounded
-    /// when part of the source has no image.
     pub fn forward_bounds(&self, source: Rect) -> Rect {
-        if source.is_empty() {
-            return Rect::EMPTY;
-        }
-        match &self.map {
-            TransformMap::Mesh(mesh) => mesh.drawn_bounds(),
-            map => map
-                .projective()
-                .and_then(|projective| projective.bounds(source))
-                .unwrap_or(Rect::UNBOUNDED),
-        }
+        if source.is_empty() { return Rect::EMPTY; }
+        let source = match self.source_from_owner { Some(map) => match map.inverse().and_then(|m| m.bounds(source)) { Some(r) => r, None => return Rect::UNBOUNDED }, None => source };
+        self.placement.forward_bounds(source)
     }
-    /// Conservative cut + placement footprint. Expand in source space before
-    /// mapping, since scaling also enlarges the interpolation support.
-    pub fn affected_bounds(&self, source: Rect) -> Rect {
-        let [cut, placed] = self.affected_regions(source);
-        cut.union(placed)
+    pub fn magnification(&self, source: Rect) -> f32 {
+        match self.source_from_owner { Some(map) => match map.inverse() { Some(inverse) => inverse.bounds(source).map_or(f32::INFINITY, |r| inverse.magnification(source) * self.placement.magnification(r)), None => f32::INFINITY }, None => self.placement.magnification(source) }
     }
-    /// Keep distant cut/placement regions separate for sparse allocation. A
-    /// transform that keeps its source cuts nothing.
+    pub fn affected_bounds(&self, source: Rect) -> Rect { let [cut, placed] = self.affected_regions(source); cut.union(placed) }
     pub fn affected_regions(&self, source: Rect) -> [Rect; 2] {
-        if source.is_empty() || self.is_identity() {
-            return [Rect::EMPTY; 2];
-        }
-        let support = source.outset(self.interpolation.support() as f32);
-        let cut = if self.keep_source { Rect::EMPTY } else { source };
-        [cut, self.forward_bounds(support)]
+        if source.is_empty() || self.is_identity() { return [Rect::EMPTY; 2]; }
+        [if self.keep_source { Rect::EMPTY } else { source }, self.forward_bounds(source.outset(self.placement.interpolation.support() as f32))]
     }
 }
 
@@ -270,15 +228,11 @@ pub(crate) mod tests {
     #[test]
     fn damage_keeps_cut_and_placement_separate_and_scales_filter_support() {
         let source = rect(10., 20., 30., 40.);
-        let mut transform = ImageTransform {
-            map: TransformMap::Affine(Affine([4., 0., 0., 2., 300., 0.])),
-            interpolation: Interpolation::Nearest,
-            ..Default::default()
-        };
+        let mut transform = ImageTransform { placement: { let mut placement = LayerPlacement::from_affine(Affine([4., 0., 0., 2., 300., 0.])); placement.interpolation = Interpolation::Nearest; placement }, ..Default::default() };
         let [cut, moved] = transform.affected_regions(source);
         assert_eq!(cut, source);
         assert_eq!(moved, rect(340., 40., 420., 80.));
-        transform.interpolation = Interpolation::Linear;
+        transform.placement.interpolation = Interpolation::Linear;
         assert_eq!(transform.affected_regions(source)[1], rect(336., 38., 424., 82.));
         assert_eq!(
             ImageTransform::default().affected_bounds(source),
@@ -305,24 +259,20 @@ pub(crate) mod tests {
             SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x4444]).unwrap(),
         ));
         for map in [
-            TransformMap::Affine(affine),
-            TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap()),
-            TransformMap::Mesh(Arc::new(mesh.clone())),
+            LayerPlacement::from_affine(affine),
+            LayerPlacement::from_projective(Projective::rect_to_quad(source, quad).unwrap()),
+            LayerPlacement { mesh: Some(Arc::new(mesh.clone())), ..Default::default() },
         ] {
-            let transform = ImageTransform {
-                map: map.clone(),
-                interpolation: Interpolation::Bicubic,
-                ..Default::default()
-            };
+            let transform = ImageTransform { placement: { let mut placement = map.clone(); placement.interpolation = Interpolation::Bicubic; placement }, ..Default::default() };
             assert!(transform.validate().is_ok() && !transform.is_identity());
             let bounds = transform.forward_bounds(source).outset(1e-3);
             let moved = transform.conjugate(to).unwrap();
-            assert_eq!(moved.interpolation, transform.interpolation);
-            assert_eq!(std::mem::discriminant(&moved.map), std::mem::discriminant(&map));
+            assert_eq!(moved.placement.interpolation, transform.placement.interpolation);
+            assert_eq!(moved.placement.mesh.is_some(), map.mesh.is_some());
             for p in samples(source) {
                 let q = map.map(p).unwrap();
                 assert!(q.x >= bounds.min.x && q.y >= bounds.min.y && q.x <= bounds.max.x && q.y <= bounds.max.y);
-                near(moved.map.map(to.map(p)).unwrap(), to.map(q), 1e-2);
+                near(moved.map(to.map(p)).unwrap(), to.map(q), 1e-2);
             }
             assert!(transform.conjugate(Affine([0.; 6])).is_none());
             let mut selection = Selection::polygon(ring.to_vec()).unwrap().transformed(placement).unwrap();
@@ -337,35 +287,31 @@ pub(crate) mod tests {
             assert!(!selection.needs_resample(&map));
             assert_eq!(pixels.needs_resample(&map), pixels.mapped(&map).is_err());
         }
-        for map in [TransformMap::Affine(Affine::IDENTITY), TransformMap::Projective(Projective::IDENTITY)] {
-            assert!(ImageTransform { map, ..Default::default() }.is_identity());
+        for map in [LayerPlacement::from_affine(Affine::IDENTITY), LayerPlacement::from_projective(Projective::IDENTITY)] {
+            assert!(ImageTransform { placement: map, ..Default::default() }.is_identity());
         }
         let broken = MeshMap {
             net: mesh.net[1..].into(),
             ..mesh
         };
         for map in [
-            TransformMap::Affine(Affine([0.; 6])),
-            TransformMap::Projective(Projective([1., 0., 0., 1., 0., 0., 0., 0., 0.])),
-            TransformMap::Mesh(Arc::new(broken)),
+            LayerPlacement::from_affine(Affine([0.; 6])),
+            LayerPlacement::from_projective(Projective([1., 0., 0., 1., 0., 0., 0., 0., 0.])),
+            LayerPlacement { mesh: Some(Arc::new(broken)), ..Default::default() },
         ] {
-            assert!(ImageTransform { map, ..Default::default() }.validate().is_err());
+            assert!(ImageTransform { placement: map, ..Default::default() }.validate().is_err());
         }
     }
     #[test]
     fn perspective_transforms_bound_their_padded_source() {
         let source = rect(10., 10., 110., 60.);
         let quad = [[40., 0.], [90., 20.], [130., 90.], [0., 70.]].map(|[x, y]| Point { x, y });
-        let mut transform = ImageTransform {
-            map: TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap()),
-            interpolation: Interpolation::Nearest,
-            ..Default::default()
-        };
+        let mut transform = ImageTransform { placement: { let mut placement = LayerPlacement::from_projective(Projective::rect_to_quad(source, quad).unwrap()); placement.interpolation = Interpolation::Nearest; placement }, ..Default::default() };
         let [cut, moved] = transform.affected_regions(source);
         assert_eq!(cut, source);
         near(moved.min, Point { x: 0., y: 0. }, 2e-3);
         near(moved.max, Point { x: 130., y: 90. }, 2e-3);
-        transform.interpolation = Interpolation::Linear;
+        transform.placement.interpolation = Interpolation::Linear;
         let padded = transform.affected_regions(source)[1];
         assert!(padded.min.x < moved.min.x && padded.max.y > moved.max.y);
         assert_eq!(transform.forward_bounds(rect(10., 10., 110., 1e5)), Rect::UNBOUNDED);

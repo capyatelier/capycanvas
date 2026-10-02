@@ -304,7 +304,7 @@ pub(crate) fn invoke(session: &mut UiSession<Recorder>, command: CommandId) -> U
             let document = &request.document;
             let bounds = document.selection.as_ref().map_or_else(
                 || layer_core::Rect::from_extent(document.target_extent(target)),
-                |selection| document.layer_transform(target).inverse().unwrap().bounds(selection.coverage_bounds()),
+                |selection| document.affine_edit_transform(target).unwrap().inverse().unwrap().bounds(selection.coverage_bounds()),
             );
             session.engine.backend_mut().bounds_reply = Some(Ok(bounds));
             change.regions |= session.frame(tick + 1, tick + 1).unwrap().regions;

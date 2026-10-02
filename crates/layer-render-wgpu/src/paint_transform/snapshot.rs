@@ -132,6 +132,8 @@ pub(crate) struct Splitter<F> {
     contains: F,
     /// Pieces start and end on multiples of this, unless at the region's edge.
     align: u32,
+    original: bool,
+    offset: [i32;2],
 }
 impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
     /// A mesh transform needs its geometry, which bounds each region's source.
@@ -146,12 +148,16 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
             bounds,
             contains,
             align: 1,
+            original: true,
+            offset: [0;2],
         })
     }
     /// Keep every split on a multiple of `align` pixels.
     pub fn aligned(self, align: u32) -> Self {
         Self { align, ..self }
     }
+    pub fn shifted(self,offset:[i32;2])->Self {Self {offset,..self}}
+    pub fn placed(self) -> Self { Self { original: false, ..self } }
     /// Append the pieces of `start` and the pages each one reads.
     pub fn split(&self, start: PixelRect, jobs: &mut Vec<Footprint>) -> Result<(), GpuRasterError> {
         let mut pending = vec![start];
@@ -160,8 +166,11 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
                 continue;
             }
             let mut required = Vec::with_capacity(TRANSFORM_SLOTS + 1);
-            required.extend(page_coordinates(region).filter(|c| (self.contains)(*c)));
-            if let Some([x0, y0, x1, y1]) = self.map.footprint(region) {
+            if self.original { required.extend(page_coordinates(region).filter(|c| (self.contains)(*c))); }
+            if let Some([x0, y0, x1, y1]) = self.map.footprint_rect(layer_core::Rect {
+                min:layer_core::Point {x:region.min_x() as f32-self.offset[0] as f32,y:region.min_y() as f32-self.offset[1] as f32},
+                max:layer_core::Point {x:region.max_x() as f32-self.offset[0] as f32,y:region.max_y() as f32-self.offset[1] as f32},
+            }) {
                 let support = self.map.support;
                 let footprint = PixelRect::new(
                     (x0 - support).floor().max(0.) as u32,
@@ -271,7 +280,7 @@ enum SourceKind {
         bounds: [f64; 4],
     },
     /// Triangles of the tessellated mesh, binned by destination page.
-    Mesh(std::sync::Arc<super::mesh::MeshGeometry>),
+    Mesh(std::sync::Arc<super::mesh::MeshGeometry>, Option<Box<SourceMap>>),
 }
 impl SourceMap {
     fn new(
@@ -280,14 +289,14 @@ impl SourceMap {
         mesh: Option<std::sync::Arc<super::mesh::MeshGeometry>>,
     ) -> Result<Self, GpuRasterError> {
         let invalid = GpuRasterError::InvalidTransform("Transform must be finite and invertible");
-        let support = f64::from(transform.interpolation.support().max(1));
-        let inset = if transform.interpolation == layer_core::Interpolation::Nearest {
+        let support = f64::from(transform.placement.interpolation.support().max(1));
+        let inset = if transform.placement.interpolation == layer_core::Interpolation::Nearest {
             0.5
         } else {
             0.
         };
         let slots = TRANSFORM_SLOTS
-            - usize::from(matches!(transform.map, layer_core::TransformMap::Mesh(_)));
+            - usize::from(transform.placement.mesh.is_some());
         let map = |kind| Self {
             kind,
             support,
@@ -297,9 +306,18 @@ impl SourceMap {
         if transform.is_identity() {
             return Ok(map(SourceKind::Identity));
         }
-        let Some(projective) = transform.map.projective() else {
+        let Some(projective) = transform.projective() else {
             let geometry = mesh.ok_or(GpuRasterError::InvalidTransform("Unsupported transform"))?;
-            return Ok(map(SourceKind::Mesh(geometry)));
+            let adapter = transform.source_from_owner.map(|adapter| {
+                let mut map = Self::new(&layer_core::ImageTransform {
+                    placement: layer_core::LayerPlacement { outer: adapter.inverse().ok_or(invalid)?,
+                        mesh: None, interpolation: transform.placement.interpolation },
+                    source_from_owner: None, keep_source: false,
+                }, bounds, None)?;
+                map.inset = 0.;
+                Ok::<_, GpuRasterError>(Box::new(map))
+            }).transpose()?;
+            return Ok(map(SourceKind::Mesh(geometry, adapter)));
         };
         if let Some(affine) = projective.as_affine() {
             return Ok(map(SourceKind::Affine(affine.inverse().ok_or(invalid)?.0)));
@@ -330,17 +348,16 @@ impl SourceMap {
 
     /// Conservative source bounds of every sample the region's pixels take,
     /// including Float32 evaluation error but not interpolation support.
-    fn footprint(&self, region: PixelRect) -> Option<[f64; 4]> {
-        let centers = [
-            region.min_x() as f64 + self.inset,
-            region.min_y() as f64 + self.inset,
-            region.max_x() as f64 - self.inset,
-            region.max_y() as f64 - self.inset,
-        ];
+    fn footprint_rect(&self, region: layer_core::Rect) -> Option<[f64; 4]> {
+        let centers = [f64::from(region.min.x)+self.inset, f64::from(region.min.y)+self.inset,
+            f64::from(region.max.x)-self.inset, f64::from(region.max.y)-self.inset];
         match &self.kind {
-            SourceKind::Identity => None,
-            SourceKind::Mesh(geometry) => geometry.footprint(region).map(|[x0, y0, x1, y1]| {
-                [x0 - 1., y0 - 1., x1 + 1., y1 + 1.]
+            SourceKind::Identity => Some(centers),
+            SourceKind::Mesh(geometry, adapter) => geometry.footprint_rect(region).and_then(|[x0,y0,x1,y1]| {
+                let bounds = layer_core::Rect { min: layer_core::Point { x:x0 as f32, y:y0 as f32 },
+                    max: layer_core::Point { x:x1 as f32, y:y1 as f32 } };
+                adapter.as_ref().map_or(Some([x0,y0,x1,y1]), |map| map.footprint_rect(bounds))
+                    .map(|[x0,y0,x1,y1]| [x0-1.,y0-1.,x1+1.,y1+1.])
             }),
             SourceKind::Affine(inverse) => {
                 let mut low = [f64::INFINITY; 2];
@@ -426,11 +443,20 @@ impl SourceMap {
     }
 }
 
+pub(crate) fn source_region(transform: &layer_core::ImageTransform, region: layer_core::Rect, extent: [u32; 2], mesh: Option<std::sync::Arc<super::mesh::MeshGeometry>>) -> Result<PixelRect, GpuRasterError> {
+    let mesh = mesh.or_else(|| transform.placement.mesh.as_ref().map(|mesh| std::sync::Arc::new(
+        super::mesh::MeshGeometry::new(mesh, transform.placement.outer, None))));
+    let map = SourceMap::new(transform, PixelRect::full(extent), mesh)?;
+    Ok(map.footprint_rect(region).map_or(PixelRect::EMPTY, |[x0,y0,x1,y1]| pixel_rect(
+        layer_core::Rect { min: layer_core::Point { x:(x0-map.support) as f32, y:(y0-map.support) as f32 },
+            max: layer_core::Point { x:(x1+map.support) as f32, y:(y1+map.support) as f32 } }, extent)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::preimage;
-    use layer_core::{ImageTransform, Point, Projective, Rect, TransformMap};
+    use layer_core::{ImageTransform, Point, Projective, Rect, LayerPlacement};
 
     const EXTENT: [u32; 2] = [6000, 4000];
 
@@ -443,8 +469,7 @@ mod tests {
             },
         };
         let map = Projective::rect_to_quad(source, quad.map(|[x, y]| Point { x, y })).unwrap();
-        let transform = ImageTransform {
-            map: TransformMap::Projective(map),
+        let transform = ImageTransform { placement: LayerPlacement::from_projective(map),
             ..Default::default()
         };
         (transform, map.0.map(f64::from))
@@ -456,7 +481,7 @@ mod tests {
     fn check(quad: [[f32; 2]; 4], interpolation: layer_core::Interpolation) -> Vec<Footprint> {
         let bounds = PixelRect::full(EXTENT);
         let (mut transform, h) = perspective(quad);
-        transform.interpolation = interpolation;
+        transform.placement.interpolation = interpolation;
         let splitter = Splitter::new(bounds, &transform, None, |_| true).unwrap();
         let mut jobs = Vec::new();
         for y in (0..EXTENT[1]).step_by(512) {
@@ -574,6 +599,7 @@ mod tests {
         assert_eq!(split_point(4, 12, 4), 8);
         assert_eq!(split_point(300, 1300, 4), 768);
     }
+
 }
 
 pub(crate) struct DisplayInputs {
@@ -623,7 +649,9 @@ impl DisplayInputs {
     ) -> Result<(), GpuRasterError> {
         r.uploads.write(encoder, &self.uniforms, values)?;
         let binding = self.binding.get_or_insert_with(|| pass.mesh_binding(&r.device, &self.uniforms, &self.sampling));
-        pass.encode_mesh(encoder, binding, level, texels, mesh, self.kept.is_some());
+        pass.encode_mesh(encoder, binding, level, texels, mesh.map(|mesh|(mesh,mesh.range_for_region(layer_core::Rect::UNBOUNDED))), self.kept.is_some());
         Ok(())
     }
+
+
 }

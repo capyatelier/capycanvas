@@ -88,7 +88,7 @@ fn smaller_transparent_imports_keep_original_photo_frames_and_original_size_hand
         invoke(&mut s, CommandId::PlacementOriginalSize);
         assert_eq!(s.transform_document_bounds(), Some(expected), "Original Size restores the photo or batch handle frame");
         for layer in s.engine.document().layers.iter().filter(|l| l.source.is_some()) {
-            assert_eq!(layer.properties.placement.0[..4], [1., 0., 0., 1.]);
+            assert_eq!(layer.properties.placement.as_affine().unwrap().0[..4], [1., 0., 0., 1.]);
             assert!(layer.raster.is_empty());
         }
         assert_eq!(s.engine.document().layers.iter().filter_map(|l| l.source.clone()).collect::<Vec<_>>(), original_sources);
@@ -140,11 +140,12 @@ fn linked_bounds_session(primary_mask: bool) -> UiSession<Recorder> {
     let mut mask = layer_core::LayerMask::reveal_all(document.allocate_layer_id(), Point { x: 24., y: 30. });
     mask.default_coverage = 0.;
     mask.initial = Some(rectangle([80., 80., 100., 100.]));
-    mask.placement = layer_core::Affine([0.75, 0., 0., 1.5, 0., 0.]);
+    mask.placement = layer_core::Projective::from_affine(layer_core::Affine([0.75, 0., 0., 1.5, 0., 0.]));
     document.layers[0].properties.offset = Point { x: 10., y: 12. };
-    document.layers[0].properties.placement = layer_core::Affine([1.5, 0., 0., 0.75, 0., 0.]);
+    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([1.5, 0., 0., 0.75, 0., 0.]));
     document.layers[0].mask = Some(mask);
     document.active_mask = primary_mask;
+    if !primary_mask { document.selection = Some(layer_core::Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 200., y: 0. }, Point { x: 200., y: 200. }, Point { x: 0., y: 200. }]).unwrap()); }
     UiSession::new(Recorder::default(), document, [800, 600], Platform::Gtk).unwrap()
 }
 
@@ -159,7 +160,7 @@ fn linked_transform_waits_for_both_actual_bounds_and_warp_covers_the_registered_
         let mask_bounds = layer_core::Rect { min: Point { x: 80., y: 80. }, max: Point { x: 100., y: 100. } };
         let tight = if primary_mask { mask_bounds } else { paint_bounds };
         let other = if primary_mask { paint_bounds } else { mask_bounds };
-        let to = doc.layer_transform(companion).then(doc.layer_transform(primary).inverse().unwrap());
+        let to = doc.affine_edit_transform(companion).unwrap().then(doc.affine_edit_transform(primary).unwrap().inverse().unwrap());
         let expected = tight.union(to.bounds(other));
         s.begin_transform().unwrap();
         assert_eq!(s.engine.backend().bounds_requests.last().unwrap().scope, layer_core::ContentScope::Target(primary));
@@ -176,12 +177,12 @@ fn linked_transform_waits_for_both_actual_bounds_and_warp_covers_the_registered_
         s.set_transform_mode(super::operation::TransformMode::Warp, false).unwrap();
         s.frame(102, 102).unwrap();
         let preview = s.engine.backend().transform.as_ref().unwrap();
-        let layer_core::TransformMap::Mesh(mesh) = &preview.transform.map else { panic!("Warp must emit a mesh") };
+        let mesh = preview.transform.placement.mesh.as_ref().expect("Warp must emit a mesh");
         assert_eq!(mesh.frame.bounds(layer_core::Rect::from_extent([1, 1])), expected,
             "the mesh domain contains both independently measured targets in primary-local coordinates");
         let paired = preview.companion(&s.engine.document().layers).unwrap();
         for point in other.corners() {
-            assert!(paired.transform.map.map(point).is_some(), "the registered companion remains inside the warp domain");
+            assert!(paired.transform.map(point).is_some(), "the registered companion remains inside the warp domain");
         }
     }
 }
@@ -246,4 +247,85 @@ fn changing_active_target_during_companion_query_rejects_the_frozen_pair() {
     assert_eq!(s.engine.document(), &changed);
     assert_eq!(s.engine.document().layers, before.layers);
     assert!(s.engine.backend().bounds_cancels > 0);
+}
+
+#[test]
+fn four_child_group_bounds_complete_once_include_hidden_paint_and_cancel_stale_inputs() {
+    let seeded = linked_bounds_session(false);
+    let mut document = seeded.engine.document().clone();
+    document.selection = None;
+    let template = document.layers[0].clone();
+    document.layers.retain(|layer| layer.id != template.id);
+    let group_id = document.allocate_layer_id();
+    let mut group = layer_core::Layer::paint(group_id, "Group");
+    group.kind = layer_core::LayerKind::Group;
+    group.properties.offset = Point { x: 50., y: 10. };
+    let mut children = Vec::new();
+    for (index, offset) in [[0., 0.], [40., 10.], [-10., 80.], [70., -20.]].into_iter().enumerate() {
+        let mut child = template.clone();
+        child.id = document.allocate_layer_id();
+        child.mask = None;
+        child.properties.parent = Some(group_id);
+        child.properties.offset = Point { x: offset[0], y: offset[1] };
+        child.visible = index != 2;
+        children.push(child.id);
+        document.layers.insert(index, child);
+    }
+    let outside_id = document.allocate_layer_id();
+    let mut outside = template.clone();
+    outside.id = outside_id;
+    outside.mask = None;
+    outside.properties.parent = None;
+    document.layers.push(outside);
+    document.layers.push(group);
+    document.active_layer = group_id;
+    document.active_mask = false;
+    let make = || {
+        let mut session = UiSession::new(Recorder::default(), document.clone(), [800, 600], Platform::Gtk).unwrap();
+        session.layer_interaction.selected = std::collections::BTreeSet::from([group_id]);
+        session
+    };
+    let mut s = make();
+    let before = s.engine.document().clone();
+    s.begin_transform().unwrap();
+    for count in 1..=4 {
+        assert!(s.content_bounds.busy());
+        assert_eq!(s.engine.backend().bounds_requests.len(), count);
+        reply_bounds(&mut s, [20., 20., 40., 40.]);
+        assert_eq!(s.operation.active(), count == 4);
+    }
+    assert!(!s.content_bounds.busy());
+    assert_eq!(s.engine.backend().bounds_requests.iter().map(|request| request.scope).collect::<Vec<_>>(),
+        children.iter().copied().map(layer_core::ContentScope::Target).collect::<Vec<_>>());
+    assert_eq!(s.measured_target_bounds(), Some(layer_core::Rect { min: Point { x: 70., y: 5. }, max: Point { x: 180., y: 120. } }));
+    invoke(&mut s, CommandId::CancelTransform);
+    assert_eq!(s.engine.document(), &before);
+    s.begin_transform().unwrap();
+    assert!(s.operation.active());
+    assert_eq!(s.engine.backend().bounds_requests.len(), 4, "all member measurements remain cached together");
+    invoke(&mut s, CommandId::CancelTransform);
+
+    let mut stale = make();
+    stale.begin_transform().unwrap();
+    reply_bounds(&mut stale, [20., 20., 40., 40.]);
+    let mut changed = stale.engine.document().layer(children[3]).unwrap().clone();
+    changed.opacity = 0.5;
+    stale.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(changed))).unwrap();
+    reply_bounds(&mut stale, [20., 20., 40., 40.]);
+    assert!(!stale.operation.active());
+    assert!(!stale.content_bounds.busy());
+    assert_eq!(stale.engine.backend().bounds_requests.len(), 2);
+
+    let mut selection_stale = make();
+    selection_stale.begin_transform().unwrap();
+    reply_bounds(&mut selection_stale, [20., 20., 40., 40.]);
+    let old_document = selection_stale.engine.document().clone();
+    selection_stale.dispatch(UiAction::Layer { action: LayerAction::ToggleSelection { id: outside_id.0 } }).unwrap();
+    assert_eq!(selection_stale.engine.document(), &old_document, "root selection does not revise artwork");
+    reply_bounds(&mut selection_stale, [20., 20., 40., 40.]);
+    assert!(!selection_stale.operation.active());
+    assert!(!selection_stale.content_bounds.busy());
+    assert!(!selection_stale.engine.can_undo());
+    assert_eq!(selection_stale.engine.backend().bounds_requests.len(), 2);
+
 }

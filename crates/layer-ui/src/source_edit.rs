@@ -1,32 +1,39 @@
 //! Source repair never reconstructs or reinterprets committed raster edits.
 use super::*;
-use layer_core::{Edit, Layer, Project, color::source::SourceImage};
+use layer_core::{Edit, Layer, Point, Project, color::source::SourceImage};
 use std::sync::Arc;
 
-/// Host preview identities follow immutable source replacement, including
-/// profile-only repair. Weak owners prevent both source retention and allocator
-/// address reuse while an identity is cached; no photo/profile bytes are hashed
-/// on a UI refresh.
+type PreviewGeometry = (layer_core::Projective, layer_core::Interpolation, Point, Option<[u32; 2]>,
+    Option<(LayerId, layer_core::Projective, Point, Option<[u32; 2]>, bool)>);
+
 #[derive(Default)]
 pub(super) struct PreviewRevisions {
-    layers: std::collections::BTreeMap<LayerId, (std::sync::Weak<SourceImage>, u64)>,
+    layers: std::collections::BTreeMap<LayerId, (Option<std::sync::Weak<SourceImage>>, Option<std::sync::Weak<layer_core::MeshMap>>, PreviewGeometry, u64)>,
     next: u64,
 }
 impl PreviewRevisions {
     pub(super) fn update(&mut self, layers: &[Layer]) {
-        self.layers.retain(|id, _| layers.iter().any(|l| l.id == *id && l.source.is_some()));
         for layer in layers {
-            let Some(source) = &layer.source else { continue };
-            let weak = Arc::downgrade(source);
-            if self.layers.get(&layer.id).is_none_or(|(old, _)| !old.ptr_eq(&weak)) {
+            let source = layer.source.as_ref().map(Arc::downgrade);
+            let placement = &layer.properties.placement;
+            let mesh = placement.mesh.as_ref().map(Arc::downgrade);
+            let geometry = (placement.outer, placement.interpolation, layer.properties.offset, layer.properties.extent,
+                layer.mask.as_ref().map(|m| (m.id, m.placement, m.offset, m.extent, m.linked)));
+            let same = self.layers.get(&layer.id).is_some_and(|(a, b, previous, _)| {
+                let source = match (a, &source) { (Some(a), Some(b)) => a.ptr_eq(b), (None, None) => true, _ => false };
+                let mesh = match (b, &mesh) { (Some(a), Some(b)) => a.ptr_eq(b), (None, None) => true, _ => false };
+                source && mesh && *previous == geometry
+            });
+            if !same {
                 self.next = self.next.wrapping_add(1);
-                self.layers.insert(layer.id, (weak, self.next));
+                self.layers.insert(layer.id, (source, mesh, geometry, self.next));
             }
         }
+        if self.layers.len() != layers.len() {
+            self.layers.retain(|id, _| layers.iter().any(|l| l.id == *id));
+        }
     }
-    pub(super) fn id(&self, id: LayerId) -> u64 {
-        self.layers.get(&id).map_or(0, |(_, revision)| *revision)
-    }
+    pub(super) fn id(&self, id: LayerId) -> u64 { self.layers.get(&id).map_or(0, |value| value.3) }
 }
 
 pub(crate) fn baked(layer: &Layer) -> bool {

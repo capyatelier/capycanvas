@@ -19,11 +19,11 @@ fn bake_session(linked: bool) -> UiSession<Recorder> {
     }, 1024 * 1024).unwrap();
     for _ in 0..8 { source.push_row(&vec![120; 16 * 4]).unwrap(); }
     doc.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
-    doc.layers[0].properties.placement = layer_core::Affine([2., 0., 0., 3., -17., 13.]);
+    doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 3., -17., 13.]));
     doc.layers[0].raster = raw_revision(doc.color, &[RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness], 20);
     let mut mask = layer_core::LayerMask::reveal_all(doc.allocate_layer_id(), Point { x: 5., y: 7. });
     mask.linked = linked;
-    mask.placement = layer_core::Affine([1., 0., 0., 2., 11., 13.]);
+    mask.placement = layer_core::Projective::from_affine(layer_core::Affine([1., 0., 0., 2., 11., 13.]));
     mask.raster = raw_revision(doc.color, &[RasterPlane::Mask], 90);
     mask.initial = Some(layer_core::Selection::polygon(vec![Point { x: 2., y: 3. }, Point { x: 7., y: 3. }, Point { x: 7., y: 9. }]).unwrap());
     doc.layers[0].mask = Some(mask);
@@ -43,7 +43,7 @@ fn completed_bake(plan: &layer_core::TransformPixelsPlan) -> layer_core::Layer {
     use layer_core::raster::RasterPlane;
     let mut layer = plan.output.clone();
     layer.raster = raw_revision(plan.input.document.color, &[RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness], 150);
-    if plan.linked_mask {
+    if matches!(plan.scope, layer_core::TransformPixelsScope::Paint { linked_mask: true }) {
         layer.mask.as_mut().unwrap().raster = raw_revision(plan.input.document.color, &[RasterPlane::Mask], 210);
     }
     layer
@@ -178,7 +178,7 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
     let seeded = bake_session(true);
     let mut doc = seeded.engine.document().clone();
     doc.layers[0].source = None;
-    doc.layers[0].properties.placement = layer_core::Affine::IDENTITY;
+    doc.layers[0].properties.placement = layer_core::LayerPlacement::IDENTITY;
     let mut s = UiSession::new(Recorder { max_dimension: Some(512), ..Default::default() }, doc,
         [800, 600], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
@@ -191,11 +191,14 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
         s.layer_pen(input)
     };
     send(&mut s, 1, PenPhase::Down, Point { x: 20., y: 20. }).unwrap();
+    if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 32., 32.]); }
     send(&mut s, 2, PenPhase::Move, Point { x: 30., y: 30. }).unwrap();
     let valid = s.engine.document().layers[0].clone();
-    assert_eq!(valid.properties.offset, Point { x: 10., y: 10. });
+    let moved_origin = s.engine.document().layer_geometry(before.active_target()).map(Point { x: 0., y: 0. }).unwrap();
+    let original_origin = before.layer_geometry(before.active_target()).map(Point { x: 0., y: 0. }).unwrap();
+    assert_eq!(moved_origin, Point { x: original_origin.x + 10., y: original_origin.y + 10. });
     assert!(!s.engine.can_undo());
-    assert!(send(&mut s, 3, PenPhase::Move, Point { x: 100000., y: 100000. }).is_err());
+    send(&mut s, 3, PenPhase::Move, Point { x: 100000., y: 100000. }).unwrap();
     assert_eq!(s.engine.document().layers[0], valid);
     send(&mut s, 4, PenPhase::Up, Point { x: 100000., y: 100000. }).unwrap();
     assert!(s.layer_interaction.path.is_empty());
@@ -208,8 +211,8 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
         assert_eq!(old.tiles.len(), new.tiles.len());
         for (key, tile) in &old.tiles {
             let moved = new.tiles.iter().find(|(next, value)| next.plane == key.plane && value.same_capture(tile)).unwrap().0;
-            let original_world = before.layer_transform(target).map(Point { x: key.coordinate[0] as f32 * 256., y: key.coordinate[1] as f32 * 256. });
-            let moved_world = s.engine.document().layer_transform(target).map(Point { x: moved.coordinate[0] as f32 * 256., y: moved.coordinate[1] as f32 * 256. });
+            let original_world = before.affine_edit_transform(target).unwrap().map(Point { x: key.coordinate[0] as f32 * 256., y: key.coordinate[1] as f32 * 256. });
+            let moved_world = s.engine.document().affine_edit_transform(target).unwrap().map(Point { x: moved.coordinate[0] as f32 * 256., y: moved.coordinate[1] as f32 * 256. });
             assert!((moved_world.x - original_world.x - 10.).abs() < 0.001);
             assert!((moved_world.y - original_world.y - 10.).abs() < 0.001);
         }

@@ -28,7 +28,7 @@ pub(super) fn bar_widget(w: &Workspace, name: &str) -> gtk::Widget {
 }
 
 /// Document bounds of the transform anchor in window coordinates.
-fn anchor_in_window(w: &Workspace) -> [f32; 4] {
+pub(super) fn anchor_in_window(w: &Workspace) -> [f32; 4] {
     let s = state(w);
     let [x0, y0, x1, y1] = s.canvas_bar.expect("canvas bar").anchor.expect("anchor");
     let m = s.camera.document_to_surface();
@@ -418,10 +418,7 @@ fn native_canvas_bar_warps_a_selection() {
     );
     let mesh = |w: &Workspace| {
         let g = w.gpu.borrow();
-        match &g.as_ref().unwrap().session.engine().transform_preview().unwrap().transform.map {
-            layer_core::TransformMap::Mesh(mesh) => mesh.clone(),
-            other => panic!("Warp previews a mesh, not {other:?}"),
-        }
+        g.as_ref().unwrap().session.engine().transform_preview().unwrap().transform.placement.mesh.clone().unwrap()
     };
     let revision = ui_session(&w).engine().document().revision;
     let node = |w: &Workspace, index: u32| {

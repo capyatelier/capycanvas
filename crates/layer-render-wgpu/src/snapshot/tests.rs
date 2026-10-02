@@ -645,7 +645,7 @@ fn shared_snapshot_chunks_preserve_masked_effect_pixels_across_column_boundaries
     let mut project = rich_project(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 }, 1);
     project.document.width = 2053;
     for layer in &mut project.document.layers {
-        if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.0[4] += 800.; }
+        if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.outer.0[2] += 800.; }
     }
     let (live, expected) = frame(&project);
     let mut capture = live.snapshot_gpu().capture(project, [0.; 4], 0., Default::default()).unwrap();
@@ -667,7 +667,7 @@ fn gpu_tone_snapshot_matches_composited_masked_filtered_document() {
     let mut project = rich_project(color,1);
     project.document.width = 2053;
     for layer in &mut project.document.layers {
-        if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.0[4] += 800.; }
+        if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.outer.0[2] += 800.; }
     }
     let extent = [project.document.width,project.document.height];
     let (live,pixels) = frame(&project);

@@ -268,18 +268,16 @@ impl RawRegions {
         request: &layer_render::RegionRequest,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
-        let [w, h] = match request.source.raw_source() {
-            layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => {
-                r.target_extent(*id)
-            }
-            _ => r.document_extent,
-        };
+        let [w,h] = r.document_extent;
         let mut layer = match request.source.raw_source() {
             layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => {
                 Some(*id)
             }
             _ => None,
         };
+        let placed = layer.is_some_and(|id| r.artwork_frame.as_ref().is_none_or(|frame|
+            !layer_core::target_geometry(&frame.layers,id).is_identity()
+                || frame.layers.iter().any(|l| l.mask.as_ref().is_some_and(|m| m.id == id))));
         let frame = match request.source.raw_source() {
             layer_render::RegionSource::Composite => Some(
                 r.artwork_frame
@@ -420,27 +418,7 @@ impl RawRegions {
             r.queue.write_buffer(&self.tonal_parameters, 0, &bytes);
             encoder.clear_buffer(&self.tonal_statistics, 0, None);
         }
-        let stored_mask = matches!(request.source, layer_render::RegionSource::Coverage(_))
-            .then(|| {
-                layer
-                    .and_then(|id| r.layer_masks.definitions.get(&id))
-                    .cloned()
-            })
-            .flatten();
-        if stored_mask.is_some() {
-            let frame = r
-                .artwork_frame
-                .clone()
-                .ok_or(GpuRasterError::InvalidExtent)?;
-            r.layer_masks.prepare(
-                &r.device,
-                encoder,
-                (&frame.layers, &[]),
-                r.document_extent,
-                false,
-                &mut r.selection_clip,
-            )?;
-        }
+        let stored_mask: Option<layer_core::LayerMask> = None;
         let limit = r.device.limits();
         // Preflight the subsequent connected-component allocation before any
         // source decoding/submission. Classification does not relax its limit.
@@ -505,32 +483,17 @@ impl RawRegions {
         let batches: Vec<_> = (tone.is_none())
             .then_some(std::slice::from_ref(&seed_tile))
             .into_iter()
-            .chain(tiles.chunks(if layer.is_some() { BATCH_TILES } else { 1 }))
+            .chain(tiles.chunks(if layer.is_some() && !placed { BATCH_TILES } else { 1 }))
             .collect();
         let stride =
             (PARAMETER_BYTES as u32).next_multiple_of(limit.min_uniform_buffer_offset_alignment);
         let mut uniforms = vec![0; stride as usize * batches.len()];
         // Occupancy only, without decoding/copying originals or retaining pages.
-        let has_tile = |coordinate: [u32; 2]| {
-            let Some(layer) = layer else {
-                return true;
-            };
-            (stored_mask.is_some() && r.layer_masks.pages.contains_key(&(layer, coordinate)))
-                || r.paint_layers
-                    .iter()
-                    .find(|l| l.id == layer)
-                    .is_some_and(|l| l.pages.iter().any(|p| p.coordinate == coordinate))
-                || r.native_backing(layer).is_some_and(|data| {
-                    data.tiles.contains_key(&layer_core::raster::TileKey {
-                        plane: layer_core::raster::RasterPlane::Color,
-                        coordinate,
-                    })
-                })
-                || r.tiled_sources.get(&layer).is_some_and(|s| {
-                    coordinate[0] * PAGE_SIZE < s.extent[0]
-                        && coordinate[1] * PAGE_SIZE < s.extent[1]
-                })
-        };
+        let has_tile = |coordinate: [u32;2]| placed || layer.is_none_or(|id|
+            r.paint_layers.iter().find(|l| l.id == id).is_some_and(|l| l.pages.iter().any(|p| p.coordinate == coordinate))
+                || r.native_backing(id).is_some_and(|data| data.tiles.contains_key(&layer_core::raster::TileKey {
+                    plane:layer_core::raster::RasterPlane::Color,coordinate }))
+                || r.tiled_sources.get(&id).is_some_and(|source| coordinate[0]*PAGE_SIZE<source.extent[0] && coordinate[1]*PAGE_SIZE<source.extent[1]));
         for (batch, tiles) in batches.iter().enumerate() {
             for (i, coordinate) in tiles.iter().enumerate() {
                 let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
@@ -622,7 +585,7 @@ impl RawRegions {
                             }
                         })
                     } else {
-                        r.raw_layer_tile(layer, *coordinate, encoder)?
+                        if placed { Some(self.capture.layer_tile(r,layer,*coordinate,encoder)?) } else { r.raw_layer_tile(layer,*coordinate,encoder)? }
                     }
                 } else {
                     let region = page_rect(*coordinate).intersect(PixelRect::full([w, h]));
@@ -765,7 +728,7 @@ fn opaque_photo(r: &WgpuRasterizer, frame: &artwork::Frame, extent: [u32; 2]) ->
         || layer.effect.is_some()
         || layer.properties.parent.is_some()
         || layer.properties.offset != layer_core::Point::default()
-        || layer.properties.placement != layer_core::Affine::IDENTITY
+        || layer.properties.placement != layer_core::LayerPlacement::IDENTITY
         || layer.properties.clipped
         || layer.properties.blend != layer_core::LayerBlend::Normal
         || source.interpretation.channels != layer_core::color::source::SourceChannels::Rgb

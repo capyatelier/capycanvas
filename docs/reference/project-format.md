@@ -64,24 +64,35 @@ live edge settings are committed because they affect composition and later paint
 
 ## Container and validation
 
-The header is the twelve bytes `CAPYRASTER\x0d\0`, followed by a little-endian
+The header is the twelve bytes `CAPYRASTER\x0e\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
 blobs and image roles/interpretations. Payload offsets are relative to the payload start.
-Readers accept versions 8–13, including recovery files.
-Version 9 adds the optional stored layer extent; a version 8 file reads with none.
-Version 10 adds photo metadata payloads; earlier files read with none.
-Version 11 adds the document's blend space (`document.blend_space`, `Linear` or
-`Perceptual`); earlier files read as `Linear`. A float document must be `Linear`.
-Version 12 adds the space an embedded filter program reads (`space`, `linear` or
-`blending`; see [runtime filters](runtime-filters.md#filter-spaces)); programs
-from earlier files read as `linear`.
-Version 13 adds explicit catalog references to filter labels and separate stable
-values and display labels to choice options. Literal string labels and options
-remain valid metadata. Existing version 8–12 readers are retained; new saves use
-version 13 because earlier applications cannot read the explicit metadata objects.
-Localization never rewrites stored layer names or changes option values or pixels.
-Version 8 fixes the tile encoding to one lossless LZ4 block per tile, without a
+Only version 14 is accepted, including recovery files. Earlier pre-release
+containers are rejected; there is no compatibility reader.
+
+Layer placement stores an outer homography, an optional immutable cubic mesh
+and one interpolation choice. The mesh stores its affine source frame,
+nonuniform unit breakpoints on both axes and its control net. Each axis has at
+most 32 cells, with adjacent breakpoints separated by at least 1/65536. Splits
+preserve the represented surface rather than fitting it onto a new grid.
+Outer edits preserve the mesh root. The complete map must be finite and
+conditioned over its covered domain before adoption.
+
+Masks store a homographic pre-map and their own optional local extent. Linked
+masks follow the owner's winning source coordinates; independent masks keep
+their document-space placement. Baking mask coverage does not enlarge or
+replace the owner's source, raster domain or material planes. Linked masks
+under nonlinear owners bake with that owner in one edit. Undo history charges
+shared mesh roots, control nets and breakpoint arrays once; history is not
+serialized.
+
+The document blend space is `Linear` or `Perceptual`; float documents use
+`Linear`. Embedded filters record their read space, and catalog labels keep
+stable option values separate from display labels. Localization never rewrites
+stored layer names, option values or pixels.
+
+Tile encoding is one lossless LZ4 block per tile, without a
 frame header or prepended size. The pixel descriptor determines the exact decoded
 size, bounded to 1 MiB; the library's compression bound caps stored bytes. Painted
 and imported tiles use the same `lz4_flex` encoder with safe, checked Rust paths.

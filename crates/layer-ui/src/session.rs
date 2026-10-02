@@ -731,6 +731,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.cursor.hover.reset();
         }
         self.cursor.event = event;
+        self.warp_hover(event.filter(|e| e.phase == PenPhase::Hover).map(|e| self.state.camera.input_transform().map(e.surface_position)));
         if event.is_some_and(|e| e.phase == PenPhase::Hover) {
             self.sync_retouch_points();
         }
@@ -1171,6 +1172,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.settle_holds_into(&mut reply)?;
                     }
                     // Native search entry/list owns text, IME and navigation.
+                    return Ok(reply);
+                }
+                if pressed && !editing && key == "escape" && self.cancel_warp_split() {
+                    reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
+                    reply.handled = true;
                     return Ok(reply);
                 }
                 if pressed && !editing && self.state.preferences.capture.is_none() && self.selection_key(&key)? {
@@ -2267,19 +2273,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::TransformRotateRight
             | CommandId::TransformFree
             | CommandId::TransformUniform => idle && self.operation.transforming(),
+            CommandId::TransformWarp => idle && self.operation.warp_available(),
             CommandId::TransformDistort
-            | CommandId::TransformWarp
             | CommandId::TransformNearest
             | CommandId::TransformBilinear
             | CommandId::TransformBicubic
             | CommandId::TransformLanczos => {
-                idle && self.operation.transforming() && !self.operation.placing() && !self.operation.outline()
+                idle && self.operation.transforming() && !self.operation.outline()
             }
             CommandId::TransformPerspective => {
                 idle && self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
             }
+            CommandId::WarpSplitVertical | CommandId::WarpSplitHorizontal | CommandId::WarpSplitCross | CommandId::WarpSelectPoints | CommandId::WarpResetGrid => idle && self.warp_command_available(id),
             CommandId::WarpGridThree | CommandId::WarpGridFour | CommandId::WarpGridFive => {
-                idle && self.warp_cells().is_some()
+                idle && matches!(transform_choice(id), Some(TransformChoice::Cells(cells)) if self.warp_grid_available(cells))
             }
             CommandId::ShowRulers => idle,
             CommandId::SnapRulers => idle && self.rulers.visible,
@@ -2479,6 +2486,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
             || self.clone_command_selected(id)
+            || self.warp_command_selected(id)
             || (id == CommandId::LayerMaskEnabled
                 && document.layer(document.active_layer).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled))
             || (id == CommandId::TransformPerspective && self.transform_mode().is_some_and(|(_, perspective)| perspective))
@@ -2487,7 +2495,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     current == mode && (mode != operation::TransformMode::Free || uniform == self.operation.aspect)
                 }),
                 TransformChoice::Interpolation(interpolation) => self.transform_interpolation() == Some(interpolation),
-                TransformChoice::Cells(cells) => self.warp_cells() == Some(cells),
+                TransformChoice::Cells(cells) => self.warp_grid_selected(cells),
             })
             || (id == CommandId::FlipHorizontal && self.state.camera.flipped[0])
             || (id == CommandId::FlipVertical && self.state.camera.flipped[1])
@@ -4440,6 +4448,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.edit_brush(tool_settings::COLOR_MIXING, f32::from(space as u8))?;
                 Ok((BRUSH, false))
             }
+            CommandId::WarpSplitVertical | CommandId::WarpSplitHorizontal | CommandId::WarpSplitCross | CommandId::WarpSelectPoints | CommandId::WarpResetGrid => {
+                self.warp_command(command)?;
+                Ok((DOCUMENT | COMMANDS | BRUSH, true))
+            }
             CommandId::PlacementOriginalSize => {
                 self.placement_original_size()?;
                 Ok((BRUSH | DOCUMENT, true))
@@ -5061,6 +5073,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CommandId::TransformWarp,
                 CommandId::PlacementOriginalSize,
                 CommandId::TransformPerspective,
+                CommandId::WarpSplitVertical,
+                CommandId::WarpSplitHorizontal,
+                CommandId::WarpSplitCross,
+                CommandId::WarpSelectPoints,
+                CommandId::WarpResetGrid,
                 CommandId::WarpGridThree,
                 CommandId::WarpGridFour,
                 CommandId::WarpGridFive,
@@ -5078,8 +5095,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             ]
             .into_iter()
             .filter(|c| match (c, transform_choice(*c)) {
-                (_, Some(TransformChoice::Interpolation(_))) => !self.operation.placing() && !self.operation.outline(),
+                (_, Some(TransformChoice::Interpolation(_))) => !self.operation.outline(),
                 (_, Some(TransformChoice::Cells(_))) => self.warp_cells().is_some(),
+                (CommandId::WarpSplitVertical | CommandId::WarpSplitHorizontal | CommandId::WarpSplitCross | CommandId::WarpSelectPoints | CommandId::WarpResetGrid, _) => self.warp_cells().is_some(),
                 (CommandId::PlacementOriginalSize, _) => self.operation.original_size_available(),
                 (CommandId::TransformDistort | CommandId::TransformWarp, _) => !self.operation.outline(),
                 (CommandId::TransformPerspective, _) => {
@@ -5518,18 +5536,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .fold(u64::from(l.opacity.to_bits()), |h, c| h.wrapping_mul(4099).wrapping_add(u64::from(c.to_bits())))
                 } else {
                     0
-                })
-                // Photo previews frame local content, so position has no effect,
-                // but rotation/aspect changes must invalidate the host's image.
-                .wrapping_add(l.source.as_ref().map_or(0, |_| {
-                    l.properties.placement.0[..4].iter().fold(0u64, |hash, value| {
-                        hash.wrapping_mul(1099511628211).wrapping_add(u64::from(value.to_bits()))
-                    })
-                })),
+                }),
             mask_revision: l.mask.as_ref().map_or(0, |m| {
                 m.id.0
                     .wrapping_mul(65537)
                     .wrapping_add(m.raster.identity().wrapping_mul(2))
+                    .wrapping_add(self.source_preview_revisions.id(l.id).wrapping_mul(65539))
                     .wrapping_add(u64::from(m.inverted))
             }),
             mask_id: l.mask.as_ref().map(|m| m.id.0),
@@ -7622,7 +7634,7 @@ mod tests {
         send(&mut s, PenPhase::Up);
         s.frame(5, 5).unwrap();
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
-        assert_eq!(request.position, [40, 60]);
+        assert_eq!(request.position, [48, 72], "placed layer reads use document coordinates");
         assert_eq!(request.source, RegionSource::Layer(id));
         assert_eq!(request.tolerance, 0.2);
         assert_eq!(
@@ -7631,7 +7643,7 @@ mod tests {
         );
         assert_eq!(
             request.limit.as_ref().unwrap().affine,
-            layer_core::Affine::translation(Point { x: -8., y: -12. })
+            layer_core::Affine::IDENTITY
         );
         s.renderer_mut().region_reply = Some(RegionResult {
             tonal_sample: None,
@@ -7643,8 +7655,8 @@ mod tests {
         let operation = &s.engine.document().layer(id).unwrap().pending_operations[0];
         assert_eq!(
             operation.coverage.initial,
-            Some(Selection::pixels(coverage.clone())),
-            "raw-layer result is converted to document then layer coordinates once"
+            Some(Selection::pixels(coverage.clone()).translated(Point { x: -8., y: -12. })),
+            "document-space placed pixels convert to target-local coverage once"
         );
         s.frame(7, 7).unwrap();
         invoke(&mut s, CommandId::Undo);

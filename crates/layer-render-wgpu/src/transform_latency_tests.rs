@@ -4,14 +4,14 @@
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth, source::*};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
-use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Projective, TransformMap};
+use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Projective, LayerPlacement};
 use std::time::Instant;
 
 const EXTENT: [u32; 2] = [6000, 4000];
 const FRAMES: usize = 200;
 const WARMUP: usize = 40;
 
-type Case = (&'static str, fn(f32) -> TransformMap, Interpolation);
+type Case = (&'static str, fn(f32) -> LayerPlacement, Interpolation);
 
 fn bounds() -> layer_core::Rect {
     layer_core::Rect {
@@ -27,8 +27,8 @@ fn center() -> Point {
     }
 }
 
-fn affine(t: f32) -> TransformMap {
-    TransformMap::Affine(Affine::around(
+fn affine(t: f32) -> LayerPlacement {
+    LayerPlacement::from_affine(Affine::around(
         center(),
         [0.9 + t.sin() * 0.05; 2],
         0.1 + t.cos() * 0.02,
@@ -39,7 +39,7 @@ fn affine(t: f32) -> TransformMap {
     ))
 }
 
-fn perspective(t: f32, depth: f32) -> TransformMap {
+fn perspective(t: f32, depth: f32) -> LayerPlacement {
     let [w, h] = EXTENT.map(|v| v as f32);
     let inset = w * depth * 0.5;
     let quad = [
@@ -48,12 +48,12 @@ fn perspective(t: f32, depth: f32) -> TransformMap {
         [w - 100., h - 80.],
         [120. + t.cos() * 30., h - 60.],
     ];
-    TransformMap::Projective(Projective::rect_to_quad(bounds(), quad.map(|[x, y]| Point { x, y })).unwrap())
+    LayerPlacement::from_projective(Projective::rect_to_quad(bounds(), quad.map(|[x, y]| Point { x, y })).unwrap())
 }
 
 /// A mesh seeded from a keystone with two nodes dragged, as a Warp drag moves
 /// one handle every frame.
-fn warp(t: f32, cells: [u16; 2]) -> TransformMap {
+fn warp(t: f32, cells: [u16; 2]) -> LayerPlacement {
     let [w, h] = EXTENT.map(|v| v as f32);
     let keystone = Projective::rect_to_quad(
         bounds(),
@@ -85,7 +85,7 @@ fn warp(t: f32, cells: [u16; 2]) -> TransformMap {
             },
         )
         .unwrap();
-    TransformMap::Mesh(std::sync::Arc::new(mesh))
+    layer_core::LayerPlacement { mesh: Some(std::sync::Arc::new(mesh)), ..Default::default() }
 }
 
 const CASES: [Case; 9] = {
@@ -99,7 +99,7 @@ const CASES: [Case; 9] = {
         ("deep perspective bicubic", |t| perspective(t, 0.9), Bicubic),
         (
             "quarter scale bicubic",
-            |t| TransformMap::Affine(Affine::around(center(), [0.25 + t.sin() * 0.01; 2], t.cos() * 0.02, Point::default())),
+            |t| LayerPlacement::from_affine(Affine::around(center(), [0.25 + t.sin() * 0.01; 2], t.cos() * 0.02, Point::default())),
             Bicubic,
         ),
         ("3x3 warp bicubic", |t| warp(t, [3, 3]), Bicubic),
@@ -112,13 +112,13 @@ const CASES: [Case; 9] = {
 const NATIVE_CASES: [Case; 3] = {
     use Interpolation::Bicubic;
     [
-        ("free", |t| TransformMap::Affine(Affine::translation(corner(t))), Bicubic),
+        ("free", |t| LayerPlacement::from_affine(Affine::translation(corner(t))), Bicubic),
         (
             "distort",
             |t| {
                 let [w, h] = EXTENT.map(|v| v as f32);
                 let corners = [corner(t), Point { x: w, y: 0. }, Point { x: w, y: h }, Point { x: 0., y: h }];
-                TransformMap::Projective(Projective::rect_to_quad(bounds(), corners).unwrap())
+                LayerPlacement::from_projective(Projective::rect_to_quad(bounds(), corners).unwrap())
             },
             Bicubic,
         ),
@@ -126,7 +126,7 @@ const NATIVE_CASES: [Case; 3] = {
             "warp",
             |t| {
                 let node = Point { x: EXTENT[0] as f32 * 0.08 * t.sin(), y: EXTENT[1] as f32 * 0.06 * (t * 1.3).sin() };
-                TransformMap::Mesh(std::sync::Arc::new(MeshMap::identity(bounds(), [4, 4]).unwrap().move_node(6, node).unwrap()))
+                layer_core::LayerPlacement { mesh: Some(std::sync::Arc::new(MeshMap::identity(bounds(), [4, 4]).unwrap().move_node(6, node).unwrap())), ..Default::default() }
             },
             Bicubic,
         ),
@@ -203,7 +203,7 @@ fn drag(r: &mut WgpuRasterizer, work: &Workload<'_>, cases: &[Case]) -> f64 {
             moving: true,
             layer: work.layer,
             selection: Some(selection.clone()),
-            transform: ImageTransform { map: map(0.), interpolation, ..Default::default() },
+            transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..map(0.) }, ..Default::default() },
         };
         if work.native {
             let still = layer_render::TransformPreview {
@@ -220,7 +220,7 @@ fn drag(r: &mut WgpuRasterizer, work: &Workload<'_>, cases: &[Case]) -> f64 {
             );
         }
         for i in 0..FRAMES {
-            preview.transform.map = map(i as f32 * work.step);
+            preview.transform.placement = map(i as f32 * work.step);
             let start = Instant::now();
             r.set_transform_preview(Some(&preview)).unwrap();
             submit(r, work, false);

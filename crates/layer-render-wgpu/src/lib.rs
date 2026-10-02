@@ -1549,7 +1549,7 @@ impl WgpuRasterizer {
 
         self.update_target_geometry(layers, resized)?;
         self.thumbnails.source_placements = layers.iter().filter(|l| l.source.is_some())
-            .map(|l| (l.id, l.properties.placement)).collect();
+            .map(|l| (l.id, l.properties.placement.clone())).collect();
 
         self.tiled_sources
             .retain(|id, _| layers.iter().any(|l| l.id == *id && l.source.is_some()));
@@ -4106,7 +4106,7 @@ impl WgpuRasterizer {
         self.preview_requires_base = new_preview_requires_base;
 
         self.awaiting_meshes = self.transform_preview.as_ref()
-            .is_some_and(|p| matches!(p.transform.map, layer_core::TransformMap::Mesh(_)))
+            .is_some_and(|p| p.transform.placement.mesh.is_some())
             && !self.mesh_pipelines_ready();
         if let Some(preview) = self.transform_preview.clone().filter(|_| !self.awaiting_meshes) {
             let level = self.scale_display.as_ref().filter(|cache| cache.evaluation == scene::scale::Evaluation::Display).map(|cache| cache.plan.level).filter(|level| *level > 0);
@@ -4157,7 +4157,7 @@ impl WgpuRasterizer {
         }
         for &(layer, bounds) in &self.transform_damage {
             let bounds = pixel_rect(
-                layer_core::target_transform(packet.layers, layer).bounds(bounds.to_rect()),
+                layer_core::target_geometry(packet.layers, layer).forward_bounds(bounds.to_rect()),
                 packet.document_extent,
             );
             if let Some(tiles) = &mut composite_tiles {
@@ -4184,8 +4184,8 @@ impl WgpuRasterizer {
         if let Some(previews) = &mut self.filter_previews {
             previews.note_frame(FramePacket { view: requested_view, ..packet }, self.filter_source_epoch);
         }
-        if composite_tiles.is_none() && (packet.dab_batches.iter().any(|batch| layer_core::target_transform(packet.layers, batch.layer_id) != layer_core::Affine::IDENTITY)
-            || self.preview_layer_id.into_iter().chain(old_preview_layer).any(|id| layer_core::target_transform(packet.layers, id) != layer_core::Affine::IDENTITY)) {
+        if composite_tiles.is_none() && (packet.dab_batches.iter().any(|batch| !layer_core::target_geometry(packet.layers, batch.layer_id).is_identity())
+            || self.preview_layer_id.into_iter().chain(old_preview_layer).any(|id| !layer_core::target_geometry(packet.layers, id).is_identity())) {
             dirty = PixelRect::full(packet.document_extent);
         }
         if packet.composite_all || reset {

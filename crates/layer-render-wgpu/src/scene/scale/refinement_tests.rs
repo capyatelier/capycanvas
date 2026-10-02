@@ -457,7 +457,7 @@ fn idle_display_refines_placement_windows_and_reuses_exact_overlap() {
     for space in layer_core::BlendSpace::ALL {
         let mut doc = document_at([1541, 771]);
         let extent = [doc.width, doc.height];
-        doc.layers[0].properties.placement = Affine::around(Point { x: 770., y: 385. }, [0.9, 0.8], 0.17, Point::default());
+        doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(Affine::around(Point { x: 770., y: 385. }, [0.9, 0.8], 0.17, Point::default()));
         let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
         r.set_complete_display_allowance(0);
         let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();

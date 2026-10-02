@@ -239,7 +239,7 @@ fn mask_target_selection_keeps_nested_nonuniform_registration_and_ignores_paint_
     let mut document = document(Default::default());
     document.layers[0].visible = false;
     document.layers[0].opacity = 0.;
-    document.layers[0].properties.placement = layer_core::Affine([2., 0., 0., 0.5, 0., 0.]);
+    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 0.5, 0., 0.]));
     document.layers[0].properties.offset = Point { x: 10., y: 12. };
     let mut group = Layer::paint(document.allocate_layer_id(), "parent");
     group.kind = layer_core::LayerKind::Group;
@@ -254,8 +254,8 @@ fn mask_target_selection_keeps_nested_nonuniform_registration_and_ignores_paint_
     document.layers[0].mask = Some(mask);
     for linked in [true, false] {
         document.layers[0].mask.as_mut().unwrap().linked = linked;
-        let map = document.layer_transform(mask_id);
-        document.selection = Some(Selection::polygon(rect(19., 19., 22., 22.).corners().map(|p| map.map(p)).to_vec()).unwrap());
+        let map = document.layer_geometry(mask_id);
+        document.selection = Some(Selection::polygon(rect(19., 19., 22., 22.).corners().map(|p| map.map(p).unwrap()).to_vec()).unwrap());
         assert_eq!(bounds(&renderer, &document, ContentScope::Target(mask_id)), rect(20., 20., 21., 21.), "linked={linked}");
         document.selection.as_mut().unwrap().inverted = true;
         assert_eq!(bounds(&renderer, &document, ContentScope::Target(mask_id)), rect(40., 20., 41., 21.), "inverted linked={linked}");
@@ -268,7 +268,7 @@ fn visible_and_all_bounds_include_placement_interpolation_beyond_source_rectangl
     let mut document = document(Default::default());
     document.layers[0].source = Some(source([16, 16], |_, _| 255));
     document.layers[0].properties.offset = Point { x: 20., y: 30. };
-    document.layers[0].properties.placement = layer_core::Affine([2., 0., 0., 2., 0., 0.]);
+    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 2., 0., 0.]));
     let canvas = bounds(&renderer, &document, ContentScope::Canvas);
     assert!(canvas.min.x < 20. && canvas.min.y < 30. && canvas.max.x > 52. && canvas.max.y > 62.,
         "independent canvas query captures interpolation fringe: {canvas:?}");
@@ -345,8 +345,8 @@ fn identity_warp_preserves_linked_companion_pixels_outside_primary_tight_bounds(
         assert_eq!(primary_bounds, if primary_mask { rect(80., 80., 100., 100.) } else { rect(20., 20., 40., 40.) });
         let companion_bounds = bounds(&renderer, &document, ContentScope::Target(companion));
         assert_eq!(companion_bounds, if primary_mask { rect(20., 20., 40., 40.) } else { rect(80., 80., 100., 100.) });
-        let to_primary = document.layer_transform(companion)
-            .then(document.layer_transform(primary).inverse().unwrap());
+        let to_primary = document.layer_geometry(companion).as_affine().unwrap()
+            .then(document.layer_geometry(primary).as_affine().unwrap().inverse().unwrap());
         let prepared = primary_bounds.union(to_primary.bounds(companion_bounds));
         assert_eq!(prepared, rect(20., 20., 100., 100.));
         let frame = |renderer: &mut WgpuRasterizer, reset| {
@@ -362,9 +362,7 @@ fn identity_warp_preserves_linked_companion_pixels_outside_primary_tight_bounds(
         let original_primary = target_bytes(&renderer, primary);
         let preview = layer_render::TransformPreview {
             transaction: 1, moving: false, layer: primary, selection: None,
-            transform: layer_core::ImageTransform {
-                map: layer_core::TransformMap::Mesh(Arc::new(layer_core::MeshMap::identity(prepared, [3, 3]).unwrap())),
-                interpolation: layer_core::Interpolation::Nearest,
+            transform: layer_core::ImageTransform { placement: layer_core::LayerPlacement { interpolation: layer_core::Interpolation::Nearest, ..layer_core::LayerPlacement { mesh: Some(Arc::new(layer_core::MeshMap::identity(prepared, [3, 3]).unwrap())), ..Default::default() } },
                 ..Default::default()
             },
         };

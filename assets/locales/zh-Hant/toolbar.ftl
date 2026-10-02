@@ -69,5 +69,5 @@ toolbar-variant = 變體
 toolbar-visible-color = 可見色彩
 toolbar-editing-layer = 正在編輯{ $name }
 toolbar-editing-mask = 正在編輯{ $name }的遮罩
-toolbar-image-count = { $count }張影像
+toolbar-layer-count = { $count } 個圖層
 toolbar-stale-action = 此動作屬於先前的畫布選取範圍或變形

@@ -142,7 +142,7 @@ impl WgpuRasterizer {
                     .selection
                     .as_ref()
                     .ok_or(GpuRasterError::InvalidImage)?
-                    .transformed(layer_core::target_transform(layers, layer.id))
+                    .mapped(&layer_core::target_geometry(layers, layer.id).placement)
                     .map_err(|_| GpuRasterError::InvalidImage)?;
                 previews.definitions.insert(layer.id, coverage);
             }

@@ -9,7 +9,7 @@ pub(super) struct Thumbnails {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) sources: Option<crate::source_thumbnails::SourceThumbnails>,
     pub paper: Option<(LayerId, [f32; 4])>,
-    pub source_placements: std::collections::BTreeMap<LayerId, layer_core::Affine>,
+    pub source_placements: std::collections::BTreeMap<LayerId, layer_core::LayerPlacement>,
 }
 impl Thumbnails {
     pub fn new() -> Self {
@@ -92,7 +92,7 @@ impl WgpuRasterizer {
             },
         );
         #[cfg(not(target_arch = "wasm32"))]
-        let source = if self.tiled_sources.contains_key(&target) {
+        let source = if self.tiled_sources.contains_key(&target) && self.thumbnails.source_placements.get(&target).is_some_and(|p| p.as_affine().is_some()) {
             let mut gpu = self.thumbnails.sources.take()
                 .unwrap_or_else(|| crate::source_thumbnails::SourceThumbnails::new(self));
             let result = gpu.prepare(self, target, &mut encoder, 4);
@@ -126,7 +126,7 @@ impl WgpuRasterizer {
             },
         );
         #[cfg(not(target_arch = "wasm32"))]
-        let source = if self.tiled_sources.contains_key(&target) {
+        let source = if self.tiled_sources.contains_key(&target) && self.thumbnails.source_placements.get(&target).is_some_and(|p| p.as_affine().is_some()) {
             let mut gpu = self
                 .thumbnails
                 .sources
@@ -312,6 +312,7 @@ struct PreviewPipeline {
     read_bounds: wgpu::BindGroupLayout,
     draw: wgpu::RenderPipeline,
     prepared: std::collections::VecDeque<PreparedPreview>,
+    capture: artwork::Capture,
 }
 struct PreparedPreview {
     id: LayerId,
@@ -319,6 +320,7 @@ struct PreparedPreview {
     rendition: [f32; 8],
     sources: Vec<Option<[u32; 2]>>,
     mask: bool,
+    placed: bool,
     records: wgpu::Buffer,
     stride: u32,
     read: wgpu::BindGroup,
@@ -371,6 +373,7 @@ impl PreviewPipeline {
             bounds,
             draw,
             prepared: Default::default(),
+            capture: Default::default(),
         }
     }
     fn begin(
@@ -432,6 +435,13 @@ impl PreviewPipeline {
             coordinates.extend(layer.pages.iter().map(|p| p.coordinate));
             coordinates.extend(r.native_color_coordinates(id));
         }
+        let geometry = r.artwork_frame.as_ref().map(|frame| layer_core::target_geometry(&frame.layers,id));
+        let placed = geometry.as_ref().is_some_and(|geometry| !geometry.is_identity());
+        if let Some(geometry) = geometry.filter(|_| placed) {
+            let mut local = coordinates.iter().fold(PixelRect::EMPTY, |bounds,c| bounds.union(page_rect(*c)));
+            if let Some(source) = r.tiled_sources.get(&id) { local = local.union(PixelRect::full(source.extent)); }
+            coordinates = page_coordinates(pixel_rect(geometry.forward_bounds(local.to_rect()),r.document_extent)).collect();
+        }
         let sources: Vec<_> = std::iter::once(None)
             .chain(coordinates.into_iter().map(Some))
             .collect();
@@ -451,7 +461,7 @@ impl PreviewPipeline {
                 r.document_extent[1],
             ]);
             record[4] = if i == 0 { 2 } else { u32::from(mask.is_some()) };
-            record[5] = u32::from(mask.as_ref().is_some_and(|m| m.inverted));
+            record[5] = u32::from(!placed && mask.as_ref().is_some_and(|m| m.inverted));
             record[8..12].copy_from_slice(&background.map(f32::to_bits));
             if mask.is_none() { record[12..20].copy_from_slice(&r.ui_rendition_parameters().map(f32::to_bits)); }
             for (dst, value) in bytes[i * stride..i * stride + 80]
@@ -474,7 +484,7 @@ impl PreviewPipeline {
             r.device.working_format(), "layer thumbnail");
         PreparedPreview { id, revision: (r.artwork_revision, r.selection_paint_revision),
             rendition: r.ui_rendition_parameters(), measure: if full { sources.len() } else { 1 },
-            sources, mask: mask.is_some(), records, stride: stride as u32, read, write, result, draw: 0,
+            sources, mask: mask.is_some(), placed, records, stride: stride as u32, read, write, result, draw: 0,
             valid: Arc::new(std::sync::atomic::AtomicBool::new(true)) }
     }
     fn prepare(&mut self, r: &mut WgpuRasterizer, id: LayerId,
@@ -487,7 +497,8 @@ impl PreviewPipeline {
         let cached = self.prepared.iter().position(|p| p.id == id);
         let mut prepared = if let Some(i) = cached { self.prepared.remove(i).unwrap() } else { self.begin(r, id) };
         let write = crate::submission::CacheWrite::new();
-        let inputs = |r: &mut WgpuRasterizer,
+        let capture = &mut self.capture;
+        let mut inputs = |r: &mut WgpuRasterizer,
                       encoder: &mut crate::submission::CommandEncoder,
                       chunk: &[Option<[u32; 2]>]|
          -> Result<Vec<wgpu::BindGroup>, GpuRasterError> {
@@ -496,6 +507,7 @@ impl PreviewPipeline {
                 .map(|coordinate| {
                     let view = match coordinate {
                         None => r.empty_view.clone(),
+                        Some(c) if prepared.placed => capture.layer_tile(r,id,*c,encoder)?.view,
                         Some(c) if prepared.mask => r.layer_masks.pages[&(id, *c)].view.clone(),
                         Some(c) => {
                             r.raw_layer_tile(id, *c, encoder)?
@@ -513,7 +525,7 @@ impl PreviewPipeline {
                 .collect()
         };
         while limit > 0 && prepared.measure < prepared.sources.len() {
-            let end = (prepared.measure + limit.min(SOURCE_SLOTS)).min(prepared.sources.len());
+            let end = (prepared.measure + limit.min(if prepared.placed { 1 } else { SOURCE_SLOTS })).min(prepared.sources.len());
             let chunk = &prepared.sources[prepared.measure..end];
             let bindings = inputs(r, encoder, chunk)?;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -534,7 +546,7 @@ impl PreviewPipeline {
             prepared.measure = end;
         }
         while limit > 0 && prepared.draw < prepared.sources.len() {
-            let end = (prepared.draw + limit.min(SOURCE_SLOTS)).min(prepared.sources.len());
+            let end = (prepared.draw + limit.min(if prepared.placed { 1 } else { SOURCE_SLOTS })).min(prepared.sources.len());
             let chunk = &prepared.sources[prepared.draw..end];
             let bindings = inputs(r, encoder, chunk)?;
             if r.device.portable_blend() {

@@ -203,7 +203,7 @@ mod selection_pixel_checks {
     }
 
     #[test]
-    fn copy_and_cut_to_a_new_layer_share_the_photo_and_sit_above_its_clipping_stack() {
+    fn copy_and_cut_to_a_new_layer_bake_only_selected_placed_pixels_above_the_clipping_stack() {
         for cut in [false, true] {
             let command = if cut { CommandId::CutSelectionToLayer } else { CommandId::CopySelectionToLayer };
             let mut s = photo_session();
@@ -222,19 +222,21 @@ mod selection_pixel_checks {
             assert_eq!(index(copy.id) + 1, index(clipped), "{command:?} goes directly above the clipping stack");
             assert!(!copy.properties.clipped && copy.mask.is_none());
             assert_eq!(copy.properties.parent, before.layer(base).unwrap().properties.parent);
-            assert!(Arc::ptr_eq(
-                copy.source.as_ref().unwrap(),
-                before.layer(base).unwrap().source.as_ref().unwrap()
-            ));
+            assert!(copy.source.is_none());
+            assert_eq!(copy.properties.placement, layer_core::LayerPlacement::IDENTITY);
+            assert!(Arc::ptr_eq(doc.layer(base).unwrap().source.as_ref().unwrap(), before.layer(base).unwrap().source.as_ref().unwrap()));
             assert!(doc.selection.is_none(), "the selection moves into the new layer");
+            let origin = copy.properties.offset;
             let copy = copy.id;
             let operations = submitted(&mut s);
             assert_eq!(operations.len(), 1 + usize::from(cut));
-            assert!(operations.iter().all(|(_, op)| erase(op)));
             assert_eq!(operations[0].0, copy);
-            assert!(operations[0].1.coverage.initial.as_ref().unwrap().inverted, "the copy keeps only the selection");
+            assert!(matches!(operations[0].1.kind, layer_core::LayerOperationKind::Bake { .. }));
+            assert!(!operations[0].1.coverage.initial.as_ref().unwrap().inverted, "Bake visits only the selected pixels");
+            assert_eq!(operations[0].1.coverage.initial, Some(selection.translated(Point { x: -origin.x, y: -origin.y })));
             if cut {
                 assert_eq!(operations[1].0, base);
+                assert!(erase(&operations[1].1));
                 assert!(!operations[1].1.coverage.initial.as_ref().unwrap().inverted, "Cut erases it from the source");
             }
             assert!(s.command(CommandId::Reselect).enabled);
@@ -441,4 +443,40 @@ mod selection_pixel_checks {
         assert!(press(&mut s, "Delete", false).handled, "a disabled Clear still consumes the key");
         assert_eq!(pixels(&s), untouched);
     }
+    #[test]
+    fn copying_hidden_placed_pixels_keeps_their_full_domain_and_document_origin() {
+        let mut s = photo_session();
+        let id = s.engine.document().active_layer;
+        let mut owner = s.engine.document().layer(id).unwrap().clone();
+        owner.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([10., 0., 0., 10., -100., -80.]));
+        owner.opacity = 0.65;
+        owner.properties.blend = layer_core::LayerBlend::Multiply;
+        s.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(owner))).unwrap();
+        let selection = rectangle([-50., -30., 60., 50.]);
+        select(&mut s, selection.clone());
+        let before = s.engine.document().clone();
+        let (origin, extent) = before.bake_extent(&std::collections::BTreeSet::from([id])).unwrap();
+        assert!(origin.x < 0. && origin.y < 0.);
+        invoke(&mut s, CommandId::CopySelectionToLayer);
+        let doc = s.engine.document();
+        let copy = doc.layer(doc.active_layer).unwrap();
+        assert_eq!(copy.properties.offset, origin);
+        assert_eq!(copy.properties.extent, Some(extent));
+        assert_eq!(copy.properties.placement, layer_core::LayerPlacement::IDENTITY);
+        assert_eq!(copy.opacity, before.layer(id).unwrap().opacity);
+        assert_eq!(copy.properties.blend, before.layer(id).unwrap().properties.blend);
+        assert_eq!(doc.layer(id).unwrap(), before.layer(id).unwrap());
+        let copy_id = copy.id;
+        let operations = submitted(&mut s);
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].0, copy_id);
+        let LayerOperationKind::Bake { members, offset } = &operations[0].1.kind else { panic!("placed input is composited") };
+        assert_eq!(*offset, Point { x: -origin.x, y: -origin.y });
+        assert!(Arc::ptr_eq(members[0].source.as_ref().unwrap(), before.layer(id).unwrap().source.as_ref().unwrap()));
+        assert_eq!(members[0].properties.placement, before.layer(id).unwrap().properties.placement);
+        assert_eq!(operations[0].1.coverage.initial, Some(selection.translated(Point { x: -origin.x, y: -origin.y })));
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().layers, before.layers);
+    }
+
 }

@@ -233,6 +233,7 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
     }
     let mut ids = BTreeSet::new();
     for l in &doc.layers {
+        if l.properties.extent.is_some_and(|e|e.contains(&0)||e.iter().any(|v|*v>limits.dimension)) || l.mask.as_ref().is_some_and(|m|m.extent.is_some_and(|e|e.contains(&0)||e.iter().any(|v|*v>limits.dimension))) {return Err("Invalid or oversized target extent".into());}
         if l.id.0 == 0 || !ids.insert(l.id) || l.name.len() > 4096 {
             return Err("Invalid project layer identity".into());
         }

@@ -38,6 +38,7 @@ impl Notices {
 
 pub(super) fn drawing_refusal_text(refusal: DrawingRefusal, l: &Localizer) -> std::sync::Arc<str> {
     match refusal {
+        DrawingRefusal::NonAffine => l.text(MessageId::COMMANDS_APPLY_TRANSFORM_BEFORE_EDITING),
         DrawingRefusal::NoLayer => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_SELECT_A_LAYER_TO_DRAW_ON),
         DrawingRefusal::Locked => l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED),
         DrawingRefusal::BaseLocked => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THE_LAYER_BELOW_THIS_EFFECT_IS_LOCKED),

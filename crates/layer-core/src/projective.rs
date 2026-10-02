@@ -112,7 +112,7 @@ impl Projective {
     }
     /// Every point of `rect` has an image, so its image is one convex,
     /// unfolded quadrilateral.
-    fn covers(self, rect: Rect) -> bool {
+    pub fn covers(self, rect: Rect) -> bool {
         if rect.is_empty() || self.0.iter().any(|v| !v.is_finite()) {
             return false;
         }
@@ -127,6 +127,21 @@ impl Projective {
             .then(|| Rect::around(rect.corners().into_iter().filter_map(|p| self.map(p))))
     }
 
+    pub fn magnification(self, bounds: Rect) -> f32 {
+        if let Some(affine) = self.as_affine() { return affine.magnification(); }
+        let [a,b,c,d,e,f,g,h,i] = self.0.map(f64::from);
+        let mut weight = f64::INFINITY;
+        let mut numerator = [0f64; 4];
+        for p in bounds.corners() {
+            let [x,y] = [f64::from(p.x), f64::from(p.y)];
+            weight = weight.min(g*x + h*y + i);
+            let n = [(a*h-b*g)*y+a*i-c*g, (d*h-e*g)*y+d*i-f*g, (b*g-a*h)*x+b*i-c*h, (e*g-d*h)*x+e*i-f*h];
+            for (bound,value) in numerator.iter_mut().zip(n) { *bound = bound.max(value.abs()); }
+        }
+        if weight <= 0. { return f32::INFINITY; }
+        let [a,b,c,d] = numerator.map(|n| (n/weight.powi(2)) as f32);
+        Affine([a,b,c,d,0.,0.]).magnification()
+    }
     /// Map closed polygons exactly, first clipping away the parts with no image
     /// (w' below a floor relative to their largest w'). Even-odd interiors
     /// survive the clip because it is convex. Polygons that vanish are dropped.

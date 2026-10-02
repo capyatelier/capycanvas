@@ -311,9 +311,9 @@ impl SourceThumbnails {
             .thumbnails
             .source_placements
             .get(&layer)
-            .copied()
+            .cloned()
             .unwrap_or_default();
-        let mapping = overview_mapping(prepared.extent, placement);
+        let mapping = overview_mapping(prepared.extent, placement.as_affine().ok_or(GpuRasterError::InvalidTransform("Nonlinear thumbnail requires placed pixels"))?);
         r.uploads.write(
             encoder,
             &self.display_parameters,
@@ -466,4 +466,4 @@ fn overview_buffer(device: &wgpu::Device) -> wgpu::Buffer {
 
 #[cfg(test)]
 #[path = "tests/source_thumbnails.rs"]
-mod tests;
+pub(crate) mod tests;

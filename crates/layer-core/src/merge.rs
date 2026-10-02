@@ -141,7 +141,7 @@ pub(crate) fn bake_bounds(members: &[Layer], offset: Point, extent: [u32; 2]) ->
     };
     let mut bounds = Rect::EMPTY;
     for layer in layers.iter().filter(|l| l.kind == LayerKind::Paint && visible(l)) {
-        bounds = bounds.union(target_transform(&layers, layer.id).bounds(content(layer, extent)));
+        bounds = bounds.union(target_geometry(&layers, layer.id).forward_bounds(content(layer, extent)));
     }
     for effect in layers.iter().filter(|l| visible(l)).filter_map(|l| l.effect.as_ref()) {
         match (effect.program.kind, effect.program.alpha) {
@@ -366,14 +366,14 @@ impl Document {
 
     /// Where the members' pixels lie in document coordinates, with the
     /// canvas, grown to whole pages from the canvas origin.
-    fn bake_extent(&self, members: &BTreeSet<LayerId>) -> Result<(Point, [u32; 2]), MergeRefusal> {
+    pub fn bake_extent(&self, members: &BTreeSet<LayerId>) -> Result<(Point, [u32; 2]), MergeRefusal> {
         let canvas = [self.width, self.height];
         let bounds = self
             .layers
             .iter()
             .filter(|l| l.kind == LayerKind::Paint && members.contains(&l.id))
             .fold(Rect::from_extent(canvas), |bounds, l| {
-                bounds.union(self.layer_transform(l.id).bounds(Rect::from_extent(l.local_extent(canvas))))
+                bounds.union(self.layer_geometry(l.id).forward_bounds(Rect::from_extent(l.local_extent(canvas))))
             });
         let size = raster::TILE_SIZE as f32;
         let origin = Point {

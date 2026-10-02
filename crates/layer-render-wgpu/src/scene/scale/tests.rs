@@ -141,7 +141,7 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
         (BlendSpace::Perceptual, Affine::IDENTITY, 0),
         (BlendSpace::Linear, Affine::IDENTITY, 0),
     ].into_iter().enumerate() {
-        doc.layers[0].properties.placement = placement;
+        doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(placement);
         let mut frame = packet(&doc.layers, extent);
         frame.blend_space = space;
         frame.composite_all = matches!(step, 3 | 4);
@@ -367,7 +367,7 @@ fn streamed_sources_reuse_valid_finer_pages_without_native_decoding() {
         cache.valid.clear();
         scene.begin_frame();
         commands.begin();
-        cache.prepare_graph(&r, frame, &scene.scale_sources, &commands, None).unwrap();
+        cache.prepare_graph(&r, frame, &scene, &commands, None).unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         cache.render(&mut scene, &mut r, frame, PixelRect::full(frame.document_extent),
             &mut Encoding { encoder: &mut encoder, commands: &mut commands }, None).unwrap();
@@ -436,7 +436,7 @@ fn retained_windows_stream_sources_when_source_requirements_grow() {
     let (selected, _) = Cache::select(Some(old), &r, frame, request(&r, frame).unwrap(), false);
     assert_eq!(selected.plan, previous);
     assert!(selected.streamed_sources);
-    assert!(allocation_for(&r, selected.plan, frame, None, true).into_iter().sum::<u64>() <= crate::scene::scale::CACHE_BYTES);
+    assert!(allocation_for(&r, selected.plan, frame, None, true, None).into_iter().sum::<u64>() <= crate::scene::scale::CACHE_BYTES);
 }
 
 #[test]
@@ -528,7 +528,7 @@ fn small_placed_source_remains_visible_beyond_its_local_extent() {
     let mut doc = document_at([256, 256]);
     let extent = [2048, 1536];
     doc.width = extent[0]; doc.height = extent[1];
-    doc.layers[0].properties.placement = layer_core::Affine([1., 0., 0., 1., 896., 640.]);
+    doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([1., 0., 0., 1., 896., 640.]));
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut frame = packet(&doc.layers, extent);
     frame.view.document_to_surface = [0.385, 0., 0., 0.385, 0., 0.];
@@ -562,7 +562,7 @@ fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
         [0.5, 0., 0., 0.5, 16., 32.], [-0.5, 0., 0., 0.5, 320., 32.],
         [0.6, 0.2, -0.1, 0.5, 30., 4.], [0.35, 0.1, 0.2, 0.75, -17., 21.],
     ].into_iter().enumerate() {
-        doc.layers[0].properties.placement = layer_core::Affine(placement);
+        doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine(placement));
         doc.layers[0].mask.as_mut().unwrap().inverted = pose % 2 != 0;
         for enabled in [true, false] {
             doc.layers[0].mask.as_mut().unwrap().enabled = enabled;
@@ -598,7 +598,7 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
     let mut updates = 0;
     let mut previous = None;
     for (step, offset) in [[-2050., -1000.], [-2100., -1000.], [-2350., -1000.], [-2100., -1000.], [-3575., -1790.], [700., 400.]].into_iter().enumerate() {
-        doc.layers[0].properties.placement = layer_core::Affine::translation(layer_core::Point { x: offset[0], y: offset[1] });
+        doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(layer_core::Point { x: offset[0], y: offset[1] }));
         let mut frame = packet(&doc.layers, extent);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
@@ -618,7 +618,7 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
         assert!(error[0] < 0.004 && error[1] < 0.04, "step={step}: {error:?}");
         assert_presentation_mip(&r);
     }
-    doc.layers[0].properties.placement = layer_core::Affine([0.5, 0., 0., 0.5, -100., -100.]);
+    doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0.5, 0., 0., 0.5, -100., -100.]));
     let frame = packet(&doc.layers, extent);
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
     let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
@@ -650,7 +650,7 @@ fn cold_identity_sources_prepare_adjacent_detail_without_redecoding() {
 fn optional_source_detail_yields_to_unallocated_required_images() {
     let mut doc = document_at([1024, 1024]);
     doc.width = 128; doc.height = 128;
-    doc.layers[0].properties.placement = layer_core::Affine([0.125, 0., 0., 0.125, 0., 0.]);
+    doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0.125, 0., 0., 0.125, 0., 0.]));
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     r.submit(packet(&doc.layers, [doc.width, doc.height])).unwrap();
     let mut scene = r.scene.take().unwrap();
@@ -663,7 +663,7 @@ fn optional_source_detail_yields_to_unallocated_required_images() {
     doc.layers.insert(0, second);
     let frame = packet(&doc.layers, [doc.width, doc.height]);
     scene.scale_sources.prepare(&r, frame, &[]);
-    let requested = r.scale_display.as_ref().unwrap().source_levels(&r, frame, &scene.scale_sources);
+    let requested = r.scale_display.as_ref().unwrap().source_levels(&r, frame, &scene);
     let budget = requested.values().flat_map(|levels| levels.values()).map(|p| p.level_bytes(p.level)).sum();
     assert_eq!(scene.scale_sources.retain_levels(&requested, budget), budget);
     assert!(scene.scale_sources.entries.values().all(|s| !s.levels.contains_key(&1)));
@@ -701,7 +701,7 @@ fn source_retention_reserves_images_that_composition_allocates_later() {
                 }
             }
             doc.layers[0].raster = RasterRevision::backed(data);
-            doc.layers[0].properties.placement = layer_core::Affine::translation(layer_core::Point { x: 32., y: 32. });
+            doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(layer_core::Point { x: 32., y: 32. }));
         }
         let mut front = doc.layers[0].clone();
         front.id = LayerId(20);
@@ -779,15 +779,18 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     r.prepare_moving_layer(Some(id));
     let mut prepared = None;
+    let mut prepared_level = None;
     for (step, (x, scale)) in [(10., 1.), (0., 1.), (0., 0.9), (0., 0.9), (0., 1.), (-10., 1.), (0., 1.)].into_iter().enumerate() {
-        doc.layers[0].properties.placement = layer_core::Affine([scale, 0., 0., scale, x, 0.]);
+        doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([scale, 0., 0., scale, x, 0.]));
         let mut frame = packet(&doc.layers, extent);
         frame.blend_space = layer_core::BlendSpace::Perceptual;
         frame.time_seconds = step as f32 * 0.1;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         r.submit(frame).unwrap();
         let source = &r.scene.as_ref().unwrap().scale_sources.entries[&id];
-        let current = (source.updates, source.levels[&2].image.texture.clone());
+        let level = *prepared_level.get_or_insert_with(|| source_level(r.scale_display.as_ref().unwrap().plan.level,
+            &layer_core::target_geometry(&doc.layers,id),extent));
+        let current = (source.updates, source.levels[&level].image.texture.clone());
         assert_eq!(prepared.get_or_insert_with(|| current.clone()), &current,
             "moving an unchanged photo through its original pose must reuse its pixels");
         assert!(!r.has_pending_work(), "an unfinished placement must not schedule exact refinement");
@@ -797,7 +800,7 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
         assert_eq!(r.metrics.composited_pixels, work, "an unchanged placement pose must not refine");
     }
     r.prepare_moving_layer(None);
-    doc.layers[0].properties.placement = layer_core::Affine::IDENTITY;
+    doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::IDENTITY);
     let mut frame = packet(&doc.layers, extent);
     frame.blend_space = layer_core::BlendSpace::Perceptual;
     frame.composite_all = false;
@@ -834,7 +837,7 @@ fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
         pixels(r, &texture)
     };
     for placement in [[1., 0., 0., 1., -153.25, -51.5], [0.5, 0.1, -0.15, 0.6, 30., 5.], [-0.6, 0.1, 0.15, 0.5, 570., 7.]] {
-        doc.layers[0].properties.placement = layer_core::Affine(placement);
+        doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine(placement));
         for camera in [[0.25, 0., 0., 0.25, 8.25, 7.5], [0.19, 0., 0., 0.19, 8.25, 7.5], [0.13, 0., 0., 0.13, 8.25, 7.5],
             [0.17, 0.075, -0.075, 0.17, 37.5, 6.25], [0.14, -0.06, 0.02, 0.24, 8.25, 42.5]] {
             let mut frame = packet(&doc.layers, extent);
@@ -898,7 +901,7 @@ fn deferred_placement_navigator_preserves_coarse_artwork() {
         pixels(r, &texture)
     };
     for (step, placement) in [[1., 0., 0., 1., -153.25, -51.5], [0.5, 0.1, -0.15, 0.6, 30., 5.], [-0.6, 0.1, 0.15, 0.5, 570., 7.]].into_iter().enumerate() {
-        doc.layers[0].properties.placement = layer_core::Affine(placement);
+        doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine(placement));
         let mut frame = packet(&doc.layers, [doc.width, doc.height]);
         frame.time_seconds = step as f32 * 0.1;
         frame.view.background_rgba_linear = [1.; 4];
@@ -957,7 +960,7 @@ fn placed_compact_prediction_keeps_the_most_magnified_source_axis() {
     let extent = [doc.width, doc.height];
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     for placement in [[2., 0., 0., 1., -300., -20.], [-2., 0., 0., 0.25, 600., 80.]] {
-        doc.layers[0].properties.placement = layer_core::Affine(placement);
+        doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine(placement));
         let mut frame = packet(&doc.layers, extent);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
@@ -967,7 +970,7 @@ fn placed_compact_prediction_keeps_the_most_magnified_source_axis() {
         dab.radii = [32.; 2];
         let mut batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         batch.kind = DabBatchKind::Preview;
-        batch.style.brush_to_layer = doc.layers[0].properties.placement.inverse().unwrap();
+        batch.style.brush_to_layer = doc.layers[0].properties.placement.as_affine().unwrap().inverse().unwrap();
         r.submit(FramePacket { dabs: &[dab], dab_batches: &[batch], ..frame }).unwrap();
         assert_eq!(r.preview_level, 1);
         assert_ne!(display_pixels(&r), baseline);
@@ -1195,7 +1198,7 @@ fn placed_page_edge_edits_match_rebuilding_the_entire_display() {
     let mut moving = doc.layers[0].clone();
     moving.id = LayerId(40);
     moving.opacity = 0.71;
-    moving.properties.placement = layer_core::Affine([0.7, 0.7, -0.7, 0.7, 76.8, 77.8]);
+    moving.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0.7, 0.7, -0.7, 0.7, 76.8, 77.8]));
     let mut front = doc.layers[0].clone();
     front.id = LayerId(41);
     front.opacity = 0.3;
@@ -1854,4 +1857,191 @@ fn resident_bytes(cache: &crate::scene::scale::Cache, scene: &crate::scene::Scen
 
 fn resident_bytes_with_pool(cache: &crate::scene::scale::Cache, scene: &crate::scene::Scene) -> u64 {
     resident_bytes(cache, scene) + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>()
+}
+
+#[test]
+fn retained_outer_mesh_display_refines_to_exact_after_geometry_and_mask_changes() {
+    use layer_core::{Affine,LayerPlacement,MeshMap,Point,Projective,Rect,Interpolation};
+    let extent = [513,387];
+    let mut doc = document_at(extent);
+    let id = doc.layers[0].id;
+    doc.layers[0].source = Some(rgba8_source(extent,|x,y|
+        if (x/7+y/5)%2==0 {[220,31,90,255]} else {[25,180,210,128]}));
+    let domain = Rect::from_extent(extent);
+    let mesh = Arc::new(MeshMap::from_affine(domain,[2,2],Affine([0.7,0.02,-0.03,0.8,57.,21.])).unwrap()
+        .move_node(4,Point {x:31.,y:-23.}).unwrap());
+    let mut mask = layer_core::LayerMask::reveal_all(LayerId(99),Point {x:7.,y:-3.});
+    mask.default_coverage=0.63;
+    mask.placement=Projective([1.,0.02,0.,0.,1.,0.,0.0001,0.,1.]);
+    mask.initial=Some(layer_core::Selection::polygon(vec![Point {x:20.,y:30.},Point {x:400.,y:30.},
+        Point {x:400.,y:300.},Point {x:20.,y:300.}]).unwrap());
+    doc.layers[0].mask=Some(mask);
+    let mut cached = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    exact.test.reference=true;
+    for (step,outer) in [Projective::IDENTITY,Projective([1.05,0.02,-16.,-0.02,1.04,-6.,0.00015,-0.0001,1.])].into_iter().enumerate() {
+        doc.layers[0].properties.placement=LayerPlacement {outer,mesh:Some(mesh.clone()),interpolation:Interpolation::Linear};
+        doc.layers[0].mask.as_mut().unwrap().inverted=step!=0;
+        let mut frame=packet(&doc.layers,extent);
+        frame.view.document_to_surface=[0.125,0.,0.,0.125,0.,0.];
+        cached.submit(frame).unwrap();exact.submit(frame).unwrap();
+        let owner_geometry=layer_core::target_geometry(&doc.layers,id);
+        let mask_geometry=layer_core::target_geometry(&doc.layers,LayerId(99));
+        let scene=cached.scene.as_ref().unwrap();
+        let owner_mesh=scene.mesh_geometry(&owner_geometry).unwrap();
+        assert!(Arc::ptr_eq(&owner_mesh,&scene.mesh_geometry(&mask_geometry).unwrap()),"owner and linked mask share tessellation and winning UV");
+        let reference=pixels(&exact,crate::test_support::document_texture(&exact));
+        assert_settled(&mut cached,frame,&reference);
+        assert!(cached.scene.as_ref().unwrap().scale_sources.cache_info(id).is_some());
+    }
+}
+
+#[test]
+fn a_near_unit_projective_photo_keeps_the_display_source_budget() {
+    use layer_core::{LayerPlacement,Projective};
+    let mut doc=document_at([33,17]);
+    let mut r=WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    r.submit(packet(&doc.layers,[doc.width,doc.height])).unwrap();
+    doc.width=9504;doc.height=6336;
+    doc.layers[0].properties.extent=Some([doc.width,doc.height]);
+    doc.layers[0].properties.placement=LayerPlacement::from_projective(
+        Projective([1.,0.,0.,0.,1.,0.,0.000001,0.,1.]));
+    r.moving_layer=Some(doc.layers[0].id);
+    let geometry=layer_core::target_geometry(&doc.layers,doc.layers[0].id);
+    let mut frame=packet(&doc.layers,[doc.width,doc.height]);
+    frame.view.document_to_surface=[0.1653409,0.,0.,0.1653409,0.,0.];
+    let requested=request(&r,frame).unwrap();
+    eprintln!("near-unit rate {} source level {} display level {} native {}",
+        geometry.magnification(layer_core::Rect::from_extent(frame.document_extent)),
+        source_level(requested.plan.level,&geometry,frame.document_extent),requested.plan.level,
+        requested.evaluation==Evaluation::Native);
+    assert!(requested.evaluation==Evaluation::Display,"a near-unit pose fits a reduced immutable source");
+    assert!(source_level(requested.plan.level,&geometry,frame.document_extent)>0);
+}
+
+#[test]
+fn a_large_bent_material_photo_keeps_the_display_source_budget() {
+    use layer_core::{LayerPlacement,MeshMap,Point,Rect};
+    use layer_core::raster::*;
+    let mut doc=document_at([33,17]);
+    let tile=RasterTile::backed(TileBlob::encode(RasterPlane::WatercolorWetness.descriptor(doc.color),&vec![255;256*256]).unwrap());
+    doc.layers[0].raster=RasterRevision::backed(RasterData {watercolor:Some(RasterWatercolor {wet_edge:0.9,burnt_edge:0.6,edge_width:8.}),
+        tiles:BTreeMap::from([(TileKey {plane:RasterPlane::WatercolorWetness,coordinate:[0;2]},tile)]),..Default::default()});
+    let mut r=WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    r.submit(packet(&doc.layers,[doc.width,doc.height])).unwrap();
+    doc.width=9504;doc.height=6336;
+    doc.layers[0].properties.extent=Some([doc.width,doc.height]);
+    doc.layers[0].properties.placement=LayerPlacement {mesh:Some(Arc::new(MeshMap::identity(Rect::from_extent([doc.width,doc.height]),[3;2]).unwrap()
+        .move_node(5,Point {x:-120./0.1653409,y:-80./0.1653409}).unwrap())),..Default::default()};
+    r.moving_layer=Some(doc.layers[0].id);
+    let mut frame=packet(&doc.layers,[doc.width,doc.height]);frame.view.document_to_surface=[0.1653409,0.,0.,0.1653409,0.,0.];
+    let requested=request(&r,frame).unwrap();
+    let bytes=allocation_for(&r,requested.plan,frame,None,bounded(frame.layers),None).into_iter().sum::<u64>();
+    let geometry=layer_core::target_geometry(&doc.layers,doc.layers[0].id);
+    eprintln!("bent material photo: level={}, source={}, native={}, prospective={bytes}",requested.plan.level,source_level(requested.plan.level,&geometry,frame.document_extent),requested.evaluation==Evaluation::Native);
+    assert!(requested.evaluation==Evaluation::Display,"the actual binned mesh and conservative reduced source fit the existing budget");
+    assert!(bytes<=CACHE_BYTES);
+    let scene=r.scene.as_ref().unwrap();let first=scene.mesh_geometry(&geometry).unwrap();
+    let mut other=doc.layers[0].clone();other.id=LayerId(55);other.properties.offset=Point {x:16.,y:8.};doc.layers.insert(0,other);
+    let second_geometry=layer_core::target_geometry(&doc.layers,LayerId(55));
+    Scene::geometry_bytes(&doc.layers,Some(scene));let second=scene.mesh_geometry(&second_geometry).unwrap();
+    assert!(Arc::ptr_eq(&first,&scene.mesh_geometry(&geometry).unwrap()));
+    assert!(Arc::ptr_eq(&second,&scene.mesh_geometry(&second_geometry).unwrap()));
+    doc.layers.remove(0);Scene::geometry_bytes(&doc.layers,Some(scene));
+    assert_eq!(scene.mesh_geometry.borrow().len(),1,"retired owner geometry cannot accumulate across poses");
+    let mut scene=r.scene.take().unwrap();
+    let mapped=scene.material_coverage(&r,doc.layers[0].id,&geometry).0;
+    assert!(!mapped.is_empty());
+    assert!((mapped.max.x-mapped.min.x)*(mapped.max.y-mapped.min.y)<256.*256.*2.,"one wet tile keeps its mapped footprint: {mapped:?}");
+    assert_eq!(scene.material_coverage(&r,doc.layers[0].id,&geometry).0,mapped);
+    let frame=packet(&doc.layers,[doc.width,doc.height]);
+    for tile in [[0,0],[1,0],[0,1]] {
+        scene.placed_material_tile(&r,frame,&doc.layers[0],geometry.clone(),tile).unwrap();
+    }
+    assert_eq!(scene.mesh_geometry.borrow().len(),1,"material neighborhoods share the owner's world mesh");
+    assert!(Arc::ptr_eq(&first,&scene.mesh_geometry(&geometry).unwrap()));
+    assert!(scene.mesh_geometry.borrow().iter().map(|(_,mesh)|mesh.storage_bytes()).sum::<u64>()<=64*1024*1024);
+}
+
+#[test]
+fn folded_display_across_positions_windows_matches_exact_paint() {
+    let mut doc=document_at([2048,512]);
+    doc.layers[0].properties.placement=layer_core::LayerPlacement {mesh:Some(Arc::new(layer_core::MeshMap::identity(
+        layer_core::Rect::from_extent([doc.width,doc.height]),[3;2]).unwrap().move_node(4,layer_core::Point {x:1500.,y:0.}).unwrap())),..Default::default()};
+    let mut cached=WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact=WgpuRasterizer::new_native_headless(doc.color).unwrap();exact.test.reference=true;
+    let mut frame=packet(&doc.layers,[doc.width,doc.height]);frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+    cached.submit(frame).unwrap();exact.submit(frame).unwrap();
+    let reference=pixels(&exact,crate::test_support::document_texture(&exact));
+    assert_settled(&mut cached,frame,&reference);
+}
+
+#[test]
+fn projective_compute_display_matches_analytic_bilinear_pigment_and_composition() {
+    use layer_core::{ImageTransform,LayerPlacement,Projective};
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let source=crate::test_support::page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+    let colors:Vec<_>=(0..256*256).map(|i| {let a=if (i/256/5+i%256/7)%2==0 {0.25}else{0.75};
+        [a*0.8,a*0.2,a*0.6,a]}).collect();
+    crate::test_support::upload_page(&r,&source,&colors.iter().flatten().flat_map(|v|f32::to_le_bytes(*v)).collect::<Vec<_>>());
+    let extent=[256;2];let plan=display_mips::Plan::at(extent,0);let texels=[3,5,113,83];
+    let resample=&r.scene_pipelines.resample;
+    for encode in [false,true] {
+        let moved=ImageTransform {placement:LayerPlacement::from_projective(
+            Projective([0.9,0.07,-16.,-0.05,1.1,-12.,0.001,-0.0002,1.])),..Default::default()};
+        let values=crate::scene::resample::Resample::values(crate::scene::resample::Request {moved:&moved,kept:&ImageTransform::default(),
+            clip:layer_core::Affine::IDENTITY,extent,texels,
+            display:pixel_transform::DisplayLevel {side:1,extent,opacity:0.65,backdrop:[0.1,0.05,0.15,0.5],encode},
+            target:plan,source:plan,max_lod:0,outside:0.,keep_source:false,identity:false}).unwrap();
+        let uniforms=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:None,contents:&values,usage:wgpu::BufferUsages::UNIFORM});
+        let compute=crate::test_support::page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+        let fragment=crate::test_support::page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+        let source=source.create_view(&Default::default());
+        let compute_view=compute.create_view(&Default::default());let fragment_view=fragment.create_view(&Default::default());
+        let binding=resample.binding(&r.device,&uniforms,0,[&source,&compute_view,&r.empty_view]);
+        let reference=resample.mesh_binding(&r.device,&uniforms,&[source,r.empty_view.clone()]);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        resample.encode(&mut encoder,&binding,texels);
+        resample.encode_mesh(&mut encoder,&reference,&fragment_view,texels,None,false);
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);
+        let actual=pixels(&r,&compute);let expected=pixels(&r,&fragment);
+        assert!(actual.iter().any(|p|p[3]>0.5),"projective display samples actual semitransparent pigment");
+        let rows=pixel_transform::inverse_rows(&moved).unwrap().map(|row|row.map(f64::from));
+        let mut maximum=[0f64;2];
+        for y in 0..256 {for x in 0..256 {
+            let index=y*256+x;
+            if x<texels[0] as usize || y<texels[1] as usize || x>=(texels[0]+texels[2]) as usize || y>=(texels[1]+texels[3]) as usize {
+                assert_eq!(actual[index],[0.;4]);assert_eq!(expected[index],[0.;4]);continue;
+            }
+            let [u,v]=crate::test_support::preimage(moved.placement.outer.0.map(f64::from),[x as f64+0.5,y as f64+0.5]).unwrap();
+            let h=[x as f64+0.5,y as f64+0.5,1.];
+            let dot=|row:usize| rows[row].into_iter().zip(h).map(|(a,b)|a*b).sum::<f64>();
+            let size=|row:usize| rows[row].into_iter().zip(h).map(|(a,b)|(a*b).abs()).sum::<f64>();
+            let w=dot(2);let round=4.*f64::from(f32::EPSILON);let minimum_w=w-round*size(2);
+            assert!(minimum_w>0.);
+            let coordinate_error=[u,v].into_iter().enumerate().map(|(axis,q)|
+                (dot(axis)/w-q).abs()+round*(size(axis)+q.abs()*size(2))/minimum_w+q.abs()*f64::from(f32::EPSILON)).sum::<f64>();
+            let [u,v]=[u-0.5,v-0.5];let [i,j]=[u.floor() as usize,v.floor() as usize];let [fx,fy]=[u.fract(),v.fract()];
+            assert!(i+1<256 && j+1<256);
+            let alpha=f64::from(colors[j*256+i][3])*(1.-fx)*(1.-fy)+f64::from(colors[j*256+i+1][3])*fx*(1.-fy)
+                +f64::from(colors[(j+1)*256+i][3])*(1.-fx)*fy+f64::from(colors[(j+1)*256+i+1][3])*fx*fy;
+            let opacity=alpha*0.65;let mut reference=[0f64;4];
+            for (channel,value) in [0.8,0.2,0.6].into_iter().enumerate() {
+                let value=if encode {r.device.working_space().encode(value)}else{value};
+                reference[channel]=value*opacity+[0.1,0.05,0.15][channel]*(1.-opacity);
+            }
+            reference[3]=opacity+0.5*(1.-opacity);
+            for (path,pixel) in [actual[index],expected[index]].into_iter().enumerate() {
+                for channel in 0..4 {
+                    let error=(f64::from(pixel[channel])-reference[channel]).abs();maximum[path]=maximum[path].max(error);
+                    let color=if channel==3 {1.}else {let value=[0.8,0.2,0.6][channel];if encode {r.device.working_space().encode(value)}else{value}};
+                    let paper=[0.1,0.05,0.15,0.5][channel];
+                    let bound=0.5*0.65*(2./256.+coordinate_error)*(color-paper).abs()+2e-5;
+                    assert!(error<bound,"sampler rounding at {x},{y} channel{channel}, path{path}: {error} exceeds {bound}");
+                }
+            }
+        }}
+        eprintln!("analytic projective compute/fragment max error {maximum:?}, encode {encode}");
+        assert!(maximum.into_iter().all(|error|error<1./255.),"reduced U8 display is within one channel code of analytic bilinear pigment: {maximum:?}");
+    }
 }

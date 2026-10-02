@@ -62,7 +62,7 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
             layer_render::SnapshotRequest::Bounds(request) => (layer_core::Project { document: (*request.document).clone() },
                 SnapshotTask::Bounds(request.scope, request.time, request.effect_times)),
             layer_render::SnapshotRequest::TransformPixels(plan) => (plan.input,
-                SnapshotTask::TransformPixels(plan.output, plan.interpolation, plan.linked_mask)),
+                SnapshotTask::TransformPixels { output: plan.output, target: plan.target, scope: plan.scope, geometry: plan.geometry }),
         };
         let mut packing = std::pin::pin!(raster_project::pack(project));
         let packed = std::future::poll_fn(|cx| {
@@ -75,12 +75,14 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
         match task {
             SnapshotTask::Bounds(..) => serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::Bounds).map_err(|e| e.to_string()),
-            SnapshotTask::TransformPixels(mut output, _, linked) => {
+            SnapshotTask::TransformPixels { mut output, scope, .. } => {
                 let (metadata, buffers) = packed_parts(&result).map_err(|e| format!("{e:?}"))?;
                 let project = raster_project::unpack(&metadata, buffers, true).await.map_err(|e| format!("{e:?}"))?;
                 let layer = project.document.layer(output.id).ok_or("Missing transformed layer")?;
-                output.raster = layer.raster.clone();
-                if linked { output.mask.as_mut().unwrap().raster = layer.mask.as_ref().ok_or("Missing transformed mask")?.raster.clone(); }
+                if scope != layer_core::TransformPixelsScope::Mask { output.raster = layer.raster.clone(); }
+                if scope != (layer_core::TransformPixelsScope::Paint { linked_mask: false }) {
+                    output.mask.as_mut().ok_or("Missing original mask")?.raster = layer.mask.as_ref().ok_or("Missing transformed mask")?.raster.clone();
+                }
                 Ok(layer_render::SnapshotResult::TransformPixels(Box::new(output)))
             }
         }
@@ -154,7 +156,8 @@ fn encode_tiles(bytes: &[u8], descriptors: Vec<PixelDescriptor>) -> Result<Vec<T
 #[derive(Serialize, Deserialize)]
 enum SnapshotTask {
     Bounds(layer_core::ContentScope, f32, Vec<(layer_core::LayerId, f32)>),
-    TransformPixels(layer_core::Layer, layer_core::Interpolation, bool),
+    TransformPixels { output: layer_core::Layer, target: layer_core::LayerId,
+        scope: layer_core::TransformPixelsScope, geometry: layer_core::ImageTransform },
 }
 
 fn packed_parts(packed: &JsValue) -> Result<(String, js_sys::Array), JsValue> {
@@ -181,11 +184,19 @@ pub async fn raster_worker_snapshot(metadata: &str, buffers: js_sys::Array) -> R
             let bounds = renderer.snapshot_gpu().content_bounds(request, Default::default()).await.map_err(js)?;
             serialize(&bounds)
         }
-        SnapshotTask::TransformPixels(output, interpolation, linked_mask) => {
-            let plan = layer_core::TransformPixelsPlan { input: project.clone(), output, interpolation, linked_mask };
-            let mut layer = renderer.snapshot_gpu().transform_pixels(plan, Default::default()).await.map_err(js)?;
-            layer.properties.parent = None;
-            project.document.layers = vec![layer];
+        SnapshotTask::TransformPixels { output, target, scope, geometry } => {
+            let plan = layer_core::TransformPixelsPlan { input: project.clone(), output, target, scope, geometry };
+            let output = renderer.snapshot_gpu().transform_pixels(plan, Default::default()).await.map_err(js)?;
+            let mut transfer = layer_core::Layer::paint(output.id, "");
+            if scope != layer_core::TransformPixelsScope::Mask { transfer.raster = output.raster; }
+            if scope != (layer_core::TransformPixelsScope::Paint { linked_mask: false }) {
+                let output = output.mask.ok_or(js("Missing transformed mask"))?;
+                let mut mask = layer_core::LayerMask::reveal_all(output.id, layer_core::Point::default());
+                mask.raster = output.raster;
+                transfer.mask = Some(mask);
+            }
+            project.document.layers = vec![transfer];
+            project.document.active_mask = false;
             raster_project::pack(project).await
         }
     }

@@ -31,6 +31,7 @@ const LANCZOS=128u;
 const KEEP_SOURCE=256u;
 const ENCODED=512u;
 const CLEAR=1024u;
+const MESH=2048u;
 const UNCOVERED=-1e38;
 
 @vertex fn vertex_main(@builtin(vertex_index) index:u32)->@builtin(position) vec4<f32> {
@@ -38,6 +39,7 @@ const UNCOVERED=-1e38;
     return vec4(p[index],0.,1.);
 }
 fn flags()->u32 {return u32(transform.attachment.z);}
+fn meshed()->bool {return mesh || (flags()&MESH)!=0u;}
 fn background()->f32 {return transform.attachment.w;}
 fn original(p:vec2<i32>)->vec4<f32> {
     if any(p<transform.bounds.xy) || any(p>=transform.bounds.xy+transform.bounds.zw) {return vec4(background());}
@@ -176,7 +178,11 @@ fn bilinear_at(world:vec2<f32>)->vec4<f32> {
 }
 fn mesh_position(p:vec2<i32>)->vec2<f32> {
     let size=vec2<i32>(textureDimensions(source15));
-    return textureLoad(source15,clamp(p,vec2(0),size-1),0).xy;
+    let owner=textureLoad(source15,clamp(p,vec2(0),size-1),0).xy;
+    if owner.x<=UNCOVERED {return vec2(UNCOVERED);}
+    let s=source_position(owner);
+    if s.z<=0. {return vec2(UNCOVERED);}
+    return s.xy;
 }
 // Source step to the next pixel along `axis`, from covered neighbors.
 fn mesh_step(p:vec2<i32>,axis:vec2<i32>,s:vec2<f32>)->vec2<f32> {
@@ -198,7 +204,7 @@ fn filtered(world:vec2<f32>,s:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
         for (var j=0u;j<count.y;j++) {
             for (var i=0u;i<count.x;i++) {
                 let t=(vec2(f32(i),f32(j))+.5)/vec2<f32>(count);
-                if mesh {
+                if meshed() {
                     let o=t-.5;
                     sum+=bilinear(s+dx*o.x+dy*o.y);
                 } else {
@@ -213,7 +219,7 @@ fn filtered(world:vec2<f32>,s:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
     return bilinear(s);
 }
 fn transformed(world:vec2<f32>)->vec4<f32> {
-    if mesh {
+    if meshed() {
         let p=vec2<i32>(floor(world-transform.attachment.xy))+vec2(1);
         let s=mesh_position(p);
         if s.x<=UNCOVERED {return beyond_horizon();}

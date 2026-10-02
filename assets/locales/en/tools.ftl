@@ -161,3 +161,5 @@ tool-tonal-mid-shadows = Mid-shadows · −5 to −3.5 stops
 tool-tonal-midtones = Midtones · −3.5 to −1.5 stops
 tool-tonal-shadows = Shadows · below −5 stops
 tool-tonal-tones = Tones · stops relative to reference white
+
+tool-action-group-transform-warp-split = Split Grid

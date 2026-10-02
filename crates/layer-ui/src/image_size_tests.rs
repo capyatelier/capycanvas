@@ -45,7 +45,7 @@ fn image_size_scales_down_with_constrained_proportions_in_one_undo_step() {
     assert_eq!([doc.width, doc.height], [500, 400]);
     let [(id, transform)] = resampled(&mut s).try_into().unwrap();
     assert_eq!(id, paint);
-    assert_eq!(transform.interpolation, layer_core::Interpolation::Lanczos, "Automatic keeps detail when reducing");
+    assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Lanczos, "Automatic keeps detail when reducing");
     let half = layer_core::Affine([0.5, 0., 0., 0.5, 0., 0.]);
     assert_eq!(s.engine.document().selection, Some(before.selection.as_ref().unwrap().transformed(half).unwrap()));
     invoke(&mut s, CommandId::Undo);
@@ -76,7 +76,7 @@ fn image_size_in_percent_with_free_proportions_and_a_chosen_filter() {
     s.frame(20, 20).unwrap();
     assert_eq!([s.engine.document().width, s.engine.document().height], [1500, 800]);
     let [(_, transform)] = resampled(&mut s).try_into().unwrap();
-    assert_eq!(transform.interpolation, layer_core::Interpolation::Nearest);
+    assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Nearest);
     assert_eq!(transform.as_affine(), Some(layer_core::Affine([1.5, 0., 0., 1., 0., 0.])));
     invoke(&mut s, CommandId::Undo);
     invoke(&mut s, CommandId::ImageSize);
@@ -84,7 +84,7 @@ fn image_size_in_percent_with_free_proportions_and_a_chosen_filter() {
     image_size(&mut s, ImageSizeAction::Apply);
     s.frame(22, 22).unwrap();
     let [(_, transform)] = resampled(&mut s).try_into().unwrap();
-    assert_eq!(transform.interpolation, layer_core::Interpolation::Bicubic, "Automatic stays smooth when enlarging");
+    assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Bicubic, "Automatic stays smooth when enlarging");
 }
 
 #[test]

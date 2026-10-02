@@ -12,6 +12,8 @@ pub(super) struct Accounting {
     tiles: HashSet<u64>,
     sources: color::source::SourceAccounting,
     selections: HashSet<usize>,
+    meshes: HashSet<usize>,
+    mesh_arrays: HashSet<usize>,
 }
 impl Accounting {
     pub fn new(document: &Document) -> Self {
@@ -22,6 +24,7 @@ impl Accounting {
             result.charge_selection(selection);
         }
         for layer in &document.layers {
+            let mut meshes=Vec::new();layer.mesh_roots(&mut meshes);for mesh in meshes{result.charge_mesh(mesh);}
             if let Some(source) = &layer.source {
                 result.sources.charge(source);
             }
@@ -39,6 +42,7 @@ impl Accounting {
 
     pub fn charge(&mut self, entry: &HistoryEntry) -> usize {
         let mut bytes = entry.metadata_bytes;
+        let mut meshes=Vec::new();entry.edit.mesh_roots(&mut meshes);for mesh in meshes{bytes=bytes.saturating_add(self.charge_mesh(mesh));}
         let mut selections = Vec::new();
         entry.edit.selection_roots(&mut selections);
         for selection in selections { bytes = bytes.saturating_add(self.charge_selection(selection)); }
@@ -76,6 +80,12 @@ impl Accounting {
         bytes
     }
 
+    pub(super) fn charge_mesh(&mut self,mesh:&Arc<MeshMap>)->usize {
+        let mut bytes=if self.meshes.insert(Arc::as_ptr(mesh) as usize){std::mem::size_of::<MeshMap>()}else{0};
+        if self.mesh_arrays.insert(mesh.net.as_ptr() as usize){bytes=bytes.saturating_add(mesh.net.len()*std::mem::size_of::<Point>());}
+        for b in &mesh.breakpoints{if self.mesh_arrays.insert(b.as_ptr() as usize){bytes=bytes.saturating_add(b.len()*std::mem::size_of::<f32>());}}
+        bytes
+    }
     pub(super) fn charge_selection(&mut self, selection: &Selection) -> usize {
         match &selection.shape {
             SelectionShape::Pixels(pixels) => {

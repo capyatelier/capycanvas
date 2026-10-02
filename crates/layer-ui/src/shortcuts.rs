@@ -624,7 +624,8 @@ fn command_section(command: CommandId) -> ShortcutSection {
         | C::CropRatioFiveSeven | C::CropRatioSixteenNine | C::CropSwapOrientation | C::CropOverlayThirds
         | C::CropOverlayGrid | C::CropOverlayDiagonal | C::CropOverlayGolden | C::CropCycleOverlay | C::CropStraighten
         | C::CropDeleteCroppedPixels | C::StraightenToGuide => ShortcutSection::Transform,
-        C::ApplyTransform | C::CancelTransform | C::PlacementOriginalSize | C::ResetTransform
+        C::WarpSplitVertical | C::WarpSplitHorizontal | C::WarpSplitCross | C::WarpSelectPoints | C::WarpResetGrid
+        | C::ApplyTransform | C::CancelTransform | C::PlacementOriginalSize | C::ResetTransform
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
         | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => ShortcutSection::Transform,

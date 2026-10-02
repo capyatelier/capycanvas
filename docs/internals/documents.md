@@ -21,6 +21,22 @@ same group, or its clipping base; groups, paper, locked bases and selection
 layers refuse with a reason (`Document::try_drawing_target`). Paper and the last
 layer can be deleted; an empty stack stays valid.
 
+Paint and photo layers retain a `LayerPlacement`: one outer homography, an
+optional shared `MeshMap`, and interpolation. `Document::layer_geometry` returns
+the complete map in document coordinates, including a linked mask's premap.
+Pixel writers use `validate_content_write` and `affine_edit_transform`; a
+nonlinear destination requires [Apply Transform to Pixels](../ui/image-commands.md#apply-a-layer-transform-to-pixels).
+Read consumers use complete placed geometry. Explicit local extents stay fixed
+when a capture grows its virtual canvas; editable affine paint grows through the
+shared extent planner when the real canvas changes.
+
+`retained_transform_targets` normalizes selected roots and checks every descendant
+before preview. `retained_transform_edit` composes one document-space delta into
+paint placement and independent masks, without moving group offsets or ordinary
+adjustment coordinates. Apply creates one history edit; canceled and unchanged
+transforms preserve both history directions. Mesh control roots are shared across
+document and history, charged once by the existing resource accounting.
+
 Effect layers hold filters in the layer stack. An adjustment transforms the
 combined image below it within its group; a clipped adjustment acts on its
 clipping stack, preserving the base layer’s coverage. Multiple adjustments apply

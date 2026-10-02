@@ -11,16 +11,17 @@ asynchronous GPU bounds in their existing GTK, Web and Android controls.
 Transparent source padding, erased overrides, masks and selection coverage use
 actual pixels; pending work is cancellable. See [image commands](../ui/image-commands.md).
 Affine paint extents preserve canvas reach and hidden content after Move.
-Apply Transform to Pixels bakes accepted affine placement while retaining raw
+Apply Transform to Pixels bakes accepted placement while retaining raw
 pigment, wetness and editable masks, with cancellable atomic publication.
-Retained geometry and its additional bounds consumers remain in
-the [M5–M6 specification](photo-editing-m5-m6.md).
+Paint and photos retain perspective and Warp, with exact reopen, grid splits,
+point selection and atomic group transforms. Their controls are described in
+the [canvas action bar](../ui/canvas-action-bar.md#transform-modes).
 
 ## Milestones
 
 | Milestone | Contents | Journeys |
 | --- | --- | --- |
-| **M5 Lossless transforms** | Remaining P-8 retained-geometry consumers, P-10 with lossless Distort and Warp on placed photos, the rest of XF-4 (groups and several layers, pivot, snapping, nudge, Transform Again), split lines, XF-6. | Opens 27 for placed photos; improves 17, 25 |
+| **M5 Lossless transforms** | XF-4 reference point, pivot, snapping, nudge and Transform Again. | Improves 17, 25 |
 | **M6 Tone and color** | P-6, P-7, ADJ-1 with ADJ-4 and the picker bar modes (BAR-5), ADJ-2, ADJ-3, ADJ-5, ADJ-6, ADJ-10, VIEW-2 with its bar mode, VIEW-3 with sampler bars, IO-3, T-3, T-7, T-14. | Improves 5–10, 13, 29 |
 | **M7 Masking and compositing** | SEL-6 as an on-canvas session, SEL-7, SEL-8, LYR-3, LYR-4, ADJ-7, ADJ-8, T-10. | Opens 15; improves 11, 12, 14, 16, 17, 19 |
 | **M8 Advanced** | RET-5 (Content-Aware on the selection bar), RET-6, RET-8, RET-9 history brush, LYR-6 to LYR-9, IO-4 to IO-6, ADJ-11 remainder, ADJ-12, SEL-9, VIEW-4, VIEW-5, T-12, T-19, and the BAR-8 decision. | Opens 9; completes 21, 28 |
@@ -65,7 +66,8 @@ M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_POR
 ## Open items from M2–M4
 
 **Behaviour**
-- **Copy to New Layer** drops the source's mask and clipping, and the copy is unlocked. Copying from a locked layer is allowed; cutting is not.
+- **Copy to New Layer** creates an unlocked, unclipped layer above the clipping
+  stack. It captures the source's own mask but not the clipping base's coverage.
 - **Undo after a canvas change** is briefly disabled and says "Nothing to undo".
 - **Hidden pixels** can still be written by brush dabs past the canvas edge and by a fill through an inverted selection.
 - **Reselect** keeps the selection's position on undo of a canvas change.

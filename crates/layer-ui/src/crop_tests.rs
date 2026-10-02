@@ -302,11 +302,11 @@ fn straighten_levels_a_drawn_line_and_applies_one_resampling_step_on_locked_laye
     let [(id, op)] = operations.as_slice() else { panic!("one resample: {operations:?}") };
     assert_eq!(*id, paint, "the locked layer follows");
     let layer_core::LayerOperationKind::Transform(transform) = &op.kind else { panic!("a resample") };
-    assert_eq!(transform.interpolation, layer_core::Interpolation::Bicubic);
+    assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Bicubic);
     let map = transform.as_affine().unwrap();
-    let after = s.engine.document().layer_transform(paint).inverse().unwrap();
+    let after = s.engine.document().affine_edit_transform(paint).unwrap().inverse().unwrap();
     for p in [Point { x: 0., y: 0. }, Point { x: 1000., y: 800. }] {
-        near_point(map.map(p), after.map(to_canvas.map(before.layer_transform(paint).map(p))), 0.01);
+        near_point(map.map(p), after.map(to_canvas.map(before.affine_edit_transform(paint).unwrap().map(p))), 0.01);
     }
     let doc = s.engine.document();
     assert_eq!(doc.selection, Some(before.selection.as_ref().unwrap().transformed(to_canvas).unwrap()));

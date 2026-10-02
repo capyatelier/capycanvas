@@ -38,14 +38,14 @@ pub use figures::{Figure, FigurePaint, FigureShape, ellipse_outline};
 mod rulers;
 pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler};
 mod affine;
-pub use affine::{Affine, ImageTransform, Interpolation, TransformMap};
+pub use affine::{Affine, ImageTransform, Interpolation, LayerPlacement};
 mod projective;
 pub use projective::{Projective, clip_convex};
 mod warp;
 pub use warp::{MeshMap, Tessellation};
 mod project;
 mod transform_pixels;
-pub use transform_pixels::{TransformPixelsPlan, TransformPixelsRefusal};
+pub use transform_pixels::{TransformPixelsPlan, TransformPixelsRefusal, TransformPixelsScope};
 mod canvas_geometry;
 pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits, ImageOrientation};
 mod content_bounds;
@@ -277,6 +277,10 @@ pub struct Layer {
 }
 
 impl Layer {
+    fn mesh_roots<'a>(&'a self,out:&mut Vec<&'a Arc<MeshMap>>) {
+        out.extend(self.properties.placement.mesh.iter());
+        for op in self.pending_operations.iter().chain(self.mask.iter().flat_map(|m|m.pending_operations.iter())) {op.mesh_roots(out);}
+    }
     fn selection_roots<'a>(&'a self, out: &mut Vec<&'a Selection>) {
         out.extend(self.selection.iter());
         for mask in self.mask.iter().chain(self.pending_operations.iter().map(|op| &op.coverage)) {
@@ -1831,6 +1835,9 @@ impl Edit {
             _ => (),
         }
     }
+    fn mesh_roots<'a>(&'a self,out:&mut Vec<&'a Arc<MeshMap>>) {
+        match self {Self::Batch(es)=>es.iter().for_each(|e|e.mesh_roots(out)),Self::ReplaceLayer(l)=>l.mesh_roots(out),Self::InsertLayer{layer:l,..}=>l.mesh_roots(out),Self::SetColor{layers,..}=>layers.iter().for_each(|l|l.mesh_roots(out)),_=>()}
+    }
     fn selection_roots<'a>(&'a self, out: &mut Vec<&'a Selection>) {
         match self {
             Self::SetSelection(selection) => out.extend(selection.iter()),
@@ -1910,10 +1917,40 @@ pub(crate) fn json_len(value: &impl serde::Serialize) -> usize {
     }
 }
 
-pub(crate) fn without_shared_selections(layer: &mut Layer) {
+impl LayerOperation {
+    fn mesh_roots<'a>(&'a self, out: &mut Vec<&'a Arc<MeshMap>>) {
+        match &self.kind {
+            LayerOperationKind::Transform(transform) => out.extend(transform.placement.mesh.iter()),
+            LayerOperationKind::Bake { members, .. } | LayerOperationKind::FrequencyDetail { members, .. } => {
+                for layer in members.iter() { layer.mesh_roots(out); }
+            }
+            _ => (),
+        }
+        for operation in self.coverage.pending_operations.iter() { operation.mesh_roots(out); }
+    }
+    fn without_shared_payloads(&mut self) {
+        match &mut self.kind {
+            LayerOperationKind::Transform(transform) => transform.placement.mesh = None,
+            LayerOperationKind::Bake { members, .. } | LayerOperationKind::FrequencyDetail { members, .. } => {
+                for layer in Arc::make_mut(members) { without_shared_payloads(layer); }
+            }
+            _ => (),
+        }
+        if !self.coverage.pending_operations.is_empty() {
+            for operation in Arc::make_mut(&mut self.coverage.pending_operations) { operation.without_shared_payloads(); }
+        }
+    }
+}
+
+pub(crate) fn without_shared_payloads(layer: &mut Layer) {
     layer.selection = None;
+    layer.properties.placement.mesh = None;
+    for operation in &mut layer.pending_operations { operation.without_shared_payloads(); }
     if let Some(mask) = &mut layer.mask {
         mask.initial = None;
+        if !mask.pending_operations.is_empty() {
+            for operation in Arc::make_mut(&mut mask.pending_operations) { operation.without_shared_payloads(); }
+        }
     }
 }
 
@@ -1932,7 +1969,7 @@ impl HistoryEntry {
         }
         fn layer_metadata(layer: &Layer) -> usize {
             let mut metadata = layer.clone();
-            without_shared_selections(&mut metadata);
+            without_shared_payloads(&mut metadata);
             serialized(&metadata)
         }
         fn size(edit: &Edit) -> usize {
@@ -2074,6 +2111,10 @@ impl Editor {
     }
 
     fn perform_with_history_budget(&mut self, edit: Edit, budget: usize) -> Result<(), DocumentError> {
+        fn empty_batch(edit: &Edit) -> bool {
+            matches!(edit, Edit::Batch(edits) if edits.iter().all(empty_batch))
+        }
+        if empty_batch(&edit) { return Ok(()); }
         // Selecting the drawing target is navigation. It must neither consume
         // an undo step nor discard redoable painting work.
         if matches!(&edit, Edit::SetActiveLayer { .. } | Edit::SetMaskTarget(_)) {
@@ -2450,3 +2491,6 @@ mod tests {
         assert_eq!(document.active_layer, LayerId(1));
     }
 }
+
+#[cfg(test)]
+mod retained_geometry_tests;

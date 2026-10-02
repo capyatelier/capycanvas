@@ -1730,7 +1730,7 @@ mod tests {
             }
         }
         let preview = host.session.engine().transform_preview().unwrap();
-        assert!(matches!(preview.transform.map, layer_core::TransformMap::Mesh(_)), "Warp draws its mesh");
+        assert!(preview.transform.placement.mesh.is_some(), "Warp draws its mesh");
     }
 
     #[test]
@@ -1779,10 +1779,8 @@ mod tests {
             frame(&mut host);
         }
         frame(&mut host);
-        let map = host.session.engine().transform_preview().unwrap().transform.map.clone();
-        let layer_core::TransformMap::Projective(projective) = map else {
-            panic!("the corner drag distorts: {map:?}");
-        };
+        let map = host.session.engine().transform_preview().unwrap().transform.clone();
+        let projective = map.projective().expect("the corner drag retains a homography");
         let moved = projective.map(Point { x: 256., y: 0. }).unwrap();
         assert!(
             (moved.x - 216.).abs() < 0.5 && (moved.y - 30.).abs() < 0.5,

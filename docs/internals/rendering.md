@@ -443,7 +443,13 @@ identity and selection match. Painting, restoring or leaving Move releases
 prepared inputs. There is no post-release settling work.
 
 A Warp transform is a [mesh](../../crates/layer-render-wgpu/src/paint_transform/mesh.rs)
-of Bézier patches. Its pages are drawn a window of four by four pages at a
+of Bézier patches with explicit source breakpoints. Exact splits subdivide whole
+rows or columns with de Casteljau; reopening and mode changes never refit controls.
+An outer homography follows the mesh. Source lookup uses the same row-major
+triangle order as rasterization, with the later triangle winning at folds.
+Regional draws use that window's ordered triangles; draws spanning windows use
+one copy of each triangle in original order.
+Its pages are drawn a window of four by four pages at a
 time: the mesh, tessellated within half a pixel and extended by a skirt past
 its edges, is first rasterized into a texture of the source position at each
 destination pixel, and the transform pass samples the original there,
@@ -476,18 +482,33 @@ source pixel, as an area reduction would, instead of aliasing. A moving
 Bicubic or Lanczos preview draws bilinearly until it stops.
 
 Exact capture (export, snapshots and the artwork readback) draws placed photos
-through the same pass with the exact cap, and with `Bicubic` where the placement
-magnifies. Display composition uses the scene's reduced source levels. Affine
-display sampling counts taps independently along each output axis, preserving
-edges under uneven scaling, and accounts for partially covered edge texels.
+through the same pass with the exact cap and the persisted interpolation choice.
+Layer reads for sampling, Wand, Fill and selection coverage use complete placed
+geometry in document coordinates. Raw target bounds retain their local coordinates.
+Display composition uses the scene's reduced source levels. Placed sources keep
+a level finer than the projected pixel footprint; small changes around unit scale
+do not force a second unnecessary level of detail. Mesh footprint planning reuses
+the scene's cached tessellation, and source preparation and regional composition
+share the resolved footprint. Translated material neighborhoods reuse the owner's
+geometry buffers. Admission counts the allocated vertex and index buffers;
+source magnification bounds preserve the signed Bézier derivatives.
+Affine display sampling counts taps independently along each output axis,
+preserving edges under uneven scaling, and accounts for partially covered edge texels.
 The direct Navigator subdivides footprints larger than its retained
 coarse source can represent with one sample grid.
 Placed pigment and scalar pages share that sampler through batched compute
 dispatches, including each region's clear and clip. Mapping, watercolor on a
 transparent target and reduction share ordered compute batches; scratch pages
 can be reused after their reduction. Their pipelines are prepared with the
-document. Display resampling and composition share ordered batches too. A placed
+document. Projective display resampling uses the same mapped sampler in the
+existing compute batches. Consecutive mesh regions sharing an output use one
+render pass, preserving weighted source positions and triangle order.
+Display resampling and composition share ordered batches too. A placed
 layer over a constant backdrop resamples directly into its final output.
+
+Material coverage clips mesh triangles to the raw material's source bounds before
+mapping them into document space. A small wet area therefore requests only the
+regions it reaches, including the interpolation border.
 
 Placed watercolor maps raw pigment and scalar wetness into document coordinates
 before evaluating its material appearance. The existing watercolor pass reads
@@ -521,6 +542,12 @@ encoder. Its private snapshot retains Color, Wetness, WatercolorWetness and link
 Mask separately; it never stores evaluated watercolor appearance as pigment.
 The shared session publishes one replacement after every output tile succeeds.
 Cancellation, renderer replacement and failure discard that private result.
+A scalar-only mask bake uses that worker and preserves its owner, default
+coverage and inversion. A linked mask under nonlinear paint geometry maps from
+the winning owner source position through its independent premap; applying it
+bakes the owner and mask together. The capture freezes each input's local extent
+before growing the output canvas, so default mask coverage and hidden source
+domains do not change during a bake.
 
 ## Filters
 

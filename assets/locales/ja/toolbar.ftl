@@ -69,5 +69,5 @@ toolbar-variant = 種類
 toolbar-visible-color = 表示されている色
 toolbar-editing-layer = 「{ $name }」を編集中
 toolbar-editing-mask = 「{ $name }」のマスクを編集中
-toolbar-image-count = { $count }枚の画像
+toolbar-layer-count = レイヤー{ $count }個
 toolbar-stale-action = この操作は、以前のキャンバスの選択範囲または変形に対するものです。

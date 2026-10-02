@@ -59,8 +59,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let inverse = self
             .engine
             .document()
-            .layer_transform(layer)
-            .inverse()
+            .affine_edit_transform(layer)
+            .and_then(Affine::inverse)
             .ok_or("Invalid layer placement")?;
         let mut coverage = LayerMask::reveal_all(self.engine.allocate_layer_id(), Point::default());
         coverage.default_coverage = f32::from(selection.inverted);
@@ -111,16 +111,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         if layer.properties.parent.is_some_and(|parent| document.is_locked(parent)) {
             return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_THE_LAYER_S_GROUP_IS_LOCKED));
         }
-        if cut && document.is_locked(layer.id) {
-            return Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED));
+        if cut && let Err(reason) = document.validate_content_write(layer.id) {
+            return Some(notices::drawing_refusal_text(reason, l));
         }
         (cut && layer.properties.alpha_locked).then_some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_ALPHA_LOCK_KEEPS_TRANSPARENCY_UNLOCK_THE_LAYER_FIRST))
     }
 
     /// Copy the active layer's selected pixels to a new layer above its
     /// clipping stack, in place and unclipped. `cut` also erases them from the
-    /// source. The copy shares the source's pixels and placed photo, and the
-    /// selection is consumed, with Reselect restoring it.
+    /// source. The copy captures placed appearance; Reselect restores the selection.
     pub(super) fn selection_to_layer(&mut self, cut: bool) -> Result<(), String> {
         refused(self.selection_to_layer_refusal(cut))?;
         let Some(selection) = self.engine.document().selection.clone() else {
@@ -130,17 +129,33 @@ impl<R: CanvasRenderer> UiSession<R> {
         let source = document.layer(document.active_layer).ok_or("Select a layer first")?.clone();
         let top = document.clipping_stack_top(source.id).ok_or("Unknown layer")?;
         let index = document.layers.iter().position(|l| l.id == top).ok_or("Unknown layer")?;
-        let mut copy = source.clone();
-        copy.id = self.engine.allocate_layer_id();
-        copy.name = format!("{} copy", source.name).into();
-        copy.mask = None;
-        copy.pending_operations.clear();
-        copy.properties.clipped = false;
-        copy.properties.locked = false;
+        let parent = source.properties.parent;
+        let parent_offset = parent.map_or(Point::default(), |id| document.layer_offset(id));
+        let (origin, extent) = document.bake_extent(&BTreeSet::from([source.id]))
+            .map_err(|_| self.localization().text(MessageId::COMMANDS_COPY_PIXELS_TOO_LARGE).to_string())?;
+        let to_local = Affine::translation(Point { x: -origin.x, y: -origin.y });
+        let mut member = source.composite_snapshot();
+        member.properties.extent = Some(source.local_extent([document.width, document.height]));
+        member.properties.parent = None;
+        member.properties.offset = document.layer_offset(source.id);
+        member.properties.clipped = false;
+        member.properties.blend = layer_core::LayerBlend::Normal;
+        member.visible = true;
+        member.opacity = 1.;
+        if let Some(mask) = &mut member.mask { mask.offset = document.layer_offset(mask.id); }
+        let mut copy = Layer::paint(self.engine.allocate_layer_id(), format!("{} copy", source.name));
+        copy.opacity = source.opacity;
+        copy.visible = source.visible;
+        copy.properties.blend = source.properties.blend;
+        copy.properties.parent = parent;
+        copy.properties.offset = Point { x: origin.x - parent_offset.x, y: origin.y - parent_offset.y };
+        copy.properties.extent = Some(extent);
         let id = copy.id;
-        let mut outside = selection.clone();
-        outside.inverted = !outside.inverted;
-        let mut operations = vec![(id, self.erase_operation(source.id, &outside, false)?)];
+        let mut coverage = LayerMask::reveal_all(self.engine.allocate_layer_id(), Point::default());
+        coverage.default_coverage = f32::from(selection.inverted);
+        coverage.initial = Some(selection.transformed(to_local).map_err(error)?);
+        let mut operations = vec![(id, LayerOperation { placement: Affine::IDENTITY, coverage,
+            kind: LayerOperationKind::Bake { members: vec![member].into(), offset: Point { x: -origin.x, y: -origin.y } } })];
         if cut {
             let alpha_locked = source.properties.alpha_locked;
             operations.push((source.id, self.erase_operation(source.id, &selection, alpha_locked)?));
@@ -177,12 +192,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             let mut selection = selection.clone();
             selection.inverted ^= hide;
             let parent = layer.properties.parent.map_or(Point::default(), |p| document.layer_offset(p));
-            let geometry = mask.transform_in_parent(&layer.properties).then(Affine::translation(parent));
-            mask.initial = Some(
-                selection
-                    .transformed(geometry.inverse().ok_or("Invalid mask placement")?)
-                    .map_err(error)?,
-            );
+            let geometry = mask.geometry_in_parent(&layer.properties).as_affine()
+                .map(|map| map.then(Affine::translation(parent)));
+            let inverse = if let Some(geometry) = geometry { geometry.inverse().ok_or("Invalid mask placement")? }
+                else {
+                    mask.linked = false;
+                    mask.offset = Point { x: -parent.x, y: -parent.y };
+                    mask.extent = Some([document.width, document.height]);
+                    Affine::IDENTITY
+                };
+            mask.initial = Some(selection.transformed(inverse).map_err(error)?);
             mask.default_coverage = f32::from(selection.inverted);
         }
         Ok(mask)

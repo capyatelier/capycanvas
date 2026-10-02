@@ -161,3 +161,5 @@ tool-tonal-mid-shadows = 中暗部 · −5 至 −3.5 級
 tool-tonal-midtones = 中間調 · −3.5 至 −1.5 級
 tool-tonal-shadows = 暗部 · 低於 −5 級
 tool-tonal-tones = 明暗 · 相對於參考白的級數
+
+tool-action-group-transform-warp-split = 分割網格

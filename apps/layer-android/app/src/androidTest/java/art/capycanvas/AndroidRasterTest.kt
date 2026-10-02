@@ -202,7 +202,7 @@ class AndroidRasterTest {
     }
     private fun manifest(bytes: ByteArray): JSONObject {
         assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
-        assertTrue("Native archive version", bytes[10].toInt() >= 8 && bytes[11].toInt() == 0)
+        assertTrue("Native archive version", bytes[10].toInt() == 14 && bytes[11].toInt() == 0)
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
@@ -1601,7 +1601,7 @@ class AndroidRasterTest {
         val images=fitted.getJSONObject("tiled_sources").getJSONArray("images")
         for(i in photos.indices) {
             val extent=images.getJSONObject(i).getJSONArray("extent");val w=extent.getDouble(0);val h=extent.getDouble(1);val scale=minOf(1.0,2000/w,1500/h)
-            val pose=fitted.getJSONObject("document").getJSONArray("layers").getJSONObject(i).getJSONObject("properties").getJSONArray("placement")
+            val pose=fitted.getJSONObject("document").getJSONArray("layers").getJSONObject(i).getJSONObject("properties").affinePlacement()
             assertEquals(scale,pose.getDouble(0),1e-6);assertEquals(scale,pose.getDouble(3),1e-6)
             assertEquals((2000-w*scale)/2,pose.getDouble(4),.01);assertEquals((1500-h*scale)/2,pose.getDouble(5),.01)
         }
@@ -1612,7 +1612,7 @@ class AndroidRasterTest {
         invoke("scale_rotate");press("placement_original_size");press("apply_transform")
         val originalSize=manifest(save("batch-original-size.capy"))
         memoryStage("after original size")
-        assertEquals(1.0,originalSize.getJSONObject("document").getJSONArray("layers").getJSONObject(0).getJSONObject("properties").getJSONArray("placement").getDouble(0),1e-6)
+        assertEquals(1.0,originalSize.getJSONObject("document").getJSONArray("layers").getJSONObject(0).getJSONObject("properties").affinePlacement().getDouble(0),1e-6)
         assertEquals(identity,sourceIdentity(originalSize))
         val before=count();val malformed=File(files,"batch-malformed.png").apply { writeText("not a photo") }
         try { batch(listOf(photos.first(),malformed)); fail("Malformed second file was accepted") } catch (_: Exception) { assertEquals(before,count()) }
@@ -1663,7 +1663,7 @@ class AndroidRasterTest {
                 memoryStage("$theme: after affine motion")
                 press("apply_transform")
                 memoryStage("$theme: after affine Apply")
-                val retained = manifest(save("$theme-retained-affine.capy"))
+                var retained = manifest(save("$theme-retained-affine.capy"))
                 if (affineSmoke) {
                     assertEquals(identity, sourceIdentity(retained))
                     assertNull(host.failure)
@@ -1680,6 +1680,62 @@ class AndroidRasterTest {
                     assertTrue("$theme: native wetness remains stored", "WatercolorWetness" in planes)
                 }
                 assertMaterial(retained)
+                invoke("scale_rotate")
+                compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar") != null }
+                invoke("transform_distort")
+                val corner = host.snapshot!!.getJSONObject("state").getJSONObject("canvas_bar").getJSONArray("anchor")
+                val zoom = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getDouble("zoom")
+                motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30,
+                    corner.getDouble(2) to corner.getDouble(3) - 20.0 / zoom).put("theme", theme).put("mode", "Distort"))
+                press("apply_transform")
+                val distorted = manifest(save("$theme-retained-distort.capy"))
+                val properties = distorted.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties")
+                val outer = properties.getJSONObject("placement").getJSONArray("outer")
+                assertTrue("$theme: corner drag retains a projective map", outer.getDouble(6) != 0.0 || outer.getDouble(7) != 0.0)
+                assertEquals(sourceIdentity(retained), sourceIdentity(distorted))
+                assertEquals(backing(retained), backing(distorted))
+                invoke("scale_rotate")
+                compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar") != null }
+                invoke("transform_warp")
+                val warpZoom = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getDouble("zoom")
+                motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30,
+                    outer.getDouble(2) / outer.getDouble(8) to outer.getDouble(5) / outer.getDouble(8) - 20.0 / warpZoom)
+                    .put("theme", theme).put("mode", "Warp"))
+                press("apply_transform")
+                retained = manifest(save("$theme-retained-warp.capy"))
+                val warpedProperties = retained.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties")
+                assertFalse("$theme: bent grid persists", warpedProperties.getJSONObject("placement").isNull("mesh"))
+                assertEquals(sourceIdentity(distorted), sourceIdentity(retained))
+                assertEquals(backing(distorted), backing(retained))
+                open(File(files, "$theme-retained-warp.capy"))
+                val reopenedRetained = manifest(save("$theme-retained-warp-reopened.capy"))
+                assertEquals(warpedProperties.toString(), reopenedRetained.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties").toString())
+                assertEquals(backing(retained), backing(reopenedRetained))
+                assertMaterial(reopenedRetained)
+                invoke("scale_rotate")
+                compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar") != null }
+                invoke("transform_warp")
+                invoke("warp_split_cross")
+                val splitHull = host.snapshot!!.getJSONObject("state").getJSONObject("canvas_bar").getJSONArray("anchor")
+                val splitZoom = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getDouble("zoom")
+                motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30,
+                    (splitHull.getDouble(0) + splitHull.getDouble(2)) * .5 to
+                        (splitHull.getDouble(1) + splitHull.getDouble(3)) * .5 - 20.0 / splitZoom)
+                    .put("theme", theme).put("mode", "Warp split cross"))
+                press("apply_transform")
+                retained = manifest(save("$theme-retained-split.capy"))
+                val splitPlacement = retained.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }
+                    .getJSONObject("properties").getJSONObject("placement")
+                val splitBreakpoints = splitPlacement.getJSONObject("mesh").getJSONArray("breakpoints")
+                assertEquals("$theme: cross split inserts a vertical line", 5, splitBreakpoints.getJSONArray(0).length())
+                assertEquals("$theme: cross split inserts a horizontal line", 5, splitBreakpoints.getJSONArray(1).length())
+                assertEquals(sourceIdentity(reopenedRetained), sourceIdentity(retained))
+                assertEquals(backing(reopenedRetained), backing(retained))
+                open(File(files, "$theme-retained-split.capy"))
+                val reopenedSplit = manifest(save("$theme-retained-split-reopened.capy"))
+                assertEquals(splitPlacement.toString(), reopenedSplit.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }
+                    .getJSONObject("properties").getJSONObject("placement").toString())
+                assertEquals(backing(retained), backing(reopenedSplit))
                 memoryStage("$theme: before pixel bake")
                 compose.onNodeWithTag("application-menu-edit").performClick()
                 compose.onNodeWithText("Apply Transform to Pixels").performClick()
@@ -1691,7 +1747,7 @@ class AndroidRasterTest {
                 assertEquals(ownerRaster(retained).getJSONObject("watercolor").toString(), ownerRaster(baked).getJSONObject("watercolor").toString())
                 assertEquals("$theme: only the chosen source is baked", retained.getJSONObject("tiled_sources").array("images").length() - 1, baked.getJSONObject("tiled_sources").array("images").length())
                 val bakedOwner = baked.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }
-                val pose = bakedOwner.getJSONObject("properties").getJSONArray("placement")
+                val pose = bakedOwner.getJSONObject("properties").affinePlacement()
                 assertEquals(listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0), (0 until 6).map { pose.getDouble(it) })
                 invoke("brush"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 80.0))
                 stroke(0.0)
@@ -1856,7 +1912,7 @@ class AndroidRasterTest {
             press("apply_transform")
             DocumentController.nativeFileJobsForTest = true
             val dropped = manifest(save("external-drop.capy"))
-            val pose = dropped.getJSONObject("document").getJSONArray("layers").getJSONObject(0).getJSONObject("properties").getJSONArray("placement")
+            val pose = dropped.getJSONObject("document").getJSONArray("layers").getJSONObject(0).getJSONObject("properties").affinePlacement()
             val extent = dropped.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("extent")
             assertEquals(400.0 - extent.getDouble(0) * pose.getDouble(0) / 2, pose.getDouble(4), 2.0)
             assertEquals(300.0 - extent.getDouble(1) * pose.getDouble(3) / 2, pose.getDouble(5), 2.0)

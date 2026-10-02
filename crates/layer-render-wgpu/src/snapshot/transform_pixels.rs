@@ -4,13 +4,15 @@ use layer_core::raster::{RasterRevision, TileKey};
 impl SnapshotGpu {
     pub async fn transform_pixels(&self, plan: layer_core::TransformPixelsPlan, control: CaptureControl) -> Result<Layer, String> {
         let mut output = plan.output;
+        let scalar = plan.scope == layer_core::TransformPixelsScope::Mask;
+        let linked_mask = matches!(plan.scope, layer_core::TransformPixelsScope::Paint { linked_mask: true });
         let mut snapshot = self.capture(plan.input, [0.; 4], 0., control.clone()).map_err(|e| e.to_string())?;
         let extent = snapshot.extent;
         let mut color = RasterData { watercolor: snapshot.backing[&output.id].watercolor, ..Default::default() };
         let mut mask = RasterData::default();
         let mut empty = std::collections::BTreeMap::new();
         for plane in [RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness, RasterPlane::Mask] {
-            if plane == RasterPlane::Mask && (!plan.linked_mask || output.mask.as_ref().unwrap().default_coverage != 0.) { continue; }
+            if plane == RasterPlane::Mask && ((!linked_mask && !scalar) || output.mask.as_ref().unwrap().default_coverage != 0.) { continue; }
             let descriptor = plane.descriptor(snapshot.color());
             let tile = layer_core::raster::TileBlob::encode(descriptor, &vec![0; descriptor.byte_len([PAGE_SIZE; 2]).unwrap()])?;
             empty.insert(plane, tile.digest);
@@ -22,7 +24,7 @@ impl SnapshotGpu {
                 [region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
                 |r, packet, _, encoder| {
                     let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
-                    let result = scene.capture_raw_tile(r, packet, coordinate, plan.interpolation, plan.linked_mask, encoder);
+                    let result = scene.capture_raw_tile(r, packet, coordinate, &plan.geometry, plan.scope, encoder);
                     r.scene = Some(scene);
                     result
                 }).map_err(|e| e.to_string())?;
@@ -38,8 +40,8 @@ impl SnapshotGpu {
             }
         }
         control.check().map_err(|e| e.to_string())?;
-        output.raster = RasterRevision::backed(color);
-        if plan.linked_mask { output.mask.as_mut().unwrap().raster = RasterRevision::backed(mask); }
+        if !scalar { output.raster = RasterRevision::backed(color); }
+        if linked_mask || scalar { output.mask.as_mut().unwrap().raster = RasterRevision::backed(mask); }
         Ok(output)
     }
 }

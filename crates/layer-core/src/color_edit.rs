@@ -72,7 +72,7 @@ impl Document {
                         "Color changes must preserve raster coverage and watercolor state",
                     ));
                 }
-                data.validate_index(new.local_extent([self.width, self.height]), mask, color)
+                data.validate_index(if mask {new.mask.as_ref().unwrap().local_extent(new.local_extent([self.width,self.height]))} else {new.local_extent([self.width,self.height])}, mask, color)
                     .map_err(|_| invalid("Color backing does not match the new document mode"))?;
             }
         }

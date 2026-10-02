@@ -47,7 +47,7 @@ mod clipboard_checks {
 
     fn translation(s: &UiSession<Recorder>) -> [f32; 2] {
         let doc = s.engine.document();
-        let placement = doc.layer(doc.active_layer).unwrap().properties.placement;
+        let placement = doc.layer(doc.active_layer).unwrap().properties.placement.as_affine().unwrap();
         assert_eq!(placement.0[..4], [1., 0., 0., 1.], "pasted at full size");
         [placement.0[4], placement.0[5]]
     }

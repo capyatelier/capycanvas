@@ -210,7 +210,7 @@ pub(crate) fn short_label(command: CommandId, localizer: &Localizer) -> std::syn
 enum CanvasBarCaption {
     Message(MessageId),
     Editing { message: MessageId, name: std::sync::Arc<str> },
-    Images(usize),
+    Layers(usize),
 }
 impl CanvasBarCaption {
     fn resolve(&self, localizer: &Localizer) -> String {
@@ -221,9 +221,9 @@ impl CanvasBarCaption {
                 args.set("name", name.as_ref());
                 *message
             }
-            Self::Images(count) => {
+            Self::Layers(count) => {
                 args.set("count", *count as i64);
-                MessageId::TOOLBAR_IMAGE_COUNT
+                MessageId::TOOLBAR_LAYER_COUNT
             }
         };
         localizer.format(message, &args)
@@ -482,7 +482,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let label = if self.operation.outline() {
             Some(CanvasBarCaption::Message(MessageId::TOOLBAR_TRANSFORM_OUTLINE))
         } else {
-            (count > 1).then_some(CanvasBarCaption::Images(count))
+            (count > 1).then_some(CanvasBarCaption::Layers(count))
         };
         Some(Plan {
             kind: if self.operation.placing() { CanvasBarKind::Placement } else { CanvasBarKind::Transform },

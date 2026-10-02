@@ -49,7 +49,7 @@ impl WgpuRasterizer {
         }
         let request_id = request.request_id;
         let [x, y] = request.position;
-        let extent = match request.source { ColorSampleSource::Layer(id) => self.target_extent(id), _ => self.document_extent };
+        let extent = self.document_extent;
         let inside = x < extent[0] && y < extent[1];
         let paper = match request.source {
             ColorSampleSource::Layer(id) => self
@@ -128,53 +128,38 @@ impl WgpuRasterizer {
         } else {
             None
         };
-        for row in top..bottom {
-            let mut column = left;
-            while column < right {
-                let (source, origin, end) = match request.source {
-                    ColorSampleSource::Composite => {
-                        (composite.clone(), [column - left, row - top], right)
-                    }
+        for ty in top / PAGE_SIZE..bottom.div_ceil(PAGE_SIZE) {
+            for tx in left / PAGE_SIZE..right.div_ceil(PAGE_SIZE) {
+                let x0 = left.max(tx * PAGE_SIZE);
+                let x1 = right.min((tx + 1) * PAGE_SIZE);
+                let y0 = top.max(ty * PAGE_SIZE);
+                let y1 = bottom.min((ty + 1) * PAGE_SIZE);
+                let (source, origin) = match request.source {
+                    ColorSampleSource::Composite => (composite.clone().unwrap(), [left, top]),
                     ColorSampleSource::Layer(id) => {
-                        let coordinate = [column / PAGE_SIZE, row / PAGE_SIZE];
-                        let source = self
-                            .raw_layer_tile(id, coordinate, &mut encoder)?
-                            .map(|tile| tile.texture);
-                        (
-                            source,
-                            [column % PAGE_SIZE, row % PAGE_SIZE],
-                            right.min((coordinate[0] + 1) * PAGE_SIZE),
-                        )
+                        let mut capture = mem::take(&mut self.color_sampler.capture);
+                        let result = capture.layer_tile(self, id, [tx, ty], &mut encoder);
+                        self.color_sampler.capture = capture;
+                        (result?.texture, [tx * PAGE_SIZE, ty * PAGE_SIZE])
                     }
                 };
-                if let Some(source) = source {
+                for row in y0..y1 {
                     encoder.copy_texture_to_buffer(
                         wgpu::TexelCopyTextureInfo {
-                            origin: wgpu::Origin3d {
-                                x: origin[0],
-                                y: origin[1],
-                                z: 0,
-                            },
+                            origin: wgpu::Origin3d { x: x0 - origin[0], y: row - origin[1], z: 0 },
                             ..source.as_image_copy()
                         },
                         wgpu::TexelCopyBufferInfo {
                             buffer: &buffer,
                             layout: wgpu::TexelCopyBufferLayout {
-                                offset: u64::from(((row - top) * width + column - left) * stride),
-                                // Metal needs an explicit row pitch even for these
-                                // single-row copies. Offsets pack at most 10,201 texels.
+                                offset: u64::from(((row - top) * width + x0 - left) * stride),
                                 bytes_per_row: Some((width * stride).div_ceil(256) * 256),
                                 ..Default::default()
                             },
                         },
-                        wgpu::Extent3d {
-                            width: end - column,
-                            height: 1,
-                            depth_or_array_layers: 1,
-                        },
+                        wgpu::Extent3d { width: x1 - x0, height: 1, depth_or_array_layers: 1 },
                     );
                 }
-                column = end;
             }
         }
         self.uploads.finish(&encoder);

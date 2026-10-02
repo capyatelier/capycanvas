@@ -89,17 +89,14 @@ impl RegionRequests {
         encoder: &mut crate::submission::CommandEncoder,
         extent: [u32; 2],
         selection: &layer_core::Selection,
-        map: &layer_core::TransformMap,
+        map: &layer_core::LayerPlacement,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
         use paint_transform::mesh::{MeshGeometry, WINDOW_PAGES};
         let source = r.selection_clip.mapped_source(&r.device, selection, map)?;
         let [w, h] = extent;
         let bytes = 32 + u64::from(w.div_ceil(4)) * u64::from(h) * 4 + 32;
         let limits = r.device.limits();
-        let mesh = match map {
-            layer_core::TransformMap::Mesh(mesh) => Some(mesh),
-            _ => None,
-        };
+        let mesh = map.mesh.as_ref();
         if extent.contains(&0)
             || bytes > limits.max_storage_buffer_binding_size
             || (mesh.is_none() && h > limits.max_compute_workgroups_per_dimension)
@@ -121,12 +118,12 @@ impl RegionRequests {
             r.selection_clip.resample_window(&r.device, encoder, &source, &output, PixelRect::full(extent), None);
             return Ok(output);
         };
-        let geometry = std::sync::Arc::new(MeshGeometry::new(mesh, None));
+        let geometry = std::sync::Arc::new(MeshGeometry::new(mesh, map.outer, None));
         let side = WINDOW_PAGES * PAGE_SIZE;
         let positions = self.positions(r);
         positions.upload(r, encoder, &geometry)?;
         let view = positions.view(&r.device, [side; 2]);
-        let drawn = pixel_rect(mesh.drawn_bounds(), extent);
+        let drawn = pixel_rect(map.forward_bounds(mesh.bounds()), extent);
         for y in (drawn.min_y() / side..drawn.max_y().div_ceil(side)).map(|n| n * side) {
             for x in (drawn.min_x() / side..drawn.max_x().div_ceil(side)).map(|n| n * side) {
                 positions.draw(r, encoder, [x / PAGE_SIZE, y / PAGE_SIZE])?;
@@ -148,14 +145,7 @@ impl RegionRequests {
             let modify = modify.clone();
             return self.start_modify(r, request, &modify);
         }
-        let extent = match request.source.raw_source() {
-            layer_render::RegionSource::Layer(id)
-            | layer_render::RegionSource::Coverage(id)
-            | layer_render::RegionSource::TransformedSelection { layer: id, .. } => {
-                r.target_extent(*id)
-            }
-            _ => r.document_extent,
-        };
+        let extent = match request.source.raw_source() { layer_render::RegionSource::TransformedSelection {layer,..} => r.target_extent(*layer), _ => r.document_extent };
         let mapped = matches!(
             request.source,
             layer_render::RegionSource::TransformedSelection { .. }
@@ -190,7 +180,7 @@ impl RegionRequests {
             startup.compiler.check()?;
             let mut ready = true;
             if let layer_render::RegionSource::TransformedSelection { map, .. } = &request.source {
-                if matches!(map, layer_core::TransformMap::Mesh(_)) {
+                if map.mesh.is_some() {
                     ready &= startup.compiler.require([&self.positions(r).pipeline], startup::BRUSH);
                 }
                 ready &= startup.compiler.require([&r.selection_clip.resample], startup::BRUSH);

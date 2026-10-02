@@ -270,7 +270,7 @@ impl SnapshotRenderer {
             || layer.opacity != 1.
             || layer.properties.parent.is_some()
             || layer.properties.offset != layer_core::Point::default()
-            || layer.properties.placement != layer_core::Affine::IDENTITY
+            || layer.properties.placement != layer_core::LayerPlacement::IDENTITY
             || layer.properties.blend != layer_core::LayerBlend::Normal
             || layer.properties.clipped
             || layer.mask.as_ref().is_some_and(|m| m.enabled)
@@ -444,6 +444,7 @@ impl SnapshotRenderer {
             scene::Scene::MATERIAL_CACHE_PAGES as u64
         } else { 0 };
         let mut planned = scene::Scene::capture_image_bound(&self.layers, window)
+            .saturating_add(scene::Scene::geometry_bytes(&self.layers,self.renderer.scene.as_ref()))
             .saturating_add(reserved_bytes)
             .saturating_add(region.area().saturating_mul(32)) // output and mapping
             .saturating_add((self.layers.len() as u64 * 3 + 32 + material_pages) * 256 * 256 * 16);
@@ -454,15 +455,10 @@ impl SnapshotRenderer {
                 let extent = layer.local_extent(self.extent);
                 let original = &self.backing[&id];
                 let halo = if mask { 0. } else { original.watercolor.map_or(0., |style| 2. * style.edge_width.clamp(1., 16.)) };
-                let inverse = layer_core::target_transform(&self.layers, id)
-                    .inverse()
-                    .ok_or(GpuRasterError::InvalidTransform(
-                        "Invalid snapshot layer placement",
-                    ))?;
-                let local = pixel_rect(
-                    inverse.bounds(pages.to_rect().outset(halo)).outset(if mask { 1. } else { PAGE_SIZE as f32 }),
-                    extent,
-                );
+                let geometry = layer_core::target_geometry(&self.layers, id);
+                let extent = layer.mask.as_ref().filter(|m| m.id == id).map_or(extent, |m| m.local_extent(extent));
+                let local = paint_transform::snapshot::source_region(&geometry,
+                    pages.to_rect().outset(halo), extent, self.renderer.scene.as_ref().and_then(|scene|scene.mesh_geometry(&geometry)))?.expand(if mask { 1 } else { PAGE_SIZE }, extent);
                 if mask {
                     masks.insert(id, local);
                     if layer.mask.as_ref().is_some_and(|m| m.initial.is_some()) {

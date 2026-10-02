@@ -576,3 +576,19 @@ commands-wait-for-current-edit = Wait for the current edit
 commands-transform-pixels-drawing-changed = The drawing changed; apply the transform again
 commands-transform-pixels-unexpected-result = Couldn't apply the transformed pixels
 commands-transform-pixels-layer-changed = The transformed layer changed
+
+commands-apply-transform-before-editing = Apply Transform to Pixels before editing this layer
+commands-transform-single-warp = Select one paint or photo layer to warp
+commands-transform-original-affine = Original Size requires a photo without Distort or Warp
+commands-warp-reset-grid = Reset Grid to replace the current warp shape
+
+command-warp-split-vertical = Split Vertically
+command-warp-split-horizontal = Split Horizontally
+command-warp-split-cross = Split Crosswise
+command-warp-select-points = Select Points
+command-warp-reset-grid = Reset Grid
+commands-warp-split-limit = This grid has no room for another split
+commands-warp-grid-reset-help = Replace the warp shape with a straight grid
+commands-warp-split-help = Tap the warp to add a grid line without changing its shape
+commands-warp-select-help = Tap to select points to move together
+commands-copy-pixels-too-large = The copied pixels would exceed the layer size limit

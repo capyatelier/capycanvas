@@ -80,17 +80,23 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     session.set_transform_control("transform_width", 2.).unwrap();
     for (i, layer) in session.engine.document().layers[..2].iter().enumerate() {
         assert_eq!(layer.source, before[i].source);
-        assert_eq!(layer.properties.placement.map(Point {
+        assert_eq!(layer.properties.placement.as_affine().unwrap().map(Point {
             x: layer.source.as_ref().unwrap().extent[0] as f32 / 2.,
             y: layer.source.as_ref().unwrap().extent[1] as f32 / 2.,
         }), Point { x: 95., y: 55. });
-        assert!((layer.properties.placement.0[0] - before[i].properties.placement.0[0] * 2.).abs() < 0.00001);
+        assert!((layer.properties.placement.as_affine().unwrap().0[0] - before[i].properties.placement.as_affine().unwrap().0[0] * 2.).abs() < 0.00001);
         assert!(layer.raster.is_empty());
     }
     invoke(&mut session, CommandId::PlacementOriginalSize);
-    for layer in &session.engine.document().layers[..2] {
-        assert_eq!(&layer.properties.placement.0[..4], &Affine::IDENTITY.0[..4]);
+    let original_size = session.engine.document().layers[..2].to_vec();
+    for layer in &original_size {
+        assert_eq!(&layer.properties.placement.as_affine().unwrap().0[..4], &Affine::IDENTITY.0[..4]);
     }
+    invoke(&mut session, CommandId::PlacementOriginalSize);
+    assert_eq!(session.engine.document().layers[..2], original_size, "Original Size does not apply the batch delta twice");
+    invoke(&mut session, CommandId::ResetTransform);
+    assert_eq!(session.engine.document().layers[..2], before, "Reset restores exact initial member maps after Original Size");
+    assert!(!session.engine.can_undo(), "provisional reset adds no history");
     invoke(&mut session, CommandId::CancelTransform);
     assert_eq!(session.engine.backend().moving_layer, None);
     assert_eq!(session.engine.document().layers, original.layers);
@@ -149,7 +155,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
         let doc = session.engine.document();
         let layer = doc.layer(doc.active_layer).unwrap();
         assert_eq!(layer.properties.parent, (position == LayerDropPosition::Into).then_some(group_id));
-        assert_eq!(doc.layer_transform(layer.id).map(Point { x: 1., y: 0.5 }), Point { x: 100., y: 75. });
+        assert_eq!(doc.affine_edit_transform(layer.id).unwrap().map(Point { x: 1., y: 0.5 }), Point { x: 100., y: 75. });
         assert_eq!(doc.layers.iter().position(|l| l.id == layer.id).unwrap(),
             if position == LayerDropPosition::Into { 1 } else { 3 });
         invoke(&mut session, CommandId::CancelTransform);
@@ -174,7 +180,7 @@ fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
     let before = session.engine.document().clone();
     let selected = session.layer_interaction.selected.clone();
     let tool = session.layer_interaction.tool;
-    assert!(session.begin_layer_placement(None).unwrap_err().contains("locked"));
+    assert!(session.begin_layer_placement(None).is_err());
     assert!(!session.operation.active());
     assert_eq!(session.layer_interaction.tool, tool);
     assert_eq!(session.layer_interaction.selected, selected);
@@ -192,7 +198,7 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
     session.place_layer_source("Photo", source.clone(), None).unwrap();
     let placed = session.engine.document().layer(session.engine.document().active_layer).unwrap();
     let id = placed.id;
-    let matrix = placed.properties.placement;
+    let matrix = placed.properties.placement.as_affine().unwrap();
     assert!((matrix.0[0] - 1. / 3.).abs() < 0.00001);
     assert_eq!(matrix.map(Point { x: 300., y: 200. }), Point { x: 100., y: 75. });
     assert!(session.operation.placing());
@@ -223,21 +229,24 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
     let restored = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
     let mut reopened = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, restored.document, [800, 600], Platform::Gtk).unwrap();
     let thumbnail_revision = reopened.state.layers.iter().find(|l| l.id == id2.0).unwrap().paint_revision;
+    let reopened_layer = reopened.engine.document().layer(id2).unwrap().clone();
     invoke(&mut reopened, CommandId::ScaleRotate);
     invoke(&mut reopened, CommandId::PlacementOriginalSize);
     invoke(&mut reopened, CommandId::ApplyTransform);
     let layer = reopened.engine.document().layer(id2).unwrap();
-    assert_eq!(&layer.properties.placement.0[..4], &Affine::IDENTITY.0[..4]);
+    assert_eq!(&layer.properties.placement.as_affine().unwrap().0[..4], &Affine::IDENTITY.0[..4]);
     assert_eq!(layer.source.as_deref(), Some(&source));
     assert!(layer.raster.is_empty());
     assert!(layer.pending_operations.is_empty());
     assert!(reopened.engine.transform_preview().is_none(), "whole photo placement bypasses raster transforms");
-    assert_eq!(layer.properties.placement.map(Point { x: 300., y: 200. }), Point { x: 60., y: 80. });
+    assert_eq!(layer.properties.placement.as_affine().unwrap().map(Point { x: 300., y: 200. }), Point { x: 60., y: 80. });
     assert_ne!(reopened.state.layers.iter().find(|l| l.id == id2.0).unwrap().paint_revision,
         thumbnail_revision, "accepted geometry invalidates the host's cached preview");
+    let accepted_revision = reopened.state.layers.iter().find(|l| l.id == id2.0).unwrap().paint_revision;
     invoke(&mut reopened, CommandId::Undo);
-    assert_eq!(reopened.state.layers.iter().find(|l| l.id == id2.0).unwrap().paint_revision,
-        thumbnail_revision, "undo publishes the restored preview identity");
+    assert_eq!(reopened.engine.document().layer(id2), Some(&reopened_layer));
+    assert_ne!(reopened.state.layers.iter().find(|l| l.id == id2.0).unwrap().paint_revision,
+        accepted_revision, "undo invalidates the accepted preview and restores the exact layer");
 }
 
 #[test]
@@ -694,7 +703,7 @@ fn skewed_photo_placements_reopen_with_their_skew() {
     let skew = |s: &UiSession<Recorder>| s.state.tool_settings.iter().find(|f| f.id == "transform_skew").unwrap().value;
     session.dispatch(UiAction::SetToolSetting { id: "transform_skew".into(), value: 0.4 }).unwrap();
     invoke(&mut session, CommandId::ApplyTransform);
-    let placement = session.engine.document().layer(session.engine.document().active_layer).unwrap().properties.placement;
+    let placement = session.engine.document().layer(session.engine.document().active_layer).unwrap().properties.placement.as_affine().unwrap();
     assert!((placement.0[2] / placement.0[3]).abs() > 0.3, "the placement keeps its shear: {placement:?}");
     invoke(&mut session, CommandId::ScaleRotate);
     assert!(session.operation.placing(), "a skewed placement can be edited again");

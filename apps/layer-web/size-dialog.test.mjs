@@ -37,7 +37,7 @@ const numeric = (unit, max = 30000) => ({ kind: "number", min: unit === "%" ? 0.
 const units = [{ unit: "pixels", label: "Pixels" }, { unit: "percent", label: "Percent" }];
 function view(overrides = {}) {
   return {
-    title: "Canvas Size", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
+    title: "Canvas Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
     unit: "pixels", units,
     relative: false, relative_label: "Relative", anchor: "center", anchor_label: "Anchor",
     anchors: ["top_left", "top", "top_right", "left", "center", "right", "bottom_left", "bottom", "bottom_right"]
@@ -49,7 +49,7 @@ const resamples = [["automatic", "Automatic"], ["bicubic", "Bicubic"], ["lanczos
   .map(([resample, label]) => ({ resample, label }));
 function imageView(overrides = {}) {
   return {
-    title: "Image Size", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
+    title: "Image Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
     unit: "pixels", units, resolution_label: "Resolution", resolution: 72, resolution_numeric: numeric("ppi", 10000),
     constrain: true, constrain_label: "Constrain proportions", resample: "automatic", resample_label: "Resample", resamples,
     message: "Current size: 800 × 600 px", can_apply: false, ...overrides,
@@ -234,7 +234,7 @@ test("Image Size projects the shared view, opens without taking the keyboard, an
   assert.deepEqual(["width", "height", "resolution"].map(name => [h.field(name).label, h.field(name).value]),
     [["Width", 800], ["Height", 600], ["Resolution", 72]]);
   assert.equal(h.field("resolution").control.unit, "ppi");
-  assert.deepEqual(h.select("Unit").children.map(o => [o.value, o.textContent]), [["pixels", "Pixels"], ["percent", "Percent"]]);
+  assert.deepEqual(h.unit().children.map(o => [o.value, o.textContent]), [["pixels", "Pixels"], ["percent", "Percent"]]);
   assert.equal(h.check().checked, true);
   assert.equal(h.check().parentNode.children[1].textContent, "Constrain proportions");
   assert.deepEqual(h.select("Resample").children.map(o => o.textContent), ["Automatic", "Bicubic", "Lanczos", "Bilinear", "Nearest neighbor"]);
@@ -259,7 +259,7 @@ test("Image Size commits typed text before a unit, Constrain, Resample or Apply 
   const h = imageHarness();
   h.ui.refresh();
   h.field("width").pending = "400";
-  choose(h.select("Unit"), "percent");
+  choose(h.unit(), "percent");
   assert.deepEqual(h.sent, [{ op: "width", value: 400 }, { op: "unit", unit: "percent" }], "the chosen unit survives the commit's refresh");
   h.sent.length = 0;
   h.field("resolution").pending = "300";
@@ -311,7 +311,7 @@ test("Image Size rebuilds each field only when its numeric range changes", () =>
   assert.equal(h.field("width").control.unit, "%");
   assert.equal(h.field("height").value, 50);
   assert.equal(h.field("resolution"), resolution, "the resolution field keeps its spec");
-  assert.equal(h.select("Unit").value, "percent");
+  assert.equal(h.unit().value, "percent");
 });
 
 cancelTest("Image Size", imageHarness);

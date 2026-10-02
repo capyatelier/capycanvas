@@ -96,7 +96,7 @@ impl PaintTransforms {
                 let native = level.is_none() || r.layer_masks.definitions.contains_key(&next.layer);
                 damage.extend(state.update_preview(r, encoder, &next, layers.iter().find(|l| l.id == next.layer), extent, native)?);
                 if let Some(level) = level.filter(|_| !native) {
-                    let local = input_level(level, &next, layer_core::target_transform(layers, next.layer), extent);
+                    let local = input_level(level, &next, &layer_core::target_geometry(layers, next.layer), extent);
                     state.prepare_reduced(r, encoder, next.selection.as_ref(), layers.iter().find(|l| l.id == next.layer), extent, local)?;
                 }
             } else { damage.extend(state.cancel_preview(r, encoder)?); }
@@ -115,7 +115,7 @@ impl PaintTransforms {
             state.capture_source(r, encoder, id, Some(selection), extent)?;
             state.standby = Some(standby);
         }
-        let local = sampling::selection_level(level, layer_core::target_transform(layers, id), Some(selection), extent);
+        let local = sampling::selection_level(level, &layer_core::target_geometry(layers, id), Some(selection), extent);
         state.prepare_reduced(r, encoder, Some(selection), Some(layer), extent, local)
     }
     pub fn release_standby(&mut self) {
@@ -135,7 +135,7 @@ impl PaintTransforms {
     }
     pub fn direct_source(&self, id: LayerId) -> bool {
         self.0.iter().any(|t| t.preview.as_ref().is_some_and(|p| p.layer == id
-            && !p.transform.keep_source && !matches!(p.transform.map, layer_core::TransformMap::Mesh(_)))
+            && !p.transform.keep_source && !p.transform.placement.mesh.is_some())
             && !t.native_preview && t.reduced.as_ref().is_some_and(|input| input.kept.is_none()))
     }
     pub fn input_requirements(&self, preview: &layer_render::TransformPreview, requested: u32, extent: [u32; 2]) -> (u32, bool) {
@@ -151,11 +151,10 @@ impl PaintTransforms {
         for state in self.0.iter_mut().filter(|t| !t.native_preview && t.preview.is_some()) {
             let preview = state.preview.clone().unwrap();
             let extent = r.target_extent(preview.layer);
-            let placement = layer_core::target_transform(layers, preview.layer);
-            let mut transform = layer_core::ImageTransform::affine(placement);
-            if placement.magnification() > 1. + 1e-4 { transform.interpolation = layer_core::Interpolation::Bicubic; }
+            let transform = layer_core::target_geometry(layers, preview.layer);
+            let mesh = self::mesh_geometry_for(&transform);
             let bounds = PixelRect::full(extent);
-            let splitter = snapshot::Splitter::new(bounds, &transform, None, |c| !page_rect(c).intersect(bounds).is_empty())?;
+            let splitter = snapshot::Splitter::new(bounds, &transform, mesh, |c| !page_rect(c).intersect(bounds).is_empty())?;
             let mut jobs = Vec::new();
             splitter.split(aligned(region, PAGE_SIZE, r.document_extent), &mut jobs)?;
             let pages: std::collections::BTreeSet<_> = jobs.into_iter().flat_map(|job| job.sources).collect();
@@ -216,7 +215,7 @@ struct ImageTransformState {
     display_mesh: MeshBuffers,
     /// The warp mesh last tessellated, the display tolerance it was
     /// tessellated within, if any, and its geometry.
-    mesh: Option<(Arc<layer_core::MeshMap>, Option<f32>, Arc<mesh::MeshGeometry>)>,
+    mesh: Option<(layer_core::LayerPlacement, Option<f32>, Arc<mesh::MeshGeometry>)>,
 }
 
 #[derive(PartialEq)]
@@ -274,12 +273,6 @@ pub(crate) fn aligned(region: PixelRect, side: u32, extent: [u32; 2]) -> PixelRe
     PixelRect::new(near(region.min_x()), near(region.min_y()), far(region.max_x(), extent[0]), far(region.max_y(), extent[1]))
 }
 
-/// The level of a layer's own pixels whose texels are at least as fine as
-/// those of display `level` along the axis `placement` magnifies most.
-pub(crate) fn local_level(level: u32, placement: layer_core::Affine) -> u32 {
-    (level as f32 - placement.magnification().log2()).floor().clamp(0., 4.) as u32
-}
-
 /// `transform` followed by `placement`, from texels of the layer reduced to
 /// `local` to texels of display `level`, sampled bilinearly. A warp resamples
 /// from mesh positions instead and maps through the placement alone.
@@ -289,13 +282,20 @@ pub(crate) fn resample_map(
     local: u32,
     level: u32,
 ) -> Result<layer_core::ImageTransform, GpuRasterError> {
-    let moved = transform.map.projective().unwrap_or(layer_core::Projective::IDENTITY);
+    if transform.placement.mesh.is_some() {
+        let scale = 1. / (1u32 << local) as f32;
+        let mut result = transform.clone();
+        result.source_from_owner = Some(transform.source_from_owner.unwrap_or(layer_core::Projective::IDENTITY)
+            .then(layer_core::Projective([scale,0.,0.,0.,scale,0.,0.,0.,1.])).ok_or(GpuRasterError::InvalidTransform("Invalid source placement"))?);
+        return Ok(result);
+    }
+    let moved = transform.projective().unwrap_or(layer_core::Projective::IDENTITY);
     let scale = |s: f32| layer_core::Projective([s, 0., 0., 0., s, 0., 0., 0., 1.]);
     let map = [moved, layer_core::Projective::from_affine(placement), scale(1. / (1u32 << level) as f32)]
         .into_iter()
         .try_fold(scale((1u32 << local) as f32), layer_core::Projective::then)
         .ok_or(GpuRasterError::InvalidTransform("Transform must be finite and invertible"))?;
-    Ok(layer_core::ImageTransform { map: map.into(), interpolation: layer_core::Interpolation::Linear, ..Default::default() })
+    Ok(layer_core::ImageTransform { placement: layer_core::LayerPlacement { interpolation: layer_core::Interpolation::Linear, ..layer_core::LayerPlacement::from_projective(map) }, ..Default::default() })
 }
 
 /// Taps per axis a preview's pages average over a minified pixel: the exact
@@ -673,9 +673,9 @@ impl ImageTransformState {
             return Ok(());
         }
         let index = r.paint_layers.iter().position(|l| l.id == layer);
-        let mesh = match &transform.map {
-            layer_core::TransformMap::Mesh(map) => {
-                let geometry = self.mesh_geometry(map, None);
+        let mesh = match &transform.placement.mesh {
+            Some(_) => {
+                let geometry = self.mesh_geometry(&transform.placement, None);
                 self.positions.upload(r, encoder, &geometry)?;
                 Some(geometry)
             }
@@ -957,7 +957,7 @@ impl ImageTransformState {
                 })
             })
             .collect();
-        let meshed = matches!(transform.map, layer_core::TransformMap::Mesh(_));
+        let meshed = transform.placement.mesh.is_some();
         let positions = meshed
             .then(|| self.positions.view(&r.device, MESH_WINDOW.map(|n| n * PAGE_SIZE)));
         let pass = if self.background.is_some() {
@@ -1148,14 +1148,14 @@ impl ImageTransformState {
             snapshot::SnapshotPage::of(&capture.texture, &capture.view),
         );
     }
-    fn mesh_geometry(&mut self, map: &Arc<layer_core::MeshMap>, display: Option<f32>) -> Arc<mesh::MeshGeometry> {
+    fn mesh_geometry(&mut self, map: &layer_core::LayerPlacement, display: Option<f32>) -> Arc<mesh::MeshGeometry> {
         if let Some((cached, within, geometry)) = &self.mesh
             && *within == display
-            && (Arc::ptr_eq(cached, map) || cached == map)
+            && cached == map
         {
             return geometry.clone();
         }
-        let geometry = Arc::new(mesh::MeshGeometry::new(map, display));
+        let geometry = Arc::new(mesh::MeshGeometry::new(map.mesh.as_ref().unwrap(), map.outer, display));
         self.mesh = Some((map.clone(), display, geometry.clone()));
         geometry
     }
@@ -1328,14 +1328,12 @@ impl ImageTransformState {
         resample: &resample::Resample,
     ) -> Result<(), GpuRasterError> {
         let side = display.side;
-        let mesh = match &next.transform.map {
-            layer_core::TransformMap::Mesh(map) => Some(map.clone()), _ => None,
-        };
+        let mesh = next.transform.placement.mesh.clone();
         let texels = texel_rect(region.window_local(target.bounds), side);
         let values = self.display_record(next, extent, placement, display, target, texels)?;
-        if let Some(map) = &mesh {
+        if mesh.is_some() {
             let tolerance = 0.5 * side as f32 / placement.magnification().max(1e-6);
-            let geometry = self.mesh_geometry(map, Some(tolerance));
+            let geometry = self.mesh_geometry(&next.transform.placement, Some(tolerance));
             self.display_mesh.upload(r, encoder, &geometry)?;
         }
         self.reduced.as_mut().unwrap().draw(r, resample, encoder, level, &values, texels, mesh.as_ref().map(|_| &self.display_mesh))
@@ -1684,4 +1682,8 @@ fn selection_capture(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+fn mesh_geometry_for(transform: &layer_core::ImageTransform) -> Option<std::sync::Arc<mesh::MeshGeometry>> {
+    transform.placement.mesh.as_ref().map(|mesh| std::sync::Arc::new(mesh::MeshGeometry::new(mesh, transform.placement.outer, None)))
 }

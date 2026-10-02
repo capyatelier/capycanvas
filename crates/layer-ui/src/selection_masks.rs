@@ -819,8 +819,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     selection = selection
                         .transformed(
-                            doc.layer_transform(id)
-                                .inverse()
+                            doc.affine_edit_transform(id)
+                                .and_then(layer_core::Affine::inverse)
                                 .ok_or("Invalid group placement")?,
                         )
                         .map_err(error)?;
@@ -873,7 +873,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     layer.id
                 };
-                let basis = doc.layer_transform(target);
                 self.return_to_artwork()?;
                 let options = layer_render::SelectionRefinement {
                     resize: 0,
@@ -881,7 +880,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     previous: self.engine.document().selection.clone().map(Arc::new),
                     antialias: true,
                     feather: 0.,
-                    source_to_document: basis,
+                    source_to_document: layer_core::Affine::IDENTITY,
                     keep_canvas_edges: false,
                 };
                 self.queue_mask_region(

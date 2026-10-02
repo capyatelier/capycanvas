@@ -6,9 +6,11 @@ use std::collections::BTreeSet;
 
 pub(super) struct Placement {
     pub(super) members: Vec<Layer>,
+    initial: Option<Vec<Layer>>,
     rollback: Edit,
     insertion: Option<usize>,
     selected: BTreeSet<layer_core::LayerId>,
+    roots: Vec<LayerId>,
 }
 pub(crate) struct PlacementInsertion {
     pub index: usize,
@@ -17,28 +19,42 @@ pub(crate) struct PlacementInsertion {
     pub selected: BTreeSet<layer_core::LayerId>,
 }
 impl Placement {
-    pub(super) fn count(&self) -> usize {
-        self.members.len()
+    pub(super) fn reset(&mut self) {
+        if let Some(initial) = self.initial.take() { self.members = initial; }
     }
-    pub(super) fn preview_layers(&self, doc: &Document, affine: Affine) -> Result<Vec<Layer>, String> {
-        self.members.iter().map(|original| {
-            let mut layer = original.clone();
-            layer.properties.placement = if self.members.len() == 1 {
-                affine
-            } else {
-                let basis = Affine::translation(doc.layer_offset(layer.id));
-                original.properties.placement.then(basis).then(affine)
-                    .then(basis.inverse().ok_or("Invalid placement destination")?)
-            };
+    pub(super) fn count(&self) -> usize {
+        self.roots.len()
+    }
+    pub(super) fn single_leaf(&self) -> bool {
+        self.members.len() == 1 && self.members[0].kind == LayerKind::Paint
+    }
+    pub(super) fn preview_layers(&self, doc: &Document, map: &LayerPlacement, interpolation: Option<Interpolation>) -> Result<Vec<Layer>, String> {
+        let mut candidate = doc.clone();
+        for original in &self.members {
+            candidate.apply(Edit::ReplaceLayer(Box::new(original.clone()))).map_err(error)?;
+        }
+        candidate.retained_transform_targets(&self.roots).map_err(error)?;
+        if self.single_leaf() {
+            let mut layer = self.members[0].clone();
+            layer.properties.placement = map.clone();
+            candidate.apply(Edit::ReplaceLayer(Box::new(layer))).map_err(error)?;
+        } else {
+            let edit = candidate.retained_transform_edit(&self.roots, map.outer).map_err(error)?;
+            candidate.apply(edit).map_err(error)?;
+        }
+        self.members.iter().map(|layer| {
+            let mut layer = candidate.layer(layer.id).cloned().ok_or("The transformed layer was removed")?;
+            if layer.kind == LayerKind::Paint && let Some(interpolation) = interpolation {
+                layer.properties.placement.interpolation = interpolation;
+            }
             Ok(layer)
         }).collect()
     }
 }
 fn batch_bounds(doc: &Document, members: &[Layer]) -> Rect {
-    members.iter().fold(Rect::EMPTY, |bounds, layer| {
-        bounds.union(layer.properties.placement
-            .then(Affine::translation(doc.layer_offset(layer.id)))
-            .bounds(source_frame(doc, layer.id)))
+    members.iter().filter(|layer| layer.kind == LayerKind::Paint).fold(Rect::EMPTY, |bounds, layer| {
+        bounds.union(layer.properties.placement.post(Projective::from_affine(Affine::translation(doc.layer_offset(layer.id))))
+            .map_or(Rect::UNBOUNDED, |map| map.forward_bounds(source_frame(doc, layer.id))))
     })
 }
 
@@ -47,44 +63,55 @@ impl<R: CanvasRenderer> UiSession<R> {
         &mut self,
         imported: Option<PlacementInsertion>,
     ) -> Result<(), String> {
+        self.begin_retained_placement(imported, false)
+    }
+    pub(super) fn begin_retained_placement(&mut self, imported: Option<PlacementInsertion>, moving: bool) -> Result<(), String> {
         if self.operation.active() { return Err("Finish the current transform first".into()); }
         let doc = self.engine.document();
-        let layer = doc
-            .layer(doc.active_layer)
-            .ok_or("Select a photo layer")?
-            .clone();
-        if doc.is_locked(layer.id) { return Err("The active layer is locked".into()); }
-        if layer.kind != layer_core::LayerKind::Paint { return Err("Select a paint or photo layer".into()); }
-        let mut bounds = if imported.is_some() { source_frame(doc, layer.id) }
-            else { self.measured_target_bounds().ok_or("The content bounds are still being measured")? };
-        if bounds.is_empty() { return Err("The layer has no pixels to transform".into()); }
-        let mut pose = Pose::from_affine(layer.properties.placement, center(bounds))
-            .ok_or("This layer has invalid placement geometry")?;
-        let (insertion, rollback, ids, selected) = imported.map_or_else(
-            || (None, Edit::ReplaceLayer(Box::new(layer.clone())), vec![layer.id],
-                self.layer_interaction.selected.clone()),
-            |insert| (Some(insert.index), insert.rollback, insert.ids, insert.selected),
-        );
+        let layer = doc.layer(doc.active_layer).ok_or("Select a paint or photo layer")?.clone();
+        let selected = self.layer_interaction.selected.clone();
+        let roots = imported.as_ref().map_or_else(|| self.transform_roots(), |insert| insert.ids.clone());
+        let ids = doc.retained_transform_targets(&roots).map_err(error)?;
         let members: Vec<_> = ids.iter().map(|id| doc.layer(*id).cloned()
-            .ok_or("The imported layer was removed")).collect::<Result<_, _>>()?;
-        let mut basis = Affine::translation(doc.layer_offset(layer.id));
-        if members.len() > 1 {
-            bounds = batch_bounds(doc, &members);
-            pose = Pose::identity();
-            basis = Affine::IDENTITY;
+            .ok_or("The transformed layer was removed")).collect::<Result<_, _>>()?;
+        let single = members.len() == 1 && layer.kind == LayerKind::Paint;
+        let bounds = if imported.is_some() || moving {
+            if single { source_frame(doc, layer.id) } else { batch_bounds(doc, &members) }
+        } else { self.measured_target_bounds().ok_or("The content bounds are still being measured")? };
+        if bounds.is_empty() { return Err("The layers have no pixels to transform".into()); }
+        let (insertion, rollback, selected) = imported.map_or_else(
+            || (None, Edit::Batch(members.iter().map(|layer| Edit::ReplaceLayer(Box::new(layer.clone()))).collect()), selected),
+            |insert| (Some(insert.index), insert.rollback, insert.selected),
+        );
+        let basis = if single { Affine::translation(doc.layer_offset(layer.id)) } else { Affine::IDENTITY };
+        let mut transaction = Transaction::new(self.operation.serial.wrapping_add(1), layer.id, None,
+            doc.revision, basis, bounds, Pose::identity());
+        transaction.source = source_frame(doc, layer.id);
+        transaction.retained_move = moving;
+        if single {
+            let map = &layer.properties.placement;
+            transaction.geometry.mesh = map.mesh.clone();
+            transaction.geometry.inner = Some(map.outer);
+            transaction.fold();
+            transaction.geometry.interpolation = insertion.is_none().then_some(map.interpolation);
+        } else {
+            let mut filters = members.iter().filter(|layer| layer.kind == LayerKind::Paint).map(|layer| layer.properties.placement.interpolation);
+            transaction.geometry.interpolation = filters.next().filter(|first| filters.all(|filter| filter == *first));
         }
+        transaction.start = transaction.geometry.clone();
+        transaction.accepted = transaction.geometry.clone();
         self.operation.serial = self.operation.serial.wrapping_add(1);
         self.operation.current = Some(Transaction {
             placement: Some(Placement {
                 members,
+                initial: None,
                 rollback,
                 insertion,
                 selected,
+                roots: roots.clone(),
             }),
-            ..Transaction::new(self.operation.serial, layer.id, None, doc.revision, basis, bounds, pose)
+            ..transaction
         });
-        // Establish the first valid preview before switching the visible tool
-        // or selection. A rejected preview must not strand an active operation.
         if let Err(cause) = self.update_transform() {
             self.operation.current = None;
             self.operation.changed = true;
@@ -95,9 +122,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.operation.aspect = true;
         self.engine.backend_mut().prepare_moving_layer(Some(layer.id));
         self.layer_interaction.editing = Some(layer.id);
-        self.layer_interaction.selected = ids.into_iter().collect();
-        self.layer_interaction.tool = LayerCanvasTool::Transform;
-        self.state.layer_tools.tool = LayerCanvasTool::Transform;
+        self.layer_interaction.selected = roots.into_iter().collect();
+        let tool = if moving { LayerCanvasTool::Move } else { LayerCanvasTool::Transform };
+        self.layer_interaction.tool = tool;
+        self.state.layer_tools.tool = tool;
         self.layer_interaction.changed = true;
         self.refresh_tools();
         self.refresh_commands();
@@ -117,7 +145,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let selected = if apply && placement.insertion.is_some() {
             current.iter().map(|layer| layer.id).collect()
         } else { placement.selected.clone() };
-        let changed = current.iter().zip(&placement.members).any(|(layer, original)| layer != original) || placement.insertion.is_some();
+        let mut original = self.engine.document().clone();
+        original.apply(placement.rollback.clone()).map_err(error)?;
+        let changed = placement.insertion.is_some() || current.iter().any(|layer| original.layer(layer.id) != Some(layer));
         if apply && changed {
             let ids: Vec<_> = current.iter().map(|layer| layer.id).collect();
             let mut candidate = self.engine.document().clone();
@@ -134,10 +164,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .map(|(i, layer)| Edit::InsertLayer { index: index + i, layer }).collect();
                 edits.push(Edit::SetActiveLayer { id });
                 Edit::Batch(edits)
-            } else { Edit::ReplaceLayer(Box::new(current.into_iter().next().unwrap())) };
-            // Validate both transitions before touching live state. Keep the
-            // inverse of rollback so a busy/failed renderer cannot strand an
-            // import outside its still-active placement transaction.
+            } else { Edit::Batch(current.into_iter().map(|layer| Edit::ReplaceLayer(Box::new(layer))).collect()) };
             let mut probe = self.engine.document().clone();
             let restore_preview = probe.apply(rollback.clone()).map_err(error)?;
             if apply { probe.apply(edit.clone()).map_err(error)?; }
@@ -172,23 +199,43 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|t| t.placement.is_some())
             .ok_or("Select an active photo placement")?;
         let placement = t.placement.as_mut().unwrap();
+        let previous = (placement.members.clone(), placement.initial.clone(), t.bounds);
         if placement.members.len() > 1 {
             let mut members = Vec::with_capacity(placement.members.len());
             for original in &placement.members {
                 let mut layer = self.engine.document().layer(original.id).cloned().ok_or("The placed layer was removed")?;
                 let local = source_frame(self.engine.document(), layer.id);
                 let pivot = center(local);
-                let position = layer.properties.placement.map(pivot);
-                let [a, b, c, d, _, _] = layer.properties.placement.0;
-                layer.properties.placement = Affine::around(pivot,
-                    [1., (a * d - b * c).signum()], b.atan2(a), sub(position, pivot));
+                let affine = layer.properties.placement.as_affine().ok_or("Original Size requires a photo without Distort or Warp")?;
+                let position = affine.map(pivot);
+                let [a, b, c, d, _, _] = affine.0;
+                layer.properties.placement = LayerPlacement::from_affine(Affine::around(pivot,
+                    [1., (a * d - b * c).signum()], b.atan2(a), sub(position, pivot)));
                 members.push(layer);
             }
+            placement.initial.get_or_insert_with(|| placement.members.clone());
             placement.members = members;
             t.bounds = batch_bounds(self.engine.document(), &placement.members);
             t.geometry.frame = t.bounds;
             t.geometry.pose = Pose::identity();
-        } else { t.geometry.pose.scale = [1.; 2]; }
-        self.update_transform()
+            t.geometry.inner = None;
+            t.geometry.exact_affine = None;
+        } else {
+            let affine = t.map().and_then(|map| map.as_affine()).ok_or("Original Size requires an affine photo")?;
+            let pivot = center(t.bounds);
+            let position = affine.map(pivot);
+            let [a, b, c, d, _, _] = affine.0;
+            t.geometry.inner = Some(Projective::from_affine(Affine::around(pivot,
+                [1., (a * d - b * c).signum()], b.atan2(a), sub(position, pivot))));
+            t.geometry.pose = Pose::identity();
+            t.fold();
+        }
+        let result = self.update_transform();
+        if result.is_err() {
+            let t = self.operation.current.as_mut().unwrap();
+            let placement = t.placement.as_mut().unwrap();
+            (placement.members, placement.initial, t.bounds) = previous;
+        }
+        result
     }
 }

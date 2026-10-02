@@ -259,7 +259,7 @@ fn placed_photos_and_watercolor_in(space: BlendSpace) {
     doc.layers[1].source = Some(color::source::rgba8_source([300, 200], |x, y| {
         [(x * 5 % 256) as u8, (y * 3 % 256) as u8, ((x ^ y) % 256) as u8, 255]
     }));
-    doc.layers[1].properties.placement = Affine([0.9, 0.2, -0.2, 0.9, 40., 10.]);
+    doc.layers[1].properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.9, 0.2, -0.2, 0.9, 40., 10.]));
     let (mut engine, mut input) = engine(doc);
     let mut brush = default_brush(DefaultBrushPreset::WetWatercolor);
     brush.diameter = 60.;
@@ -271,7 +271,7 @@ fn placed_photos_and_watercolor_in(space: BlendSpace) {
     let result = merge(&mut engine, MergeKind::Down);
     image(&mut engine, 3_000_000_000).assert_near(&original, TOLERANCE, "merged photo and wash");
     let layer = engine.document().layer(result).unwrap();
-    assert!(layer.source.is_none() && layer.properties.placement == Affine::IDENTITY);
+    assert!(layer.source.is_none() && layer.properties.placement == layer_core::LayerPlacement::IDENTITY);
     let data = layer.raster.wait_data().unwrap();
     assert!(data.watercolor.is_none() && data.tiles.keys().all(|k| k.plane == raster::RasterPlane::Color), "no wet state remains");
 }

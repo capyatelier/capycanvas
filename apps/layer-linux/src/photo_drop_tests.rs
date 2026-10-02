@@ -23,7 +23,7 @@ fn native_photo_transform_pixels_workflow() {
     photo.source = Some(layer_core::color::source::rgba8_source([320, 240], |x, y| {
         if (x / 16 + y / 16) % 2 == 0 { [230, 40, 80, 255] } else { [20, 160, 220, 255] }
     }));
-    photo.properties.placement = layer_core::Affine([0.5, 0., 0., 0.5, 20., 15.]);
+    photo.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0.5, 0., 0., 0.5, 20., 15.]));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();
     w.window.present();
@@ -31,6 +31,14 @@ fn native_photo_transform_pixels_workflow() {
     w.dispatch(UiAction::SetTheme { theme: Some(theme) });
     pump(100);
     assert_eq!(state(&w).theme, theme);
+    let narrow=std::env::var("LAYER_MOTION_VIEWPORT").as_deref()==Ok("640x480");
+    if narrow {
+        for panel in layer_ui::Panel::ALL.into_iter().filter(|panel| !matches!(panel,layer_ui::Panel::Toolbar|layer_ui::Panel::Commands|layer_ui::Panel::ToolSettings)) {
+            w.dispatch(UiAction::Customize {action:layer_ui::CustomizationAction::SetPanelVisible{panel,visible:false}});
+        }
+        ready(&w);
+    }
+    invoke(&w,CommandId::FitCanvas);ready(&w);
     let current = || ui_session(&w).engine().document().layer(id).unwrap().clone();
     let capture = |name: &str| {
         if let Some(path) = std::env::var_os("LAYER_IMAGE_CAPTURE_DIR") {
@@ -52,6 +60,47 @@ fn native_photo_transform_pixels_workflow() {
     assert_eq!(ui_session(&w).engine().brush().wet_mix.wetness, 0.);
     native_pen_path(&w, &[[50., 65.], [75., 65.], [100., 65.]]);
     ready(&w);
+    let raw = current();
+    w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::AddMask {id:id.0,replace:false}});
+    w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::Select {id:id.0,mask:false}});
+    invoke(&w,CommandId::ScaleRotate);
+    until(|| state(&w).canvas_bar.is_some_and(|bar|matches!(bar.context.kind,layer_ui::CanvasBarKind::Transform|layer_ui::CanvasBarKind::Placement)),"retained Transform opens");
+    invoke(&w,CommandId::TransformDistort);
+    let mut native=super::canvas_bar_tests::remote_input();
+    let corner=ui_session(&w).engine().document().layer_geometry(id).map(Point{x:320.,y:0.}).unwrap();
+    let corner=super::canvas_bar_tests::canvas_point(&w,[corner.x,corner.y]);
+    let area=w.area.compute_bounds(&w.window).unwrap();
+    assert!(corner[0]>area.x()+12. && corner[0]<area.x()+area.width()-12.
+        && corner[1]>area.y()+12. && corner[1]<area.y()+area.height()-12.,"Distort handle is visible: {corner:?} in {area:?}");
+    native.perform(json!([{"point":corner},{"down":true},{"wait_ms":40},
+        {"point":[corner[0]-25.,corner[1]+12.]},{"wait_ms":30},{"down":false}]));
+    invoke(&w,CommandId::ApplyTransform);ready(&w);
+    assert!(current().properties.placement.as_affine().is_none(),"Distort persists a homography");
+    invoke(&w,CommandId::ScaleRotate);
+    until(|| state(&w).canvas_bar.is_some_and(|bar|matches!(bar.context.kind,layer_ui::CanvasBarKind::Transform|layer_ui::CanvasBarKind::Placement)),"retained Distort reopens");
+    invoke(&w,CommandId::TransformWarp);
+    let preview=|| ui_session(&w).engine().document().layer_geometry(id);
+    let map=preview();let mesh=layer_core::MeshMap::identity(layer_core::Rect::from_extent(current().local_extent([200,150])),layer_core::MeshMap::PRESETS[0]).unwrap();let cells=mesh.cells();
+    let split=map.map(mesh.frame.map(Point {x:0.37,y:0.61})).unwrap();
+    invoke(&w,CommandId::WarpSplitCross);
+    native.click(super::canvas_bar_tests::canvas_point(&w,[split.x,split.y]));
+    until(|| preview().placement.mesh.as_ref().is_some_and(|mesh|mesh.cells()==[cells[0]+1,cells[1]+1]),"Cross inserts two nonuniform grid lines");
+    let node=|index| {let map=preview();let p=map.placement.outer.map(map.placement.mesh.as_ref().unwrap().node(index).unwrap()).unwrap();
+        super::canvas_bar_tests::canvas_point(&w,[p.x,p.y])};
+    let width=u32::from(preview().placement.mesh.as_ref().unwrap().cells()[0])+1;
+    let indices=[width+1,width+2];
+    invoke(&w,CommandId::WarpSelectPoints);
+    for index in indices {native.click(node(index));}
+    invoke(&w,CommandId::WarpSelectPoints);
+    let before=indices.map(node);let from=before[0];
+    native.perform(json!([{"point":from},{"down":true},{"wait_ms":40},
+        {"point":[from[0]+18.,from[1]+12.]},{"wait_ms":30},{"down":false}]));
+    until(|| indices.into_iter().zip(before).all(|(index,p)| {let now=node(index);(now[0]-p[0]).hypot(now[1]-p[1])>10.}),"selected Warp points move together");
+    capture("retained-warp.png");
+    invoke(&w,CommandId::ApplyTransform);ready(&w);
+    assert!(current().properties.placement.mesh.is_some());
+    assert_eq!(current().raster,raw.raster,"retained geometry keeps raw material immutable");
+    assert_eq!(current().source,raw.source,"retained geometry keeps the original photo");
     let retained = current();
     let material = retained.raster.wait_data().unwrap();
     let planes = |data: &layer_core::raster::RasterData| data.tiles.keys().map(|key| key.plane)
@@ -59,7 +108,7 @@ fn native_photo_transform_pixels_workflow() {
     assert_eq!(planes(&material), std::collections::BTreeSet::from([
         layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::WatercolorWetness]));
     assert!(material.watercolor.is_some());
-    assert_ne!(retained.properties.placement, layer_core::Affine::IDENTITY);
+    assert_ne!(retained.properties.placement, layer_core::LayerPlacement::IDENTITY);
     w.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels });
     assert!(state(&w).commands.iter().any(|c| c.id == CommandId::CancelTransform && c.enabled));
     w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
@@ -70,7 +119,7 @@ fn native_photo_transform_pixels_workflow() {
     until(|| current().source.is_none(), "bake worker publishes native pixels");
     ready(&w);
     let baked = current();
-    assert_eq!(baked.properties.placement, layer_core::Affine::IDENTITY);
+    assert_eq!(baked.properties.placement, layer_core::LayerPlacement::IDENTITY);
     assert!(!baked.raster.is_empty());
     let baked_material = baked.raster.wait_data().unwrap();
     assert_eq!(planes(&baked_material), planes(&material));
@@ -85,21 +134,20 @@ fn native_photo_transform_pixels_workflow() {
     assert_ne!(painted.raster, baked.raster);
     capture("editing.png");
     if std::env::var_os("LAYER_IMAGE_CAPTURE_DIR").is_some()
-        && std::env::var("LAYER_MOTION_VIEWPORT").as_deref() == Ok("640x480") {
+        && narrow {
         assert!(w.window.is_maximized());
         assert_eq!((w.surface.width(), w.surface.height()), (640, 480));
-        invoke(&w, CommandId::ZenMode);
         invoke(&w, CommandId::ScaleRotate);
-        until(|| state(&w).canvas_bar.is_some_and(|bar| bar.context.kind == layer_ui::CanvasBarKind::Transform)
+        until(|| state(&w).canvas_bar.is_some_and(|bar| matches!(bar.context.kind,layer_ui::CanvasBarKind::Transform|layer_ui::CanvasBarKind::Placement))
             && super::canvas_bar_tests::shown(&w), "narrow transform bar is visible");
         let bounds = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
         assert!(bounds.x() >= 0. && bounds.y() >= 0.
             && bounds.x() + bounds.width() <= 640. && bounds.y() + bounds.height() <= 480.,
             "narrow transform bar must fit the allocated window: {bounds:?}");
         capture("narrow-transform.png");
-        let mut native = super::canvas_bar_tests::remote_input();
         let more = super::canvas_bar_tests::bar_widget(&w, "canvas-bar-more");
-        native.click(super::canvas_bar_tests::center(&w, &more));
+        let more_point=super::canvas_bar_tests::center(&w,&more);
+        native.click(more_point);
         until(|| w.canvas_bar.menu_open(), "narrow More menu opens");
         capture("narrow-more.png");
         native.key(0xff1b);
@@ -110,7 +158,6 @@ fn native_photo_transform_pixels_workflow() {
         ready(&w);
         assert_eq!(current(), painted);
         capture("narrow-editing.png");
-        invoke(&w, CommandId::ZenMode);
         w.window.maximize();
         pump(350);
         ready(&w);
@@ -535,8 +582,8 @@ fn native_photo_file_drops() {
         for photo in photos {
             assert_eq!(photo.source.as_deref(), Some(&source));
             let actual = doc
-                .layer_transform(photo.id)
-                .map(Point { x: 600., y: 400. });
+                .layer_geometry(photo.id)
+                .map(Point { x: 600., y: 400. }).unwrap();
             assert!(
                 (actual.x - center.x).abs() < 0.5 && (actual.y - center.y).abs() < 0.5,
                 "drop camera mapping {actual:?} != {center:?}"
@@ -602,8 +649,8 @@ fn native_photo_file_drops() {
         let photo = doc.layer(doc.active_layer).unwrap();
         assert_eq!(photo.properties.parent, parent);
         assert_eq!(
-            doc.layer_transform(photo.id)
-                .map(Point { x: 600., y: 400. }),
+            doc.layer_geometry(photo.id)
+                .map(Point { x: 600., y: 400. }).unwrap(),
             Point { x: 100., y: 75. }
         );
         let expected = if fraction < 0.2 {

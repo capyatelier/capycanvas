@@ -14,12 +14,8 @@ use photo_metadata::MetadataIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x0d\0";
-/// Version 8 has no stored layer extents, versions before 10 no photo
-/// metadata, versions before 11 no blend space and versions before 12 no
-/// filter spaces; those files read with none, and Linear blending.
-const READABLE: [&[u8; 12]; 6] =
-    [b"CAPYRASTER\x08\0", b"CAPYRASTER\x09\0", b"CAPYRASTER\x0a\0", b"CAPYRASTER\x0b\0", b"CAPYRASTER\x0c\0", MAGIC];
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x0e\0";
+const READABLE: [&[u8; 12]; 1] = [MAGIC];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,7 +65,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
         {
             let data = raster.wait_data()?;
             data.validate(
-                layer.local_extent([project.document.width, project.document.height]),
+                project.document.target_extent(target),
                 mask,
                 project.document.color,
             )?;
@@ -363,14 +359,14 @@ mod tests {
         let original = project.document.layers[0].clone();
         let mut editor = Editor::new(project.document);
         let mut placed = original.clone();
-        placed.properties.placement = Affine::around(
+        placed.properties.placement = LayerPlacement::from_affine(Affine::around(
             Point::default(), [1. / 3.; 2], 0.3, Point { x: -45., y: 8. },
-        );
+        ));
         editor.perform(Edit::ReplaceLayer(Box::new(placed.clone()))).unwrap();
         assert!(editor.document().layer(id).unwrap().raster.is_empty());
         assert!(Arc::ptr_eq(editor.document().layer(id).unwrap().source.as_ref().unwrap(), original.source.as_ref().unwrap()));
         assert!(editor.undo().unwrap());
-        assert_eq!(editor.document().layer(id).unwrap().properties.placement, Affine::IDENTITY);
+        assert_eq!(editor.document().layer(id).unwrap().properties.placement, LayerPlacement::IDENTITY);
         assert!(editor.redo().unwrap());
         project.document = editor.document().clone();
         let mut bytes = Vec::new();
@@ -378,10 +374,10 @@ mod tests {
         assert_eq!(&bytes[..12], MAGIC);
         let mut loaded = Project::read(bytes.as_slice(), Default::default()).unwrap();
         assert_eq!(loaded.document.layer(id).unwrap().properties, placed.properties);
-        assert_eq!(loaded.document.layers[1].properties.placement, Affine::IDENTITY);
+        assert_eq!(loaded.document.layers[1].properties.placement, LayerPlacement::IDENTITY);
         assert_eq!(loaded.document.layer(id).unwrap().source, original.source);
         // A subsequent 100% placement still reads the original samples.
-        loaded.document.layers[0].properties.placement = Affine::IDENTITY;
+        loaded.document.layers[0].properties.placement = LayerPlacement::IDENTITY;
         assert_eq!(loaded.document.layers[0].source, original.source);
         // Editable source-local backing beyond the 32px canvas survives saving.
         let key = TileKey { plane: RasterPlane::Color, coordinate: [1, 0] };
@@ -476,14 +472,14 @@ mod tests {
         assert!(read(&sources).is_err());
         bytes[10] = 7;
         assert!(read(&bytes).is_err());
-        bytes[10] = 14;
+        bytes[10] = 15;
         assert!(read(&bytes).is_err());
     }
 
     #[test]
-    fn published_version_12_choices_and_pixels_resave_unchanged() {
-        let bytes = include_bytes!("../tests/fixtures/published-v12-choice.capy");
-        assert_eq!(&bytes[..12], b"CAPYRASTER\x0c\0");
+    fn published_version_14_choices_and_pixels_resave_unchanged() {
+        let bytes = include_bytes!("../tests/fixtures/published-v14-choice.capy");
+        assert_eq!(&bytes[..12], MAGIC);
         let project = Project::read(bytes.as_slice(), Default::default()).unwrap();
         assert_eq!(project.document.layers[0].name.as_ref(), "  My curves { $name } 한글 🎨  ");
         assert_eq!(project.document.layers[1].name.as_ref(), "  Current ink { $name } 漢字 🖌️\u{2068}literal\u{2069}  ");
@@ -517,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_spaces_round_trip_and_version_11_filters_read_linear() {
+    fn filter_spaces_round_trip() {
         let mut project = fixture();
         let id = project.document.allocate_layer_id();
         let mut blur = Layer::paint(id, "Blur");
@@ -530,31 +526,22 @@ mod tests {
             Project::read(bytes, Default::default()).unwrap().document.layers[0].effect.as_ref().unwrap().program.space
         };
         assert_eq!(space(&bytes), EffectSpace::Blending);
-        let mut version_11 = rewrite_manifest(&bytes, |m| {
-            m["document"]["layers"][0]["effect"]["program"].as_object_mut().unwrap().remove("space");
-        });
-        version_11[10] = 11;
-        assert_eq!(space(&version_11), EffectSpace::Linear);
+
     }
 
     #[test]
-    fn blend_space_round_trips_and_version_10_reads_as_linear() {
+    fn blend_space_round_trips() {
         let mut project = fixture();
         project.document.blend_space = BlendSpace::Perceptual;
         let mut bytes = Vec::new();
         project.write(&mut bytes).unwrap();
         assert_eq!(Project::read(bytes.as_slice(), Default::default()).unwrap().document.blend_space, BlendSpace::Perceptual);
-        let mut version_10 = rewrite_manifest(&bytes, |m| {
-            m["document"].as_object_mut().unwrap().remove("blend_space");
-        });
-        version_10[10] = 10;
-        assert_eq!(Project::read(version_10.as_slice(), Default::default()).unwrap().document.blend_space, BlendSpace::Linear);
         let float = rewrite_manifest(&bytes, |m| m["document"]["color"]["depth"] = "F32".into());
         assert!(Project::read(float.as_slice(), Default::default()).unwrap_err().contains("linear light"));
     }
 
     #[test]
-    fn photo_metadata_round_trips_as_payloads_and_version_9_reads_without_it() {
+    fn photo_metadata_round_trips_as_payloads() {
         let mut project = source_fixture();
         let block = |n: usize, seed: u8| -> Arc<[u8]> { (0..n).map(|i| (i as u8) ^ seed).collect::<Vec<_>>().into() };
         project.document.metadata = PhotoMetadata { exif: Some(block(300, 1)), xmp: Some(block(5000, 2)), iptc: None };
@@ -587,26 +574,17 @@ mod tests {
         let mut plain = Vec::new();
         project.write(&mut plain).unwrap();
         assert!(!String::from_utf8_lossy(&plain).contains("\"metadata\""));
-        let mut version_9 = plain;
-        version_9[10] = 9;
-        let loaded = Project::read(version_9.as_slice(), Default::default()).unwrap();
+        let loaded = Project::read(plain.as_slice(),Default::default()).unwrap();
         assert!(loaded.document.metadata.is_empty());
         assert_eq!(loaded.document.layers[0].source, project.document.layers[0].source);
     }
 
     #[test]
-    fn version_8_reads_without_extents_and_version_9_keeps_hidden_tiles() {
+    fn extents_preserve_hidden_tiles() {
         let mut project = fixture();
         let mut bytes = Vec::new();
         project.write(&mut bytes).unwrap();
         assert_eq!(&bytes[..12], MAGIC);
-        let mut version_8 = bytes.clone();
-        version_8[10] = 8;
-        assert!(!String::from_utf8_lossy(&version_8).contains("\"extent\""));
-        let loaded = Project::read(version_8.as_slice(), Default::default()).unwrap();
-        assert!(loaded.document.layers.iter().all(|l| l.properties.extent.is_none()));
-        assert_eq!(loaded.document.layers[0].raster.wait_data().unwrap().tiles.len(), 2);
-
         let without_extent = rewrite_manifest(&bytes, |m| {
             m["document"]["width"] = 100.into();
             m["document"]["height"] = 50.into();

@@ -12,20 +12,20 @@ impl SnapshotGpu {
         let target = if let ContentScope::Target(id) = request.scope {
             let owner = document.target_owner(id).ok_or("The bounds target was removed")?;
             selection = document.selection.as_ref().map(|s| {
-                s.transformed(document.layer_transform(id).inverse().ok_or("Invalid layer placement")?)
+                s.transformed(document.layer_geometry(id).as_affine().and_then(Affine::inverse).ok_or("Invalid layer placement")?)
                     .map(Arc::new).map_err(|e| e.to_string())
             }).transpose()?;
             let mut layer = owner.composite_snapshot();
-            let extent = layer.local_extent(original_extent);
+            let extent = if id == layer.id { layer.local_extent(original_extent) } else { layer.mask.as_ref().unwrap().local_extent(layer.local_extent(original_extent)) };
             layer.properties.parent = None;
-            layer.properties.placement = Affine::IDENTITY;
+            layer.properties.placement = layer_core::LayerPlacement::IDENTITY;
             layer.properties.offset = Point::default();
             layer.properties.clipped = false;
             layer.visible = true;
             layer.opacity = 1.;
             if id == layer.id { layer.mask = None; }
             else if let Some(mask) = &mut layer.mask {
-                mask.placement = Affine::IDENTITY;
+                mask.placement = layer_core::Projective::IDENTITY;
                 mask.offset = Point::default();
                 mask.enabled = true;
             }
@@ -84,11 +84,10 @@ impl SnapshotGpu {
             for layer in document.layers.iter().filter(|l| document.layer_is_visible(l.id) && l.opacity > 0.) {
                 let next = match layer.kind {
                     LayerKind::Paint => {
-                        let transform = document.layer_transform(layer.id);
-                        let copied = transform.0[..4] == [1., 0., 0., 1.]
-                            && transform.0[4..].iter().all(|v| v.fract() == 0.);
-                        transform.bounds(local_hull(layer, original_extent)?.outset(if copied { 0. }
-                            else { layer_core::Interpolation::Bicubic.support() as f32 }))
+                        let transform = document.layer_geometry(layer.id);
+                        let copied = transform.as_affine().is_some_and(|a| a.0[..4] == [1.,0.,0.,1.] && a.0[4..].iter().all(|v| v.fract() == 0.));
+                        transform.forward_bounds(local_hull(layer, original_extent)?.outset(if copied { 0. }
+                            else { transform.placement.interpolation.support() as f32 }))
                             .outset(layer.raster.wait_data()?.watercolor.map_or(0., |style|
                                 2. * style.edge_width.clamp(1., 16.)))
                     }

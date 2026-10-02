@@ -17,22 +17,34 @@ pub(crate) struct MeshGeometry {
     /// Destination x, y and source x, y of each vertex, row by row with one
     /// more vertex per row than `quads[0]`.
     pub vertices: Vec<[f32; 4]>,
+    weights: Vec<f32>,
     quads: [u32; 2],
     /// Destination bounds of each quad, as min x, min y, max x, max y.
     destination: Vec<[f32; 4]>,
     pages: Bins,
     windows: Option<Bins>,
-    /// Triangles of every window in turn, or of the whole mesh when the
-    /// windows are too many to bin.
+    /// Window triangles followed by the unique triangles in drawing order.
     indices: Vec<u32>,
+    original: Range<u32>,
+    footprint: std::sync::OnceLock<(layer_core::Rect,Option<[f64;4]>)>,
 }
 
 impl MeshGeometry {
     /// The mesh within TOLERANCE destination pixels, or within `display`
     /// pixels for a display level drawn whole, which neither bounds regions
     /// nor bins windows.
-    pub fn new(mesh: &layer_core::MeshMap, display: Option<f32>) -> Self {
-        let (vertices, quads) = Self::surface(mesh, display.map_or(TOLERANCE, |t| t.max(TOLERANCE)));
+    pub fn new(mesh: &layer_core::MeshMap, outer: layer_core::Projective, display: Option<f32>) -> Self {
+        let _span=crate::performance_trace::Span::new(c"Capy mesh geometry");
+        let tolerance = display.map_or(TOLERANCE, |t| t.max(TOLERANCE));
+        let (mut vertices, quads) = Self::surface(mesh, tolerance / outer.magnification(mesh.drawn_bounds()).max(1e-6));
+        let [a,b,c,d,e,f,g,h,i] = outer.0;
+        let weights = vertices.iter_mut().map(|vertex| {
+            let [x,y,_,_] = *vertex;
+            let w = g*x+h*y+i;
+            vertex[0] = (a*x+b*y+c)/w;
+            vertex[1] = (d*x+e*y+f)/w;
+            w
+        }).collect();
         let width = quads[0] + 1;
         let rows = if display.is_some() { 0 } else { quads[1] };
         let mut destination = Vec::with_capacity(quads[0] * rows);
@@ -61,11 +73,14 @@ impl MeshGeometry {
         let quads = quads.map(|n| n as u32);
         let mut geometry = Self {
             vertices,
+            weights,
             quads,
             destination,
             pages,
             windows,
             indices: Vec::new(),
+            original: 0..0,
+            footprint: Default::default(),
         };
         geometry.indices = match &geometry.windows {
             Some(windows) => windows
@@ -75,7 +90,24 @@ impl MeshGeometry {
                 .collect(),
             None => geometry.triangles().flatten().collect(),
         };
+        let start=if geometry.windows.is_some() {
+            let start=geometry.indices.len() as u32;
+            let original:Vec<_>=geometry.triangles().flatten().collect();
+            geometry.indices.extend(original);start
+        } else {0};
+        geometry.original=start..geometry.indices.len() as u32;
         geometry
+    }
+
+    pub fn storage_bytes(&self)->u64 {
+        std::mem::size_of::<Self>() as u64+(self.vertices.capacity()*16+self.weights.capacity()*4+self.destination.capacity()*16+self.indices.capacity()*4
+            +self.pages.starts.capacity()*4+self.pages.items.capacity()*4
+            +self.windows.as_ref().map_or(0,|bins|bins.starts.capacity()*4+bins.items.capacity()*4)) as u64
+    }
+
+    pub fn buffer_bytes(&self) -> u64 {
+        (self.vertices.len() as u64*20).next_power_of_two()
+            +(self.indices.len() as u64*4).next_power_of_two()
     }
 
     /// Vertices of the tessellated surface with its skirt, and its quads per
@@ -139,24 +171,33 @@ impl MeshGeometry {
 
     /// Index range of the triangles reaching the window whose first page is
     /// `page`, or its one-pixel border.
-    fn window(&self, page: [u32; 2]) -> Range<u32> {
+    fn window(&self, page: [i32; 2]) -> Range<u32> {
         let Some(windows) = &self.windows else {
-            return 0..self.indices.len() as u32;
+            return self.original.clone();
         };
-        let items = windows.cell(page.map(|c| c / WINDOW_PAGES));
+        let items = windows.cell(page.map(|c| c.div_euclid(WINDOW_PAGES as i32)));
         items.start * 6..items.end * 6
+    }
+
+    pub fn range_for_region(&self,region:layer_core::Rect)->Range<u32> {
+        if region.is_empty() {return 0..0;}
+        let span=(WINDOW_PAGES*PAGE_SIZE) as f32;
+        let first=[region.min.x,region.min.y].map(|v|(v/span).floor() as i32);
+        let last=[region.max.x,region.max.y].map(|v|((v.ceil() as i64-1).div_euclid(span as i64)) as i32);
+        if first==last {self.window(first.map(|n|n*WINDOW_PAGES as i32))} else {self.original.clone()}
     }
 
     /// Source bounds of the triangles' parts within a destination pixel of
     /// the region, or None when no triangle reaches it. Positions interpolate
     /// linearly across each triangle, so its clipped corners bound them.
+    #[cfg(test)]
     pub fn footprint(&self, region: PixelRect) -> Option<[f64; 4]> {
-        let near = [
-            region.min_x() as f32 - 1.,
-            region.min_y() as f32 - 1.,
-            region.max_x() as f32 + 1.,
-            region.max_y() as f32 + 1.,
-        ];
+        self.footprint_rect(region.to_rect())
+    }
+    pub fn footprint_rect(&self, region: layer_core::Rect) -> Option<[f64; 4]> {
+        if let Some((query,result))=self.footprint.get() && *query==region {return *result;}
+        let _span=crate::performance_trace::Span::new(c"Capy mesh footprint");
+        let near = [region.min.x - 1., region.min.y - 1., region.max.x + 1., region.max.y + 1.];
         let mut found = [
             f32::INFINITY,
             f32::INFINITY,
@@ -169,27 +210,57 @@ impl MeshGeometry {
                 continue;
             }
             for triangle in self.quad(quad) {
-                let (corners, count) = clip(triangle.map(|v| self.vertices[v as usize]), near);
+                let (corners, count) = clip(triangle.map(|v| {
+                    let [x,y,u,s] = self.vertices[v as usize];
+                    let weight = self.weights[v as usize].recip();
+                    [x,y,u*weight,s*weight,weight]
+                }), near);
                 for v in &corners[..count] {
                     found = [
-                        found[0].min(v[2]),
-                        found[1].min(v[3]),
-                        found[2].max(v[2]),
-                        found[3].max(v[3]),
+                        found[0].min(v[2]/v[4]),
+                        found[1].min(v[3]/v[4]),
+                        found[2].max(v[2]/v[4]),
+                        found[3].max(v[3]/v[4]),
                     ];
                 }
             }
         }
-        (found[0] <= found[2]).then(|| found.map(f64::from))
+        let result=(found[0]<=found[2]).then(||found.map(f64::from));
+        let _=self.footprint.set((region,result));
+        result
+    }
+    pub fn forward_bounds(&self, source: layer_core::Rect, source_from_owner: Option<layer_core::Projective>) -> layer_core::Rect {
+        let _span=crate::performance_trace::Span::new(c"Capy mesh material bounds");
+        if source.is_empty() {return layer_core::Rect::EMPTY;}
+        let source=if let Some(adapter)=source_from_owner {
+            let Some(source)=adapter.inverse().and_then(|map|map.bounds(source)) else {
+                return layer_core::Rect::around(self.vertices.iter().map(|v|layer_core::Point {x:v[0],y:v[1]}));
+            };source
+        } else {source};
+        let mut bounds=layer_core::Rect::EMPTY;
+        for triangle in self.triangles() {
+            let (corners,count)=clip(triangle.map(|index| {
+                let index=index as usize;let [x,y,u,v]=self.vertices[index];let w=self.weights[index];
+                [u,v,x*w,y*w,w]
+            }),[source.min.x,source.min.y,source.max.x,source.max.y]);
+            if corners[..count].iter().any(|point|point[4]<=0.) {return layer_core::Rect::UNBOUNDED;}
+            bounds=bounds.union(layer_core::Rect::around(corners[..count].iter().map(|point|
+                layer_core::Point {x:point[2]/point[4],y:point[3]/point[4]})));
+        }
+        bounds
     }
 }
 
 /// The part of a triangle of destination x, y and source x, y vertices within
 /// `rect` in destination space, with sources interpolated along cut edges. A
 /// triangle clipped by four edges has at most seven corners.
-fn clip(triangle: [[f32; 4]; 3], rect: [f32; 4]) -> ([[f32; 4]; 7], usize) {
-    let mut polygon = [[0f32; 4]; 7];
+fn clip(triangle: [[f32; 5]; 3], rect: [f32; 4]) -> ([[f32; 5]; 7], usize) {
+    let mut polygon = [[0f32; 5]; 7];
+    let bounds=triangle.iter().fold([f32::INFINITY,f32::INFINITY,f32::NEG_INFINITY,f32::NEG_INFINITY],|b,v|
+        [b[0].min(v[0]),b[1].min(v[1]),b[2].max(v[0]),b[3].max(v[1])]);
+    if bounds[2]<rect[0] || bounds[0]>rect[2] || bounds[3]<rect[1] || bounds[1]>rect[3] {return (polygon,0);}
     polygon[..3].copy_from_slice(&triangle);
+    if bounds[0]>=rect[0] && bounds[1]>=rect[1] && bounds[2]<=rect[2] && bounds[3]<=rect[3] {return (polygon,3);}
     let mut count = 3;
     for (axis, edge, sign) in [
         (0, rect[0], 1.),
@@ -197,8 +268,8 @@ fn clip(triangle: [[f32; 4]; 3], rect: [f32; 4]) -> ([[f32; 4]; 7], usize) {
         (0, rect[2], -1.),
         (1, rect[3], -1.),
     ] {
-        let inside = |v: &[f32; 4]| (v[axis] - edge) * sign >= 0.;
-        let mut clipped = [[0f32; 4]; 7];
+        let inside = |v: &[f32; 5]| (v[axis] - edge) * sign >= 0.;
+        let mut clipped = [[0f32; 5]; 7];
         let mut kept = 0;
         for n in 0..count {
             let [previous, current] = [polygon[(n + count - 1) % count], polygon[n]];
@@ -227,7 +298,7 @@ fn clip(triangle: [[f32; 4]; 3], rect: [f32; 4]) -> ([[f32; 4]; 7], usize) {
 #[derive(Default)]
 struct Bins {
     shift: u32,
-    first: [u32; 2],
+    first: [i32; 2],
     size: [u32; 2],
     starts: Vec<u32>,
     items: Vec<u32>,
@@ -239,11 +310,10 @@ impl Bins {
     fn new(bounds: &[[f32; 4]], margin: f32, shift: u32) -> Option<Self> {
         let cells = |b: &[f32; 4]| {
             let b = [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin];
-            (b.iter().all(|v| v.is_finite()) && b[2] >= 0. && b[3] >= 0.)
-                .then(|| b.map(|v| (v.max(0.) as u32) >> shift))
+            b.iter().all(|v| v.is_finite()).then(|| b.map(|v| (v / (1u64 << shift) as f32).floor() as i32))
         };
-        let mut first = [u32::MAX; 2];
-        let mut last = [0; 2];
+        let mut first = [i32::MAX; 2];
+        let mut last = [i32::MIN; 2];
         for [x0, y0, x1, y1] in bounds.iter().filter_map(cells) {
             first = [first[0].min(x0), first[1].min(y0)];
             last = [last[0].max(x1), last[1].max(y1)];
@@ -255,11 +325,17 @@ impl Bins {
                 ..Default::default()
             });
         }
-        let size = [last[0] - first[0] + 1, last[1] - first[1] + 1];
+        let size = [0,1].map(|a| u32::try_from(i64::from(last[a])-i64::from(first[a])+1).ok()).into_iter().collect::<Option<Vec<_>>>()?;
+        let size = [size[0],size[1]];
         if u64::from(size[0]) * u64::from(size[1]) > BIN_CELLS {
             return None;
         }
-        let index = |x: u32, y: u32| ((y - first[1]) * size[0] + x - first[0]) as usize;
+        bounds.iter().filter_map(cells).try_fold(0u64, |total,[x0,y0,x1,y1]| {
+            let count = (i64::from(x1)-i64::from(x0)+1) as u64 * (i64::from(y1)-i64::from(y0)+1) as u64;
+            let total = total.checked_add(count)?;
+            (total <= BIN_CELLS*32).then_some(total)
+        })?;
+        let index = |x: i32, y: i32| ((y - first[1]) as u32 * size[0] + (x - first[0]) as u32) as usize;
         let mut starts = vec![0u32; (size[0] * size[1]) as usize + 1];
         for [x0, y0, x1, y1] in bounds.iter().filter_map(cells) {
             for y in y0..=y1 {
@@ -295,10 +371,10 @@ impl Bins {
     }
 
     /// Positions in `items` of the items in cell `c`.
-    fn cell(&self, c: [u32; 2]) -> Range<u32> {
+    fn cell(&self, c: [i32; 2]) -> Range<u32> {
         let [x, y] = [
-            c[0].wrapping_sub(self.first[0]),
-            c[1].wrapping_sub(self.first[1]),
+            c[0].wrapping_sub(self.first[0]) as u32,
+            c[1].wrapping_sub(self.first[1]) as u32,
         ];
         if x >= self.size[0] || y >= self.size[1] {
             return 0..0;
@@ -309,8 +385,8 @@ impl Bins {
 
     /// Items in the cells `rect` reaches; an item in several cells repeats.
     fn reaching(&self, rect: [f32; 4]) -> impl Iterator<Item = u32> + '_ {
-        let [x0, y0, x1, y1] = rect.map(|v| (v.max(0.) as u32) >> self.shift);
-        let end = [self.first[0] + self.size[0], self.first[1] + self.size[1]];
+        let [x0, y0, x1, y1] = rect.map(|v| (v / (1u64 << self.shift) as f32).floor() as i32);
+        let end = [self.first[0].saturating_add(self.size[0] as i32), self.first[1].saturating_add(self.size[1] as i32)];
         let columns = x0.max(self.first[0])..x1.saturating_add(1).min(end[0]);
         (y0.max(self.first[1])..y1.saturating_add(1).min(end[1])).flat_map(move |y| {
             columns.clone().flat_map(move |x| {
@@ -320,6 +396,20 @@ impl Bins {
                     .copied()
             })
         })
+    }
+}
+
+pub(crate) struct MeshDraw {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    triangles: Range<u32>,
+}
+impl MeshDraw {
+    pub fn draw(&self,pass:&mut wgpu::RenderPass<'_>) {
+        if self.triangles.is_empty() {return;}
+        pass.set_vertex_buffer(0,self.vertices.slice(..));
+        pass.set_index_buffer(self.indices.slice(..),wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(self.triangles.clone(),0,0..1);
     }
 }
 
@@ -334,7 +424,9 @@ impl MeshBuffers {
     pub fn storage_bytes(&self) -> u64 {
         self.vertices.as_ref().map_or(0, wgpu::Buffer::size) + self.indices.as_ref().map_or(0, wgpu::Buffer::size)
     }
-    pub fn count(&self) -> u32 { self.uploaded.as_ref().map_or(0, |g| g.indices.len() as u32) }
+    pub fn range_for_region(&self,region:layer_core::Rect)->Range<u32> {self.uploaded.as_ref().map_or(0..0,|g|g.range_for_region(region))}
+    pub fn matches(&self,geometry:&Arc<MeshGeometry>)->bool {self.uploaded.as_ref().is_some_and(|held|Arc::ptr_eq(held,geometry))}
+    pub fn drawing(&self,triangles:Range<u32>)->MeshDraw {MeshDraw {vertices:self.vertices.as_ref().unwrap().clone(),indices:self.indices.as_ref().unwrap().clone(),triangles}}
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, triangles: Range<u32>) {
         if triangles.is_empty() { return; }
         pass.set_vertex_buffer(0, self.vertices.as_ref().unwrap().slice(..));
@@ -356,10 +448,12 @@ impl MeshBuffers {
             return Ok(());
         }
         self.uploaded = None;
+        let vertices: Vec<_> = geometry.vertices.iter().zip(&geometry.weights)
+            .map(|(v,w)| [v[0],v[1],v[2],v[3],*w]).collect();
         for (buffer, (floats, integers), usage, label) in [
             (
                 &mut self.vertices,
-                (geometry.vertices.as_flattened(), &[][..]),
+                (vertices.as_flattened(), &[][..]),
                 wgpu::BufferUsages::VERTEX,
                 "mesh vertices",
             ),
@@ -377,6 +471,8 @@ impl MeshBuffers {
             if bytes.is_empty() {
                 continue;
             }
+            let size = (bytes.len() as u64).next_power_of_two();
+            if size > r.device.limits().max_buffer_size { return Err(GpuRasterError::ExtentUnsupported); }
             if buffer
                 .as_ref()
                 .is_none_or(|b| b.size() < bytes.len() as u64)
@@ -439,9 +535,9 @@ impl Positions {
                         entry_point: Some("vertex_main"),
                         compilation_options: Default::default(),
                         buffers: &[Some(wgpu::VertexBufferLayout {
-                            array_stride: 16,
+                            array_stride: 20,
                             step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32],
                         })],
                     },
                     fragment: Some(wgpu::FragmentState {
@@ -523,9 +619,13 @@ impl Positions {
         encoder: &mut crate::submission::CommandEncoder,
         page: [u32; 2],
     ) -> Result<(), GpuRasterError> {
-        let triangles = self.buffers.uploaded.as_ref().map_or(0..0, |g| g.window(page));
-        let origin = page.map(|v| (v * PAGE_SIZE) as f32 - 1.);
-        self.draw_window(r, encoder, triangles, origin, layer_core::Affine::IDENTITY, 1.)
+        self.draw_offset(r,encoder,page,[0;2])
+    }
+    pub fn draw_offset(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,page:[u32;2],offset:[i32;2])->Result<(),GpuRasterError> {
+        let world=std::array::from_fn(|i|page[i] as i32-offset[i]/PAGE_SIZE as i32);
+        let triangles=self.buffers.uploaded.as_ref().map_or(0..0,|g|g.window(world));
+        let origin=std::array::from_fn(|i|(page[i]*PAGE_SIZE) as f32-offset[i] as f32-1.);
+        self.draw_window(r,encoder,triangles,origin,layer_core::Affine::IDENTITY,1.)
     }
     fn draw_window(
         &mut self,
@@ -605,7 +705,7 @@ mod tests {
             },
         )
         .unwrap();
-        MeshGeometry::new(&mesh, None)
+        MeshGeometry::new(&mesh, layer_core::Projective::IDENTITY, None)
     }
 
     fn bounds(g: &MeshGeometry, triangle: [u32; 3]) -> [f32; 4] {
@@ -629,6 +729,57 @@ mod tests {
     }
 
     #[test]
+    fn cached_footprints_preserve_different_regions_and_mesh_roots() {
+        let geometry=warped(0.);
+        let whole=Rect {min:Point {x:0.,y:0.},max:Point {x:3600.,y:2700.}};
+        let small=Rect {min:Point {x:600.,y:400.},max:Point {x:700.,y:500.}};
+        let original=geometry.footprint_rect(whole).unwrap();
+        assert_eq!(geometry.footprint_rect(whole),Some(original));
+        let partial=geometry.footprint_rect(small).unwrap();
+        assert_ne!(partial,original);
+        assert!(partial[0]>=original[0] && partial[1]>=original[1] && partial[2]<=original[2] && partial[3]<=original[3]);
+        assert_eq!(geometry.footprint_rect(whole),Some(original));
+        assert_eq!(geometry.footprint_rect(small),Some(partial));
+        assert_eq!(geometry.footprint.get().unwrap().0,whole);
+        let next=warped(700.);
+        assert_ne!(next.footprint_rect(whole),Some(original));
+        assert_eq!(geometry.footprint_rect(whole),Some(original));
+    }
+
+    #[test]
+    fn folded_display_windows_keep_the_original_winning_triangle() {
+        let frame=Rect::from_extent([2048,512]);
+        let mesh=MeshMap::identity(frame,[3;2]).unwrap().move_node(4,Point {x:1500.,y:0.}).unwrap();
+        let geometry=MeshGeometry::new(&mesh,layer_core::Projective::IDENTITY,None);
+        let original:Vec<_>=geometry.triangles().flatten().collect();
+        let winner=|indices:&[u32],point:Point| {
+            let mut found=None;
+            for triangle in indices.chunks_exact(3) {
+                let [a,b,c]=std::array::from_fn::<_,3,_>(|i|geometry.vertices[triangle[i] as usize]);
+                let edge=|u:[f32;4],v:[f32;4]|(u[0]-point.x)*(v[1]-point.y)-(u[1]-point.y)*(v[0]-point.x);
+                let area=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+                if area.abs()>1e-6 && [edge(b,c),edge(c,a),edge(a,b)].into_iter().all(|w|w/area>0.0001) {found=Some([triangle[0],triangle[1],triangle[2]]);}
+            }
+            found
+        };
+        let mut incorrect=0;let mut covered=0;
+        for y in (80..480).step_by(53) {for x in (760..1400).step_by(47) {
+            let point=Point {x:x as f32+0.37,y:y as f32+0.41};
+            let expected=winner(&original,point);
+            covered+=usize::from(expected.is_some());
+            let rect=Rect {min:Point {x:point.x-1.,y:point.y-1.},max:Point {x:point.x+1.,y:point.y+1.}};
+            let range=geometry.range_for_region(rect);
+            assert_eq!(winner(&geometry.indices[range.start as usize..range.end as usize],point),expected,"folded winner at {point:?}");
+            incorrect+=usize::from(winner(&geometry.indices[..geometry.original.start as usize],point)!=expected);
+        }}
+        assert!(covered>50);
+        assert!(incorrect>0,"the fold must expose concatenated-window draw-order drift");
+        let spanning=Rect {min:Point {x:900.,y:100.},max:Point {x:1100.,y:400.}};
+        let range=geometry.range_for_region(spanning);
+        assert_eq!(&geometry.indices[range.start as usize..range.end as usize],&original);
+    }
+
+    #[test]
     fn each_window_draws_the_triangles_reaching_it_in_drawing_order() {
         let g = warped(0.);
         assert!(g.windows.is_some());
@@ -638,7 +789,7 @@ mod tests {
         let mut drawn_somewhere = std::collections::HashSet::new();
         for wy in 0..4 {
             for wx in 0..5 {
-                let range = g.window([wx * WINDOW_PAGES, wy * WINDOW_PAGES]);
+                let range = g.window([(wx * WINDOW_PAGES) as i32, (wy * WINDOW_PAGES) as i32]);
                 let drawn: Vec<[u32; 3]> = g.indices[range.start as usize..range.end as usize]
                     .chunks_exact(3)
                     .map(|t| [t[0], t[1], t[2]])
@@ -724,13 +875,134 @@ mod tests {
     }
 
     #[test]
+    fn weighted_outer_mesh_footprints_cover_negative_windows_and_linked_source_adapters() {
+        use layer_core::{ImageTransform,Interpolation,LayerPlacement,Projective};
+        let mesh=Arc::new(MeshMap::from_affine(Rect::from_extent([512;2]),[2,2],
+            Affine([0.8,0.1,-0.05,0.7,-180.,-120.])).unwrap().move_node(4,Point {x:-60.,y:30.}).unwrap());
+        let outer=Projective([1.,0.03,-12.,-0.02,1.,-8.,0.0006,0.0003,1.]);
+        let geometry=Arc::new(MeshGeometry::new(&mesh,outer,None));
+        let placement=LayerPlacement {outer,mesh:Some(mesh),interpolation:Interpolation::Bicubic};
+        let adapter=Projective([1.,0.02,7.,-0.01,1.,3.,0.0001,0.,1.]);
+        let transform=ImageTransform {placement:placement.clone(),source_from_owner:Some(adapter),keep_source:false};
+        let inverse=Projective::invert(outer.0.map(f64::from)).unwrap();
+        let mut negative=0;let mut sampled=0;
+        for triangle in geometry.triangles().step_by((geometry.indices.len()/96).max(1)) {
+            let vertices=triangle.map(|i|geometry.vertices[i as usize].map(f64::from));
+            let point=[0,1].map(|k|vertices.iter().map(|v|v[k]).sum::<f64>()/3.);
+            let weights=vertices.map(|v|inverse[6]*v[0]+inverse[7]*v[1]+inverse[8]);
+            let weight=weights.iter().sum::<f64>();
+            let owner=[2,3].map(|k|vertices.iter().zip(weights).map(|(v,w)|v[k]*w).sum::<f64>()/weight);
+            let source=adapter.map(Point {x:owner[0] as f32,y:owner[1] as f32}).unwrap();
+            if source.x<0. || source.y<0. || source.x>=512. || source.y>=512. {continue;}
+            let region=Rect {min:Point {x:point[0] as f32-0.25,y:point[1] as f32-0.25},
+                max:Point {x:point[0] as f32+0.25,y:point[1] as f32+0.25}};
+            let bounds=crate::paint_transform::snapshot::source_region(&transform,region,[512;2],Some(geometry.clone())).unwrap();
+            assert!(source.x>=bounds.min_x() as f32 && source.x<bounds.max_x() as f32
+                && source.y>=bounds.min_y() as f32 && source.y<bounds.max_y() as f32,"{source:?} outside {bounds:?}");
+            negative+=usize::from(point[0]<0. || point[1]<0.);sampled+=1;
+        }
+        let owner = Arc::new(MeshMap::identity(Rect::from_extent([512;2]),[2,2]).unwrap());
+        let mask = Projective([1.,0.,0.,0.,1.,0.,0.004,0.,1.]);
+        let linked = ImageTransform {placement:LayerPlacement {outer:Projective::IDENTITY,
+            mesh:Some(owner.clone()),interpolation:Interpolation::Nearest},
+            source_from_owner:Some(mask.inverse().unwrap()),keep_source:false};
+        let region = Rect::from_extent([256;2]);
+        let bounds = crate::paint_transform::snapshot::source_region(&linked,region,[256;2],
+            Some(Arc::new(MeshGeometry::new(&owner,Projective::IDENTITY,None)))).unwrap();
+        for source in [Point {x:10.,y:20.},Point {x:240.,y:220.}] {
+            let destination = mask.map(source).unwrap();
+            assert!(destination.x>=0. && destination.y>=0. && destination.x<256. && destination.y<256.);
+            assert!(source.x>=bounds.min_x() as f32 && source.x<bounds.max_x() as f32
+                && source.y>=bounds.min_y() as f32 && source.y<bounds.max_y() as f32,
+                "valid mask source {source:?} omitted across inverse horizon: {bounds:?}");
+        }
+        assert!(sampled>10 && negative>3);
+        assert!(geometry.buffer_bytes()>=(geometry.vertices.len() as u64*20).next_power_of_two()
+            +(geometry.indices.len() as u64*4).next_power_of_two(),"admission covers actual retained buffers");
+    }
+
+    #[test]
+    fn a_large_bent_mesh_uses_window_local_indices() {
+        let frame=Rect::from_extent([9504,6336]);
+        let mesh=MeshMap::identity(frame,[3;2]).unwrap().move_node(5,Point {x:-120./0.1653409,y:-80./0.1653409}).unwrap();
+        let placement=layer_core::LayerPlacement {mesh:Some(Arc::new(mesh)),..Default::default()};
+        let geometry=MeshGeometry::new(placement.mesh.as_ref().unwrap(),placement.outer,None);
+        let actual=(geometry.vertices.len() as u64*20).next_power_of_two()+(geometry.indices.len() as u64*4).next_power_of_two();
+        let triangle_rate=geometry.triangles().map(|triangle| {
+            let [a,b,c]=triangle.map(|i|geometry.vertices[i as usize]);
+            let source=layer_core::Affine([b[2]-a[2],b[3]-a[3],c[2]-a[2],c[3]-a[3],a[2],a[3]]);
+            let destination=layer_core::Affine([b[0]-a[0],b[1]-a[1],c[0]-a[0],c[1]-a[1],a[0],a[1]]);
+            source.inverse().unwrap().then(destination).magnification()
+        }).fold(0f32,f32::max);
+        eprintln!("large bent mesh: grid={:?}, rate={}, triangle_rate={triangle_rate}, actual={actual}, indices={}",placement.mesh.as_ref().unwrap().tessellation_grid(0.5),placement.magnification(frame),geometry.indices.len());
+        assert_eq!(actual,geometry.buffer_bytes());
+        assert!(placement.magnification(frame)>=triangle_rate);
+        assert!(placement.magnification(frame)<2.,"a modest bend keeps a reduced source footprint");
+        assert!(geometry.indices.len()<geometry.triangles().count()*3*4,"window-local binning must not repeat every triangle in every window");
+    }
+
+    #[test]
+    fn mesh_magnification_covers_dense_derivatives_and_drawn_triangles() {
+        let mesh=MeshMap::identity(Rect::from_extent([9504,6336]),[3;2]).unwrap()
+            .move_node(5,Point {x:-120./0.1653409,y:-80./0.1653409}).unwrap();
+        for split in [false,true] {for frame in [mesh.frame,layer_core::Affine([8500.,1200.,-1800.,6000.,20.,30.])] {
+            let mut mesh=if split {mesh.split(0,0.37).unwrap().split(1,0.61).unwrap()} else {mesh.clone()};
+            mesh.frame=frame;
+            let bound=mesh.magnification();let mut largest=0f32;
+            for y in 1..40 {for x in 1..40 {
+                let p=frame.map(Point {x:x as f32/40.,y:y as f32/40.});
+                let [left,right,top,bottom]=[Point{x:p.x-1.,..p},Point{x:p.x+1.,..p},Point{y:p.y-1.,..p},Point{y:p.y+1.,..p}].map(|p|mesh.map(p).unwrap());
+                let rate=layer_core::Affine([(right.x-left.x)*0.5,(right.y-left.y)*0.5,(bottom.x-top.x)*0.5,(bottom.y-top.y)*0.5,0.,0.]).magnification();
+                largest=largest.max(rate);
+            }}
+            let geometry=MeshGeometry::new(&mesh,layer_core::Projective::IDENTITY,None);
+            for triangle in geometry.triangles() {
+                let [a,b,c]=triangle.map(|i|geometry.vertices[i as usize]);
+                let source=layer_core::Affine([b[2]-a[2],b[3]-a[3],c[2]-a[2],c[3]-a[3],a[2],a[3]]);
+                let destination=layer_core::Affine([b[0]-a[0],b[1]-a[1],c[0]-a[0],c[1]-a[1],a[0],a[1]]);
+                largest=largest.max(source.inverse().unwrap().then(destination).magnification());
+            }
+            eprintln!("split={split}, frame={frame:?}, bound={bound}, dense/drawn={largest}");
+            assert!(largest<=bound,"the source footprint covers independent finite differences and every drawn triangle");
+        }}
+    }
+
+    #[test]
+    fn mapped_material_bounds_clip_the_owner_source_before_outer_perspective() {
+        use layer_core::Projective;
+        let mesh=MeshMap::identity(Rect::from_extent([9504,6336]),[3;2]).unwrap()
+            .move_node(5,Point {x:-120./0.1653409,y:-80./0.1653409}).unwrap();
+        let source=Rect {min:Point{x:2200.,y:1400.},max:Point{x:3400.,y:2400.}};
+        for outer in [Projective::IDENTITY,Projective([1.,0.02,-300.,-0.01,1.,-120.,0.000005,-0.000003,1.])] {
+            let geometry=MeshGeometry::new(&mesh,outer,None);
+            for adapter in [None,Some(Projective([1.,0.,-40.,0.,1.,30.,0.00001,0.,1.]))] {
+                let bounds=geometry.forward_bounds(source,adapter);
+                assert!(!bounds.is_empty());
+                assert!((bounds.max.x-bounds.min.x)*(bounds.max.y-bounds.min.y)<9504.*6336./8.,"a small wet patch must not become full-canvas work: {bounds:?}");
+                let mut witnessed=0;
+                for triangle in geometry.triangles() {
+                    let vertices=triangle.map(|i|geometry.vertices[i as usize]);
+                    let owner=Point{x:vertices.iter().map(|v|v[2]).sum::<f32>()/3.,y:vertices.iter().map(|v|v[3]).sum::<f32>()/3.};
+                    let Some(target)=adapter.map_or(Some(owner),|map|map.map(owner)) else {continue;};
+                    if target.x<source.min.x || target.y<source.min.y || target.x>source.max.x || target.y>source.max.y {continue;}
+                    let weights=triangle.map(|i|geometry.weights[i as usize]);let sum=weights.iter().sum::<f32>();
+                    let p=Point{x:vertices.iter().zip(weights).map(|(v,w)|v[0]*w).sum::<f32>()/sum,y:vertices.iter().zip(weights).map(|(v,w)|v[1]*w).sum::<f32>()/sum};
+                    assert!(p.x>=bounds.min.x && p.y>=bounds.min.y && p.x<=bounds.max.x && p.y<=bounds.max.y,"mapped pigment {p:?} outside {bounds:?}");
+                    witnessed+=1;
+                }
+                assert!(witnessed>100);
+            }
+        }
+    }
+
+    #[test]
     fn a_pixel_on_a_patch_seam_reads_only_its_neighborhood() {
         let bounds = Rect {
             min: Point { x: 0., y: 0. },
             max: Point { x: 2048., y: 1536. },
         };
         let mesh = MeshMap::identity(bounds, [3, 3]).unwrap();
-        let g = MeshGeometry::new(&mesh, None);
+        let g = MeshGeometry::new(&mesh, layer_core::Projective::IDENTITY, None);
         let f = g.footprint(PixelRect::new(681, 0, 682, 1)).unwrap();
         for (actual, expected) in f.into_iter().zip([680., -1., 683., 2.]) {
             assert!((actual - expected).abs() < 0.01, "{f:?}");
@@ -762,7 +1034,7 @@ mod tests {
             .unwrap()
             .move_node(15, far)
             .unwrap();
-        let g = MeshGeometry::new(&mesh, None);
+        let g = MeshGeometry::new(&mesh, layer_core::Projective::IDENTITY, None);
         assert!(g.windows.is_none());
         assert_eq!(g.window([0, 0]), 0..g.indices.len() as u32);
         assert_eq!(g.indices.len(), g.triangles().count() * 3);

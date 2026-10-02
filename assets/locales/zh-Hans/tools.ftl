@@ -161,3 +161,5 @@ tool-tonal-mid-shadows = 中阴影 · −5 至 −3.5 档
 tool-tonal-midtones = 中间调 · −3.5 至 −1.5 档
 tool-tonal-shadows = 阴影 · 低于 −5 档
 tool-tonal-tones = 明暗 · 相对于参考白的档数
+
+tool-action-group-transform-warp-split = 拆分网格

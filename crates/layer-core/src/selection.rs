@@ -83,7 +83,7 @@ impl Document {
             .ok_or(DocumentError::InvalidLayerOperation(
                 "Choose a Selection Layer",
             ))?
-            .transformed(self.layer_transform(id))
+            .mapped(&self.layer_geometry(id).placement)
     }
 
     /// Construct a validated edit from document-space coverage. Loading/painting
@@ -102,7 +102,7 @@ impl Document {
                 if self.is_locked(id) {
                     return Err(DocumentError::ProtectedLayer(id));
                 }
-                let inverse = self.layer_transform(id).inverse().ok_or(
+                let inverse = self.affine_edit_transform(id).and_then(crate::Affine::inverse).ok_or(
                     DocumentError::InvalidLayerOperation("Invalid selection placement"),
                 )?;
                 Ok(Edit::SetSavedSelection {
@@ -372,33 +372,15 @@ impl Selection {
     /// exactly under perspective, and within a pixel under a mesh, after
     /// clipping away any part with no image; pixel coverage must be resampled
     /// by the renderer instead.
-    pub fn mapped(&self, map: &crate::TransformMap) -> Result<Self, DocumentError> {
-        let invalid = DocumentError::InvalidLayerOperation("Invalid selection transform");
-        let paths = match (map, &self.shape) {
-            (crate::TransformMap::Affine(affine), _) => return self.transformed(*affine),
-            (_, SelectionShape::Pixels(_)) => {
-                return Err(DocumentError::InvalidLayerOperation(Self::RESAMPLE_PIXELS));
-            }
-            (crate::TransformMap::Projective(projective), SelectionShape::Contours(paths)) => {
-                crate::Projective::from_affine(self.affine)
-                    .then(*projective)
-                    .ok_or(invalid)?
-                    .map_polygons(paths)
-            }
-            (crate::TransformMap::Mesh(mesh), SelectionShape::Contours(paths)) => {
-                mesh.map_polygons(paths, self.affine).ok_or(invalid)?
-            }
-        };
-        Ok(Self {
-            shape: SelectionShape::Contours(paths.into()),
-            affine: crate::Affine::IDENTITY,
-            inverted: self.inverted,
-        })
+    pub fn mapped(&self, map: &crate::LayerPlacement) -> Result<Self, DocumentError> {
+        if let Some(affine)=map.as_affine(){return self.transformed(affine);}
+        let invalid=DocumentError::InvalidLayerOperation("Invalid selection transform");
+        let SelectionShape::Contours(paths)=&self.shape else{return Err(DocumentError::InvalidLayerOperation(Self::RESAMPLE_PIXELS));};
+        let paths=if let Some(mesh)=&map.mesh {map.outer.map_polygons(&mesh.map_polygons(paths,self.affine).ok_or(invalid)?)}
+            else {crate::Projective::from_affine(self.affine).then(map.outer).ok_or(invalid)?.map_polygons(paths)};
+        Ok(Self{shape:SelectionShape::Contours(paths.into()),affine:crate::Affine::IDENTITY,inverted:self.inverted})
     }
-    /// Whether only the renderer can carry this selection through `map`.
-    pub fn needs_resample(&self, map: &crate::TransformMap) -> bool {
-        matches!(self.shape, SelectionShape::Pixels(_)) && !matches!(map, crate::TransformMap::Affine(_))
-    }
+    pub fn needs_resample(&self,map:&crate::LayerPlacement)->bool {matches!(self.shape,SelectionShape::Pixels(_))&&map.as_affine().is_none()}
     /// The error when pixel coverage cannot follow a map without the renderer.
     pub const RESAMPLE_PIXELS: &'static str = "Pixel selections are resampled by the renderer";
 }
@@ -490,10 +472,10 @@ mod selection_tests {
         let mut layer = Layer::selection(id, "Hair", soft_mask());
         layer.properties.parent = Some(group_id);
         layer.properties.placement =
-            Affine::around(Point::default(), [2., 2.], 0., Point::default());
+            LayerPlacement::from_affine(Affine::around(Point::default(), [2., 2.], 0., Point::default()));
         doc.apply(Edit::InsertLayer { index: 1, layer }).unwrap();
         let world = doc.saved_selection(id).unwrap();
-        assert_eq!(world.affine, doc.layer_transform(id));
+        assert_eq!(world.affine, doc.affine_edit_transform(id).unwrap());
         let replacement = world.translated(Point { x: 2., y: 4. });
         doc.apply(
             doc.selection_edit(SelectionTarget::Saved(id), replacement.clone())
@@ -620,10 +602,10 @@ mod selection_tests {
     }
     #[test]
     fn perspective_clips_contours_beyond_the_horizon() {
-        use crate::{Projective, TransformMap};
+        use crate::{Projective, LayerPlacement};
         let source = Rect { min: Point::default(), max: Point { x: 100., y: 100. } };
         let quad = [Point { x: 40., y: 0. }, Point { x: 60., y: 0. }, Point { x: 100., y: 100. }, Point { x: 0., y: 100. }];
-        let map = TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap());
+        let map = LayerPlacement::from_projective(Projective::rect_to_quad(source, quad).unwrap());
         let tall = Selection::polygon(vec![
             Point { x: 0., y: 0. },
             Point { x: 100., y: 0. },
@@ -642,7 +624,7 @@ mod selection_tests {
         ])
         .unwrap();
         assert!(beyond.mapped(&map).unwrap().contours().is_empty());
-        assert!(beyond.mapped(&TransformMap::Projective(Projective([f32::NAN; 9]))).is_err());
+        assert!(beyond.mapped(&LayerPlacement::from_projective(Projective([f32::NAN; 9]))).is_err());
         let pixels = Selection::pixels(Arc::new(SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x4444]).unwrap()));
         assert_eq!(
             pixels.mapped(&map),

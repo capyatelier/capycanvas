@@ -52,6 +52,7 @@ struct DocumentKey {
     operations: bool,
     transform: bool,
     mesh: bool,
+    nonlinear: bool,
     blend_space: layer_core::BlendSpace,
     chains: Vec<(Vec<Arc<layer_core::EffectProgram>>, effects::Execution)>,
 }
@@ -66,10 +67,12 @@ impl DocumentKey {
             transform: document.layers.iter().any(|l| l.pending_operations.iter()
                 .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
                 .any(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_)))),
-            mesh: document.layers.iter().any(|l| l.pending_operations.iter()
+            mesh: document.layers.iter().any(|l| l.properties.placement.mesh.is_some() || l.pending_operations.iter()
                 .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
                 .any(|op| matches!(&op.kind, layer_core::LayerOperationKind::Transform(t)
-                    if matches!(t.map, layer_core::TransformMap::Mesh(_))))),
+                    if t.placement.mesh.is_some()))),
+            nonlinear: document.layers.iter().flat_map(|l| std::iter::once(l.id).chain(l.masks().map(|m| m.id)))
+                .any(|id| document.layer_geometry(id).as_affine().is_none()),
             blend_space: document.blend_space,
             chains: scene::startup_effect_chains(&document.layers).into_iter()
                 .map(|(layers, execution)| (layers.into_iter().filter_map(|l| l.effect.as_ref().map(|e| e.program.clone())).collect(), execution)).collect(),
@@ -352,6 +355,7 @@ impl WgpuRasterizer {
             if shader.key.mesh {
                 required.render.extend(self.transforms.as_ref().unwrap().mesh_pipelines().into_iter().cloned());
             }
+            if shader.key.nonlinear { required.render.extend(self.scene_pipelines.resample.mesh.iter().cloned()); }
             if shader.key.transform {
                 required.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
             }

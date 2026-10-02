@@ -21,6 +21,7 @@ impl Scene {
         members: &[Layer],
         offset: layer_core::Point,
         damage: PixelRect,
+        coverage: &layer_core::LayerMask,
         low: Option<&Layer>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
@@ -68,7 +69,7 @@ impl Scene {
                 self.retire_images(|scene| scene.images = images::ImageStages::default());
                 self.image_window = Some(window);
                 self.update_images(r, source, window, encoder)?;
-                self.bake_pages(r, source, &pages, low, encoder)?;
+                self.bake_pages(r, source, &pages, coverage, low, encoder)?;
                 if plan.is_some() {
                     r.metrics.image_window_peak_bytes = r.metrics.image_window_peak_bytes.max(self.images.storage_bytes());
                     if multiple {
@@ -91,6 +92,7 @@ impl Scene {
         r: &mut WgpuRasterizer,
         source: FramePacket<'_>,
         pages: &[&([u32; 2], Image)],
+        coverage: &layer_core::LayerMask,
         low: Option<&Layer>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
@@ -109,6 +111,17 @@ impl Scene {
                         [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32], [17., 1., 0., 0.], false, Convert::None);
                     self.free(output);
                     output = detail;
+                }
+                if coverage.default_coverage != 1. || coverage.inverted || coverage.initial.is_some()
+                    || !coverage.raster.is_empty() || !coverage.pending_operations.is_empty() {
+                    let geometry = layer_core::ImageTransform { placement: layer_core::LayerPlacement::from_projective(
+                        coverage.placement.then(layer_core::Projective::from_affine(layer_core::Affine::translation(coverage.offset)))
+                            .ok_or(GpuRasterError::InvalidTransform("Invalid bake coverage"))?), ..Default::default() };
+                    let mask = self.mask_at(r, coverage, geometry, coverage.local_extent(source.document_extent), *coordinate)?;
+                    let clipped = self.alloc(r, wgpu::Color::TRANSPARENT);
+                    self.draw(r, clipped, self.pool[output].view.clone(), Some(self.pool[mask].view.clone()),
+                        [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32], [3., 1., 0., 0.], false, Convert::None);
+                    self.free(output); self.free(mask); output = clipped;
                 }
                 let output = self.converted(r, output, Convert::stored(source));
                 self.copy_window_tile(output, destination, *coordinate);

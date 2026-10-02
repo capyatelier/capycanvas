@@ -58,8 +58,8 @@ impl ContentBoundsCache {
         self.entries.iter().find(|(key, _)| key == request).map(|(_, bounds)| *bounds)
     }
     pub fn insert(&mut self, request: ContentBoundsRequest, bounds: Rect) {
-        self.entries.retain(|(key, _)| key != &request);
-        if self.entries.len() == 2 { self.entries.remove(0); }
+        self.entries.retain(|(key, _)| key.document.id == request.document.id
+            && key.document.revision == request.document.revision && key.scope != request.scope);
         self.entries.push((request, bounds));
     }
     pub fn discard_changed(&mut self, document: &Document) {

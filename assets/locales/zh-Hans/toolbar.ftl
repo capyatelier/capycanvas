@@ -69,5 +69,5 @@ toolbar-variant = 变体
 toolbar-visible-color = 可见颜色
 toolbar-editing-layer = 正在编辑{ $name }
 toolbar-editing-mask = 正在编辑{ $name }的蒙版
-toolbar-image-count = { $count }张图像
+toolbar-layer-count = { $count } 个图层
 toolbar-stale-action = 此操作属于之前的画布选区或变换

@@ -69,5 +69,5 @@ toolbar-variant = 유형
 toolbar-visible-color = 보이는 색상
 toolbar-editing-layer = { $name } 편집 중
 toolbar-editing-mask = { $name } 마스크 편집 중
-toolbar-image-count = 이미지 { $count }개
+toolbar-layer-count = 레이어 { $count }개
 toolbar-stale-action = 이 동작은 이전 캔버스 선택 영역 또는 변형에 속합니다.

@@ -838,7 +838,7 @@ impl Input {
                 if let Some(layer) = doc.layer(doc.active_layer).filter(|layer| layer.source.is_some()) {
                     gpu.session.engine().backend().stats.lock().unwrap().photo_inputs.push((
                         delivered_ns, layer.id.0,
-                        [event.surface_position.x, event.surface_position.y], layer.properties.placement.0,
+                        [event.surface_position.x, event.surface_position.y], layer.properties.placement.clone(),
                     ));
                 }
             }

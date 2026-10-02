@@ -49,7 +49,7 @@ fn photo_drop_captures_document_point_and_reuses_shared_row_validation() {
         read_bytes(&job, "Drop.tiff", &bytes); adopt(&app, &job, false);
         let doc = unsafe { &*app.0 }.host.session.engine().document();
         let placed = doc.layers.iter().find(|l| l.source.is_some()).unwrap();
-        let center = doc.layer_transform(placed.id).map(layer_core::Point { x: 6.5, y: 4.5 });
+        let center = doc.layer_geometry(placed.id).map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
         assert!((center.x - expected.x).abs() < 0.0001 && (center.y - expected.y).abs() < 0.0001);
         assert_eq!(source_samples(placed.source.as_ref().unwrap()), source_samples(&original));
         app.invoke("apply_transform"); app.draw_until_idle();
@@ -379,13 +379,13 @@ fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
             for (index, layer) in placed.iter().enumerate() {
                 assert_eq!(layer.name.as_ref(), format!("Photo-{}", index + 1));
                 assert_eq!(layer.source.as_deref(), Some(&images[index].1));
-                assert!((layer.properties.placement.0[0] - 7. / 13.).abs() < 0.00001);
-                let center = layer.properties.placement.map(layer_core::Point { x: 6.5, y: 4.5 });
+                assert!((layer.properties.placement.as_affine().unwrap().0[0] - 7. / 13.).abs() < 0.00001);
+                let center = layer.properties.placement.map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
                 assert!((center.x - 3.5).abs() < 0.00001 && (center.y - 2.5).abs() < 0.00001);
             }
             app.invoke("placement_original_size"); app.draw_until_prepared(true);
             for layer in unsafe { &*app.0 }.host.session.engine().document().layers.iter().filter(|l| l.source.is_some()) {
-                assert_eq!(&layer.properties.placement.0[..4], &layer_core::Affine::IDENTITY.0[..4]);
+                assert_eq!(&layer.properties.placement.as_affine().unwrap().0[..4], &layer_core::Affine::IDENTITY.0[..4]);
             }
             if !apply {
                 app.invoke("cancel_transform"); app.draw_until_idle();

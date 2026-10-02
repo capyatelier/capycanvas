@@ -22,6 +22,20 @@ const RECORD_BYTES: u64 = 112 + (1 + TRANSFORM_SLOTS as u64) * 16;
 const ENCODED: f32 = 512.;
 const BINDING_CAPACITY: usize = 4096;
 
+#[derive(Clone)]
+pub(crate) struct GeometryKey(pub ImageTransform);
+impl GeometryKey {
+    fn bits(&self) -> ([u32; 9], Option<usize>, u8, Option<[u32; 9]>, bool) {
+        (self.0.placement.outer.0.map(f32::to_bits), self.0.placement.mesh.as_ref().map(|m| std::sync::Arc::as_ptr(m) as usize),
+            self.0.placement.interpolation as u8, self.0.source_from_owner.map(|m| m.0.map(f32::to_bits)), self.0.keep_source)
+    }
+}
+impl PartialEq for GeometryKey { fn eq(&self, other: &Self) -> bool { self.bits() == other.bits() } }
+impl Eq for GeometryKey {}
+impl PartialOrd for GeometryKey { fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) } }
+impl Ord for GeometryKey { fn cmp(&self, other: &Self) -> std::cmp::Ordering { self.bits().cmp(&other.bits()) } }
+impl std::hash::Hash for GeometryKey { fn hash<H: std::hash::Hasher>(&self, state: &mut H) { std::hash::Hash::hash(&self.bits(), state); } }
+
 pub(super) struct TransformTile<'a> {
     pub view: &'a wgpu::TextureView,
     pub origin: [i32; 2],
@@ -369,12 +383,13 @@ impl PixelTransform {
                 rows,
                 taps,
                 job.target.map(|v| (v * super::PAGE_SIZE) as f32),
-                filter_flags(transform.interpolation)
+                filter_flags(transform.placement.interpolation)
                     + 2. * f32::from(job.unmoved || identity)
                     + 4. * f32::from(self.placement)
                     + f32::from(part as u8)
                     + 256. * f32::from(transform.keep_source)
-                    + 1024. * f32::from(job.clear),
+                    + 1024. * f32::from(job.clear)
+                    + 2048. * f32::from(transform.placement.mesh.is_some()),
                 background,
                 display.map(|(level, _)| level),
                 job.texels.map(|v| v as f32),
@@ -502,7 +517,11 @@ pub(super) fn exact_taps(transform: &ImageTransform) -> u32 {
 /// reads its source positions from a texture instead.
 pub(super) fn inverse_rows(transform: &ImageTransform) -> Result<[[f32; 3]; 3], &'static str> {
     let invalid = "Transform must be finite and invertible";
-    let projective = transform.map.projective().unwrap_or(Projective::IDENTITY);
+    let projective = if transform.placement.mesh.is_some() {
+        return Ok(match transform.source_from_owner.unwrap_or(Projective::IDENTITY).0 {
+            [a,b,c,d,e,f,g,h,i] => [[a,b,c],[d,e,f],[g,h,i]],
+        });
+    } else { transform.projective().ok_or(invalid)? };
     if let Some(affine) = projective.as_affine() {
         let [a, b, c, d, x, y] = affine.inverse().ok_or(invalid)?.0;
         return Ok([[a, c, x], [b, d, y], [0., 0., 1.]]);

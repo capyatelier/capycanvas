@@ -2,9 +2,7 @@
 //! composite's sub-rectangle, hidden pixels come back, and history is exact.
 mod support;
 use layer_core::*;
-use layer_engine::{CanvasEngine, InputProducer, PenEvent, ViewTransform, input_queue};
-use layer_render::ViewState;
-use layer_render_wgpu::WgpuRasterizer;
+use layer_engine::{InputProducer, PenEvent};
 use support::*;
 
 fn geometry(origin: [i32; 2], size: [u32; 2]) -> CanvasGeometry {
@@ -405,8 +403,8 @@ fn flips_and_turns_move_every_pixel_exactly_in_one_undo_step() {
         assert_permutation(&oriented, &original, geometry.to_canvas(), &format!("{orientation:?}"));
         for (id, document) in before {
             let plane = if id == upper { raster::RasterPlane::Color } else { raster::RasterPlane::Mask };
-            let old = target_transform(&document.layers, id);
-            let new = target_transform(&engine.document().layers, id).inverse().unwrap();
+            let old = target_geometry(&document.layers, id).as_affine().unwrap();
+            let new = target_geometry(&engine.document().layers, id).as_affine().unwrap().inverse().unwrap();
             let extent = document.target_extent(id).map(|v| v as f32);
             let initial = document.layer(upper).unwrap().mask.as_ref().filter(|m| m.id == id).and_then(|m| m.initial.as_ref());
             let page = |[x, y]: [u32; 2]| Rect {

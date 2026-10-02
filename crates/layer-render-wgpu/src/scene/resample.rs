@@ -71,8 +71,8 @@ impl Resample {
             let (device, layout, shader) = (device.clone(), mesh_pipeline_layout.clone(), shader.clone());
             Deferred::pipeline(move |mode| {
                 let buffers = [Some(wgpu::VertexBufferLayout {
-                    array_stride: 16, step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                    array_stride: 20, step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32],
                 })];
                 let mesh = entry.starts_with("mesh");
                 mode.render(&device, &wgpu::RenderPipelineDescriptor {
@@ -105,7 +105,8 @@ impl Resample {
         let Request { moved, kept, clip, extent, texels, display, target, source, max_lod, outside, keep_source, identity } = request;
         let origin = [target.bounds.min_x(), target.bounds.min_y()].map(|n| n as f32 / display.side as f32);
         let local = |[x, y, z]: [f32; 3]| [x, y, z + x * origin[0] + y * origin[1]];
-        let rows = |transform| pixel_transform::inverse_rows(transform).map(|rows| rows.map(local)).map_err(GpuRasterError::InvalidTransform);
+        let rows = |transform: &layer_core::ImageTransform| pixel_transform::inverse_rows(transform)
+            .map(|rows| if transform.placement.mesh.is_some() { rows } else { rows.map(local) }).map_err(GpuRasterError::InvalidTransform);
         let [x, y, w] = rows(moved)?;
         let [kx, ky, kw] = rows(kept)?;
         let [a, b, c, d, u, v] = clip.0;
@@ -158,26 +159,33 @@ impl Resample {
     }
 
     pub fn mesh_binding(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer, views: &[wgpu::TextureView; 2]) -> wgpu::BindGroup {
+        self.mesh_binding_at(device, uniforms, 0, views)
+    }
+    pub fn mesh_binding_at(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer, offset: u64, views: &[wgpu::TextureView; 2]) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("mesh resample"), layout: &self.mesh_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&views[0]) },
-                wgpu::BindGroupEntry { binding: 2, resource: uniforms.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: uniforms, offset, size: wgpu::BufferSize::new(UNIFORM_BYTES) }) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&views[1]) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
         })
     }
     pub fn encode_mesh(&self, encoder: &mut crate::submission::CommandEncoder, binding: &wgpu::BindGroup,
-        target: &wgpu::TextureView, texels: [u32; 4], mesh: Option<&paint_transform::MeshBuffers>, kept: bool,
+        target: &wgpu::TextureView, texels: [u32; 4], mesh: Option<(&paint_transform::MeshBuffers,std::ops::Range<u32>)>, kept: bool,
     ) {
         let mut pass = encoder.color_pass("mesh resample", target, wgpu::LoadOp::Load);
+        let mesh=mesh.map(|(buffers,range)|buffers.drawing(range));
+        self.draw_mesh(&mut pass,binding,texels,mesh.as_ref(),kept);
+    }
+    pub(super) fn draw_mesh(&self,pass:&mut wgpu::RenderPass<'_>,binding:&wgpu::BindGroup,texels:[u32;4],mesh:Option<&paint_transform::mesh::MeshDraw>,kept:bool) {
         pass.set_scissor_rect(texels[0], texels[1], texels[2], texels[3]);
         pass.set_bind_group(0, binding, &[]);
         pass.set_pipeline(&self.mesh[if mesh.is_some() { 0 } else { 4 } + usize::from(kept)]);
         pass.draw(0..3, 0..1);
         if let Some(mesh) = mesh {
             pass.set_pipeline(&self.mesh[2+usize::from(kept)]);
-            mesh.draw(&mut pass, 0..mesh.count());
+            mesh.draw(pass);
         }
     }
 

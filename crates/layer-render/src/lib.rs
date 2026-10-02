@@ -395,7 +395,7 @@ impl ColorSampleArea {
 pub struct ColorSampleRequest {
     pub request_id: u64,
     pub source: ColorSampleSource,
-    /// Document coordinates for Composite, layer-local coordinates for Layer.
+    /// Document coordinates for both sources.
     pub position: [u32; 2],
     /// Centered footprint clipped to the source extent. Circular samples average
     /// Oklab with alpha weights; legacy squares average premultiplied linear RGB.
@@ -414,9 +414,9 @@ pub struct ColorSample {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RegionSource {
     Composite,
-    /// Raw paint, in layer-local coordinates.
+    /// Placed raw paint, in document coordinates.
     Layer(LayerId),
-    /// Raw content alpha or a visibility mask's stored coverage, before artwork compositing.
+    /// Placed raw content alpha or mask coverage, in document coordinates.
     Coverage(LayerId),
     /// Composition snapshot with original indices and selected visibility.
     Layers(Vec<Layer>),
@@ -430,7 +430,7 @@ pub enum RegionSource {
     TransformedSelection {
         layer: LayerId,
         selection: std::sync::Arc<layer_core::Selection>,
-        map: layer_core::TransformMap,
+        map: layer_core::LayerPlacement,
     },
     /// Select › Modify of a document selection, in document pixels.
     Modify(std::sync::Arc<SelectionModify>),
@@ -603,10 +603,9 @@ impl TransformPreview {
     /// The transform the renderer draws for this preview.
     pub fn drawn(&self) -> std::borrow::Cow<'_, layer_core::ImageTransform> {
         if self.moving
-            && matches!(self.transform.interpolation, layer_core::Interpolation::Bicubic | layer_core::Interpolation::Lanczos)
+            && matches!(self.transform.placement.interpolation, layer_core::Interpolation::Bicubic | layer_core::Interpolation::Lanczos)
         {
-            std::borrow::Cow::Owned(layer_core::ImageTransform {
-                interpolation: layer_core::Interpolation::Linear,
+            std::borrow::Cow::Owned(layer_core::ImageTransform { placement: layer_core::LayerPlacement { interpolation: layer_core::Interpolation::Linear, ..self.transform.placement.clone() },
                 ..self.transform.clone()
             })
         } else {
@@ -629,8 +628,8 @@ impl TransformPreview {
         } else {
             owner.id
         };
-        let to = layer_core::target_transform(layers, self.layer)
-            .then(layer_core::target_transform(layers, target).inverse()?);
+        let to = layer_core::target_geometry(layers, self.layer).as_affine()?
+            .then(layer_core::target_geometry(layers, target).as_affine()?.inverse()?);
         Some(Self {
             transaction: self.transaction,
             moving: self.moving,

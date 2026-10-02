@@ -619,11 +619,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             if interactive {
                 let [w, h] = source.extent.map(|v| v as f32);
                 let scale = 1_f32.min(doc.width as f32 / w).min(doc.height as f32 / h);
-                layer.properties.placement = layer_core::Affine([
+                layer.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([
                     scale, 0., 0., scale,
                     center.x - parent_offset.x - w * scale * 0.5,
                     center.y - parent_offset.y - h * scale * 0.5,
-                ]);
+                ]));
             }
             layer.source = Some(std::sync::Arc::new(source));
             edits.push(Edit::InsertLayer { index: index + offset, layer });
@@ -1247,9 +1247,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                             return Err("Enable the mask before applying it".into());
                         }
                         mask.show_area = false;
-                        mask.placement = mask.transform_in_parent(&layer.properties).then(
-                            layer.properties.placement.then(layer_core::Affine::translation(layer.properties.offset))
-                                .inverse().ok_or("Invalid layer placement")?);
+                        let doc = self.engine.document();
+                        doc.validate_content_write(layer.id).map_err(|reason| notices::drawing_refusal_text(reason, self.localization()).to_string())?;
+                        doc.validate_content_write(mask.id).map_err(|reason| notices::drawing_refusal_text(reason, self.localization()).to_string())?;
+                        let to = doc.affine_edit_transform(mask.id).unwrap()
+                            .then(doc.affine_edit_transform(layer.id).unwrap().inverse().ok_or("Invalid layer placement")?);
+                        mask.placement = layer_core::Projective::from_affine(to);
                         mask.offset = Point::default();
                         mask.linked = false;
                         layer.pending_operations.push(layer_core::LayerOperation {
@@ -1753,7 +1756,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. }) {
             return self.ruler_pen(event, p);
         }
-        if self.layer_interaction.tool == LayerCanvasTool::Transform || self.operation.moving_pixels() {
+        if self.layer_interaction.tool == LayerCanvasTool::Transform || self.operation.moving_pixels() || self.operation.moving_layer() {
             return self.transform_pen(event, p);
         }
         if self.layer_interaction.tool == LayerCanvasTool::Crop {
@@ -1769,7 +1772,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.notify(reason);
                 return Ok(());
             }
-            if self.moves_selected_pixels() {
+            if self.moves_selected_pixels() || !self.engine.document().active_mask {
                 let keep_source = self.operation.leave_copy != self.interaction.modifiers.alt;
                 return self.begin_move_transform(p, keep_source);
             }
@@ -2007,12 +2010,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Select a paint layer's content to fill".into());
         }
         let offset = self.engine.document().layer_offset(id);
-        let inverse = self.engine.document().layer_transform(id).inverse().ok_or("Invalid layer placement")?;
+        let inverse = self.engine.document().affine_edit_transform(id).and_then(layer_core::Affine::inverse).ok_or("Invalid layer placement")?;
         let placement = layer_core::Affine::translation(offset).then(inverse);
         let mut coverage = LayerMask::reveal_all(self.engine.allocate_layer_id(), Point::default());
         let doc = self.engine.document();
         let [w, h] = [doc.width as f32, doc.height as f32];
-        let hidden = doc.target_extent(id) != [doc.width, doc.height] || doc.layer_transform(id) != layer_core::Affine::IDENTITY;
+        let hidden = doc.target_extent(id) != [doc.width, doc.height] || doc.affine_edit_transform(id) != Some(layer_core::Affine::IDENTITY);
         let selection = match selection {
             None if hidden => Some(
                 Selection::polygon([[0., 0.], [w, 0.], [w, h], [0., h]].map(|[x, y]| Point { x, y }).to_vec())

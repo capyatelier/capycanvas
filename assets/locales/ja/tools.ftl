@@ -161,3 +161,5 @@ tool-tonal-mid-shadows = 中間シャドウ · −5〜−3.5段
 tool-tonal-midtones = 中間調 · −3.5〜−1.5段
 tool-tonal-shadows = シャドウ · −5段より下
 tool-tonal-tones = 階調 · 基準白に対する段数
+
+tool-action-group-transform-warp-split = グリッドを分割

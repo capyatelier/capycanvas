@@ -7,7 +7,7 @@ use crate::pixel_transform::EXACT_TAPS;
 use crate::test_support::preimage;
 use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
 use layer_core::{
-    Affine, ImageTransform, Interpolation, Projective, SelectionPixels, TransformMap,
+    Affine, ImageTransform, Interpolation, Projective, SelectionPixels, LayerPlacement,
 };
 use std::sync::Arc;
 
@@ -304,20 +304,20 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
         max: Point { x: 230., y: 180. },
     };
     let quad = |q: [[f32; 2]; 4]| {
-        TransformMap::Projective(
+        LayerPlacement::from_projective(
             Projective::rect_to_quad(source, q.map(|[x, y]| Point { x, y })).unwrap(),
         )
     };
     let maps = [
-        TransformMap::Affine(Affine::translation(Point { x: 256., y: 0. })),
-        TransformMap::Affine(Affine::around(
+        LayerPlacement::from_affine(Affine::translation(Point { x: 256., y: 0. })),
+        LayerPlacement::from_affine(Affine::around(
             pivot,
             [1.7, 1.3],
             0.31,
             Point { x: 3.5, y: -2.25 },
         )),
-        TransformMap::Affine(Affine::around(pivot, [-1., 1.], 0.1, Point::default())),
-        TransformMap::Affine(Affine::around(pivot, [0.25, 0.4], -0.7, Point::default())),
+        LayerPlacement::from_affine(Affine::around(pivot, [-1., 1.], 0.1, Point::default())),
+        LayerPlacement::from_affine(Affine::around(pivot, [0.25, 0.4], -0.7, Point::default())),
         quad([[30.3, 20.1], [250.2, 45.4], [280.1, 200.3], [10.2, 170.4]]),
         quad([[120.3, 60.1], [150.2, 60.4], [290.1, 210.3], [5.2, 210.4]]),
         quad([[250.2, 45.4], [30.3, 20.1], [10.2, 170.4], [280.1, 200.3]]),
@@ -344,21 +344,13 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
                     moving: false,
                     layer: layer.id,
                     selection: selection.clone(),
-                    transform: ImageTransform {
-                        map: map.clone(),
-                        interpolation,
+                    transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..map.clone() },
                         ..Default::default()
                     },
                 };
                 r.set_transform_preview(Some(&preview)).unwrap();
                 frame(&mut r, &layer, false);
-                let h = match map {
-                    TransformMap::Affine(affine) => Projective::from_affine(*affine),
-                    TransformMap::Projective(projective) => *projective,
-                    TransformMap::Mesh(_) => unreachable!(),
-                }
-                .0
-                .map(f64::from);
+                let h = map.projective().unwrap().0.map(f64::from);
                 let texels = pages(&r);
                 assert!(!texels.is_empty(), "the preview draws pages");
                 check_pages(&oracle, h, interpolation, false, texels, format_args!("mode {mode} {interpolation:?} {map:?}"));
@@ -388,10 +380,9 @@ fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
         for interpolation in [Interpolation::Nearest, Interpolation::Bicubic] {
             for affine in maps {
                 transaction += 1;
-                let transform = ImageTransform {
-                    map: TransformMap::Affine(affine),
-                    interpolation,
+                let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..LayerPlacement::from_affine(affine) },
                     keep_source: true,
+                source_from_owner: None,
                 };
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction,
@@ -438,14 +429,12 @@ fn minified_native_transforms_average_the_pixel_footprint() {
                     ])
                     .unwrap(),
                 ),
-                transform: ImageTransform {
-                    map: TransformMap::Affine(Affine::around(
+                transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..LayerPlacement::from_affine(Affine::around(
                         Point::default(),
                         [scale; 2],
                         0.1,
                         Point { x: 1.3, y: 0.7 },
-                    )),
-                    interpolation,
+                    )) },
                     ..Default::default()
                 },
             }))
@@ -479,9 +468,7 @@ fn bicubic_and_lanczos_mask_transforms_keep_scalar_coverage_within_the_unit_inte
             moving: false,
             layer: LayerId(9),
             selection: None,
-            transform: ImageTransform {
-                map: TransformMap::Affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])),
-                interpolation,
+            transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..LayerPlacement::from_affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])) },
                 ..Default::default()
             },
         }))
@@ -653,7 +640,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
     let pixels = selection_pixels();
     let mut transaction = 100;
     for (mesh, folds) in [(warped, false), (folded, true), (shrunk, false)] {
-        let geometry = MeshGeometry::new(&mesh, None);
+        let geometry = MeshGeometry::new(&mesh, layer_core::Projective::IDENTITY, None);
         let (positions, stacked) = mesh_positions(&geometry);
         let covered = positions[0].iter().filter(|p| p.is_some()).count();
         assert!(covered > 1000, "the mesh covers the layer");
@@ -677,9 +664,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
                     moving: false,
                     layer: layer.id,
                     selection: selection.clone(),
-                    transform: ImageTransform {
-                        map: TransformMap::Mesh(Arc::new(mesh.clone())),
-                        interpolation,
+                    transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..layer_core::LayerPlacement { mesh: Some(Arc::new(mesh.clone())), ..Default::default() } },
                         ..Default::default()
                     },
                 }))
@@ -727,8 +712,8 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
         max: Point { x: EXTENT[0] as f32, y: EXTENT[1] as f32 },
     };
     let maps = [
-        TransformMap::Affine(affine),
-        TransformMap::Mesh(Arc::new(MeshMap::from_affine(bounds, [4, 3], affine).unwrap())),
+        LayerPlacement::from_affine(affine),
+        layer_core::LayerPlacement { mesh: Some(Arc::new(MeshMap::from_affine(bounds, [4, 3], affine).unwrap())), ..Default::default() },
     ];
     for interpolation in [Interpolation::Nearest, Interpolation::Linear, Interpolation::Bicubic] {
         let drawn: Vec<_> = maps
@@ -742,9 +727,7 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
                     moving: false,
                     layer: LayerId(9),
                     selection: None,
-                    transform: ImageTransform {
-                        map: map.clone(),
-                        interpolation,
+                    transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..map.clone() },
                         ..Default::default()
                     },
                 }))
@@ -843,9 +826,7 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
         .unwrap();
     };
     submit(&mut r, &layer, &[], true);
-    let transform = ImageTransform {
-        map: TransformMap::Affine(EIGHTH),
-        interpolation: Interpolation::Bicubic,
+    let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..LayerPlacement::from_affine(EIGHTH) },
         ..Default::default()
     };
     let reduced = |r: &WgpuRasterizer| {
@@ -889,7 +870,7 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     let mut document = layer_core::Document::new("placed zone plate", size, size, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.layers[1].visible = false;
     document.layers[0].source = Some(zone_plate());
-    document.layers[0].properties.placement = EIGHTH;
+    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(EIGHTH);
     let mut capture = r.snapshot_gpu().capture(layer_core::Project { document }, [0.; 4], 0., Default::default()).unwrap();
     let exported = capture.read_region([0, 0, size, size]).unwrap();
     let placed = largest_difference(exported.iter().map(|p| p[0]), &expected);

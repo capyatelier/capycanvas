@@ -244,13 +244,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .filter(|source| {
                     coverage.is_none()
                         && !source_edit::baked(&layer)
+                        && layer.mask.is_none()
                         && offset == Point::default()
-                        && layer.properties.placement == Affine::IDENTITY
+                        && layer.properties.placement.as_affine() == Some(Affine::IDENTITY)
                         && source.extent == [document.width, document.height]
                 });
             layer.visible = true;
             layer.opacity = 1.;
-            layer.mask = None;
+            if let Some(mask) = &mut layer.mask { mask.offset = document.layer_offset(mask.id); }
             layer.properties.parent = None;
             layer.properties.offset = offset;
             layer.properties.clipped = false;
@@ -398,7 +399,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let mut layer = Layer::paint(id, name.trim());
             layer.properties.parent = parent;
             layer.properties.placement =
-                Affine::translation(Point { x: at.x - parent_offset.x, y: at.y - parent_offset.y });
+                layer_core::LayerPlacement::from_affine(Affine::translation(Point { x: at.x - parent_offset.x, y: at.y - parent_offset.y }));
             layer.source = Some(Arc::new(source));
             if masked {
                 let mask = probe.allocate_layer_id();

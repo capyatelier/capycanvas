@@ -153,7 +153,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.eyedropper.picking.position = Some(position);
         let (_, sample, _) = self.picker_geometry(position);
-        let mut point = self.state.camera.input_transform().map(Point {
+        let point = self.state.camera.input_transform().map(Point {
             x: sample[0],
             y: sample[1],
         });
@@ -164,13 +164,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             && point.x < doc.width as f32
             && point.y < doc.height as f32;
         let (source, extent) = if self.eyedropper.layer && self.picker_layer_available() {
-            let Some(inverse) = doc.layer_transform(doc.active_layer).inverse() else {
-                return;
-            };
-            point = inverse.map(point);
             (
                 ColorSampleSource::Layer(doc.active_layer),
-                doc.target_extent(doc.active_layer),
+                [doc.width, doc.height],
             )
         } else {
             (ColorSampleSource::Composite, [doc.width, doc.height])

@@ -69,5 +69,5 @@ toolbar-variant = Variant
 toolbar-visible-color = Visible color
 toolbar-editing-layer = Editing { $name }
 toolbar-editing-mask = Editing { $name } mask
-toolbar-image-count = { $count } images
+toolbar-layer-count = { $count } layers
 toolbar-stale-action = This action belongs to a previous canvas selection or transform

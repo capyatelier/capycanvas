@@ -501,6 +501,12 @@ command_ids! {
     WarpGridThree,
     WarpGridFour,
     WarpGridFive,
+    WarpSplitVertical,
+    WarpSplitHorizontal,
+    WarpSplitCross,
+    WarpSelectPoints,
+    WarpResetGrid,
+
     UseReferenceBelow,
     ClearSelected,
     ClearOutside,
@@ -607,6 +613,7 @@ impl CommandId {
                 | Self::TransformNearest | Self::TransformBilinear | Self::TransformBicubic | Self::TransformLanczos
                 | Self::ColorMixOklab | Self::ColorMixLinear | Self::ColorMixClassic
                 | Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive
+                | Self::WarpSplitVertical | Self::WarpSplitHorizontal | Self::WarpSplitCross | Self::WarpSelectPoints
                 | Self::ZenMode
                 | Self::Fullscreen
                 | Self::ToggleTheme
@@ -750,7 +757,8 @@ impl CommandId {
             Self::TransformNearest => "mosaic",
             Self::TransformBilinear => "blur",
             Self::TransformBicubic => "sharpen",
-            Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive => "warp",
+            Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive
+            | Self::WarpSplitVertical | Self::WarpSplitHorizontal | Self::WarpSplitCross | Self::WarpSelectPoints | Self::WarpResetGrid => "warp",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
@@ -1000,6 +1008,12 @@ impl CommandId {
             Self::WarpGridThree => MessageId::COMMAND_WARP_GRID_THREE,
             Self::WarpGridFour => MessageId::COMMAND_WARP_GRID_FOUR,
             Self::WarpGridFive => MessageId::COMMAND_WARP_GRID_FIVE,
+            Self::WarpSplitVertical => MessageId::COMMAND_WARP_SPLIT_VERTICAL,
+            Self::WarpSplitHorizontal => MessageId::COMMAND_WARP_SPLIT_HORIZONTAL,
+            Self::WarpSplitCross => MessageId::COMMAND_WARP_SPLIT_CROSS,
+            Self::WarpSelectPoints => MessageId::COMMAND_WARP_SELECT_POINTS,
+            Self::WarpResetGrid => MessageId::COMMAND_WARP_RESET_GRID,
+
             Self::KeyboardShortcuts => MessageId::COMMAND_KEYBOARD_SHORTCUTS,
             Self::About => MessageId::COMMAND_ABOUT,
             Self::Website => MessageId::COMMAND_WEBSITE,

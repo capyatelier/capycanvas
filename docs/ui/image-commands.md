@@ -27,9 +27,15 @@ position; releasing commits that position as one undo step.
 ## Apply a layer transform to pixels
 
 **Apply Transform to Pixels**, in Edit and the active layer's menu, turns an
-accepted affine placement into editable pixels. It includes content outside the
+accepted affine, perspective or Warp placement into editable pixels. It includes content outside the
 canvas, preserves paint wetness and keeps linked masks editable. An unlinked mask
 stays in place. Layer opacity, blending and clipping remain separate from its paint.
+
+Painting and other pixel edits on a perspective or Warp result require this
+command first. Sampling, copying and selecting its visible pixels remain available.
+With a mask selected, the command applies that mask's geometry. A mask linked to
+a perspective or warped paint layer applies the owner's geometry and linked mask
+together; an independent mask or group mask changes only its coverage.
 
 The command runs in the background with Cancel on the canvas bar. A failed or
 canceled operation changes nothing; one Undo restores the original photo, paint,
@@ -107,8 +113,9 @@ photo's local pixels while retaining its placement.
   target intersected with the selection (Transform and Move). An unedited source
   whose channel format proves opacity needs no scan.
   A destructive linked paint/mask pair measures both targets before opening
-  Transform, so its Warp domain preserves the companion's pixels too. Whole-photo
-  placement uses the photo's own coverage.
+  Transform, so its Warp domain preserves the companion's pixels too. Whole-layer
+  retained transforms measure each paint target's coverage; selected roots and
+  group descendants share one document-space frame.
 - **Commands:** `crates/layer-ui/src/image_geometry.rs` runs the turns, flips, Trim,
   Reveal All and Fit Content. Bounds preparation and rendering run on a worker,
   including a dedicated Web worker. The frame loop keeps running while the query

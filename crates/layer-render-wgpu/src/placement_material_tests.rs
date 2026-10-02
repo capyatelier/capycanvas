@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Projective, TransformMap, raster::*};
+use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Projective, LayerPlacement, raster::*};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -45,7 +45,7 @@ fn fixture(map: Affine, width: f32) -> RasterData {
 fn layer(data: RasterData, map: Affine) -> Layer {
     let mut layer = Layer::paint(LayerId(1), "independent wet rectangle");
     layer.raster = RasterRevision::backed(data);
-    layer.properties.placement = map;
+    layer.properties.placement = layer_core::LayerPlacement::from_affine(map);
     layer
 }
 
@@ -95,9 +95,8 @@ fn affine_material_transform_maps_raw_planes_before_edges_and_keeps_tile_neighbo
             let operation = LayerOperation {
                 placement: Affine::IDENTITY,
                 coverage,
-                kind: LayerOperationKind::Transform(ImageTransform {
-                    interpolation: Interpolation::Nearest,
-                    ..ImageTransform::affine(map)
+                kind: LayerOperationKind::Transform(ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(map) },
+                    ..Default::default()
                 }),
             };
             let operation_batch = DabBatch {
@@ -135,7 +134,7 @@ fn retained_affine_material_evaluates_mapped_raw_planes_in_document_coordinates(
             placed.properties.extent = Some([280, 168]);
             let identity = placed.raster.identity();
             let mut original = placed.clone();
-            original.properties.placement = Affine::IDENTITY;
+            original.properties.placement = layer_core::LayerPlacement::from_affine(Affine::IDENTITY);
             render(&mut expected, &original, &[], true);
             let original_planes = live_planes(&expected);
             let actual = render(&mut retained, &placed, &[], true);
@@ -200,8 +199,7 @@ fn cold_backed_scalar_planes_survive_destructive_affine_mapping_without_live_pag
     let operation = LayerOperation {
         placement: Affine::IDENTITY,
         coverage: LayerMask::reveal_all(LayerId(9), Point::default()),
-        kind: LayerOperationKind::Transform(ImageTransform {
-            interpolation: Interpolation::Nearest, ..ImageTransform::affine(map)
+        kind: LayerOperationKind::Transform(ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(map) }, ..Default::default()
         }),
     };
     let operation_batch = DabBatch { kind: DabBatchKind::LayerOperation(0), dab_count: 0,
@@ -324,7 +322,7 @@ fn minified_material_split_pieces_clear_color_scalar_and_clip_mask_coverage() {
     }
     let mut pieces = Vec::new();
     crate::paint_transform::snapshot::Splitter::new(PixelRect::full([8192; 2]),
-        &ImageTransform::affine(source.properties.placement), None, |_| true).unwrap()
+        &ImageTransform { placement: source.properties.placement.clone(), ..Default::default() }, None, |_| true).unwrap()
         .split(PixelRect::full([PAGE_SIZE; 2]), &mut pieces).unwrap();
     assert!(pieces.len() > 1, "the compute clear must survive several clipped pieces");
     let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -494,7 +492,7 @@ fn snapshot_affine_material_bake_preserves_raw_codes_masks_and_world_registratio
         let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, control.clone())).unwrap();
         assert!(control.allocation_peaks().unwrap().observations > 0);
         assert_eq!(baked.id, document.active_layer);
-        assert_eq!(baked.properties.placement, Affine::IDENTITY);
+        assert_eq!(baked.properties.placement, layer_core::LayerPlacement::IDENTITY);
         assert_eq!(baked.opacity, before.layers[0].opacity);
         assert!(baked.source.is_none());
         assert_eq!(baked.raster.wait_data().unwrap().watercolor, before.layers[0].raster.wait_data().unwrap().watercolor);
@@ -506,7 +504,7 @@ fn snapshot_affine_material_bake_preserves_raw_codes_masks_and_world_registratio
         if linked {
             let baked_mask = baked.mask.as_ref().unwrap();
             assert!(baked_mask.initial.is_none());
-            assert_eq!(baked_mask.placement, Affine::IDENTITY);
+            assert_eq!(baked_mask.placement, layer_core::Projective::IDENTITY);
             assert_eq!(baked_mask.offset, baked.properties.offset);
             assert_eq!(baked_mask.inverted, mask.inverted);
             assert!(!baked_mask.raster.is_empty());
@@ -609,7 +607,7 @@ fn snapshot_photo_bake_keeps_original_source_and_honors_erased_base_overrides() 
     let source = layer_core::color::source::rgba8_source([512, 256], |_, _| [20, 180, 80, 255]);
     let original = &mut document.layers[0];
     original.source = Some(source.clone());
-    original.properties.placement = Affine([0.5, 0., 0., 0.5, -20., 30.]);
+    original.properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.5, 0., 0., 0.5, -20., 30.]));
     original.raster = RasterRevision::backed(RasterData {
         tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] },
             RasterTile::backed(TileBlob::encode(document.color.paint_descriptor(), &vec![0; 256 * 256 * 4]).unwrap()))].into(),
@@ -617,7 +615,7 @@ fn snapshot_photo_bake_keeps_original_source_and_honors_erased_base_overrides() 
     });
     let before = document.clone();
     let plan = document.transform_pixels_plan(document.active_layer, Interpolation::Nearest, Default::default()).unwrap();
-    let inverse = before.layers[0].properties.placement.inverse().unwrap();
+    let inverse = before.layers[0].properties.placement.as_affine().unwrap().inverse().unwrap();
     let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
     assert_baked_codes(&baked, &[RasterPlane::Color], |plane, point| {
         let local = inverse.map(point);
@@ -644,7 +642,7 @@ fn snapshot_magnified_nonuniform_photo_bake_matches_retained_bicubic_edges() {
         else if (x / 4 + y / 4) % 2 == 0 { [220, 28, 90, 255] }
         else { [24, 170, 210, 128] }
     }));
-    original.properties.placement = Affine([1.6, 0.1, 0., 0.8, 19.2, 23.4]);
+    original.properties.placement = layer_core::LayerPlacement { interpolation:Interpolation::Bicubic, ..LayerPlacement::from_affine(Affine([1.6, 0.1, 0., 0.8, 19.2, 23.4])) };
     let plan = document.transform_pixels_plan(document.active_layer, Interpolation::Bicubic, Default::default()).unwrap();
     let mut renderer = WgpuRasterizer::new_native_headless(document.color).unwrap();
     renderer.test.reference = true;
@@ -665,7 +663,7 @@ fn snapshot_bake_rejects_corrupt_native_tile_after_metadata_admission() {
     blob.digest[0] ^= 1;
     data.tiles.insert(key, RasterTile::backed(blob));
     document.layers[0].raster = RasterRevision::backed(data);
-    document.layers[0].properties.placement = maps()[0];
+    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(maps()[0]);
     let before = document.clone();
     let plan = document.transform_pixels_plan(document.active_layer, Interpolation::Nearest, Default::default()).unwrap();
     plan.input.validate(Default::default()).unwrap();
@@ -681,7 +679,7 @@ fn snapshot_bake_enlargement_preserves_mask_defaults_and_finite_native_overrides
     document.layers.retain(|layer| layer.kind == layer_core::LayerKind::Paint);
     let mask_id = document.allocate_layer_id();
     let map = Affine([0.5, 0., 0., 1., -80., -40.]);
-    document.layers[0].properties.placement = map;
+    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(map);
     document.layers[0].source = Some(layer_core::color::source::rgba8_source(EXTENT, |_, _| [80, 120, 160, 255]));
     let mut mask = LayerMask::reveal_all(mask_id, Point::default());
     mask.initial = Some(Selection::polygon(vec![
@@ -741,8 +739,8 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
     oracle.prepare_moving_layer(Some(original.id));
     let mut prepared = None;
     for x in [0., 16., 0.] {
-        original.properties.placement = Affine::translation(Point { x, y: 0. });
-        let mut expected = layer(fixture(original.properties.placement, 16.), Affine::IDENTITY);
+        original.properties.placement = layer_core::LayerPlacement::from_affine(Affine::translation(Point { x, y: 0. }));
+        let mut expected = layer(fixture(original.properties.placement.as_affine().unwrap(), 16.), Affine::IDENTITY);
         expected.source = Some(layer_core::color::source::rgba8_source(extent, |px, py| {
             if px < x as u32 { return [0; 4]; }
             let px = px - x as u32;
@@ -823,7 +821,7 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     eprintln!("{initial:?} initial updates {}", cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap().1);
     let raw_pixels = crate::test_support::float_pixels(&cached, &raw_texture);
     cached.prepare_moving_layer(None);
-    photo.properties.placement = Affine::IDENTITY;
+    photo.properties.placement = layer_core::LayerPlacement::from_affine(Affine::IDENTITY);
     submit(&mut cached, &photo);
     let (accepted_texture, _, accepted_level) = cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap();
     assert_eq!(accepted_level, raw_level);
@@ -921,22 +919,27 @@ fn plane_sizes(planes: &Planes) -> [usize; 3] {
         / (PAGE_SIZE * PAGE_SIZE) as usize)
 }
 
-fn nonlinear_maps() -> Vec<(&'static str, TransformMap)> {
+fn nonlinear_maps() -> Vec<(&'static str, LayerPlacement)> {
     let domain = Rect { min: Point { x: 224., y: 112. }, max: Point { x: 280., y: 168. } };
     let affine = Affine([0.55, 0.07, 0.03, 0.8, 113.137, 125.263]);
     let base = MeshMap::from_affine(domain, [2, 2], affine).unwrap();
     vec![
-        ("perspective", TransformMap::Projective(Projective([
+        ("perspective", LayerPlacement::from_projective(Projective([
             0.8, 0.02, 117., 0.02, 0.8, 204., 0.0009, 0.0002, 1.,
         ]))),
-        ("nonuniform warp", TransformMap::Mesh(Arc::new(base.move_node(4, Point { x: 7., y: -6. }).unwrap()))),
-        ("folded warp", TransformMap::Mesh(Arc::new(base.move_node(4, Point { x: 40., y: -20. }).unwrap()))),
+        ("nonuniform warp", layer_core::LayerPlacement { mesh: Some(Arc::new(base.move_node(4, Point { x: 7., y: -6. }).unwrap())), ..Default::default() }),
+        ("folded warp", layer_core::LayerPlacement { mesh: Some(Arc::new(base.move_node(4, Point { x: 40., y: -20. }).unwrap())), ..Default::default() }),
+        ("outer perspective on folded warp", layer_core::LayerPlacement {
+            outer: Projective([1.05,0.02,-16.,-0.02,1.04,-6.,0.00015,-0.0001,1.]),
+            mesh: Some(Arc::new(base.move_node(4, Point { x:40., y:-20. }).unwrap())),
+            ..Default::default()
+        }),
     ]
 }
 
 type SourcePositions = Vec<Vec<Option<[f64; 2]>>>;
 
-fn source_positions(map: &TransformMap) -> SourcePositions {
+fn source_positions(map: &LayerPlacement) -> SourcePositions {
     let size = (EXTENT[0] * EXTENT[1]) as usize;
     let mut positions = vec![vec![None]; size];
     if let Some(h) = map.projective() {
@@ -947,8 +950,9 @@ fn source_positions(map: &TransformMap) -> SourcePositions {
         }}
         return positions;
     }
-    let TransformMap::Mesh(mesh) = map else { unreachable!() };
-    let geometry = crate::paint_transform::mesh::MeshGeometry::new(mesh, None);
+    let mesh = map.mesh.as_ref().unwrap();
+    let geometry = crate::paint_transform::mesh::MeshGeometry::new(mesh, map.outer, None);
+    let inverse_outer = Projective::invert(map.outer.0.map(f64::from)).unwrap();
     for t in geometry.triangles() {
         let [a, b, c] = t.map(|i| geometry.vertices[i as usize].map(f64::from));
         let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
@@ -963,10 +967,12 @@ fn source_positions(map: &TransformMap) -> SourcePositions {
             let l = [weight(b, c), weight(c, a), weight(a, b)];
             let edges = [(b, c), (c, a), (a, b)].map(|(u, v)| (u[0] - v[0]).hypot(u[1] - v[1]));
             let nearest = (0..3).map(|i| l[i] * area.abs() / edges[i]).fold(f64::INFINITY, f64::min);
-            let source = [2, 3].map(|k| l[0] * a[k] + l[1] * b[k] + l[2] * c[k]);
+            let homogeneous = [a,b,c].map(|v| inverse_outer[6]*v[0]+inverse_outer[7]*v[1]+inverse_outer[8]);
+            let denominator = (0..3).map(|n| l[n]*homogeneous[n]).sum::<f64>();
+            let source = [2,3].map(|k| (l[0]*homogeneous[0]*a[k]+l[1]*homogeneous[1]*b[k]+l[2]*homogeneous[2]*c[k])/denominator);
             let i = (y * EXTENT[0] + x) as usize;
             if nearest > 0.02 { positions[i].clear(); }
-            if nearest > -0.02 { positions[i].push(Some(source)); }
+            if nearest > -0.02 { positions[i].insert(0,Some(source)); }
         }}
     }
     positions
@@ -978,6 +984,8 @@ fn nearest_candidates(positions: &SourcePositions, i: usize) -> Vec<[i32; 2]> {
         match *position {
             None => if !candidates.contains(&[-1, -1]) { candidates.push([-1, -1]); },
             Some([x, y]) => {
+                let center = [x.floor() as i32,y.floor() as i32];
+                if !candidates.contains(&center) { candidates.push(center); }
                 for sx in [(x - 0.005).floor() as i32, (x + 0.005).floor() as i32] {
                     for sy in [(y - 0.005).floor() as i32, (y + 0.005).floor() as i32] {
                         if !candidates.contains(&[sx, sy]) { candidates.push([sx, sy]); }
@@ -1070,11 +1078,15 @@ fn nonlinear_material_transform_maps_raw_planes_with_preview_commit_and_destinat
             let digests: Vec<_> = immutable.wait_data().unwrap().tiles.values().map(|t| t.wait_backing().unwrap().digest).collect();
             render(&mut transformed, &source, &[], true);
             let source_planes = live_planes(&transformed);
-            let transform = ImageTransform { map: map.clone(), interpolation: Interpolation::Nearest, ..Default::default() };
+            let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..map.clone() }, ..Default::default() };
             transformed.set_transform_preview(Some(&layer_render::TransformPreview {
                 transaction: 1, layer: source.id, moving: false, selection: None, transform: transform.clone(),
             })).unwrap();
             let preview = render(&mut transformed, &source, &[], false);
+            let mut retained = source.clone();
+            retained.properties.placement = transform.placement.clone();
+            let retained_pixels = render(&mut expected, &retained, &[], true);
+            assert_pixels(&retained_pixels, &preview, &format!("retained {context}"));
             transformed.set_transform_preview(None).unwrap();
             render(&mut transformed, &source, &[], false);
             let mut coverage = LayerMask::reveal_all(LayerId(9), Point::default());
@@ -1107,17 +1119,17 @@ fn nonlinear_material_source_footprints_cover_destination_neighbors_with_portabl
         Affine([0.04, 0., 0., 0.04, 100.137, 120.263])).unwrap()
         .move_node(4, Point { x: 40., y: -20. }).unwrap();
     let maps = [
-        ("minified perspective", TransformMap::Projective(Projective([
+        ("minified perspective", LayerPlacement::from_projective(Projective([
             0.04, 0.0008, 100., 0.0008, 0.04, 120., 0.00001, 0.000008, 1.,
         ]))),
-        ("minified warp", TransformMap::Mesh(Arc::new(mesh))),
+        ("minified warp", layer_core::LayerPlacement { mesh: Some(Arc::new(mesh)), ..Default::default() }),
     ];
     for (label, map) in maps {
         let positions = source_positions(&map);
-        let geometry = match &map { TransformMap::Mesh(mesh) => Some(Arc::new(MeshGeometry::new(mesh, None))), _ => None };
+        let geometry = map.mesh.as_ref().map(|mesh| Arc::new(MeshGeometry::new(mesh, map.outer, None)));
         let slots = 16 - usize::from(geometry.is_some());
         for interpolation in [Interpolation::Nearest, Interpolation::Linear, Interpolation::Bicubic, Interpolation::Lanczos] {
-            let transform = ImageTransform { map: map.clone(), interpolation, ..Default::default() };
+            let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..map.clone() }, ..Default::default() };
             let splitter = Splitter::new(PixelRect::full(source_extent), &transform, geometry.clone(), |c| c[0] < 32 && c[1] < 32).unwrap();
             let mut jobs = Vec::new();
             splitter.split(PixelRect::new(192, 192, 320, 320), &mut jobs).unwrap();
@@ -1128,7 +1140,7 @@ fn nonlinear_material_source_footprints_cover_destination_neighbors_with_portabl
                 for y in job.region.min_y()..job.region.max_y() { for x in job.region.min_x()..job.region.max_x() {
                     let i = (y * EXTENT[0] + x) as usize;
                     let mut sampled: Vec<_> = positions[i].iter().filter_map(|p| *p).collect();
-                    if interpolation != Interpolation::Nearest && let TransformMap::Projective(h) = &map {
+                    if interpolation != Interpolation::Nearest && let Some(h) = map.projective() {
                         for dy in [0.01, 0.99] { for dx in [0.01, 0.99] {
                             sampled.extend(crate::test_support::preimage(h.0.map(f64::from), [x as f64 + dx, y as f64 + dy]));
                         }}
@@ -1148,4 +1160,219 @@ fn nonlinear_material_source_footprints_cover_destination_neighbors_with_portabl
             }
         }
     }
+}
+
+#[test]
+fn independent_projective_group_mask_bake_preserves_owner_and_default_domain() {
+    let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut document = layer_core::Document::new("independent mask", 512,512,
+        layer_core::DocumentNames { paint:"Ink".into(),paper:"Paper".into() });
+    let mut owner = Layer::paint(LayerId(1),"group");
+    owner.kind = LayerKind::Group;
+    owner.properties.offset = Point { x:17.,y:23. };
+    owner.opacity = 0.4;
+    let mut mask = LayerMask::reveal_all(LayerId(2),Point { x:-32.,y:-14. });
+    mask.extent = Some([256;2]);
+    mask.linked = false;
+    mask.enabled = false;
+    mask.inverted = true;
+    mask.default_coverage = 0.63;
+    mask.placement = Projective([0.9,0.07,0.,-0.03,1.1,0.,0.0003,0.0001,1.]);
+    mask.initial = Some(Selection::polygon(vec![Point {x:300.,y:300.},Point {x:340.,y:300.},
+        Point {x:340.,y:340.},Point {x:300.,y:340.}]).unwrap());
+    let mut bytes = Vec::new();
+    for y in 0..PAGE_SIZE { for x in 0..PAGE_SIZE { bytes.push(if (80..160).contains(&x) && (90..190).contains(&y) { 51 } else { 204 }); }}
+    let mut data = RasterData::default();
+    data.tiles.insert(TileKey {plane:RasterPlane::Mask,coordinate:[0;2]},RasterTile::backed(
+        TileBlob::encode(RasterPlane::Mask.descriptor(document.color),&bytes).unwrap()));
+    mask.raster = RasterRevision::backed(data);
+    let source_mask = mask.clone();
+    owner.mask = Some(mask);
+    let mut child = Layer::paint(LayerId(3),"child");
+    child.properties.parent = Some(owner.id);
+    document.layers = vec![child,owner.clone()];
+    document.active_layer = owner.id;
+    document.active_mask = true;
+    let geometry = document.layer_geometry(source_mask.id).projective().unwrap().0.map(f64::from);
+    let plan = document.transform_pixels_plan(source_mask.id,Interpolation::Nearest,Default::default()).unwrap();
+    assert_eq!(plan.scope,layer_core::TransformPixelsScope::Mask);
+    let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
+    assert_eq!(baked.properties,owner.properties);
+    assert_eq!(baked.raster,owner.raster);
+    assert_eq!(baked.source,owner.source);
+    assert_eq!(baked.opacity,owner.opacity);
+    let mask = baked.mask.as_ref().unwrap();
+    assert_eq!(mask.inverted,source_mask.inverted);
+    assert_eq!(mask.enabled,source_mask.enabled);
+    assert_eq!(mask.default_coverage,source_mask.default_coverage);
+    assert_eq!(mask.placement,Projective::IDENTITY);
+    assert!(mask.initial.is_none());
+    let mut checked = 0;
+    let mut defaults = 0;
+    for (key,tile) in &mask.raster.wait_data().unwrap().tiles {
+        assert_eq!(key.plane,RasterPlane::Mask);
+        let bytes = tile.wait_backing().unwrap().decode().unwrap();
+        for (i,actual) in bytes.into_iter().enumerate() {
+            let world = [mask.offset.x as f64+(key.coordinate[0]*PAGE_SIZE+i as u32%PAGE_SIZE) as f64+0.5,
+                mask.offset.y as f64+(key.coordinate[1]*PAGE_SIZE+i as u32/PAGE_SIZE) as f64+0.5];
+            let expected = crate::test_support::preimage(geometry,world).filter(|p| p.iter().all(|v| *v>=0. && *v<256.)).map_or_else(
+                || {defaults+=1;161}, |p| if (80. ..160.).contains(&p[0].floor()) && (90. ..190.).contains(&p[1].floor()) {51}else{204});
+            assert_eq!(actual,expected,"mask raw sample at {world:?}");
+            checked+=1;
+        }
+    }
+    assert!(checked>256*256 && defaults>256*256);
+}
+
+#[test]
+fn linked_outer_mesh_mask_bake_uses_winning_owner_uv_and_preserves_no_hit_default() {
+    let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let (_,mut placement) = nonlinear_maps().pop().unwrap();
+    placement.interpolation = Interpolation::Nearest;
+    let positions = source_positions(&placement);
+    for mask_placement in [Projective([1.,0.03,0.,-0.02,1.,0.,0.0001,0.00005,1.]),
+        Projective([1.,0.,0.,0.,1.,0.,0.004,0.,1.])] {
+    for inverted in [false,true] {
+        let mut document = layer_core::Document::new("linked folded mask",512,512,
+            layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let mut owner = layer(fixture(Affine::IDENTITY,4.),Affine::IDENTITY);
+        owner.properties.placement = placement.clone();
+        let mut mask = LayerMask::reveal_all(LayerId(2),Point {x:7.,y:-3.});
+        mask.extent = Some([256;2]);
+        mask.default_coverage = 161./255.;
+        mask.inverted = inverted;
+        mask.placement = mask_placement;
+        let mut data = RasterData::default();
+        let bytes: Vec<_> = (0..PAGE_SIZE*PAGE_SIZE).map(|i| if i%PAGE_SIZE>220 && i/PAGE_SIZE>100 {51}else{204}).collect();
+        data.tiles.insert(TileKey {plane:RasterPlane::Mask,coordinate:[0;2]},RasterTile::backed(
+            TileBlob::encode(RasterPlane::Mask.descriptor(document.color),&bytes).unwrap()));
+        mask.raster = RasterRevision::backed(data);
+        let adapter = mask.placement.then(Projective::from_affine(Affine::translation(mask.offset))).unwrap().inverse().unwrap();
+        owner.mask = Some(mask.clone());
+        document.layers = vec![owner.clone()];
+        document.active_layer = owner.id;
+        document.active_mask = true;
+        let original = render(&mut renderer,&owner,&[],true);
+        let source: Planes = owner.raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
+            (*key,tile.wait_backing().unwrap().decode().unwrap())).collect();
+        let plan = document.transform_pixels_plan(mask.id,Interpolation::Nearest,Default::default()).unwrap();
+        assert_eq!(plan.target,mask.id);
+        assert_eq!(plan.scope,layer_core::TransformPixelsScope::Paint {linked_mask:true});
+        let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
+        let actual: Planes = baked.raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
+            (*key,tile.wait_backing().unwrap().decode().unwrap())).collect();
+        check_raw_mapping(&source,&actual,&positions,"linked outer mesh bake");
+        let baked_mask = baked.mask.as_ref().unwrap();
+        assert_eq!(baked_mask.inverted,inverted);
+        let masks: Planes = baked_mask.raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
+            (*key,tile.wait_backing().unwrap().decode().unwrap())).collect();
+        let mut no_hit = 0;
+        for (i,sources) in positions.iter().enumerate() {
+            let codes: Vec<u8> = sources.iter().map(|source| source.and_then(|[x,y]|
+                adapter.map(Point {x:x as f32,y:y as f32})).filter(|p| p.x>=0. && p.y>=0. && p.x<256. && p.y<256.)
+                .map_or(161,|p| if p.x.floor()>220. && p.y.floor()>100. {51}else{204})).collect();
+            let coordinate = [i as u32%512/PAGE_SIZE,i as u32/512/PAGE_SIZE];
+            let pixel = (i as u32/512%PAGE_SIZE*PAGE_SIZE+i as u32%512%PAGE_SIZE) as usize;
+            let actual = masks[&TileKey {plane:RasterPlane::Mask,coordinate}][pixel];
+            assert!(codes.contains(&actual),"linked mask at {},{}: {actual} expected {codes:?}",i%512,i/512);
+            no_hit+=usize::from(sources==&vec![None]);
+        }
+        assert!(no_hit>200_000);
+        let restored = render(&mut renderer,&baked,&[],true);
+        assert_pixels(&restored,&original,"linked outer mesh preview/bake appearance");
+    }
+    }
+}
+
+#[test]
+fn retained_outer_mesh_document_reads_and_linked_mask_thumbnail_match_independent_bake() {
+    use layer_render::{ColorSampleRequest,ColorSampleArea,ColorSampleSource,RegionRequest,RegionSource};
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let (_,mut placement)=nonlinear_maps().pop().unwrap();
+    placement.interpolation=Interpolation::Nearest;
+    let mut doc=layer_core::Document::new("placed reads",512,512,
+        layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let mut owner=layer(fixture(Affine::IDENTITY,4.),Affine::IDENTITY);
+    owner.properties.placement=placement;
+    let mut mask=LayerMask::reveal_all(LayerId(2),Point {x:7.,y:-3.});
+    mask.extent=Some([256;2]);mask.default_coverage=161./255.;
+    mask.placement=Projective([1.,0.03,0.,-0.02,1.,0.,0.0001,0.00005,1.]);
+    let mut data=RasterData::default();
+    let bytes:Vec<_>=(0..PAGE_SIZE*PAGE_SIZE).map(|i| if i%PAGE_SIZE>110 && i/PAGE_SIZE>100 {51}else{204}).collect();
+    data.tiles.insert(TileKey {plane:RasterPlane::Mask,coordinate:[0;2]},RasterTile::backed(
+        TileBlob::encode(RasterPlane::Mask.descriptor(doc.color),&bytes).unwrap()));
+    mask.raster=RasterRevision::backed(data);owner.mask=Some(mask);
+    doc.layers=vec![owner.clone()];
+    let plan=doc.transform_pixels_plan(owner.id,Interpolation::Nearest,Default::default()).unwrap();
+    let baked=pollster::block_on(r.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
+    let coverage=|r:&mut WgpuRasterizer,id| crate::test_support::receive_request(r,RegionRequest {
+        request_id:1,source:RegionSource::Coverage(id),position:[0;2],contiguous:false,
+        tolerance:0.,refinement:Default::default(),selection:Some(layer_render::SelectionRefinement {
+            resize:0,mode:layer_core::SelectionMode::New,antialias:true,feather:0.,previous:None,
+            source_to_document:Affine::IDENTITY,keep_canvas_edges:false
+        }),limit:None
+    }).pixels;
+    let points=|r:&mut WgpuRasterizer,id| {
+        [[0,0],[60,60],[170,120],[240,130],[270,150],[255,255],[320,280],[511,511]]
+            .into_iter().flat_map(|position| [ColorSampleArea::Point,ColorSampleArea::Circle5].map(|area| {
+                assert!(r.request_color_sample(ColorSampleRequest {request_id:1,source:ColorSampleSource::Layer(id),position,area}).unwrap());
+                crate::test_support::complete(r);r.take_color_sample().unwrap().unwrap().rgba
+            })).collect::<Vec<_>>()
+    };
+    for inverted in [false,true] {
+        owner.mask.as_mut().unwrap().inverted=inverted;
+        let mut reference=baked.clone();reference.mask.as_mut().unwrap().inverted=inverted;
+        render(&mut r,&owner,&[],true);
+        let color=points(&mut r,owner.id);
+        let alpha=coverage(&mut r,owner.id);
+        let mask=coverage(&mut r,LayerId(2));
+        let thumb=crate::source_thumbnails::tests::thumbnail(&mut r,LayerId(2));
+        render(&mut r,&reference,&[],true);
+        assert_eq!(color,points(&mut r,owner.id));
+        assert_eq!(alpha.words(),coverage(&mut r,owner.id).words());
+        assert_eq!(mask.words(),coverage(&mut r,LayerId(2)).words());
+        assert_pixels(&thumb,&crate::source_thumbnails::tests::thumbnail(&mut r,LayerId(2)),"placed linked mask thumbnail");
+    }
+}
+
+#[test]
+fn folded_selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let (_,mut placement)=nonlinear_maps().pop().unwrap();placement.interpolation=Interpolation::Nearest;
+    let mut owner=layer(fixture(Affine::IDENTITY,4.),Affine::IDENTITY);
+    owner.properties.placement=placement;
+    let mut mask=LayerMask::reveal_all(LayerId(2),Point {x:7.,y:-3.});
+    mask.default_coverage=0.63;
+    mask.initial=Some(layer_core::Selection::polygon(vec![Point {x:160.,y:80.},Point {x:290.,y:80.},
+        Point {x:280.,y:180.},Point {x:170.,y:180.}]).unwrap());owner.mask=Some(mask);
+    render(&mut r,&owner,&[],true);
+    let original=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
+    let occupied:Vec<_>=original.iter().enumerate().filter(|(_,p)|p[3]>0.).map(|(i,_)|[i%512,i/512]).collect();
+    let bounds=[occupied.iter().map(|p|p[0]).min().unwrap(),occupied.iter().map(|p|p[1]).min().unwrap(),
+        occupied.iter().map(|p|p[0]).max().unwrap()+1,occupied.iter().map(|p|p[1]).max().unwrap()+1];
+    let [left,top,right,bottom]=[(bounds[0]+bounds[2])/2,bounds[1],bounds[2],bounds[3]];
+    let mut words=vec![0u32;512*128];
+    for y in top..bottom {for x in left..right {words[y*128+x/4]|=127u32<<((x%4)*8);}}
+    let mut coverage=LayerMask::reveal_all(LayerId(4),Point::default());coverage.default_coverage=0.;
+    coverage.initial=Some(layer_core::Selection::pixels(Arc::new(layer_core::SelectionPixels::bytes(
+        EXTENT,[left as u32,top as u32,right as u32,bottom as u32],words).unwrap())));
+    let operation=LayerOperation {placement:Affine::IDENTITY,coverage,
+        kind:LayerOperationKind::Bake {members:vec![owner.clone()].into(),offset:Point::default()}};
+    let mut copied=Layer::paint(LayerId(3),"selection copy");copied.properties.extent=Some(EXTENT);
+    let damage=operation.bounds(EXTENT);copied.pending_operations.push(operation);
+    let batch=DabBatch {layer_id:copied.id,kind:DabBatchKind::LayerOperation(0),dab_count:0,damage,..batch(3)};
+    owner.visible=false;
+    r.submit(FramePacket {dab_batches:&[batch],..packet(&[copied.clone(),owner],EXTENT)}).unwrap();
+    let actual=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
+    let mut occupied=0;
+    for (i,(actual,source)) in actual.iter().zip(&original).enumerate() {
+        let x=i%512;let y=i/512;
+        let coverage=if (left..right).contains(&x)&&(top..bottom).contains(&y){127./255.}else{0.};
+        occupied+=usize::from(actual[3]>0.);
+        for c in 0..4 {assert!((actual[c]-source[c]*coverage).abs()<1e-6,
+            "copy {x},{y} channel{c}: {actual:?}, source {source:?}, coverage{coverage}");}
+    }
+    assert!(occupied>100,"folded soft selection must retain actual paint");
+    assert!(r.paint_layers.iter().find(|layer|layer.id==copied.id).unwrap().pages.iter()
+        .all(|page|!page_rect(page.coordinate).intersect(pixel_rect(damage,EXTENT)).is_empty()),"copy must allocate only selection pages");
 }

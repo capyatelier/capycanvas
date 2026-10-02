@@ -258,6 +258,12 @@ APK calls, so test-APK benchmarks use the unminified build.
   the retained source and native watercolor planes alongside its motion report.
   `-e translationRepeats 4` saves the first translation and three more gestures
   in the same session, keeping cold-start and warm results separate.
+  `-e labels photo-retained-distort-drag` or
+  `-e labels photo-retained-warp-drag` measures retained corner or mesh-node
+  motion on the same input and repeats it in the same session.
+  `-e saveRetainedDiagnostic true` uses a one-way retained drag, accepts its
+  geometry, and saves `retained-diagnostic.capy` and its manifest for reproduction.
+  This changes the motion path; keep it separate from qualification runs.
   `-e finalBake true` accepts a translated watercolor photo, applies Transform
   to Pixels, samples job memory, and verifies native backing after save/reopen.
   For a smaller command-memory diagnostic, `AndroidRasterTest`'s

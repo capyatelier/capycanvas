@@ -32,7 +32,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (e.key === "Escape" && context.matches(":popover-open")) {
       context.hidePopover(); e.preventDefault(); e.stopPropagation();
     }
-  });
+  }, { capture: true });
   popup.addEventListener("toggle", () => {
     if (!popup.matches(":popover-open") && state().customization.control) send({ type: "close_control" });
     updateZen();

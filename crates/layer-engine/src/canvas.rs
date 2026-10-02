@@ -558,7 +558,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.transform_preview = None;
             return Ok(false);
         }
-        let basis = self.document().layer_transform(preview.layer);
+        let basis = self.document().affine_edit_transform(preview.layer)
+            .ok_or(DocumentError::InvalidLayerOperation("Apply Transform to Pixels before editing this layer"))?;
         let selection = match (resampled, &preview.selection) {
             (Some(pixels), _) if pixels.extent() != self.document().target_extent(preview.layer) => {
                 return Err(DocumentError::InvalidLayerOperation(
@@ -573,7 +574,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .transformed(basis)?,
             ),
             (None, Some(selection)) if self.selection_display.is_none() => {
-                Some(selection.mapped(&preview.transform.map)?.transformed(basis)?)
+                Some(selection.mapped(&preview.transform.placement)?.transformed(basis)?)
             }
             (None, _) => self.display_selection().map(|s| s.into_owned()),
         };
@@ -610,7 +611,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let selection = preview.selection.as_ref().filter(|s| {
             !preview.transform.is_identity()
                 && self.selection_display.is_none()
-                && s.needs_resample(&preview.transform.map)
+                && s.needs_resample(&preview.transform.placement)
         })?;
         Some(layer_render::RegionRequest {
             contiguous: false,
@@ -619,7 +620,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             source: layer_render::RegionSource::TransformedSelection {
                 layer: preview.layer,
                 selection: std::sync::Arc::new(selection.clone()),
-                map: preview.transform.map.clone(),
+                map: preview.transform.placement.clone(),
             },
             position: [0, 0],
             tolerance: 0.,
@@ -640,9 +641,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         if let Some(preview) = &self.transform_preview {
             let mapped = self.transform_selection.get_or_init(|| {
-                preview.selection.as_ref()?.mapped(&preview.transform.map).ok()
+                preview.selection.as_ref()?.mapped(&preview.transform.placement).ok()
             });
-            let basis = self.document().layer_transform(preview.layer);
+            let basis = self.document().affine_edit_transform(preview.layer)?;
             return mapped.as_ref()?.transformed(basis).ok().map(std::borrow::Cow::Owned);
         }
         self.document()
@@ -692,6 +693,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 return Err(DocumentError::InvalidLayerOperation(
                     "Select an unlocked paint layer",
                 ));
+            }
+            if document.affine_edit_transform(id).is_none() {
+                return Err(DocumentError::InvalidLayerOperation("Apply Transform to Pixels before editing this layer"));
             }
             let pixels = document.target_raster(id).cloned().unwrap_or_default();
             if self.document().target_owner(id).is_none() && pixels.is_empty() {
@@ -1004,7 +1008,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let source = self.settings.retouch?;
         let document = self.document();
         let layer = document.layer(target)?;
-        let layer_core::Affine([a, b, c, d, ..]) = document.layer_transform(target);
+        let layer_core::Affine([a, b, c, d, ..]) = document.affine_edit_transform(target)?;
         if [a, b, c, d] != [1., 0., 0., 1.] {
             return Some(StrokeRefusal::TransformedLayer);
         }
@@ -1733,13 +1737,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 }
                 let mut style = DabStyle::for_brush(&brush, tool);
                 style.brush_to_layer = layer_core::Affine::translation(offset)
-                    .then(self.document().layer_transform(layer_id).inverse().expect("validated layer geometry"));
+                    .then(self.document().affine_edit_transform(layer_id).expect("admitted paint geometry").inverse().expect("validated layer geometry"));
                 style.alpha_locked = alpha_locked;
                 style.blend_space = if is_mask { layer_core::BlendSpace::Linear } else { self.document().blend_space };
                 style.retouch = self.settings.retouch.map(|source| Retouch::for_target(self.document(), layer_id, source));
                 style.selection = self.document().selection.as_ref().map(|selection| {
                     std::sync::Arc::new(selection.transformed(
-                        self.document().layer_transform(layer_id).inverse().expect("validated layer geometry")
+                        self.document().affine_edit_transform(layer_id).expect("admitted paint geometry").inverse().expect("validated layer geometry")
                     ).expect("invertible selection placement"))
                 });
                 let active = ActiveStroke {
@@ -2224,7 +2228,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             }
             let mut style = DabStyle::for_brush(&stroke.brush, stroke.tool);
             style.brush_to_layer = layer_core::Affine::translation(self.document().layer_offset(stroke.layer_id))
-                .then(self.document().layer_transform(stroke.layer_id).inverse().expect("validated layer geometry"));
+                .then(self.document().affine_edit_transform(stroke.layer_id).expect("admitted paint geometry").inverse().expect("validated layer geometry"));
             style.alpha_locked = stroke.alpha_locked;
             style.blend_space = stroke.blend_space;
             style.selection = stroke.selection.clone();
@@ -2376,7 +2380,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
 /// `retouch` copying through the document offset `offset`, in `layer`'s pixels.
 fn clone_mapping(document: &Document, layer: LayerId, retouch: Retouch, offset: [f32; 2], flip: [bool; 2]) -> Retouch {
-    let layer_core::Affine([.., x, y]) = document.layer_transform(layer);
+    let layer_core::Affine([.., x, y]) = document.affine_edit_transform(layer).expect("admitted retouch geometry");
     retouch.cloning(offset, flip, layer_core::Point { x, y })
 }
 
@@ -2602,6 +2606,7 @@ mod tests {
         persistent: Vec<Dab>,
         persistent_batches: Vec<(StrokeId, bool, bool, u32)>,
         material_batches: Vec<(u32, u32)>,
+        operation_batches: Vec<(LayerId, u32, layer_core::Rect, bool)>,
         preview: Vec<Dab>,
         styles: Vec<DabStyle>,
         saw_reset: bool,
@@ -2668,6 +2673,10 @@ mod tests {
 
         fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
             self.time_seconds = packet.time_seconds;
+            self.operation_batches.extend(packet.dab_batches.iter().filter_map(|batch| {
+                let DabBatchKind::LayerOperation(index) = batch.kind else { return None; };
+                Some((batch.layer_id, index, batch.damage, packet.commit_rasters))
+            }));
             self.visibility = packet.layers.iter().map(|l| (l.id, l.visible)).collect();
             if self.size != [packet.view.width_px, packet.view.height_px] {
                 return Err(BackendError("surface size mismatch"));
@@ -2944,7 +2953,7 @@ mod tests {
         assert_eq!(mapping.flip, [true, false]);
         assert_eq!(mapping.offset, [40. + first.x - 8., 30. - first.y], "layer pixels map through the layer's position");
 
-        moved.properties.placement = layer_core::Affine([2., 0., 0., 2., 0., 0.]);
+        moved.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 2., 0., 0.]));
         engine.apply_edit(Edit::ReplaceLayer(Box::new(moved))).unwrap();
         assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::TransformedLayer));
     }
@@ -3324,7 +3333,7 @@ mod tests {
             transform: layer_core::ImageTransform::default(),
         };
         for x in [12., 100., -23.] {
-            preview.transform.map = layer_core::TransformMap::Affine(layer_core::Affine::translation(Point { x, y: 4. }));
+            preview.transform.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point { x, y: 4. }));
             engine.set_transform_preview(Some(preview.clone())).unwrap();
             engine.render_frame().unwrap();
             assert_eq!(engine.backend.transform.as_ref(), Some(&preview));
@@ -3511,7 +3520,7 @@ mod tests {
 
     #[test]
     fn perspective_transform_carries_contours_and_waits_for_pixel_coverage() {
-        use layer_core::{ImageTransform, Projective, Selection, SelectionPixels, TransformMap};
+        use layer_core::{ImageTransform, Projective, Selection, SelectionPixels, LayerPlacement};
         let mut doc = Document::new("perspective transform", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let layer = doc.active_layer;
         let selection = Selection::polygon(vec![
@@ -3533,13 +3542,13 @@ mod tests {
             Point { x: 80., y: 70. },
             Point { x: 0., y: 70. },
         ];
-        let map = TransformMap::Projective(Projective::rect_to_quad(source, quad).unwrap());
+        let map = LayerPlacement::from_projective(Projective::rect_to_quad(source, quad).unwrap());
         let preview = layer_render::TransformPreview {
             transaction: 1,
             moving: false,
             layer,
             selection: Some(selection.clone()),
-            transform: ImageTransform { map: map.clone(), ..Default::default() },
+            transform: ImageTransform { placement: map.clone(), ..Default::default() },
         };
         engine.set_transform_preview(Some(preview.clone())).unwrap();
         let expected = selection.mapped(&map).unwrap();
@@ -5577,4 +5586,100 @@ mod tests {
         assert_eq!(liquify.len(), 4);
         assert!(liquify.iter().all(|batch| batch.dab_count == 1));
     }
+    #[test]
+    fn nonlinear_paint_canvas_crop_growth_and_rotation_keep_frozen_owner_and_mask_domains() {
+        use layer_core::{CanvasGeometry, CanvasRect, ImageOrientation, LayerPlacement, MeshMap, Projective, Rect};
+        for mesh in [false, true] {
+            let (_, mut engine) = engine("nonlinear canvas", 128, 96);
+            let id = engine.document().active_layer;
+            let mut owner = engine.document().layer(id).unwrap().clone();
+            owner.properties.extent = Some([128, 96]);
+            owner.properties.placement = LayerPlacement {
+                outer: Projective::rect_to_quad(Rect::from_extent([128, 96]), [[0., 0.], [140., 8.], [119., 109.], [-6., 80.]].map(|[x, y]| Point { x, y })).unwrap(),
+                mesh: mesh.then(|| std::sync::Arc::new(MeshMap::identity(Rect::from_extent([128, 96]), [3, 3]).unwrap().move_node(5, Point { x: 12., y: -7. }).unwrap())),
+                interpolation: layer_core::Interpolation::Bicubic,
+            };
+            let mask_id = engine.allocate_layer_id();
+            let mut mask = layer_core::LayerMask::reveal_all(mask_id, Point::default());
+            mask.extent = Some([64, 48]);
+            owner.mask = Some(mask);
+            engine.apply_edit(Edit::ReplaceLayer(Box::new(owner))).unwrap();
+            let raw_owner = engine.document().target_raster(id).unwrap().clone();
+            let raw_mask = engine.document().target_raster(mask_id).unwrap().clone();
+            for geometry in [
+                CanvasGeometry::crop(CanvasRect { origin: [-200, -150], size: [600, 450] }),
+                CanvasGeometry::crop(CanvasRect { origin: [40, 30], size: [80, 60] }),
+                CanvasGeometry::orient([80, 60], ImageOrientation::RotateRight),
+            ] {
+                let before = engine.document().clone();
+                let point = Point { x: 23., y: 17. };
+                let old = before.layer_geometry(id).map(point).unwrap();
+                engine.apply_canvas_geometry(&geometry).unwrap();
+                assert!(engine.document().extents_cover_canvas());
+                assert_eq!(engine.document().target_extent(id), [128, 96]);
+                assert_eq!(engine.document().target_extent(mask_id), [64, 48]);
+                assert_eq!(engine.document().target_raster(id).unwrap(), &raw_owner);
+                assert_eq!(engine.document().target_raster(mask_id).unwrap(), &raw_mask);
+                let new = engine.document().layer_geometry(id).map(point).unwrap();
+                let mapped = geometry.linear.map(old);
+                let expected = Point { x: mapped.x - geometry.rect.origin[0] as f32, y: mapped.y - geometry.rect.origin[1] as f32 };
+                assert!((new.x - expected.x).hypot(new.y - expected.y) < 0.001);
+                engine.render_frame().unwrap();
+                assert!(engine.undo().unwrap());
+                assert_eq!(engine.document().layers, before.layers);
+                assert!(engine.redo().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn large_selected_bake_and_cut_erase_stay_bounded_ordered_and_settle_once() {
+        use layer_core::{LayerMask, LayerOperation, LayerOperationKind, Rect, Selection};
+        use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey, TILE_SIZE};
+        let mut document = Document::new("mixed bake", 3072, 2048, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let descriptor = RasterPlane::Color.descriptor(document.color);
+        let tile = RasterTile::backed(TileBlob::encode(descriptor, &vec![255; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap());
+        document.layers[0].raster = RasterRevision::backed(RasterData {
+            tiles: [[0, 0], [11, 7]].map(|coordinate| (TileKey { plane: RasterPlane::Color, coordinate }, tile.clone())).into(),
+            ..Default::default()
+        });
+        let (_, mut engine) = engine_with(RecordingRenderer::default(), document, view(3072, 2048), TRANSFORM);
+        engine.render_frame().unwrap();
+        let original = engine.document().clone();
+        let source_id = original.active_layer;
+        let output_id = engine.allocate_layer_id();
+        let output = layer_core::Layer::paint(output_id, "Selected pixels");
+        let selected = Rect { min: Point { x: 300., y: 300. }, max: Point { x: 2700., y: 1700. } };
+        let selection = Selection::polygon(selected.corners().to_vec()).unwrap();
+        let mut coverage = LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
+        coverage.default_coverage = 0.;
+        coverage.initial = Some(selection);
+        let bake = LayerOperation { placement: layer_core::Affine::IDENTITY, coverage: coverage.clone(),
+            kind: LayerOperationKind::Bake { members: vec![original.layer(source_id).unwrap().clone()].into(), offset: Point::default() } };
+        let erase = LayerOperation { placement: layer_core::Affine::IDENTITY, coverage,
+            kind: LayerOperationKind::Erase { alpha_locked: false } };
+        engine.insert_with_operations(vec![Edit::InsertLayer { index: 0, layer: output }], vec![(output_id, bake), (source_id, erase)], None).unwrap();
+        let mut frames = 0;
+        while engine.wants_continuous_frames() {
+            engine.render_frame().unwrap();
+            frames += 1;
+            assert!(frames <= 8, "only the bounded bake pieces and one erase are submitted");
+        }
+        let operations = &engine.backend().operation_batches;
+        assert!(operations.len() > 2, "Cut does not disable bounded bake stepping");
+        let (last, pieces) = operations.split_last().unwrap();
+        assert_eq!(last.0, source_id);
+        assert!(last.3, "the mixed operation publishes one final settlement");
+        assert!(pieces.iter().all(|(target, _, damage, commit)| *target == output_id && !commit
+            && damage.max.x - damage.min.x <= 1024. && damage.max.y - damage.min.y <= 1024.));
+        let area: f32 = pieces.iter().map(|(_, _, damage, _)| (damage.max.x - damage.min.x) * (damage.max.y - damage.min.y)).sum();
+        assert_eq!(area, 2560. * 1536., "only the page-aligned selected window is baked");
+        let after = engine.document().clone();
+        assert!(engine.undo().unwrap());
+        assert_eq!(engine.document().layers, original.layers);
+        assert!(!engine.can_undo(), "Bake and Cut are one undo step");
+        assert!(engine.redo().unwrap());
+        assert_eq!(engine.document().layers, after.layers);
+    }
+
 }

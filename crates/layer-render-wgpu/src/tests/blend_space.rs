@@ -102,7 +102,7 @@ fn representative(depth: SampleDepth) -> Document {
     layers.push(painted);
 
     let mut placed = paint(&mut document, "Placed", source(depth, |u, v| [0.2 + 0.7 * u, 0.6 * v, 0.9 - 0.5 * u, 1.]));
-    placed.properties.placement = layer_core::Affine::around(Point { x: 150., y: 100. }, [0.8, 0.7], 0.35, Point { x: 11., y: -7. });
+    placed.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::around(Point { x: 150., y: 100. }, [0.8, 0.7], 0.35, Point { x: 11., y: -7. }));
     placed.opacity = 0.7;
     layers.push(placed);
 

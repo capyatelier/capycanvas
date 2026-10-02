@@ -341,7 +341,7 @@ fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
     s.place_layer_sources(vec![("First".into(), source.clone()), ("Second".into(), source)], None, None).unwrap();
     s.frame(1, 1).unwrap();
     let batch = s.state.canvas_bar.as_ref().unwrap();
-    assert_eq!(batch.label.as_deref(), Some("2 images"));
+    assert_eq!(batch.label.as_deref(), Some("2 layers"));
     assert_ne!(batch.context, bar.context);
     let context = batch.context;
     let caption = batch.label.as_ref().unwrap().as_ptr();
@@ -350,7 +350,7 @@ fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
     let moved = s.state.canvas_bar.as_ref().unwrap();
     assert_eq!(moved.context, context);
     assert_eq!(moved.label.as_ref().unwrap().as_ptr(), caption);
-    assert_eq!(moved.label.as_deref(), Some("2 images"));
+    assert_eq!(moved.label.as_deref(), Some("2 layers"));
     invoke(&mut s, CommandId::CancelTransform);
     assert!(s.state.canvas_bar.is_none());
 }
@@ -404,7 +404,7 @@ fn flipping_a_placement_stays_lossless_and_applies_as_one_step() {
     invoke(&mut s, CommandId::ApplyTransform);
     let layer = s.engine.document().layer(s.engine.document().active_layer).unwrap();
     assert!(layer.source.is_some(), "the retained photo is kept");
-    let [a, b, c, d, _, _] = layer.properties.placement.0;
+    let [a, b, c, d, _, _] = layer.properties.placement.as_affine().unwrap().0;
     assert!(a.abs() < 1e-4 && d.abs() < 1e-4 && (b * c) > 0.9, "a mirrored quarter turn: {a} {b} {c} {d}");
     invoke(&mut s, CommandId::Undo);
     assert_eq!(s.engine.document().layers, placed.layers, "one undo step restores the placement");
@@ -528,7 +528,7 @@ fn handle_drags_publish_values_and_the_document_only_on_release() {
         }
         s.frame(2, 2).unwrap();
         let value = |s: &UiSession<Recorder>| s.state.tool_settings.iter().find(|c| c.id == "transform_x").unwrap().value;
-        let placement = |s: &UiSession<Recorder>| s.engine.document().layer(s.engine.document().active_layer).unwrap().properties.placement;
+        let placement = |s: &UiSession<Recorder>| s.engine.document().layer(s.engine.document().active_layer).unwrap().properties.placement.clone();
         let before = (value(&s), placement(&s));
         let quad = s.operation.quad();
         let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
@@ -575,7 +575,7 @@ fn distort_moves_corners_folds_back_and_resets() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
     s.frame(2, 2).unwrap();
-    let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform.map;
+    let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform.placement;
     invoke(&mut s, CommandId::TransformDistort);
     assert!(s.command(CommandId::TransformDistort).selected);
     let bar = s.state.canvas_bar.clone().unwrap();
@@ -584,7 +584,7 @@ fn distort_moves_corners_folds_back_and_resets() {
     let target = Point { x: quad[1].x + 40., y: quad[1].y - 30. };
     drag_to(&mut s, quad[1], target);
     s.frame(3, 3).unwrap();
-    assert!(matches!(preview(&mut s), layer_core::TransformMap::Projective(_)), "a lone corner drag is perspective");
+    assert!(preview(&mut s).as_affine().is_none(), "a lone corner drag is perspective");
     let moved = s.operation.quad();
     for (i, corner) in moved.iter().enumerate() {
         let expected = if i == 1 { target } else { quad[i] };
@@ -595,7 +595,7 @@ fn distort_moves_corners_folds_back_and_resets() {
     invoke(&mut s, CommandId::ResetTransform);
     s.frame(4, 4).unwrap();
     assert!(s.command(CommandId::TransformFree).selected);
-    assert_eq!(preview(&mut s), layer_core::TransformMap::Affine(layer_core::Affine::IDENTITY));
+    assert_eq!(preview(&mut s), layer_core::LayerPlacement::IDENTITY);
     invoke(&mut s, CommandId::TransformDistort);
     let quad = s.operation.quad();
     let edge = Point { x: (quad[0].x + quad[1].x) * 0.5, y: (quad[0].y + quad[1].y) * 0.5 };
@@ -623,17 +623,15 @@ fn perspective_mirrors_a_corner_drag_onto_its_neighbour() {
 }
 
 #[test]
-fn distort_and_warp_are_refused_on_photo_placements_with_the_route_that_works() {
-    let mut s = placed_photo("distort placement");
-    for command in [CommandId::TransformDistort, CommandId::TransformWarp] {
-        assert!(!s.command(command).enabled);
-        assert_eq!(s.command_disabled_reason(command).as_deref(), Some(s.localization().text(operation::DISTORT_PLACEMENT).as_ref()));
-        assert!(s.dispatch(UiAction::Invoke { command }).is_err());
+fn photo_distort_and_warp_preserve_retained_source_and_geometry() {
+    let mut s = placed_photo("retained photo geometry");
+    let source = s.engine.document().layers[0].source.clone();
+    for command in [CommandId::TransformDistort, CommandId::TransformWarp, CommandId::TransformFree] {
+        assert!(s.command(command).enabled);
+        invoke(&mut s, command);
+        assert_eq!(s.engine.document().layers[0].source, source);
     }
-    assert!(!s.command(CommandId::WarpGridFour).enabled);
-    assert!(interpolation_choice(&s).is_none(), "placed photos keep their pixels");
-    assert!(!s.command(CommandId::TransformBicubic).enabled);
-    assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformNearest }).is_err());
+    invoke(&mut s, CommandId::CancelTransform);
 }
 
 fn interpolation_choice(s: &UiSession<Recorder>) -> Option<(bool, Vec<(&str, bool)>)> {
@@ -651,7 +649,7 @@ fn interpolation_follows_the_mode_until_chosen_and_stays_chosen() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
     s.frame(2, 2).unwrap();
-    let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform.interpolation;
+    let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform.placement.interpolation;
     assert_eq!(preview(&mut s), Interpolation::Linear);
     assert_eq!(
         interpolation_choice(&s),
@@ -820,8 +818,8 @@ fn a_failed_apply_leaves_the_transform_ready_to_apply_again() {
     assert!(s.state.commands.iter().any(|c| c.id == CommandId::ApplyTransform && c.enabled));
 }
 
-fn preview_map(s: &mut UiSession<Recorder>) -> layer_core::TransformMap {
-    s.renderer_mut().transform.clone().unwrap().transform.map
+fn preview_map(s: &mut UiSession<Recorder>) -> layer_core::LayerPlacement {
+    s.renderer_mut().transform.clone().unwrap().transform.placement
 }
 
 fn close(a: Point, b: Point, tolerance: f32) -> bool {
@@ -850,45 +848,53 @@ fn warp_seeds_from_the_transform_and_bends_through_nodes_and_tangents() {
     let mesh = s.operation.mesh().expect("Warp seeds a mesh");
     assert_eq!(mesh.node_count(), 16);
     for corner in [Point { x: 150., y: 150. }, Point { x: 250., y: 180. }, Point { x: 200., y: 250. }] {
-        assert!(close(mesh.map(corner).unwrap(), rotated.map(corner).unwrap(), 0.01), "the seed keeps the quarter turn");
+        assert!(close(preview_map(&mut s).map(corner).unwrap(), rotated.map(corner).unwrap(), 0.01), "the seed keeps the quarter turn");
     }
     let bar = s.state.canvas_bar.clone().unwrap();
     assert!(bar.items.iter().any(|i| matches!(i.option, ToolOption::Choice { id: "transform-warp-grid", .. })));
     assert!(s.state.tool_settings.is_empty(), "the pose fields do not apply to a mesh");
 
     let node = mesh.node(5).unwrap();
-    let moved = Point { x: node.x + 30., y: node.y + 20. };
-    drag_to(&mut s, node, moved);
+    let outer = preview_map(&mut s).outer;
+    let node_on_canvas = outer.map(node).unwrap();
+    let moved_on_canvas = Point { x: node_on_canvas.x + 30., y: node_on_canvas.y + 20. };
+    let moved = outer.inverse().unwrap().map(moved_on_canvas).unwrap();
+    drag_to(&mut s, node_on_canvas, moved_on_canvas);
     s.frame(4, 4).unwrap();
     let mesh = s.operation.mesh().unwrap();
     assert!(close(mesh.node(5).unwrap(), moved, 0.01), "a node follows the pen");
-    assert!(matches!(preview_map(&mut s), layer_core::TransformMap::Mesh(_)));
+    assert!(preview_map(&mut s).mesh.is_some());
     let tangent = mesh.tangent(5, 0).expect("the pressed node shows its tangents");
     let pulled = Point { x: tangent.x, y: tangent.y + 25. };
-    drag_to(&mut s, tangent, pulled);
+    drag_to(&mut s, outer.map(tangent).unwrap(), outer.map(pulled).unwrap());
     assert!(close(s.operation.mesh().unwrap().tangent(5, 0).unwrap(), pulled, 0.01), "a tangent handle follows the pen");
+    s.frame(5, 5).unwrap();
 
     let probe = Point { x: 200., y: 200. };
-    let before = s.operation.mesh().unwrap().map(probe).unwrap();
-    invoke(&mut s, CommandId::WarpGridFour);
-    let refit = s.operation.mesh().unwrap();
-    assert_eq!(refit.node_count(), 25);
-    assert!(close(refit.map(probe).unwrap(), before, 0.5), "a new grid keeps the shape");
+    let before = preview_map(&mut s).map(probe).unwrap();
+    let original_mesh = s.operation.mesh().unwrap();
+    assert!(!s.command(CommandId::WarpGridFour).enabled, "incompatible topology requires an explicit reset");
+    assert!(s.dispatch(UiAction::Invoke { command: CommandId::WarpGridFour }).is_err());
+    assert_eq!(s.operation.mesh().unwrap(), original_mesh);
 
     invoke(&mut s, CommandId::TransformFree);
     s.frame(5, 5).unwrap();
     assert!(s.operation.mesh().is_some(), "leaving Warp keeps the mesh");
-    let hull = s.operation.quad();
-    let centre = Point { x: (hull[0].x + hull[2].x) * 0.5, y: (hull[0].y + hull[2].y) * 0.5 };
+    assert!(s.command(CommandId::TransformFree).selected);
+    let centre = preview_map(&mut s).outer.map(Point { x: 200., y: 200. }).unwrap();
+    let before_box_map = preview_map(&mut s);
     drag_to(&mut s, centre, Point { x: centre.x + 10., y: centre.y });
     s.frame(6, 6).unwrap();
-    let layer_core::TransformMap::Mesh(moved) = preview_map(&mut s) else { panic!("the mesh stays under the box") };
-    assert!(close(moved.map(probe).unwrap(), Point { x: before.x + 10., y: before.y }, 0.5), "the box moves the warped content");
+    let moved = preview_map(&mut s);
+    assert!(moved.mesh.is_some(), "the mesh stays under the box");
+    assert_eq!(moved.mesh, before_box_map.mesh, "Free moves outer geometry without editing the mesh");
+    assert!(close(moved.map(probe).unwrap(), Point { x: before.x + 10., y: before.y }, 0.5), "the box moves the warped content: {:?} expected {:?}, {:?} -> {:?}, centre {:?}", moved.map(probe), Point { x: before.x + 10., y: before.y }, before_box_map.outer, moved.outer, centre);
 
     invoke(&mut s, CommandId::TransformWarp);
+    let hull = layer_core::Rect::around(s.operation.quad());
     invoke(&mut s, CommandId::TransformFlipHorizontal);
-    let flipped = s.operation.mesh().unwrap();
-    let hull = flipped.bounds();
+    s.frame(7, 7).unwrap();
+    let flipped = preview_map(&mut s);
     assert!(close(flipped.map(probe).unwrap(), Point { x: hull.min.x + hull.max.x - before.x - 10., y: before.y }, 0.5), "a flip mirrors the mesh about its hull");
 
     invoke(&mut s, CommandId::ResetTransform);
@@ -1407,5 +1413,172 @@ fn localized_crop_bar_preserves_actions_and_fallback_captions() {
         assert!(completion.contains(&(CommandId::CancelTransform, cancel, false)));
         bar_edit(&mut s, CommandId::CancelTransform);
         assert!(!s.operation.active());
+    }
+}
+
+#[test]
+fn opening_and_switching_retained_modes_preserves_exact_geometry_and_redo() {
+    let imported = placed_photo("retained modes");
+    let mut doc = imported.engine.document().clone();
+    let id = doc.active_layer;
+    let frame = layer_core::Rect::from_extent(doc.layer(id).unwrap().source.as_ref().unwrap().extent);
+    let mesh = std::sync::Arc::new(layer_core::MeshMap::identity(frame, [3, 3]).unwrap().move_node(5, Point { x: 1., y: -0.5 }).unwrap());
+    let placement = layer_core::LayerPlacement {
+        outer: layer_core::Projective([1., 0.1, 90., -0.05, 1., 70., 0.001, -0.002, 1.]),
+        mesh: Some(mesh.clone()), interpolation: layer_core::Interpolation::Nearest,
+    };
+    doc.layers.iter_mut().find(|layer| layer.id == id).unwrap().properties.placement = placement.clone();
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600], Platform::Gtk).unwrap();
+    let mut hidden = s.engine.document().layer(id).unwrap().clone();
+    hidden.opacity = 0.;
+    s.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(hidden))).unwrap();
+    assert!(s.engine.undo().unwrap());
+    assert!(s.engine.can_redo());
+    let before = s.engine.document().clone();
+    invoke(&mut s, CommandId::ScaleRotate);
+    for command in [CommandId::TransformFree, CommandId::TransformDistort, CommandId::TransformWarp, CommandId::TransformFree] {
+        invoke(&mut s, command);
+        s.frame(20, 20).unwrap();
+        let preview = s.engine.document().layer(id).unwrap().properties.placement.clone();
+        assert_eq!(preview.outer, placement.outer);
+        assert!(std::sync::Arc::ptr_eq(preview.mesh.as_ref().unwrap(), &mesh));
+        assert_eq!(preview.interpolation, placement.interpolation);
+        assert_eq!(s.engine.document(), &before);
+        assert!(s.engine.can_redo());
+    }
+    invoke(&mut s, CommandId::ApplyTransform);
+    assert_eq!(s.engine.document(), &before);
+    assert!(s.engine.can_redo(), "an unchanged retained edit preserves redo");
+}
+
+#[test]
+fn warp_cross_split_from_pen_inserts_two_exact_full_grid_lines() {
+    let mut s = filled_selection_session();
+    let original = s.engine.document().clone();
+    let had_undo = s.engine.can_undo();
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformWarp);
+    let before = s.operation.mesh().unwrap();
+    let point = before.frame.map(Point { x: 0.42, y: 0.61 });
+    let on_canvas = preview_map(&mut s).map(point).unwrap();
+    invoke(&mut s, CommandId::WarpSplitCross);
+    assert!(s.command(CommandId::WarpSplitCross).selected);
+    drag_to(&mut s, on_canvas, on_canvas);
+    let split = s.operation.mesh().unwrap();
+    assert_eq!(split.cells(), [4, 4]);
+    for axis in 0..2 {
+        let unit = [0.42, 0.61][axis];
+        assert!(split.breakpoints[axis].iter().any(|value| (*value - unit).abs() < 0.00001));
+    }
+    for y in 0..=16 {
+        for x in 0..=16 {
+            let source = before.frame.map(Point { x: x as f32 / 16., y: y as f32 / 16. });
+            let old = before.map(source).unwrap();
+            let new = split.map(source).unwrap();
+            assert!(close(old, new, 0.0003), "{source:?}: {old:?} != {new:?}");
+        }
+    }
+    assert!(!s.command(CommandId::WarpSplitCross).selected, "the insertion finishes on release");
+    invoke(&mut s, CommandId::CancelTransform);
+    assert_eq!(s.engine.can_undo(), had_undo, "topology preview cancellation adds no history");
+    assert_eq!(s.engine.document(), &original);
+}
+
+#[test]
+fn entering_untouched_warp_on_affine_artwork_preserves_redo_and_write_admission() {
+    for photo in [false, true] {
+        let mut s = if photo {
+            let mut imported = placed_photo("untouched warp");
+            invoke(&mut imported, CommandId::ApplyTransform);
+            imported
+        } else {
+            let mut paint = filled_selection_session();
+            paint.engine.apply_edit(layer_core::Edit::SetSelection(None)).unwrap();
+            paint
+        };
+        let id = s.engine.document().active_layer;
+        let mut changed = s.engine.document().layer(id).unwrap().clone();
+        changed.opacity = 0.6;
+        s.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(changed))).unwrap();
+        assert!(s.engine.undo().unwrap());
+        let before = s.engine.document().clone();
+        assert!(before.validate_content_write(id).is_ok());
+        assert!(s.engine.can_redo());
+        invoke(&mut s, CommandId::ScaleRotate);
+        invoke(&mut s, CommandId::TransformWarp);
+        assert!(s.operation.mesh().is_some(), "Warp exposes controls for an untouched affine map");
+        invoke(&mut s, CommandId::TransformFree);
+        invoke(&mut s, CommandId::ApplyTransform);
+        assert_eq!(s.engine.document(), &before);
+        assert!(s.engine.can_redo());
+        assert!(s.engine.document().validate_content_write(id).is_ok());
+    }
+}
+
+#[test]
+fn warp_selected_nodes_follow_one_pen_drag_without_repeating_shared_controls() {
+    let mut s = filled_selection_session();
+    let document = s.engine.document().clone();
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformWarp);
+    let mesh = s.operation.mesh().unwrap();
+    invoke(&mut s, CommandId::WarpSelectPoints);
+    for node in [5, 6] {
+        let point = mesh.node(node).unwrap();
+        drag_to(&mut s, point, point);
+    }
+    invoke(&mut s, CommandId::WarpSelectPoints);
+    let start = mesh.node(5).unwrap();
+    let delta = Point { x: 13., y: -9. };
+    drag_to(&mut s, start, Point { x: start.x + delta.x, y: start.y + delta.y });
+    let expected = mesh.move_nodes(&std::collections::BTreeSet::from([5, 6]), delta).unwrap();
+    assert_eq!(*s.operation.mesh().unwrap(), expected);
+    for node in [5, 6] {
+        let point = mesh.node(node).unwrap();
+        assert!(close(s.operation.mesh().unwrap().node(node).unwrap(), Point { x: point.x + delta.x, y: point.y + delta.y }, 0.0001));
+    }
+    invoke(&mut s, CommandId::CancelTransform);
+    assert_eq!(s.engine.document(), &document);
+}
+
+#[test]
+fn mixed_retained_sampling_changes_together_in_one_undo_and_noop_preserves_each_choice() {
+    let imported = placed_photo("mixed retained sampling");
+    let mut doc = imported.engine.document().clone();
+    let photo_id = doc.active_layer;
+    doc.layers[0].properties.placement.interpolation = layer_core::Interpolation::Nearest;
+    let ink = filled_selection_session();
+    let mut paint = ink.engine.document().layers[0].clone();
+    paint.id = doc.allocate_layer_id();
+    let paint_id = paint.id;
+    paint.mask = None;
+    paint.properties.offset = Point::default();
+    paint.properties.placement.interpolation = layer_core::Interpolation::Lanczos;
+    doc.layers.insert(1, paint);
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600], Platform::Gtk).unwrap();
+    s.layer_interaction.selected = std::collections::BTreeSet::from([photo_id, paint_id]);
+    let original = s.engine.document().layers.clone();
+    invoke(&mut s, CommandId::ScaleRotate);
+    assert!(!s.command(CommandId::TransformNearest).selected);
+    assert!(!s.command(CommandId::TransformLanczos).selected);
+    invoke(&mut s, CommandId::ApplyTransform);
+    assert_eq!(s.engine.document().layers, original);
+    assert!(!s.engine.can_undo());
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformBicubic);
+    invoke(&mut s, CommandId::ApplyTransform);
+    for id in [photo_id, paint_id] {
+        let owner = s.engine.document().layer(id).unwrap();
+        assert_eq!(owner.properties.placement.interpolation, layer_core::Interpolation::Bicubic);
+        let old = original.iter().find(|layer| layer.id == id).unwrap();
+        assert_eq!(owner.source, old.source);
+        assert_eq!(owner.raster, old.raster);
+    }
+    assert!(s.engine.undo().unwrap());
+    assert_eq!(s.engine.document().layers, original);
+    assert!(!s.engine.can_undo(), "the common sampling choice is one atomic edit");
+    assert!(s.engine.redo().unwrap());
+    for id in [photo_id, paint_id] {
+        assert_eq!(s.engine.document().layer(id).unwrap().properties.placement.interpolation, layer_core::Interpolation::Bicubic);
     }
 }

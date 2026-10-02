@@ -71,7 +71,7 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
         Affine([0.27, 0.04, -0.03, 0.24, 30., 4.]),
         Affine([-0.25, 0., 0., 0.25, 290., 4.]),
     ] {
-        project.document.layers[1].properties.placement = pose;
+        project.document.layers[1].properties.placement = layer_core::LayerPlacement::from_affine(pose);
         project.validate(Default::default()).unwrap();
         let source = project.document.layers[1].source.clone();
         let inverse = pose
@@ -158,7 +158,7 @@ fn snapshot_export_does_not_bypass_placement_when_source_matches_canvas_extent()
         .unwrap()
         .interpretation
         .clone();
-    project.document.layers[0].properties.placement = Affine::translation(Point { x: 7., y: -3. });
+    project.document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(Affine::translation(Point { x: 7., y: -3. }));
     let mut capture = capture(project).unwrap();
     assert!(
         capture.identity_source(&target).is_none(),

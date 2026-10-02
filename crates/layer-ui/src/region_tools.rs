@@ -157,7 +157,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 );
             }
             PenPhase::Up => {
-                let Some(mut point) = self.region_tools.contact.take() else {
+                let Some(point) = self.region_tools.contact.take() else {
                     return;
                 };
                 let Some((fill, source, contiguous)) = self.layer_interaction.tool.region() else {
@@ -167,11 +167,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mask_target = self.selection_masks.target().filter(|_| fill);
                 let source_layer = if mask_target.is_some() { self.selection_masks.artwork().unwrap_or(doc.active_layer) }
                     else { doc.drawing_target().unwrap_or(doc.active_target()) };
-                let (basis, extent) = if source == RegionSource::Editing {
-                    (doc.layer_transform(source_layer), doc.target_extent(source_layer))
-                } else { (layer_core::Affine::IDENTITY, [doc.width, doc.height]) };
-                let Some(inverse) = basis.inverse() else { return; };
-                point = inverse.map(point);
+                let basis = layer_core::Affine::IDENTITY;
+                let extent = [doc.width, doc.height];
                 if !point.x.is_finite()
                     || !point.y.is_finite()
                     || point.x < 0.
@@ -210,7 +207,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         ..self.region_tools.refinement
                     },
                     limit: if fill && mask_target.is_none() {
-                        doc.selection.as_ref().and_then(|s| s.transformed(inverse).ok()).map(std::sync::Arc::new)
+                        doc.selection.clone().map(std::sync::Arc::new)
                     } else {
                         None
                     },

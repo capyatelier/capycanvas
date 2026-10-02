@@ -22,23 +22,31 @@ fn resample_color(t:vec2<u32>,mesh:bool,keeps:bool,source:vec2<f32>,dx:vec2<f32>
     return resample_color(vec2<u32>(p.xy),false,true,vec2(0.),vec2(0.),vec2(0.));
 }
 
-struct MeshVertex { @builtin(position) position:vec4<f32>, @location(0) @interpolate(linear) source:vec2<f32> }
-@vertex fn mesh_vertex(@location(0) destination:vec2<f32>, @location(1) source:vec2<f32>)->MeshVertex {
+struct MeshVertex { @builtin(position) position:vec4<f32>, @location(0) source:vec2<f32> }
+@vertex fn mesh_vertex(@location(0) destination:vec2<f32>, @location(1) source:vec2<f32>, @location(2) weight:f32)->MeshVertex {
     let x=resample.clip_x;let y=resample.clip_y;
     let p=destination-vec2(x.z,y.z);
     let output=vec2(y.y*p.x-x.y*p.y,x.x*p.y-y.x*p.x)/(x.x*y.y-x.y*y.x);
     let normalized=output/ceil(resample.target_extent.xy);
-    return MeshVertex(vec4(normalized.x*2.-1.,1.-normalized.y*2.,0.,1.),source*resample.source_extent.xy/resample.extent.xy);
+    return MeshVertex(vec4((normalized.x*2.-1.)*weight,(1.-normalized.y*2.)*weight,0.,weight),source);
 }
 @vertex fn background_vertex(@builtin(vertex_index) index:u32)->@builtin(position) vec4<f32> {
     let p=vec2(f32((index<<1u)&2u),f32(index&2u));
     return vec4(p*2.-1.,0.,1.);
 }
+fn mesh_source(owner:vec2<f32>)->vec2<f32> {
+    let h=vec3(owner,1.);
+    let w=dot(resample.w.xyz,h);
+    if w<=0. {return vec2(UNCOVERED);}
+    return vec2(dot(resample.x.xyz,h),dot(resample.y.xyz,h))/w;
+}
 @fragment fn mesh_color(vertex:MeshVertex)->@location(0) vec4<f32> {
-    return resample_color(vec2<u32>(vertex.position.xy),true,false,vertex.source,dpdx(vertex.source),dpdy(vertex.source));
+    let source=mesh_source(vertex.source);
+    return resample_color(vec2<u32>(vertex.position.xy),true,false,source,dpdx(source),dpdy(source));
 }
 @fragment fn mesh_color_kept(vertex:MeshVertex)->@location(0) vec4<f32> {
-    return resample_color(vec2<u32>(vertex.position.xy),true,true,vertex.source,dpdx(vertex.source),dpdy(vertex.source));
+    let source=mesh_source(vertex.source);
+    return resample_color(vec2<u32>(vertex.position.xy),true,true,source,dpdx(source),dpdy(source));
 }
 @fragment fn background_color(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
     if resample.options.z!=0. {return resample_color(vec2<u32>(position.xy),true,false,vec2(UNCOVERED),vec2(0.),vec2(0.));}
@@ -51,6 +59,10 @@ struct MeshVertex { @builtin(position) position:vec4<f32>, @location(0) @interpo
 fn resample_affine_area(@builtin(global_invocation_id) id:vec3<u32>) {
     if any(id.xy>=resample.texels.zw) {return;}
     let t=resample.texels.xy+id.xy;
+    if resample.w.x!=0. || resample.w.y!=0. || resample.w.z!=1. {
+        textureStore(level,vec2<i32>(t),resample_color(t,false,false,vec2(0.),vec2(0.),vec2(0.)));
+        return;
+    }
     let h=vec3(vec2<f32>(t)+min(vec2(1.),resample.target_extent.xy-vec2<f32>(t))*.5,1.);
     if !inside(h) {textureStore(level,vec2<i32>(t),composite_color(vec4(resample.options.w)));return;}
     let footprint=min(vec2(1.),resample.target_extent.xy-vec2<f32>(t));

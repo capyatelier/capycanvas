@@ -55,7 +55,7 @@ fn placed_material_backtrace(execution: BrushExecution, alpha_locked: bool) {
             ] {
                 let mut layer = Layer::paint(LayerId(1), "backtrace across placed source tiles");
                 layer.source = Some(image);
-                layer.properties.placement = placement;
+                layer.properties.placement = layer_core::LayerPlacement::from_affine(placement);
                 submit(r, &[layer.clone()], &[], &[], true);
                 assert_eq!(pixel(r, 64, 64), [0, 255, 0, alpha]);
                 let original_view = r.readback_srgb_rgba8().unwrap();
@@ -191,7 +191,7 @@ fn placed_photo_gradient_and_figure_use_document_geometry() {
     ] {
         let mut images = Vec::new();
         for (r, pose) in [(&mut reference, Affine::IDENTITY), (&mut actual, affine)] {
-            layer.properties.placement = pose;
+            layer.properties.placement = layer_core::LayerPlacement::from_affine(pose);
             let op = LayerOperation {
                 placement: pose.inverse().unwrap(),
                 coverage: LayerMask::reveal_all(LayerId(9), Point::default()),
@@ -234,7 +234,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
     let mut behind = photo.clone();
     behind.id = LayerId(2);
     behind.opacity = 0.78;
-    behind.properties.placement = Affine([0.3, 0., 0., 0.3, 140.25, 87.5]);
+    behind.properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.3, 0., 0., 0.3, 140.25, 87.5]));
     let canvas = [1031, 777]; // Both partial edge tiles and full interior tiles.
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut rebuilt = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -245,7 +245,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
         Affine([0.35, 0.15, -0.15, 0.35, 100.25, -38.5]),
         Affine([-0.4, 0., 0., 0.4, 403.25, 33.75]),
     ].into_iter().enumerate() {
-        photo.properties.placement = transform;
+        photo.properties.placement = layer_core::LayerPlacement::from_affine(transform);
         let layers = [photo.clone(), behind.clone()];
         let mut images = Vec::new();
         for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
@@ -267,7 +267,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
         (1., DabMode::Erase, false), (0.63, DabMode::Erase, true)] {
         photo.opacity = opacity;
         if mask {
-            photo.properties.placement = Affine([0.35, 0.15, -0.15, 0.35, 120.25, -38.5]);
+            photo.properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.35, 0.15, -0.15, 0.35, 120.25, -38.5]));
             photo.mask = Some(LayerMask::reveal_all(LayerId(9), Point { x: 10.25, y: 20.5 }));
         }
         let layers = [photo.clone(), behind.clone()];
@@ -279,7 +279,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
         stroke.style = preset_style(layer_core::DefaultBrushPreset::GPen);
         stroke.kind = DabBatchKind::Preview;
         stroke.style.mode = mode;
-        stroke.style.brush_to_layer = layer_core::target_transform(&layers, stroke.layer_id).inverse().unwrap();
+        stroke.style.brush_to_layer = layer_core::target_geometry(&layers, stroke.layer_id).as_affine().unwrap().inverse().unwrap();
         stroke.damage = ink.bounds();
         let mut baseline = None;
         for prediction in [false, true, false] {
@@ -310,7 +310,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
         if mask {
             stroke.layer_id = LayerId(9);
             stroke.kind = DabBatchKind::Persistent;
-            stroke.style.brush_to_layer = layer_core::target_transform(&layers, stroke.layer_id).inverse().unwrap();
+            stroke.style.brush_to_layer = layer_core::target_geometry(&layers, stroke.layer_id).as_affine().unwrap().inverse().unwrap();
             let mut images = Vec::new();
             for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
                 if full { r.scale_display = None; }
@@ -335,7 +335,7 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
     let size = [2048; 2];
     let mut layer = Layer::paint(LayerId(1), "cached photo");
     layer.source = Some(rgba8_source(size, |_, _| [255; 4]));
-    layer.properties.placement = Affine([0.0625, 0., 0., 0.0625, 0., 0.]);
+    layer.properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.0625, 0., 0., 0.0625, 0., 0.]));
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     submit(&mut r, &[layer.clone()], &[], &[], true);
     let cache = |r: &WgpuRasterizer| {
@@ -364,7 +364,7 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
     let mut ink = dab([1., 0., 0., 1.]);
     ink.radii = [8.; 2];
     let mut stroke = batch(1);
-    stroke.style.brush_to_layer = layer.properties.placement.inverse().unwrap();
+    stroke.style.brush_to_layer = layer.properties.placement.as_affine().unwrap().inverse().unwrap();
     stroke.damage = ink.bounds();
     submit(&mut r, &[layer.clone()], &[ink], &[stroke.clone()], false);
     layer.raster.wait_data().unwrap();
@@ -391,7 +391,7 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
     submit(&mut r, &[layer.clone()], &[], &[], false);
     assert_eq!(cached_pixel(&r, 1024, 1024), [1., 0., 0., 1.]);
     let before_scale_updates = cache(&r).1;
-    layer.properties.placement = Affine([0.064, 0., 0., 0.064, 0., 0.]);
+    layer.properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.064, 0., 0., 0.064, 0., 0.]));
     submit(&mut r, &[layer.clone()], &[], &[], false);
     let (texture, updates, _) = cache(&r);
     assert_eq!(
@@ -403,7 +403,7 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
         "the first scale-up must not reload the source"
     );
     for scale in [0.062, 0.064, 1., 0.062] {
-        layer.properties.placement = Affine([scale, 0., 0., scale, 0., 0.]);
+        layer.properties.placement = layer_core::LayerPlacement::from_affine(Affine([scale, 0., 0., scale, 0., 0.]));
         submit(&mut r, &[layer.clone()], &[], &[], false);
         let (current, work, _) = cache(&r);
         assert_eq!(
@@ -414,7 +414,7 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
     }
     let mut second = Layer::paint(LayerId(2), "second photo needs a finer preview");
     second.source = Some(rgba8_source(size, |_, _| [0, 255, 0, 255]));
-    second.properties.placement = Affine([0.3, 0., 0., 0.3, 0., 0.]);
+    second.properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.3, 0., 0., 0.3, 0., 0.]));
     submit(&mut r, &[layer, second], &[], &[], false);
     let scene = r.scene.as_ref().unwrap();
     assert!(
@@ -435,14 +435,14 @@ fn oversized_photo_preview_uses_admitted_memory_across_scale_boundary() {
     let mut layer = Layer::paint(LayerId(1), "oversized cached photo");
     layer.source = Some(rgba8_source(size, |_, _| [255; 4]));
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    layer.properties.placement = Affine([0.24, 0., 0., 0.24, -900., -450.]);
+    layer.properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.24, 0., 0., 0.24, -900., -450.]));
     submit(&mut r, &[layer.clone()], &[], &[], true);
     let (texture, updates, level) = r.scene.as_ref().unwrap().placement_cache(layer.id).unwrap();
     assert_eq!(level, 1);
     assert!(u64::from(texture.width()) * u64::from(texture.height()) * 16 < 8 * 1024 * 1024,
         "the source window is bounded by visible output");
     for scale in [0.26, 0.42, 0.24] {
-        layer.properties.placement = Affine([scale, 0., 0., scale, -900., -450.]);
+        layer.properties.placement = layer_core::LayerPlacement::from_affine(Affine([scale, 0., 0., scale, -900., -450.]));
         submit(&mut r, &[layer.clone()], &[], &[], false);
         let cache = r.scene.as_ref().unwrap().placement_cache(layer.id).unwrap();
         assert_eq!((cache.0, cache.1, cache.2), (texture.clone(), updates, level));
@@ -459,7 +459,7 @@ fn placed_photo_mask_linking_preserves_pose_and_apply_preserves_pixels() {
     let size = [600, 400];
     let mut layer = Layer::paint(LayerId(1), "placed masked photo");
     layer.source = Some(rgba8_source(size, |_, _| [255; 4]));
-    layer.properties.placement = Affine([0.2, 0., 0., 0.2, 0., 0.]);
+    layer.properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.2, 0., 0., 0.2, 0., 0.]));
     let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
     mask.default_coverage = 0.;
     mask.initial = Some(
@@ -489,7 +489,7 @@ fn placed_photo_mask_linking_preserves_pose_and_apply_preserves_pixels() {
         original,
         "unlink does not move coverage"
     );
-    layer.properties.placement.0[4] += 10.;
+    layer.properties.placement.outer.0[2] += 10.;
     submit(&mut r, &[layer.clone()], &[], &[], false);
     assert_eq!(pixel(&mut r, 35, 30), [255; 4]);
     assert_eq!(pixel(&mut r, 85, 30), [0; 4]);
@@ -506,15 +506,15 @@ fn placed_photo_mask_linking_preserves_pose_and_apply_preserves_pixels() {
         unlinked,
         "relink does not move coverage"
     );
-    layer.properties.placement.0[4] += 10.;
+    layer.properties.placement.outer.0[2] += 10.;
     submit(&mut r, &[layer.clone()], &[], &[], false);
     assert_eq!(pixel(&mut r, 35, 30), [0; 4]);
     assert_eq!(pixel(&mut r, 85, 30), [255; 4]);
     let before_apply = r.readback_srgb_rgba8().unwrap();
     let mut mask = layer.mask.take().unwrap();
     mask.placement = mask
-        .transform_in_parent(&layer.properties)
-        .then(layer.properties.placement.inverse().unwrap());
+        .geometry_in_parent(&layer.properties).projective().unwrap()
+        .then(layer.properties.placement.outer.inverse().unwrap()).unwrap();
     mask.offset = Point::default();
     mask.linked = false;
     let op = LayerOperation {
@@ -550,7 +550,7 @@ fn placed_photo_edits_and_restores_tiles_outside_canvas_bounds() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut layer = Layer::paint(LayerId(1), "placed editable photo");
     layer.source = Some(source.clone());
-    layer.properties.placement = Affine::translation(Point { x: -560., y: -440. });
+    layer.properties.placement = layer_core::LayerPlacement::from_affine(Affine::translation(Point { x: -560., y: -440. }));
     submit(&mut r, &[layer.clone()], &[], &[], true);
     let before = layer.raster.clone();
     layer.raster = RasterRevision::pending();
@@ -618,7 +618,7 @@ fn placed_photo_brush_footprint_matches_document_brush_under_affine() {
         stroke.style = preset_style(preset);
         stroke.style.selection = Some(Arc::new(selection.clone()));
         stroke.damage = ink.bounds();
-        layer.properties.placement = Affine::IDENTITY;
+        layer.properties.placement = layer_core::LayerPlacement::from_affine(Affine::IDENTITY);
         submit(
             &mut reference,
             &[layer.clone()],
@@ -636,7 +636,7 @@ fn placed_photo_brush_footprint_matches_document_brush_under_affine() {
             ),
             Affine([-0.2, 0.02, 0.04, 0.3, 140., -50.]),
         ] {
-            layer.properties.placement = affine;
+            layer.properties.placement = layer_core::LayerPlacement::from_affine(affine);
             let mut stroke = stroke.clone();
             stroke.style.brush_to_layer = affine.inverse().unwrap();
             stroke.style.selection = Some(Arc::new(
@@ -723,7 +723,7 @@ fn retained_placement_samples_full_source_across_tiles_without_creating_raster()
     .into_iter()
     .enumerate()
     {
-        layer.properties.placement = affine;
+        layer.properties.placement = layer_core::LayerPlacement::from_affine(affine);
         r.submit(FramePacket {
             reset_layers: n == 0,
             ..packet(std::slice::from_ref(&layer), canvas)

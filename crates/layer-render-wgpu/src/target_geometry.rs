@@ -28,7 +28,7 @@ impl WgpuRasterizer {
             .flat_map(|layer| {
                 let extent = layer.local_extent(self.document_extent);
                 std::iter::once((layer.id, extent))
-                    .chain(layer.masks().map(move |mask| (mask.id, extent)))
+                    .chain(layer.masks().map(move |mask| (mask.id, mask.local_extent(extent))))
             })
             .collect();
         if !resized && targets == self.target_geometry.targets {

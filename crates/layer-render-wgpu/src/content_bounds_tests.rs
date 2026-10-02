@@ -254,7 +254,7 @@ fn linked_and_unlinked_initial_mask_coverage_uses_the_owner_geometry_once() {
     let mut document = document(Default::default());
     document.layers[0].source = Some(source([96, 80], |_, _| 255));
     document.layers[0].properties.offset = Point { x: 10., y: 10. };
-    document.layers[0].properties.placement = layer_core::Affine([2., 0., 0., 2., 0., 0.]);
+    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 2., 0., 0.]));
     let mut mask = LayerMask::reveal_all(document.allocate_layer_id(), Point { x: 10., y: 10. });
     mask.default_coverage = 0.;
     mask.initial = Some(Selection::polygon(rect(20., 20., 30., 30.).corners().to_vec()).unwrap());

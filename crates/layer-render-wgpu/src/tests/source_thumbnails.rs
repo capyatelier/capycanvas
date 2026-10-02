@@ -34,7 +34,7 @@ fn photo(extent: [u32; 2]) -> Arc<SourceImage> {
     }
     Arc::new(builder.finish().unwrap())
 }
-fn thumbnail(r: &mut WgpuRasterizer, id: LayerId) -> Vec<u8> {
+pub(crate) fn thumbnail(r: &mut WgpuRasterizer, id: LayerId) -> Vec<u8> {
     r.start_thumbnail(7, id).unwrap();
     r.device
         .poll(wgpu::PollType::Wait {

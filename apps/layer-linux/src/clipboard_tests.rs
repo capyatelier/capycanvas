@@ -122,7 +122,7 @@ fn native_clipboard_copy_paste_round_trips() {
     until(|| document(&w).layers.len() == layers + 1 && idle(&w), "Ctrl+V pastes a new layer");
     let pasted = active_layer(&w);
     assert_eq!(pasted.source.as_deref(), Some(&clip.source_for(document(&w).color)));
-    assert_eq!(pasted.properties.placement.0[4..], clip.origin.map(|v| v as f32), "at the copied position");
+    assert_eq!(pasted.properties.placement.as_affine().unwrap().0[4..], clip.origin.map(|v| v as f32), "at the copied position");
     assert!(state(&w).canvas_bar.is_none_or(|b| b.context.kind != layer_ui::CanvasBarKind::Placement), "no handles");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     until(|| document(&w).layers.len() == layers, "one undo step");
@@ -173,7 +173,7 @@ fn native_clipboard_copy_paste_round_trips() {
     until(|| document(&second).layers.len() == 3 && idle(&second), "Paste in Place into another drawing");
     let pasted = active_layer(&second);
     assert_eq!(pasted.source.as_ref().unwrap().kind, SourceKind::Original, "another colour mode keeps an explicit profile");
-    assert_eq!(pasted.properties.placement.0[4..], copy.origin.map(|v| v as f32));
+    assert_eq!(pasted.properties.placement.as_affine().unwrap().0[4..], copy.origin.map(|v| v as f32));
     second.window.destroy();
     w.window.present();
     pump(400);

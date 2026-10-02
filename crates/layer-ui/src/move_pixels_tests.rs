@@ -1,6 +1,6 @@
 mod move_pixels_checks {
     use super::*;
-    use layer_core::{Affine, ImageTransform, Interpolation, LayerOperationKind, TransformMap};
+    use layer_core::{Affine, ImageTransform, Interpolation, LayerOperationKind, LayerPlacement};
 
     fn surface(s: &UiSession<Recorder>, p: [f32; 2]) -> [f32; 2] {
         let m = s.state.camera.document_to_surface();
@@ -29,8 +29,8 @@ mod move_pixels_checks {
     }
     fn moved(offset: [f32; 2], keep_source: bool) -> ImageTransform {
         ImageTransform {
-            map: TransformMap::Affine(Affine::translation(Point { x: offset[0], y: offset[1] })),
-            interpolation: Interpolation::Nearest,
+            placement: LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(Affine::translation(Point { x: offset[0], y: offset[1] })) },
+            source_from_owner: None,
             keep_source,
         }
     }
@@ -132,7 +132,7 @@ mod move_pixels_checks {
         let data = s.engine.document().target_raster(LayerId(1)).unwrap().wait_data().unwrap();
         let (key, tile) = data.tiles.iter().next().unwrap();
         assert!(tile.same_capture(&original_tile), "the same captured pixels survive tile rebasing");
-        let origin = s.engine.document().layer_transform(LayerId(1)).map(layer_core::Point {
+        let origin = s.engine.document().affine_edit_transform(LayerId(1)).unwrap().map(layer_core::Point {
             x: key.coordinate[0] as f32 * layer_core::raster::TILE_SIZE as f32,
             y: key.coordinate[1] as f32 * layer_core::raster::TILE_SIZE as f32,
         });
@@ -231,6 +231,6 @@ mod move_pixels_checks {
         drag(&mut s, [200., 200.], [216., 190.]);
         let transforms = committed(&s);
         assert_eq!(transforms.len(), 2, "the paint and its linked mask");
-        assert!(transforms.iter().all(|t| !t.keep_source && t.interpolation == Interpolation::Nearest));
+        assert!(transforms.iter().all(|t| !t.keep_source && t.placement.interpolation == Interpolation::Nearest));
     }
 }

@@ -168,6 +168,7 @@ struct LayerChange {
     tiles: [i32; 2],
     extent: [u32; 2],
     trim: bool,
+    mask: Option<Box<LayerChange>>,
 }
 
 fn shift(point: Point, by: Point) -> Point {
@@ -176,10 +177,15 @@ fn shift(point: Point, by: Point) -> Point {
 
 /// Move a target's local origin by `delta` pixels without moving its pixels:
 /// the offset moves back by the same amount and a placement is conjugated.
-fn rebased_placement(placement: Affine, delta: Point) -> Affine {
-    Affine::translation(Point { x: -delta.x, y: -delta.y })
-        .then(placement)
-        .then(Affine::translation(delta))
+fn rebased_placement(placement: &LayerPlacement, delta: Point) -> LayerPlacement {
+    let to=Projective::from_affine(Affine::translation(delta));
+    let mut result=placement.clone();
+    if let Some(mesh)=&placement.mesh {let mut mesh=(**mesh).clone();mesh.frame=mesh.frame.then(Affine::translation(delta));result.mesh=Some(Arc::new(mesh));result.outer=result.outer.then(to).unwrap();}
+    else {result.outer=Projective::from_affine(Affine::translation(Point{x:-delta.x,y:-delta.y})).then(result.outer).and_then(|m|m.then(to)).unwrap();}
+    result
+}
+fn rebased_mask(placement: Projective,delta:Point)->Projective {
+    Projective::from_affine(Affine::translation(Point{x:-delta.x,y:-delta.y})).then(placement).and_then(|m|m.then(Projective::from_affine(Affine::translation(delta)))).unwrap()
 }
 
 fn raster_data(raster: &RasterRevision) -> Result<Arc<RasterData>, CanvasGeometryError> {
@@ -219,8 +225,8 @@ fn invalid_placement() -> CanvasGeometryError {
 
 /// The canvas window in a target's local pixels.
 fn local_window(layers: &[Layer], id: LayerId, canvas: [u32; 2]) -> Result<Rect, CanvasGeometryError> {
-    let inverse = target_transform(layers, id).inverse().ok_or_else(invalid_placement)?;
-    Ok(inverse.bounds(Rect::from_extent(canvas)))
+    affine_edit_transform(layers, id).and_then(Affine::inverse)
+        .map(|map| map.bounds(Rect::from_extent(canvas))).ok_or_else(invalid_placement)
 }
 
 /// Local pixels a target holds, in whole tiles: its tiles and the tiles a
@@ -398,10 +404,10 @@ impl Document {
     pub fn extents_cover_canvas(&self) -> bool {
         let canvas = [self.width, self.height];
         self.layers.iter().all(|layer| {
-            let extent = layer.local_extent(canvas);
             let paint = (layer.kind == LayerKind::Paint && layer.source.is_none()).then_some(layer.id);
             let mask = layer.mask.as_ref().filter(|_| layer.source.is_none()).map(|m| m.id);
-            paint.into_iter().chain(mask).all(|id| {
+            paint.into_iter().chain(mask).filter(|id| self.affine_edit_transform(*id).is_some()).all(|id| {
+                let extent=self.target_extent(id);
                 local_window(&self.layers, id, canvas).is_ok_and(|window| {
                     window.min.x >= -PIXEL_TOLERANCE
                         && window.min.y >= -PIXEL_TOLERANCE
@@ -439,21 +445,20 @@ impl Document {
                 layer.raster = rebased_raster(&layer.raster, change)?;
                 if moved {
                     layer.properties.offset = shift(layer.properties.offset, delta);
-                    layer.properties.placement = rebased_placement(layer.properties.placement, delta);
+                    layer.properties.placement = rebased_placement(&layer.properties.placement, delta);
                 }
             }
-            if let Some(mask) = &mut layer.mask {
-                mask.raster = rebased_raster(&mask.raster, change)?;
-                if moved {
-                    mask.offset = shift(mask.offset, delta);
-                    mask.placement = rebased_placement(mask.placement, delta);
-                    mask.initial = mask.initial.as_ref().map(|s| s.translated(delta));
-                }
+            let owner_extent = if layer.kind == LayerKind::Paint { change.extent } else { layer.local_extent(rect.size) };
+            if let Some((mask,mask_change)) = layer.mask.as_mut().zip(change.mask.as_ref()) {
+                mask.raster=rebased_raster(&mask.raster,mask_change)?;
+                let mask_delta=Point{x:(mask_change.tiles[0]*size) as f32,y:(mask_change.tiles[1]*size) as f32};
+                if mask_change.tiles!=[0;2] {mask.offset=shift(mask.offset,mask_delta);mask.placement=rebased_mask(mask.placement,mask_delta);mask.initial=mask.initial.as_ref().map(|s|s.translated(mask_delta));}
+                mask.extent=(mask_change.extent != owner_extent).then_some(mask_change.extent);
             }
             let base = layer.source.as_ref().map_or(rect.size, |source| {
                 std::array::from_fn(|i| rect.size[i].max(source.extent[i]))
             });
-            layer.properties.extent = (0..2).any(|i| change.extent[i] > base[i]).then_some(change.extent);
+            if layer.kind==LayerKind::Paint && !(targets.is_some() && change.tiles == [0; 2] && change.extent == self.target_extent(layer.id)) {layer.properties.extent = (change.extent != base).then_some(change.extent);}
         }
         self.check_raster_limits(&layers, &BTreeMap::new(), limits.project)?;
         let mut operations = Vec::new();
@@ -465,7 +470,7 @@ impl Document {
             if tiles.tiles.is_empty() {
                 continue;
             }
-            let transform = target_transform(&layers, layer.id);
+            let transform = affine_edit_transform(&layers, layer.id).ok_or_else(invalid_placement)?;
             let erase = if is_translation(transform) {
                 erase_outside(local_window(&layers, layer.id, rect.size)?, change.extent, &tiles)?
             } else {
@@ -507,43 +512,24 @@ impl Document {
                 changes.push(None);
                 continue;
             }
-            let extent = layer.local_extent(canvas);
-            let change = if layer.source.is_some() {
-                LayerChange { tiles: [0; 2], extent, trim: false }
-            } else {
-                let mut window = Rect::EMPTY;
-                for id in paint_targets {
-                    window = window.union(local_window(&layers, id, rect.size)?);
-                }
-                let low = [window.min.x, window.min.y];
-                let high = [window.max.x, window.max.y];
-                let mut tiles = [0; 2];
-                let mut grown = extent;
-                let limit = limits.project.dimension as f32;
-                let size = TILE_SIZE as f32;
+            let extent=layer.local_extent(canvas);
+            let change_for=|id,extent:[u32;2]|->Result<LayerChange,CanvasGeometryError>{
+                if layer.source.is_some()||affine_edit_transform(&layers,id).is_none(){return Ok(LayerChange{tiles:[0;2],extent,trim:false,mask:None});}
+                let window=local_window(&layers,id,rect.size)?;let low=[window.min.x,window.min.y];let high=[window.max.x,window.max.y];
+                let mut tiles=[0;2];let mut grown=extent;let limit=limits.project.dimension as f32;let size=TILE_SIZE as f32;
                 for axis in 0..2 {
-                    let before = (-low[axis] - PIXEL_TOLERANCE).ceil().max(0.);
-                    let after = (high[axis] - PIXEL_TOLERANCE).ceil().max(0.);
-                    if before > limit || after > 2. * limit {
-                        return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.project.dimension });
-                    }
-                    if geometry.delete_outside {
-                        let first = ((low[axis] + PIXEL_TOLERANCE) / size).floor();
-                        let last = ((high[axis] - PIXEL_TOLERANCE) / size).ceil();
-                        tiles[axis] = -first as i32;
-                        grown[axis] = ((last - first).max(1.) * size) as u32;
-                    } else {
-                        tiles[axis] = (before as u32).div_ceil(TILE_SIZE) as i32;
-                        let delta = tiles[axis] as u32 * TILE_SIZE;
-                        grown[axis] = (extent[axis] + delta).max((after as u32).saturating_add(delta));
-                    }
+                    let before=(-low[axis]-PIXEL_TOLERANCE).ceil().max(0.);let after=(high[axis]-PIXEL_TOLERANCE).ceil().max(0.);
+                    if before>limit||after>2.*limit{return Err(CanvasGeometryError::ExtentTooLarge{limit:limits.project.dimension});}
+                    if geometry.delete_outside {let first=((low[axis]+PIXEL_TOLERANCE)/size).floor();let last=((high[axis]-PIXEL_TOLERANCE)/size).ceil();tiles[axis]=-first as i32;grown[axis]=((last-first).max(1.)*size) as u32;}
+                    else {tiles[axis]=(before as u32).div_ceil(TILE_SIZE) as i32;let delta=tiles[axis] as u32*TILE_SIZE;grown[axis]=(extent[axis]+delta).max((after as u32).saturating_add(delta));}
                 }
-                LayerChange { tiles, extent: grown, trim: geometry.delete_outside }
+                if grown.iter().any(|v|*v>limits.project.dimension){return Err(CanvasGeometryError::ExtentTooLarge{limit:limits.project.dimension});}
+                Ok(LayerChange{tiles,extent:grown,trim:geometry.delete_outside,mask:None})
             };
-            if change.extent.iter().any(|v| *v > limits.project.dimension) {
-                return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.project.dimension });
-            }
-            changes.push((targets.is_none() || change.tiles != [0; 2] || change.extent != extent).then_some(change));
+            let mut change=if layer.kind==LayerKind::Paint {change_for(layer.id,extent)?}else{LayerChange{tiles:[0;2],extent,trim:false,mask:None}};
+            change.mask=layer.mask.as_ref().map(|m|change_for(m.id,m.local_extent(extent)).map(Box::new)).transpose()?;
+            let changed=change.tiles!=[0;2]||change.extent!=extent||change.mask.as_ref().zip(layer.mask.as_ref()).is_some_and(|(c,m)|c.tiles!=[0;2]||c.extent!=m.local_extent(extent));
+            changes.push((targets.is_none()||changed).then_some(change));
         }
         Ok((layers, changes))
     }
@@ -565,21 +551,27 @@ impl Document {
             let parents = shift(target_offset(&layers, old.id), layers[index].properties.offset);
             if old.kind == LayerKind::Selection {
                 if let Some(selection) = &old.selection {
-                    let after = target_transform(&layers, old.id).inverse().ok_or_else(invalid_placement)?;
-                    let map = target_transform(&self.layers, old.id).then(to_canvas).then(after);
+                    let after = affine_edit_transform(&layers,old.id).and_then(Affine::inverse).ok_or_else(invalid_placement)?;
+                    let map = affine_edit_transform(&self.layers,old.id).ok_or_else(invalid_placement)?.then(to_canvas).then(after);
                     layers[index].selection = Some(selection.transformed(map)?);
                 }
                 continue;
             }
-            if old.source.is_some() {
-                let world = target_offset(&layers, old.id);
-                layers[index].properties.placement =
-                    target_transform(&self.layers, old.id).then(to_canvas).then(Affine::translation(shift(Point::default(), world)));
-                if let Some(mask) = &old.mask {
-                    let desired = target_transform(&self.layers, mask.id).then(to_canvas);
-                    layers[index].mask.as_mut().unwrap().placement = Affine::IDENTITY;
-                    let rest = target_transform(&layers, mask.id).inverse().ok_or_else(invalid_placement)?;
-                    layers[index].mask.as_mut().unwrap().placement = desired.then(rest);
+            if old.source.is_some() || old.properties.placement.as_affine().is_none() {
+                let edit=self.retained_transform_edit(&[old.id],Projective::from_affine(to_canvas))?;
+                let Edit::Batch(edits)=edit else{unreachable!()};
+                if let Some(replacement)=edits.into_iter().find_map(|e|match e {Edit::ReplaceLayer(l) if l.id==old.id=>Some(*l),_=>None}) {
+                    let world=target_offset(&layers,old.id);let mut replacement=replacement;
+                    let original_world=self.layer_offset(old.id);let delta=Point{x:original_world.x-world.x,y:original_world.y-world.y};
+                    replacement.properties.placement=replacement.properties.placement.post(Projective::from_affine(Affine::translation(delta))).ok_or_else(invalid_placement)?;
+                    replacement.properties.offset=layers[index].properties.offset;
+                    replacement.properties.extent=Some(old.local_extent(canvas));
+                    if let Some(mask)=replacement.mask.as_mut() {
+                        mask.extent=Some(old.mask.as_ref().unwrap().local_extent(old.local_extent(canvas)));
+                        if mask.linked {mask.offset=Point{x:mask.offset.x+replacement.properties.offset.x-old.properties.offset.x,y:mask.offset.y+replacement.properties.offset.y-old.properties.offset.y};}
+                        else {let old_parent=Point{x:original_world.x-old.properties.offset.x,y:original_world.y-old.properties.offset.y};let new_parent=Point{x:world.x-replacement.properties.offset.x,y:world.y-replacement.properties.offset.y};mask.placement=mask.placement.then(Projective::from_affine(Affine::translation(shift(old_parent,new_parent)))).ok_or_else(invalid_placement)?;}
+                    }
+                    layers[index]=replacement;
                 }
                 continue;
             }
@@ -591,7 +583,7 @@ impl Document {
             let extent = old.local_extent(canvas);
             let mut rotated = Rect::EMPTY;
             for &id in &targets {
-                rotated = rotated.union(target_transform(&self.layers, id).then(to_canvas).bounds(Rect::from_extent(extent)));
+                rotated = rotated.union(self.layer_geometry(id).placement.post(Projective::from_affine(to_canvas)).map_or(Rect::UNBOUNDED,|p|p.forward_bounds(Rect::from_extent(self.target_extent(id)))));
             }
             let frame = if geometry.delete_outside {
                 [0.; 2]
@@ -611,20 +603,20 @@ impl Document {
             let layer = &mut layers[index];
             if paint.is_some() {
                 layer.properties.offset = shift(world, parents);
-                layer.properties.placement = Affine::IDENTITY;
+                layer.properties.placement = LayerPlacement::IDENTITY;
             }
             layer.properties.extent = (0..2).any(|i| grown[i] > rect.size[i]).then_some(grown);
             if let Some(mask) = &mut layer.mask {
-                mask.placement = Affine::IDENTITY;
+                mask.placement = Projective::IDENTITY;
                 mask.offset = shift(world, parents);
+                mask.extent = Some(grown);
             }
             for id in targets {
-                let map = target_transform(&self.layers, id)
-                    .then(to_canvas)
-                    .then(Affine::translation(shift(Point::default(), world)));
-                let content = content_bounds(old, id)?;
-                let existing = raster_data(self.target_raster(id).ok_or(DocumentError::MissingLayer(id))?)?;
-                let transform = ImageTransform { map: TransformMap::Affine(map), interpolation: geometry.interpolation, ..Default::default() };
+                let mut transform=self.layer_geometry(id);
+                transform.placement=transform.placement.post(Projective::from_affine(to_canvas.then(Affine::translation(shift(Point::default(),world))))).ok_or_else(invalid_placement)?;
+                transform.placement.interpolation=geometry.interpolation;
+                let content=content_bounds(old,id)?;
+                let existing=raster_data(self.target_raster(id).ok_or(DocumentError::MissingLayer(id))?)?;
                 let written: BTreeSet<[u32; 2]> = if content.is_empty() {
                     existing.tiles.keys().map(|k| k.coordinate).collect()
                 } else {

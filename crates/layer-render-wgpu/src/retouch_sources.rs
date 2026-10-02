@@ -218,7 +218,7 @@ fn lone_layer(frame: &artwork::Frame) -> Option<LayerId> {
         && layer.properties.parent.is_none()
         && !layer.properties.clipped
         && layer.properties.blend == layer_core::LayerBlend::Normal
-        && layer_core::target_transform(&frame.layers, layer.id) == layer_core::Affine::IDENTITY)
+        && layer_core::target_geometry(&frame.layers, layer.id).is_identity())
         .then_some(layer.id)
 }
 
@@ -625,7 +625,8 @@ impl RetouchSources {
             (None, None, None) => return Err(GpuRasterError::MissingPaintLayer(LayerId(0))),
         };
         let frame = r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?;
-        let layer_core::Affine([a, b, c, d, tx, ty]) = layer_core::target_transform(&frame.layers, target);
+        let layer_core::Affine([a, b, c, d, tx, ty]) = layer_core::affine_edit_transform(&frame.layers, target)
+            .ok_or(GpuRasterError::InvalidTransform("Apply the transform to edit these pixels"))?;
         let region = gather.region;
         if [a, b, c, d] != [1., 0., 0., 1.] || region.is_empty() || region.width().max(region.height()) > PAGE_SIZE {
             return Err(GpuRasterError::InvalidTransform("Retouch sources need an unrotated, unscaled layer"));

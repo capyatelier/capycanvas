@@ -98,7 +98,7 @@ fn same_state(a: &Document, b: &Document) {
 }
 
 fn document_point(doc: &Document, id: LayerId, local: Point) -> Point {
-    doc.layer_transform(id).map(local)
+    doc.affine_edit_transform(id).unwrap().map(local)
 }
 
 #[test]
@@ -229,14 +229,15 @@ fn locked_layers_follow_and_photos_never_rebase() {
     assert_eq!(result.layer(doc.layers[4].id).unwrap().properties.offset, Point { x: -236., y: -236. });
     let placed = result.layer(photo).unwrap();
     assert_eq!(placed.properties.offset, Point { x: 20., y: 20. });
-    assert_eq!(placed.properties.extent, None);
-    assert_eq!(result.target_extent(photo), [700, 300]);
+    assert_eq!(placed.properties.extent, Some(doc.target_extent(photo)));
+    assert_eq!(result.target_extent(photo), doc.target_extent(photo));
+    assert!(Arc::ptr_eq(placed.source.as_ref().unwrap(), doc.layer(photo).unwrap().source.as_ref().unwrap()));
 }
 
 #[test]
 fn rebasing_conjugates_a_placement_so_pixels_stay_put() {
     let mut doc = fixture();
-    doc.layers[3].properties.placement = Affine::around(Point { x: 20., y: 10. }, [1.5, 0.5], 0.4, Point { x: 3., y: -8. });
+    doc.layers[3].properties.placement = LayerPlacement::from_affine(Affine::around(Point { x: 20., y: 10. }, [1.5, 0.5], 0.4, Point { x: 3., y: -8. }));
     let paint = doc.layers[3].id;
     let editor = apply(&doc, rect([-400, 0], [900, 256]));
     let result = editor.document();
@@ -349,18 +350,18 @@ fn straightening_resamples_paint_and_masks_into_a_frame_that_keeps_hidden_corner
     assert_eq!(targets, [child, paint, mask], "the locked layer and its mask follow");
     for (id, op) in &plan.operations {
         let LayerOperationKind::Transform(transform) = &op.kind else { panic!("a resample") };
-        assert_eq!(transform.interpolation, Interpolation::Bicubic);
+        assert_eq!(transform.placement.interpolation, Interpolation::Bicubic);
         let map = transform.as_affine().unwrap();
         let extent = doc.target_extent(*id);
-        let after = result.layer_transform(*id).inverse().unwrap();
+        let after = result.affine_edit_transform(*id).unwrap().inverse().unwrap();
         let new_extent = result.target_extent(*id);
         for corner in Rect::from_extent(extent).corners() {
-            let expected = after.map(to_canvas.map(doc.layer_transform(*id).map(corner)));
+            let expected = after.map(to_canvas.map(doc.affine_edit_transform(*id).unwrap().map(corner)));
             near(map.map(corner), expected);
             assert!(expected.x >= -0.01 && expected.y >= -0.01, "{expected:?}");
             assert!(expected.x <= new_extent[0] as f32 + 0.01 && expected.y <= new_extent[1] as f32 + 0.01);
         }
-        assert!(is_translation(result.layer_transform(*id)));
+        assert!(is_translation(result.affine_edit_transform(*id).unwrap()));
     }
     let saved = doc.layers[0].id;
     let before = doc.saved_selection(saved).unwrap();
@@ -400,7 +401,7 @@ fn straightening_turns_a_photo_placement_without_touching_its_pixels() {
     let mask = before.mask.as_ref().unwrap().id;
     for id in [photo, mask] {
         for p in [Point { x: 0., y: 0. }, Point { x: 300., y: 200. }] {
-            near(result.layer_transform(id).map(p), geometry.to_canvas().map(doc.layer_transform(id).map(p)));
+            near(result.affine_edit_transform(id).unwrap().map(p), geometry.to_canvas().map(doc.affine_edit_transform(id).unwrap().map(p)));
         }
     }
 }
@@ -474,7 +475,7 @@ fn flips_and_turns_move_pixel_centres_onto_pixel_centres_in_one_step() {
         let resampled = transforms(&plan);
         assert_eq!(resampled.len(), 3, "the child, the paint layer and its mask");
         for (id, transform) in resampled {
-            assert_eq!(transform.interpolation, Interpolation::Nearest);
+            assert_eq!(transform.placement.interpolation, Interpolation::Nearest);
             let map = transform.as_affine().unwrap();
             assert!(map.0.iter().all(|v| v.fract() == 0.), "{orientation:?} {map:?}");
             let extent = result.target_extent(id);
@@ -485,11 +486,11 @@ fn flips_and_turns_move_pixel_centres_onto_pixel_centres_in_one_step() {
                 let q = map.map(p);
                 assert_eq!([q.x.fract(), q.y.fract()], [0.5, 0.5]);
                 assert!(q.x > 0. && q.y > 0. && q.x < extent[0] as f32 && q.y < extent[1] as f32);
-                near(result.layer_transform(id).map(q), to_canvas.map(doc.layer_transform(id).map(p)));
+                near(result.affine_edit_transform(id).unwrap().map(q), to_canvas.map(doc.affine_edit_transform(id).unwrap().map(p)));
             }
         }
         for p in [Point { x: 0., y: 0. }, Point { x: 300., y: 200. }] {
-            near(result.layer_transform(photo).map(p), to_canvas.map(doc.layer_transform(photo).map(p)));
+            near(result.affine_edit_transform(photo).unwrap().map(p), to_canvas.map(doc.affine_edit_transform(photo).unwrap().map(p)));
         }
         assert!(result.layer(photo).unwrap().raster == doc.layer(photo).unwrap().raster, "photos only move");
         assert_eq!(result.selection, Some(doc.selection.as_ref().unwrap().transformed(to_canvas).unwrap()));
@@ -526,10 +527,10 @@ fn turning_four_times_or_flipping_twice_puts_every_pixel_back() {
         let result = editor.document();
         assert_eq!([result.width, result.height], [doc.width, doc.height]);
         for (id, p) in tracked.iter().zip(samples.iter().cycle()).map(|((id, p), start)| (*id, (*p, *start))) {
-            near(result.layer_transform(id).map(p.0), doc.layer_transform(id).map(p.1));
+            near(result.affine_edit_transform(id).unwrap().map(p.0), doc.affine_edit_transform(id).unwrap().map(p.1));
         }
         for p in [Point { x: 0., y: 0. }, Point { x: 300., y: 200. }] {
-            near(result.layer_transform(photo).map(p), doc.layer_transform(photo).map(p));
+            near(result.affine_edit_transform(photo).unwrap().map(p), doc.affine_edit_transform(photo).unwrap().map(p));
         }
         let selection = result.selection.as_ref().unwrap();
         for p in [Point { x: 100., y: 100. }, Point { x: 200., y: 200. }] {
@@ -596,13 +597,13 @@ fn image_size_scales_layers_placements_selections_guides_and_pixel_distances() {
         assert!(result.extents_cover_canvas());
         assert_eq!(sigma(result), expected, "clamped to the parameter's range");
         for (id, transform) in transforms(&plan) {
-            assert_eq!(transform.interpolation, Interpolation::Lanczos);
+            assert_eq!(transform.placement.interpolation, Interpolation::Lanczos);
             for p in [Point { x: 0., y: 0. }, Point { x: 256., y: 256. }] {
-                near(result.layer_transform(id).map(transform.as_affine().unwrap().map(p)), to_canvas.map(doc.layer_transform(id).map(p)));
+                near(result.affine_edit_transform(id).unwrap().map(transform.as_affine().unwrap().map(p)), to_canvas.map(doc.affine_edit_transform(id).unwrap().map(p)));
             }
         }
         for p in [Point { x: 0., y: 0. }, Point { x: 300., y: 200. }] {
-            near(result.layer_transform(photo).map(p), to_canvas.map(doc.layer_transform(photo).map(p)));
+            near(result.affine_edit_transform(photo).unwrap().map(p), to_canvas.map(doc.affine_edit_transform(photo).unwrap().map(p)));
         }
         assert_eq!(result.selection, Some(doc.selection.as_ref().unwrap().transformed(to_canvas).unwrap()));
         assert_eq!(result.rulers[0].geometry, doc.rulers[0].geometry.transformed(to_canvas));
@@ -645,7 +646,7 @@ fn paint_extent_plan_inverse_maps_the_canvas_and_preserves_hidden_material_and_m
             data.watercolor = Some(crate::raster::RasterWatercolor { wet_edge: 0.8, burnt_edge: 0.6, edge_width: 7. });
             doc.layers[0].raster = RasterRevision::backed(data);
             doc.layers[0].properties.extent = Some([1024, 768]);
-            doc.layers[0].properties.placement = map;
+            doc.layers[0].properties.placement = LayerPlacement::from_affine(map);
             doc.layers[0].properties.offset = Point { x: -20., y: 15. };
             let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), Point { x: -20., y: 15. });
             mask.linked = linked;
@@ -682,21 +683,28 @@ fn paint_extent_plan_inverse_maps_the_canvas_and_preserves_hidden_material_and_m
             }
             let new_mask = after.mask.as_ref().unwrap();
             let old_mask = before.mask.as_ref().unwrap();
-            assert_eq!(new_mask.initial, old_mask.initial.as_ref().map(|s| s.translated(delta)));
-            for (key, tile) in &old_mask.raster.wait_data().unwrap().tiles {
-                let moved = TileKey { plane: key.plane, coordinate: [key.coordinate[0] + moved[0], key.coordinate[1] + moved[1]] };
+            let old_mask_data = old_mask.raster.wait_data().unwrap();
+            let new_mask_data = new_mask.raster.wait_data().unwrap();
+            let mask_key = old_mask_data.tiles.keys().next().unwrap();
+            let mask_position = new_mask_data.tiles.iter().find(|(_, tile)| tile.same_capture(&old_mask_data.tiles[mask_key])).unwrap().0.coordinate;
+            let mask_move = [mask_position[0] - mask_key.coordinate[0], mask_position[1] - mask_key.coordinate[1]];
+            let mask_delta = Point { x: (mask_move[0] * TILE_SIZE) as f32, y: (mask_move[1] * TILE_SIZE) as f32 };
+            assert_eq!(new_mask.initial, old_mask.initial.as_ref().map(|s| s.translated(mask_delta)));
+            for (key, tile) in &old_mask_data.tiles {
+                let moved = TileKey { plane: key.plane, coordinate: [key.coordinate[0] + mask_move[0], key.coordinate[1] + mask_move[1]] };
                 assert!(new_mask.raster.wait_data().unwrap().tiles[&moved].same_capture(tile));
             }
             for target in [id, mask_id] {
-                let inverse = result.layer_transform(target).inverse().unwrap();
+                let inverse = result.affine_edit_transform(target).unwrap().inverse().unwrap();
                 for corner in Rect::from_extent([256, 128]).corners() {
                     let local = inverse.map(corner);
                     let extent = result.target_extent(target);
                     assert!(local.x >= -0.01 && local.y >= -0.01, "{map:?} linked={linked}: {local:?}");
                     assert!(local.x <= extent[0] as f32 + 0.01 && local.y <= extent[1] as f32 + 0.01);
                 }
+                let target_delta = if target == mask_id { mask_delta } else { delta };
                 for local in [Point { x: 11., y: 9. }, Point { x: 1000., y: 760. }] {
-                    near(document_point(result, target, Point { x: local.x + delta.x, y: local.y + delta.y }),
+                    near(document_point(result, target, Point { x: local.x + target_delta.x, y: local.y + target_delta.y }),
                         document_point(&doc, target, local));
                 }
             }
@@ -713,15 +721,15 @@ fn paint_extent_plan_inverse_maps_the_canvas_and_preserves_hidden_material_and_m
 fn paint_extent_plan_changes_only_selected_paint_and_keeps_photo_domains_fixed() {
     let mut doc = Document::new("selected extent", 512, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let id = doc.layers[0].id;
-    doc.layers[0].properties.placement = Affine([0.5, 0., 0., 0.5, 20., 30.]);
+    doc.layers[0].properties.placement = LayerPlacement::from_affine(Affine([0.5, 0., 0., 0.5, 20., 30.]));
     let other = doc.allocate_layer_id();
     let mut unrelated = Layer::paint(other, "Unselected");
-    unrelated.properties.placement = Affine([1. / 128., 0., 0., 1. / 128., 0., 0.]);
+    unrelated.properties.placement = LayerPlacement::from_affine(Affine([1. / 128., 0., 0., 1. / 128., 0., 0.]));
     doc.layers.insert(0, unrelated.clone());
     let photo = doc.allocate_layer_id();
     let mut source = Layer::paint(photo, "Photo");
     source.source = Some(Arc::new(photo_source([300, 200])));
-    source.properties.placement = Affine([0.1, 0., 0., 0.1, 100., 50.]);
+    source.properties.placement = LayerPlacement::from_affine(Affine([0.1, 0., 0., 0.1, 100., 50.]));
     doc.layers.insert(0, source.clone());
     let edits = doc.paint_extent_plan(&[id, photo], limits()).unwrap();
     let mut editor = Editor::new(doc.clone());
@@ -740,7 +748,7 @@ fn paint_extent_plan_cap_refusal_and_identity_are_atomic_and_add_no_history() {
     let id = doc.layers[0].id;
     assert!(doc.paint_extent_plan(&[id], limits()).unwrap().is_empty());
     assert!(doc.validate_paint_extents(&[id], limits()).is_ok());
-    doc.layers[0].properties.placement = Affine([1. / 128., 0., 0., 1. / 128., 0., 0.]);
+    doc.layers[0].properties.placement = LayerPlacement::from_affine(Affine([1. / 128., 0., 0., 1. / 128., 0., 0.]));
     let editor = Editor::new(doc.clone());
     let error = CanvasGeometryError::ExtentTooLarge { limit: 32768 };
     assert_eq!(doc.paint_extent_plan(&[id], limits()), Err(error.clone()));

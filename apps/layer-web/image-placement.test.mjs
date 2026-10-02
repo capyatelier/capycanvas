@@ -30,6 +30,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
   const state=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state(),(_,v)=>typeof v==="bigint"?Number(v):v))');
   const idle=()=>wait('!layerApp.state().document_file.busy');
   const placed=()=>wait('layerApp.state().commands.find(c=>c.id==="placement_original_size").enabled');
+  const transforming=()=>wait("['transform','placement'].includes(layerApp.state().canvas_bar?.context.kind)&&layerApp.state().commands.find(c=>c.id==='apply_transform').enabled");
   const click=async selector=>{
     await wait(`(n=>n && !n.disabled && n.getAttribute('aria-disabled')!=='true' && !n.closest('.canvas-action-bar.suppressed'))(document.querySelector(${JSON.stringify(selector)}))`);
     const p=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
@@ -49,6 +50,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     for(const type of ['dragEnter','dragOver','drop'])await call('Input.dispatchDragEvent',{type,...p,data:{items:[],files,dragOperationsMask:1}});
   };
   const save=placementSave({evaluate,invoke,idle});
+  const affine=p=>{assert.equal(p.mesh,null);const m=p.outer;assert.deepEqual(m.slice(6),[0,0,1]);return[m[0],m[3],m[1],m[4],m[2],m[5]];};
   let files;
   try {
     await evaluate(`window.placementTestBounds=[];window.placementTestOriginalWorker=Worker;const OriginalWorker=Worker;window.Worker=class extends OriginalWorker{constructor(...args){super(...args);this.boundsIds=new Set();this.addEventListener('message',({data})=>{if(this.boundsIds.has(data.id))placementTestBounds.push(data);});}postMessage(message,...args){if(message.request?.operation==='snapshot'&&JSON.parse(message.request.metadata)[1].Bounds)this.boundsIds.add(message.id);return super.postMessage(message,...args);}};`);
@@ -67,19 +69,21 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     }
     const bad=join(root,'malformed.png');await writeFile(bad,'not an image');
     await invoke('new_document');
-    await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Discard Changes')?.click()`);
-    await wait('document.querySelector("dialog[open] input[type=number]")');
-    await evaluate(`{const fields=document.querySelectorAll('dialog[open] input[type=number]');fields[0].value=2000;fields[1].value=1500;[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create').click();}`);
+    await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===layerApp.app.editor_models(innerWidth,innerHeight).document_options.discard_label)?.click()`);
+    await wait('document.querySelector("dialog[open] [data-document-field=width]")');
+    await evaluate(`{for(const [id,value] of [['width',2000],['height',1500]]){const entry=document.querySelector('dialog[open] [data-document-field='+id+']');entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));}document.querySelector('dialog[open] [data-document-action=create]').click();}`);
     await idle();await wait('layerApp.app.brush_ready()');
+    console.log('Image placement: document ready, checking linked paint Transform');
     for(const theme of ['light','dark']){
       await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
       await invoke('select_all');await invoke('fill_selection');
       const linkedPaint=await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
       await evaluate(`layerApp.dispatch({type:'layer',action:{op:'add_mask',id:${linkedPaint},replace:false}});layerApp.dispatch({type:'layer',action:{op:'select',id:${linkedPaint},mask:false}})`);await settle();
-      await invoke('scale_rotate');await wait("layerApp.state().canvas_bar?.context.kind==='transform'");
+      await invoke('scale_rotate');await wait("['transform','placement'].includes(layerApp.state().canvas_bar?.context.kind)");
       await invoke('transform_warp');await invoke('cancel_transform');
       await invoke('undo');await invoke('undo');await invoke('deselect');
     }
+    console.log('Image placement: linked paint Transform Cancel passed');
     const base=await state(),baseCount=base.layers.length;
     assert.deepEqual(await evaluate('layerApp.app.photo_formats().map(f=>f.name)'),['OpenEXR','TIFF','PNG','WebP','BMP','JPEG','GIF','HEIF','AVIF']);
     await importFiles(files);
@@ -93,7 +97,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     const fitted=await save(),sources=sourceIdentity(fitted);
     assert.equal(sources.length,files.length);
     for(let i=0;i<files.length;i++){
-      const [w,h]=sources[i].extent,scale=Math.min(1,2000/w,1500/h),pose=fitted.document.layers[i].properties.placement;
+      const [w,h]=sources[i].extent,scale=Math.min(1,2000/w,1500/h),pose=affine(fitted.document.layers[i].properties.placement);
       assert.ok(Math.abs(pose[0]-scale)<1e-6);assert.ok(Math.abs(pose[3]-scale)<1e-6);
       assert.ok(Math.abs(pose[4]-(2000-w*scale)/2)<.01);assert.ok(Math.abs(pose[5]-(1500-h*scale)/2)<.01);
     }
@@ -126,7 +130,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     console.log('Retained-photo cached Transform:',JSON.stringify(await timedTransform()));
     await click('.canvas-action-bar [data-command=placement_original_size]');
     await click('.canvas-action-bar [data-command=apply_transform]');
-    const native=await save();assert.equal(native.document.layers[0].properties.placement[0],1);assert.deepEqual(sourceIdentity(native),sources);
+    const native=await save();assert.equal(affine(native.document.layers[0].properties.placement)[0],1);assert.deepEqual(sourceIdentity(native),sources);
     await evaluate('placementTest.retainedMaster=placementTest.saved.slice()');
     const rasterIdentity=m=>m.rasters.map(r=>({...r,tiles:r.tiles.map(t=>({...t,blob:m.blobs[t.blob].digest}))}));
     const stroke=async()=>{
@@ -137,11 +141,50 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       }
       await wait('layerApp.app.brush_ready()');
     };
+    const screen=async(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
+    const pointer=async(type,p)=>{await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,pointerType:'pen',force:type==='mouseReleased'?0:.65});await settle();};
+    const tap=async p=>{await pointer('mousePressed',p);await pointer('mouseReleased',p);};
+    const drag=async(p,dx,dy)=>{await pointer('mousePressed',p);await pointer('mouseMoved',{x:p.x+dx/2,y:p.y+dy/2});await pointer('mouseMoved',{x:p.x+dx,y:p.y+dy});await pointer('mouseReleased',{x:p.x+dx,y:p.y+dy});};
+    const map=(m,x,y)=>{const w=m[6]*x+m[7]*y+m[8];return[(m[0]*x+m[1]*y+m[2])/w,(m[3]*x+m[4]*y+m[5])/w];};
     for(const theme of ['light','dark']){
       await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
       await invoke('brush');
       await evaluate(`layerApp.dispatch({type:'select_brush',id:21});layerApp.dispatch({type:'set_brush_size',value:80});layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'Srgb',rgba:[.15,.25,.9,1]}}});`);await settle();
       await stroke();
+      const rawBefore=await save(),retainedId=rawBefore.document.active_layer;
+      const ownerRaster=m=>rasterIdentity(m).filter(r=>r.target===retainedId);
+      await evaluate(`layerApp.dispatch({type:'layer',action:{op:'add_mask',id:${retainedId},replace:false}});layerApp.dispatch({type:'layer',action:{op:'select',id:${retainedId},mask:false}})`);await settle();
+      await invoke('scale_rotate');await transforming();
+      await evaluate(`layerApp.dispatch({type:'set_tool_setting',id:'transform_width',value:.5})`);await settle();await invoke('apply_transform');
+      await invoke('scale_rotate');await transforming();await invoke('transform_distort');
+      const anchor=(await state()).canvas_bar.anchor;
+      await drag(await screen(anchor[0],anchor[1]),-25,12);await invoke('apply_transform');
+      const distorted=await save(),outer=distorted.document.layers.find(l=>l.id===retainedId).properties.placement.outer;
+      assert.ok(outer[6]!==0||outer[7]!==0,'A real corner drag retains projective geometry');
+      const [sourceWidth,sourceHeight]=sources[0].extent;
+      const node=async(u,v)=>screen(...map(outer,u*sourceWidth,v*sourceHeight));
+      await invoke('scale_rotate');await transforming();await invoke('transform_warp');await invoke('warp_split_cross');
+      await tap(await node(.37,.61));await invoke('warp_select_points');
+      await tap(await node(.37,.61));await tap(await node(2/3,.61));await invoke('warp_select_points');
+      await drag(await node(.37,.61),18,12);await capture(`${theme}-retained-warp`);await invoke('apply_transform');
+      const warped=await save(),mesh=warped.document.layers.find(l=>l.id===retainedId).properties.placement.mesh;
+      assert.ok(mesh&&mesh.breakpoints.every(points=>points.length===5),'Cross Split persists both exact mesh axes');
+      for(const [u,v] of [[.37,.61],[2/3,.61]]) {
+        const i=mesh.breakpoints[0].findIndex(p=>Math.abs(p-u)<1e-4),j=mesh.breakpoints[1].findIndex(p=>Math.abs(p-v)<1e-4);
+        assert.ok(i>=0&&j>=0,'The selected split nodes remain in the nonuniform grid');
+        const point=mesh.net[j*3*(3*(mesh.breakpoints[0].length-1)+1)+i*3];
+        const [a,b,c,d,e,f]=mesh.frame,x=a*u+c*v+e,y=b*u+d*v+f;
+        assert.ok(Math.hypot(point.x-x,point.y-y)>1,'Each selected Warp node actually moves');
+      }
+      assert.deepEqual(ownerRaster(warped),ownerRaster(rawBefore),'Retained Distort/Warp leaves all original raw planes unchanged');
+      assert.deepEqual(sourceIdentity(warped),sources,'Retained Distort/Warp keeps the immutable photograph');
+      await evaluate(`placementTest.warpedMaster=placementTest.saved.slice();window.showOpenFilePicker=async()=>[{async getFile(){return new File([placementTest.warpedMaster],'warped.capy')}}]`);
+      await invoke('open_document');await idle();await wait('layerApp.app.brush_ready()');await evaluate('window.showOpenFilePicker=undefined');
+      const reopened=await save();assert.deepEqual(reopened.document.layers.find(l=>l.id===retainedId).properties.placement,warped.document.layers.find(l=>l.id===retainedId).properties.placement);
+      assert.deepEqual(ownerRaster(reopened),ownerRaster(rawBefore));
+      await wait(`(()=>{const l=layerApp.state().layers.find(l=>String(l.id)===${JSON.stringify(String(retainedId))}),c=document.querySelector('.layer-row[data-layer="${retainedId}"] .layer-thumbnail canvas');return l&&c?.dataset.previewRevision?.endsWith(':'+String(l.paint_revision))})()`);
+      const retainedColors=await evaluate(`(()=>{const c=document.querySelector('.layer-row[data-layer="${retainedId}"] .layer-thumbnail canvas'),p=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let n=0;for(let i=0;i<p.length;i+=4)if(p[i+3]&&Math.max(p[i],p[i+1],p[i+2])-Math.min(p[i],p[i+1],p[i+2])>20)n++;return n})()`);
+      assert.ok(retainedColors>0,'Completed retained outer-mesh photo thumbnail contains original photo colors');
       const seeded=await save(),seededId=seeded.document.active_layer;
       const rawMaterial=m=>m.rasters.find(r=>r.target===seededId);
       const materialPlanes=m=>[...new Set(rawMaterial(m).tiles.map(t=>t.key.plane))].sort();
@@ -159,7 +202,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await wait(`!layerApp.state().commands.find(c=>c.id==='cancel_transform').enabled&&layerApp.app.brush_ready()`);
       const baked=await save(),id=baked.document.active_layer;
       assert.ok(!baked.tiled_sources.layers.some(l=>l.target===id),'Bake removes the retained source association');
-      assert.deepEqual(baked.document.layers.find(l=>l.id===id).properties.placement,[1,0,0,1,0,0]);
+      assert.deepEqual(affine(baked.document.layers.find(l=>l.id===id).properties.placement),[1,0,0,1,0,0]);
       assert.ok(baked.rasters.some(r=>r.tiles.length),'Bake publishes editable native tiles');
       assert.deepEqual(materialPlanes(baked),materialPlanes(seeded),'Bake preserves the real watercolor pigment and scalar planes');
       assert.deepEqual(rawMaterial(baked).watercolor,rawMaterial(seeded).watercolor,'Bake preserves the wet stroke material style');
@@ -171,13 +214,6 @@ export async function checkImagePlacement({call,evaluate,settle}) {
         assert.ok(colored>0,'Completed baked-photo thumbnail contains the photo colors');
       }
       await capture(`${theme}-editing`);
-      if(captures){
-        await invoke('zen_mode');
-        await call('Emulation.setDeviceMetricsOverride',{width:360,height:640,deviceScaleFactor:1,mobile:false});await settle();
-        await wait(`document.getElementById('workspace').classList.contains('zen-hidden')&&[...document.querySelectorAll('#workspace > .dock-group:not(.floating-panel)')].every(n=>Number(getComputedStyle(n).opacity)===0)`);
-        await capture(`${theme}-narrow-editing`);
-        await call('Emulation.clearDeviceMetricsOverride');await invoke('zen_mode');
-      }
       await invoke('liquify');await evaluate(`layerApp.dispatch({type:'select_brush',id:13});layerApp.dispatch({type:'set_brush_size',value:80});`);await settle();
       await stroke();const liquified=await save();assert.notDeepEqual(rasterIdentity(liquified),rasterIdentity(painted),'Liquify edits baked paint');
       await invoke('undo');assert.deepEqual(rasterIdentity(await save()),rasterIdentity(painted));
@@ -194,6 +230,41 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await evaluate('window.showOpenFilePicker=undefined');
       assert.deepEqual(sourceIdentity(await save()),sources);
       console.log(`Photo bake ${theme}: pending Cancel, native pixels, paint, Liquify, one-step Undo and reopen passed`);
+    }
+    for(const theme of ['light','dark']) {
+      await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
+      const baseline=await save(),ownerId=baseline.document.active_layer;
+      await evaluate(`layerApp.dispatch({type:'layer',action:{op:'add_mask',id:${ownerId},replace:false}});layerApp.dispatch({type:'layer',action:{op:'link_mask',id:${ownerId},value:false}});layerApp.dispatch({type:'layer',action:{op:'select',id:${ownerId},mask:true}})`);await settle();
+      await invoke('eraser');await evaluate(`layerApp.dispatch({type:'select_brush',id:3});layerApp.dispatch({type:'set_brush_size',value:120});`);await settle();
+      await stroke();
+      assert.ok(rasterIdentity(await save()).some(r=>r.target!==ownerId&&r.tiles.some(t=>t.key.plane==='Mask')),'Mask eraser stroke creates real scalar native pixels');
+      await evaluate(`layerApp.dispatch({type:'layer',action:{op:'select',id:${ownerId},mask:false}});layerApp.dispatch({type:'layer',action:{op:'new',group:true,clipped:false}})`);await settle();
+      const groupId=Number((await state()).layer_tools.editing_layer.id);
+      await evaluate(`layerApp.dispatch({type:'layer',action:{op:'reparent',id:${ownerId},parent:${groupId},index:0}});layerApp.dispatch({type:'layer',action:{op:'select',id:${groupId},mask:false}})`);await settle();
+      await invoke('fit_canvas');await invoke('zoom_out');await invoke('zoom_out');
+      await invoke('scale_rotate');await transforming();await invoke('transform_distort');
+      const anchor=(await state()).canvas_bar.anchor;
+      const corners=await Promise.all([[anchor[0],anchor[1]],[anchor[2],anchor[1]],
+        [anchor[0],anchor[3]],[anchor[2],anchor[3]]].map(([x,y])=>screen(x,y)));
+      let corner;
+      for(const p of corners)if(await evaluate(`document.elementFromPoint(${p.x},${p.y})===layerApp.canvas`)){corner=p;break;}
+      assert.ok(corner,`A group Distort corner is reachable through the visible native canvas: ${JSON.stringify({anchor,corners})}`);
+      await drag(corner,20,12);await invoke('apply_transform');
+      await evaluate(`layerApp.dispatch({type:'layer',action:{op:'select',id:${ownerId},mask:true}})`);await settle();
+      const beforeMaskBake=await save(),owner=m=>m.document.layers.find(l=>l.id===ownerId);
+      const withoutMask=m=>{const {mask,...layer}=owner(m);return layer;};
+      assert.ok(owner(beforeMaskBake).mask.placement[6]!==0||owner(beforeMaskBake).mask.placement[7]!==0,'Independent mask retains projective geometry');
+      await invoke('apply_transform_pixels');await wait(`!layerApp.state().commands.find(c=>c.id==='cancel_transform').enabled&&layerApp.app.brush_ready()`);
+      const bakedMask=await save();
+      assert.deepEqual(withoutMask(bakedMask),withoutMask(beforeMaskBake),'Scalar-only worker bake preserves the complete owner');
+      assert.deepEqual(rasterIdentity(bakedMask).filter(r=>r.target===ownerId),rasterIdentity(beforeMaskBake).filter(r=>r.target===ownerId),'Scalar-only worker bake preserves owner raw Color/material');
+      assert.deepEqual(sourceIdentity(bakedMask),sources,'Scalar-only worker bake preserves immutable owner photo');
+      assert.deepEqual(owner(bakedMask).mask.placement,[1,0,0,0,1,0,0,0,1]);
+      assert.equal(owner(bakedMask).mask.linked,false);
+      await capture(`${theme}-independent-mask-baked`);
+      await invoke('undo');assert.deepEqual(owner(await save()).mask,owner(beforeMaskBake).mask);
+      await evaluate(`window.showOpenFilePicker=async()=>[{async getFile(){return new File([placementTest.retainedMaster],'retained.capy')}}]`);
+      await invoke('open_document');await idle();await wait('layerApp.app.brush_ready()');await evaluate('window.showOpenFilePicker=undefined');
     }
     // A malformed second file must discard all prepared sources.
     const before=await state();await invoke('import_image');await choose([files[0],bad]);await idle();
@@ -253,19 +324,43 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await drop(rowPoint,[files[0]]);
     await settle();assert.equal((await state()).layers.length,groupCount);assert.equal((await state()).document_file.busy,false);
     for(let i=0;i<files.length;i++) {
-      await invoke('open_document');await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Discard Changes')?.click()`);
+      await invoke('open_document');await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===layerApp.app.editor_models(innerWidth,innerHeight).document_options.discard_label)?.click()`);
       await choose([files[i]]);await idle();await wait('layerApp.app.brush_ready()');
       const opened=await save();
       assert.deepEqual([opened.document.width,opened.document.height],sources[i].extent,'Open uses oriented source dimensions');
       assert.deepEqual(sourceIdentity(opened),[sources[i]],'Open and placement decode the same exact source samples');
     }
     if(process.env.LAYER_IMAGE_MOTION==='1') {
-      await invoke('new_document');await wait('document.querySelector("dialog[open] input[type=number]")');
-      await evaluate(`{const fields=document.querySelectorAll('dialog[open] input[type=number]');fields[0].value=2000;fields[1].value=1500;[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create').click();}`);
+      await invoke('new_document');await wait('document.querySelector("dialog[open] [data-document-field=width]")');
+      await evaluate(`{for(const [id,value] of [['width',2000],['height',1500]]){const entry=document.querySelector('dialog[open] [data-document-field='+id+']');entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));}document.querySelector('dialog[open] [data-document-action=create]').click();}`);
       await idle();await wait('layerApp.app.brush_ready()');
       const started=Date.now();await importFiles(files);await click('.canvas-action-bar [data-command=apply_transform]');
       const loadingMs=Date.now()-started,baseline=await save();
       await measurePlacedPhotos({call,evaluate,settle,invoke,save,baseline,loadingMs});
+    }
+    if(captures){
+      await call('Emulation.setDeviceMetricsOverride',{width:640,height:480,deviceScaleFactor:1,mobile:false});
+      await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','tool_settings'].includes(id)}})`);
+      await settle();await invoke('fit_canvas');await invoke('zoom_out');
+      for(const theme of ['light','dark']){
+        await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
+        await invoke('scale_rotate');await transforming();await invoke('transform_warp');
+        await wait(`(()=>{const n=document.querySelector('.canvas-action-bar:not(.suppressed)'),r=n?.getBoundingClientRect();return r&&r.width>0&&r.x>=0&&r.right<=innerWidth})()`);
+        assert.equal(await evaluate(`document.getElementById('workspace').classList.contains('zen-hidden')`),false,'Narrow editing keeps ordinary controls visible');
+        await capture(`${theme}-narrow-transform`);
+        await click('.canvas-action-bar-more');await wait(`!!document.querySelector('[popover]:popover-open')`);
+        await capture(`${theme}-narrow-more`);
+        await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+        await settle();
+        assert.ok(['transform','placement'].includes((await state()).canvas_bar?.context.kind),'Escape closes native More while preserving the active transform');
+        assert.equal(await evaluate(`!!document.querySelector('.panel-context-menu:popover-open')`),false);
+        await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();
+        assert.ok(['transform','placement'].includes((await state()).canvas_bar?.context.kind),'Releasing the consumed menu Escape preserves the active transform');
+        await click('.canvas-action-bar [data-command=cancel_transform]');
+        await wait(`!['transform','placement'].includes(layerApp.state().canvas_bar?.context.kind)`);
+        await capture(`${theme}-narrow-editing`);
+      }
+      await call('Emulation.clearDeviceMetricsOverride');
     }
     console.log('Image placement: Open, batches, clipboard, fit, Apply/Cancel, one-step history, exact sources after reopen, Original Size, malformed/stale/cancelled requests, canvas/group/locked drops and compact controls passed');
   } finally {

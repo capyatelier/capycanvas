@@ -37,7 +37,7 @@ fn rotating_a_non_square_image_right_turns_every_pixel_in_one_step() {
     assert_eq!(size_of(&s), [800, 1000]);
     let [(id, transform)] = resampled(&mut s).try_into().unwrap();
     assert_eq!(id, paint);
-    assert_eq!(transform.interpolation, layer_core::Interpolation::Nearest, "an exact permutation");
+    assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Nearest, "an exact permutation");
     assert_eq!(s.engine.document().target_extent(paint), [1000, 1000], "a square scratch extent");
     let turn = layer_core::Affine([0., 1., -1., 0., 800., 0.]);
     assert_eq!(s.engine.document().selection, Some(before.selection.as_ref().unwrap().transformed(turn).unwrap()));

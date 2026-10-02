@@ -113,6 +113,13 @@ pub(super) struct Capture {
     pub image_limit: Option<u64>,
 }
 impl Capture {
+    pub fn layer_tile(&mut self, r: &mut WgpuRasterizer, id: LayerId, coordinate: [u32; 2],
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<source_access::RawTile,GpuRasterError> {
+        let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
+        self.scene.get_or_insert_with(|| scene::Scene::new(r))
+            .layer_tile_for_query(r,&frame.layers,id,coordinate,encoder)
+    }
     pub fn source_tile(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -221,7 +228,7 @@ impl Capture {
         };
         sources.uploads_full()
             || layers.iter().filter(|l| l.visible && l.is_artwork()).any(|l| {
-                let placed = layer_core::target_transform(layers, l.id) != layer_core::Affine::IDENTITY;
+                let placed = !layer_core::target_geometry(layers, l.id).is_identity();
                 let source = l.source.as_ref().is_some_and(|source| placed
                     || (tile[0] * PAGE_SIZE < source.extent[0] && tile[1] * PAGE_SIZE < source.extent[1]
                         && !resident(l.id) && sources.prepared_view(source, tile).is_none()));

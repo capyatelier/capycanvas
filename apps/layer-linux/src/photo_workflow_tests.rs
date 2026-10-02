@@ -35,8 +35,8 @@ fn frames(stats: &Arc<Mutex<crate::timing::Stats>>) -> Value {
     let mut previous_pose = None;
     let mut latency = Vec::new();
     let mut changed_inputs = 0;
-    for &(at, layer, _, pose) in &stats.photo_inputs {
-        if previous_pose == Some((layer, pose)) {
+    for (at, layer, _, pose) in &stats.photo_inputs {
+        if previous_pose.as_ref() == Some(&(layer, pose)) {
             continue;
         }
         previous_pose = Some((layer, pose));
@@ -44,16 +44,16 @@ fn frames(stats: &Arc<Mutex<crate::timing::Stats>>) -> Value {
         if let Some(presented_at) = stats
             .photo_frames
             .iter()
-            .filter(|(_, id, geometry)| *id == layer && *geometry == pose)
+            .filter(|(_, id, geometry)| id == layer && geometry == pose)
             .filter_map(|(frame, _, _)| {
                 presented
                     .iter()
-                    .find(|p| p[0] == *frame && p[1] >= at)
+                    .find(|p| p[0] == *frame && p[1] >= *at)
                     .map(|p| p[1])
             })
             .min()
         {
-            latency.push((presented_at - at) as f64 / 1e6);
+            latency.push((presented_at - *at) as f64 / 1e6);
         }
     }
     let mut camera_frames = Vec::new();
@@ -190,7 +190,7 @@ fn native_large_photo_placement_workflow() {
             "file": std::env::var_os("LAYER_PLACEMENT_BACKGROUND_PHOTO"),
             "extent": background.source.as_ref().unwrap().extent,
             "source_resident_bytes": background.source.as_ref().unwrap().resident_bytes(),
-            "placement": background.properties.placement.0,
+            "placement": background.properties.placement.as_affine().unwrap().0,
         });
     }
     let mut driver = FileDrag::start(&w);
@@ -218,7 +218,7 @@ fn native_large_photo_placement_workflow() {
     assert!(source.extent[0] as u64 * source.extent[1] as u64 >= 24_000_000);
     assert!(photo.raster.is_empty());
     let fit = (2000. / source.extent[0] as f32).min(1500. / source.extent[1] as f32);
-    assert!((photo.properties.placement.0[0] - fit).abs() < 1e-5);
+    assert!((photo.properties.placement.as_affine().unwrap().0[0] - fit).abs() < 1e-5);
     until(
         || {
             let s = stats.lock().unwrap();
@@ -280,10 +280,10 @@ fn native_large_photo_placement_workflow() {
         });
         ready(&w);
         let before = layer(&w).properties.placement;
-        assert!((before.0[0] - fit * factor).abs() < 1e-5);
+        assert!((before.as_affine().unwrap().0[0] - fit * factor).abs() < 1e-5);
         report["oversized_factor"] = json!(factor);
         report["measured_transform_kind"] = json!("translation");
-        report["oversized_placement"] = json!(before.0);
+        report["oversized_placement"] = json!(before.as_affine().unwrap().0);
         let center = window_point(&w, Point { x: 1000., y: 750. });
         assert!(canvas_hit(&w, center));
         let mut events = vec![json!({"point": center}), json!({"down": true})];
@@ -304,7 +304,7 @@ fn native_large_photo_placement_workflow() {
                     photo.properties.placement.map(Point {
                         x: f[0] * source.extent[0] as f32,
                         y: f[1] * source.extent[1] as f32,
-                    }),
+                    }).unwrap(),
                 )
             })
             .find(|&p| canvas_hit(&w, p))
@@ -314,7 +314,7 @@ fn native_large_photo_placement_workflow() {
             photo.properties.placement.map(Point {
                 x: source.extent[0] as f32 * 0.5,
                 y: source.extent[1] as f32 * 0.5,
-            }),
+            }).unwrap(),
         );
         let mut events = vec![json!({"point": handle}), json!({"down": true})];
         for i in 1..=120 {
@@ -337,9 +337,9 @@ fn native_large_photo_placement_workflow() {
     assert_eq!(posed.source.as_deref(), Some(source.as_ref()));
     assert!(posed.raster.is_empty());
     if oversized.is_some() {
-        assert_eq!(posed.properties.placement.0[..4],
+        assert_eq!(posed.properties.placement.as_affine().unwrap().0[..4],
             serde_json::from_value::<[f32; 6]>(report["oversized_placement"].clone()).unwrap()[..4]);
-        assert_ne!(posed.properties.placement.0[4..],
+        assert_ne!(posed.properties.placement.as_affine().unwrap().0[4..],
             serde_json::from_value::<[f32; 6]>(report["oversized_placement"].clone()).unwrap()[4..],
             "native drag must translate the clipped photo");
     }
@@ -441,7 +441,7 @@ fn native_large_photo_placement_workflow() {
             result["source_sample_passes"] = json!(now[2].saturating_sub(counters[2]));
             result["source_sample_field_bytes"] = json!(now[3]);
             result["brush_diameter"] = json!(diameter);
-            result["placement"] = json!(before.properties.placement.0);
+            result["placement"] = json!(before.properties.placement.as_affine().unwrap().0);
             result["native_size_comparison"] = json!(native_size);
             result["status"] = json!(w.status.text().as_str());
             result["host_error"] = json!(state(&w).host_error);
@@ -538,7 +538,7 @@ fn native_large_photo_placement_workflow() {
     driver.click_placement(&restored, "canvas-bar-PlacementOriginalSize");
     let native = layer(&restored);
     assert!(
-        (native.properties.placement.0[0].hypot(native.properties.placement.0[1]) - 1.).abs()
+        (native.properties.placement.as_affine().unwrap().0[0].hypot(native.properties.placement.as_affine().unwrap().0[1]) - 1.).abs()
             < 1e-5
     );
     assert_eq!(native.source.as_deref(), Some(source.as_ref()));
@@ -597,7 +597,7 @@ fn native_large_photo_placement_workflow() {
     );
     assert_eq!(
         project.document.layers[0].properties.placement,
-        Affine::IDENTITY
+        layer_core::LayerPlacement::IDENTITY
     );
     restored.window.destroy();
     pump(200);

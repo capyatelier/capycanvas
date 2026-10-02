@@ -169,7 +169,7 @@ mod tests {
         let document = other.session.engine().document();
         let pasted = document.layer(document.active_layer).unwrap();
         assert_eq!(pasted.source.as_ref().unwrap().kind, SourceKind::Original, "another colour mode converts");
-        assert_eq!(pasted.properties.placement.0[4..], [10., 8.]);
+        assert_eq!(pasted.properties.placement.as_affine().unwrap().0[4..], [10., 8.]);
         drop((host, other));
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }

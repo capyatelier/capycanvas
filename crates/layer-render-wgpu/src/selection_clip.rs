@@ -339,7 +339,7 @@ impl SelectionClip {
         &mut self,
         device: &wgpu::Device,
         selection: &layer_core::Selection,
-        map: &layer_core::TransformMap,
+        map: &layer_core::LayerPlacement,
     ) -> Result<(wgpu::Buffer, [[f32; 3]; 3]), GpuRasterError> {
         let layer_core::SelectionShape::Pixels(pixels) = &selection.shape else {
             return Err(GpuRasterError::InvalidTransform(

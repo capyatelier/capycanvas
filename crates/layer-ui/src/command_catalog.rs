@@ -1138,7 +1138,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             {
                 self.operation_refusal()
             }
-            C::PlacementOriginalSize => l.text(MessageId::COMMANDS_PLACE_AN_IMAGE_FIRST),
+            C::PlacementOriginalSize => l.text(MessageId::COMMANDS_TRANSFORM_ORIGINAL_AFFINE),
             C::Reselect if selection => l.text(MessageId::COMMANDS_DESELECT_BEFORE_RESTORING_THE_PREVIOUS_SELECTION),
             C::Reselect => l.text(MessageId::COMMANDS_NO_PREVIOUS_SELECTION_TO_RESTORE),
             C::Deselect | C::InvertSelection | C::FillSelection | C::SaveSelectionLayer if !selection => {
@@ -1176,12 +1176,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::TransformNearest | C::TransformBilinear | C::TransformBicubic if self.operation.outline() => {
                 l.text(crate::session::operation::OUTLINE_PIXELS)
             }
-            C::TransformDistort | C::TransformWarp if self.operation.placing() => l.text(crate::session::operation::DISTORT_PLACEMENT),
+            C::TransformWarp if self.operation.placing() => l.text(MessageId::COMMANDS_TRANSFORM_SINGLE_WARP),
             C::TransformWarp => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
-            C::WarpGridThree | C::WarpGridFour | C::WarpGridFive => l.text(MessageId::COMMANDS_CHOOSE_WARP_FIRST),
-            C::TransformNearest | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos if self.operation.placing() => {
-                l.text(MessageId::COMMANDS_PLACED_PHOTOS_KEEP_THEIR_ORIGINAL_PIXELS)
-            }
+            C::WarpSplitVertical | C::WarpSplitHorizontal | C::WarpSplitCross if self.warp_cells().is_some() => l.text(MessageId::COMMANDS_WARP_SPLIT_LIMIT),
+            C::WarpGridThree | C::WarpGridFour | C::WarpGridFive if self.warp_cells().is_some() => l.text(MessageId::COMMANDS_WARP_RESET_GRID),
+            C::WarpGridThree | C::WarpGridFour | C::WarpGridFive | C::WarpSplitVertical | C::WarpSplitHorizontal | C::WarpSplitCross
+            | C::WarpSelectPoints | C::WarpResetGrid => l.text(MessageId::COMMANDS_CHOOSE_WARP_FIRST),
             C::TransformNearest | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
             C::TransformDistort => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
             C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic => l.text(MessageId::COMMANDS_PAINT_MIXING_UNAVAILABLE),

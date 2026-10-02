@@ -52,6 +52,8 @@ tool_action_groups! {
         [TransformNearest, TransformBilinear, TransformBicubic, TransformLanczos];
     TransformWarpGrid: "transform-warp-grid", TOOL_ACTION_GROUP_TRANSFORM_WARP_GRID, false,
         [WarpGridThree, WarpGridFour, WarpGridFive];
+    TransformWarpSplit: "transform-warp-split", TOOL_ACTION_GROUP_TRANSFORM_WARP_SPLIT, false,
+        [WarpSplitVertical, WarpSplitHorizontal, WarpSplitCross];
     CropRatio: "crop-ratio", TOOL_ACTION_GROUP_CROP_RATIO, false,
         [CropRatioFree, CropRatioOriginal, CropRatioSquare, CropRatioFourFive, CropRatioTwoThree, CropRatioFiveSeven, CropRatioSixteenNine];
     CropOverlay: "crop-overlay", TOOL_ACTION_GROUP_CROP_OVERLAY, false,

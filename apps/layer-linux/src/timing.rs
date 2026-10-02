@@ -29,9 +29,9 @@ pub struct Stats {
     /// Recipe actually used by this presented frame, for local-tone latency.
     pub hdr_views: Vec<(u64, Option<layer_core::color::hdr::SdrRendition>)>,
     /// GTK owner delivery ns, source layer id, surface point, resulting pose.
-    pub photo_inputs: Vec<(u64, u64, [f32; 2], [f32; 6])>,
+    pub photo_inputs: Vec<(u64, u64, [f32; 2], layer_core::LayerPlacement)>,
     /// Frame id, source layer id and its submitted placement for presentation correlation.
-    pub photo_frames: Vec<(u64, u64, [f32; 6])>,
+    pub photo_frames: Vec<(u64, u64, layer_core::LayerPlacement)>,
     /// Frame id, cumulative recomposited pixels, display bytes, source tile misses,
     /// and this canvas frame's source misses (excludes background thumbnail work).
     pub camera_work: Vec<[u64; 5]>,
@@ -88,7 +88,7 @@ impl Timing {
     pub fn photo_frame(&self, layers: &[layer_core::Layer]) {
         self.stats.lock().unwrap().photo_frames.extend(layers.iter()
             .filter(|layer| layer.source.is_some())
-            .map(|layer| (self.id, layer.id.0, layer.properties.placement.0)));
+            .map(|layer| (self.id, layer.id.0, layer.properties.placement.clone())));
     }
     pub fn camera_view(&self, view: layer_render::ViewState, renderer: &WgpuRasterizer) {
         let mut stats = self.stats.lock().unwrap();

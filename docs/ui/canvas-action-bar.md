@@ -10,7 +10,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 
 | Context | Shown when | Items | Placement |
 | --- | --- | --- | --- |
-| Placement | A photo is being placed or pasted | Mode, Original Size, flips, quarter turns, Reset · Cancel, Apply | Beside the photo |
+| Placement | Whole layers are being transformed, or photos placed or pasted | Mode, Original Size for affine photos, flips, quarter turns, Reset, Interpolation · Cancel, Apply | Beside the transformed layers |
 | Transform | Transform is open on paint, a mask or selected pixels | Mode (Free, Uniform, Distort, Warp), Perspective while distorting, Grid while warping, Flip H/V, Rotate 90° left/right, Reset, Interpolation · Cancel, Apply | Beside the transform box |
 | Transform, labelled **Transform Outline** | Transform Outline is moving the selection outline | Mode (Free, Uniform), Flip H/V, Rotate 90° left/right, Reset · Cancel, Apply | Beside the outline's box |
 | Polygon | A polygon selection is under construction | Remove Last Point · Cancel, Finish | Bottom edge |
@@ -45,8 +45,12 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
   - **Refine ▾:** Grow…, Shrink…, Feather… (the primary command), Border…, Smooth…, then Transform Outline. The first five open the [Refine dialog](#refine-dialog).
   - **Adjust ▾:** the Filter menu's categories, which hold adjustments only. The new effect layer takes the selection as its mask and consumes it, in one undo step.
   - **Clear ▾:** Clear Selected Pixels (the primary command) and Clear Outside Selection.
-- **More:** lists the items that did not fit, then the context's own menu (the full Select menu for selections), then the bar toggle.
-- **Distort on photo placements:** refused with the route that works: select all, then transform the pixels.
+- **More:** lists the items that did not fit, then the context's own menu (the full Select menu for selections), then the bar toggle. Escape closes an open menu before cancelling the canvas edit.
+- **Copy Selection to New Layer** captures the placed layer and its mask into an
+  unlocked layer, including selected pixels outside the canvas. The copy keeps
+  opacity and blending, leaves clipping, and consumes the selection; Reselect
+  restores it. Copying a locked or warped source is allowed. Cutting requires an
+  unlocked, affine target because it also erases the source.
 - **Crop:** Crop Canvas to Selection crops the canvas to the bounds of the selection's coverage, as metadata: pixels outside stay on their layers and reappear when the canvas grows. It is disabled, with a reason, for an inverted selection.
 - **Moving selected pixels:** a Move drag over a selection keeps the Selection context; the bar hides during the contact and returns beside the moved selection. Leave Copy is the Move toggle described in [Selections](selections.md#moving-selected-pixels).
 - **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Edit › Image; see [image commands](image-commands.md)), Layer › New › Solid Color Fill and Gradient Fill (which also take the selection as their mask) and New Dodge & Burn Layer, Filter › Frequency Separation…, Revert to Original Photo, the merges (Merge Down, Merge Group, Merge Visible, Stamp Visible and Flatten Image) and Edit › Blending's Perceptual and Linear Light Blending have no bar item; menus and command search reach them.
@@ -80,22 +84,24 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 - **Uniform:** Free with proportions kept.
 - **Distort:** each corner moves independently and each edge moves both of its corners. **Perspective**, or Shift, mirrors a corner drag onto its neighbour so opposite sides stay symmetric.
 - **Warp:** a mesh of curved patches over the content.
-  - Drag a node to bend the mesh around it. Pressing a node shows its tangent handles, which shape the curves leaving it. Dragging elsewhere inside moves the whole mesh.
-  - **Grid** offers 3 × 3 (the default), 4 × 4 and 5 × 5 cells. Changing it keeps the current shape.
+  - Drag a point to bend the mesh around it. Pressing a point shows its tangent handles, which shape the curves leaving it. Shift-click, or **Select Points** and tap, selects points to move together. Dragging elsewhere inside moves the whole mesh.
+  - **Grid** offers 3 × 3 (the default), 4 × 4 and 5 × 5 cells. A bent grid can only change to a preset that contains every existing line. **Reset Grid** replaces its bends with a straight grid; it keeps the outer transform.
+  - **Split Vertically**, **Split Horizontally** and **Split Crosswise** preview lines under the pointer and insert them on release without changing the shape. A grid supports up to 32 cells per direction. Escape cancels a pending split.
 - **Switching modes keeps the geometry:**
   - Returning to Free from a perspective quad keeps it under a bounding-box frame.
   - A parallelogram folds back into position, scale, rotation and skew exactly.
-  - Warp starts from the current box or quad. Leaving Warp keeps the mesh, and Free or Distort then act on its hull.
+  - Warp keeps the current outer transform around its mesh. Leaving Warp keeps every control point exactly; Free or Distort then act on its hull.
 - **Flips and quarter turns** act in the layer's axes about the centre of the transformed box, or of the mesh's hull while warping.
 - **Reset** returns to Free and the geometry the transform started with.
+- **Whole layers:** Apply retains original photo and paint pixels, perspective and mesh controls, and the sampling choice. Reopening Transform edits that geometry. Selected roots and supported group descendants transform together in one undo step, including hidden paint. Locked descendants, generators and Selection Layers refuse the whole operation; Warp requires one paint or photo layer.
+- **Masks:** linked masks follow their owner's geometry once; independent masks follow a selected group in document coordinates. Changing linkage on a perspective or warped result requires **Apply Transform to Pixels** first. Creating a mask from a selection on such a layer creates an independent mask in place.
 - **Applying a distorted pixel selection:** a soft or painted selection cannot follow a perspective map as metadata, so Apply first resamples its coverage on the GPU.
   - The transform stays open, and Apply reads "Applying the transform" until the coverage returns; the result is one undo step.
   - Cancel discards the pending coverage, and any further edit to the transform supersedes it.
 - **Interpolation:** Nearest neighbor, Bilinear, Bicubic or Lanczos, on the bar and in Tool Options.
   - Until one is chosen, Free and Uniform resample bilinearly and Distort bicubically.
-  - A chosen filter stays for later transforms in the session.
+  - A chosen filter stays for later pixel transforms in the session. Whole-layer transforms reopen with their saved filter.
   - Previews draw a moving Bicubic or Lanczos transform bilinearly; the still preview and Apply use the chosen filter.
-  - Placed photos keep their original pixels, so placements do not offer it.
 - **Touch:** a finger inside the box or on a handle manipulates the transform; elsewhere it navigates.
 
 ## Transform Outline

@@ -259,10 +259,11 @@ impl Editor {
         // the interaction thread just to estimate resident memory.
         let mut accounting = crate::history_budget::Accounting::default();
         for selection in selections { metadata_bytes = metadata_bytes.saturating_add(accounting.charge_selection(selection)); }
+        for layer in &self.document.layers{let mut roots=Vec::new();layer.mesh_roots(&mut roots);for mesh in roots{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_mesh(mesh));}}
         let mut document = self.document.clone();
         document.selection = None;
         for layer in &mut document.layers {
-            crate::without_shared_selections(layer);
+            crate::without_shared_payloads(layer);
         }
         // Metadata excludes payloads (sources/rasters are independently stored).
         metadata_bytes =

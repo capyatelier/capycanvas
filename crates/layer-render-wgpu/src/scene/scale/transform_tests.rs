@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Point, Projective, Rect, Selection, TransformMap};
+use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Point, Projective, Rect, Selection, LayerPlacement};
 
 #[test]
 fn navigator_visibility_preserves_direct_transform_presentation() {
@@ -75,9 +75,9 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
         frame.view.document_to_surface = [0.19, 0., 0., 0.19, 8.25, 7.5];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         frame.composite_all = false;
-        for map in [TransformMap::Affine(Affine([0.8, 0.12, -0.1, 0.9, 40., 0.])), TransformMap::Projective(projective)] {
+        for map in [LayerPlacement::from_affine(Affine([0.8, 0.12, -0.1, 0.9, 40., 0.])), LayerPlacement::from_projective(projective)] {
             let preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id, moving: true,
-                selection: selected.then(|| selection.clone()), transform: ImageTransform { map, ..Default::default() } };
+                selection: selected.then(|| selection.clone()), transform: ImageTransform { placement: map, ..Default::default() } };
             frame.time_seconds += 0.1;
             let work = r.metrics.composited_pixels;
             for renderer in [&mut r, &mut exact] {
@@ -201,9 +201,9 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
     let mesh = MeshMap::fit(bounds, [3,3], |p| projective.map(p)).unwrap()
         .move_node(5, Point { x: 24., y: -12. }).unwrap();
     let folded = mesh.move_node(5, Point { x: 360., y: 160. }).unwrap();
-    let maps = [TransformMap::Affine(Affine::translation(Point { x: 12., y: -8. })),
-        TransformMap::Affine(Affine::around(Point { x: 250., y: 125. }, [0.8, 1.1], 0.2, Point { x: 8., y: 2. })),
-        TransformMap::Projective(projective), TransformMap::Mesh(Arc::new(mesh)), TransformMap::Mesh(Arc::new(folded))];
+    let maps = [LayerPlacement::from_affine(Affine::translation(Point { x: 12., y: -8. })),
+        LayerPlacement::from_affine(Affine::around(Point { x: 250., y: 125. }, [0.8, 1.1], 0.2, Point { x: 8., y: 2. })),
+        LayerPlacement::from_projective(projective), layer_core::LayerPlacement { mesh: Some(Arc::new(mesh)), ..Default::default() }, layer_core::LayerPlacement { mesh: Some(Arc::new(folded)), ..Default::default() }];
     for (stacked, blend) in [
         (false, layer_core::LayerBlend::Normal),
         (true, layer_core::LayerBlend::Normal),
@@ -216,9 +216,9 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
             let id = doc.layers[0].id;
             doc.layers[0].opacity = 0.8;
             doc.layers[0].properties.blend = blend;
-            doc.layers[0].properties.placement = placement;
+            doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(placement);
             let mut below = doc.layers[0].clone();
-            below.id = LayerId(40); below.opacity = 1.; below.properties.placement = Affine::IDENTITY;
+            below.id = LayerId(40); below.opacity = 1.; below.properties.placement = layer_core::LayerPlacement::from_affine(Affine::IDENTITY);
             let mut above = below.clone();
             above.id = LayerId(41); above.opacity = 0.23; above.properties.blend = layer_core::LayerBlend::Multiply;
             if stacked { doc.layers.insert(0, above); doc.layers.insert(2, below); }
@@ -233,7 +233,7 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
             let original = display_pixels(&r);
             for (step, map) in maps.iter().enumerate() {
                 let preview = layer_render::TransformPreview { transaction: 1, layer: id, moving: true,
-                    selection: selection.clone(), transform: ImageTransform { map: map.clone(), interpolation: Interpolation::Bicubic, ..Default::default() } };
+                    selection: selection.clone(), transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..map.clone() }, ..Default::default() } };
                 for renderer in [&mut r, &mut exact] {
                     renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
                 }
@@ -309,8 +309,8 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap();
     let mut preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id,
         moving: true, selection: Some(selection.clone()),
-        transform: ImageTransform { interpolation: Interpolation::Bicubic, map: TransformMap::Affine(
-            Affine::around(Point { x: 250., y: 125. }, [3.2,2.1], 0.31, Point { x: 7., y: -3. })), ..Default::default() } };
+        transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..LayerPlacement::from_affine(
+            Affine::around(Point { x: 250., y: 125. }, [3.2,2.1], 0.31, Point { x: 7., y: -3. })) }, ..Default::default() } };
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     exact.test.reference = true;
@@ -463,13 +463,12 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         let original = r.readback_srgb_rgba8().unwrap();
         let original_display = display_pixels(&r);
-        let maps = [TransformMap::default(), TransformMap::Affine(Affine::translation(Point {x:48.,y:12.})),
-            TransformMap::Projective(projective), TransformMap::Mesh(Arc::new(mesh.clone())), TransformMap::default()];
+        let maps = [LayerPlacement::default(), LayerPlacement::from_affine(Affine::translation(Point {x:48.,y:12.})),
+            LayerPlacement::from_projective(projective), layer_core::LayerPlacement { mesh: Some(Arc::new(mesh.clone())), ..Default::default() }, LayerPlacement::default()];
         for map in maps {
             for keep_source in [false,true] {
                 let preview = layer_render::TransformPreview { transaction: 1, layer: id, moving: true,
-                    selection: selection.clone(), transform: ImageTransform { map: map.clone(),
-                        interpolation: Interpolation::Bicubic, keep_source } };
+                    selection: selection.clone(), transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..map.clone() }, keep_source, source_from_owner:None } };
                 for renderer in [&mut r,&mut exact] {
                     renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
                 }
@@ -513,8 +512,7 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     assert_eq!(r.test.reduced_pages.get(),reduced);
     for offset in [0.,64.,-32.] {
         let preview=layer_render::TransformPreview {transaction:7,layer:id,moving:true,selection:Some(part.clone()),
-            transform:ImageTransform {map:TransformMap::Affine(Affine::translation(Point {x:offset,y:0.})),
-                interpolation:Interpolation::Nearest,keep_source:true}};
+            transform:ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})) },keep_source:true,source_from_owner:None}};
         for renderer in [&mut r,&mut exact] {renderer.set_transform_preview(Some(&preview)).unwrap();renderer.submit(frame).unwrap();}
         assert_eq!(r.test.source_captures.get(),captures);
         assert_eq!(r.test.reduced_pages.get(),reduced);
@@ -554,8 +552,7 @@ fn moving_pixels_invalidate_the_cut_only_when_its_coverage_changes() {
         for (step,(offset,keep_source)) in [(384.,false),(416.,false),(416.,true),
             (448.,true),(448.,false),(0.,false)].into_iter().enumerate() {
             let preview = layer_render::TransformPreview {transaction:1,layer:doc.layers[0].id,
-                moving:true,selection:Some(selection.clone()),transform:ImageTransform {
-                    map:TransformMap::Affine(Affine::translation(Point {x:offset,y:0.})),
+                moving:true,selection:Some(selection.clone()),transform:ImageTransform { placement: LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})),
                     keep_source,..Default::default()}};
             for renderer in [&mut r,&mut exact] {
                 renderer.set_transform_preview(Some(&preview)).unwrap();renderer.submit(frame).unwrap();

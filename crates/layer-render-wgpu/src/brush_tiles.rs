@@ -425,8 +425,8 @@ pub(super) fn document_damage(
     local: PixelRect,
     extent: [u32; 2],
 ) -> PixelRect {
-    let transform = layer_core::target_transform(layers, id);
-    if transform == layer_core::Affine::IDENTITY {
+    let transform = layer_core::target_geometry(layers, id);
+    if transform.is_identity() {
         return local.intersect(PixelRect::full(extent));
     }
     if local.is_empty() {
@@ -434,7 +434,7 @@ pub(super) fn document_damage(
     }
     let halo = PAGE_SIZE as f32;
     pixel_rect(
-        transform.bounds(layer_core::Rect {
+        transform.forward_bounds(layer_core::Rect {
             min: layer_core::Point {
                 x: local.min_x() as f32 - halo,
                 y: local.min_y() as f32 - halo,
