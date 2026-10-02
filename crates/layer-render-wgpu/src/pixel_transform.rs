@@ -40,6 +40,7 @@ pub(super) struct TiledTransformRecord<'a> {
     /// x, y, width, height of the display level texels a job draws.
     pub texels: [u32; 4],
     pub unmoved: bool,
+    pub clear: bool,
 }
 /// Draw a display level: each texel is the mean of `side` x `side` layer
 /// pixels within `extent`, times `opacity`, over the premultiplied
@@ -62,6 +63,14 @@ pub(super) struct BatchDraw<'a> {
     pub scissor: [u32; 4],
 }
 
+pub(super) struct PlacementDraw {
+    pub records: wgpu::BindGroup,
+    pub source: TransformSource,
+    pub target: wgpu::BindGroup,
+    pub offset: u32,
+    pub size: [u32; 2],
+}
+
 /// Which of a layer's unmoved pixels an identity transform draws into a
 /// display level.
 #[derive(Clone, Copy)]
@@ -82,6 +91,7 @@ pub struct PixelTransform {
     visibility: bool,
     pub(super) pipeline: Deferred<wgpu::RenderPipeline>,
     pub(super) mesh_pipeline: Deferred<wgpu::RenderPipeline>,
+    pub(super) placement_pipeline: Deferred<wgpu::ComputePipeline>,
     /// Color transforms drawn straight into a display level.
     pub(super) display: Option<Deferred<wgpu::ComputePipeline>>,
     display_layout: wgpu::BindGroupLayout,
@@ -134,9 +144,9 @@ impl PixelTransform {
         let source_layout = crate::bindings::layout(device, "transform sources and selection", &entries);
         let display_layout = crate::bindings::layout(device, "transform display level", &[
             crate::bindings::storage_texture(
-                0,
+                u32::from(scalar),
                 wgpu::ShaderStages::COMPUTE,
-                wgpu::TextureFormat::Rgba32Float,
+                if scalar { wgpu::TextureFormat::R32Float } else { wgpu::TextureFormat::Rgba32Float },
                 wgpu::StorageTextureAccess::WriteOnly,
             ),
         ]);
@@ -149,6 +159,17 @@ impl PixelTransform {
         };
         let render_layout = pipeline_layout(&[Some(&layout), Some(&source_layout)]);
         let pipeline = |mesh| transform_pipeline(device, &render_layout, shader, [scalar, visibility, mesh]);
+        let placement_pipeline = {
+            let layout = pipeline_layout(&[Some(&layout), Some(&source_layout), Some(&display_layout)]);
+            let (device, shader) = (device.clone(), shader.clone());
+            Deferred::pipeline(move |mode| mode.compute(&device, &wgpu::ComputePipelineDescriptor {
+                label: Some("placed pixels"), layout: Some(&layout), module: &shader,
+                entry_point: Some(if scalar { "placement_scalar" } else { "placement_color" }),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[("scalar", f64::from(scalar))], ..Default::default()
+                }, cache: None,
+            }))
+        };
         let display = (!scalar && !visibility).then(|| {
             let layout = pipeline_layout(&[Some(&layout), Some(&source_layout), Some(&display_layout)]);
             Deferred::compute(device, "transform display level", &layout, shader, "display_main")
@@ -159,6 +180,7 @@ impl PixelTransform {
             visibility,
             pipeline: pipeline(false),
             mesh_pipeline: pipeline(true),
+            placement_pipeline,
             display,
             display_layout,
             display_target: Default::default(),
@@ -188,6 +210,7 @@ impl PixelTransform {
             visibility: self.visibility,
             pipeline: self.pipeline.clone(),
             mesh_pipeline: self.mesh_pipeline.clone(),
+            placement_pipeline: self.placement_pipeline.clone(),
             display: self.display.clone(),
             display_layout: self.display_layout.clone(),
             display_target: Default::default(),
@@ -350,7 +373,8 @@ impl PixelTransform {
                     + 2. * f32::from(job.unmoved || identity)
                     + 4. * f32::from(self.placement)
                     + f32::from(part as u8)
-                    + 256. * f32::from(transform.keep_source),
+                    + 256. * f32::from(transform.keep_source)
+                    + 1024. * f32::from(job.clear),
                 background,
                 display.map(|(level, _)| level),
                 job.texels.map(|v| v as f32),
@@ -399,6 +423,23 @@ impl PixelTransform {
             pass.set_scissor_rect(x, y, w, h);
             pass.draw(0..3, 0..1);
         }
+    }
+    pub(super) fn placement_draw(&self, device: &wgpu::Device, target: &wgpu::TextureView,
+        source: TransformSource, offset: u32) -> PlacementDraw {
+        let output = self.display_target.get(target.clone(), || device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("placed pixels destination"), layout: &self.display_layout,
+            entries: &[wgpu::BindGroupEntry { binding: u32::from(self.scalar), resource: wgpu::BindingResource::TextureView(target) }],
+        }));
+        PlacementDraw { records: self.uniforms.as_ref().unwrap().1.clone(), source, target: output.clone(), offset,
+            size: [target.texture().width(), target.texture().height()] }
+    }
+
+    pub(super) fn encode_placement<'a>(&'a self, pass: &mut wgpu::ComputePass<'a>, draw: &'a PlacementDraw) {
+        pass.set_pipeline(&self.placement_pipeline);
+        pass.set_bind_group(0, &draw.records, &[draw.offset]);
+        pass.set_bind_group(1, &draw.source.binding, &[]);
+        pass.set_bind_group(2, &draw.target, &[]);
+        pass.dispatch_workgroups(draw.size[0].div_ceil(8), draw.size[1].div_ceil(8), 1);
     }
     /// Draw prepared jobs straight into a display level, `side` layer pixels
     /// per texel, keeping its other texels. Each draw's scissor holds the

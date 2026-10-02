@@ -63,8 +63,8 @@ impl NativeOutput {
         }
     }
 }
-pub(super) struct NativeCapture {
-    pub outputs: Vec<NativeOutput>,
+pub(crate) struct NativeCapture {
+    pub(super) outputs: Vec<NativeOutput>,
     pub status: NativeEncodeStatus,
     pub pool: Arc<BufferPool>,
     pub device: wgpu::Device,
@@ -145,7 +145,7 @@ impl PresentationPriority {
 }
 #[cfg(target_arch = "wasm32")]
 impl NativeCapture {
-    pub(super) async fn finish_browser(mut self, worker: &browser::BrowserRasterEncoder) -> Result<(), String> {
+    pub(crate) async fn finish_browser(mut self, worker: &browser::BrowserRasterEncoder) -> Result<(), String> {
         let mut validated = false;
         while !self.outputs.is_empty() {
             self.pool.priority.wait_browser().await;

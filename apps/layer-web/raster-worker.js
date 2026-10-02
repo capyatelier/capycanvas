@@ -22,7 +22,7 @@ async function execute({id,request}) {
         return prepared.view;
       });break;
       case "palette-file": { const [metadata,bytes]=wasm.raster_worker_palette_file(request.metadata,request.buffers[0]); result={metadata,bytes}; break; }
-      case "content-bounds": result = await wasm.raster_worker_content_bounds(request.metadata,request.buffers); break;
+      case "snapshot": result = await wasm.raster_worker_snapshot(request.metadata,request.buffers); break;
       case "properties": result = wasm.raster_worker_properties(request.metadata); break;
       case "source-profile": result = wasm.raster_worker_source_profile(request.metadata); break;
       case "source-rasterize": result = await wasm.raster_worker_source_rasterize(request.metadata,request.buffers); break;

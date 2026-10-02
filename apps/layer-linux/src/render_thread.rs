@@ -115,7 +115,7 @@ enum Command {
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
-    ContentBounds(layer_core::ContentBoundsRequest, mpsc::Sender<Result<layer_render_wgpu::snapshot::ContentBoundsJob, String>>),
+    Snapshot(layer_render::SnapshotRequest, mpsc::Sender<Result<layer_render_wgpu::snapshot::SnapshotJob, String>>),
     ColorSample(layer_render::ColorSampleRequest),
     FilterPreviews(u64, layer_render::FilterPreviewRequest),
     CancelFilterPreviews(u64),
@@ -169,14 +169,14 @@ pub(crate) fn pause_next_startup() -> Arc<AtomicBool> {
     pause
 }
 
-enum BoundsJob {
-    Preparing(mpsc::Receiver<Result<layer_render_wgpu::snapshot::ContentBoundsJob, String>>),
-    Running(layer_render_wgpu::snapshot::ContentBoundsJob),
+enum SnapshotJobState {
+    Preparing(mpsc::Receiver<Result<layer_render_wgpu::snapshot::SnapshotJob, String>>),
+    Running(layer_render_wgpu::snapshot::SnapshotJob),
 }
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
-    bounds_job: Option<BoundsJob>,
+    snapshot_job: Option<SnapshotJobState>,
     shader_activity: Option<layer_render_wgpu::ShaderActivity>,
     #[cfg(test)]
     startup_pause: Option<Arc<AtomicBool>>,
@@ -373,7 +373,7 @@ impl RenderWorker {
             })
             .map_err(error)?;
         Ok(Self {
-            bounds_job: None,
+            snapshot_job: None,
             shader_activity: None,
             #[cfg(test)]
             startup_pause,
@@ -778,30 +778,30 @@ impl CanvasRenderer for RenderWorker {
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.pop_front().map(Ok)
     }
-    fn request_content_bounds(&mut self, request: layer_core::ContentBoundsRequest) -> Result<bool, Self::Error> {
-        if self.bounds_job.is_some() { return Ok(false); }
+    fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
+        if self.snapshot_job.is_some() { return Ok(false); }
         let (sender, receiver) = mpsc::channel();
-        self.send(Command::ContentBounds(request, sender))?;
-        self.bounds_job = Some(BoundsJob::Preparing(receiver));
+        self.send(Command::Snapshot(request, sender))?;
+        self.snapshot_job = Some(SnapshotJobState::Preparing(receiver));
         Ok(true)
     }
-    fn take_content_bounds(&mut self) -> Option<Result<layer_core::Rect, Self::Error>> {
-        if let BoundsJob::Preparing(receiver) = self.bounds_job.as_mut()? {
+    fn take_snapshot(&mut self) -> Option<Result<layer_render::SnapshotResult, Self::Error>> {
+        if let SnapshotJobState::Preparing(receiver) = self.snapshot_job.as_mut()? {
             match receiver.try_recv() {
-                Ok(Ok(job)) => self.bounds_job = Some(BoundsJob::Running(job)),
+                Ok(Ok(job)) => self.snapshot_job = Some(SnapshotJobState::Running(job)),
                 Err(mpsc::TryRecvError::Empty) => return None,
                 _ => {
-                    self.bounds_job = None;
-                    return Some(Err(BackendError("Could not start content bounds")));
+                    self.snapshot_job = None;
+                    return Some(Err(BackendError("Could not start the operation")));
                 }
             }
         }
-        let BoundsJob::Running(job) = self.bounds_job.as_mut()? else { unreachable!() };
+        let SnapshotJobState::Running(job) = self.snapshot_job.as_mut()? else { unreachable!() };
         let result = job.take()?;
-        self.bounds_job = None;
-        Some(result.map_err(|_| BackendError("Could not measure content bounds")))
+        self.snapshot_job = None;
+        Some(result.map_err(|_| BackendError("Could not complete the operation")))
     }
-    fn cancel_content_bounds(&mut self) { self.bounds_job = None; }
+    fn cancel_snapshot(&mut self) { self.snapshot_job = None; }
     fn request_color_sample(
         &mut self,
         request: layer_render::ColorSampleRequest,
@@ -1207,7 +1207,7 @@ impl Worker {
                     Command::Region(..)
                         | Command::SelectionPaint(..)
                         | Command::Thumbnail(..)
-                        | Command::ContentBounds(..)
+                        | Command::Snapshot(..)
                         | Command::ColorSample(_)
                         | Command::FilterPreviews(..)
                 )
@@ -1348,8 +1348,8 @@ impl Worker {
                 Command::Thumbnail(id, target) => {
                     pending_thumbnails.push_back((id, target));
                 }
-                Command::ContentBounds(request, sender) => {
-                    let _ = sender.send(layer_render_wgpu::snapshot::ContentBoundsJob::start(self.renderer.snapshot_gpu(), request));
+                Command::Snapshot(request, sender) => {
+                    let _ = sender.send(layer_render_wgpu::snapshot::SnapshotJob::start(self.renderer.snapshot_gpu(), request));
                 }
                 Command::ColorSample(request) => {
                     let result = self.renderer.request_color_sample(request);

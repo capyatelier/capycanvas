@@ -204,3 +204,8 @@ mod bounds_review {
     use super::*;
     include!("image_geometry_review_tests.rs");
 }
+
+mod transform_pixels {
+    use super::*;
+    include!("transform_pixels_tests.rs");
+}

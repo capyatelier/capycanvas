@@ -5,13 +5,16 @@ use layer_core::raster::{RasterData, RasterPlane};
 pub(super) struct Level {
     pub image: Image,
     pub valid: BTreeSet<[u32; 2]>,
+    blend_space: layer_core::BlendSpace,
+    watercolor: Option<WatercolorLayerStyle>,
 }
 pub(super) struct Source {
     pub extent: [u32; 2],
     pub updates: u64,
     pub blend_space: layer_core::BlendSpace,
     raster: u64,
-    watercolor: Option<WatercolorLayerStyle>,
+    pub(super) watercolor: Option<WatercolorLayerStyle>,
+    raw_material: bool,
     pub levels: BTreeMap<u32, Level>,
     source: Option<Arc<layer_core::color::source::SourceImage>>,
     backing: Option<Arc<RasterData>>,
@@ -21,13 +24,19 @@ pub(super) struct Source {
 }
 
 impl Source {
+    fn material(&self) -> Option<WatercolorLayerStyle> { if self.raw_material { None } else { self.watercolor } }
+    pub(super) fn accepts(&self, level: &Level) -> bool { level.blend_space == self.blend_space && level.watercolor == self.material() }
+    fn new_level(&self, r: &WgpuRasterizer, plan: display_mips::Plan) -> Level {
+        Level { image: Image::new(r, plan, "composition source level"), valid: BTreeSet::new(),
+            blend_space: self.blend_space, watercolor: self.material() }
+    }
     pub(super) fn derive_pages(
         &self, commands: &mut Commands, r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder, plan: display_mips::Plan,
         output: &wgpu::TextureView, missing: &mut BTreeSet<[u32; 2]>,
     ) -> Result<(), GpuRasterError> {
         for (&finer, previous) in self.levels.range(..=plan.level).rev() {
-            if previous.image.view == *output { continue; }
+            if previous.image.view == *output || !self.accepts(previous) { continue; }
             let completed: Vec<_> = previous.valid.intersection(missing).copied().filter(|tile| {
                 let region = page_rect(*tile).intersect(PixelRect::full(self.extent));
                 region.intersect(previous.image.plan.bounds) == region && region.intersect(plan.bounds) == region
@@ -57,8 +66,12 @@ pub(crate) struct Sources {
 impl Sources {
     #[cfg(test)]
     pub fn cache_info(&self, id: LayerId) -> Option<(wgpu::Texture, u64, u32)> {
+        self.cache_info_at(id, *self.entries.get(&id)?.levels.first_key_value()?.0)
+    }
+    #[cfg(test)]
+    pub fn cache_info_at(&self, id: LayerId, level: u32) -> Option<(wgpu::Texture, u64, u32)> {
         let source = self.entries.get(&id)?;
-        let (&level, image) = source.levels.first_key_value()?;
+        let image = source.levels.get(&level)?;
         Some((image.image.texture.clone(), source.updates, level))
     }
     pub fn storage_bytes(&self) -> u64 {
@@ -76,7 +89,6 @@ impl Sources {
                 source.raster = layer.raster.identity();
                 let watercolor = r.paint_layers.iter().find(|l| l.id == layer.id).and_then(|l| l.watercolor);
                 if source.watercolor != watercolor {
-                    for level in source.levels.values_mut() { level.valid.clear(); }
                     source.watercolor = watercolor;
                     self.reset = true;
                     source.damage = PixelRect::full(source.extent);
@@ -97,21 +109,24 @@ impl Sources {
         let blend_space = if is_mask || r.moving_layer == Some(id) || layer_core::target_transform(packet.layers, id) != layer_core::Affine::IDENTITY {
             layer_core::BlendSpace::Linear
         } else { packet.blend_space };
+        let raw_material = !is_mask && mapped_material(r, packet, id);
         self.reset |= !self.entries.contains_key(&id);
         let source = self.entries.entry(id).or_insert_with(|| Source {
-            extent, updates: 0, blend_space, raster: 0, watercolor: None, levels: BTreeMap::new(), source: None, backing: None, mask: None, preview: BTreeSet::new(), damage: PixelRect::EMPTY,
+            extent, updates: 0, blend_space, raster: 0, watercolor: None, raw_material, levels: BTreeMap::new(), source: None, backing: None, mask: None, preview: BTreeSet::new(), damage: PixelRect::EMPTY,
         });
         let resized = source.extent != extent;
         if resized { source.extent = extent; source.levels.clear(); self.reset = true; }
         let same_image = match (&source.source, &image) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false,
         };
-        let reset = resized || packet.reset_layers || !same_image || source.mask != mask || source.blend_space != blend_space;
+        let reset = resized || packet.reset_layers || !same_image || source.mask != mask;
+        let changed = reset || source.blend_space != blend_space || source.raw_material != raw_material;
+        source.raw_material = raw_material;
         source.blend_space = blend_space;
         if reset {
             for level in source.levels.values_mut() { level.valid.clear(); }
-            self.reset = true;
         }
+        self.reset |= changed;
         source.source = image;
         source.mask = mask;
         let backing = r.native_backing(id).cloned();
@@ -141,13 +156,13 @@ impl Sources {
         }
         let radius = source.watercolor.map_or(0, |w| w.radius());
         if radius > 0 { damage = damage.into_iter().flat_map(|c| page_coordinates(page_rect(c).expand(radius, extent))).collect(); }
-        source.damage = if reset { PixelRect::full(extent) } else { damage.iter().fold(PixelRect::EMPTY, |r, c| r.union(page_rect(*c).intersect(PixelRect::full(extent)))) };
+        source.damage = if changed { PixelRect::full(extent) } else { damage.iter().fold(PixelRect::EMPTY, |r, c| r.union(page_rect(*c).intersect(PixelRect::full(extent)))) };
         for level in source.levels.values_mut() { level.valid.retain(|c| !damage.contains(c)); }
     }
     pub fn sample(&self, id: LayerId, requested: u32) -> Option<(display_mips::Plan, &wgpu::TextureView)> {
         let source = self.entries.get(&id)?;
         if source.blend_space != layer_core::BlendSpace::Linear { return None; }
-        let (_, image) = source.levels.range(..=requested).next_back()?;
+        let (_, image) = source.levels.range(..=requested).rev().find(|(_, level)| source.accepts(level))?;
         Some((image.image.plan, &image.image.view))
     }
     pub fn complete_texture(&self, layer: &Layer, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
@@ -155,7 +170,7 @@ impl Sources {
         let current = source.blend_space == layer_core::BlendSpace::Linear && source.extent == extent && source.raster == layer.raster.identity() && source.preview.is_empty()
             && match (&source.source, &layer.source) { (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false };
         let image = source.levels.get(&level)?;
-        (current && image.image.plan.bounds == PixelRect::full(extent)
+        (current && source.accepts(image) && image.watercolor.is_none() && image.image.plan.bounds == PixelRect::full(extent)
             && page_coordinates(PixelRect::full(extent)).all(|c| image.valid.contains(&c))).then_some(&image.image.texture)
     }
     pub(super) fn image(&self, id: LayerId, level: u32) -> &Level { &self.entries[&id].levels[&level] }
@@ -171,10 +186,15 @@ impl Sources {
     ) -> Result<(), GpuRasterError> {
         let source = self.entries.get_mut(&id).unwrap();
         let level = plan.level;
-        let mut target = source.levels.remove(&level).unwrap_or_else(|| Level { image: Image::new(r, plan, "composition source level"), valid: BTreeSet::new() });
+        let mut target = source.levels.remove(&level).unwrap_or_else(|| source.new_level(r, plan));
+        if !source.accepts(&target) {
+            target.valid.clear();
+            target.blend_space = source.blend_space;
+            target.watercolor = source.material();
+        }
         if target.image.plan != plan {
             let previous = target;
-            target = Level { image: Image::new(r, plan, "composition source level"), valid: BTreeSet::new() };
+            target = source.new_level(r, plan);
             let overlap = previous.image.plan.bounds.intersect(plan.bounds);
             if !overlap.is_empty() {
                 let [sx, sy, width, height] = paint_transform::texel_rect(overlap.window_local(previous.image.plan.bounds), 1 << level);
@@ -231,7 +251,7 @@ impl Scene {
             if cache.streamed_sources && layer_core::target_transform(packet.layers, id) == layer_core::Affine::IDENTITY { continue; }
             let Some((_, required)) = requested.get(&id).and_then(|levels| levels.first_key_value()) else { continue; };
             let source = &self.scale_sources.entries[&id];
-            let existing = source.levels.range(..required.level).next_back();
+            let existing = source.levels.range(..required.level).rev().find(|(_, level)| source.accepts(level));
             let cold = source.levels.range(..=required.level).next().is_none()
                 && !packet.dab_batches.iter().any(|batch| batch.layer_id == id);
             let Some(level) = existing.map(|(&level, _)| level)
@@ -266,26 +286,30 @@ impl Scene {
         let missing: Vec<_> = page_coordinates(required.intersect(plan.bounds))
             .filter(|c| !cached.valid.contains(c) && page_rect(*c).intersect(covered).is_empty())
             .collect();
-        let changed = self.reduce_color_pages(commands, r, packet, encoder, layer, plan, &output, &missing)?;
+        let changed = self.reduce_color_pages(commands, r, packet, encoder, layer, plan, &output, &missing, None)?;
         self.scale_sources.entries.get_mut(&layer.id).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
         Ok(changed)
     }
     pub(super) fn reduce_color_pages(
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, layer: &Layer, plan: display_mips::Plan,
-        output: &wgpu::TextureView, missing: &[[u32; 2]],
+        output: &wgpu::TextureView, missing: &[[u32; 2]], placement: Option<layer_core::Affine>,
     ) -> Result<PixelRect, GpuRasterError> {
         let level = plan.level;
-        let extent = layer.local_extent(packet.document_extent);
+        let extent = if placement.is_some() { packet.document_extent } else { layer.local_extent(packet.document_extent) };
+        let blend_space = if placement.is_some() { packet.blend_space } else { self.scale_sources.entries[&layer.id].blend_space };
         let mut changed = PixelRect::EMPTY;
         for chunk in missing.chunks(32) {
-            let mut jobs = Vec::with_capacity(chunk.len());
-            let mut scratch = Vec::new();
             for &tile in chunk {
-                let (source, base, reduced_preview, over, empty) = if self.scale_sources.entries[&layer.id].watercolor.is_some() {
-                    let tile = self.local_color_tile(r, packet, layer, tile)?;
-                    scratch.push(tile);
-                    (self.pool[tile].view.clone(), r.empty_view.clone(), false, false, false)
+                let entry = &self.scale_sources.entries[&layer.id];
+                let mut scratch = None;
+                let (source, base, reduced_preview, over, empty) = if placement.is_some() || (entry.watercolor.is_some() && !entry.raw_material) {
+                    let (tile, pigment) = match placement {
+                        Some(placement) => self.placed_material_inputs(r, packet, layer, placement, tile)?,
+                        None => (self.local_color_tile(r, packet, layer, tile)?, r.empty_view.clone()),
+                    };
+                    scratch = Some(tile);
+                    (self.pool[tile].view.clone(), pigment, false, false, false)
                 } else {
                     let persistent = r
                         .paint_layers
@@ -329,24 +353,14 @@ impl Scene {
                     valid.height(),
                     1 << (level - input_level),
                     u32::from(over) | if empty { 4 } else { 0 } | (input_level << 8)
-                        | if self.scale_sources.entries[&layer.id].blend_space == layer_core::BlendSpace::Perceptual { 2 } else { 0 },
+                        | if placement.is_some() { 128 } else { 0 }
+                        | if blend_space == layer_core::BlendSpace::Perceptual { 2 } else { 0 },
                 ]);
-                jobs.push((Commands::binding(r, &source, &base, &output), values, size));
+                self.jobs.push(Job::Reduce { binding: Commands::binding(r, &source, &base, output), values, size });
+                if let Some(slot) = scratch { self.free(slot); }
             }
-            let offset = commands.records(r, encoder, jobs.iter().map(|job| job.1))?;
+            commands.flush(r, encoder)?;
             self.encode_jobs(r, encoder)?;
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("reduce changed paint pages"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&r.scene_pipelines.scale.reduce);
-            for (i, (binding, _, size)) in jobs.iter().enumerate() {
-                pass.set_bind_group(0, &commands.record_binding, &[offset + i as u32 * commands.stride]);
-                pass.set_bind_group(1, binding, &[]);
-                pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
-            }
-            drop(pass);
-            for slot in scratch { self.free(slot); }
             self.scale_sources.entries.get_mut(&layer.id).unwrap().updates += chunk.len() as u64;
         }
         Ok(changed)

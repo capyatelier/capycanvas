@@ -357,7 +357,7 @@ impl Document {
         if same && !geometry.delete_outside {
             return Err(CanvasGeometryError::Unchanged);
         }
-        let mut plan = if resampled { self.resampled_plan(geometry, limits)? } else { self.crop_plan(geometry, limits)? };
+        let mut plan = if resampled { self.resampled_plan(geometry, limits)? } else { self.crop_plan(geometry, limits, None)? };
         if same && plan.edits.is_empty() && plan.operations.is_empty() {
             return Err(CanvasGeometryError::Unchanged);
         }
@@ -381,6 +381,16 @@ impl Document {
         }
         plan.edits.insert(0, Edit::SetCanvasSize { size: rect.size, origin: rect.origin });
         Ok(plan)
+    }
+
+    pub fn paint_extent_plan(&self, targets: &[LayerId], limits: GeometryLimits) -> Result<Vec<Edit>, CanvasGeometryError> {
+        let geometry = CanvasGeometry::crop(CanvasRect { origin: [0; 2], size: [self.width, self.height] });
+        Ok(self.crop_plan(&geometry, limits, Some(targets))?.edits)
+    }
+
+    pub fn validate_paint_extents(&self, targets: &[LayerId], limits: GeometryLimits) -> Result<(), CanvasGeometryError> {
+        let geometry = CanvasGeometry::crop(CanvasRect { origin: [0; 2], size: [self.width, self.height] });
+        self.canvas_layout(&geometry, limits, Some(targets)).map(|_| ())
     }
 
     /// Whether every paint layer without a source, and every mask, can be
@@ -417,9 +427,9 @@ impl Document {
 
     /// A crop or growth without resampling: offsets and rebases, and with
     /// Delete Cropped Pixels, trimmed tiles and erased edges.
-    fn crop_plan(&self, geometry: &CanvasGeometry, limits: GeometryLimits) -> Result<CanvasGeometryPlan, CanvasGeometryError> {
+    fn crop_plan(&self, geometry: &CanvasGeometry, limits: GeometryLimits, targets: Option<&[LayerId]>) -> Result<CanvasGeometryPlan, CanvasGeometryError> {
         let rect = geometry.rect;
-        let (mut layers, changes) = self.canvas_layout(geometry, limits)?;
+        let (mut layers, changes) = self.canvas_layout(geometry, limits, targets)?;
         for (layer, change) in layers.iter_mut().zip(&changes) {
             let Some(change) = change else { continue };
             let size = TILE_SIZE as i32;
@@ -480,15 +490,20 @@ impl Document {
         &self,
         geometry: &CanvasGeometry,
         limits: GeometryLimits,
+        targets: Option<&[LayerId]>,
     ) -> Result<(Vec<Layer>, Vec<Option<LayerChange>>), CanvasGeometryError> {
         let rect = geometry.rect;
         let layers = self.shifted_roots(rect.origin);
         let canvas = [self.width, self.height];
         let mut changes = Vec::with_capacity(layers.len());
         for layer in &layers {
+            if targets.is_some_and(|ids| !ids.contains(&layer.id)) {
+                changes.push(None);
+                continue;
+            }
             let paint = (layer.kind == LayerKind::Paint).then_some(layer.id);
-            let targets: Vec<_> = paint.into_iter().chain(layer.mask.as_ref().map(|m| m.id)).collect();
-            if targets.is_empty() || matches!(layer.kind, LayerKind::Background | LayerKind::Selection) {
+            let paint_targets: Vec<_> = paint.into_iter().chain(layer.mask.as_ref().map(|m| m.id)).collect();
+            if paint_targets.is_empty() || matches!(layer.kind, LayerKind::Background | LayerKind::Selection) {
                 changes.push(None);
                 continue;
             }
@@ -497,7 +512,7 @@ impl Document {
                 LayerChange { tiles: [0; 2], extent, trim: false }
             } else {
                 let mut window = Rect::EMPTY;
-                for id in targets {
+                for id in paint_targets {
                     window = window.union(local_window(&layers, id, rect.size)?);
                 }
                 let low = [window.min.x, window.min.y];
@@ -528,7 +543,7 @@ impl Document {
             if change.extent.iter().any(|v| *v > limits.project.dimension) {
                 return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.project.dimension });
             }
-            changes.push(Some(change));
+            changes.push((targets.is_none() || change.tiles != [0; 2] || change.extent != extent).then_some(change));
         }
         Ok((layers, changes))
     }

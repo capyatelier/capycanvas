@@ -13,16 +13,18 @@ impl WgpuRasterizer {
         id: LayerId,
         coordinate: [u32; 2],
     ) -> Result<Option<Arc<TileBlob>>, GpuRasterError> {
+        self.native_plane_tile(id, RasterPlane::Color, coordinate)
+    }
+
+    pub(crate) fn native_plane_tile(&self, id: LayerId, plane: RasterPlane, coordinate: [u32; 2])
+        -> Result<Option<Arc<TileBlob>>, GpuRasterError> {
         let Some(tile) = self.native_backing(id).and_then(|data| {
-            data.tiles.get(&TileKey {
-                plane: RasterPlane::Color,
-                coordinate,
-            })
+            data.tiles.get(&TileKey { plane, coordinate })
         }) else {
             return Ok(None);
         };
         tile.try_backing()
-            .ok_or_else(|| GpuRasterError::Effect("Native color backing is not ready".into()))?
+            .ok_or_else(|| GpuRasterError::Effect("Native raster backing is not ready".into()))?
             .map(Some)
             .map_err(GpuRasterError::Effect)
     }

@@ -10,6 +10,9 @@ Transform, selected-pixel Move, Trim, Reveal All and Crop Fit Content now share
 asynchronous GPU bounds in their existing GTK, Web and Android controls.
 Transparent source padding, erased overrides, masks and selection coverage use
 actual pixels; pending work is cancellable. See [image commands](../ui/image-commands.md).
+Affine paint extents preserve canvas reach and hidden content after Move.
+Apply Transform to Pixels bakes accepted affine placement while retaining raw
+pigment, wetness and editable masks, with cancellable atomic publication.
 Retained geometry and its additional bounds consumers remain in
 the [M5–M6 specification](photo-editing-m5-m6.md).
 

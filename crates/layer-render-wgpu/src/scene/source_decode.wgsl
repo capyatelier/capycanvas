@@ -18,6 +18,7 @@ struct Settings {
 @fragment fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     if any(position.xy >= settings.options.zw) { return vec4<f32>(0.); }
     let samples = textureLoad(encoded, vec2<i32>(position.xy), 0);
+    if settings.unused0.z != 0. { return vec4(f32(samples.r) / settings.options.y, 0., 0., 1.); }
     if settings.options.y==0. {
         var decoded=vec4(half_value(samples.r),half_value(samples.g),half_value(samples.b),half_value(samples.a));
         if settings.unused0.x!=0. {decoded=bitcast<vec4<f32>>(samples);}

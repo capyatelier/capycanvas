@@ -15,6 +15,7 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Navigator drag | 120 | | |
 | Brush-cursor hover | 120 | | |
 | Placed-photo drag (24 MP photo) | 120 | | |
+| Retained wet-photo Transform body drag (61 MP) | 120 | **Not met.** 36.3–37.0 renderer updates/s; presentation unmeasured | [Material transforms](#retained-wet-photo-transforms), 2026-10-02 |
 | Pixel transform handle drag: Free, Uniform, Skew or Rotate | 120 | | |
 | Pixel transform: Distort or Perspective | 120 | | |
 | Pixel transform: Warp | 120 | | |
@@ -87,6 +88,80 @@ Records: `artifacts/testing/profiling/bounds-final-release-timing.log` and
 `artifacts/testing/android-benchmark-publication-split.log` and
 `android-benchmark-cache-apk.sha256` in the photo-editing worktree.
 
+## Retained wet-photo transforms
+
+Measured on 2026-10-02 at `eb9b8bab1` plus the retained-material changes, on
+the reference tablet at thermal status zero. The exact 9504 × 6336 tier photo
+has an accepted Wet Watercolor stroke, Linear blending, Fit zoom 0.16534 and
+Navigator open. The nondebuggable benchmark uses release Rust. Four five-second
+translations include one cold motion and three warm repeats.
+
+The warm repeats submit 36.34–36.95 renderer updates/s, with callback medians
+22.66–24.26 ms. Median submission duration is 6.315–6.472 ms, with p95
+16.20–17.01 ms. Transform dispatch after the new stroke reaches shared placement
+state after 87.889 ms; pending-to-idle takes 201.339 ms. This single shared-state
+observation is below 100 ms but does not qualify press-to-first-motion latency.
+These are renderer and shared-state timings, not presented frame rates;
+the 120 fps target remains unmet.
+
+A separate trace before the float-document precision guard observes median
+main GPU time of 21.68 ms (p95 26.36 ms),
+command finishing of 4.88 ms and queue submission of 0.65 ms. Before the box
+reduction change, main GPU time was 29.23 ms (p95 36.91 ms). Across 141 moving
+callbacks, 3,594 Color and 3,377 watercolor-wetness page mappings are all unique
+within their frames. The preceding 32-page cache repeats 24.6% of its mappings
+and takes 37.63 ms median main GPU time. The 64-page cache and omission of unused
+color neighbors remove that duplicate work. Admission reserves the larger
+bounded cache before allocating it.
+
+Repeated-dispatch probes before the box reduction estimate 8.81 ms for raw-plane mapping,
+1.51 ms for watercolor, 4.88 ms for display-area sampling, 8.25 ms for native
+reduction and 0.23 ms for composition. These differences include scheduling and
+cache effects; they are cost estimates, not physical lower bounds. The reduction
+averages approximately 1.72 million native pixels into 108,000 output pixels per
+frame. Replacing its complete linear-color blocks with hardware box averages
+reduces measured main GPU time to 21.68 ms, p95 26.36 ms.
+Partial edges, nonlinear color conversion and float-document material differences
+retain the general reduction.
+
+The audited motion maps each required raw page once, retains the photo's source
+levels, evaluates material only around wet content, and filters 3.76 million
+display pixels. Raw mapping and display sampling alone account for approximately
+13.7 ms on this tablet, against a 6 ms GPU budget. After removing the demonstrated
+duplicate work and slow reduction, the remaining gap is consistent with the
+measured sampling workload on this hardware. This assessment does not establish
+an absolute hardware limit or qualify the 120 fps target.
+
+Bulk destruction of completed Android command pools keeps process mappings
+between 8,377 and 8,443 through the final four motions, from 8,409 beforehand,
+and returns to 8,399 after idle. The old pool-retention policy exceeds 27,000
+mappings during brush warm-up and is stopped
+by the private-process guard. This establishes the observed stability of these
+workloads, not every brush or an absolute memory maximum.
+
+The separate 61 MP bake run, before the float-document precision guard,
+completes Apply Transform to Pixels in 18.793 s. The guard changes display
+reduction, leaving this raw bake path unchanged.
+The result keeps 950 Color and ten watercolor-wetness pages plus material style,
+removes the original source, sets identity placement, and reopens with exact
+native raster backing. Across 141 off-thread samples, observed peak PSS is
+828.0 MB, tracked GPU allocation/reservation peaks are 2.758/2.837 GB, and
+system available memory stays at least 7.904 GB. These overlapping measures
+must not be added; sampling does not establish absolute peaks. Pending shared
+state is observed after 129.9 ms, not a presented-response qualification.
+
+Clean final benchmark APK SHA-256:
+`dd64a08b6f2b0a209a18b77fc4192bbebcdae493129df18deb055e5cfcfd0ca0`.
+Box-reduction trace and large-bake APK SHA-256:
+`d00c75cb7b2d7ea98773e1e18b732640aa9eecf3a548de55c73a46f7ab2273da`.
+Preceding cache-counter APK SHA-256:
+`c85304da262916f9983fb4d13643dde16b3058595b4aebd295708596351533a6`.
+Records: `artifacts/testing/material/{android-box-hdr-final,android-box-reduction}` and the preceding
+`android-lru64-probe`, `android-placement-calibration`,
+`android-watercolor-calibration`, `android-area-calibration`,
+`android-reduce-calibration` and `android-compose-calibration` directories
+in the photo-editing worktree. Low and mid reference tiers remain unmeasured.
+
 ## Brushes
 
 Target: **120 completed updates/s** at the guaranteed size, on the 61 MP canvas.
@@ -106,7 +181,7 @@ are kept separate from the 10 s comparison table below.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 2048 px | 150.2 fresh updates/s (138.61–154.45); completion gap p99 20.02–36.63 ms | **Not met** |
+| G-Pen (1) | Simple | 2048 px | 87.6 fresh updates/s (85.98–87.88); completion gap p99 31.59–38.83 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 2048 px | 61.8 updates/s (60.6–62.7); gap p99 33.6 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 2048 px | 189.3 updates/s (188.6–190.5); gap p99 10.6 ms | Met |
 | Antique Pen (30) | Simple | 2048 px | 82.0 updates/s (81.7–82.2); gap p99 26.4 ms | **Not met** |
@@ -147,28 +222,29 @@ are kept separate from the 10 s comparison table below.
 
 ## Current G-Pen comparison
 
-Measured on 2026-09-30 against `ba8835fec`: the tier photo beneath one paint
-layer, Perceptual blending, 2048 px G-Pen, Fit, 16 ms prediction, default
-workspace with Stats closed, warm-up and three five-second strokes. Thermal
-status is zero. The front-stack and covered-pixel candidate raises fresh input
-throughput from 102.45 to 150.24 updates/s. Completion-gap p99 is
-20.02–36.63 ms. The rate exceeds 120/s, but the 16.7 ms gap target remains open.
-This does not qualify the class or its other brushes.
-Settling increases from 715–793 ms to 1,074–1,438 ms; smaller idle-refinement
-batches trade completion time for admission of fresh input.
+Measured on 2026-10-02 at `eb9b8bab1` with the retained-material changes:
+the tier photo beneath one paint layer, Perceptual blending, 2048 px G-Pen,
+Fit, 16 ms prediction, default workspace with Stats closed, warm-up and three
+five-second strokes. Thermal status is zero. Both nondebuggable ARM64 benchmark
+builds use release Rust, R8 optimization and the same completed-pool cleanup.
 
-Candidate: `c452a0642` (production source matches `fc5d00fd5` after the
-test-fixture rebase), optimized benchmark APK SHA-256
-`865b0dd05b8253b3b22eac806136023a5befeac5b642e5fddb2f3cd24194d047`.
-Raw records: `artifacts/optimization-roi/{current-main,final}-top-fit`.
+| Build | Fresh updates/s, median (range) | Completion-gap p99, range |
+| --- | ---: | ---: |
+| `eb9b8bab1` plus bounded Android command-pool cleanup | 86.98 (85.70–89.07) | 31.43–33.17 ms |
+| Same base and cleanup, plus retained-material changes | 87.62 (85.98–87.88) | 31.59–38.83 ms |
 
-Current short-contact tests show a separate start-latency gap after two seconds
-of idle, despite longer settling not increasing the matched run medians.
-A 25-contact rapid sequence also encountered a GPU-driver allocation crash;
-a memory-sampled repeat passed. Neither the cause of the idle start delay nor
-the intermittent allocation failure is established. See
-[the resumed-contact audit](responsiveness.md#resumed-contacts-before-the-batch-tradeoff) before
-treating settling time as harmless to subsequent drawing.
+Neither meets 120/s or the 16.7 ms gap target. The matched comparison isolates
+no throughput regression from the retained-material changes. The older 150.2/s
+record used a different shared-renderer revision and pool policy; this comparison
+does not attribute that difference to hardware or one change.
+
+Candidate APK SHA-256:
+`356fdd9d9855cf2e9cd0717d6b59a1343a84b77119b944334186e0bcd3d584d5`.
+Baseline APK SHA-256:
+`2f45e728edd62a59f6c648cd3e6f08f6d5604770c4df0e3a2669555bf7e61aa5`.
+Raw records: `artifacts/testing/material/android-pool-destroy/{gpen-top-fit,gpen-head-baseline}`.
+These strokes do not qualify resumed-contact latency; see
+[the resumed-contact audit](responsiveness.md#resumed-contacts-before-the-batch-tradeoff).
 
 ## Retouching with the integrated compositor
 
@@ -195,16 +271,6 @@ refinement and keeps backpressure for required raster work; APK SHA-256
 Raw reports are `artifacts/latency-investigation/qualified-25-top-retouch`.
 These successful runs do not establish that the earlier rare Adreno fault is
 fixed, or qualify the other brushes and presentation-paced navigation.
-
-## Latest refinement validation status
-
-The subsequent 2026-09-30 shared renderer removes the fixed front-layer
-preference and restores four-page idle-refinement batches while retaining
-fresh-input queueing. It is measured on low and mid tiers in
-[the controlled tradeoff](responsiveness.md#refinement-batch-tradeoff).
-MovinkPad 14 was reserved by another session, so that version has no top-tier
-remeasurement. The G-Pen and retouching rows above retain their frozen builds;
-they do not qualify the latest version.
 
 ## Shared layout regression comparison
 

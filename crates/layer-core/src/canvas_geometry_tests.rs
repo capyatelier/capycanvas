@@ -627,3 +627,130 @@ fn resampled_tile_predictions_count_only_the_result() {
     assert_eq!(doc.canvas_geometry_plan(&double, bytes(14)).unwrap_err(), CanvasGeometryError::RasterTooLarge);
     doc.canvas_geometry_plan(&double, bytes(15)).unwrap();
 }
+
+#[test]
+fn paint_extent_plan_inverse_maps_the_canvas_and_preserves_hidden_material_and_masks() {
+    for map in [
+        Affine([0.25, 0., 0., 0.5, 200., 120.]),
+        Affine([0.4, 0.15, -0.2, 0.3, 180., 90.]),
+        Affine::around(Point { x: 100., y: 80. }, [0.3, 0.5], 0.6, Point { x: 140., y: 70. }),
+    ] {
+        for linked in [true, false] {
+            let mut doc = Document::new("affine extent", 256, 128, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+            let id = doc.layers[0].id;
+            let mut data = raster(RasterPlane::Color, doc.color, &[[0, 0], [3, 2]]).wait_data().unwrap().as_ref().clone();
+            for plane in [RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
+                data.tiles.insert(TileKey { plane, coordinate: [3, 2] }, tile(plane, doc.color, 17));
+            }
+            data.watercolor = Some(crate::raster::RasterWatercolor { wet_edge: 0.8, burnt_edge: 0.6, edge_width: 7. });
+            doc.layers[0].raster = RasterRevision::backed(data);
+            doc.layers[0].properties.extent = Some([1024, 768]);
+            doc.layers[0].properties.placement = map;
+            doc.layers[0].properties.offset = Point { x: -20., y: 15. };
+            let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), Point { x: -20., y: 15. });
+            mask.linked = linked;
+            mask.default_coverage = 0.;
+            mask.initial = Some(Selection::polygon(vec![
+                Point { x: 11., y: 9. }, Point { x: 71., y: 9. }, Point { x: 71., y: 49. },
+            ]).unwrap());
+            mask.raster = raster(RasterPlane::Mask, doc.color, &[[0, 0], [3, 2]]);
+            let mask_id = mask.id;
+            doc.layers[0].mask = Some(mask);
+            let before = doc.layers[0].clone();
+            let mut editor = Editor::new(doc.clone());
+            let edits = doc.paint_extent_plan(&[id], limits()).unwrap();
+            assert!(!edits.is_empty());
+            assert!(editor.next_history_edit(false).is_none(), "planning adds no history");
+            same_state(editor.document(), &doc);
+            editor.perform(Edit::Batch(edits)).unwrap();
+            let result = editor.document();
+            assert_eq!([result.width, result.height], [256, 128]);
+            assert_eq!(result.selection, doc.selection);
+            assert_eq!(result.rulers, doc.rulers);
+            let after = result.layer(id).unwrap();
+            let old = before.raster.wait_data().unwrap();
+            let new = after.raster.wait_data().unwrap();
+            assert_eq!(old.watercolor, new.watercolor);
+            assert_eq!(old.tiles.len(), new.tiles.len());
+            let key = TileKey { plane: RasterPlane::Color, coordinate: [0, 0] };
+            let moved = new.tiles.iter().find(|(_, tile)| tile.same_capture(&old.tiles[&key])).unwrap().0.coordinate;
+            let delta = Point { x: (moved[0] * TILE_SIZE) as f32, y: (moved[1] * TILE_SIZE) as f32 };
+            assert!(delta.x > 0. || delta.y > 0., "negative inverse origin rebases whole tiles");
+            for (key, tile) in &old.tiles {
+                let moved = TileKey { plane: key.plane, coordinate: [key.coordinate[0] + moved[0], key.coordinate[1] + moved[1]] };
+                assert!(new.tiles[&moved].same_capture(tile), "{map:?} linked={linked}: hidden planes keep their captures");
+            }
+            let new_mask = after.mask.as_ref().unwrap();
+            let old_mask = before.mask.as_ref().unwrap();
+            assert_eq!(new_mask.initial, old_mask.initial.as_ref().map(|s| s.translated(delta)));
+            for (key, tile) in &old_mask.raster.wait_data().unwrap().tiles {
+                let moved = TileKey { plane: key.plane, coordinate: [key.coordinate[0] + moved[0], key.coordinate[1] + moved[1]] };
+                assert!(new_mask.raster.wait_data().unwrap().tiles[&moved].same_capture(tile));
+            }
+            for target in [id, mask_id] {
+                let inverse = result.layer_transform(target).inverse().unwrap();
+                for corner in Rect::from_extent([256, 128]).corners() {
+                    let local = inverse.map(corner);
+                    let extent = result.target_extent(target);
+                    assert!(local.x >= -0.01 && local.y >= -0.01, "{map:?} linked={linked}: {local:?}");
+                    assert!(local.x <= extent[0] as f32 + 0.01 && local.y <= extent[1] as f32 + 0.01);
+                }
+                for local in [Point { x: 11., y: 9. }, Point { x: 1000., y: 760. }] {
+                    near(document_point(result, target, Point { x: local.x + delta.x, y: local.y + delta.y }),
+                        document_point(&doc, target, local));
+                }
+            }
+            let grown = result.clone();
+            assert!(editor.undo().unwrap());
+            same_state(editor.document(), &doc);
+            assert!(editor.redo().unwrap());
+            same_state(editor.document(), &grown);
+        }
+    }
+}
+
+#[test]
+fn paint_extent_plan_changes_only_selected_paint_and_keeps_photo_domains_fixed() {
+    let mut doc = Document::new("selected extent", 512, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let id = doc.layers[0].id;
+    doc.layers[0].properties.placement = Affine([0.5, 0., 0., 0.5, 20., 30.]);
+    let other = doc.allocate_layer_id();
+    let mut unrelated = Layer::paint(other, "Unselected");
+    unrelated.properties.placement = Affine([1. / 128., 0., 0., 1. / 128., 0., 0.]);
+    doc.layers.insert(0, unrelated.clone());
+    let photo = doc.allocate_layer_id();
+    let mut source = Layer::paint(photo, "Photo");
+    source.source = Some(Arc::new(photo_source([300, 200])));
+    source.properties.placement = Affine([0.1, 0., 0., 0.1, 100., 50.]);
+    doc.layers.insert(0, source.clone());
+    let edits = doc.paint_extent_plan(&[id, photo], limits()).unwrap();
+    let mut editor = Editor::new(doc.clone());
+    editor.perform(Edit::Batch(edits)).unwrap();
+    assert_eq!(editor.document().layer(other), Some(&unrelated));
+    assert_eq!(editor.document().layer(photo), Some(&source));
+    assert!(editor.document().target_extent(id)[0] > 512);
+    assert_eq!([editor.document().width, editor.document().height], [512, 256]);
+    assert!(doc.validate_paint_extents(&[id], limits()).is_ok());
+    assert_eq!(doc.validate_paint_extents(&[other], limits()), Err(CanvasGeometryError::ExtentTooLarge { limit: 32768 }));
+}
+
+#[test]
+fn paint_extent_plan_cap_refusal_and_identity_are_atomic_and_add_no_history() {
+    let mut doc = Document::new("extent cap", 512, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let id = doc.layers[0].id;
+    assert!(doc.paint_extent_plan(&[id], limits()).unwrap().is_empty());
+    assert!(doc.validate_paint_extents(&[id], limits()).is_ok());
+    doc.layers[0].properties.placement = Affine([1. / 128., 0., 0., 1. / 128., 0., 0.]);
+    let editor = Editor::new(doc.clone());
+    let error = CanvasGeometryError::ExtentTooLarge { limit: 32768 };
+    assert_eq!(doc.paint_extent_plan(&[id], limits()), Err(error.clone()));
+    assert_eq!(doc.validate_paint_extents(&[id], limits()), Err(error));
+    same_state(editor.document(), &doc);
+    assert!(editor.next_history_edit(false).is_none());
+    assert!(editor.next_history_edit(true).is_none());
+}
+
+mod transform_pixels_plan {
+    use super::*;
+    include!("transform_pixels_plan_tests.rs");
+}

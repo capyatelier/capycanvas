@@ -109,7 +109,7 @@ impl Pixels {
             Self::Raster(tile, space) => Ok(NativeSamples {
                 tile,
                 descriptor: tile.descriptor,
-                channels: SourceChannels::Rgba,
+                channels: if tile.descriptor.channels == 1 { SourceChannels::Gray } else { SourceChannels::Rgba },
                 depth: tile.descriptor.depth(),
                 space: *space,
             }),
@@ -245,19 +245,15 @@ impl DecodedTiles {
         validate_raster(blob, space)?;
         let d = blob.descriptor;
         let depth = d.depth();
+        let mut data = rgb_settings(space, destination, depth, [PAGE_SIZE; 2], d.alpha);
+        data[18] = f32::from(d.channels == 1);
         let (tile, write) =
             self.plan_key(r, Key::Raster(blob.digest, space, destination))?;
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Raster(blob.clone(), space),
             texture: tile.texture.clone(),
             view: tile.view.clone(),
-            data: Some(rgb_settings(
-                space,
-                destination,
-                depth,
-                [PAGE_SIZE; 2],
-                d.alpha,
-            )),
+            data: Some(data),
             write,
         });
         Ok((tile, pending))
@@ -484,6 +480,9 @@ impl DecodedTiles {
 
 pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), GpuRasterError> {
     let d = blob.descriptor;
+    if d.channels == 1 && d.sample == layer_core::color::SampleType::Unsigned
+        && matches!(d.bits_per_channel, 8 | 16) && d.encoding == TransferEncoding::Linear
+        && d.alpha == AlphaAssociation::None { return Ok(()); }
     if d.channels != 4
         || d.bytes_per_pixel().is_none()
         || !matches!(

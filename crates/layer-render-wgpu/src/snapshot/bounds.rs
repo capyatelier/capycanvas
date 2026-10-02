@@ -89,6 +89,8 @@ impl SnapshotGpu {
                             && transform.0[4..].iter().all(|v| v.fract() == 0.);
                         transform.bounds(local_hull(layer, original_extent)?.outset(if copied { 0. }
                             else { layer_core::Interpolation::Bicubic.support() as f32 }))
+                            .outset(layer.raster.wait_data()?.watercolor.map_or(0., |style|
+                                2. * style.edge_width.clamp(1., 16.)))
                     }
                     LayerKind::Effect if layer.effect.as_ref().is_some_and(|e| e.program.kind == layer_core::EffectKind::Generator) => Rect::from_extent(original_extent),
                     _ => Rect::EMPTY,
@@ -243,7 +245,6 @@ impl SnapshotGpu {
         }.union(paper_bounds))
     }
 }
-
 async fn read_bounds(device: &PipelineDevice, queue: &wgpu::Queue, output: &wgpu::Buffer) -> Result<[u32; 4], String> {
     let bytes = crate::local_tone::read_buffer_async(device, queue, output).await?;
     Ok(std::array::from_fn(|i| u32::from_le_bytes(bytes[4*i..4*i+4].try_into().unwrap())))
@@ -255,50 +256,5 @@ fn local_hull(layer: &Layer, extent: [u32; 2]) -> Result<Rect, String> {
     for key in raster.tiles.keys().filter(|key| key.plane == RasterPlane::Color) {
         bounds = bounds.union(page_rect(key.coordinate).to_rect());
     }
-    if let Some(style) = raster.watercolor && !bounds.is_empty() {
-        bounds = bounds.outset(2. * style.edge_width.clamp(1., 16.));
-    }
     Ok(bounds.intersect(Rect::from_extent(layer.local_extent(extent))))
-}
-
-pub struct ContentBoundsJob {
-    control: CaptureControl,
-    receiver: mpsc::Receiver<Result<Rect, String>>,
-}
-impl Drop for ContentBoundsJob {
-    fn drop(&mut self) { self.control.cancel(); }
-}
-#[cfg(target_arch = "wasm32")]
-pub type BrowserContentBounds = std::rc::Rc<dyn Fn(ContentBoundsRequest, CaptureControl)
-    -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Rect, String>>>>>;
-
-impl ContentBoundsJob {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn start(gpu: SnapshotGpu, request: ContentBoundsRequest) -> Result<Self, String> {
-        let control = CaptureControl::default();
-        let capture = control.clone();
-        let (sender, receiver) = mpsc::channel();
-        std::thread::Builder::new().name("capy-content-bounds".into()).stack_size(8 * 1024 * 1024).spawn(move || {
-            let result = pollster::block_on(gpu.content_bounds(request, capture));
-            let _ = sender.send(result);
-        }).map_err(|e| e.to_string())?;
-        Ok(Self { control, receiver })
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub fn start(worker: BrowserContentBounds, request: ContentBoundsRequest) -> Result<Self, String> {
-        let control = CaptureControl::default();
-        let capture = control.clone();
-        let (sender, receiver) = mpsc::channel();
-        wasm_bindgen_futures::spawn_local(async move {
-            let _ = sender.send(worker(request, capture).await);
-        });
-        Ok(Self { control, receiver })
-    }
-    pub fn take(&mut self) -> Option<Result<Rect, String>> {
-        match self.receiver.try_recv() {
-            Ok(result) => Some(result),
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(Err("The content bounds scan stopped".into())),
-        }
-    }
 }

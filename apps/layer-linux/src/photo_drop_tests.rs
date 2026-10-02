@@ -8,6 +8,145 @@ use std::path::{Path, PathBuf};
 #[path = "photo_workflow_tests.rs"]
 mod workflow;
 
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_photo_transform_pixels_workflow() {
+    let app = native_test_app("art.capycanvas.PhotoTransformPixels");
+    let theme = match std::env::var("CAPY_NATIVE_TEST_THEME").as_deref().unwrap_or("dark") {
+        "light" => layer_ui::Theme::Light,
+        "dark" => layer_ui::Theme::Dark,
+        _ => panic!("CAPY_NATIVE_TEST_THEME must be light or dark"),
+    };
+    let mut project = new_drawing(200, 150, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let id = project.document.active_layer;
+    let photo = project.document.layers.iter_mut().find(|layer| layer.id == id).unwrap();
+    photo.source = Some(layer_core::color::source::rgba8_source([320, 240], |x, y| {
+        if (x / 16 + y / 16) % 2 == 0 { [230, 40, 80, 255] } else { [20, 160, 220, 255] }
+    }));
+    photo.properties.placement = layer_core::Affine([0.5, 0., 0., 0.5, 20., 15.]);
+    let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.maximize();
+    w.window.present();
+    ready(&w);
+    w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+    pump(100);
+    assert_eq!(state(&w).theme, theme);
+    let current = || ui_session(&w).engine().document().layer(id).unwrap().clone();
+    let capture = |name: &str| {
+        if let Some(path) = std::env::var_os("LAYER_IMAGE_CAPTURE_DIR") {
+            let directory = std::path::PathBuf::from(path);
+            std::fs::create_dir_all(&directory).unwrap();
+            super::new_photo::capture_ui(&w, &directory, name);
+        }
+    };
+    invoke(&w, CommandId::ScaleRotate);
+    until(|| state(&w).commands.iter().any(|c| c.id == CommandId::PlacementOriginalSize && c.enabled), "photo transform preparation");
+    w.dispatch(UiAction::SetToolSetting { id: "transform_width".into(), value: 0.6 });
+    invoke(&w, CommandId::ApplyTransform);
+    ready(&w);
+    invoke(&w, CommandId::Brush);
+    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::WetWatercolor as u32 });
+    w.dispatch(UiAction::SetBrushSize { value: 30. });
+    w.dispatch(UiAction::SetColor { rgba: [0.15, 0.25, 0.9, 1.] });
+    ready(&w);
+    assert_eq!(ui_session(&w).engine().brush().wet_mix.wetness, 0.);
+    native_pen_path(&w, &[[50., 65.], [75., 65.], [100., 65.]]);
+    ready(&w);
+    let retained = current();
+    let material = retained.raster.wait_data().unwrap();
+    let planes = |data: &layer_core::raster::RasterData| data.tiles.keys().map(|key| key.plane)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(planes(&material), std::collections::BTreeSet::from([
+        layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::WatercolorWetness]));
+    assert!(material.watercolor.is_some());
+    assert_ne!(retained.properties.placement, layer_core::Affine::IDENTITY);
+    w.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels });
+    assert!(state(&w).commands.iter().any(|c| c.id == CommandId::CancelTransform && c.enabled));
+    w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
+    pump(300);
+    assert_eq!(current(), retained, "cancelled worker cannot publish a bake");
+    w.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels });
+    capture("applying.png");
+    until(|| current().source.is_none(), "bake worker publishes native pixels");
+    ready(&w);
+    let baked = current();
+    assert_eq!(baked.properties.placement, layer_core::Affine::IDENTITY);
+    assert!(!baked.raster.is_empty());
+    let baked_material = baked.raster.wait_data().unwrap();
+    assert_eq!(planes(&baked_material), planes(&material));
+    assert_eq!(baked_material.watercolor, material.watercolor);
+    invoke(&w, CommandId::Pen);
+    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::GPen as u32 });
+    w.dispatch(UiAction::SetBrushSize { value: 15. });
+    w.dispatch(UiAction::SetColor { rgba: [1., 0., 1., 1.] });
+    native_pen_path(&w, &[[50., 65.], [75., 65.], [100., 65.]]);
+    ready(&w);
+    let painted = current();
+    assert_ne!(painted.raster, baked.raster);
+    capture("editing.png");
+    if std::env::var_os("LAYER_IMAGE_CAPTURE_DIR").is_some()
+        && std::env::var("LAYER_MOTION_VIEWPORT").as_deref() == Ok("640x480") {
+        assert!(w.window.is_maximized());
+        assert_eq!((w.surface.width(), w.surface.height()), (640, 480));
+        invoke(&w, CommandId::ZenMode);
+        invoke(&w, CommandId::ScaleRotate);
+        until(|| state(&w).canvas_bar.is_some_and(|bar| bar.context.kind == layer_ui::CanvasBarKind::Transform)
+            && super::canvas_bar_tests::shown(&w), "narrow transform bar is visible");
+        let bounds = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
+        assert!(bounds.x() >= 0. && bounds.y() >= 0.
+            && bounds.x() + bounds.width() <= 640. && bounds.y() + bounds.height() <= 480.,
+            "narrow transform bar must fit the allocated window: {bounds:?}");
+        capture("narrow-transform.png");
+        let mut native = super::canvas_bar_tests::remote_input();
+        let more = super::canvas_bar_tests::bar_widget(&w, "canvas-bar-more");
+        native.click(super::canvas_bar_tests::center(&w, &more));
+        until(|| w.canvas_bar.menu_open(), "narrow More menu opens");
+        capture("narrow-more.png");
+        native.key(0xff1b);
+        until(|| !w.canvas_bar.menu_open(), "Escape closes narrow More");
+        let cancel = super::canvas_bar_tests::bar_widget(&w, "canvas-bar-CancelTransform");
+        native.click(super::canvas_bar_tests::center(&w, &cancel));
+        until(|| state(&w).layer_tools.tool != LayerCanvasTool::Transform, "narrow Cancel returns to editing");
+        ready(&w);
+        assert_eq!(current(), painted);
+        capture("narrow-editing.png");
+        invoke(&w, CommandId::ZenMode);
+        w.window.maximize();
+        pump(350);
+        ready(&w);
+    }
+    invoke(&w, CommandId::Liquify);
+    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::LiquifyTwirl as u32 });
+    w.dispatch(UiAction::SetBrushSize { value: 40. });
+    native_pen_path(&w, &[[80., 70.], [95., 75.], [110., 80.]]);
+    ready(&w);
+    let liquified = current();
+    assert_ne!(liquified.raster, painted.raster);
+    invoke(&w, CommandId::Undo); ready(&w); assert_eq!(current(), painted);
+    invoke(&w, CommandId::Undo); ready(&w); assert_eq!(current(), baked);
+    invoke(&w, CommandId::Undo); ready(&w); assert_eq!(current(), retained);
+    invoke(&w, CommandId::Redo); ready(&w); assert_eq!(current(), baked);
+    let saved = super::place_source::snapshot(&w);
+    let reopened = layer_core::Project::read(saved.as_slice(), Default::default()).unwrap();
+    let restored_layer = reopened.document.layer(id).unwrap();
+    assert_eq!(restored_layer.properties, baked.properties);
+    assert!(restored_layer.source.is_none());
+    let digests = |layer: &layer_core::Layer| layer.raster.wait_data().unwrap().tiles.iter()
+        .map(|(key, tile)| (*key, tile.wait_backing().unwrap().digest)).collect::<Vec<_>>();
+    assert_eq!(digests(restored_layer), digests(&baked));
+    assert_eq!(restored_layer.raster.wait_data().unwrap().watercolor, material.watercolor);
+    let before = glib::MainContext::default().block_on(read_canvas_pixels(&w, 9981)).unwrap();
+    w.window.destroy(); pump(100);
+    let restored = Workspace::with_project(&app, Some((reopened, None)));
+    restored.window.maximize(); restored.window.present(); ready(&restored);
+    restored.dispatch(UiAction::SetTheme { theme: Some(theme) });
+    pump(100);
+    assert_eq!(state(&restored).theme, theme);
+    let after = glib::MainContext::default().block_on(read_canvas_pixels(&restored, 9982)).unwrap();
+    assert!(before.bytes == after.bytes, "baked artwork survives native reopen");
+    restored.window.destroy(); pump(100);
+}
+
 fn publish(path: &Path, value: &Value) {
     let temporary = path.with_extension("tmp");
     std::fs::write(&temporary, serde_json::to_vec(value).unwrap()).unwrap();

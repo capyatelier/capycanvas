@@ -4,7 +4,7 @@ use layer_core::{Affine, Rect, TransformMap};
 pub(crate) fn input_level(level: u32, preview: &layer_render::TransformPreview, placement: Affine, extent: [u32; 2]) -> u32 {
     let bounds = Rect::from_extent(extent);
     let bounds = preview.selection.as_ref().map_or(bounds, |s| bounds.intersect(s.bounds()));
-    let rate = stretch(&preview.transform.map, placement, bounds).max(magnification(placement));
+    let rate = stretch(&preview.transform.map, placement, bounds).max(placement.magnification());
     selection_level(level, placement, preview.selection.as_ref(), extent)
         .min((level as f32 - rate.log2()).floor().clamp(0., 4.) as u32)
 }
@@ -15,10 +15,10 @@ pub(crate) fn selection_level(level: u32, placement: Affine, selection: Option<&
 
 fn stretch(map: &TransformMap, placement: Affine, bounds: Rect) -> f32 {
     match map {
-        TransformMap::Affine(affine) => magnification(affine.then(placement)),
+        TransformMap::Affine(affine) => affine.then(placement).magnification(),
         TransformMap::Projective(projective) => {
             let Some(map) = projective.then(layer_core::Projective::from_affine(placement)) else { return f32::INFINITY; };
-            if let Some(affine) = map.as_affine() { return magnification(affine); }
+            if let Some(affine) = map.as_affine() { return affine.magnification(); }
             let [a,b,c,d,e,f,g,h,i] = map.0.map(f64::from);
             let mut weight = f64::INFINITY;
             let mut numerator = [0f64; 4];
@@ -31,7 +31,7 @@ fn stretch(map: &TransformMap, placement: Affine, bounds: Rect) -> f32 {
             }
             if weight <= 0. { return f32::INFINITY; }
             let [a,b,c,d] = numerator.map(|n| (n / weight.powi(2)) as f32);
-            magnification(Affine([a,b,c,d,0.,0.]))
+            Affine([a,b,c,d,0.,0.]).magnification()
         }
         TransformMap::Mesh(mesh) => {
             let Some(inverse) = mesh.frame.inverse() else { return f32::INFINITY; };
@@ -54,10 +54,10 @@ fn stretch(map: &TransformMap, placement: Affine, bounds: Rect) -> f32 {
                             }
                         }
                     }}
-                    largest = largest.max(magnification(Affine([
+                    largest = largest.max(Affine([
                         du[0]*a+dv[0]*b, du[1]*a+dv[1]*b,
                         du[0]*c+dv[0]*d, du[1]*c+dv[1]*d, 0.,0.,
-                    ])));
+                    ]).magnification());
                 }
             }
             largest

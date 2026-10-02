@@ -120,13 +120,23 @@ mod move_pixels_checks {
         let mut s = filled_selection_session();
         invoke(&mut s, CommandId::Deselect);
         invoke(&mut s, CommandId::Move);
+        let raw = super::transform_pixels::raw_revision(s.engine.document().color,
+            &[layer_core::raster::RasterPlane::Color], 30);
+        let original_tile = raw.wait_data().unwrap().tiles.values().next().unwrap().clone();
+        s.engine.apply_edit(layer_core::Edit::SetRaster { target: LayerId(1), revision: raw }).unwrap();
         send(&mut s, 1, PenPhase::Down, [200., 200.]);
         send(&mut s, 2, PenPhase::Move, [230.5, 211.25]);
         assert!(!s.operation.moving_pixels() && s.renderer_mut().transform.is_none());
         send(&mut s, 3, PenPhase::Up, [230.5, 211.25]);
         s.frame(2, 2).unwrap();
-        let offset = s.engine.document().layer(LayerId(1)).unwrap().properties.offset;
-        assert!((offset.x - 30.5).abs() < 1e-3 && (offset.y - 11.25).abs() < 1e-3, "{offset:?}");
+        let data = s.engine.document().target_raster(LayerId(1)).unwrap().wait_data().unwrap();
+        let (key, tile) = data.tiles.iter().next().unwrap();
+        assert!(tile.same_capture(&original_tile), "the same captured pixels survive tile rebasing");
+        let origin = s.engine.document().layer_transform(LayerId(1)).map(layer_core::Point {
+            x: key.coordinate[0] as f32 * layer_core::raster::TILE_SIZE as f32,
+            y: key.coordinate[1] as f32 * layer_core::raster::TILE_SIZE as f32,
+        });
+        assert!((origin.x - 30.5).abs() < 1e-3 && (origin.y - 11.25).abs() < 1e-3, "{origin:?}");
         assert!(committed(&s).is_empty(), "no pixels are resampled");
     }
 

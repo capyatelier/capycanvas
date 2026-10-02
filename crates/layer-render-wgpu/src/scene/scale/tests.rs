@@ -50,6 +50,37 @@ fn document_at(extent: [u32; 2]) -> Document {
 }
 
 #[test]
+fn native_material_reduction_preserves_small_hdr_corrections() {
+    let mut doc = document_at([256, 256]);
+    doc.color.depth = SampleDepth::F32;
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let base = crate::test_support::page_texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let source = crate::test_support::page_texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let output = crate::test_support::page_texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let mut pigment = vec![[0., 0., 0., 1.]; 256 * 256];
+    for (i, value) in [1048576., 1048576.125, 1048576.25, 1048576.375].into_iter().enumerate() {
+        pigment[(i / 2) * 256 + i % 2][0] = value;
+    }
+    let mut appearance = pigment.clone();
+    appearance[0][0] += 0.125;
+    let expected = [0, 1, 256, 257].into_iter().map(|i|
+        f64::from(appearance[i][0]) - f64::from(pigment[i][0])).sum::<f64>() / 4.;
+    let bytes = |values: &[[f32; 4]]| values.iter().flatten().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>();
+    crate::test_support::upload_page(&r, &base, &bytes(&pigment));
+    crate::test_support::upload_page(&r, &source, &bytes(&appearance));
+    let binding = Commands::binding(&r, &source.create_view(&Default::default()),
+        &base.create_view(&Default::default()), &output.create_view(&Default::default()));
+    let mut commands = Commands::new(&r);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let mut values = [0; 20];
+    values[..8].copy_from_slice(&[0, 0, 1, 1, 256, 256, 2, 128]);
+    commands.reduce(&mut r, &mut encoder, values, &binding, "HDR material correction oracle").unwrap();
+    r.uploads.finish(&encoder); encoder.submit(&r.queue);
+    let actual = pixels(&r, &output)[0][0];
+    assert!((f64::from(actual) - expected).abs() < 1e-6, "HDR correction {actual}, expected {expected}");
+}
+
+#[test]
 fn idle_display_converges_to_exact_composition_after_edits() {
     for space in layer_core::BlendSpace::ALL {
         let mut doc = document();
@@ -654,24 +685,52 @@ fn optional_source_detail_yields_to_unallocated_required_images() {
 
 #[test]
 fn source_retention_reserves_images_that_composition_allocates_later() {
-    let mut doc = document_at([33, 17]);
-    doc.width = 4096; doc.height = 4096;
-    let mut front = doc.layers[0].clone();
-    front.id = LayerId(20);
-    front.opacity = 0.5;
-    doc.layers.insert(0, front);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
-    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    let cache = Cache::new(&r, Request { plan: display_mips::Plan::at(frame.document_extent, 2), evaluation: Evaluation::Display }, doc.layers.len());
-    assert!(cache.output.is_empty() && cache.pixels.next().is_none());
-    let source_budget = cache.source_budget(&r, frame, &Commands::new(&r), None);
-    r.scale_display = Some(cache);
-    r.submit(frame).unwrap();
-    let cache = r.scale_display.as_ref().unwrap();
-    assert!(cache.pixels.root().is_some() && cache.pixels.next().is_some());
-    let commands = r.scene.as_ref().unwrap().scale_commands.as_ref().unwrap();
-    assert!(source_budget + cache.storage_bytes() + commands.storage_bytes() <= crate::scene::scale::CACHE_BYTES);
+    for material in [false, true] {
+        let mut doc = document_at([33, 17]);
+        doc.width = 4096; doc.height = 4096;
+        if material {
+            use layer_core::raster::*;
+            let plane = RasterPlane::WatercolorWetness;
+            let tile = RasterTile::backed(TileBlob::encode(plane.descriptor(doc.color), &vec![255; 256 * 256]).unwrap());
+            let mut data = RasterData { watercolor: Some(RasterWatercolor {
+                wet_edge: 0.9, burnt_edge: 0.6, edge_width: 8.,
+            }), ..Default::default() };
+            for y in 0..16 {
+                for x in 0..16 {
+                    data.tiles.insert(TileKey { plane, coordinate: [x, y] }, tile.clone());
+                }
+            }
+            doc.layers[0].raster = RasterRevision::backed(data);
+            doc.layers[0].properties.placement = layer_core::Affine::translation(layer_core::Point { x: 32., y: 32. });
+        }
+        let mut front = doc.layers[0].clone();
+        front.id = LayerId(20);
+        front.opacity = 0.5;
+        doc.layers.insert(0, front);
+        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+        frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        if material {
+            r.submit(frame).unwrap();
+            r.wait_idle().unwrap();
+            r.scale_display = None;
+            r.scene = None;
+            frame.reset_layers = false;
+        }
+        let cache = Cache::new(&r, Request { plan: display_mips::Plan::at(frame.document_extent, 2), evaluation: Evaluation::Display }, doc.layers.len());
+        assert!(cache.output.is_empty() && cache.pixels.next().is_none());
+        let source_budget = cache.source_budget(&r, frame, &Commands::new(&r), None);
+        r.scale_display = Some(cache);
+        r.submit(frame).unwrap();
+        let cache = r.scale_display.as_ref().unwrap();
+        assert!(cache.pixels.root().is_some() && cache.pixels.next().is_some());
+        let commands = r.scene.as_ref().unwrap().scale_commands.as_ref().unwrap();
+        let scene = r.scene.as_ref().unwrap();
+        let material_bytes = scene.pool.iter().map(PageSurface::storage_bytes).sum::<u64>();
+        let total = source_budget + cache.storage_bytes() + commands.storage_bytes() + material_bytes;
+        eprintln!("material={material}: prospective_source={source_budget}, later_display={}, later_material={material_bytes}, total={total}", cache.storage_bytes());
+        assert!(total <= crate::scene::scale::CACHE_BYTES, "prospective sources and later outputs/material must stay admitted: {total}");
+    }
 }
 
 #[test]
@@ -747,7 +806,15 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
     assert!(r.has_pending_work(), "finishing placement must allow exact refinement");
     let mut fresh = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     fresh.submit(frame).unwrap();
-    assert_eq!(display_pixels(&r), display_pixels(&fresh));
+    let actual = display_pixels(&r);
+    let expected = display_pixels(&fresh);
+    let describe = |r: &WgpuRasterizer| r.scene.as_ref().unwrap().scale_sources.entries[&id].levels.iter()
+        .map(|(level, image)| (*level, r.scene.as_ref().unwrap().scale_sources.entries[&id].accepts(image), image.valid.len())).collect::<Vec<_>>();
+    assert_eq!(actual.len(), expected.len());
+    let error = actual.iter().zip(&expected).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (a - b).abs()))
+        .fold(0f32, f32::max);
+    eprintln!("display reduction histories max={error}; cached {:?}; fresh {:?}", describe(&r), describe(&fresh));
+    assert!(error < 1e-6, "cached versus fresh display reduction: {error}");
 }
 
 #[test]
@@ -1199,7 +1266,7 @@ fn masks_refresh_coverage_properties_and_paint_without_exact_display() {
 
     }
 }
-fn display_pixels(r: &WgpuRasterizer) -> Vec<[f32; 4]> {
+pub(crate) fn display_pixels(r: &WgpuRasterizer) -> Vec<[f32; 4]> {
     pixels(r, &materialized_display(r).texture)
 }
 fn materialized_display(r: &WgpuRasterizer) -> Image {

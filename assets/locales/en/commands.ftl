@@ -566,3 +566,13 @@ commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-gro
 commands-refusal-art-layers-an-effect-layer-s-mask-sets-where-the-effect-shows-it-can-t-be-applied = An effect layer's mask sets where the effect shows; it can't be applied
 commands-refusal-art-layers-only-a-paint-layer-s-mask-can-be-applied = Only a paint layer's mask can be applied
 commands-refusal-blending-float-documents-blend-in-linear-light = Float documents blend in linear light
+command-apply-transform-pixels = Apply Transform to Pixels
+transform-applying = Applying transform…
+commands-help-apply-transform-pixels = Apply the layer transform to its pixels, keeping editable paint and masks.
+commands-wait-for-transform = Wait for the transform to finish, or cancel it
+commands-transform-pixels-select-layer = Select a paint or photo layer
+commands-transform-pixels-unchanged = This layer has no transform to apply
+commands-wait-for-current-edit = Wait for the current edit
+commands-transform-pixels-drawing-changed = The drawing changed; apply the transform again
+commands-transform-pixels-unexpected-result = Couldn't apply the transformed pixels
+commands-transform-pixels-layer-changed = The transformed layer changed

@@ -29,9 +29,10 @@
     revised guarantee. See the [mid-tier measurement](mid-tier.md#g-pen-at-the-1536-px-guarantee).
   - The low-tier 1024 px G-Pen measured stroke meets 60/s; other simple brushes
     and stacked-photo drawing retain gaps. See the [low-tier table](low-tier.md#brushes).
-  - The preceding top-tier 2048 px G-Pen build reaches 150.2 fresh updates/s,
-    but completion-gap p99 20.0–36.6 ms exceeds 16.7 ms. The latest shared
-    refinement change is not measured there. See the [top-tier table](top-tier.md#current-g-pen-comparison).
+  - The top-tier 2048 px G-Pen reaches 87.6 fresh updates/s, with completion-gap
+    p99 31.6–38.8 ms. Both targets remain open. The matched base with the same
+    bounded command-pool cleanup reaches 87.0/s. See the
+    [top-tier table](top-tier.md#current-g-pen-comparison).
 - **Complex brushes at 1024 px miss on every tier.**
   - On the top tier all but Spray reach 76–118 updates/s, so most are close.
   - On the mid tier they reach about 6–25, and on the low tier about 3–19.
@@ -52,5 +53,7 @@
   - List scrolling.
   - Android canvas rotation.
   - Magic Wand and fill latency.
-- **Transforms on the top tier** have been measured only on GTK, not on the
-  MovinkPad Pro 14.
+- **Retained wet-photo transforms on the top tier** reach 36.3–37.0 renderer
+  updates/s on the 61 MP canvas. Presentation is unmeasured; this does not meet
+  the 120 fps target. See the [material-transform measurements](top-tier.md#retained-wet-photo-transforms).
+  Projective and Warp motion remain unmeasured on that reference tablet.

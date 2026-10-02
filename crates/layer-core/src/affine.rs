@@ -162,6 +162,12 @@ impl Default for Affine {
 }
 impl Affine {
     pub const IDENTITY: Self = Self([1., 0., 0., 1., 0., 0.]);
+    pub fn magnification(self) -> f32 {
+        let [a, b, c, d, _, _] = self.0;
+        let sum = a * a + b * b + c * c + d * d;
+        let det = (a * d - b * c).abs();
+        ((sum + (sum * sum - 4. * det * det).max(0.).sqrt()) * 0.5).sqrt()
+    }
     pub fn translation(p: Point) -> Self {
         Self([1., 0., 0., 1., p.x, p.y])
     }

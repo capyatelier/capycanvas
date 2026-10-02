@@ -437,6 +437,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn canvas_bar_plan(&self) -> Option<Plan> {
+        if self.content_bounds.baking() {
+            return Some(Plan { kind: CanvasBarKind::Transform, label: Some(CanvasBarCaption::Message(MessageId::TRANSFORM_APPLYING)),
+                items: Vec::new(), completion: vec![PlanItem::Command(CommandId::CancelTransform)],
+                placement: Some(CanvasBarPlacement::BottomEdge) });
+        }
         let completion = [CommandId::CancelTransform, CommandId::ApplyTransform];
         if self.cropping() {
             return Some(Plan {

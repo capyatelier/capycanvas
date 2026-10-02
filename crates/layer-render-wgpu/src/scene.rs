@@ -37,6 +37,7 @@ struct ColorInput {
 #[derive(Clone)]
 enum Job {
     Placement(Box<placement::PlacementJob>),
+    Reduce { binding: wgpu::BindGroup, values: [u32; 20], size: [u32; 2] },
     DecodedTile(std::sync::Arc<sources::PendingTile>),
     Effect {
         target: wgpu::TextureView,
@@ -55,11 +56,10 @@ enum Job {
     },
     Clear(wgpu::TextureView, wgpu::Color),
     Watercolor {
-        layer: LayerId,
+        coordinates: (wgpu::BindGroup, u32),
         target: wgpu::TextureView,
         binding: wgpu::BindGroup,
         record: u32,
-        coordinate: [u32; 2],
     },
     Copy {
         source: wgpu::Texture,
@@ -120,7 +120,10 @@ pub(super) enum Output { Artwork(Option<LayerId>), Display }
 
 pub(super) struct Scene {
     valid: Arc<std::sync::atomic::AtomicBool>,
-    placement: pixel_transform::PixelTransform,
+    placement: [pixel_transform::PixelTransform; 2],
+    material_coordinates: wgpu::BindGroup,
+    material_pages: std::collections::VecDeque<placement::MaterialPage>,
+    material_bounds: std::collections::HashMap<LayerId, layer_core::Rect>,
     placement_display: bool,
     scale_sources: scale::Sources,
     scale_commands: Option<scale::Commands>,
@@ -132,11 +135,13 @@ pub(super) struct Scene {
     source_bindings: RecentBindings<[wgpu::TextureView; 3]>,
     compute_bindings: RecentBindings<[wgpu::TextureView; 3]>,
     output_bindings: RecentBindings<wgpu::TextureView>,
+    watercolor_outputs: RecentBindings<wgpu::TextureView>,
     mask_bindings: std::collections::HashMap<[wgpu::TextureView; effects::MASK_SLOTS], wgpu::BindGroup>,
     layout: wgpu::BindGroupLayout,
     uniforms: wgpu::BindGroupLayout,
     buffer: wgpu::Buffer,
     binding: wgpu::BindGroup,
+    reduction_binding: wgpu::BindGroup,
     stride: usize,
     capacity: usize,
     record_count: usize,
@@ -183,11 +188,15 @@ impl Scene {
     pub fn placement_cache(&self, id: LayerId) -> Option<(wgpu::Texture, u64, u32)> {
         self.scale_sources.cache_info(id)
     }
+    #[cfg(test)]
+    pub fn placement_cache_at(&self, id: LayerId, level: u32) -> Option<(wgpu::Texture, u64, u32)> {
+        self.scale_sources.cache_info_at(id, level)
+    }
     pub fn scratch_bytes(&self) -> u64 {
         self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>()
             + (self.capacity * self.stride) as u64
             + self.effects.storage_bytes()
-            + self.placement.storage_bytes()
+            + self.placement.iter().map(pixel_transform::PixelTransform::storage_bytes).sum::<u64>() + 32
             + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes)
     }
     fn submit_source_uploads(
@@ -291,10 +300,12 @@ impl Scene {
         Ok(())
     }
     pub fn begin_frame(&mut self) {
-        self.placement.begin_frame();
+        self.clear_material_pages();
+        for pass in &mut self.placement { pass.begin_frame(); }
         self.source_bindings.begin_frame();
         self.compute_bindings.begin_frame();
         self.output_bindings.begin_frame();
+        self.watercolor_outputs.begin_frame();
         self.record_count = 0;
         self.effect_passes = 0;
     }
@@ -315,24 +326,35 @@ impl Scene {
         });
         let binding = uniform_binding(device, &uniforms, &buffer);
         let effects = effects::Effects::new(r, &uniforms, &layout);
+        use wgpu::util::DeviceExt;
+        let coordinates = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("placed material neighborhood"),
+            contents: target_bytes(&TargetGpu::new([PAGE_SIZE; 2], [PAGE_SIZE; 2], [PAGE_SIZE * 3; 2])),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
         Self {
             valid: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             placement_display: false,
             scale_sources: Default::default(),
             scale_commands: None,
-            placement: r.transforms.as_ref().map_or_else(
-                || pixel_transform::PixelTransform::staged(device, false).placement_pass(),
-                paint_transform::PaintTransforms::placement_pass,
-            ),
+            placement: std::array::from_fn(|i| r.transforms.as_ref().map_or_else(
+                || pixel_transform::PixelTransform::staged(device, i == 1).placement_pass(),
+                |passes| passes.placement_pass(i == 1),
+            )),
+            material_coordinates: create_target_bind_group(device, &r.target_layout, &coordinates, &r.unclipped),
+            material_pages: Default::default(),
+            material_bounds: Default::default(),
             pool: Vec::new(),
             used: Vec::new(),
             jobs: Vec::new(),
             source_bindings: Default::default(),
             compute_bindings: Default::default(),
             output_bindings: Default::default(),
+            watercolor_outputs: Default::default(),
             mask_bindings: Default::default(),
             layout,
             uniforms,
+            reduction_binding: scale::Commands::record_binding(r, &buffer),
             buffer,
             binding,
             stride,
@@ -352,6 +374,7 @@ impl Scene {
         self.source_bindings.forget(|views| views.iter().any(|view| retired.contains(view)));
         self.compute_bindings.forget(|views| views.iter().any(|view| retired.contains(view)));
         self.output_bindings.forget(|view| retired.contains(view));
+        self.watercolor_outputs.forget(|view| retired.contains(view));
         self.mask_bindings.retain(|views, _| !views.iter().any(|view| retired.contains(view)));
     }
     fn alloc(&mut self, r: &WgpuRasterizer, color: wgpu::Color) -> usize {
@@ -361,13 +384,19 @@ impl Scene {
         id
     }
     fn reserve(&mut self, r: &WgpuRasterizer) -> usize {
+        self.reserve_format(r, false)
+    }
+    fn reserve_format(&mut self, r: &WgpuRasterizer, scalar: bool) -> usize {
+        let format = if scalar { r.device.scalar_format() } else { r.device.working_format() };
         let id = self
             .used
             .iter()
-            .position(|v| !*v)
+            .enumerate()
+            .position(|(i, v)| !*v && self.pool[i].texture.format() == format)
             .unwrap_or(self.pool.len());
         if id == self.pool.len() {
-            self.pool.push(r.create_page_surface("scene reusable tile"));
+            self.pool.push(if scalar { r.create_scalar_page_surface("scene reusable scalar") }
+                else { r.create_page_surface("scene reusable tile") });
             self.used.push(false);
         }
         self.used[id] = true;
@@ -495,11 +524,10 @@ impl Scene {
                 self.alloc(r, wgpu::Color::TRANSPARENT)
             };
             self.jobs.push(Job::Watercolor {
-                layer: layer.id,
+                coordinates: (r.target_bind_group.clone(), r.layer_target_offset(layer.id, c)),
                 target: self.pool[page].view.clone(),
                 binding,
                 record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
-                coordinate: c,
             });
             if page != out {
                 self.draw(
@@ -922,7 +950,9 @@ impl Scene {
     }
     fn paint_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, index: usize, tile: [u32; 2], source_level: u32) -> Result<usize, GpuRasterError> {
         let layer = &packet.layers[index];
-        if layer.properties.placement != layer_core::Affine::IDENTITY {
+        if layer.properties.placement != layer_core::Affine::IDENTITY
+            || (world_offset(packet.layers, layer.id, false) != layer_core::Point::default()
+                && r.paint_layers.iter().any(|stored| stored.id == layer.id && stored.watercolor.is_some())) {
             return self.placed_tile(r, packet, index, tile, source_level);
         }
         let out = self.alloc(r, wgpu::Color::TRANSPARENT);
@@ -984,6 +1014,7 @@ impl Scene {
         }
         let mask = layer.mask.as_ref().filter(|m| m.enabled);
         if mask.is_none() && self.placement_display
+            && !r.paint_layers.iter().any(|stored| stored.id == layer.id && stored.watercolor.is_some())
             && scale::placement_level(packet.layers, layer.id) > 0
             && let Some((plan, view)) = self.scale_sources.sample(layer.id, scale::placement_level(packet.layers, layer.id))
         {
@@ -1096,6 +1127,7 @@ impl Scene {
     ) -> Result<(), GpuRasterError> {
         use layer_core::LayerOperationKind;
         self.jobs.clear();
+        self.clear_material_pages();
         self.used.fill(false);
         let layer = &packet.layers[layer_index];
         let op = &layer.pending_operations[operation_index];
@@ -1145,11 +1177,10 @@ impl Scene {
                         let binding = self.watercolor_binding(r, layer, stored, c, false)?;
                         let p = self.alloc(r, wgpu::Color::TRANSPARENT);
                         self.jobs.push(Job::Watercolor {
-                            layer: layer.id,
+                            coordinates: (r.target_bind_group.clone(), r.layer_target_offset(layer.id, c)),
                             target: self.pool[p].view.clone(),
                             binding,
                             record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
-                            coordinate: c,
                         });
                         resolved = Some(p);
                     }
@@ -1346,6 +1377,7 @@ impl Scene {
         regions: &[PixelRect], output: Output, encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         self.jobs.clear();
+        self.clear_material_pages();
         self.used.fill(false);
         self.stop_before = None;
         for tile in regions.iter().flat_map(|r| page_coordinates(*r)) {
@@ -1386,6 +1418,7 @@ impl Scene {
                 self.retire_images(|scene| scene.images.release_window_pixels());
                 self.image_window = None;
                 if cache.plan.level > 0 && !scale::bounded(packet.layers) {
+                    self.clear_material_pages();
                     self.pool.clear();
                     self.used.clear();
                 }
@@ -1467,6 +1500,7 @@ impl Scene {
                 mapped_at_creation: false,
             });
             self.binding = uniform_binding(&r.device, &self.uniforms, &self.buffer);
+            self.reduction_binding = scale::Commands::record_binding(r, &self.buffer);
         }
         self.upload.resize(self.jobs.len() * self.stride, 0);
         for (i, job) in self.jobs.iter().enumerate() {
@@ -1479,6 +1513,11 @@ impl Scene {
                     captured[13] += origin[1];
                     captured[14..16].copy_from_slice(&extent.map(|n| n as f32));
                     captured[30..32].copy_from_slice(&origin);
+                    Some(&captured)
+                }
+                Job::Reduce { values, .. } => {
+                    captured = [0.; 32];
+                    for (out, value) in captured.iter_mut().zip(scale::Commands::reduction_record(r, *values)) { *out = f32::from_bits(value); }
                     Some(&captured)
                 }
                 Job::Draw { data, .. } | Job::Effect { data, .. } => Some(data.as_slice()),
@@ -1518,6 +1557,14 @@ impl Scene {
                 && (!is_compute(next) || matches!(next, Job::Draw { data, .. }
                     if data[..2] == [0., 0.] && data[2..4] == data[4..6])))
         };
+        let is_material_compute = |i: usize| match &self.jobs[i] {
+            Job::Placement(_) | Job::Reduce { .. } => true,
+            Job::Watercolor { target, .. } => i > 0 && matches!(&self.jobs[i - 1],
+                Job::Clear(previous, color) if previous == target && *color == wgpu::Color::TRANSPARENT),
+            _ => false,
+        };
+        let material_clear = |i: usize| matches!(self.jobs[i], Job::Clear(..))
+            && i + 1 < self.jobs.len() && is_material_compute(i + 1);
         let source_bindings = &mut self.source_bindings;
         let mask_bindings = &mut self.mask_bindings;
         let output_bindings = &mut self.output_bindings;
@@ -1525,6 +1572,50 @@ impl Scene {
         let mut encoded_through = 0;
         for (i, job) in self.jobs.iter().enumerate() {
             if i < encoded_through {
+                continue;
+            }
+            if is_material_compute(i) {
+                let end = (i + 1..self.jobs.len()).find(|&j| !is_material_compute(j) && !material_clear(j)).unwrap_or(self.jobs.len());
+                let mut draws = Vec::new();
+                for job in &self.jobs[i..end] {
+                    if let Job::Placement(job) = job {
+                        let plane = usize::from(job.scalar);
+                        draws.push((plane, placement::prepare(&mut self.placement[plane], r, encoder, job)?));
+                    }
+                }
+                let mut draws = draws.iter();
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("placed material tiles"), timestamp_writes: None,
+                });
+                for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
+                    match job {
+                        Job::Placement(_) => {
+                            let (plane, draw) = draws.next().unwrap();
+                            self.placement[*plane].encode_placement(&mut pass, draw);
+                        }
+                        Job::Watercolor { coordinates, target, binding, record } => {
+                            let (layout, pipeline) = &r.pipelines.watercolor_compute;
+                            let output = self.watercolor_outputs.get(target, || crate::bindings::group(
+                                &r.device, "watercolor output", layout, [wgpu::BindingResource::TextureView(target)],
+                            ));
+                            pass.set_pipeline(pipeline);
+                            pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
+                            pass.set_bind_group(1, &coordinates.0, &[coordinates.1]);
+                            pass.set_bind_group(2, binding, &[]);
+                            pass.set_bind_group(3, output, &[]);
+                            pass.dispatch_workgroups(PAGE_SIZE.div_ceil(8), PAGE_SIZE.div_ceil(8), 1);
+                        }
+                        Job::Reduce { binding, size, .. } => {
+                            pass.set_pipeline(&r.scene_pipelines.scale.reduce);
+                            pass.set_bind_group(0, &self.reduction_binding, &[((base + j) * self.stride) as u32]);
+                            pass.set_bind_group(1, binding, &[]);
+                            pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+                        }
+                        Job::Clear(..) => {}
+                        _ => unreachable!(),
+                    }
+                }
+                encoded_through = end;
                 continue;
             }
             if is_compute(job) {
@@ -1556,7 +1647,7 @@ impl Scene {
                 continue;
             }
             match job {
-                Job::Placement(job) => placement::encode(&mut self.placement, r, encoder, job)?,
+                Job::Placement(_) | Job::Reduce { .. } => unreachable!(),
                 Job::DecodedTile(pending) => {
                     if r.source_tiles.borrow().uploads_full() {
                         Self::submit_source_uploads(r, encoder)?;
@@ -1617,7 +1708,8 @@ impl Scene {
                     } else {
                         wgpu::LoadOp::Load
                     };
-                    let portable = r.device.portable_blend() && matches!(job, Job::Draw { over: true, .. } | Job::Watercolor { .. });
+                    let portable = needs_blend(job)
+                        && !matches!(load, wgpu::LoadOp::Clear(color) if color == wgpu::Color::TRANSPARENT);
                     let source = portable.then(|| r.portable_blend.source(&r.device,target,r.device.working_format()));
                     if portable && let wgpu::LoadOp::Clear(color) = load {
                         let attachments = [Some(attachment(target,wgpu::LoadOp::Clear(color)))];
@@ -1636,10 +1728,10 @@ impl Scene {
                         let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
                         if effect { self.effect_passes += 1; }
                         for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
-                            if let Job::Watercolor { layer, binding, record, coordinate, .. } = job {
+                            if let Job::Watercolor { coordinates, binding, record, .. } = job {
                                 pass.set_pipeline(&r.pipelines.watercolor_composite);
                                 pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
-                                pass.set_bind_group(1, &r.target_bind_group, &[r.layer_target_offset(*layer, *coordinate)]);
+                                pass.set_bind_group(1, &coordinates.0, &[coordinates.1]);
                                 pass.set_bind_group(2, binding, &[]);
                                 pass.set_scissor_rect(0, 0, PAGE_SIZE, PAGE_SIZE);
                                 pass.draw(0..3, 0..1);

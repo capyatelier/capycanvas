@@ -44,6 +44,8 @@ pub use projective::{Projective, clip_convex};
 mod warp;
 pub use warp::{MeshMap, Tessellation};
 mod project;
+mod transform_pixels;
+pub use transform_pixels::{TransformPixelsPlan, TransformPixelsRefusal};
 mod canvas_geometry;
 pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits, ImageOrientation};
 mod content_bounds;

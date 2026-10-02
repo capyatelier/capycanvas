@@ -600,7 +600,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn require_document_interaction_idle(&self) -> Result<(), String> {
         self.require_idle()?;
-        if self.operation.active() {
+        if self.content_bounds.baking() {
+            Err(self.localization().text(MessageId::COMMANDS_WAIT_FOR_TRANSFORM).to_string())
+        } else if self.operation.active() {
             Err(self.operation_refusal().to_string())
         } else if self.region_tools.busy() && !self.refine_previewing() {
             Err(FileFailure::CanvasOperation.message(self.localization()))

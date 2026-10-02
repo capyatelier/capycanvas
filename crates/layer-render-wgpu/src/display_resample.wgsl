@@ -57,16 +57,16 @@ fn resample_affine_area(@builtin(global_invocation_id) id:vec3<u32>) {
     let center=vec2(dot(resample.x.xyz,h),dot(resample.y.xyz,h));
     let dx=vec2(resample.x.x,resample.y.x)*footprint.x;
     let dy=vec2(resample.x.y,resample.y.y)*footprint.y;
-    let taps=resample.affine_taps.x;
+    let taps=vec2<u32>(clamp(floor(vec2(length(dx),length(dy))+.5),vec2(1.),vec2(f32(resample.affine_taps.x))));
     var color=vec4(0.);
-    if taps==2u {
+    if all(taps==vec2(2u)) {
         color=area_sample(moved,linear_sampler,resample.source_extent.xy,resample.options.w,center,dx*.25,dy*.25);
     } else {
-        for (var y=0u;y<taps;y++) {for (var x=0u;x<taps;x++) {
-            let delta=(vec2<f32>(f32(x),f32(y))+.5)/f32(taps)-.5;
+        for (var y=0u;y<taps.y;y++) {for (var x=0u;x<taps.x;x++) {
+            let delta=(vec2<f32>(f32(x),f32(y))+.5)/vec2<f32>(taps)-.5;
             color+=border_sample(moved,linear_sampler,resample.source_extent.xy,resample.options.w,center+dx*delta.x+dy*delta.y);
         }}
-        color/=f32(taps*taps);
+        color/=f32(taps.x*taps.y);
     }
     textureStore(level,vec2<i32>(t),composite_color(color));
 }

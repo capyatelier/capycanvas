@@ -27,7 +27,7 @@ pub(crate) struct Request<'a> {
 pub(crate) struct Resample {
     layout: wgpu::BindGroupLayout,
     mesh_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
+    pub(super) sampler: wgpu::Sampler,
     pub mesh: [Deferred<wgpu::RenderPipeline>; 6],
     pub area: Deferred<wgpu::ComputePipeline>,
 }
@@ -147,6 +147,7 @@ impl Resample {
             wgpu::BindingResource::Sampler(&self.sampler),
         ])
     }
+    #[cfg(test)]
     pub fn encode(&self, encoder: &mut crate::submission::CommandEncoder, binding: &wgpu::BindGroup, texels: [u32; 4]) {
         let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("display resample"), timestamp_writes: None,

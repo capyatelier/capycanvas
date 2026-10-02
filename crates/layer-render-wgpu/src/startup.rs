@@ -334,6 +334,8 @@ impl WgpuRasterizer {
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
             if self.device.portable_blend() { required.compute.extend(self.portable_blend.pipelines.iter().cloned()); }
             required.compute.push(self.scene_pipelines.constant.2.clone());
+            required.compute.push(self.pipelines.watercolor_compute.1.clone());
+            required.compute.extend(self.transforms.as_ref().unwrap().placement_pipelines().into_iter().cloned());
             if self.native_edit.is_some() {
                 required.compute.push(self.scene_pipelines.scale.reduce.clone());
                 required.compute.push(self.scene_pipelines.scale.reduce_pair.clone());

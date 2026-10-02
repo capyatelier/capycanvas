@@ -12,7 +12,14 @@ fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
         if (region.flags & 2048u) != 0u { below = working_encode(below); }
         below *= region.opacity.z;
     }
-    var color = textureLoad(source, p + region.source_origin, 0);
+    let coordinate = p + region.source_origin;
+    var color = textureLoad(source, coordinate, 0);
+    if (region.flags & 16384u) != 0u {
+        color = vec4<f32>(0.0);
+        if all(coordinate >= vec2<i32>(0)) && all(coordinate < vec2<i32>(textureDimensions(source))) {
+            color = textureLoad(source, coordinate, 0);
+        }
+    }
     if (region.flags & 256u) != 0u {
         let preview = textureLoad(source_preview, p + region.source_origin, 0);
         color = preview + color * (1. - preview.a);

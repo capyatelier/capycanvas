@@ -19,6 +19,8 @@ mod transform_latency;
 mod transform_oracles;
 #[path = "placement_tests.rs"]
 mod placement;
+#[path = "placement_material_tests.rs"]
+mod placement_material;
 #[path = "erase_tests.rs"]
 mod erase;
 #[path = "liquify_tests.rs"]
@@ -476,4 +478,3 @@ fn small_swept_contact_preview_matches_commit_and_preserves_distant_pixels() {
         assert_eq!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?}: cancel restores pixels");
     }
 }
-

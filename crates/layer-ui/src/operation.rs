@@ -113,6 +113,7 @@ struct Transaction {
     basis: Affine,
     bounds: Rect,
     geometry: Geometry,
+    accepted: Geometry,
     cells: [u16; 2],
     node: Option<u32>,
     mode: TransformMode,
@@ -153,6 +154,10 @@ impl Operation {
     }
     pub fn placing(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.placement.is_some())
+    }
+    pub fn original_size_available(&self) -> bool {
+        self.current.as_ref().and_then(|t| t.placement.as_ref())
+            .is_some_and(|placement| placement.members.iter().all(|layer| layer.source.is_some()))
     }
     pub fn outline(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.outline.is_some())
@@ -487,6 +492,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn update_transform(&mut self) -> Result<(), String> {
+        let request = self.operation.current.as_ref().map(|t| t.request.clone());
+        let result = self.preview_transform();
+        if let Some(t) = &mut self.operation.current {
+            if result.is_ok() { t.accepted = t.geometry.clone(); }
+            else {
+                t.geometry = t.accepted.clone();
+                t.request = request.unwrap();
+            }
+        }
+        result
+    }
+
+    fn preview_transform(&mut self) -> Result<(), String> {
         let chosen = self.operation.interpolation;
         let Some(t) = &mut self.operation.current else {
             return Ok(());
@@ -517,7 +535,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             if !edits.is_empty() {
-                self.engine.preview_edit(layer_core::Edit::Batch(edits)).map_err(error)?;
+                let edit = layer_core::Edit::Batch(edits);
+                let mut candidate = self.engine.document().clone();
+                candidate.apply(edit.clone()).map_err(error)?;
+                candidate.validate_paint_extents(&placement.members.iter().map(|l| l.id).collect::<Vec<_>>(),
+                    self.engine.geometry_limits()).map_err(error)?;
+                self.engine.preview_edit(edit).map_err(error)?;
             }
             t.revision = self.engine.document().revision;
         } else {
@@ -1025,6 +1048,7 @@ pub(super) fn inside_convex(quad: &[Point; 4], p: Point) -> bool {
 }
 impl Transaction {
     fn new(transaction: u64, layer: LayerId, selection: Option<Selection>, revision: u64, basis: Affine, bounds: Rect, pose: Pose) -> Self {
+        let geometry = Geometry { pose, inner: None, mesh: None, frame: bounds };
         Self {
             placement: None,
             request: TransformPreview {
@@ -1037,12 +1061,8 @@ impl Transaction {
             revision,
             basis,
             bounds,
-            geometry: Geometry {
-                pose,
-                inner: None,
-                mesh: None,
-                frame: bounds,
-            },
+            geometry: geometry.clone(),
+            accepted: geometry,
             cells: MeshMap::PRESETS[0],
             node: None,
             mode: TransformMode::Free,

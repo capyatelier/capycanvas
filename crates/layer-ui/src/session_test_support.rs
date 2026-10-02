@@ -31,6 +31,11 @@ pub(crate) struct Recorder {
     pub(crate) bounds_reply: Option<Result<layer_core::Rect, BackendError>>,
     pub(crate) bounds_cancels: usize,
     pub(crate) bounds_wait: bool,
+    pub(crate) snapshot_requests: Vec<layer_render::SnapshotRequest>,
+    pub(crate) snapshot_reply: Option<Result<layer_render::SnapshotResult, BackendError>>,
+    pub(crate) snapshot_cancels: usize,
+    pub(crate) snapshot_wait: bool,
+    pub(crate) snapshot_fails: bool,
     pub(crate) transform: Option<layer_render::TransformPreview>,
     pub(crate) moving_layer: Option<layer_core::LayerId>,
     pub(crate) moving_pixels: Option<(layer_core::LayerId, layer_core::Selection)>,
@@ -96,6 +101,19 @@ impl CanvasRenderer for Recorder {
     fn cancel_region(&mut self) {
         self.region_cancels += 1;
     }
+    fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
+        if self.snapshot_fails { return Err(BackendError("snapshot request failed")); }
+        if self.snapshot_wait { return Ok(false); }
+        self.snapshot_requests.push(request);
+        Ok(true)
+    }
+    fn take_snapshot(&mut self) -> Option<Result<layer_render::SnapshotResult, Self::Error>> {
+        self.snapshot_reply.take()
+    }
+    fn cancel_snapshot(&mut self) {
+        self.snapshot_cancels += 1;
+        self.snapshot_reply = None;
+    }
     fn request_content_bounds(&mut self, request: layer_core::ContentBoundsRequest) -> Result<bool, Self::Error> {
         if self.bounds_wait { return Ok(false); }
         self.bounds_requests.push(request);
@@ -107,6 +125,7 @@ impl CanvasRenderer for Recorder {
     fn cancel_content_bounds(&mut self) {
         self.bounds_cancels += 1;
         self.bounds_reply = None;
+        self.cancel_snapshot();
     }
     fn request_color_sample(
         &mut self,

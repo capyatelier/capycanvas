@@ -350,8 +350,10 @@ impl WgpuRasterizer {
         if frame.publications.is_empty() {
             return Ok(None);
         }
-        // Immutable native outputs replace frame-sized mapped staging. Admission
-        // reserves one separate bounded transfer in the backing worker.
+        self.native_capture_job(frame, inputs).map(Some)
+    }
+
+    fn native_capture_job(&self, mut frame: NativeFrame, inputs: Vec<(wgpu::Texture, RasterTile)>) -> Result<NativeJob, GpuRasterError> {
         let output_bytes: u64 = STATUS_BYTES
             + inputs
                 .iter()
@@ -377,7 +379,15 @@ impl WgpuRasterizer {
             queue: self.queue.clone(),
         });
         validate::Validator::validate(&inputs.iter().map(|(t, tile)| (t, tile.clone())).collect::<Vec<_>>())?;
-        Ok(Some(NativeJob { frame, inputs, views: Default::default(), validated: 0, encoded: 0, started: false }))
+        Ok(NativeJob { frame, inputs, views: Default::default(), validated: 0, encoded: 0, started: false })
+    }
+
+    pub(crate) fn encode_private_tiles(&mut self, inputs: Vec<(wgpu::Texture, RasterTile)>, encoder: &mut submission::CommandEncoder)
+        -> Result<NativeCapture, GpuRasterError> {
+        let frame = NativeFrame { capture: None, publications: Vec::new(), canonical_pages: Vec::new() };
+        let mut job = self.native_capture_job(frame, inputs)?;
+        while self.step_native_rasters(&mut job, encoder)? {}
+        Ok(job.frame.capture.take().unwrap())
     }
 
     pub(crate) fn step_native_rasters(&mut self, job: &mut NativeJob, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {

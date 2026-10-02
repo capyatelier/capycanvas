@@ -1546,6 +1546,7 @@ class AndroidRasterTest {
     }
 
     @Test fun imagePlacementBatchHistoryAndStaleRequests() {
+        val affineSmoke = InstrumentationRegistry.getArguments().getString("imagePlacementAffineSmoke") == "true"
         fun invoke(command: String) { native { Native.dispatch(it,obj("type" to "invoke","command" to command).toString()) }; tick(); scenario.onActivity { host.documentChanged() } }
         native { Native.dispatch(it,obj("type" to "preferences","action" to obj("type" to "edit","id" to "missing_profile","value" to 0)).toString()) }
         val newTask = native { h -> val (id, f) = request(h,"new_document"); Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
@@ -1579,14 +1580,23 @@ class AndroidRasterTest {
         fun press(command: String) = pressCanvasBar(command, 20_000)
         fun memoryStage(label: String) {
             val stats = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
+            val maps = File("/proc/self/maps").readLines()
+            val directory = File(activity.getExternalFilesDir(null), "validation/pixel-bake/maps").apply { mkdirs() }
+            val name = label.replace(Regex("[^A-Za-z0-9]+"), "-")
+            File(directory, "$name.txt").writeText(maps.joinToString("\n"))
+            val counts = maps.groupingBy { it.trim().split(Regex("\\s+"), limit = 6).getOrNull(5) ?: "[anonymous]" }.eachCount()
+            File(directory, "$name.json").writeText(JSONObject(counts).toString(2))
             android.util.Log.i("CapyPlacementTest", "$label: pss=${android.os.Debug.getPss()} KiB; mappings=${File("/proc/self/maps").useLines { it.count() }}; canvas=${stats.getLong("resident_bytes")} bytes; status=${File("/proc/self/status").readLines().filter { it.startsWith("Vm") }}")
         }
         memoryStage("before batch")
         val baseCount=count()
         batch(photos);assertEquals(baseCount+photos.size,count());memoryStage("provisional batch")
-        assertEquals("Recovery defers while a placement is provisional", 0L, native { Native.projectRecoveryTask(it, false) })
-        press("cancel_transform");assertEquals(baseCount,count())
-        batch(photos);press("apply_transform");memoryStage("applied batch")
+        if (!affineSmoke) {
+            assertEquals("Recovery defers while a placement is provisional", 0L, native { Native.projectRecoveryTask(it, false) })
+            press("cancel_transform");assertEquals(baseCount,count())
+            batch(photos)
+        }
+        press("apply_transform");memoryStage("applied batch")
         val fitted=manifest(save("batch-placement.capy"));val identity=sourceIdentity(fitted)
         val images=fitted.getJSONObject("tiled_sources").getJSONArray("images")
         for(i in photos.indices) {
@@ -1595,6 +1605,7 @@ class AndroidRasterTest {
             assertEquals(scale,pose.getDouble(0),1e-6);assertEquals(scale,pose.getDouble(3),1e-6)
             assertEquals((2000-w*scale)/2,pose.getDouble(4),.01);assertEquals((1500-h*scale)/2,pose.getDouble(5),.01)
         }
+        if (!affineSmoke) {
         invoke("undo");assertEquals(baseCount,count());invoke("redo");assertEquals(baseCount+photos.size,count())
         memoryStage("before reopen")
         open(File(files,"batch-placement.capy"));memoryStage("after reopen");assertEquals(identity,sourceIdentity(manifest(save("batch-reopened.capy"))))
@@ -1616,8 +1627,102 @@ class AndroidRasterTest {
             native { Native.documentComplete(it,id,false,"null") }
         }
         assertEquals(identity,sourceIdentity(manifest(save("batch-after-errors.capy"))))
+        }
+        fun backing(project: JSONObject) = project.array("blobs").objects().map {
+            JSONObject(it.toString()).apply { remove("offset") }.toString()
+        }.sorted()
+        val originalTheme = host.snapshot!!.getJSONObject("state").opt("settings")?.let { it as JSONObject }?.opt("theme") ?: JSONObject.NULL
+        val motions = org.json.JSONArray()
+        try {
+            for (theme in if (affineSmoke) listOf("light") else listOf("light", "dark")) {
+                if (!affineSmoke) open(File(files, "batch-placement.capy"))
+                memoryStage("$theme: before affine")
+                action(obj("type" to "set_theme", "theme" to theme))
+                val owner = fitted.getJSONObject("document").array("layers").getJSONObject(0).getLong("id")
+                action(obj("type" to "layer", "action" to obj("op" to "select", "id" to owner, "mask" to false)))
+                invoke("fit_canvas")
+                if (!affineSmoke || InstrumentationRegistry.getArguments().getString("affineSmokeWatercolor") == "true") {
+                    invoke("brush")
+                    action(obj("type" to "select_brush", "id" to 21))
+                    action(obj("type" to "set_brush_size", "value" to 180.0))
+                    compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+                    stroke(0.0)
+                }
+                invoke("scale_rotate")
+                compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any { it.getString("id") == "apply_transform" && it.getBoolean("enabled") } == true }
+                val affineDrags = if (affineSmoke) InstrumentationRegistry.getArguments().getString("affineSmokeDrags", "1")!!.toInt() else 1
+                require(affineDrags > 0)
+                repeat(affineDrags) { index ->
+                    motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30).put("theme", theme).put("canvas", listOf(2000, 1500)))
+                    if (affineDrags > 1) memoryStage("$theme: after affine drag ${index + 1}")
+                }
+                if (affineDrags > 1) {
+                    android.os.SystemClock.sleep(2000)
+                    memoryStage("$theme: after affine idle")
+                }
+                memoryStage("$theme: after affine motion")
+                press("apply_transform")
+                memoryStage("$theme: after affine Apply")
+                val retained = manifest(save("$theme-retained-affine.capy"))
+                if (affineSmoke) {
+                    assertEquals(identity, sourceIdentity(retained))
+                    assertNull(host.failure)
+                    File(activity.getExternalFilesDir(null), "validation/pixel-bake/motion-3mp.json").apply { parentFile!!.mkdirs() }.writeText(motions.toString(2))
+                    println("Android minimal retained-photo affine smoke passed")
+                    return
+                }
+                fun ownerRaster(project: JSONObject) = project.array("rasters").objects().first { it.getLong("target") == owner }
+                fun assertMaterial(project: JSONObject) {
+                    val raster = ownerRaster(project)
+                    assertFalse("$theme: watercolor style remains stored", raster.isNull("watercolor"))
+                    val planes = raster.array("tiles").objects().map { it.getJSONObject("key").getString("plane") }
+                    assertTrue("$theme: native pigment remains stored", "Color" in planes)
+                    assertTrue("$theme: native wetness remains stored", "WatercolorWetness" in planes)
+                }
+                assertMaterial(retained)
+                memoryStage("$theme: before pixel bake")
+                compose.onNodeWithTag("application-menu-edit").performClick()
+                compose.onNodeWithText("Apply Transform to Pixels").performClick()
+                compose.waitUntil(120_000) { tick(); native { state(it).isNull("canvas_bar") } }
+                refresh()
+                memoryStage("$theme: after pixel bake")
+                val baked = manifest(save("$theme-baked.capy"))
+                assertMaterial(baked)
+                assertEquals(ownerRaster(retained).getJSONObject("watercolor").toString(), ownerRaster(baked).getJSONObject("watercolor").toString())
+                assertEquals("$theme: only the chosen source is baked", retained.getJSONObject("tiled_sources").array("images").length() - 1, baked.getJSONObject("tiled_sources").array("images").length())
+                val bakedOwner = baked.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }
+                val pose = bakedOwner.getJSONObject("properties").getJSONArray("placement")
+                assertEquals(listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0), (0 until 6).map { pose.getDouble(it) })
+                invoke("brush"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 80.0))
+                stroke(0.0)
+                val painted = manifest(save("$theme-baked-painted.capy"))
+                assertNotEquals("$theme: painting edits the baked native planes", backing(baked), backing(painted))
+                invoke("liquify"); action(obj("type" to "select_brush", "id" to 37)); action(obj("type" to "set_brush_size", "value" to 180.0))
+                stroke(0.0)
+                val liquified = manifest(save("$theme-baked-liquified.capy"))
+                assertNotEquals("$theme: Liquify edits the baked native planes", backing(painted), backing(liquified))
+                invoke("undo"); assertEquals(backing(painted), backing(manifest(save("$theme-undo-liquify.capy"))))
+                invoke("undo"); assertEquals(backing(baked), backing(manifest(save("$theme-undo-paint.capy"))))
+                invoke("undo")
+                val restored = manifest(save("$theme-undo-bake.capy"))
+                assertEquals(sourceIdentity(retained), sourceIdentity(restored))
+                assertEquals(backing(retained), backing(restored))
+                invoke("redo"); assertEquals(backing(baked), backing(manifest(save("$theme-redo-bake.capy"))))
+                open(File(files, "$theme-baked.capy"))
+                val reopened = manifest(save("$theme-baked-reopened.capy"))
+                assertMaterial(reopened)
+                assertEquals(ownerRaster(baked).toString(), ownerRaster(reopened).toString())
+                assertEquals(backing(baked), backing(reopened))
+                assertEquals(sourceIdentity(baked), sourceIdentity(reopened))
+                instrumentation.uiAutomation.takeScreenshot()?.let { image ->
+                    try { File(activity.getExternalFilesDir(null), "validation/pixel-bake/$theme.png").apply { parentFile!!.mkdirs() }.outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                    finally { image.recycle() }
+                }
+            }
+        } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
+        File(activity.getExternalFilesDir(null), "validation/pixel-bake/motion-3mp.json").apply { parentFile!!.mkdirs() }.writeText(motions.toString(2))
         assertNull(host.failure)
-        println("Android image placement: batch Apply/Cancel, fit, exact source retention, one-step history, reopen, Original Size, malformed/cancelled/stale requests passed")
+        println("Android image placement: batch Apply/Cancel, fit, exact source retention, one-step history, reopen, Original Size, malformed/cancelled/stale requests; light/dark affine bake, paint, Liquify, exact undo/redo and reopen passed")
     }
 
     @Test fun imagePlacementSystemPickerAndExternalDrag() {

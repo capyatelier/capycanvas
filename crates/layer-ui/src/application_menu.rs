@@ -146,7 +146,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .filter(|id| id.available_on(self.state.platform))
                     .map(command)
                     .collect(),
-                [CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
+                [CommandId::ApplyTransformPixels, CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
                 vec![command(CommandId::ScaleRotate)],
                 vec![ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_IMAGE), vec![
                     [CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize, CommandId::ImageSize].map(command).into(),

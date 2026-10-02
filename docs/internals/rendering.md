@@ -478,9 +478,49 @@ Bicubic or Lanczos preview draws bilinearly until it stops.
 Exact capture (export, snapshots and the artwork readback) draws placed photos
 through the same pass with the exact cap, and with `Bicubic` where the placement
 magnifies. Display composition uses the scene's reduced source levels. Affine
-display sampling accounts for the output footprint and partially covered edge
-texels; the direct Navigator subdivides footprints larger than its retained
+display sampling counts taps independently along each output axis, preserving
+edges under uneven scaling, and accounts for partially covered edge texels.
+The direct Navigator subdivides footprints larger than its retained
 coarse source can represent with one sample grid.
+Placed pigment and scalar pages share that sampler through batched compute
+dispatches, including each region's clear and clip. Mapping, watercolor on a
+transparent target and reduction share ordered compute batches; scratch pages
+can be reused after their reduction. Their pipelines are prepared with the
+document. Display resampling and composition share ordered batches too. A placed
+layer over a constant backdrop resamples directly into its final output.
+
+Placed watercolor maps raw pigment and scalar wetness into document coordinates
+before evaluating its material appearance. The existing watercolor pass reads
+the center and four cardinal neighbors of both planes, so edge widths remain
+document-sized under nonuniform scale. Visible-content bounds include that
+destination halo. Masks, opacity and blending follow that evaluation. Reduced display levels
+reuse cached raw pigment and add the material appearance difference within the wet
+region and its halo. One reduction subtracts the already mapped pigment from
+the native appearance, converting each first in Perceptual blending, so dry photo
+pixels keep their cached values. Complete native blocks in Linear blending use
+the existing Float32 sampler to average four texels per tap. Power-of-two texture
+dimensions keep these samples exactly centered; partial edges, preview blending,
+color conversion and float-document material differences retain per-pixel
+reduction. Subtracting before averaging preserves small HDR corrections. Moving sparse
+wet paint does not rebuild the full native canvas. An active placement keeps
+the same raw source representation when it crosses the identity pose.
+Each cached source level records its color and material representation. Returning
+to ordinary display can retain a finer raw level within the existing budget;
+reopening Transform repairs its changed pages instead of decoding the whole photo.
+Reduction and direct sampling reuse only matching representations.
+Neighbor mappings share at most 64 scratch pages within a frame. Neighbor color
+is mapped only where wetness can contribute, and the material pass borrows that
+color only for empty centers. Tiles outside mapped wetness bounds take the
+pigment-only path. Display and snapshot admission include
+this bounded scratch allowance. On devices without Float32 attachment blending,
+a source over a newly cleared transparent target renders directly into that
+target; only an existing backdrop needs the portable blend pass.
+
+**Apply Transform to Pixels** uses the same raw-plane sampler and native tile
+encoder. Its private snapshot retains Color, Wetness, WatercolorWetness and linked
+Mask separately; it never stores evaluated watercolor appearance as pigment.
+The shared session publishes one replacement after every output tile succeeds.
+Cancellation, renderer replacement and failure discard that private result.
 
 ## Filters
 

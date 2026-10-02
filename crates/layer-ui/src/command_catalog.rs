@@ -383,6 +383,7 @@ fn action_description(action: &UiAction, l: &Localizer) -> String {
             CopySelectionToLayer => l.text(MessageId::COMMANDS_HELP_COPY_SELECTION_TO_LAYER).to_string(),
             CutSelectionToLayer => l.text(MessageId::COMMANDS_HELP_CUT_SELECTION_TO_LAYER).to_string(),
             RevertToOriginal => l.text(MessageId::COMMANDS_HELP_REVERT_TO_ORIGINAL).to_string(),
+            ApplyTransformPixels => l.text(MessageId::COMMANDS_HELP_APPLY_TRANSFORM_PIXELS).to_string(),
             MergeDown => l.text(MessageId::COMMANDS_HELP_MERGE_DOWN).to_string(),
             MergeGroup => l.text(MessageId::COMMANDS_HELP_MERGE_GROUP).to_string(),
             MergeVisible => l.text(MessageId::COMMANDS_HELP_MERGE_VISIBLE).to_string(),
@@ -1019,6 +1020,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::CopySelectionToLayer
             | C::CutSelectionToLayer
             | C::RevertToOriginal
+            | C::ApplyTransformPixels
             | C::MergeDown
             | C::MergeGroup
             | C::MergeVisible
@@ -1184,6 +1186,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_to_layer_refusal(command == C::CutSelectionToLayer).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET))
             }
             C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::ApplyTransformPixels => self.transform_pixels_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::MergeDown | C::MergeGroup | C::MergeVisible | C::FlattenImage | C::StampVisible => {
                 super::merges::merge_kind(command).and_then(|kind| self.merge_refusal(kind)).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET))
             }

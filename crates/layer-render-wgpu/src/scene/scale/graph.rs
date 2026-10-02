@@ -61,7 +61,8 @@ impl Expression {
                 let placement = layer_core::Affine(placement.map(f32::from_bits));
                 if placement == layer_core::Affine::IDENTITY { return source.damage; }
                 let local = source.damage.expand(1 << source_level(plan.level, placement), source.extent);
-                pixel_rect(placement.bounds(local.to_rect()), plan.extent)
+                pixel_rect(placement.bounds(local.to_rect()), plan.extent).expand(
+                    source.watercolor.map_or(0, |w| w.radius()), plan.extent)
             }),
             Self::Opacity { input, .. } => input.damage(sources, plan),
             Self::Combine { front, back, .. } => front.damage(sources, plan).union(back.damage(sources, plan)),
@@ -98,7 +99,8 @@ impl Expression {
                 if let Some(transforms) = r.transforms.as_ref().filter(|t| t.display_source(*id)) {
                     return transforms.direct_source(*id);
                 }
-                r.moving_layer == Some(*id) || *placement != layer_core::Affine::IDENTITY.0.map(f32::to_bits)
+                r.paint_layers.iter().find(|l| l.id == *id).is_none_or(|l| l.watercolor.is_none())
+                    && (r.moving_layer == Some(*id) || *placement != layer_core::Affine::IDENTITY.0.map(f32::to_bits))
             }
             Self::Opacity { input, .. } => input.deferred(r),
             Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(r),

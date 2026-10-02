@@ -1117,7 +1117,6 @@ pub struct CommandEncoder {
     /// the given pool & location.
     end_of_pass_timer_query: Option<(vk::QueryPool, u32)>,
 
-    completed_resets: u16,
     framebuffers: FastHashMap<FramebufferKey, CachedFramebuffer>,
     temp_texture_views: FastHashMap<TempTextureViewKey, IdentifiedTextureView>,
 

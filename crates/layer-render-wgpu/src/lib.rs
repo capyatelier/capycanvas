@@ -784,6 +784,7 @@ struct Pipelines {
     reservoir: Deferred<wgpu::RenderPipeline>,
     stroke_edge: Deferred<wgpu::RenderPipeline>,
     watercolor_composite: Deferred<wgpu::RenderPipeline>,
+    watercolor_compute: (wgpu::BindGroupLayout, Deferred<wgpu::ComputePipeline>),
     export: Deferred<wgpu::RenderPipeline>,
 }
 
@@ -922,9 +923,9 @@ pub struct WgpuRasterizer {
     target_capacity: usize,
     target_upload: Vec<u8>,
     uploads: Uploads,
-    bounds_job: Option<snapshot::ContentBoundsJob>,
+    snapshot_job: Option<snapshot::SnapshotJob>,
     #[cfg(target_arch = "wasm32")]
-    bounds_worker: Option<snapshot::BrowserContentBounds>,
+    snapshot_worker_callback: Option<snapshot::BrowserSnapshot>,
     _empty_texture: wgpu::Texture,
     empty_view: wgpu::TextureView,
     _empty_scalar_texture: wgpu::Texture,
@@ -1064,10 +1065,8 @@ impl WgpuRasterizer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let edge_layout = fragment_textures_layout(&device, 10, "layer post-stroke edge sources");
-        // Five cardinal color pages plus the full 3x3 watercolor-wetness
-        // neighborhood stay within the portable 16-texture fragment-stage limit.
-        let watercolor_layout =
-            fragment_textures_layout(&device, 14, "layer watercolor pigment and wetness neighborhood");
+        let watercolor_layout = bindings::layout(&device, "layer watercolor pigment and wetness neighborhood",
+            &(0..10).map(|i| bindings::texture(i, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, false)).collect::<Vec<_>>());
         let transport_layout = fragment_textures_layout(&device, 10, "layer watercolor transport sources");
         let style_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
         let style_stride =
@@ -1251,9 +1250,9 @@ impl WgpuRasterizer {
             target_capacity,
             target_upload: Vec::with_capacity(target_stride as usize * target_capacity),
             uploads,
-            bounds_job: None,
+            snapshot_job: None,
             #[cfg(target_arch = "wasm32")]
-            bounds_worker: None,
+            snapshot_worker_callback: None,
             _empty_texture: empty_texture,
             empty_view,
             _empty_scalar_texture: empty_scalar_texture,
@@ -2232,37 +2231,35 @@ impl WgpuRasterizer {
         preview: bool,
         color_views: &[&wgpu::TextureView],
     ) -> wgpu::BindGroup {
-        let mut wetness_views = Vec::with_capacity(9);
-        for offset_y in -1_i32..=1 {
-            for offset_x in -1_i32..=1 {
-                let x = coordinate[0] as i32 + offset_x;
-                let y = coordinate[1] as i32 + offset_y;
-                let view = if x < 0 || y < 0 {
-                    &self.empty_scalar_view
-                } else {
-                    let neighbor = [x as u32, y as u32];
-                    let preview_page = preview
-                        .then(|| {
-                            self.preview_watercolor_wetness_pages.iter().find(|page| {
-                                page.coordinate == neighbor
-                                    && !self
-                                        .preview_damage
-                                        .intersect(page_rect(neighbor))
-                                        .is_empty()
-                            })
+        let mut wetness_views = Vec::with_capacity(5);
+        for [offset_x, offset_y] in [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]] {
+            let x = coordinate[0] as i32 + offset_x;
+            let y = coordinate[1] as i32 + offset_y;
+            let view = if x < 0 || y < 0 {
+                &self.empty_scalar_view
+            } else {
+                let neighbor = [x as u32, y as u32];
+                let preview_page = preview
+                    .then(|| {
+                        self.preview_watercolor_wetness_pages.iter().find(|page| {
+                            page.coordinate == neighbor
+                                && !self
+                                    .preview_damage
+                                    .intersect(page_rect(neighbor))
+                                    .is_empty()
                         })
-                        .flatten();
-                    let page = preview_page.or_else(|| {
-                        layer
-                            .watercolor_wetness_pages
-                            .iter()
-                            .find(|page| page.coordinate == neighbor)
-                    });
-                    page.map(|page| &page.active().view)
-                        .unwrap_or(&self.empty_scalar_view)
-                };
-                wetness_views.push(view);
-            }
+                    })
+                    .flatten();
+                let page = preview_page.or_else(|| {
+                    layer
+                        .watercolor_wetness_pages
+                        .iter()
+                        .find(|page| page.coordinate == neighbor)
+                });
+                page.map(|page| &page.active().view)
+                    .unwrap_or(&self.empty_scalar_view)
+            };
+            wetness_views.push(view);
         }
         views_group(&self.device, "layer watercolor pigment and wetness neighborhood", &self.watercolor_layout,
             color_views.iter().chain(&wetness_views).copied())
@@ -3215,27 +3212,29 @@ impl CanvasRenderer for WgpuRasterizer {
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.take()
     }
-    fn request_content_bounds(&mut self, request: layer_core::ContentBoundsRequest) -> Result<bool, Self::Error> {
-        if self.bounds_job.is_some() { return Ok(false); }
+    fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
+        if self.snapshot_job.is_some() { return Ok(false); }
         #[cfg(not(target_arch = "wasm32"))]
-        let job = snapshot::ContentBoundsJob::start(self.snapshot_gpu(), request);
+        let job = snapshot::SnapshotJob::start(self.snapshot_gpu(), request);
         #[cfg(target_arch = "wasm32")]
         let job = {
             let mut request = request;
-            request.effect_times = request.document.layers.iter().filter(|l| l.effect.is_some())
-                .map(|l| (l.id, effects::Gpu::effect_time(self, l, request.time))).collect();
-            snapshot::ContentBoundsJob::start(self.bounds_worker.clone()
-                .ok_or_else(|| GpuRasterError::Color("Content bounds worker unavailable".into()))?, request)
+            if let layer_render::SnapshotRequest::Bounds(request) = &mut request {
+                request.effect_times = request.document.layers.iter().filter(|l| l.effect.is_some())
+                    .map(|l| (l.id, effects::Gpu::effect_time(self, l, request.time))).collect();
+            }
+            snapshot::SnapshotJob::start(self.snapshot_worker_callback.clone()
+                .ok_or_else(|| GpuRasterError::Color("Snapshot worker unavailable".into()))?, request)
         };
-        self.bounds_job = Some(job.map_err(GpuRasterError::Color)?);
+        self.snapshot_job = Some(job.map_err(GpuRasterError::Color)?);
         Ok(true)
     }
-    fn take_content_bounds(&mut self) -> Option<Result<layer_core::Rect, Self::Error>> {
-        let result = self.bounds_job.as_mut()?.take()?;
-        self.bounds_job = None;
+    fn take_snapshot(&mut self) -> Option<Result<layer_render::SnapshotResult, Self::Error>> {
+        let result = self.snapshot_job.as_mut()?.take()?;
+        self.snapshot_job = None;
         Some(result.map_err(GpuRasterError::Color))
     }
-    fn cancel_content_bounds(&mut self) { self.bounds_job = None; }
+    fn cancel_snapshot(&mut self) { self.snapshot_job = None; }
     fn request_color_sample(
         &mut self,
         request: layer_render::ColorSampleRequest,
@@ -4657,7 +4656,7 @@ fn dab_candidate_pixels(dab: Dab, extent: [u32; 2]) -> u64 {
 fn create_style_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     bindings::layout(device, "layer style layout", &[bindings::buffer(
         0,
-        wgpu::ShaderStages::VERTEX_FRAGMENT,
+        wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
         wgpu::BufferBindingType::Uniform,
         true,
         NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
@@ -5256,6 +5255,17 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             )
         })
     };
+    let watercolor_compute = {
+        let output = bindings::layout(device, "watercolor output", &[bindings::storage_texture(
+            0, wgpu::ShaderStages::COMPUTE, wgpu::TextureFormat::Rgba32Float, wgpu::StorageTextureAccess::WriteOnly,
+        )]);
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("watercolor composition"),
+            bind_group_layouts: &[Some(layouts.style), Some(layouts.target), Some(layouts.watercolor), Some(&output)],
+            immediate_size: 0,
+        });
+        (output, Deferred::compute(device, "watercolor composition", &layout, &watercolor_shader, "composite"))
+    };
     let export = {
         let (device, layout, shader) =
             (device.clone(), export_layout.clone(), export_shader.clone());
@@ -5283,6 +5293,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         reservoir,
         stroke_edge,
         watercolor_composite,
+        watercolor_compute,
         export,
     }
 }
@@ -5911,5 +5922,5 @@ mod tests {
 mod content_bounds_tests;
 #[cfg(target_arch = "wasm32")]
 impl WgpuRasterizer {
-    pub fn set_content_bounds_worker(&mut self, worker: snapshot::BrowserContentBounds) { self.bounds_worker = Some(worker); }
+    pub fn set_snapshot_worker(&mut self, worker: snapshot::BrowserSnapshot) { self.snapshot_worker_callback = Some(worker); }
 }

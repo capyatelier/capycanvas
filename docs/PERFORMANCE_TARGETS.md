@@ -103,9 +103,9 @@ measured on low and mid tiers:
   p99 below 28.4 ms; this measured stroke meets 60/s. Mid-tier G-Pen at the
   revised 1536 px guarantee reaches 55.6/s on a path that keeps the whole brush
   inside the photo, with completion-gap p99 31.9–33.5 ms; the 90/s and
-  22.2 ms criteria remain open. The preceding
-  top-tier build reaches 150.2/s, but its p99 gap
-  still misses 16.7 ms; the latest refinement change is not remeasured there.
+  22.2 ms criteria remain open. The current
+  top-tier G-Pen comparison reaches 87.6/s with completion-gap p99
+  31.6–38.8 ms; both targets remain open.
   Other mid-tier simple brushes need measurements at 1536 px; their older
   2048 px results are above the guarantee. Stacked-photo strokes remain below
   their targets.

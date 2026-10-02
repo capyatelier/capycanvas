@@ -17,6 +17,17 @@ pub use selection::{SelectionGradient, SelectionOverlay, SelectionPaint, Selecti
 pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
 
+#[derive(Clone, Debug)]
+pub enum SnapshotRequest {
+    Bounds(layer_core::ContentBoundsRequest),
+    TransformPixels(layer_core::TransformPixelsPlan),
+}
+#[derive(Clone, Debug)]
+pub enum SnapshotResult {
+    Bounds(Rect),
+    TransformPixels(Box<Layer>),
+}
+
 /// Immutable brush source shared across a render-worker boundary. Pixel storage
 /// is reference-counted; cursor geometry and UI stamps use the same generation.
 #[derive(Clone, Debug)]
@@ -792,11 +803,19 @@ pub trait CanvasRenderer {
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         None
     }
-    fn request_content_bounds(&mut self, _request: layer_core::ContentBoundsRequest) -> Result<bool, Self::Error> {
-        Ok(false)
+    fn request_snapshot(&mut self, _request: SnapshotRequest) -> Result<bool, Self::Error> { Ok(false) }
+    fn take_snapshot(&mut self) -> Option<Result<SnapshotResult, Self::Error>> { None }
+    fn cancel_snapshot(&mut self) {}
+    fn request_content_bounds(&mut self, request: layer_core::ContentBoundsRequest) -> Result<bool, Self::Error> {
+        self.request_snapshot(SnapshotRequest::Bounds(request))
     }
-    fn take_content_bounds(&mut self) -> Option<Result<layer_core::Rect, Self::Error>> { None }
-    fn cancel_content_bounds(&mut self) {}
+    fn take_content_bounds(&mut self) -> Option<Result<layer_core::Rect, Self::Error>> {
+        self.take_snapshot().map(|result| result.map(|result| match result {
+            SnapshotResult::Bounds(bounds) => bounds,
+            SnapshotResult::TransformPixels(_) => unreachable!(),
+        }))
+    }
+    fn cancel_content_bounds(&mut self) { self.cancel_snapshot(); }
     /// One texel, asynchronous and single-flight. Does not recomposite the scene.
     fn request_color_sample(&mut self, _request: ColorSampleRequest) -> Result<bool, Self::Error> {
         Ok(false)

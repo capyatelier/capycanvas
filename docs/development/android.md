@@ -239,7 +239,24 @@ APK calls, so test-APK benchmarks use the unminified build.
   `transparency` (`off` to `high`) narrow or
   resize the run. `-e photo <readable-file>` uses a JPEG matching `width` and
   `height`; otherwise the fixture generates an image. `-e zoomOut false` keeps
-  Fit zoom. Each scenario records the initial camera and its input window in
+  Fit zoom. `-e project <readable-current-format.capy>` opens a prepared native
+  project through the ordinary loader instead of creating a canvas. For paired
+  retained-photo translation, use `-e acceptedPhoto true`,
+  `-e labels photo-translate-drag`, and add `-e materialWatercolor true` to paint
+  a sparse wet-watercolor stroke before Transform. That run verifies and saves
+  the retained source and native watercolor planes alongside its motion report.
+  `-e translationRepeats 4` saves the first translation and three more gestures
+  in the same session, keeping cold-start and warm results separate.
+  `-e finalBake true` accepts a translated watercolor photo, applies Transform
+  to Pixels, samples job memory, and verifies native backing after save/reopen.
+  For a smaller command-memory diagnostic, `AndroidRasterTest`'s
+  `imagePlacementBatchHistoryAndStaleRequests` accepts
+  `-e imagePlacementAffineSmoke true -e affineSmokeDrags 4` and
+  `-e affineSmokeWatercolor true`; it records process maps after each drag,
+  idle, and Apply without reopening between gestures.
+  `-e memory true` records tracked renderer allocation; `-e rendererProfile true`
+  records CPU submission and GPU observations. These rates exclude presented
+  input latency. Each scenario records the initial camera and its input window in
   monotonic and boot clocks, separately from terminal completion polling,
   logs a `CapyBarPerf` line and writes
   `canvas-bar-benchmark/<label>.json` in external files; `ui_hz` and

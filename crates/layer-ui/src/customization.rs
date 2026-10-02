@@ -1146,6 +1146,7 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 CommandId::CopySelectionToLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COPY_SELECTION_TO_LAYER).to_string(),
                 CommandId::CutSelectionToLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CUT_SELECTION_TO_LAYER).to_string(),
                 CommandId::RevertToOriginal => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_REVERT_TO_ORIGINAL).to_string(),
+                CommandId::ApplyTransformPixels => localization.text(MessageId::COMMANDS_HELP_APPLY_TRANSFORM_PIXELS).to_string(),
                 CommandId::MergeDown => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MERGE_DOWN).to_string(),
                 CommandId::MergeGroup => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MERGE_GROUP).to_string(),
                 CommandId::MergeVisible => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MERGE_VISIBLE).to_string(),

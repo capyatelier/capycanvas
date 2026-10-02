@@ -17,6 +17,7 @@ struct Region {
 @group(1) @binding(2) var output: texture_storage_2d<rgba32float, write>;
 @group(1) @binding(3) var source_preview: texture_2d<f32>;
 @group(1) @binding(4) var base_preview: texture_2d<f32>;
+@group(1) @binding(5) var area_sampler: sampler;
 
 @compute @workgroup_size(8, 8)
 fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -29,6 +30,25 @@ fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
     let step = 1u << (region.flags >> 8u);
     let remaining = region.extent - start * step;
     let size = min(vec2<u32>(region.side), (remaining + step - 1u) / step);
+    let dimensions = textureDimensions(source);
+    let base_dimensions = textureDimensions(base);
+    if (region.flags & ~128u) == 0u && region.side % 2u == 0u && all(size == vec2(region.side))
+        && all((dimensions & (dimensions - 1u)) == vec2(0u))
+        && all((base_dimensions & (base_dimensions - 1u)) == vec2(0u)) {
+        var sum = vec4(0.);
+        for (var y = 1u; y < region.side; y += 2u) {
+            for (var x = 1u; x < region.side; x += 2u) {
+                let p = vec2<f32>(start + vec2(x, y));
+                var value = textureSampleLevel(source, area_sampler, p / vec2<f32>(dimensions), 0.);
+                if (region.flags & 128u) != 0u {
+                    value -= textureSampleLevel(base, area_sampler, p / vec2<f32>(base_dimensions), 0.);
+                }
+                sum += value;
+            }
+        }
+        textureStore(output, vec2<i32>(region.origin + id.xy), sum * (4. / f32(region.side * region.side)));
+        return;
+    }
     var sum = vec4<f32>(0.);
     var weight = 0u;
     for (var y = 0u; y < size.y; y++) {
@@ -44,6 +64,11 @@ fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
                 value += textureLoad(base, p, 0) * (1. - value.a);
             }
             if (region.flags & 2u) != 0u { value = working_encode(value); }
+            if (region.flags & 128u) != 0u {
+                var pigment = textureLoad(base, p, 0);
+                if (region.flags & 2u) != 0u { pigment = working_encode(pigment); }
+                value -= pigment;
+            }
             // A final compact texel may represent fewer document pixels.
             // Weight its average accordingly at odd document boundaries.
             let footprint = min(vec2<u32>(step), remaining - vec2<u32>(x, y) * step);

@@ -642,7 +642,7 @@ fn command_section(command: CommandId) -> ShortcutSection {
         | C::InvertSelectionLayer | C::GrowSelection | C::ShrinkSelection | C::FeatherSelection | C::BorderSelection
         | C::SmoothSelection | C::TransformSelectionOutline => ShortcutSection::Select,
         C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile
-        | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer | C::RevertToOriginal | C::InvertLayerMask
+        | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer | C::RevertToOriginal | C::ApplyTransformPixels | C::InvertLayerMask
         | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask | C::EditLayerContent | C::MergeDown | C::MergeGroup
         | C::MergeVisible | C::FlattenImage | C::StampVisible | C::NewDodgeBurnLayer | C::FrequencySeparation => ShortcutSection::Layer,
         C::FitCanvas | C::ActualPixels | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical

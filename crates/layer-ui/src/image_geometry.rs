@@ -42,14 +42,23 @@ struct ContentJob {
     submitted: bool,
 }
 
+struct PixelBake {
+    epoch: u64,
+    revision: u64,
+    plan: layer_core::TransformPixelsPlan,
+    submitted: bool,
+}
+
 #[derive(Default)]
 pub(super) struct ContentBounds {
     cache: ContentBoundsCache,
     job: Option<ContentJob>,
+    bake: Option<PixelBake>,
     pub(super) moving: Option<PendingMove>,
 }
 impl ContentBounds {
-    pub(super) fn busy(&self) -> bool { self.job.is_some() }
+    pub(super) fn busy(&self) -> bool { self.job.is_some() || self.bake.is_some() }
+    pub(super) fn baking(&self) -> bool { self.bake.is_some() }
 }
 
 pub(super) fn orientation(command: CommandId) -> Option<ImageOrientation> {
@@ -186,12 +195,82 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn cancel_content_bounds(&mut self) -> bool {
         self.content_bounds.moving = None;
-        if self.content_bounds.job.take().is_none() { return false; }
+        let cancelled = self.content_bounds.job.take().is_some() | self.content_bounds.bake.take().is_some();
+        if !cancelled { return false; }
         self.engine.backend_mut().cancel_content_bounds();
         true
     }
 
+    pub(super) fn transform_pixels_refusal(&self) -> Option<std::sync::Arc<str>> {
+        use layer_core::TransformPixelsRefusal::*;
+        let doc = self.engine.document();
+        let l = self.localization();
+        if self.selection_masks.target().is_some() || doc.active_mask { return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST)); }
+        doc.transform_pixels_refusal(doc.active_layer).map(|reason| l.text(match reason {
+            Target => MessageId::COMMANDS_TRANSFORM_PIXELS_SELECT_LAYER,
+            Locked => MessageId::COMMANDS_THE_LAYER_IS_LOCKED,
+            Unchanged => MessageId::COMMANDS_TRANSFORM_PIXELS_UNCHANGED,
+            Pending => MessageId::COMMANDS_WAIT_FOR_CURRENT_EDIT,
+        }))
+    }
+
+    pub(super) fn apply_transform_pixels(&mut self) -> Result<(), String> {
+        self.require_document_idle()?;
+        refused(self.transform_pixels_refusal())?;
+        self.cancel_content_bounds();
+        let doc = self.engine.document();
+        let interpolation = if doc.layer_transform(doc.active_layer).magnification() > 1. + 1e-4 {
+            layer_core::Interpolation::Bicubic
+        } else { layer_core::Interpolation::Linear };
+        let plan = doc.transform_pixels_plan(doc.active_layer, interpolation, Default::default())?;
+        self.engine.validate_edit(&plan.reserved_edit()).map_err(error)?;
+        let mut bake = PixelBake { epoch: self.state.document_file.epoch, revision: doc.revision, plan, submitted: false };
+        bake.submitted = self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::TransformPixels(bake.plan.clone())).map_err(error)?;
+        self.content_bounds.bake = Some(bake);
+        self.refresh_tools();
+        self.refresh_commands();
+        Ok(())
+    }
+
+    fn poll_transform_pixels(&mut self) -> u32 {
+        let l = self.localization().clone();
+        let Some(bake) = self.content_bounds.bake.as_mut() else { return 0; };
+        let changed = bake.epoch != self.state.document_file.epoch || bake.revision != self.engine.document().revision
+            || self.engine.document().active_target() != bake.plan.output.id;
+        let result = if changed {
+            self.engine.backend_mut().cancel_snapshot();
+            Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_DRAWING_CHANGED).to_string())
+        } else if !bake.submitted {
+            match self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::TransformPixels(bake.plan.clone())).map_err(error) {
+                Ok(accepted) => { bake.submitted = accepted; return 0; }
+                Err(error) => Err(error),
+            }
+        } else {
+            match self.engine.backend_mut().take_snapshot() {
+                None => return 0,
+                Some(result) => result.map_err(error),
+            }
+        };
+        let bake = self.content_bounds.bake.take().unwrap();
+        let result = result.and_then(|result| {
+            let layer_render::SnapshotResult::TransformPixels(layer) = result else { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_UNEXPECTED_RESULT).to_string()); };
+            if layer.id != bake.plan.output.id { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_LAYER_CHANGED).to_string()); }
+            self.require_document_idle()?;
+            refused(self.transform_pixels_refusal())?;
+            let edit = Edit::ReplaceLayer(layer);
+            self.source_edit_candidates(&edit, &[], Default::default())?;
+            self.engine.apply_edit(edit).map_err(error)?;
+            self.refresh_document();
+            Ok(())
+        });
+        if let Err(message) = result { self.notify(message); }
+        self.refresh_tools();
+        self.refresh_commands();
+        regions::DOCUMENT | regions::BRUSH | regions::COMMANDS | regions::HOST
+    }
+
     pub(super) fn poll_content_bounds(&mut self) -> u32 {
+        if self.content_bounds.baking() { return self.poll_transform_pixels(); }
         self.content_bounds.cache.discard_changed(self.engine.document());
         let Some(job) = &mut self.content_bounds.job else { return 0 };
         let doc = self.engine.document();

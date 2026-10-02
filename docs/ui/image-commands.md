@@ -20,6 +20,22 @@ Layers keep pixels outside the canvas. A crop or a smaller canvas hides them, an
 a larger canvas, Reveal All or Fit Content shows them again. Delete Cropped Pixels
 on the crop bar drops them instead ([crop](canvas-action-bar.md#crop)).
 
+Moving paint reserves enough local space to paint across the canvas again. Existing
+hidden pixels and mask coverage stay intact. An oversized move keeps its last valid
+position; releasing commits that position as one undo step.
+
+## Apply a layer transform to pixels
+
+**Apply Transform to Pixels**, in Edit and the active layer's menu, turns an
+accepted affine placement into editable pixels. It includes content outside the
+canvas, preserves paint wetness and keeps linked masks editable. An unlinked mask
+stays in place. Layer opacity, blending and clipping remain separate from its paint.
+
+The command runs in the background with Cancel on the canvas bar. A failed or
+canceled operation changes nothing; one Undo restores the original photo, paint,
+mask and placement. **Rasterize Original Photo** instead converts the original
+photo's local pixels while retaining its placement.
+
 ## Commands
 
 - **Crop** opens the Crop tool and its bar ([crop](canvas-action-bar.md#crop)).
@@ -67,6 +83,12 @@ on the crop bar drops them instead ([crop](canvas-action-bar.md#crop)).
   against the limits first. `Edit::SetResolution` changes only the resolution.
   How the renderer resamples and drops emptied tiles is in
   [rendering](../internals/rendering.md).
+- **Pixel bake:** `crates/layer-core/src/transform_pixels.rs` freezes the layer and
+  plans its output extent. History admission reserves the output before work starts.
+  The existing snapshot worker maps each raw plane and captures native tiles;
+  `image_geometry.rs` publishes the complete replacement only while its document
+  and target still match. Bounds queries and pixel bakes share this cancellable
+  worker lifecycle.
 - **Content bounds:** `crates/layer-core/src/content_bounds.rs` freezes the query
   and caches its result. `crates/layer-render-wgpu/src/snapshot/bounds.rs` uses
   bounded snapshot rendering and the thumbnail GPU reduction to measure actual

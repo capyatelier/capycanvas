@@ -127,6 +127,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
     type A = super::Api;
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
+        if self.raw == vk::CommandPool::null() {
+            let vk_info = vk::CommandPoolCreateInfo::default()
+                .queue_family_index(self.device.family_index)
+                .flags(vk::CommandPoolCreateFlags::TRANSIENT);
+            self.raw = unsafe { self.device.raw.create_command_pool(&vk_info, None) }
+                .map_err(super::map_host_device_oom_err)?;
+        }
         if self.free.is_empty() {
             let vk_info = vk::CommandBufferAllocateInfo::default()
                 .command_pool(self.raw)
@@ -188,15 +195,6 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.free
             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
         self.free.append(&mut self.discarded);
-        // Wide sustained updates can grow retained driver pool storage even
-        // while completed command buffers are freed. Reclaim it occasionally,
-        // at the same all-completed boundary, without charging every frame.
-        let reclaim_storage = if cfg!(target_os = "android") && !self.free.is_empty() {
-            self.completed_resets = (self.completed_resets + 1) % 256;
-            self.completed_resets == 0
-        } else {
-            false
-        };
         // Adreno framebuffer creation/destruction is expensive even when the
         // attachment textures are reused. Keep a bounded working set across
         // completed submissions; retire entries after one unused cycle. Large
@@ -206,7 +204,6 @@ impl crate::CommandEncoder for super::CommandEncoder {
         // Vulkan permits destroying an unused attachment before its framebuffer:
         // destruction must not access the framebuffer's referenced objects.
         let retain_framebuffers = cfg!(target_os = "android")
-            && !reclaim_storage
             && self.framebuffers.len() <= 128;
         self.framebuffers.retain(|_, framebuffer| {
             let keep = retain_framebuffers && framebuffer.used;
@@ -217,24 +214,17 @@ impl crate::CommandEncoder for super::CommandEncoder {
             }
             keep
         });
-        // Adreno can accumulate host mappings across pool resets until command
-        // recording fails, even with ample RAM. Free every completed buffer:
-        // resetting alone and periodic buffer reclamation were insufficient.
-        // Keep reusable pool storage: RELEASE_RESOURCES recreated it even on
-        // empty resets and dominated CPU time in sustained drawing. This is
-        // wgpu's existing all-completed boundary, before the pool is reused.
         if cfg!(target_os = "android") {
             if !self.free.is_empty() {
-                unsafe { self.device.raw.free_command_buffers(self.raw, &self.free) };
+                unsafe { self.device.raw.destroy_command_pool(self.raw, None) };
+                self.raw = vk::CommandPool::null();
                 self.free.clear();
             }
-        }
-        let flags = if reclaim_storage {
-            vk::CommandPoolResetFlags::RELEASE_RESOURCES
         } else {
-            vk::CommandPoolResetFlags::default()
-        };
-        let _ = unsafe { self.device.raw.reset_command_pool(self.raw, flags) };
+            let _ = unsafe {
+                self.device.raw.reset_command_pool(self.raw, vk::CommandPoolResetFlags::empty())
+            };
+        }
     }
 
     unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)

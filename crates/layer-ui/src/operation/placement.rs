@@ -5,8 +5,7 @@ use layer_core::{Edit, Layer};
 use std::collections::BTreeSet;
 
 pub(super) struct Placement {
-    pub original: Layer,
-    members: Vec<Layer>,
+    pub(super) members: Vec<Layer>,
     rollback: Edit,
     insertion: Option<usize>,
     selected: BTreeSet<layer_core::LayerId>,
@@ -55,7 +54,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .ok_or("Select a photo layer")?
             .clone();
         if doc.is_locked(layer.id) { return Err("The active layer is locked".into()); }
-        if layer.source.is_none() { return Err("Select a retained photo layer".into()); }
+        if layer.kind != layer_core::LayerKind::Paint { return Err("Select a paint or photo layer".into()); }
         let mut bounds = if imported.is_some() { source_frame(doc, layer.id) }
             else { self.measured_target_bounds().ok_or("The content bounds are still being measured")? };
         if bounds.is_empty() { return Err("The layer has no pixels to transform".into()); }
@@ -77,7 +76,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.operation.serial = self.operation.serial.wrapping_add(1);
         self.operation.current = Some(Transaction {
             placement: Some(Placement {
-                original: layer.clone(),
                 members,
                 rollback,
                 insertion,
@@ -109,7 +107,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn finish_layer_placement(&mut self, apply: bool) -> Result<(), String> {
         let t = self.operation.current.as_ref().ok_or("No active placement")?;
         let placement = t.placement.as_ref().ok_or("No active placement")?;
-        let current: Vec<_> = placement.members.iter().map(|original|
+        let mut current: Vec<_> = placement.members.iter().map(|original|
             self.engine.document().layer(original.id).cloned().ok_or("The placed layer was removed")
         ).collect::<Result<_, _>>()?;
         if apply && (t.revision != self.engine.document().revision
@@ -119,7 +117,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         let selected = if apply && placement.insertion.is_some() {
             current.iter().map(|layer| layer.id).collect()
         } else { placement.selected.clone() };
-        let changed = current[0] != placement.original || placement.insertion.is_some();
+        let changed = current.iter().zip(&placement.members).any(|(layer, original)| layer != original) || placement.insertion.is_some();
+        if apply && changed {
+            let ids: Vec<_> = current.iter().map(|layer| layer.id).collect();
+            let mut candidate = self.engine.document().clone();
+            for edit in candidate.paint_extent_plan(&ids, self.engine.geometry_limits()).map_err(error)? {
+                candidate.apply(edit).map_err(error)?;
+            }
+            current = ids.into_iter().map(|id| candidate.layer(id).unwrap().clone()).collect();
+        }
         if changed {
             let rollback = placement.rollback.clone();
             let id = current[0].id;
@@ -158,6 +164,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(crate) fn placement_original_size(&mut self) -> Result<(), String> {
+        if !self.operation.original_size_available() { return Err("Original Size requires a photo layer".into()); }
         let t = self
             .operation
             .current

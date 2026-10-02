@@ -24,7 +24,8 @@ use browser::CaptureWorker;
 mod pool;
 pub(super) use pool::BufferPool;
 mod deferred;
-use deferred::{NativeCapture, NativeOutput};
+pub(crate) use deferred::NativeCapture;
+use deferred::NativeOutput;
 
 struct Target {
     revision: RasterRevision,

@@ -659,7 +659,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn layer_edit(&mut self, edit: Edit) -> Result<(), String> {
         if self.operation.placing() {
-            return Err("Apply or cancel the photo placement first".into());
+            return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string());
         }
         let previous = self.engine.document().selection.clone();
         self.engine.apply_edit(edit).map_err(error)?;
@@ -724,7 +724,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.selection_masks.quick() && matches!(action,LayerAction::Delete {..}|LayerAction::DeleteSelected) {return Err("Return to artwork before deleting artwork layers".into());}
 
         if self.operation.placing() && !matches!(action, LayerAction::Tool { .. }) {
-            return Err("Apply or cancel the photo placement first".into());
+            return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string());
         }
         let hide_selection = matches!(action, LayerAction::MaskSelection { hide: true, .. });
         let action = if let LayerAction::MaskSelection { id, .. } = action {
@@ -1634,6 +1634,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
             ]);
             if l.id == doc.active_layer {
+                let state = self.command(CommandId::ApplyTransformPixels);
+                let mut apply = ContextMenuItem::command(state.label.as_ref(), UiAction::Invoke { command: state.id });
+                apply.enabled = state.enabled;
+                protection.push(apply);
                 let state = self.command(CommandId::UseReferenceBelow);
                 let mut below = ContextMenuItem::command(state.label.as_ref(), UiAction::Invoke { command: state.id });
                 below.enabled = state.enabled;
@@ -1831,21 +1835,39 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.layer_interaction.tool == LayerCanvasTool::Move {
                     let start = self.layer_interaction.path[0];
                     let original = self.layer_interaction.original.as_ref().unwrap().clone();
-                    self.engine
-                        .preview_edit(Edit::ReplaceLayer(Box::new(original.clone())))
-                        .map_err(error)?;
-                    let edit = self
-                        .engine
-                        .document()
-                        .move_target_edit(Point {
-                            x: p.x - start.x,
-                            y: p.y - start.y,
-                        })
-                        .map_err(error)?;
-                    if event.phase == PenPhase::Up {
-                        self.layer_edit(edit)?;
-                    } else {
-                        self.engine.preview_edit(edit).map_err(error)?;
+                    let rollback = Edit::ReplaceLayer(Box::new(original.clone()));
+                    let mut candidate = self.engine.document().clone();
+                    candidate.apply(rollback.clone()).map_err(error)?;
+                    let targets: Vec<_> = candidate.layer_subtrees(&[original.id]).into_iter().collect();
+                    let planned = (|| {
+                        let edit = candidate.move_target_edit(Point { x: p.x - start.x, y: p.y - start.y }).map_err(error)?;
+                        candidate.apply(edit.clone()).map_err(error)?;
+                        candidate.validate_paint_extents(&targets, self.engine.geometry_limits()).map_err(error)?;
+                        Ok::<_, String>(edit)
+                    })();
+                    let edit = match planned {
+                        Ok(edit) => edit,
+                        Err(cause) if event.phase == PenPhase::Up => {
+                            self.notify(cause);
+                            candidate = self.engine.document().clone();
+                            Edit::ReplaceLayer(Box::new(candidate.layer(original.id).ok_or("Unknown layer")?.clone()))
+                        }
+                        Err(cause) => return Err(cause),
+                    };
+                    let moved = candidate.layer(original.id) != Some(&original);
+                    let edit = if moved && event.phase == PenPhase::Up {
+                        let mut edits = vec![edit];
+                        edits.extend(candidate.paint_extent_plan(&targets, self.engine.geometry_limits()).map_err(error)?);
+                        Edit::Batch(edits)
+                    } else { edit };
+                    if event.phase == PenPhase::Up || candidate.layers != self.engine.document().layers {
+                        if self.engine.document().layer(original.id) != Some(&original) {
+                            self.engine.preview_edit(rollback).map_err(error)?;
+                        }
+                        if moved {
+                            if event.phase == PenPhase::Up { self.layer_edit(edit)?; }
+                            else { self.engine.preview_edit(edit).map_err(error)?; }
+                        }
                     }
                 }
                 if event.phase == PenPhase::Up {

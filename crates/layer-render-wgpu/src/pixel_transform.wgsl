@@ -30,6 +30,7 @@ const KEPT=64u;
 const LANCZOS=128u;
 const KEEP_SOURCE=256u;
 const ENCODED=512u;
+const CLEAR=1024u;
 const UNCOVERED=-1e38;
 
 @vertex fn vertex_main(@builtin(vertex_index) index:u32)->@builtin(position) vec4<f32> {
@@ -254,6 +255,24 @@ fn layer_pixel(world:vec2<f32>)->vec4<f32> {
     return layer_pixel(position.xy+transform.attachment.xy);
 }
 @group(2) @binding(0) var display_level:texture_storage_2d<rgba32float,write>;
+@group(2) @binding(1) var placed_scalar:texture_storage_2d<r32float,write>;
+fn placement_contains(pixel:vec2<u32>)->bool {
+    return all(pixel>=vec2<u32>(transform.texels.xy)) && all(pixel<vec2<u32>(transform.texels.xy+transform.texels.zw));
+}
+fn placement_pixel(pixel:vec2<u32>)->vec4<f32> {
+    if !placement_contains(pixel) {return vec4(0.);}
+    return layer_pixel(vec2<f32>(pixel)+.5+transform.attachment.xy);
+}
+@compute @workgroup_size(8,8)
+fn placement_color(@builtin(global_invocation_id) id:vec3<u32>) {
+    if any(id.xy>=textureDimensions(display_level)) || ((flags()&CLEAR)==0u && !placement_contains(id.xy)) {return;}
+    textureStore(display_level,vec2<i32>(id.xy),placement_pixel(id.xy));
+}
+@compute @workgroup_size(8,8)
+fn placement_scalar(@builtin(global_invocation_id) id:vec3<u32>) {
+    if any(id.xy>=textureDimensions(placed_scalar)) || ((flags()&CLEAR)==0u && !placement_contains(id.xy)) {return;}
+    textureStore(placed_scalar,vec2<i32>(id.xy),placement_pixel(id.xy));
+}
 // An unmoved display level holds only the pixels the selection moves, or only
 // those it keeps, when those flags ask for them.
 fn display_pixel(world:vec2<f32>)->vec4<f32> {

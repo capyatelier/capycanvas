@@ -73,7 +73,7 @@ impl Evaluator<'_> {
     }
 
     fn effect_input(&mut self, value: Value) -> Result<Value, GpuRasterError> {
-        let value = self.resample(value)?;
+        let value = self.resample(value, None)?;
         if matches!(&value, Value::Image { opacity: 1., plan, preview: None, encode: false, .. } if *plan == self.working_plan()) { Ok(value) }
         else { self.draw(value, Value::Color([0.; 4]), layer_core::LayerBlend::Normal, 0, None) }
     }

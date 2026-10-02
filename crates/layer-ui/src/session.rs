@@ -2240,7 +2240,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 idle && self.straighten_to_guide_refusal().is_none()
                     && (self.cropping() || self.require_document_idle().is_ok())
             }
-            CommandId::PlacementOriginalSize => idle && self.operation.placing(),
+            CommandId::PlacementOriginalSize => idle && self.operation.original_size_available(),
             CommandId::ApplyTransform => {
                 idle && self.operation.active() && !self.region_tools.applying_transform()
             }
@@ -2312,6 +2312,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::CopySelectionToLayer | CommandId::CutSelectionToLayer => {
                 self.require_document_idle().is_ok()
                     && self.selection_to_layer_refusal(id == CommandId::CutSelectionToLayer).is_none()
+            }
+            CommandId::ApplyTransformPixels => {
+                self.require_document_idle().is_ok() && self.transform_pixels_refusal().is_none()
             }
             CommandId::RevertToOriginal => {
                 self.require_document_idle().is_ok() && self.revert_to_original_refusal().is_none()
@@ -2504,7 +2507,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | UiAction::SetLayerOpacity { .. }
             | UiAction::Effect { .. } | UiAction::FilterPicker { .. })
         {
-            return Err("Apply or cancel the photo placement first".into());
+            return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string());
         }
         // An interrupted property contact still needs to restore its preview.
         // The gesture handler cancels it when editing is no longer available.
@@ -3752,6 +3755,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         if self.rendering_suspended
+            || self.content_bounds.baking()
             || self.workspace_transition
             || (self.workspace_read_only && event.phase == PenPhase::Down)
         {
@@ -4522,6 +4526,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_to_layer(command == CommandId::CutSelectionToLayer)?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
+            CommandId::ApplyTransformPixels => { self.apply_transform_pixels()?; Ok((DOCUMENT | BRUSH | COMMANDS, true)) }
             CommandId::RevertToOriginal => {
                 self.revert_to_original()?;
                 Ok((DOCUMENT | COMMANDS, true))
@@ -4691,7 +4696,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.operation.placing() || self.cropping() {
                     if redo {
                         return Err(if self.operation.placing() {
-                            "Apply or cancel the photo placement first"
+                            "Apply or cancel the transform first"
                         } else {
                             "Apply or cancel the crop first"
                         }.into());
@@ -5028,7 +5033,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn refresh_tools(&mut self) {
         self.selection_tools.options.tonal.adapt_to_document(self.engine.document().color.depth.is_float());
-        self.state.tool_actions = if self.cropping() {
+        self.state.tool_actions = if self.content_bounds.baking() {
+            vec![ToolSettingAction { command: CommandId::CancelTransform, checkable: false }]
+        } else if self.cropping() {
             self.crop_actions()
         } else if self.operation.active() {
             [
@@ -5057,7 +5064,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|c| match (c, transform_choice(*c)) {
                 (_, Some(TransformChoice::Interpolation(_))) => !self.operation.placing() && !self.operation.outline(),
                 (_, Some(TransformChoice::Cells(_))) => self.warp_cells().is_some(),
-                (CommandId::PlacementOriginalSize, _) => self.operation.placing(),
+                (CommandId::PlacementOriginalSize, _) => self.operation.original_size_available(),
                 (CommandId::TransformDistort | CommandId::TransformWarp, _) => !self.operation.outline(),
                 (CommandId::TransformPerspective, _) => {
                     self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)

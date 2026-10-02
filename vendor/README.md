@@ -42,7 +42,7 @@ HEIF tests), exact
 libde265 YUV comparison of a photographic still, shared source/ICC/grid/alpha
 tests, Chrome execution and GTK Open/Import/Paste with an empty codec directory.
 HEIC support and its limits are described in the
-[portable colour guide](../docs/development/portable-color.md).
+[portable colour guide](../docs/internals/portable-color.md).
 
 Run the isolated vendor tests with:
 
@@ -149,39 +149,23 @@ nil (which disables color matching). The Apple application currently requests
 Display P3; retain this delta until alternate callers and surface tests are
 qualified for removal or upstream supplies the fix.
 
-`wgpu-android-command-memory.patch` frees completed Android Vulkan command
-buffers at wgpu's existing all-completed boundary and allocates replacements
-on demand. Large photo preparation followed
-by save/reopen and editing exhausted host mappings in Adreno command recording on
-the Wacom DTHA140: one failing process reached 64,039 mappings despite available
-RAM. Resetting pools alone and periodic buffer reclamation still failed during
-the long workload; freeing completed buffers on every reset passed.
-The renderer also submits cold placement previews in batches of 64 tiles;
-resetting pools alone did not bound command storage while recording a new preview.
-The pool itself now retains reusable storage with the ordinary reset flags.
-Profiling the initial `RELEASE_RESOURCES` policy showed repeated driver
-allocation/reset costs: full 61 MP drawing took roughly 14–16 ms per host
-callback despite only 1–2 ms of GPU work. Retaining pool storage while still
-freeing every completed buffer reduced median callbacks to about 4.6 ms and
-reached 8.33 ms presentation intervals. Submission ownership and completion
-synchronization remain unchanged. Other targets retain their existing policy.
+`wgpu-android-command-memory.patch` destroys nonempty completed Android Vulkan
+command pools at wgpu's existing all-completed boundary. It recreates each pool
+and allocates command buffers on demand; empty resets allocate nothing.
+Retaining command buffers or pool storage across repeated photo transforms
+exhausts Adreno host mappings despite available RAM. The renderer also submits cold placement previews in bounded
+tile batches to limit command storage before a submission completes.
 
-`wgpu-android-resource-reuse.patch` applies after the command-memory patch
-and reuses up to 128 Vulkan framebuffers per completed Android encoder. Entries
-expire after one unused completed cycle;
-encoders with larger sets release the entire set. Permanent attachment-view
-identities prevent recycled Vulkan handles from matching retired attachments.
-The [Vulkan object lifetime rules](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-objectmodel-lifetime)
+The same patch retains up to 128 Vulkan framebuffers per completed Android
+encoder. Entries expire after one unused completed cycle; encoders with larger
+sets release the entire set. Permanent attachment-view identities prevent
+recycled Vulkan handles from matching retired attachments. The
+[Vulkan object lifetime rules](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-objectmodel-lifetime)
 permit destroying referenced objects before an unused referencing object;
 object destruction must not access the referenced objects. Cache entries do not
-retain textures and are never reused after their view identities are retired.
-Every completed command buffer is still freed on every reset. Once per 256
-nonempty completed resets, the encoder also releases retained pool storage and
-its framebuffer cache. Empty resets do not advance the interval. This amortized
-cleanup addresses mapping growth in sustained wide-brush drawing; releasing
-pool storage at every reset would restore the earlier driver-allocation cost.
-Completion synchronization is unchanged. Other platforms keep their original
-pool policy and continue to destroy framebuffers at every reset.
+retain textures. Framebuffer retention is independent of command-storage cleanup.
+Submission ownership and completion synchronization are unchanged. Other
+platforms keep their original pool and framebuffer policies.
 
 `wgpu-instance-identity.patch` makes native wgpu handles equal only when the
 same instance owns them. Upstream compares only the registry identifier, and

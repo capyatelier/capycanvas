@@ -20,6 +20,7 @@ pub(super) struct TileSnapshot {
     pub backing: Option<(
         std::sync::Arc<layer_core::raster::RasterData>,
         layer_core::color::RgbSpace,
+        layer_core::raster::RasterPlane,
     )>,
     pub bounds: PixelRect,
 }
@@ -35,9 +36,9 @@ impl TileSnapshot {
     }
     pub fn contains(&self, coordinate: [u32; 2]) -> bool {
         self.pages.contains_key(&coordinate)
-            || self.backing.as_ref().is_some_and(|(data, _)| {
+            || self.backing.as_ref().is_some_and(|(data, _, plane)| {
                 data.tiles.contains_key(&layer_core::raster::TileKey {
-                    plane: layer_core::raster::RasterPlane::Color,
+                    plane: *plane,
                     coordinate,
                 })
             })
@@ -107,9 +108,9 @@ impl TileSnapshot {
             }));
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some((data, space)) = &self.backing
+        if let Some((data, space, plane)) = &self.backing
             && let Some(tile) = data.tiles.get(&layer_core::raster::TileKey {
-                plane: layer_core::raster::RasterPlane::Color,
+                plane: *plane,
                 coordinate,
             })
         {

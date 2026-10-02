@@ -12,22 +12,117 @@
  const DST_IMAGE_LAYOUT: vk::ImageLayout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
 
  impl super::Texture {
-@@ -184,6 +187,18 @@
-         // Delete framebuffers from the framebuffer cache
-         for (_, framebuffer) in self.framebuffers.drain() {
-             unsafe { self.device.raw.destroy_framebuffer(framebuffer, None) };
+@@ -57,7 +60,10 @@
+         key: super::FramebufferKey,
+     ) -> Result<vk::Framebuffer, crate::DeviceError> {
+         Ok(match self.framebuffers.entry(key) {
+-            Entry::Occupied(e) => *e.get(),
++            Entry::Occupied(mut e) => {
++                e.get_mut().used = true;
++                e.get().raw
++            }
+             Entry::Vacant(e) => {
+                 let super::FramebufferKey {
+                     raw_pass,
+@@ -74,7 +80,8 @@
+                     .attachments(attachment_views);
+
+                 let raw = unsafe { self.device.raw.create_framebuffer(&vk_info, None).unwrap() };
+-                *e.insert(raw)
++                e.insert(super::CachedFramebuffer { raw, used: true });
++                raw
+             }
+         })
+     }
+@@ -120,6 +127,13 @@
+     type A = super::Api;
+
+     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
++        if self.raw == vk::CommandPool::null() {
++            let vk_info = vk::CommandPoolCreateInfo::default()
++                .queue_family_index(self.device.family_index)
++                .flags(vk::CommandPoolCreateFlags::TRANSIENT);
++            self.raw = unsafe { self.device.raw.create_command_pool(&vk_info, None) }
++                .map_err(super::map_host_device_oom_err)?;
 +        }
-+        // Adreno can accumulate host mappings across pool resets until command
-+        // recording fails, even with ample RAM. Free every completed buffer:
-+        // resetting alone and periodic buffer reclamation were insufficient.
-+        // Keep reusable pool storage: RELEASE_RESOURCES recreated it even on
-+        // empty resets and dominated CPU time in sustained drawing. This is
-+        // wgpu's existing all-completed boundary, before the pool is reused.
+         if self.free.is_empty() {
+             let vk_info = vk::CommandBufferAllocateInfo::default()
+                 .command_pool(self.raw)
+@@ -181,15 +195,36 @@
+         self.free
+             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
+         self.free.append(&mut self.discarded);
+-        // Delete framebuffers from the framebuffer cache
+-        for (_, framebuffer) in self.framebuffers.drain() {
+-            unsafe { self.device.raw.destroy_framebuffer(framebuffer, None) };
+-        }
+-        let _ = unsafe {
+-            self.device
+-                .raw
+-                .reset_command_pool(self.raw, vk::CommandPoolResetFlags::default())
+-        };
++        // Adreno framebuffer creation/destruction is expensive even when the
++        // attachment textures are reused. Keep a bounded working set across
++        // completed submissions; retire entries after one unused cycle. Large
++        // one-off passes cannot leave an unbounded cache on a pooled encoder.
++        // Keys include permanent view identities, so destroyed/recycled Vulkan
++        // handles cannot revive a framebuffer referencing an old attachment.
++        // Vulkan permits destroying an unused attachment before its framebuffer:
++        // destruction must not access the framebuffer's referenced objects.
++        let retain_framebuffers = cfg!(target_os = "android")
++            && self.framebuffers.len() <= 128;
++        self.framebuffers.retain(|_, framebuffer| {
++            let keep = retain_framebuffers && framebuffer.used;
++            framebuffer.used = false;
++            if !keep {
++                // reset_all is the all-completed boundary for this encoder.
++                unsafe { self.device.raw.destroy_framebuffer(framebuffer.raw, None) };
++            }
++            keep
++        });
 +        if cfg!(target_os = "android") {
 +            if !self.free.is_empty() {
-+                unsafe { self.device.raw.free_command_buffers(self.raw, &self.free) };
++                unsafe { self.device.raw.destroy_command_pool(self.raw, None) };
++                self.raw = vk::CommandPool::null();
 +                self.free.clear();
 +            }
++        } else {
++            let _ = unsafe {
++                self.device.raw.reset_command_pool(self.raw, vk::CommandPoolResetFlags::empty())
++            };
++        }
+     }
+
+     unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)
+--- a/wgpu-hal/src/vulkan/mod.rs
++++ b/wgpu-hal/src/vulkan/mod.rs
+@@ -1055,6 +1055,11 @@
+     }
+ }
+
++struct CachedFramebuffer {
++    raw: vk::Framebuffer,
++    used: bool,
++}
++
+ /// A texture view paired with its identity.
+ #[derive(Copy, Clone)]
+ struct IdentifiedTextureView {
+@@ -1112,7 +1117,7 @@
+     /// the given pool & location.
+     end_of_pass_timer_query: Option<(vk::QueryPool, u32)>,
+
+-    framebuffers: FastHashMap<FramebufferKey, vk::Framebuffer>,
++    framebuffers: FastHashMap<FramebufferKey, CachedFramebuffer>,
+     temp_texture_views: FastHashMap<TempTextureViewKey, IdentifiedTextureView>,
+
+     counters: Arc<wgt::HalCounters>,
+@@ -1140,7 +1145,7 @@
          }
-         let _ = unsafe {
-             self.device
+
+         for (_, fb) in self.framebuffers.drain() {
+-            unsafe { self.device.raw.destroy_framebuffer(fb, None) };
++            unsafe { self.device.raw.destroy_framebuffer(fb.raw, None) };
+         }
+
+         for (_, view) in self.temp_texture_views.drain() {

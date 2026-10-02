@@ -40,8 +40,8 @@ impl Pipelines {
             device,
             "display composition inputs",
             &[
-                crate::bindings::texture(0, wgpu::ShaderStages::COMPUTE, false),
-                crate::bindings::texture(1, wgpu::ShaderStages::COMPUTE, false),
+                crate::bindings::texture(0, wgpu::ShaderStages::COMPUTE, true),
+                crate::bindings::texture(1, wgpu::ShaderStages::COMPUTE, true),
                 crate::bindings::storage_texture(
                     2,
                     wgpu::ShaderStages::COMPUTE,
@@ -50,6 +50,7 @@ impl Pipelines {
                 ),
                 crate::bindings::texture(3, wgpu::ShaderStages::COMPUTE, false),
                 crate::bindings::texture(4, wgpu::ShaderStages::COMPUTE, false),
+                crate::bindings::sampler(5, wgpu::ShaderStages::COMPUTE, wgpu::SamplerBindingType::Filtering),
             ],
         );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -100,12 +101,16 @@ pub(crate) struct Commands {
     record_binding: wgpu::BindGroup,
     stride: u32,
     cursor: u32,
-    composition: Vec<Composition>,
+    jobs: Vec<DisplayJob>,
 }
 struct Composition {
     values: [u32; 20],
     binding: wgpu::BindGroup,
     leases: Vec<Arc<()>>,
+}
+enum DisplayJob {
+    Compose(Composition),
+    Resample { values: [u8; resample::UNIFORM_BYTES as usize], views: [wgpu::TextureView; 2], size: [u32; 2] },
 }
 impl Commands {
     pub fn new(r: &WgpuRasterizer) -> Self {
@@ -123,19 +128,14 @@ impl Commands {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let record_binding = crate::bindings::group(
-            &r.device,
-            "display composition regions",
-            &r.scene_pipelines.scale.records,
-            [wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer: &records,
-                offset: 0,
-                size: NonZeroU64::new(80),
-            })],
-        );
-        Self { records, record_binding, stride, cursor: 0, composition: Vec::new() }
+        let record_binding = Self::record_binding(r, &records);
+        Self { records, record_binding, stride, cursor: 0, jobs: Vec::new() }
     }
-    pub fn begin(&mut self) { self.cursor = 0; self.composition.clear(); }
+    pub(super) fn record_binding(r: &WgpuRasterizer, records: &wgpu::Buffer) -> wgpu::BindGroup {
+        crate::bindings::group(&r.device, "display composition regions", &r.scene_pipelines.scale.records,
+            [wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: records, offset: 0, size: NonZeroU64::new(80) })])
+    }
+    pub fn begin(&mut self) { self.cursor = 0; self.jobs.clear(); }
     pub fn storage_bytes(&self) -> u64 { self.records.size() }
     pub(super) fn binding(
         r: &WgpuRasterizer,
@@ -156,6 +156,7 @@ impl Commands {
                 wgpu::BindingResource::TextureView(output),
                 wgpu::BindingResource::TextureView(sources[2]),
                 wgpu::BindingResource::TextureView(sources[3]),
+                wgpu::BindingResource::Sampler(&r.scene_pipelines.resample.sampler),
             ],
         )
     }
@@ -188,9 +189,14 @@ impl Commands {
         r.uploads.write_at(encoder, &self.records, u64::from(offset), bytes)?;
         Ok(offset)
     }
+    pub(super) fn reduction_record(r: &WgpuRasterizer, mut values: [u32; 20]) -> [u32; 20] {
+        if r.document_color().depth.is_float() && values[7] & 128 != 0 { values[7] |= 16; }
+        values
+    }
     fn reduce(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         values: [u32; 20], binding: &wgpu::BindGroup, label: &str,
     ) -> Result<(), GpuRasterError> {
+        let values = Self::reduction_record(r, values);
         let offset = self.record(r, encoder, values)?;
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(label), timestamp_writes: None,
@@ -201,35 +207,49 @@ impl Commands {
         pass.dispatch_workgroups(values[2].div_ceil(8), values[3].div_ceil(8), 1);
         Ok(())
     }
-    fn compose(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, job: Composition) -> Result<(), GpuRasterError> {
-        self.composition.push(job);
-        if self.composition.len() >= 32 { self.flush(r, encoder)?; }
+    fn push(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, job: DisplayJob) -> Result<(), GpuRasterError> {
+        self.jobs.push(job);
+        if self.jobs.len() >= 32 { self.flush(r, encoder)?; }
         Ok(())
     }
-    fn records(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
-        values: impl ExactSizeIterator<Item = [u32; 20]>,
-    ) -> Result<u32, GpuRasterError> {
-        let mut records = vec![0; values.len() * self.stride as usize];
-        for (record, values) in records.chunks_exact_mut(self.stride as usize).zip(values) {
-            for (dst, value) in record.chunks_exact_mut(4).zip(values) { dst.copy_from_slice(&value.to_le_bytes()); }
-        }
-        self.write(r, encoder, &records)
-    }
     fn flush(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
-        if self.composition.is_empty() { return Ok(()); }
-        let jobs = std::mem::take(&mut self.composition);
-        let offset = self.records(r, encoder, jobs.iter().map(|job| job.values))?;
+        if self.jobs.is_empty() { return Ok(()); }
+        let jobs = std::mem::take(&mut self.jobs);
+        let mut records = vec![0; jobs.len() * self.stride as usize];
+        for (record, job) in records.chunks_exact_mut(self.stride as usize).zip(&jobs) {
+            match job {
+                DisplayJob::Compose(job) => for (dst, value) in record.chunks_exact_mut(4).zip(job.values) { dst.copy_from_slice(&value.to_le_bytes()); },
+                DisplayJob::Resample { values, .. } => record[..values.len()].copy_from_slice(values),
+            }
+        }
+        let offset = self.write(r, encoder, &records)?;
+        let resample = &r.scene_pipelines.resample;
+        let bindings: Vec<_> = jobs.iter().enumerate().map(|(i, job)| match job {
+            DisplayJob::Resample { views, .. } => Some(resample.binding(&r.device, &self.records,
+                u64::from(offset + i as u32 * self.stride), [&views[0], &views[1], &views[0]])),
+            DisplayJob::Compose(_) => None,
+        }).collect();
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("display graph composition"), timestamp_writes: None,
         });
-        pass.set_pipeline(&r.scene_pipelines.scale.compose);
         for (i, job) in jobs.iter().enumerate() {
-            pass.set_bind_group(0, &self.record_binding, &[offset + i as u32 * self.stride]);
-            pass.set_bind_group(1, &job.binding, &[]);
-            pass.dispatch_workgroups(job.values[2].div_ceil(8), job.values[3].div_ceil(8), 1);
+            let size = match job {
+                DisplayJob::Compose(job) => {
+                    pass.set_pipeline(&r.scene_pipelines.scale.compose);
+                    pass.set_bind_group(0, &self.record_binding, &[offset + i as u32 * self.stride]);
+                    pass.set_bind_group(1, &job.binding, &[]);
+                    [job.values[2], job.values[3]]
+                }
+                DisplayJob::Resample { size, .. } => {
+                    pass.set_pipeline(&resample.area);
+                    pass.set_bind_group(0, bindings[i].as_ref().unwrap(), &[]);
+                    *size
+                }
+            };
+            pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
         }
         drop(pass);
-        for mut job in jobs { job.leases.clear(); }
+        for mut job in jobs { if let DisplayJob::Compose(job) = &mut job { job.leases.clear(); } }
         Ok(())
     }
 }
@@ -300,7 +320,8 @@ pub(crate) fn request(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Result<Req
     let evaluation = if native { Evaluation::Native } else { Evaluation::Display };
     let plan = view_plan(packet, level, evaluation).ok_or(GpuRasterError::InvalidExtent)?;
     let output_bytes = |p: display_mips::Plan| p.level_bytes(p.level) + p.level_bytes(p.level + 1) + 32;
-    let native_bytes = output_bytes(plan) + u64::from(PAGE_SIZE).pow(2) * 16
+    let material_pages = if targets(r, packet).any(|(_, id)| mapped_material(r, packet, id)) { Scene::MATERIAL_CACHE_PAGES as u64 } else { 0 };
+    let native_bytes = output_bytes(plan) + u64::from(PAGE_SIZE).pow(2) * 16 * (1 + material_pages)
         + if plan.bounds == PixelRect::full(plan.extent) { 0 } else { output_bytes(overview_plan(plan)) };
     if plan.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) || native_bytes > CACHE_BYTES {
         return Err(GpuRasterError::ExtentUnsupported);
@@ -411,6 +432,8 @@ fn allocation_for(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePac
     let layers = packet.layers;
     let images = if bounded(layers) { scratch_images(layers) }
         else { graph::scratch_images(packet, plan.level, r.device.working_space()).unwrap_or_else(|_| scratch_images(layers)) };
+    let material = targets(r, packet).any(|(_, id)| mapped_material(r, packet, id));
+    let images = images + u64::from(plan.level > 0 && material);
     let input = input_plan(plan, layers);
     let (source_bytes, root_mips) = targets(r, packet).fold((0, 0), |(sum, largest), (layer, id)| {
         let placement = layer_core::target_transform(layers, id);
@@ -433,7 +456,7 @@ fn allocation_for(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePac
         u64::from(PAGE_SIZE).pow(2) * 16 * (images + pixel_transform::TRANSFORM_SLOTS as u64)
     } else { input.level_bytes(input.level) * (images - 1) };
     let own = [source_bytes, output + working + root_mips + plan.level_bytes(plan.level + 1) + records + 32 + transform
-        + u64::from(PAGE_SIZE).pow(2) * 16];
+        + u64::from(PAGE_SIZE).pow(2) * 16 * (1 + u64::from(material) * Scene::MATERIAL_CACHE_PAGES as u64)];
     if plan.bounds == PixelRect::full(plan.extent) { own }
     else {
         let overview = allocation(r, overview_plan(plan), packet, sources);
@@ -466,7 +489,7 @@ fn transform_plans<'a>(r: &'a WgpuRasterizer, plan: display_mips::Plan, layers: 
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 fn source_coarse_level(plan: display_mips::Plan) -> u32 {
     display_mips::Plan::new(plan.extent).map_or(8, |p| p.level).max(plan.level + 2)
@@ -752,7 +775,8 @@ impl Cache {
             self.used.push(false);
             self.used.len() - 1
         });
-        if self.output[slot].plan != plan { self.output[slot] = Image::new(r, plan, "display composition level"); }
+        if self.output[slot].plan.size != plan.size { self.output[slot] = Image::new(r, plan, "display composition level"); }
+        self.output[slot].plan = plan;
         self.used[slot] = true;
         slot
     }
@@ -1090,6 +1114,11 @@ struct Evaluator<'a> {
     input: display_mips::Plan,
     tiled: bool,
 }
+fn mapped_material(r: &WgpuRasterizer, packet: FramePacket<'_>, id: LayerId) -> bool {
+    r.paint_layers.iter().any(|layer| layer.id == id && layer.watercolor.is_some())
+        && (r.moving_layer == Some(id) || layer_core::target_transform(packet.layers, id) != layer_core::Affine::IDENTITY)
+}
+
 impl Evaluator<'_> {
     fn working_plan(&self) -> display_mips::Plan {
         if self.tiled {
@@ -1120,6 +1149,28 @@ impl Evaluator<'_> {
         paint_transform::texel_rect(self.region.window_local(plan.bounds), 1 << plan.level)
     }
     fn source(&mut self, id: LayerId, placement: layer_core::Affine, extent: [u32; 2], outside: f32) -> Result<Value, GpuRasterError> {
+        let value = self.source_pixels(id, placement, extent, outside)?;
+        if self.cache.plan.level == 0 || !mapped_material(self.r, self.packet, id)
+            || self.r.transforms.as_ref().is_some_and(|t| t.display_source(id)) { return Ok(value); }
+        let (bounds, radius) = self.scene.material_coverage(self.r, id);
+        if bounds.is_empty() { return Ok(value); }
+        let bounds = placement.bounds(bounds.outset(layer_core::Interpolation::Linear.support() as f32))
+            .outset((radius + 2 * (1 << self.cache.plan.level)) as f32);
+        let region = self.region.intersect(paint_transform::aligned(pixel_rect(bounds, self.packet.document_extent), PAGE_SIZE, self.packet.document_extent));
+        if region.is_empty() { return Ok(value); }
+        let value = self.materialize(value, None)?;
+        self.commands.flush(self.r, self.encoder)?;
+        let layer = self.packet.layers.iter().find(|layer| layer.id == id).unwrap();
+        let pages: Vec<_> = page_coordinates(region).collect();
+        let plan = display_mips::Plan::window(self.packet.document_extent, self.cache.plan.level, region);
+        let slot = self.cache.allocate(self.r, plan);
+        let view = self.cache.output[slot].view.clone();
+        self.scene.reduce_color_pages(self.commands, self.r, self.packet, self.encoder,
+            layer, plan, &view, &pages, Some(placement))?;
+        let material = Target { view, slot: Some(Slot::Cache(slot)), plan }.value();
+        self.draw(material, value, layer_core::LayerBlend::Normal, 128 | 16384, None)
+    }
+    fn source_pixels(&mut self, id: LayerId, placement: layer_core::Affine, extent: [u32; 2], outside: f32) -> Result<Value, GpuRasterError> {
         let encode = self.packet.blend_space == layer_core::BlendSpace::Perceptual
             && self.packet.layers.iter().any(|layer| layer.id == id);
         if self.r.transforms.as_ref().is_some_and(|t| t.display_source(id)) {
@@ -1162,8 +1213,9 @@ impl Evaluator<'_> {
         if plan.bounds.is_empty() { return Ok(Value::Color([outside; 4])); }
         let encode = encode && self.scene.scale_sources.entries[&id].blend_space == layer_core::BlendSpace::Linear;
         if self.cache.streamed_sources && placement == layer_core::Affine::IDENTITY {
-            let cached = self.scene.scale_sources.entries[&id].levels.get(&plan.level).filter(|level|
-                self.region.intersect(level.image.plan.bounds) == self.region
+            let source = &self.scene.scale_sources.entries[&id];
+            let cached = source.levels.get(&plan.level).filter(|level|
+                source.accepts(level) && self.region.intersect(level.image.plan.bounds) == self.region
                     && page_coordinates(self.region).all(|c| level.valid.contains(&c)));
             if let Some(level) = cached {
                 return Ok(Value::Image { view: level.image.view.clone(), slot: None, opacity: 1., plan: level.image.plan, preview: None, encode });
@@ -1174,7 +1226,7 @@ impl Evaluator<'_> {
             self.scene.scale_sources.entries[&id].derive_pages(self.commands, self.r, self.encoder, target.plan, &target.view, &mut missing)?;
             let pages: Vec<_> = missing.into_iter().collect();
             if let Some(layer) = self.packet.layers.iter().find(|l| l.id == id) {
-                self.scene.reduce_color_pages(self.commands, self.r, self.packet, self.encoder, layer, target.plan, &target.view, &pages)?;
+                self.scene.reduce_color_pages(self.commands, self.r, self.packet, self.encoder, layer, target.plan, &target.view, &pages, None)?;
             } else {
                 let mask = self.packet.layers.iter().find_map(|l| l.mask.as_ref().filter(|m| m.id == id)).unwrap();
                 self.scene.reduce_mask_pages(self.commands, self.r, self.encoder, mask, target.plan, &target.view, &pages)?;
@@ -1209,21 +1261,19 @@ impl Evaluator<'_> {
         result?;
         Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
-    fn resample(&mut self, value: Value) -> Result<Value, GpuRasterError> {
-        if let Value::Transform(source) = value { return self.transform(source, None); }
+    fn resample(&mut self, value: Value, output: Option<Target>) -> Result<Value, GpuRasterError> {
+        if let Value::Transform(source) = value { return self.transform(source, output); }
         let Value::Placed(placed) = value else { return Ok(value); };
-        let Target { view, slot, plan } = self.target();
+        let Target { view, slot, plan } = output.unwrap_or_else(|| self.target());
         let texels = self.texels(plan);
         let values = placed.record(plan, texels)?;
-        let offset = self.commands.write(self.r, self.encoder, &values)?;
-        let resample = &self.r.scene_pipelines.resample;
-        let binding = resample.binding(&self.r.device, &self.commands.records, u64::from(offset), [&placed.view, &view, &placed.view]);
-        resample.encode(self.encoder, &binding, texels);
+        self.commands.push(self.r, self.encoder, DisplayJob::Resample {
+            values, views: [placed.view, view.clone()], size: [texels[2], texels[3]],
+        })?;
         Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
     fn materialize(&mut self, value: Value, output: Option<Target>) -> Result<Value, GpuRasterError> {
-        if let Value::Transform(source) = value { return self.transform(source, output); }
-        let value = self.resample(value)?;
+        if matches!(value, Value::Transform(_) | Value::Placed(_)) { return self.resample(value, output); }
         if !value.needs_encode() && value.preview().is_none() && value.opacity() == 1. && output.as_ref().map_or_else(|| value.slot().is_some(), |target| value.view() == Some(&target.view)) { return Ok(value); }
         let (front, back) = if matches!(value, Value::Color(_)) { (Value::Color([0.; 4]), value) } else { (value, Value::Color([0.; 4])) };
         self.draw(front, back, layer_core::LayerBlend::Normal, 0, output)
@@ -1236,16 +1286,16 @@ impl Evaluator<'_> {
                 return if output.is_some() { self.transform(source, output) } else { Ok(Value::Transform(source)) };
             }
             (Value::Placed(mut placed), Value::Color(color))
-                if output.is_none() && blend == layer_core::LayerBlend::Normal && flags == 0 => {
+                if blend == layer_core::LayerBlend::Normal && flags == 0 => {
                 let alpha = placed.backdrop[3];
                 placed.backdrop = std::array::from_fn(|i| placed.backdrop[i] + color[i] * (1. - alpha));
-                return Ok(Value::Placed(placed));
+                return if output.is_some() { self.resample(Value::Placed(placed), output) } else { Ok(Value::Placed(placed)) };
             }
             pair => pair,
         };
-        let front = self.resample(front)?;
+        let front = self.resample(front, None)?;
         let front = if matches!(front, Value::Color(c) if c != [0.; 4]) { self.materialize(front, None)? } else { front };
-        let back = self.resample(back)?;
+        let back = self.resample(back, None)?;
         let Target { view, slot, plan } = output.unwrap_or_else(|| self.target());
         let [x, y, width, height] = self.texels(plan);
         let mut values = [0; 20];
@@ -1272,7 +1322,7 @@ impl Evaluator<'_> {
         let leases = [front.slot(), back.slot()].into_iter().filter_map(|slot| match slot {
             Some(Slot::Decoded(lease)) => Some(lease), _ => None,
         }).collect();
-        self.commands.compose(self.r, self.encoder, Composition { values, binding, leases })?;
+        self.commands.push(self.r, self.encoder, DisplayJob::Compose(Composition { values, binding, leases }))?;
         for slot in [front.slot(), back.slot()] { self.release(slot); }
         Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }

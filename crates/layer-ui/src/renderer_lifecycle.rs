@@ -238,6 +238,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.rendering_suspended {
             self.engine.recover_failed_rasters().map_err(error)?;
         }
+        self.discard_render_requests();
         let previous = self.engine.replace_backend(renderer).map_err(error)?;
         self.input_pending = self.engine.has_pending_input();
         self.refresh_file_state();
@@ -246,7 +247,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.host_error = None;
         }
         self.rendering_suspended = false;
-        self.discard_render_requests();
         if let Some(pending) = &mut self.pending_filters {
             pending.validated = false;
         }

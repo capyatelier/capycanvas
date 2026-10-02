@@ -440,25 +440,29 @@ impl SnapshotRenderer {
             .intersect(PixelRect::full(self.extent));
         let mut selected = HashMap::new();
         let mut masks = HashMap::new();
+        let material_pages = if self.backing.values().any(|data| data.watercolor.is_some()) {
+            scene::Scene::MATERIAL_CACHE_PAGES as u64
+        } else { 0 };
         let mut planned = scene::Scene::capture_image_bound(&self.layers, window)
             .saturating_add(reserved_bytes)
             .saturating_add(region.area().saturating_mul(32)) // output and mapping
-            .saturating_add((self.layers.len() as u64 * 3 + 32) * 256 * 256 * 16);
+            .saturating_add((self.layers.len() as u64 * 3 + 32 + material_pages) * 256 * 256 * 16);
         for layer in &self.layers {
             for (id, mask) in
                 std::iter::once((layer.id, false)).chain(layer.masks().map(|m| (m.id, true)))
             {
                 let extent = layer.local_extent(self.extent);
+                let original = &self.backing[&id];
+                let halo = if mask { 0. } else { original.watercolor.map_or(0., |style| 2. * style.edge_width.clamp(1., 16.)) };
                 let inverse = layer_core::target_transform(&self.layers, id)
                     .inverse()
                     .ok_or(GpuRasterError::InvalidTransform(
                         "Invalid snapshot layer placement",
                     ))?;
                 let local = pixel_rect(
-                    inverse.bounds(pages.to_rect()),
+                    inverse.bounds(pages.to_rect().outset(halo)).outset(if mask { 1. } else { PAGE_SIZE as f32 }),
                     extent,
-                )
-                .expand(if mask { 1 } else { PAGE_SIZE }, extent);
+                );
                 if mask {
                     masks.insert(id, local);
                     if layer.mask.as_ref().is_some_and(|m| m.initial.is_some()) {
@@ -469,7 +473,6 @@ impl SnapshotRenderer {
                             .saturating_add(page_coordinates(local).count() as u64 * 256 * 256 * 5);
                     }
                 }
-                let original = &self.backing[&id];
                 let data = RasterData {
                     watercolor: original.watercolor,
                     tiles: original
@@ -880,6 +883,8 @@ impl SnapshotPreview {
 }
 
 mod bounds;
-pub use bounds::ContentBoundsJob;
+mod transform_pixels;
+mod jobs;
+pub use jobs::SnapshotJob;
 #[cfg(target_arch = "wasm32")]
-pub use bounds::BrowserContentBounds;
+pub use jobs::BrowserSnapshot;

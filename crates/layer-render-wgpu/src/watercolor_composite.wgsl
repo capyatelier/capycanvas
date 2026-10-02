@@ -25,15 +25,11 @@ struct Target {
 @group(2) @binding(2) var color_right: texture_2d<f32>;
 @group(2) @binding(3) var color_up: texture_2d<f32>;
 @group(2) @binding(4) var color_down: texture_2d<f32>;
-@group(2) @binding(5) var wetness_00: texture_2d<f32>;
-@group(2) @binding(6) var wetness_10: texture_2d<f32>;
-@group(2) @binding(7) var wetness_20: texture_2d<f32>;
-@group(2) @binding(8) var wetness_01: texture_2d<f32>;
-@group(2) @binding(9) var wetness_11: texture_2d<f32>;
-@group(2) @binding(10) var wetness_21: texture_2d<f32>;
-@group(2) @binding(11) var wetness_02: texture_2d<f32>;
-@group(2) @binding(12) var wetness_12: texture_2d<f32>;
-@group(2) @binding(13) var wetness_22: texture_2d<f32>;
+@group(2) @binding(5) var wetness_center: texture_2d<f32>;
+@group(2) @binding(6) var wetness_left: texture_2d<f32>;
+@group(2) @binding(7) var wetness_right: texture_2d<f32>;
+@group(2) @binding(8) var wetness_up: texture_2d<f32>;
+@group(2) @binding(9) var wetness_down: texture_2d<f32>;
 
 @vertex
 fn vertex_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
@@ -58,16 +54,31 @@ fn load_color(index: i32, coordinate: vec2<i32>) -> vec4<f32> {
 
 fn load_wetness(index: i32, coordinate: vec2<i32>) -> f32 {
     switch index {
-        case 0: { return textureLoad(wetness_00, coordinate, 0).r; }
-        case 1: { return textureLoad(wetness_10, coordinate, 0).r; }
-        case 2: { return textureLoad(wetness_20, coordinate, 0).r; }
-        case 3: { return textureLoad(wetness_01, coordinate, 0).r; }
-        case 4: { return textureLoad(wetness_11, coordinate, 0).r; }
-        case 5: { return textureLoad(wetness_21, coordinate, 0).r; }
-        case 6: { return textureLoad(wetness_02, coordinate, 0).r; }
-        case 7: { return textureLoad(wetness_12, coordinate, 0).r; }
-        default: { return textureLoad(wetness_22, coordinate, 0).r; }
+        case 0: { return textureLoad(wetness_center, coordinate, 0).r; }
+        case 1: { return textureLoad(wetness_left, coordinate, 0).r; }
+        case 2: { return textureLoad(wetness_right, coordinate, 0).r; }
+        case 3: { return textureLoad(wetness_up, coordinate, 0).r; }
+        default: { return textureLoad(wetness_down, coordinate, 0).r; }
     }
+}
+
+fn neighbor_index(page_offset: vec2<i32>) -> i32 {
+    if all(page_offset == vec2<i32>(0, 0)) {
+        return 0;
+    }
+    if all(page_offset == vec2<i32>(-1, 0)) {
+        return 1;
+    }
+    if all(page_offset == vec2<i32>(1, 0)) {
+        return 2;
+    }
+    if all(page_offset == vec2<i32>(0, -1)) {
+        return 3;
+    }
+    if all(page_offset == vec2<i32>(0, 1)) {
+        return 4;
+    }
+    return -1;
 }
 
 fn color_at(document_position: vec2<f32>) -> vec4<f32> {
@@ -77,24 +88,10 @@ fn color_at(document_position: vec2<f32>) -> vec4<f32> {
     }
     let relative = document_position - render_target.origin_extent.xy;
     let page_offset = vec2<i32>(floor(relative / 256.0));
+    let index = neighbor_index(page_offset);
+    if index < 0 { return vec4<f32>(0.0); }
     let local = vec2<i32>(floor(relative - vec2<f32>(page_offset) * 256.0));
-    let coordinate = clamp(local, vec2<i32>(0), vec2<i32>(255));
-    if all(page_offset == vec2<i32>(0, 0)) {
-        return load_color(0, coordinate);
-    }
-    if all(page_offset == vec2<i32>(-1, 0)) {
-        return load_color(1, coordinate);
-    }
-    if all(page_offset == vec2<i32>(1, 0)) {
-        return load_color(2, coordinate);
-    }
-    if all(page_offset == vec2<i32>(0, -1)) {
-        return load_color(3, coordinate);
-    }
-    if all(page_offset == vec2<i32>(0, 1)) {
-        return load_color(4, coordinate);
-    }
-    return vec4<f32>(0.0);
+    return load_color(index, clamp(local, vec2<i32>(0), vec2<i32>(255)));
 }
 
 fn wetness_at(document_position: vec2<f32>) -> f32 {
@@ -104,12 +101,11 @@ fn wetness_at(document_position: vec2<f32>) -> f32 {
     }
     let relative = document_position - render_target.origin_extent.xy;
     let page_offset = vec2<i32>(floor(relative / 256.0));
-    if any(page_offset < vec2<i32>(-1)) || any(page_offset > vec2<i32>(1)) {
-        return 0.0;
-    }
+    let index = neighbor_index(page_offset);
+    if index < 0 { return 0.0; }
     let local = vec2<i32>(floor(relative - vec2<f32>(page_offset) * 256.0));
     let coordinate = clamp(local, vec2<i32>(0), vec2<i32>(255));
-    return load_wetness((page_offset.y + 1) * 3 + page_offset.x + 1, coordinate);
+    return load_wetness(index, coordinate);
 }
 
 fn occupied(wetness: f32) -> f32 {
@@ -136,6 +132,7 @@ fn sample_band(
         vec2<f32>( 0.0,  1.0), vec2<f32>( 0.0, -1.0),
     );
     var band = Band(center_occupied, center_occupied, center_color.a, center_color);
+    let borrow_pigment = center_occupied < 0.5 && !working_has_color(center_color.a);
     for (var index = 0u; index < 4u; index += 1u) {
         let sample_position = world + directions[index] * radius;
         let sample_wetness = wetness_at(sample_position);
@@ -144,7 +141,7 @@ fn sample_band(
         band.maximum = max(band.maximum, sample_occupied);
         // The outside band borrows pigment only from the wet union. Nearby
         // opaque dry paint must not recolor or strengthen a watercolor halo.
-        if sample_occupied > 0.5 {
+        if borrow_pigment && sample_occupied > 0.5 {
             let sample_color = color_at(sample_position);
             if sample_color.a > band.strongest_pigment {
                 band.strongest_pigment = sample_color.a;
@@ -155,9 +152,8 @@ fn sample_band(
     return band;
 }
 
-@fragment
-fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let world = position.xy + render_target.origin_extent.xy;
+fn watercolor(position: vec2<f32>) -> vec4<f32> {
+    let world = position + render_target.origin_extent.xy;
     let center = color_at(world);
     let center_wetness = wetness_at(world);
     let center_occupied = occupied(center_wetness);
@@ -206,4 +202,15 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
     );
     let alpha = density * style.canvas_opacity.z;
     return vec4<f32>(straight * (1.0 - darken) * alpha, alpha);
+}
+
+@fragment
+fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return watercolor(position.xy);
+}
+@group(3) @binding(0) var output: texture_storage_2d<rgba32float, write>;
+@compute @workgroup_size(8, 8)
+fn composite(@builtin(global_invocation_id) pixel: vec3<u32>) {
+    if any(pixel.xy >= textureDimensions(output)) { return; }
+    textureStore(output, pixel.xy, watercolor(vec2<f32>(pixel.xy) + .5));
 }

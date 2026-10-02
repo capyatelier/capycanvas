@@ -13,8 +13,8 @@ use snapshot::TileSnapshot;
 
 pub(super) struct PaintTransforms([ImageTransformState; 2]);
 impl PaintTransforms {
-    pub(super) fn placement_pass(&self) -> PixelTransform {
-        self.0[0].color.placement_pass()
+    pub(super) fn placement_pass(&self, scalar: bool) -> PixelTransform {
+        if scalar { self.0[0].scalar.placement_pass() } else { self.0[0].color.placement_pass() }
     }
     pub fn new(device: &PipelineDevice) -> Self {
         let primary = ImageTransformState::new(device);
@@ -32,6 +32,9 @@ impl PaintTransforms {
     /// they never delay input.
     pub fn display_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 1] {
         [self.0[0].color.display.as_ref().expect("color transform")]
+    }
+    pub fn placement_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 2] {
+        [&self.0[0].color.placement_pipeline, &self.0[0].scalar.placement_pipeline]
     }
     pub fn begin_frame(&mut self) {
         for t in &mut self.0 {
@@ -150,7 +153,7 @@ impl PaintTransforms {
             let extent = r.target_extent(preview.layer);
             let placement = layer_core::target_transform(layers, preview.layer);
             let mut transform = layer_core::ImageTransform::affine(placement);
-            if magnification(placement) > 1. + 1e-4 { transform.interpolation = layer_core::Interpolation::Bicubic; }
+            if placement.magnification() > 1. + 1e-4 { transform.interpolation = layer_core::Interpolation::Bicubic; }
             let bounds = PixelRect::full(extent);
             let splitter = snapshot::Splitter::new(bounds, &transform, None, |c| !page_rect(c).intersect(bounds).is_empty())?;
             let mut jobs = Vec::new();
@@ -274,16 +277,7 @@ pub(crate) fn aligned(region: PixelRect, side: u32, extent: [u32; 2]) -> PixelRe
 /// The level of a layer's own pixels whose texels are at least as fine as
 /// those of display `level` along the axis `placement` magnifies most.
 pub(crate) fn local_level(level: u32, placement: layer_core::Affine) -> u32 {
-    (level as f32 - magnification(placement).log2()).floor().clamp(0., 4.) as u32
-}
-
-/// How far `placement` stretches layer pixels along the axis it magnifies
-/// most.
-pub(crate) fn magnification(placement: layer_core::Affine) -> f32 {
-    let [a, b, c, d, _, _] = placement.0;
-    let sum = a * a + b * b + c * c + d * d;
-    let det = (a * d - b * c).abs();
-    ((sum + (sum * sum - 4. * det * det).max(0.).sqrt()) * 0.5).sqrt()
+    (level as f32 - placement.magnification().log2()).floor().clamp(0., 4.) as u32
 }
 
 /// `transform` followed by `placement`, from texels of the layer reduced to
@@ -589,10 +583,14 @@ impl ImageTransformState {
                 .fold(PixelRect::EMPTY, |b, (c, _)| b.union(page_rect(*c)))
                 .intersect(PixelRect::full(extent))
         });
+        let planes = [layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::Wetness,
+            layer_core::raster::RasterPlane::WatercolorWetness];
         if let Some((data, _)) = &backing {
-            for key in data.tiles.keys().filter(|key| key.plane == layer_core::raster::RasterPlane::Color) {
-                if !self.original_pages[0].contains(&key.coordinate) { self.original_pages[0].push(key.coordinate); }
-                self.source_bounds[0] = self.source_bounds[0].union(page_rect(key.coordinate).intersect(PixelRect::full(extent)));
+            for (i, plane) in planes.iter().enumerate() {
+                for key in data.tiles.keys().filter(|key| key.plane == *plane) {
+                    if !self.original_pages[i].contains(&key.coordinate) { self.original_pages[i].push(key.coordinate); }
+                    self.source_bounds[i] = self.source_bounds[i].union(page_rect(key.coordinate).intersect(PixelRect::full(extent)));
+                }
             }
         }
         if let Some(original) = &original {
@@ -636,7 +634,7 @@ impl ImageTransformState {
             encoder.copy_buffer_to_buffer(source, 0, target, 0, source.size());
         }
         for (channel, pages) in pages.into_iter().enumerate() {
-            if channel == 0 || !pages.is_empty() {
+            if channel == 0 || !self.source_bounds[channel].is_empty() {
                 let bounds = if self.source_bounds[channel].is_empty() {
                     source_bounds
                 } else {
@@ -645,7 +643,7 @@ impl ImageTransformState {
                 self.sources[channel] = Some(TileSnapshot {
                     pages: pages.into_iter().collect(),
                     original: if channel == 0 { original.clone() } else { None },
-                    backing: if channel == 0 { backing.clone() } else { None },
+                    backing: backing.as_ref().map(|(data, space)| (data.clone(), *space, planes[channel])),
                     bounds,
                 });
             }
@@ -955,6 +953,7 @@ impl ImageTransformState {
                     sources: &job.sources,
                     texels: [0; 4],
                     unmoved: *unmoved,
+                    clear: false,
                 })
             })
             .collect();
@@ -1335,7 +1334,7 @@ impl ImageTransformState {
         let texels = texel_rect(region.window_local(target.bounds), side);
         let values = self.display_record(next, extent, placement, display, target, texels)?;
         if let Some(map) = &mesh {
-            let tolerance = 0.5 * side as f32 / magnification(placement).max(1e-6);
+            let tolerance = 0.5 * side as f32 / placement.magnification().max(1e-6);
             let geometry = self.mesh_geometry(map, Some(tolerance));
             self.display_mesh.upload(r, encoder, &geometry)?;
         }
@@ -1398,6 +1397,7 @@ impl ImageTransformState {
                 sources: &job.sources,
                 texels: texels(job.region),
                 unmoved: false,
+                clear: false,
             })
             .collect();
         let offset = self
