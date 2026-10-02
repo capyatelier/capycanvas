@@ -108,13 +108,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     TextBlock camera;
     Grid cameraSlot;
     Button fitCamera{nullptr},zenCapy{nullptr};Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
-    Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
+    Impl(Dispatch send,J catalog,std::shared_ptr<CapyLocalization> localization,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
         data->input=std::move(input);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
         data->popupChanged=std::move(popupChanged);
         data->thumbnails=CreateLayerThumbnailCache(previews);
         data->query=previews;data->previews=CreateFilterPreviewCache(std::move(previews));
-        data->send=std::move(send);data->catalog=catalog;data->glassSurfaces=true;
+        data->localization=localization;data->send=std::move(send);data->catalog=catalog;data->glassSurfaces=true;
         AutomationProperties::SetName(root,L"Drawing workspace");
         camera.FontSize(num(catalog,L"text_size_pt",11)*96./72.);
         camera.FontWeight(Windows::UI::Text::FontWeights::Normal());
@@ -208,7 +208,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
             group.header.Visibility(flag(geometry,L"tabs_visible")?Visibility::Visible:Visibility::Collapsed);
         }
-        if(group.tabScroll&&group.tabScroll.ActualWidth()>0)fitAutomaticTabs(group.automatic,group.tabScroll.ActualWidth(),tabWidths);
+        if(group.tabScroll&&group.tabScroll.ActualWidth()>0)fitAutomaticTabs(data,group.automatic,group.tabScroll.ActualWidth(),tabWidths);
         group.body=std::make_unique<PanelBody>(data,panel,geometry,
             [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();},gestures);
         auto body=group.body->Root();Grid::SetRow(body,1);frame.Children().Append(body);
@@ -670,7 +670,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             J source;for(auto value:data->drawerSources){auto anchor=object(value.GetObject(),L"anchor");
                 if(str(anchor,L"kind")==L"tile"&&str(anchor,L"panel")==str(group.geometry,L"active"))source=value.GetObject();}
             std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
-            if(source.Size()&&!expanded){auto square=sourceCorners(source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
+            if(source.Size()&&!expanded){auto square=sourceCorners(data,source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
             auto key=O({{L"expansion",group.presented},{L"tabbed",B(tabbed)},{L"source",source},{L"transparent",B(data->transparent())},{L"bounds",bounds},{L"slots",slots},
                 {L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
@@ -739,7 +739,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(!zenCapySource){zenCapySource=true;gestures->Source(zenCapy,{},O({{L"kind",S(L"zen_mode")}}),false);}
     }
     bool zenCapySource=false;
-    void fitTabs(uint32_t id){if(auto found=groups.find(id);found!=groups.end()&&found->second.tabScroll)fitAutomaticTabs(found->second.automatic,found->second.tabScroll.ActualWidth(),tabWidths);}
+    void fitTabs(uint32_t id){if(auto found=groups.find(id);found!=groups.end()&&found->second.tabScroll)fitAutomaticTabs(data,found->second.automatic,found->second.tabScroll.ActualWidth(),tabWidths);}
     void publishOverviews(){
         A slots;
         for(auto const& [id,group]:groups)appendGroupOverviews(slots,group);
@@ -771,7 +771,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             to_hstring(int(std::round(num(view,L"rotation")*180/3.141592653589793)))+L"°");
     }
 };
-WorkspaceView::WorkspaceView(Dispatch send,Json catalog,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):impl(std::make_shared<Impl>(std::move(send),catalog,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input))){impl->init();}
+WorkspaceView::WorkspaceView(Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):impl(std::make_shared<Impl>(std::move(send),catalog,localization,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input))){impl->init();}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
 bool WorkspaceView::Apply(Json const& snapshot){return impl->apply(snapshot);}

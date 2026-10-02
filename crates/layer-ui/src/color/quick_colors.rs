@@ -4,12 +4,14 @@ use super::*;
 #[derive(Clone, Debug, Serialize)]
 pub struct QuickColorView {
     pub white: bool,
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub rgba: [f32; 4],
     pub selected: bool,
 }
 impl ColorState {
-    pub fn quick_colors(&self) -> [QuickColorView; 2] {
+    #[cfg(test)]
+    pub fn quick_colors(&self) -> [QuickColorView; 2] { self.quick_colors_localized(&crate::Localizer::shared(crate::UiLanguage::English)) }
+    pub fn quick_colors_localized(&self, localizer: &crate::Localizer) -> [QuickColorView; 2] {
         [false, true].map(|white| {
             let color = if white {
                 RgbColor::WHITE
@@ -18,11 +20,7 @@ impl ColorState {
             };
             QuickColorView {
                 white,
-                label: if white {
-                    "Paint with white"
-                } else {
-                    "Paint with black"
-                },
+                label: localizer.text(if white { crate::MessageId::NATIVE_COLOR_PAINT_WHITE } else { crate::MessageId::NATIVE_COLOR_PAINT_BLACK }),
                 rgba: color.rgba,
                 selected: self.slot == ColorSlot::Temporary && self.temporary == color,
             }

@@ -11,6 +11,17 @@ initialization error instead of a canvas.
 The native Gradle build tracks shared Rust, filter assets and Fluent catalogs as
 inputs. Catalog-only changes rebuild the embedded native UI text.
 
+The render worker supplies saved settings and the ordered application resource
+locales before shared launch creates the first localization context or GPU.
+Android retains that first context for the process, including Activity, surface and
+editor recreation. The active bootstrap view supplies startup captions and a widget locale context;
+system fonts retain Android's native fallback. Settings language changes take
+effect after restart. `locales_config.xml` advertises only shared shipped languages,
+and the Rust launch test rejects inventory drift. Text fields retain native
+composition ranges; editor key captures yield while preedit or IME key events own
+input. InputConnection fixtures check that boundary, independently of checks with
+a real Japanese, Chinese or Korean input method.
+
 JNI result handling lives in `native/src/android.rs`: `or_throw` reports
 `IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
 pixels for Kotlin.

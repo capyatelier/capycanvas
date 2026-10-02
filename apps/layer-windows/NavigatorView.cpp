@@ -36,7 +36,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
     }
     void init(){
         auto weak=weak_from_this();
-        AutomationProperties::SetName(root,L"Navigator panel");
+        AutomationProperties::SetName(root,data->caption(L"color",L"navigator_panel"));
         surround.Fill(data->brush(L"bg"));surround.IsHitTestVisible(false);
         root.Children().Append(surround);
         content.Margin({8,8,8,8});content.RowSpacing(4);content.VerticalAlignment(VerticalAlignment::Top);
@@ -44,7 +44,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
         RowDefinition buttonsRow;buttonsRow.Height({32,GridUnitType::Pixel});content.RowDefinitions().Append(buttonsRow);
         overview.Background(clear());overview.Height(220);
         overview.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetName(overview,L"Navigator overview");
+        AutomationProperties::SetName(overview,data->caption(L"color",L"navigator_overview"));
         AutomationProperties::SetAutomationId(overview,L"navigator-overview");
         content.Children().Append(overview);
         for(int i=0;i<6;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});actions.ColumnDefinitions().Append(column);}
@@ -59,7 +59,7 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
             Grid::SetColumn(pick,column++);actions.Children().Append(pick);
             bindings.emplace_back([data=data,id,pick]{auto command=find(array(data->state,L"commands"),L"id",id);
                 pick.IsEnabled(flag(command,L"enabled"));pick.Background(flag(command,L"selected")?selected(data):clear());
-                AutomationProperties::SetItemStatus(pick,flag(command,L"selected")?L"Selected":L"");});
+                AutomationProperties::SetItemStatus(pick,flag(command,L"selected")?data->caption(L"search",L"selected"):L"");});
         }
         Grid::SetRow(actions,1);content.Children().Append(actions);root.Children().Append(content);
         overview.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){

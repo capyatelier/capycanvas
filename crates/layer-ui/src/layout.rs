@@ -739,27 +739,8 @@ impl Panel {
         Self::SculptSets,
         Self::FilterTypes,
     ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Toolbar => "Tools",
-            Self::Commands => "Commands",
-            Self::Brushes => "Tool Set",
-            Self::BrushSets => "Brushes",
-            Self::FilterTypes => "Filter Type",
-            Self::SculptSets => "Sculpting",
-            Self::Tools => "Tools",
-            Self::ToolSettings => "Tool",
-            Self::Color => "Color",
-            Self::Palettes => "Palettes",
-            Self::Sizes => "Brush size",
-            Self::Layers => "Layers",
-            Self::Adjustments => "Filters",
-            Self::Properties => "Properties",
-            Self::Stats => "Diagnostics",
-            Self::Navigator => "Navigator",
-            Self::Proof => "Proof",
-            Self::CustomToolbar(_) => "Toolbar",
-        }
+    pub fn canonical_label(self) -> std::sync::Arc<str> {
+        self.localized_label(&crate::Localizer::shared(crate::UiLanguage::English))
     }
     pub fn icon(self) -> &'static str {
         match self {
@@ -4642,8 +4623,8 @@ mod tests {
         assert_eq!(tools[13].control, ToolbarControl::Divider);
         assert_eq!(tools.last().unwrap().control, ToolbarControl::Color);
         let settings_group = layout.panel_group(Panel::ToolSettings).unwrap();
-        assert_eq!(layout.panel(Panel::ToolSettings).unwrap().title(), "Tool");
-        assert_eq!(crate::PanelControl::ToolSettings.label(), "Tool");
+        assert_eq!(layout.panel(Panel::ToolSettings).unwrap().canonical_title(), "Tool");
+        assert_eq!(crate::PanelControl::ToolSettings.canonical_label().as_ref(), "Tool");
         let DockNode::Tabs { panels, active, .. } = layout.node(settings_group).unwrap() else {
             panic!("Tool tab group");
         };
@@ -4755,7 +4736,7 @@ mod tests {
             .restore_builtin_toolbar(Panel::Commands, None)
             .unwrap();
         assert_eq!(layout.panel(Panel::Toolbar).unwrap(), &old_tools);
-        assert_eq!(layout.panel(custom).unwrap().title(), "Commands");
+        assert_eq!(layout.panel(custom).unwrap().canonical_title(), "Commands");
         assert!(layout.panel(Panel::Commands).unwrap().custom_name().is_none());
         for language in crate::UiLanguage::ALL {
             let localization = crate::Localizer::shared(language);

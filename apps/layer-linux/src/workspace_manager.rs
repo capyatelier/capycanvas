@@ -49,11 +49,13 @@ pub(crate) struct NativeWorkspaces {
     close_prompt: Cell<bool>,
     focused: RefCell<Option<layer_workspace::FocusTarget>>,
     switcher_revision: Cell<u64>,
+    status_key: RefCell<Option<(bool, bool, usize, String, Option<String>)>>,
     #[cfg(test)]
     paused: Cell<bool>,
 }
 impl NativeWorkspaces {
     pub fn new() -> Self {
+        let localization = crate::launch_localization();
         let directory = std::env::var_os("CAPY_WORKSPACE_DIR")
             .map(std::path::PathBuf::from)
             .or_else(|| {
@@ -73,12 +75,12 @@ impl NativeWorkspaces {
         label.set_xalign(0.);
         label.set_hexpand(true);
         label.set_wrap(true);
-        let retry = gtk::Button::with_label("Retry");
+        let retry = gtk::Button::with_label(&localization.text(layer_ui::MessageId::WORKSPACE_ACTION_RETRY_STORAGE));
         retry.set_widget_name("workspace-save-retry");
         retry.set_visible(false);
         root.append(&label);
         root.append(&retry);
-        let recovery = gtk::Button::with_label("Save as New Workspace…");
+        let recovery = gtk::Button::with_label(&localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SAVE_AS_NEW_WORKSPACE));
         recovery.set_visible(false);
         root.append(&recovery);
         root.set_visible(store.is_some());
@@ -101,6 +103,7 @@ impl NativeWorkspaces {
             close_prompt: Cell::new(false),
             focused: RefCell::new(None),
             switcher_revision: Cell::new(0),
+            status_key: RefCell::new(None),
             #[cfg(test)]
             paused: Cell::new(false),
         }
@@ -179,7 +182,7 @@ impl NativeWorkspaces {
         let Some(store) = self.store.borrow_mut().take() else {
             return;
         };
-        let mut controller = Controller::new(store, Platform::Gtk, now_ms());
+        let mut controller = Controller::new_localized(store, Platform::Gtk, now_ms(), w.localization.clone());
         let owner = controller.manager.owner.id.clone();
         let pending = Arc::new(AtomicBool::new(false));
         let target = owner.clone();
@@ -271,7 +274,7 @@ impl NativeWorkspaces {
             match controller.input(session, input.take().unwrap(), now_ms()) {
                 Ok(change) => change,
                 Err(error) => {
-                    controller.view.error = Some(error.to_string());
+                    controller.view.error = Some(error.localized_message(session.localization()));
                     UiChange::default()
                 }
             }
@@ -315,7 +318,7 @@ impl NativeWorkspaces {
         *self.view.borrow_mut() = view.clone();
         w.surface
             .update_state(&[gtk::accessible::State::Busy(view.busy)]);
-        self.update_status(&view);
+        self.update_status(w, &view);
         self.update_switcher();
         self.ui.render(w, &view);
         if view.ready
@@ -350,7 +353,7 @@ impl NativeWorkspaces {
                                 w.workspaces.send(
                                 &w,
                                 WorkspaceInput::FocusFailed {
-                                    error: "This workspace is open in another application window. Close it there or try again after it closes.".into(),
+                                    error: w.localization.text(layer_ui::MessageId::WORKSPACE_REFUSAL_THIS_WORKSPACE_IS_OPEN_IN_ANOTHER_WINDOW).to_string(),
                                 },
                             )
                             }
@@ -371,49 +374,31 @@ impl NativeWorkspaces {
             }
         }
     }
-    fn update_status(&self, view: &WorkspaceView) {
-        if self.controller.borrow().is_none() {
-            return;
-        }
-        let name = if view.name.is_empty() {
-            "My Workspace"
-        } else {
-            &view.name
-        };
+    fn update_status(&self, w: &Rc<Workspace>, view: &WorkspaceView) {
+        if self.controller.borrow().is_none() { return; }
+        if self.status_key.borrow().as_ref().is_some_and(|key| key.0 == view.ready && key.1 == view.busy && key.2 == view.interrupted as usize && key.3 == view.name && key.4 == view.error) { return; }
+        *self.status_key.borrow_mut() = Some((view.ready, view.busy, view.interrupted as usize, view.name.clone(), view.error.clone()));
         if let Some(error) = &view.error {
-            self.recovery.set_label("Save as New Workspace…");
+            self.recovery.set_label(&w.localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SAVE_AS_NEW_WORKSPACE));
             self.root.set_visible(true);
-            self.label.set_text(&format!("{name} — {error}"));
+            self.label.set_text(error);
             self.label.add_css_class("error");
             self.retry.set_visible(true);
             self.recovery.set_visible(true);
         } else if view.interrupted > 0 && !view.busy {
-            self.recovery.set_label("Recover Changes…");
+            let caption = w.localization.text(layer_ui::MessageId::WORKSPACE_ACTION_RECOVER_INTERRUPTED_CHANGES);
+            self.recovery.set_label(&caption);
             self.root.set_visible(true);
             self.retry.set_visible(false);
             self.recovery.set_visible(true);
             self.label.remove_css_class("error");
-            self.label.set_text(&format!(
-                "{} unsaved changes can be recovered.",
-                view.interrupted
-            ));
+            self.label.set_text(&format!("{} · {}", view.interrupted, caption));
         } else {
-            // Routine switches and autosaves need no flashing status message.
-            // Keep startup and actionable recovery visible.
             self.root.set_visible(!view.ready);
             self.label.remove_css_class("error");
             self.retry.set_visible(false);
             self.recovery.set_visible(false);
-            self.label.set_text(&format!(
-                "{name} · {}",
-                if !view.ready {
-                    "Opening workspace…"
-                } else if view.dirty || view.saving {
-                    "Saving changes…"
-                } else {
-                    "Changes saved automatically"
-                }
-            ));
+            if view.ready { self.label.set_text(""); } else { self.label.set_text(&w.localization.text(layer_ui::MessageId::NATIVE_DIALOG_LOADING)); }
         }
     }
     /// Return true while the close must wait for acknowledged workspace writes.

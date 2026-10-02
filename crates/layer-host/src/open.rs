@@ -84,7 +84,7 @@ impl OpenEnvironment {
         cancelled: impl Fn() -> bool,
     ) -> Result<Box<UiSession<Renderer>>, String> {
         project.validate(self.limits())?;
-        self.admission.admit(&project)?;
+        self.admission.admit(&project).map_err(|reason| reason.message(&self.localization))?;
         let check = || {
             if cancelled() {
                 Err("Document operation cancelled".to_string())

@@ -250,7 +250,7 @@ try {
     Wait-Until {![CapyWindowTest]::IsWindow([IntPtr]$first.hwnd) -and @(Windows).Count -eq 1} 'Initial window did not close independently'
     if($FailPreferences -and ((Saved-Preferences).dark_base -ne $expectedDark -or (Saved-Preferences).light_base -ne '#dcecfb')){throw 'Closing retry did not preserve both windows preference edits'}
     Use-Window $second
-    (Control 'Drawing canvas' -Name).SetFocus()
+    (Control 'drawing-canvas').SetFocus()
     [CapyWindowTest]::SetForegroundWindow([IntPtr]$second.hwnd)|Out-Null
     Wait-Until {[CapyWindowTest]::GetForegroundWindow() -eq [IntPtr]$second.hwnd} 'Second window could not become active'
     [CapyWindowTest]::Check([uint32]$review.Id,[IntPtr]$second.hwnd)

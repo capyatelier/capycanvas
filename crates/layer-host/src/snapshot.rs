@@ -199,8 +199,8 @@ impl NativeHost {
 
     fn color_view(&self, colors: &layer_ui::ColorState) -> layer_ui::ColorPanelView {
         match self.ui_color {
-            crate::UiColor::Mapped => colors.view_mapped(self.session.effective_sdr_rendition()),
-            crate::UiColor::Tagged(space) => colors.view_in(space),
+            crate::UiColor::Mapped => colors.view_mapped(self.session.effective_sdr_rendition(), self.session.localization()),
+            crate::UiColor::Tagged(space) => colors.view_in_localized(space, self.session.localization()),
         }
     }
     fn swatch_preview(&self, colors: &layer_ui::ColorState, color: layer_core::color::RgbColor) -> [f32; 4] {
@@ -283,7 +283,7 @@ impl NativeHost {
             "palette_panel",
             &layer_ui::PalettePanelView::new(colors, &state.colors.library, |color| {
                 self.swatch_preview(colors, color)
-            }),
+            }, self.session.localization()),
         )?;
         let document_spec = layer_ui::new_document_spec(self.session.localization());
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,

@@ -5,6 +5,7 @@ use layer_core::color::{
 };
 use layer_color::photo::{DeliveryMetadata, ExportMetadata, MetadataKeep};
 use serde::{Deserialize, Serialize};
+use crate::color_feature_error::ColorFeatureError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportFormat {
@@ -21,6 +22,15 @@ pub enum ExportFormat {
     Webp,
 }
 impl ExportFormat {
+    pub fn localized_name(self, localizer: &crate::Localizer) -> std::sync::Arc<str> {
+        use crate::MessageId as M;
+        localizer.text(match self { Self::Exr => M::COLOR_FEATURES_EXPORT_FORMAT_EXR,
+            Self::Png => M::COLOR_FEATURES_EXPORT_FORMAT_PNG, Self::Tiff => M::COLOR_FEATURES_EXPORT_FORMAT_TIFF,
+            Self::Jpeg => M::COLOR_FEATURES_EXPORT_FORMAT_JPEG, Self::Webp => M::COLOR_FEATURES_EXPORT_FORMAT_WEBP,
+            Self::PngHdr => M::COLOR_FEATURES_EXPORT_FORMAT_PQ, Self::PngHdrMapped => M::COLOR_FEATURES_EXPORT_FORMAT_PQ_CLIPPED,
+            Self::JpegHdr | Self::JpegHdrMapped => M::COLOR_FEATURES_EXPORT_FORMAT_JPEG_HDR,
+            Self::AvifHdr | Self::AvifHdrMapped => M::COLOR_FEATURES_EXPORT_FORMAT_AVIF_HDR })
+    }
     pub fn is_hdr(self) -> bool { matches!(self, Self::Exr | Self::PngHdr | Self::PngHdrMapped | Self::JpegHdr | Self::JpegHdrMapped | Self::AvifHdr | Self::AvifHdrMapped) }
     pub fn maps_hdr_range(self) -> bool { matches!(self, Self::PngHdrMapped | Self::JpegHdrMapped | Self::AvifHdrMapped) }
     pub fn with_hdr_range_mapping(self, mapped: bool) -> Self {
@@ -117,12 +127,12 @@ pub enum ExportSize {
     },
 }
 impl ExportSize {
-    pub fn extent(&self, source: [u32; 2]) -> Result<[u32; 2], String> {
+    pub fn extent(&self, source: [u32; 2]) -> Result<[u32; 2], ColorFeatureError> {
         let validate = |size: [u32; 2]| {
             if size.into_iter().all(|v| (1..=32768).contains(&v)) {
                 Ok(())
             } else {
-                Err("Image dimensions must be between 1 and 32768 pixels".to_string())
+                Err(ColorFeatureError::ExportDimensions)
             }
         };
         validate(source)?;
@@ -186,17 +196,17 @@ impl<P> ExportRecipe<P> {
 }
 impl ExportRecipe {
     /// Validate the delivery transform from a document color on a file worker.
-    pub fn validate_for_color(&self, color: DocumentColor) -> Result<(), String> {
+    pub fn validate_for_color(&self, color: DocumentColor) -> Result<(), ColorFeatureError> {
         self.validate()?;
-        if self.format.is_hdr() && !color.depth.is_float() { return Err("HDR delivery requires an HDR document".into()); }
+        if self.format.is_hdr() && !color.depth.is_float() { return Err(ColorFeatureError::HdrDocument); }
         if layer_color::profile_channels(&self.profile.profile)? != self.profile.channels {
-            return Err("Profile channels do not match the ICC data".into());
+            return Err(ColorFeatureError::ProfileChannels);
         }
         layer_color::WorkingEncoder::new(color.space, &self.interpretation(), self.encoding)?;
         Ok(())
     }
     /// Validate the complete delivery transform and size on a file worker.
-    pub fn validate_for_document(&self, document: &layer_core::Document) -> Result<(), String> {
+    pub fn validate_for_document(&self, document: &layer_core::Document) -> Result<(), ColorFeatureError> {
         self.validate_for_color(document.color)?;
         self.output_extent([document.width, document.height])?;
         self.output_resolution(document.resolution)?;
@@ -204,13 +214,10 @@ impl ExportRecipe {
     }
     /// Delivery pixel dimensions, refused when the format's encoder cannot
     /// write them.
-    pub fn output_extent(&self, source: [u32; 2]) -> Result<[u32; 2], String> {
+    pub fn output_extent(&self, source: [u32; 2]) -> Result<[u32; 2], ColorFeatureError> {
         let extent = self.size.extent(source)?;
         if self.format == ExportFormat::Webp && extent.iter().any(|v| *v > layer_color::photo::WEBP_MAX_DIMENSION) {
-            return Err(format!(
-                "{}. Fit the size within that or choose another format.",
-                layer_color::photo::WEBP_SIZE_LIMIT
-            ));
+            return Err(ColorFeatureError::WebpLimit);
         }
         Ok(extent)
     }
@@ -263,8 +270,7 @@ impl ExportRecipe {
             metadata: self.metadata,
             ..base
         }
-        .draft(ExportDraftAction::Format(format))
-        .recipe
+        .normalized(ExportDraftAction::Format(format))
     }
     pub fn interpretation(&self) -> SourceInterpretation {
         SourceInterpretation {
@@ -283,19 +289,19 @@ impl ExportRecipe {
             profile_assumed: false,
         }
     }
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), ColorFeatureError> {
         if let ExportResolution::Ppi(value) = self.resolution
             && !(1..=65535).contains(&value)
         {
-            return Err("Resolution must be between 1 and 65535 pixels per inch".into());
+            return Err(ColorFeatureError::ExportResolution);
         }
         self.size.extent([1, 1])?;
-        self.encoding.validate(self.depth)?;
+        self.encoding.validate(self.depth).map_err(|_| ColorFeatureError::DitherDepth)?;
         if !(1..=100).contains(&self.jpeg_quality) {
-            return Err("JPEG quality must be between 1 and 100".into());
+            return Err(ColorFeatureError::ExportQuality);
         }
-        if self.clone().draft(ExportDraftAction::Refresh).recipe != *self {
-            return Err("Unsupported export combination".into());
+        if self.clone().normalized(ExportDraftAction::Refresh) != *self {
+            return Err(ColorFeatureError::ExportCombination);
         }
         Ok(())
     }
@@ -308,7 +314,7 @@ impl ExportRecipe {
     pub fn output_resolution(
         &self,
         master: Option<layer_core::ImageResolution>,
-    ) -> Result<Option<layer_core::ImageResolution>, String> {
+    ) -> Result<Option<layer_core::ImageResolution>, ColorFeatureError> {
         let value = match self.resolution {
             ExportResolution::Master => master,
             ExportResolution::Ppi(value) => Some(layer_core::ImageResolution::ppi(value)),
@@ -331,7 +337,7 @@ impl ExportRecipe {
         Ok(value)
     }
     /// The resolution and photo metadata this recipe writes for `document`.
-    pub fn delivery_metadata(&self, document: &layer_core::Document) -> Result<DeliveryMetadata, String> {
+    pub fn delivery_metadata(&self, document: &layer_core::Document) -> Result<DeliveryMetadata, ColorFeatureError> {
         Ok(DeliveryMetadata {
             resolution: self.output_resolution(document.resolution)?,
             photo: document.metadata.clone(),
@@ -356,39 +362,48 @@ pub enum ExportDraftAction {
 #[derive(Serialize)]
 pub struct MetadataChoice {
     pub value: MetadataKeep,
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
 }
 /// The export dialog's Metadata row.
 #[derive(Serialize)]
 pub struct ExportMetadataView {
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub choices: Vec<MetadataChoice>,
-    pub remove_location: &'static str,
+    pub remove_location: std::sync::Arc<str>,
     /// Remove location applies only when everything else is kept.
     pub location: bool,
     /// Whether the format carries photo metadata at all.
     pub available: bool,
-    pub note: Option<&'static str>,
+    pub note: Option<std::sync::Arc<str>>,
 }
 impl ExportMetadataView {
-    fn new(recipe: &ExportRecipe) -> Self {
+    pub fn new_localized(recipe: &ExportRecipe, localizer: &crate::Localizer) -> Self {
+        use crate::MessageId as M;
         let available = recipe.format != ExportFormat::Exr;
         Self {
-            label: "Metadata",
-            choices: MetadataKeep::ALL
-                .into_iter()
-                .map(|value| MetadataChoice { value, label: value.label() })
-                .collect(),
-            remove_location: "Remove location",
-            location: available && recipe.metadata.keep == MetadataKeep::All,
-            available,
-            note: (!available)
-                .then_some("OpenEXR keeps no camera or copyright details. Choose another format to keep them."),
+            label: localizer.text(M::COLOR_FEATURES_EXPORT_METADATA),
+            choices: MetadataKeep::ALL.into_iter().map(|value| MetadataChoice { value,
+                label: localizer.text(match value { MetadataKeep::All => M::COLOR_FEATURES_EXPORT_METADATA_ALL,
+                    MetadataKeep::CopyrightContact => M::COLOR_FEATURES_EXPORT_METADATA_COPYRIGHT,
+                    MetadataKeep::None => M::COLOR_FEATURES_EXPORT_METADATA_NONE }) }).collect(),
+            remove_location: localizer.text(M::COLOR_FEATURES_EXPORT_REMOVE_LOCATION),
+            location: available && recipe.metadata.keep == MetadataKeep::All, available,
+            note: (!available).then(|| localizer.text(M::COLOR_FEATURES_EXPORT_METADATA_EXR)),
         }
     }
 }
 #[derive(Serialize)]
+pub struct ExportChoice<T> { pub value: T, pub label: std::sync::Arc<str> }
+#[derive(Serialize)]
+pub struct ExportChoices {
+    pub formats: Vec<ExportChoice<ExportFormat>>,
+    pub depths: Vec<ExportChoice<SampleDepth>>,
+    pub backgrounds: Vec<ExportChoice<ExportBackground>>,
+    pub dithers: Vec<ExportChoice<layer_core::color::OutputDither>>,
+}
+#[derive(Serialize)]
 pub struct ExportDraft {
+    pub choices: ExportChoices,
     pub hdr: bool,
     pub clip_hdr_range: bool,
     pub format: ExportFormat,
@@ -400,8 +415,11 @@ pub struct ExportDraft {
     pub metadata: ExportMetadataView,
 }
 impl ExportRecipe {
-    pub fn draft_for_color(self, color: DocumentColor, action: ExportDraftAction) -> ExportDraft {
-        let mut draft = self.draft(action);
+    pub fn draft_localized(self, action: ExportDraftAction, localizer: &crate::Localizer) -> ExportDraft {
+        self.draft_impl(action, localizer)
+    }
+    pub fn draft_for_color_localized(self, color: DocumentColor, action: ExportDraftAction, localizer: &crate::Localizer) -> ExportDraft {
+        let mut draft = self.draft_impl(action, localizer);
         if draft.recipe.format == ExportFormat::Exr {
             draft.recipe.profile = ExportProfile::builtin(color.space);
         }
@@ -410,9 +428,12 @@ impl ExportRecipe {
             draft.formats.extend([ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::Exr,
                 ExportFormat::JpegHdr, ExportFormat::JpegHdrMapped, ExportFormat::AvifHdr, ExportFormat::AvifHdrMapped]);
         }
+        draft.choices.formats = draft.formats.iter().map(|value| ExportChoice { value: *value, label: value.localized_name(localizer) }).collect();
         draft
     }
-    pub fn draft(mut self, action: ExportDraftAction) -> ExportDraft {
+    pub fn draft_for_color_canonical(self, color: DocumentColor, action: ExportDraftAction) -> ExportDraft { self.draft_for_color_localized(color, action, &crate::Localizer::shared(crate::UiLanguage::English)) }
+    pub fn draft_canonical(self, action: ExportDraftAction) -> ExportDraft { self.draft_impl(action, &crate::Localizer::shared(crate::UiLanguage::English)) }
+    fn normalized(mut self, action: ExportDraftAction) -> Self {
         use layer_core::color::OutputDither;
         match action {
             ExportDraftAction::Refresh => (),
@@ -446,27 +467,68 @@ impl ExportRecipe {
         if eight_bit { self.depth = SampleDepth::U8; }
         if (jpeg || cmyk) && self.background == ExportBackground::Preserve { self.background = ExportBackground::White; }
         if self.depth != SampleDepth::U8 { self.encoding.dither = OutputDither::None; }
+        self
+    }
+    fn draft_impl(mut self, action: ExportDraftAction, localizer: &crate::Localizer) -> ExportDraft {
+        self = self.normalized(action);
+        use layer_core::color::OutputDither;
+        let choices = ExportFormat::sdr_choices(self.profile.channels);
+        let cmyk = self.profile.channels == ProfileChannels::Cmyk;
+        let jpeg = self.format == ExportFormat::Jpeg;
+        let eight_bit = jpeg || self.format == ExportFormat::Webp;
+        let formats: Vec<_> = if self.format.is_hdr() { vec![ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr, ExportFormat::Exr] } else { choices };
+        let depths: Vec<_> = if self.format == ExportFormat::Exr { vec![SampleDepth::F32] } else if self.format.is_hdr() { vec![SampleDepth::U16] } else if eight_bit { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] };
+        let backgrounds: Vec<_> = if self.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg) { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] } else if self.format.is_hdr() { vec![ExportBackground::Preserve] } else if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] };
+        let dithers: Vec<_> = if self.depth == SampleDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] };
+        let choices = ExportChoices {
+            formats: formats.iter().map(|value| ExportChoice {value:*value, label:value.localized_name(localizer)}).collect(),
+            depths: depths.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {SampleDepth::U8=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_8, SampleDepth::U16=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_16, SampleDepth::F16=>crate::MessageId::COLOR_FEATURES_COLOR_DEPTH_FLOAT16, SampleDepth::F32=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_FLOAT32})}).collect(),
+            backgrounds: backgrounds.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {ExportBackground::Preserve=>crate::MessageId::COLOR_FEATURES_EXPORT_KEEP_TRANSPARENCY, ExportBackground::White=>crate::MessageId::COLOR_FEATURES_EXPORT_WHITE_BACKGROUND, ExportBackground::Black=>crate::MessageId::COLOR_FEATURES_EXPORT_BLACK_BACKGROUND})}).collect(),
+            dithers: dithers.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {OutputDither::None=>crate::MessageId::COLOR_FEATURES_EXPORT_DITHER_NONE, OutputDither::Stochastic8=>crate::MessageId::COLOR_FEATURES_EXPORT_DITHER_STOCHASTIC})}).collect(),
+        };
         ExportDraft {
+            choices,
             hdr:self.format.is_hdr(),clip_hdr_range:self.format.maps_hdr_range(),format:self.format.with_hdr_range_mapping(false),
-            formats: if self.format.is_hdr() { vec![ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr, ExportFormat::Exr] } else { choices },
-            depths: if self.format == ExportFormat::Exr { vec![SampleDepth::F32] } else if self.format.is_hdr() { vec![SampleDepth::U16] } else if eight_bit { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
-            backgrounds: if self.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg) { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] } else if self.format.is_hdr() { vec![ExportBackground::Preserve] } else if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] },
-            dithers: if self.depth == SampleDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] },
-            metadata: ExportMetadataView::new(&self),
+            formats,
+            depths,
+            backgrounds,
+            dithers,
+            metadata: ExportMetadataView::new_localized(&self, localizer),
             recipe: self,
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct ExportNumericControls {
+    pub dimension: crate::NumericControl,
+    pub ppi: crate::NumericControl,
+    pub quality: crate::NumericControl,
+}
+impl Default for ExportNumericControls {
+    fn default() -> Self {
+        Self {
+            dimension: crate::NumericControl::number(1., 32768., 1., 0),
+            ppi: crate::NumericControl::number(1., 65535., 1., 0),
+            quality: crate::NumericControl::number(1., 100., 1., 0),
         }
     }
 }
 
 #[derive(Serialize)]
 pub struct ExportForm {
+    pub numeric: ExportNumericControls,
+    pub copy: crate::color_feature_copy::ExportCopy,
     pub profiles: Vec<ExportProfile>,
     pub extent: [u32; 2],
     /// The document keeps metadata from an opened photo, so the Metadata row applies.
     pub metadata: bool,
 }
 impl ExportForm {
-    pub fn new(document: &layer_core::Document) -> Self {
+    pub fn new_canonical(document: &layer_core::Document) -> Self {
+        Self::new_localized(document, &crate::Localizer::shared(crate::UiLanguage::English))
+    }
+    pub fn new_localized(document: &layer_core::Document, localizer: &crate::Localizer) -> Self {
         let mut profiles: Vec<_> = RgbSpace::ALL
             .into_iter()
             .map(ExportProfile::builtin)
@@ -485,11 +547,13 @@ impl ExportForm {
                 profiles.push(ExportProfile {
                     profile: profile.clone(),
                     channels,
-                    name: format!("Original: {}", layer.name),
+                    name: crate::color_feature_copy::named(localizer, crate::MessageId::COLOR_FEATURES_EXPORT_ORIGINAL_PROFILE, &layer.name),
                 });
             }
         }
         Self {
+            numeric: ExportNumericControls::default(),
+            copy: crate::color_feature_copy::ExportCopy::new(localizer),
             profiles,
             extent: [document.width, document.height],
             metadata: !document.metadata.is_empty(),
@@ -503,7 +567,7 @@ mod tests {
     #[test]
     fn hdr_choices_describe_only_the_fixed_delivery_contract() {
         for format in [ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::JpegHdr, ExportFormat::JpegHdrMapped, ExportFormat::AvifHdr, ExportFormat::AvifHdrMapped] {
-            let draft = ExportRecipe::web_share().draft(ExportDraftAction::Format(format));
+            let draft = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(format));
             assert_eq!(draft.formats, [ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr, ExportFormat::Exr]);
             assert_eq!(draft.depths, [SampleDepth::U16]);
             if format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg){assert_eq!(draft.backgrounds,[ExportBackground::Preserve,ExportBackground::White,ExportBackground::Black]);}else{assert_eq!(draft.backgrounds, [ExportBackground::Preserve]);}
@@ -512,13 +576,13 @@ mod tests {
             draft.recipe.validate().unwrap();
             for depth in [SampleDepth::F16, SampleDepth::F32] {
                 let color = DocumentColor { space: RgbSpace::Srgb, depth };
-                let choices = draft.recipe.clone().draft_for_color(color, ExportDraftAction::Refresh);
+                let choices = draft.recipe.clone().draft_for_color_canonical(color, ExportDraftAction::Refresh);
                 assert!(choices.formats.contains(&format), "Authored range policy must remain selectable");
             }
-            let integer = ExportRecipe::web_share().draft_for_color(DocumentColor::default(), ExportDraftAction::Refresh);
+            let integer = ExportRecipe::web_share().draft_for_color_canonical(DocumentColor::default(), ExportDraftAction::Refresh);
             assert!(!integer.formats.contains(&format));
         }
-        let sdr = ExportRecipe::web_share().draft(ExportDraftAction::Refresh);
+        let sdr = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Refresh);
         assert_eq!(sdr.formats, [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg, ExportFormat::Webp]);
         assert_eq!(sdr.depths, [SampleDepth::U8, SampleDepth::U16]);
     }
@@ -527,29 +591,29 @@ mod tests {
     fn draft_transitions_keep_supported_depth_alpha_and_dither_choices() {
         let mut recipe = ExportRecipe::further_editing(DocumentColor::default());
         recipe.encoding.dither = layer_core::color::OutputDither::Stochastic8;
-        let jpeg = recipe.draft(ExportDraftAction::Format(ExportFormat::Jpeg));
+        let jpeg = recipe.draft_canonical(ExportDraftAction::Format(ExportFormat::Jpeg));
         assert_eq!(jpeg.depths, [SampleDepth::U8]);
         assert_eq!(jpeg.recipe.depth, SampleDepth::U8);
         assert_eq!(jpeg.recipe.background, ExportBackground::White);
         jpeg.recipe.validate().unwrap();
-        let png = jpeg.recipe.draft(ExportDraftAction::Format(ExportFormat::Png));
-        let deep = png.recipe.draft(ExportDraftAction::Depth(SampleDepth::U16));
+        let png = jpeg.recipe.draft_canonical(ExportDraftAction::Format(ExportFormat::Png));
+        let deep = png.recipe.draft_canonical(ExportDraftAction::Depth(SampleDepth::U16));
         assert_eq!(deep.recipe.encoding.dither, layer_core::color::OutputDither::None);
         deep.recipe.validate().unwrap();
-        let cmyk = deep.recipe.draft(ExportDraftAction::Profile(ExportProfile { profile: ColorProfile::Icc(vec![1].into()), channels: ProfileChannels::Cmyk, name: "CMYK".into() }));
+        let cmyk = deep.recipe.draft_canonical(ExportDraftAction::Profile(ExportProfile { profile: ColorProfile::Icc(vec![1].into()), channels: ProfileChannels::Cmyk, name: "CMYK".into() }));
         assert_eq!(cmyk.formats, [ExportFormat::Tiff, ExportFormat::Jpeg]);
         assert_eq!(cmyk.recipe.format, ExportFormat::Tiff);
         assert!(!cmyk.backgrounds.contains(&ExportBackground::Preserve));
         cmyk.recipe.validate().unwrap();
         let mut invalid = cmyk.recipe;invalid.jpeg_quality = 0;
-        assert!(invalid.draft(ExportDraftAction::Refresh).recipe.validate().is_err());
+        assert!(invalid.draft_canonical(ExportDraftAction::Refresh).recipe.validate().is_err());
     }
 
     #[test]
     fn webp_drafts_as_lossless_eight_bit_rgb_with_transparency() {
         let mut recipe = ExportRecipe::further_editing(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
         recipe.encoding.dither = layer_core::color::OutputDither::Stochastic8;
-        let webp = recipe.draft(ExportDraftAction::Format(ExportFormat::Webp));
+        let webp = recipe.draft_canonical(ExportDraftAction::Format(ExportFormat::Webp));
         assert_eq!(webp.recipe.format, ExportFormat::Webp);
         assert_eq!((webp.recipe.depth, webp.depths.as_slice()), (SampleDepth::U8, [SampleDepth::U8].as_slice()));
         assert_eq!(webp.recipe.background, ExportBackground::Preserve);
@@ -564,24 +628,24 @@ mod tests {
         assert_eq!(json["format"], "Webp");
         assert_eq!(serde_json::from_value::<ExportRecipe>(json).unwrap(), webp.recipe);
         let deep = ExportRecipe { depth: SampleDepth::U16, encoding: Default::default(), ..webp.recipe.clone() };
-        assert_eq!(deep.validate().unwrap_err(), "Unsupported export combination");
+        assert_eq!(deep.validate().unwrap_err(), ColorFeatureError::ExportCombination);
         for (channels, format, formats) in [
             (ProfileChannels::Gray, ExportFormat::Png, vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg]),
             (ProfileChannels::Cmyk, ExportFormat::Tiff, vec![ExportFormat::Tiff, ExportFormat::Jpeg]),
         ] {
             let profile = ExportProfile { profile: ColorProfile::Icc(vec![1].into()), channels, name: "Print".into() };
-            let other = webp.recipe.clone().draft(ExportDraftAction::Profile(profile.clone()));
+            let other = webp.recipe.clone().draft_canonical(ExportDraftAction::Profile(profile.clone()));
             assert_eq!((other.recipe.format, &other.formats), (format, &formats), "{channels:?} cannot be WebP");
-            let refused = ExportRecipe { profile, ..webp.recipe.clone() }.draft(ExportDraftAction::Format(ExportFormat::Webp));
+            let refused = ExportRecipe { profile, ..webp.recipe.clone() }.draft_canonical(ExportDraftAction::Format(ExportFormat::Webp));
             assert_eq!(refused.recipe.format, format);
             for depth in [SampleDepth::U8, SampleDepth::F32] {
                 let color = DocumentColor { space: RgbSpace::Srgb, depth };
-                assert!(!refused.recipe.clone().draft_for_color(color, ExportDraftAction::Refresh).formats.contains(&ExportFormat::Webp));
+                assert!(!refused.recipe.clone().draft_for_color_canonical(color, ExportDraftAction::Refresh).formats.contains(&ExportFormat::Webp));
             }
         }
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16] {
             let color = DocumentColor { space: RgbSpace::DisplayP3, depth };
-            let choices = ExportRecipe::web_share().draft_for_color(color, ExportDraftAction::Format(ExportFormat::Webp));
+            let choices = ExportRecipe::web_share().draft_for_color_canonical(color, ExportDraftAction::Format(ExportFormat::Webp));
             assert!(choices.formats.contains(&ExportFormat::Webp));
             assert_eq!(choices.recipe.format, ExportFormat::Webp);
         }
@@ -589,11 +653,11 @@ mod tests {
 
     #[test]
     fn webp_output_is_refused_beyond_the_encoder_dimension_limit() {
-        let webp = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Webp)).recipe;
+        let webp = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::Webp)).recipe;
         assert_eq!(webp.output_extent([16384, 16384]).unwrap(), [16384, 16384]);
         for source in [[16385, 1], [1, 16385], [32768, 32768]] {
             let error = webp.output_extent(source).unwrap_err();
-            assert!(error.starts_with("WebP export is limited to 16,384 pixels per side."), "{error}");
+            assert_eq!(error, ColorFeatureError::WebpLimit);
             assert_eq!(ExportRecipe { format: ExportFormat::Png, ..webp.clone() }.output_extent(source).unwrap(), source);
         }
         let fitted = ExportRecipe { size: ExportSize::Fit { bounds: [4096, 4096], enlarge: false }, ..webp.clone() };
@@ -753,11 +817,11 @@ mod tests {
     fn document_delivery_switches_between_hdr_and_sdr_without_relabelling_primaries() {
         for space in RgbSpace::ALL {
             let color=DocumentColor {space,depth:SampleDepth::F32};
-            let exr=ExportRecipe::web_share().draft_for_color(color,ExportDraftAction::Format(ExportFormat::Exr));
+            let exr=ExportRecipe::web_share().draft_for_color_canonical(color,ExportDraftAction::Format(ExportFormat::Exr));
             assert_eq!(exr.recipe.profile,ExportProfile::builtin(space));assert_eq!(exr.recipe.depth,SampleDepth::F32);
-            let sdr=exr.recipe.draft_for_color(color,ExportDraftAction::Format(ExportFormat::Png));
+            let sdr=exr.recipe.draft_for_color_canonical(color,ExportDraftAction::Format(ExportFormat::Png));
             assert_eq!(sdr.recipe.depth,SampleDepth::U16);assert!(sdr.formats.contains(&ExportFormat::Exr));sdr.recipe.validate().unwrap();
-            let integer=ExportRecipe::web_share().draft_for_color(DocumentColor{space,depth:SampleDepth::U8},ExportDraftAction::Refresh);
+            let integer=ExportRecipe::web_share().draft_for_color_canonical(DocumentColor{space,depth:SampleDepth::U8},ExportDraftAction::Refresh);
             assert!(integer.formats.iter().all(|f|!f.is_hdr()));
         }
     }
@@ -772,7 +836,7 @@ mod tests {
         json["metadata"] = serde_json::json!({"keep": "CopyrightContact"});
         assert_eq!(serde_json::from_value::<ExportRecipe>(json).unwrap().metadata, ExportMetadata { keep: MetadataKeep::CopyrightContact, remove_location: true });
 
-        let draft = recipe.clone().draft(ExportDraftAction::Refresh);
+        let draft = recipe.clone().draft_canonical(ExportDraftAction::Refresh);
         let view = serde_json::to_value(&draft.metadata).unwrap();
         assert_eq!(view["label"], "Metadata");
         assert_eq!(view["choices"], serde_json::json!([
@@ -783,29 +847,29 @@ mod tests {
         assert_eq!((view["remove_location"].as_str(), view["location"].as_bool(), view["available"].as_bool()), (Some("Remove location"), Some(true), Some(true)));
         assert!(view["note"].is_null());
         let action: ExportDraftAction = serde_json::from_value(serde_json::json!({"type": "metadata", "value": {"keep": "CopyrightContact", "remove_location": false}})).unwrap();
-        let rights = recipe.clone().draft(action);
+        let rights = recipe.clone().draft_canonical(action);
         assert_eq!(rights.recipe.metadata, ExportMetadata { keep: MetadataKeep::CopyrightContact, remove_location: false });
         assert!(!rights.metadata.location, "Remove location applies only when everything is kept");
         rights.recipe.validate().unwrap();
         for format in [ExportFormat::Tiff, ExportFormat::Jpeg, ExportFormat::Webp] {
-            let draft = rights.recipe.clone().draft(ExportDraftAction::Format(format));
+            let draft = rights.recipe.clone().draft_canonical(ExportDraftAction::Format(format));
             assert_eq!(draft.recipe.metadata, rights.recipe.metadata, "{format:?} keeps the choice");
             assert!(draft.metadata.available);
         }
-        let exr = rights.recipe.clone().draft(ExportDraftAction::Format(ExportFormat::Exr));
+        let exr = rights.recipe.clone().draft_canonical(ExportDraftAction::Format(ExportFormat::Exr));
         assert!(!exr.metadata.available && !exr.metadata.location);
         assert!(exr.metadata.note.unwrap().starts_with("OpenEXR keeps no camera or copyright details."));
-        let back = exr.recipe.draft_for_color(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 }, ExportDraftAction::Format(ExportFormat::Png));
+        let back = exr.recipe.draft_for_color_canonical(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 }, ExportDraftAction::Format(ExportFormat::Png));
         assert_eq!(back.recipe.metadata, rights.recipe.metadata);
-        let sdr = ExportRecipe { metadata: rights.recipe.metadata, ..ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::JpegHdr)).recipe }
+        let sdr = ExportRecipe { metadata: rights.recipe.metadata, ..ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::JpegHdr)).recipe }
             .for_color(DocumentColor::default());
         assert_eq!(sdr.metadata, rights.recipe.metadata, "an SDR fallback keeps the choice");
 
         let mut document = layer_core::Document::new("Photo", 40, 30, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        assert!(!ExportForm::new(&document).metadata, "a new drawing has no photo metadata");
+        assert!(!ExportForm::new_canonical(&document).metadata, "a new drawing has no photo metadata");
         document.metadata.exif = Some(vec![1, 2, 3].into());
         document.resolution = Some(layer_core::ImageResolution::ppi(300));
-        assert!(ExportForm::new(&document).metadata);
+        assert!(ExportForm::new_canonical(&document).metadata);
         let delivery = ExportRecipe { resolution: ExportResolution::Ppi(72), ..rights.recipe }.delivery_metadata(&document).unwrap();
         assert_eq!(delivery.resolution, Some(layer_core::ImageResolution::ppi(72)));
         assert_eq!(delivery.photo, document.metadata);
@@ -815,16 +879,16 @@ mod tests {
     fn exr_validates_for_any_document_primaries() {
         let mut document=layer_core::Document::new("P3",8,8, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color=DocumentColor{space:RgbSpace::DisplayP3,depth:SampleDepth::F32};
-        let recipe=ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Exr)).recipe;
+        let recipe=ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::Exr)).recipe;
         assert_eq!(recipe.profile,ExportProfile::builtin(RgbSpace::Srgb));
         recipe.validate_for_document(&document).unwrap();
     }
     #[test]
     fn validate_for_color_rejects_mismatched_profile_channels_and_sdr_documents_for_hdr() {
-        let exr = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Exr)).recipe;
-        assert_eq!(exr.validate_for_color(DocumentColor::default()).unwrap_err(), "HDR delivery requires an HDR document");
+        let exr = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::Exr)).recipe;
+        assert_eq!(exr.validate_for_color(DocumentColor::default()).unwrap_err(), ColorFeatureError::HdrDocument);
         let mut gray = ExportRecipe::web_share();
         gray.profile.channels = ProfileChannels::Gray;
-        assert_eq!(gray.validate_for_color(DocumentColor::default()).unwrap_err(), "Profile channels do not match the ICC data");
+        assert_eq!(gray.validate_for_color(DocumentColor::default()).unwrap_err(), ColorFeatureError::ProfileChannels);
     }
 }

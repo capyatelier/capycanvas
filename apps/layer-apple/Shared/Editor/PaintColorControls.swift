@@ -31,10 +31,10 @@ struct PaintColorControls: View {
     var body: some View {
         Button(action: open) {
             if compact { SharedIcon(name: "pencil").frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
-            else { Text("Edit Color…") }
+            else { Text(store.catalog["native_copy"]["color"]["edit_menu"].string) }
         }.buttonStyle(.plain).disabled(store.displayColors["slot"].string == "transparent")
-            .accessibilityLabel("Edit Color").accessibilityIdentifier("paint-edit-color")
-            .help("Edit Color…")
+            .accessibilityLabel(store.catalog["native_copy"]["color"]["edit"].string).accessibilityIdentifier("paint-edit-color")
+            .help(store.catalog["native_copy"]["color"]["edit_menu"].string)
             .sheet(item: $selection) { selection in
                 ColorEditor(value: selection.color, documentSpace: selection.space, intensity: selection.intensity,
                     viewing: store.colorViewing, hdrUse: { color, stops in use(color, intensity: stops, for: selection) }) { use($0, for: selection) }

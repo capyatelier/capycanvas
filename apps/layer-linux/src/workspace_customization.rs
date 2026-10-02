@@ -27,8 +27,8 @@ pub(super) fn tile_button(
     config: &PanelConfig,
     tile: &ToolbarTile,
     style: TileStyle,
+    choice: &ToolChoice,
 ) -> gtk::Button {
-    let choice = tool_choice(tile.control);
     let panel = config.id;
     let id = tile.id;
     let button = gtk::Button::builder().tooltip_text(&choice.label).build();
@@ -319,7 +319,6 @@ impl Customization {
         let picker = adw::Dialog::builder()
             .content_width(480)
             .content_height(560)
-            .title("Tools")
             .build();
         picker.set_widget_name("tool-picker");
         picker.add_css_class("layer-preferences");
@@ -437,7 +436,7 @@ impl Customization {
         header.set_show_start_title_buttons(false);
         header.set_show_end_title_buttons(false);
         let cancel = w.action_button(
-            "Cancel",
+            &w.localization.text(layer_ui::MessageId::COMMON_CANCEL),
             UiAction::Customize {
                 action: CustomizationAction::CancelTools,
             },
@@ -818,7 +817,8 @@ impl Customization {
         w: &Rc<Workspace>,
         layout: &DockLayout,
         resolved: &ResolvedLayout,
-    ) {
+    ) -> bool {
+        if w.gpu.borrow().is_none() { return false; }
         self.toolbars
             .borrow_mut()
             .retain(|t| layout.panels.iter().any(|p| p.id == t.id));
@@ -837,7 +837,7 @@ impl Customization {
                         TileStrip::new()
                     };
                     strip.add_css_class("toolbar-controls");
-                    let grip = tiles::grip();
+                    let grip = tiles::grip(&w.localization.text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
                     w.install_panel_drag(&grip, DockItem::Panel { panel: config.id });
                     strip.set_grip(&grip);
                     w.install_context(&strip, ContextTarget::Ribbon { panel: config.id });
@@ -861,17 +861,20 @@ impl Customization {
             if toolbar.tiles == config.tiles() && toolbar.style == style {
                 continue;
             }
+            let Ok(view) = w.gpu.borrow().as_ref().unwrap().session.panel_view(config.id) else { continue; };
             toolbar.strip.clear();
             toolbar.strip.set_style(style);
             toolbar.style = style;
-            toolbar.items = config.tiles().iter().map(|tile| {
-                let item = toolbar_components::TileWidget::new(w, config, tile, style);
+            toolbar.items = config.tiles().iter().filter_map(|tile| {
+                let choice = &view.tiles.iter().find(|view| view.id == tile.id && view.choice.control == tile.control)?.choice;
+                let item = toolbar_components::TileWidget::new(w, config, tile, style, choice);
                 toolbar.strip.append(&item.root());
-                item
+                Some(item)
             }).collect();
             toolbar.tiles = config.tiles().to_vec();
             toolbar.strip.set_tiles(config.tiles());
         }
+        true
     }
 
     pub fn drawer_button(&self, anchor: TileAnchor) -> Option<gtk::Button> {
@@ -982,9 +985,8 @@ impl Customization {
                 }
                 None => (),
                 Some(FieldValue::Brush(input)) => input.set_selected(
-                    brush_categories()
-                        .flat_map(|c| c.brushes)
-                        .position(|b| b.id == brush.preset)
+                    layer_ui::brush_ids()
+                        .position(|id| id == brush.preset)
                         .unwrap_or(0) as u32,
                 ),
                 Some(FieldValue::Layer(input)) => {
@@ -1013,7 +1015,7 @@ impl Customization {
             if let Some(control) = control {
                 let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
                 margins(&body, 12);
-                body.append(&gtk::Label::new(Some(control.label())));
+                body.append(&gtk::Label::new(Some(&control.localized_label(&w.localization))));
                 match control {
                     PanelControl::BrushColor => body.append(&w.color.widget),
                     PanelControl::BrushOpacity => body.append(&w.opacity),
@@ -1146,7 +1148,7 @@ impl Workspace {
             }
             let group = gtk::Box::new(gtk::Orientation::Vertical, 6);
             group.set_widget_name(&format!("panel-field-{panel:?}-{control:?}"));
-            let label = gtk::Label::new(Some(control.label()));
+            let label = gtk::Label::new(Some(&control.localized_label(&self.localization)));
             label.set_xalign(0.0);
             if !matches!(
                 control,
@@ -1210,9 +1212,9 @@ impl Workspace {
             PanelControl::BrushSize => {
                 let input = crate::number_control::NumberControl::new(
                     NumericControl::brush_size(),
-                    control.label(),
+                    &control.localized_label(&self.localization),
                     "",
-                );
+                 self.localization.clone());
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -1226,9 +1228,9 @@ impl Workspace {
             PanelControl::BrushOpacity => {
                 let input = crate::number_control::NumberControl::new(
                     NumericControl::percent(),
-                    control.label(),
+                    &control.localized_label(&self.localization),
                     "",
-                );
+                 self.localization.clone());
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -1248,7 +1250,7 @@ impl Workspace {
                 FieldValue::Color(input)
             }
             PanelControl::Brushes => {
-                let brushes: Vec<_> = brush_categories().flat_map(|c| c.brushes).collect();
+                let brushes: Vec<_> = layer_ui::brush_catalog_localized(&self.localization).collect();
                 let labels: Vec<_> = brushes.iter().map(|b| b.label.as_ref()).collect();
                 let input = gtk::DropDown::from_strings(&labels);
                 input.connect_selected_notify(glib::clone!(
@@ -1287,9 +1289,9 @@ impl Workspace {
             PanelControl::LayerOpacity => {
                 let input = crate::number_control::NumberControl::new(
                     NumericControl::percent(),
-                    control.label(),
+                    &control.localized_label(&self.localization),
                     "",
-                );
+                 self.localization.clone());
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -1325,7 +1327,7 @@ impl Workspace {
                     let mut buttons = Vec::new();
                     for command in CommandId::LAYERS {
                         let button =
-                            self.action_button(&command.label(), UiAction::Invoke { command });
+                            self.action_button(&command.localized_label(&self.localization), UiAction::Invoke { command });
                         grid.insert(&button, -1);
                         buttons.push((command, button));
                     }

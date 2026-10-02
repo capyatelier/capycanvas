@@ -14,16 +14,20 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::localized(layer_ui::UiLanguage::English)
+    }
+    fn localized(language: layer_ui::UiLanguage) -> Self {
+        let mut native = NativeHost::launch_localized(Platform::Windows, "", layer_ui::Localizer::shared(language)).unwrap();
         let directory = TempDir::new();
         let (notify, notifications) = mpsc::channel();
         let service = WorkspaceService::new(
             StoreWorker::shared(&directory.path).unwrap(),
             directory.path.clone(),
+            native.session.localization().clone(),
             move || {
                 let _ = notify.send(());
             },
         );
-        let mut native = NativeHost::new(Platform::Windows).unwrap();
         crate::workspace::initialize(&mut native).unwrap();
         let mut f = Self {
             service,
@@ -86,5 +90,23 @@ fn export_backup_waits_for_idle_and_reports_notice() {
         serde_json::to_value(f.service.status(&f.native)).unwrap()["close_attempt"],
         1
     );
+    f.service.stop();
+}
+
+#[test]
+fn workspace_service_keeps_launch_context_for_prompts_and_literal_names() {
+    let mut f = Fixture::localized(layer_ui::UiLanguage::Japanese);
+    let active = f.native.session.localization().clone();
+    assert!(Arc::ptr_eq(f.service.controller.localization(), &active));
+    let input = serde_json::from_value(serde_json::json!({"type":"form","action":{"type":"new"}})).unwrap();
+    f.service.input(&mut f.native, input).unwrap();
+    let prompt = f.service.view().prompt.as_ref().unwrap();
+    assert_eq!(prompt.title, "新規ワークスペース");
+    assert_eq!(prompt.confirm, "作成して切り替え");
+    let literal = "HDR 日本語 中文 한국어 🖌️ { $name }\u{2068}literal\u{2069}";
+    f.service.input(&mut f.native, WorkspaceInput::Submit { name: literal.into(), description: None, choice: None }).unwrap();
+    f.pump(|f| f.service.view().name == literal && !f.service.view().busy);
+    assert!(Arc::ptr_eq(f.service.controller.localization(), &active));
+    assert_eq!(f.service.controller.manager.current().unwrap().metadata.name, literal);
     f.service.stop();
 }

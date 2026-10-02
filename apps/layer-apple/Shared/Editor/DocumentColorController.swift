@@ -20,7 +20,9 @@ import UniformTypeIdentifiers
     let history: Bool
     let properties: Bool
     let source: Bool
-    let title: String
+    @Published private(set) var title: String
+    @Published private(set) var propertiesView = JSON()
+    @Published private(set) var propertiesDone: String
     private weak var store: EditorStore?
     private let expected: (UInt64, UInt64)?
     private let completion: (Bool) -> Void
@@ -34,7 +36,8 @@ import UniformTypeIdentifiers
         operation = source ? request["type"].string : request["operation"].string
         history = request["type"].string == "color_history"
         properties = request["type"].string == "properties"
-        title = properties ? "Document Properties" : history ? (request["redo"].bool ? "Redo Color Change" : "Undo Color Change")
+        propertiesDone = store.bootstrap["common"]["done"].string
+        title = properties ? store.bootstrap["preparing_document"].string : history ? (request["redo"].bool ? "Redo Color Change" : "Undo Color Change")
             : operation == "repair_source_profile" ? "Repair Source Profile" : operation == "rasterize_source" ? "Rasterize Retained Source"
             : operation == "assign" ? "Assign Profile" : operation == "depth" ? "Change Bit Depth" : "Convert Color Space"
     }
@@ -47,7 +50,7 @@ import UniformTypeIdentifiers
                         DispatchQueue.main.async {
                             guard let self else { return }
                             if self.source { self.sourceInfo = details; self.color = details["color"] }
-                            else { self.rows = details.array }
+                            else { self.propertiesView = details; self.rows = details["rows"].array; self.title = details["title"].string; self.propertiesDone = details["done"].string }
                             self.loaded = true; self.busy = false; self.task = nil
                             if self.closing { self.finish(false) }
                         }

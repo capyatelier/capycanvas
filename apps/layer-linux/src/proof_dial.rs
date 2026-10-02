@@ -296,6 +296,7 @@ struct ReadoutCache {
 }
 type Changed = Box<dyn Fn(ContactPhase, SdrRendition)>;
 pub(crate) struct ProofDial {
+    localization: std::sync::Arc<layer_ui::Localizer>,
     pub root: DialLayout,
     pub field: gtk::DrawingArea,
     pub arcs: [ArcScale; 2],
@@ -315,7 +316,8 @@ pub(crate) struct ProofDial {
     readout_builds: Cell<[u64; 4]>,
 }
 impl ProofDial {
-    pub fn new() -> Rc<Self> {
+    pub fn new(localization: &std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
+        let copy = layer_ui::color_feature_copy::ProofCopy::new(localization);
         let root: DialLayout = glib::Object::new();
         root.set_widget_name("sdr-proof-dial");
         root.add_css_class("color-panel");
@@ -325,7 +327,7 @@ impl ProofDial {
         field.set_widget_name("sdr-tone-pad-surface");
         field.set_focusable(true);
         field.set_parent(&root);
-        field.update_property(&[gtk::accessible::Property::Label("Contrast and scale"),gtk::accessible::Property::Description("Up increases contrast. Left favors broad structure; right favors fine texture. Center restores the automatic baseline. Arrow keys adjust; Escape cancels; double-click resets.")]);
+        field.update_property(&[gtk::accessible::Property::Label(&copy.contrast_scale),gtk::accessible::Property::Description(&copy.tone_help)]);
         let arcs = std::array::from_fn(|i| {
             let arc: ArcScale = glib::Object::builder()
                 .property("orientation", gtk::Orientation::Horizontal)
@@ -339,7 +341,7 @@ impl ProofDial {
             arc.set_range(spec.numeric.min, spec.numeric.max);
             arc.set_increments(spec.numeric.step, spec.numeric.step * 10.);
             arc.set_widget_name(&format!("sdr-appearance-{}", spec.key));
-            arc.update_property(&[gtk::accessible::Property::Label(spec.label)]);
+            arc.update_property(&[gtk::accessible::Property::Label(if i == 0 {&copy.brightness} else {&copy.highlight_color})]);
             // GTK picks descendants before calling the parent's contains().
             // Keep GtkRange's keyboard/accessibility behavior, but exclude its
             // invisible linear trough/slider subtree from pointer targeting.
@@ -357,7 +359,7 @@ impl ProofDial {
         reset.add_css_class("color-utility");
         reset.add_css_class("color-swap");
         reset.set_widget_name("sdr-appearance-reset");
-        reset.update_property(&[gtk::accessible::Property::Label("Reset SDR appearance")]);
+        reset.update_property(&[gtk::accessible::Property::Label(&copy.reset_sdr)]);
         reset.set_parent(&root);
         let icons = layer_ui::proof_panel::SDR_READOUT_ICONS.map(|name| {
             let image = gtk::Image::from_icon_name(name);
@@ -369,6 +371,7 @@ impl ProofDial {
         let recipe = SdrRendition::default();
         let pad = sdr_pad_values(recipe);
         let p = Rc::new(Self {
+            localization: localization.clone(),
             root,
             field,
             arcs,
@@ -474,19 +477,13 @@ impl ProofDial {
         self.arcs[1].set_value(r.highlight_color as f64);
         for (i, a) in self.arcs.iter().enumerate() {
             a.update_property(&[gtk::accessible::Property::ValueText(&if i == 0 {
-                format!("{:+.0}% brightness", r.exposure * 25.)
+                format!("{:+.0}%", r.exposure * 25.)
             } else {
-                format!("{:.0}% color intensity", r.highlight_color * 100.)
+                format!("{:.0}%", r.highlight_color * 100.)
             })]);
         }
-        let v = self.pad.get();
-        let text = format!(
-            "Contrast {:.0} percent, balance {:+.0} percent; left favors macro structure, right favors micro texture.",
-            v[1].exp2() * 100.,
-            v[0] * 100.
-        );
-        self.field
-            .update_property(&[gtk::accessible::Property::Description(&text)]);
+        let text = layer_ui::color_feature_copy::proof_dial_value(r, &self.localization);
+        self.field.update_property(&[gtk::accessible::Property::ValueText(&text)]);
         self.root.queue_draw();
         self.updating.set(false);
     }

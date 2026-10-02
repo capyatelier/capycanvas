@@ -127,7 +127,7 @@ mod selection_pixel_checks {
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.engine.document().layers, before);
         assert_eq!(CommandId::ClearLayer.label().as_ref(), "Clear Entire Layer");
-        assert!(crate::customization::tool_choice(ToolbarControl::Command { command: CommandId::ClearLayer })
+        assert!(crate::customization::canonical_tool_choice(ToolbarControl::Command { command: CommandId::ClearLayer })
             .description
             .contains("placed photo"));
         invoke(&mut s, CommandId::ClearLayer);

@@ -196,7 +196,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     row.Children().Append(panelTabShell(pick,nullptr));
                 }
                 ScrollViewer strip;strip.Content(row);strip.Background(clear());
-                strip.SizeChanged([weak,index=columns.size()](auto&& sender,auto&&){if(auto self=weak.lock();self&&index<self->columns.size())fitAutomaticTabs(self->columns[index].automatic,sender.template as<ScrollViewer>().ActualWidth(),self->tabWidths);});
+                strip.SizeChanged([weak,index=columns.size()](auto&& sender,auto&&){if(auto self=weak.lock();self&&index<self->columns.size())fitAutomaticTabs(self->data,self->columns[index].automatic,sender.template as<ScrollViewer>().ActualWidth(),self->tabWidths);});
                 strip.HorizontalScrollMode(ScrollMode::Enabled);strip.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);
                 strip.VerticalScrollMode(ScrollMode::Disabled);header.Children().Append(strip);
                 gestures->Source(strip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);

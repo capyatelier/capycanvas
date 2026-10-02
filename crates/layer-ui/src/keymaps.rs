@@ -361,6 +361,10 @@ pub struct KeymapDifference {
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct KeymapImportPreview {
     pub title: String,
+    pub heading: String,
+    pub body: String,
+    pub cancel_label: std::sync::Arc<str>,
+    pub import_label: std::sync::Arc<str>,
     pub added: Vec<String>,
     pub changed: Vec<String>,
     pub removed: Vec<String>,
@@ -448,19 +452,19 @@ pub(crate) fn export(settings: &Settings) -> String {
     .expect("keymap serialization")
 }
 
-pub(crate) fn import(settings: &Settings, text: &str, platform: crate::Platform) -> Result<KeymapImport, String> {
-    let file: KeymapFile = serde_json::from_str(text).map_err(|e| format!("This isn't a CapyCanvas keymap: {e}"))?;
+pub(crate) fn import(settings: &Settings, text: &str, platform: crate::Platform, localization: &crate::Localizer) -> Result<KeymapImport, String> {
+    let file: KeymapFile = serde_json::from_str(text).map_err(|e| keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_INVALID_DETAIL, &[("detail", e.to_string())]))?;
     if file.format != KEYMAP_FORMAT {
-        return Err("This isn't a CapyCanvas keymap".into());
+        return Err(localization.text(crate::MessageId::SETTINGS_KEYMAP_INVALID).to_string());
     }
     if file.version > KEYMAP_VERSION {
-        return Err("This keymap was made by a newer version of CapyCanvas".into());
+        return Err(localization.text(crate::MessageId::SETTINGS_KEYMAP_NEWER_VERSION).to_string());
     }
     let mut candidate = settings.clone();
     let mut unavailable = Vec::new();
     match file.keymap {
         Some(keymap) if preset(&keymap.id).is_some() => candidate.keymap = Some(keymap),
-        Some(keymap) => unavailable.push(format!("Keymap “{}”", keymap.id)),
+        Some(keymap) => unavailable.push(keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_UNAVAILABLE_NAME, &[("name", keymap.id)])),
         None => {}
     }
     let definitions = crate::shortcuts::definitions(platform);
@@ -482,7 +486,7 @@ pub(crate) fn import(settings: &Settings, text: &str, platform: crate::Platform)
             hold.actions.retain(|_, target| {
                 let available = crate::shortcuts::hold_id(target).is_some_and(|id| known(&id));
                 if !available {
-                    unavailable.push(format!("{}: {target}", hold.key.label(platform)));
+                    unavailable.push(keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_PREVIEW_BINDING, &[("action", hold.key.localized_label(platform, localization)), ("keys", target.clone())]));
                 }
                 available
             });
@@ -498,13 +502,13 @@ pub(crate) fn import(settings: &Settings, text: &str, platform: crate::Platform)
         if crate::GESTURE_TRIGGERS.iter().any(|t| t.id == trigger) && (id.is_empty() || known(&id)) {
             candidate.gestures.insert(trigger, id);
         } else {
-            unavailable.push(format!("{trigger}: {id}"));
+            unavailable.push(keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_PREVIEW_BINDING, &[("action", trigger), ("keys", id)]));
         }
     }
-    candidate.validate()?;
-    let label = |keys: Vec<KeyChord>| keys.iter().map(|k| k.label(platform)).collect::<Vec<_>>().join(" / ");
+    candidate.validate_localized(localization)?;
+    let label = |keys: Vec<KeyChord>| keys.iter().map(|k| k.localized_label(platform, localization)).collect::<Vec<_>>().join(" / ");
     let mut preview = KeymapImportPreview {
-        title: candidate.keymap_preset().map_or(KEYMAP_PRESETS[0].title, |p| p.preset.title).into(),
+        title: candidate.keymap_preset().map_or_else(|| KEYMAP_PRESETS[0].localized_title(localization), |p| p.preset.localized_title(localization)).to_string(),
         unavailable,
         ..Default::default()
     };
@@ -512,20 +516,80 @@ pub(crate) fn import(settings: &Settings, text: &str, platform: crate::Platform)
         let (before, after) = (label(settings.keys(&definition.id)), label(candidate.keys(&definition.id)));
         match (before.is_empty(), after.is_empty()) {
             _ if before == after => {}
-            (true, false) => preview.added.push(format!("{}: {after}", definition.label.resolve(&crate::Localizer::shared(crate::UiLanguage::English)))),
-            (false, true) => preview.removed.push(format!("{}: {before}", definition.label.resolve(&crate::Localizer::shared(crate::UiLanguage::English)))),
-            _ => preview.changed.push(format!("{}: {before} → {after}", definition.label.resolve(&crate::Localizer::shared(crate::UiLanguage::English)))),
+            (true, false) => preview.added.push(keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_PREVIEW_BINDING, &[("action", definition.label.resolve(localization)), ("keys", after)])),
+            (false, true) => preview.removed.push(keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_PREVIEW_BINDING, &[("action", definition.label.resolve(localization)), ("keys", before)])),
+            _ => preview.changed.push(keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_PREVIEW_CHANGE, &[("action", definition.label.resolve(localization)), ("before", before), ("after", after)])),
         }
     }
     for trigger in crate::GESTURE_TRIGGERS {
         let name = |s: &Settings| {
             let id = s.gesture_binding(trigger.id);
-            definitions.iter().find(|(d, _)| d.id == id).map_or_else(|| "Nothing".to_string(), |(d, _)| d.label.resolve(&crate::Localizer::shared(crate::UiLanguage::English)))
+            definitions.iter().find(|(d, _)| d.id == id).map_or_else(|| localization.text(crate::MessageId::SHORTCUT_NOTHING).to_string(), |(d, _)| d.label.resolve(localization))
         };
         let (before, after) = (name(settings), name(&candidate));
         if before != after {
-            preview.changed.push(format!("{}: {before} → {after}", trigger.localized_label(&crate::Localizer::shared(crate::UiLanguage::English))));
+            preview.changed.push(keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_PREVIEW_CHANGE, &[("action", trigger.localized_label(localization)), ("before", before), ("after", after)]));
         }
     }
+    preview.heading = keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_PREVIEW_HEADING, &[("name", preview.title.clone())]);
+    preview.cancel_label = localization.text(crate::MessageId::COMMON_CANCEL);
+    preview.import_label = localization.text(crate::MessageId::COMMON_IMPORT);
+    let mut lines = Vec::new();
+    for (message, items) in [(crate::MessageId::SETTINGS_KEYMAP_PREVIEW_ADDED, &preview.added), (crate::MessageId::SETTINGS_KEYMAP_PREVIEW_CHANGED, &preview.changed), (crate::MessageId::SETTINGS_KEYMAP_PREVIEW_REMOVED, &preview.removed), (crate::MessageId::SETTINGS_KEYMAP_PREVIEW_UNAVAILABLE, &preview.unavailable)] {
+        if !items.is_empty() {
+            let mut args = crate::FluentArgs::new(); args.set("count", items.len());
+            lines.push(localization.format(message, &args));
+            lines.extend(items.iter().take(6).map(|item| keymap_copy(localization, crate::MessageId::SETTINGS_KEYMAP_PREVIEW_ENTRY, &[("item", item.clone())])));
+        }
+    }
+    preview.body = if lines.is_empty() { localization.text(crate::MessageId::SETTINGS_KEYMAP_PREVIEW_NONE).to_string() } else { lines.join("\n") };
     Ok(KeymapImport { settings: candidate, preview })
+}
+
+fn keymap_copy(localization: &crate::Localizer, message: crate::MessageId, values: &[(&str, String)]) -> String {
+    let mut args = crate::FluentArgs::new(); for (key, value) in values { args.set(*key, value.as_str()); }
+    localization.format(message, &args)
+}
+impl KeymapPreset {
+    pub fn localized_title(&self, localization: &crate::Localizer) -> std::sync::Arc<str> {
+        localization.text(match self.id {
+            "photoshop" => crate::MessageId::SETTINGS_KEYMAP_TITLE_PHOTOSHOP,
+            "krita" => crate::MessageId::SETTINGS_KEYMAP_TITLE_KRITA,
+            "clip-studio" => crate::MessageId::SETTINGS_KEYMAP_TITLE_CLIPSTUDIO,
+            "procreate" => crate::MessageId::SETTINGS_KEYMAP_TITLE_PROCREATE,
+            "gimp" => crate::MessageId::SETTINGS_KEYMAP_TITLE_GIMP,
+            "affinity" => crate::MessageId::SETTINGS_KEYMAP_TITLE_AFFINITY,
+            _ => crate::MessageId::SETTINGS_KEYMAP_TITLE_CAPY,
+        })
+    }
+}
+pub fn shortcut_default_caption(localization: &crate::Localizer, keys: &[String]) -> String {
+    if keys.is_empty() { return localization.text(crate::MessageId::SETTINGS_SHORTCUT_DEFAULT_EMPTY).to_string(); }
+    keymap_copy(localization, crate::MessageId::SETTINGS_SHORTCUT_DEFAULT, &[("keys", keys.join(" / "))])
+}
+pub fn modifier_hold_help(localization: &crate::Localizer, label: &str) -> String {
+    keymap_copy(localization, crate::MessageId::SETTINGS_MODIFIER_HOLD_HELP, &[("label", label.to_owned())])
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+    #[test]
+    fn keymap_import_retains_complete_preview_and_stable_preset_identity() {
+        let localization = crate::Localizer::shared(crate::UiLanguage::English);
+        for preset in KEYMAP_PRESETS { assert_eq!(preset.localized_title(&localization).as_ref(), preset.title); }
+        let settings = Settings::default();
+        let file = serde_json::json!({"format": KEYMAP_FORMAT, "version": KEYMAP_VERSION, "keymap": {"id": "clip-studio", "revision": 1}, "shortcuts": {}}).to_string();
+        let imported = import(&settings, &file, crate::Platform::Gtk, &localization).unwrap();
+        assert_eq!(imported.settings.keymap.as_ref().unwrap().id, "clip-studio");
+        assert_eq!(imported.preview.heading, "Import Clip Studio Paint Style?");
+        assert_eq!(imported.preview.cancel_label.as_ref(), "Cancel");
+        assert_eq!(imported.preview.import_label.as_ref(), "Import");
+        assert!(!imported.preview.body.is_empty());
+        assert_eq!(shortcut_default_caption(&localization, &[]), "Default: none");
+        assert_eq!(shortcut_default_caption(&localization, &["⌘K".into(), "Shift+Q".into()]), "Default: ⌘K / Shift+Q");
+        let literal = "键 {label} 🖌";
+        assert_eq!(modifier_hold_help(&localization, literal), format!("Hold {literal} to use an action until you let go."));
+        assert_eq!(view(&imported.settings, Some(&imported), false).import.unwrap(), imported.preview);
+    }
 }

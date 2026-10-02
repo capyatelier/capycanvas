@@ -58,13 +58,22 @@ struct BinaryFileDocument: FileDocument {
 
 @MainActor final class PaletteController: ObservableObject {
     private weak var store: EditorStore?
+    var common: JSON { store?.bootstrap["common"] ?? JSON() }
+    var copy: JSON { store?.catalog["native_copy"]["palettes"] ?? JSON() }
     @Published var selected: UInt64?
     @Published var chooser = false
     @Published var expanded = false
     @Published private(set) var editing = false
     @Published var editText = ""
     @Published var message: PaletteMessage?
-    @Published var dialog: PaletteDialog?
+    @Published var dialog: PaletteDialog? {
+        didSet {
+            if dialog?.kind == .remove, let name = dialog?.name, oldValue?.kind != .remove || oldValue?.name != name {
+                removeCaption = NativeTextContext.caption(["type": "remove_palette", "name": name])
+            }
+        }
+    }
+    @Published private(set) var removeCaption = ""
     @Published private(set) var menu: PaletteMenu?
     @Published var importing = false
     @Published var export: PaletteExport?
@@ -160,7 +169,7 @@ struct BinaryFileDocument: FileDocument {
         switch target {
         case .color(let id): view["swatches"].array.first { $0["id"].uint == id }?["name"].string ?? ""
         case .palette(let id): view["palettes"].array.first { $0["id"].uint == id }?["name"].string ?? ""
-        case .library: "Palettes"
+        case .library: copy["title"].string
         }
     }
     func closeMenu(owner: UUID? = nil) {

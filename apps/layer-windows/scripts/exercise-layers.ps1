@@ -202,14 +202,14 @@ try {
     $close=$preferences.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'CloseButton'))
     $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Preferences did not close'
+    Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'drawing-canvas').Current.IsEnabled} 'Preferences did not close'
     Capture 'alternate-theme'
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document'
     $discard=@{item=$null};try{Wait-Until {$discard.item=Find 'Discard Changes' -Name;$null -ne $discard.item -or $null -ne (Find 'document-width')} 'New drawing did not open' 5}catch{}
     if($discard.item){$discard.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
     Edit 'document-width' '128';Edit 'document-height' '64';Invoke 'Create' -Name
     Wait-Until {(Model).state.document_file.epoch -gt 0 -and !(Model).state.document_file.busy} 'New document did not replace layer state' 45
-    Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Document gate did not clear'
+    Wait-Until {(Control 'drawing-canvas').Current.IsEnabled} 'Document gate did not clear'
     $fresh=(Model).state.layer_tools.editing_layer.id
     Wait-Until {(Find "layer-$fresh-thumbnail").Current.ItemStatus -eq 'Ready'} 'Replacement thumbnail not ready' 20
     if((Model).state.layers.Count -ne 2 -or (Model).state.document_file.modified -or (Model).state.layer_tools.editing_layer.opacity -ne 1){throw 'Old layer state leaked into replacement'}
@@ -219,7 +219,7 @@ try {
     Wait-Until {$null -ne (Find 'Discard Changes' -Name -Type ([System.Windows.Automation.ControlType]::Button))} 'Closing did not commit the focused draft'
     if(!(Model).state.document_file.modified -or [Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.55) -gt .000001){throw 'Close checked stale document state'}
     Invoke 'Cancel' -Name
-    Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Cancel did not reopen the canvas'
+    Wait-Until {(Control 'drawing-canvas').Current.IsEnabled} 'Cancel did not reopen the canvas'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [PSCustomObject]@{thumbnail_paint_and_exact_undo='passed';row_retention='passed';header_and_lock_controls='passed';native_toggle_states_and_history='passed';keyboard_layer_and_mask_menus='passed';independent_selection='passed';mask_thumbnail='passed';rename_duplicate_delete_undo='passed';mask_controls_clipping_references='passed';group_collapse_hidden_target_and_ungroup='passed';virtualized_rows_and_recycling='passed';theme_and_document_replacement='passed';focused_draft_committed_before_close='passed';zero_exit='passed'}|ConvertTo-Json

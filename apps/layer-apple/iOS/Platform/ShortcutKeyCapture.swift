@@ -27,6 +27,7 @@ struct ShortcutKeyCapture: UIViewRepresentable {
             return view.subviews.lazy.compactMap { firstResponder(in: $0) }.first
         }
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            guard !NativeTextContext.composing else { super.pressesBegan(presses, with: event); return }
             for press in presses {
                 guard let key = press.key else { continue }
                 let name = AppleKeyName.name(key)

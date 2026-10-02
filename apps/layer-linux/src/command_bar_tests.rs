@@ -278,3 +278,58 @@ fn native_command_bar_glass() {
     }
     d.w.window.close();
 }
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_command_bar_preedit_guard --native-storage"]
+fn native_command_bar_preedit_guard() {
+    let d = Driver::managed("art.capycanvas.CommandPreedit");
+    assert!(std::sync::Arc::ptr_eq(&d.w.localization, crate::launch_localization()));
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for preedit in ["にほんご", "简体", "繁體", "한국어"] {
+            d.w.dispatch(UiAction::Invoke { command: CommandId::SearchCommands });
+            let entry = d.named("command-search").downcast::<gtk::SearchEntry>().unwrap();
+            entry.set_text("fit canvas");
+            let text = entry.delegate().and_downcast::<gtk::Text>().unwrap();
+            let popup = d.named("command-bar").downcast::<gtk::Popover>().unwrap();
+            let controllers = popup.observe_controllers();
+            let controller = |name: &str| (0..controllers.n_items()).find_map(|i| {
+                controllers.item(i).and_downcast::<gtk::EventControllerKey>()
+                    .filter(|controller| controller.name().as_deref() == Some(name))
+            }).unwrap();
+            let keys = controller("command-search-navigation");
+            let bubble = controller("command-search-composed-key");
+            let before = serde_json::to_value(state(&d.w).command_search).unwrap();
+            text.emit_preedit_changed(preedit);
+            for (key, code) in [(gdk::Key::Up, 111u32), (gdk::Key::Down, 116), (gdk::Key::Escape, 9)] {
+                assert!(!keys.emit_by_name::<bool>("key-pressed", &[&key, &code, &gdk::ModifierType::empty()]));
+                assert!(bubble.emit_by_name::<bool>("key-pressed", &[&key, &code, &gdk::ModifierType::empty()]));
+                keys.emit_by_name::<()>("key-released", &[&key, &code, &gdk::ModifierType::empty()]);
+                assert_eq!(serde_json::to_value(state(&d.w).command_search).unwrap(), before);
+            }
+            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+            text.emit_preedit_changed("");
+            entry.emit_by_name::<()>("activate", &[]);
+            assert_eq!(serde_json::to_value(state(&d.w).command_search).unwrap(), before);
+            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+            entry.emit_by_name::<()>("activate", &[]);
+            assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+            assert_eq!(serde_json::to_value(state(&d.w).command_search).unwrap(), before);
+            keys.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
+            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+            entry.emit_by_name::<()>("activate", &[]);
+            assert!(state(&d.w).command_search.is_none());
+            d.w.dispatch(UiAction::Invoke { command: CommandId::SearchCommands });
+            text.emit_preedit_changed(preedit);
+            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+            text.emit_preedit_changed("");
+            assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+            assert!(state(&d.w).command_search.is_some());
+            keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+            assert!(keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+            assert!(state(&d.w).command_search.is_none());
+        }
+    }
+    d.w.window.close();
+    pump(160);
+}

@@ -19,10 +19,11 @@ impl App {
                 let store =
                     StoreWorker::shared(std::path::Path::new(path)).map_err(|e| e.to_string())?;
                 self.host.session.set_workspace_read_only(true);
-                self.workspaces = Some(WorkspaceController::new(
+                self.workspaces = Some(WorkspaceController::new_localized(
                     store,
                     layer_ui::Platform::Android,
                     time,
+                    self.host.session.localization().clone(),
                 ));
             }
         }
@@ -37,7 +38,7 @@ impl App {
             let before = self.host.session.state().revision;
             match c.input(&mut self.host.session, input, time) {
                 Ok(change) => self.host.apply_change(before, change),
-                Err(error) => c.view.error = Some(error.to_string()),
+                Err(error) => c.view.error = Some(error.localized_message(self.host.session.localization())),
             }
         }
         if request["type"] == "capture" {

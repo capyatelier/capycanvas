@@ -22,8 +22,8 @@ class AndroidWorkspaceOwnershipTest {
     }
     @Test fun liveOwnersRemainExclusiveAndClosedSessionsReleaseTheirLocks() {
         val directory = File(device.root, "ownership")
-        var first = Native.create(false)
-        val second = Native.create(false)
+        var first = createEnglishHostForTest()
+        val second = createEnglishHostForTest()
         try {
             fun start(handle: Long): JSONObject {
                 request(handle, obj("type" to "start", "directory" to directory.absolutePath))

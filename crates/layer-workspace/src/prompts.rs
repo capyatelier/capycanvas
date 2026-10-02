@@ -56,9 +56,7 @@ pub fn recover_prompt(localization: &layer_ui::Localizer, changes: Vec<(String, 
         .map(|(id, label)| ManagerChoice { id, label })
         .collect::<Vec<_>>();
     if choices.is_empty() {
-        return Err(StoreError::invalid(
-            "There are no interrupted changes to recover.",
-        ));
+        return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThereAreNoInterruptedChangesToRecover));
     }
     Ok(ManagerPrompt::confirm(
         localization.text(layer_ui::MessageId::WORKSPACE_RECOVER_INTERRUPTED_CHANGES).to_string(),
@@ -75,14 +73,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .filter(|i| i.metadata.kind == kind)
             .map(|i| ManagerChoice {
                 id: i.id.clone(),
-                label: self.display_name(&i.id, &i.metadata),
+                label: self.summary_display_name(&i),
             })
             .collect()
     }
     fn current_toolbar_choices(&self) -> Result<Vec<ManagerChoice>, StoreError> {
         let current = self
             .current()
-            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+            .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
         Ok(current
             .capture()?
             .history
@@ -118,7 +116,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         source: Option<&Metadata>,
     ) -> Result<ManagerPrompt, StoreError> {
         use ManagerAction as A;
-        let source = || source.ok_or_else(|| StoreError::invalid("Choose an item."));
+        let source = || source.ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAnItem));
         Ok(match action {
             A::New => {
                 let mut p = ManagerPrompt::confirm(
@@ -157,7 +155,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             A::SaveToolbar(panel) => {
                 let current = self
                     .current()
-                    .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+                    .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
                 let capture = current.capture()?;
                 let toolbar = capture
                     .history
@@ -176,7 +174,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             A::Reset(id) => {
                 let s = source()?;
                 if s.kind != ItemKind::Workspace {
-                    return Err(StoreError::invalid("Choose a workspace."));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace));
                 }
                 ManagerPrompt::confirm(
                     self.localization.text(layer_ui::MessageId::WORKSPACE_RESTORE_STARTING_LAYOUT).to_string(),
@@ -197,7 +195,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             A::ReplaceToolbar(_) => {
                 let choices = self.choices_for(ItemKind::Toolbar);
                 if choices.is_empty() {
-                    return Err(StoreError::invalid("Save a toolbar to the Library first."));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::SaveAToolbarToTheLibraryFirst));
                 }
                 ManagerPrompt::confirm(self.localization.text(layer_ui::MessageId::WORKSPACE_REPLACE_FROM_LIBRARY).to_string(),self.localization.text(layer_ui::MessageId::WORKSPACE_REPLACE_TOOLBAR_CONFIRM).to_string(),self.localization.text(layer_ui::MessageId::WORKSPACE_REPLACE_TOOLBAR).to_string())
                     .choices(self.localization.text(layer_ui::MessageId::WORKSPACE_SAVED_TOOLBAR).to_string(),choices,None)
@@ -205,7 +203,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             A::UpdateToolbar(_) => {
                 let current = self
                     .current()
-                    .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+                    .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
                 ManagerPrompt::confirm(self.localization.text(layer_ui::MessageId::WORKSPACE_UPDATE_SAVED_TOOLBAR).to_string(),message(&self.localization, layer_ui::MessageId::WORKSPACE_UPDATE_TOOLBAR_CONFIRM, &[("workspace", self.display_name(&current.id, &current.metadata)), ("toolbar", source()?.name.clone())]),self.localization.text(layer_ui::MessageId::WORKSPACE_UPDATE).to_string())
                     .choices(self.localization.text(layer_ui::MessageId::WORKSPACE_TOOLBAR).to_string(),self.current_toolbar_choices()?,None)
             }
@@ -220,9 +218,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 p
             }
             _ => {
-                return Err(StoreError::invalid(
-                    "This action does not use a workspace form.",
-                ));
+                return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisActionDoesNotUseAWorkspaceForm));
             }
         })
     }

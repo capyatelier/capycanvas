@@ -21,8 +21,8 @@ pub(crate) struct App {
     pub screen_presented: std::time::Instant,
 }
 impl App {
-    pub fn new() -> Result<Self, String> {
-        let mut host = layer_host::NativeHost::new(layer_ui::Platform::Android)?;
+    pub fn new(saved: &str, preferred_tags: &[&str]) -> Result<Self, String> {
+        let mut host = layer_host::NativeHost::launch_localized(layer_ui::Platform::Android, saved, crate::launch::localization(saved, preferred_tags))?;
         host.startup = Default::default();
         host.session.set_document_replacement(false);
         host.dispatch(layer_ui::UiAction::RestoreWorkspace {

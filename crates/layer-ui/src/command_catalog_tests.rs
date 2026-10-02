@@ -650,3 +650,134 @@ fn toolbar_visibility_search_projects_default_and_literal_custom_titles() {
     invoke(&mut session, CommandId::UndoWorkspace);
     assert!(descriptor(&session).contains("ツール"));
 }
+
+#[test]
+fn command_numbers_refuse_compatibility_input_and_leave_rejected_edits_unchanged() {
+    let mut s = session(Platform::Gtk);
+    let before = s.state.brush.diameter;
+    for text in ["ｓｑｒｔ（－１）", "１２＋３ ｐｘ", "２＋３", "２３", "１２３", "sqrt(-1)"] {
+        assert!(s.execute_catalog_command("tool_setting.size", Some(text.into())).is_err());
+        assert_eq!(s.state.brush.diameter, before);
+        assert_eq!(s.engine.configured_brush().diameter, before);
+    }
+    s.execute_catalog_command("tool_setting.size", Some("12+3 px".into())).unwrap();
+    assert_eq!(s.state.brush.diameter, 15.);
+    assert_eq!(s.engine.configured_brush().diameter, 15.);
+}
+
+#[test]
+fn numeric_parameters_match_active_and_canonical_labels_with_stable_targets() {
+    let mut canonical = session(Platform::Gtk);
+    invoke(&mut canonical, CommandId::AddLayer);
+    canonical.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "exposure".into() } }).unwrap();
+    canonical.dispatch(UiAction::Layer { action: LayerAction::Rename { id: canonical.engine.document().active_layer.0, name: "Literal { $name }".into() } }).unwrap();
+    let english = canonical.command_catalog();
+    for language in [UiLanguage::Japanese, UiLanguage::SimplifiedChinese,
+        UiLanguage::TraditionalChinese, UiLanguage::Korean] {
+        let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk,
+            Localizer::shared(language)).unwrap();
+        invoke(&mut s, CommandId::AddLayer);
+        s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "exposure".into() } }).unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::Rename { id: s.engine.document().active_layer.0, name: "Literal { $name }".into() } }).unwrap();
+        let active = s.command_catalog();
+        assert!(active.iter().any(|row| row.parameter.is_some() && row.id.starts_with("layer_property.") && row.id != "layer_property.opacity"));
+        invoke(&mut s, CommandId::SearchCommands);
+        for row in active.iter().filter(|row| row.parameter.is_some()) {
+            let canonical = english.iter().find(|item| item.id == row.id).unwrap();
+            for label in [&row.label, &canonical.label] {
+                search_action(&mut s, CommandSearchAction::Query { text: label.trim_end_matches('…').into() });
+                let result = s.state.command_search.as_ref().unwrap().results.iter()
+                    .find(|result| result.id == row.id).unwrap_or_else(|| panic!("{language:?}: {} -> {}", label, row.id));
+                assert_eq!(result.label, row.label);
+                assert_eq!(serde_json::to_value(&result.parameter).unwrap(), serde_json::to_value(&row.parameter).unwrap());
+            }
+        }
+        let size = active.iter().find(|row| row.id == "tool_setting.size").unwrap();
+        search_action(&mut s, CommandSearchAction::Query { text: "brush size".into() });
+        assert_eq!(s.state.command_search.as_ref().unwrap().results[0].id, size.id);
+    }
+}
+
+
+#[test]
+fn filter_insertions_match_active_and_canonical_labels_with_stable_targets() {
+    let english = Localizer::shared(UiLanguage::English);
+    for language in [UiLanguage::Japanese, UiLanguage::SimplifiedChinese,
+        UiLanguage::TraditionalChinese, UiLanguage::Korean]
+    {
+        let localization = Localizer::shared(language);
+        let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Windows,
+            localization.clone()).unwrap();
+        for (effect, label, display) in [("exposure", MessageId::RESOURCES_FILTER_EXPOSURE, MessageId::RESOURCES_FILTER_EXPOSURE),
+            ("gaussian_blur", MessageId::RESOURCES_FILTER_GAUSSIAN_BLUR, MessageId::RESOURCES_FILTER_GAUSSIAN_BLUR),
+            ("solid_color", MessageId::RESOURCES_FILTER_SOLID_COLOR, MessageId::MENU_SOLID_COLOR_FILL)]
+        {
+            let action = UiAction::Effect { action: EffectAction::Insert { effect: effect.into() } };
+            let id = command_catalog::identity(&action);
+            let row = s.command_catalog().into_iter().find(|row| row.id == id).unwrap();
+            assert_eq!(row.label, localization.text(display).to_string());
+            assert!(row.enabled);
+            invoke(&mut s, CommandId::SearchCommands);
+            for query in [english.text(label), localization.text(display)] {
+                search_action(&mut s, CommandSearchAction::Query { text: query.to_string() });
+                let result = s.state.command_search.as_ref().unwrap().results.iter()
+                    .find(|result| result.id == id).unwrap_or_else(|| panic!("{language:?}: {query} -> {id}"));
+                assert_eq!(result.label, row.label);
+                assert_eq!(result.enabled, row.enabled);
+                assert!(result.parameter.is_none());
+            }
+            search_action(&mut s, CommandSearchAction::Execute { id, value: None });
+            assert!(s.state.command_search.is_none());
+            let document = s.engine.document();
+            let inserted = document.layer(document.active_layer).unwrap().effect.as_ref().unwrap();
+            assert_eq!(&*inserted.program.id, effect);
+            assert_eq!(inserted.program.label, s.effect_catalog.get(effect).unwrap().program.label);
+        }
+    }
+}
+
+#[test]
+fn filter_insertion_search_keeps_admitted_literal_replacements_and_custom_labels() {
+    use layer_core::EffectInstallMode;
+    let replacement_label = "私の明るさ { $label } 한글 \u{2068}mix\u{2069}";
+    let custom_label = "My literal filter { $label } 한글 🎨";
+    for language in [UiLanguage::Japanese, UiLanguage::SimplifiedChinese,
+        UiLanguage::TraditionalChinese, UiLanguage::Korean]
+    {
+        let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Windows,
+            Localizer::shared(language)).unwrap();
+        s.frame(0, 0).unwrap();
+        let mut replacement = s.effect_catalog.get("exposure").unwrap().clone();
+        std::sync::Arc::make_mut(&mut replacement.program).label = replacement_label.into();
+        let mut custom = s.effect_catalog.get("gaussian_blur").unwrap().clone();
+        let program = std::sync::Arc::make_mut(&mut custom.program);
+        program.id = "test.literal-filter".into();
+        program.label = custom_label.into();
+        let package = package_json(s.effect_catalog.categories().to_vec(), vec![replacement, custom]);
+        s.load_effect_library(&package, |_| panic!("inline program"), EffectInstallMode::Merge).unwrap();
+        s.renderer_mut().validation_result = Some(layer_render::EffectValidationResult {
+            request_id: s.state.filter_load.request_id, result: Ok(()),
+        });
+        s.frame(1, 1).unwrap();
+        assert!(!s.state.filter_load.pending);
+        let replacement_id = command_catalog::identity(&UiAction::Effect {
+            action: EffectAction::Insert { effect: "exposure".into() },
+        });
+        invoke(&mut s, CommandId::SearchCommands);
+        search_action(&mut s, CommandSearchAction::Query { text: "Exposure".into() });
+        assert!(s.state.command_search.as_ref().unwrap().results.iter().all(|row| row.id != replacement_id));
+        for (effect, literal) in [("exposure", replacement_label), ("test.literal-filter", custom_label)] {
+            let id = command_catalog::identity(&UiAction::Effect { action: EffectAction::Insert { effect: effect.into() } });
+            search_action(&mut s, CommandSearchAction::Query { text: literal.into() });
+            let row = s.state.command_search.as_ref().unwrap().results.iter().find(|row| row.id == id).unwrap();
+            assert_eq!(row.label, literal);
+            assert!(row.enabled);
+            search_action(&mut s, CommandSearchAction::Execute { id, value: None });
+            let document = s.engine.document();
+            let inserted = document.layer(document.active_layer).unwrap().effect.as_ref().unwrap();
+            assert_eq!(&*inserted.program.id, effect);
+            assert_eq!(inserted.program.label, layer_core::ResourceLabel::from(literal));
+            invoke(&mut s, CommandId::SearchCommands);
+        }
+    }
+}

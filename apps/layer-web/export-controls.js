@@ -1,28 +1,31 @@
 // The shared recipe describes a delivery copy, independent of the master.
-export const SDR_FORMATS=[["Png","PNG"],["Tiff","TIFF"],["Jpeg","JPEG"],["Webp","WebP · lossless"]];
-export async function chooseExport({app,dialog,element,button,gpuOperation,id}) {
+export const SDR_FORMATS=["Png","Tiff","Jpeg","Webp"];
+export async function chooseExport({app,dialog,element,button,numberField,gpuOperation,id}) {
   let control,running,closed=false;
-  const model=app.export_form();
+  const model=app.export_form(),copy=model.copy,profilesCopy=app.profile_copy();
   let library=await app.export_presets({type:"get",index:0});
-  try { const result=await dialog("Export image",(form,finish)=>{
+  try { const result=await dialog(copy.title,(form,finish)=>{
     let recipe=library.recipe,currentPreset=0;
     const field=(label,node)=>{const root=element("label","document-size",label);node.setAttribute("aria-label",label);root.append(node);form.append(root);return node;};
     const select=(label,choices)=>{const node=element("select");for(const[id,name]of choices){const option=element("option","",name);option.value=id;node.append(option);}return field(label,node);};
-    const number=(label,value,min,max)=>{const node=element("input");Object.assign(node,{type:"number",value,min,max,step:1});return field(label,node);};
-    form.append(element("p","","Export a profiled copy. The editable drawing stays unchanged."));
-    const destination=select("Destination",library.names.map((name,i)=>[i,name]));
-    const range=select("Dynamic range",["F16","F32"].includes(app.document_color().depth)?[["sdr","SDR rendition"],["jpeg","HDR JPEG · gain map"],["avif","HDR AVIF · gain map with transparency"],["hdr","HDR PNG · BT.2020 PQ"],["exr","OpenEXR · 32-bit float"]]:[["sdr","SDR"]]);
-    const clip=field("Clip out-of-range HDR colors",element("input"));clip.type="checkbox";
-    const format=select("Format",SDR_FORMATS);
-    const profile=select("Output profile",model.profiles.map((p,i)=>[i,p.name]));
-    const depth=select("Bit depth",[["U8","8-bit"],["U16","16-bit"],["F32","32-bit float"]]);
-    const background=select("Transparency",[["Preserve","Preserve"],["White","White background"],["Black","Black background"]]);
-    const intent=select("Rendering intent",[["RelativeColorimetric","Relative colorimetric"],["Perceptual","Perceptual"],["Saturation","Saturation"],["AbsoluteColorimetric","Absolute colorimetric"]]);
-    const dither=select("Dither",[["None","None"],["Stochastic8","Stochastic (8-bit output)"]]);
-    const quality=number("Quality",90,1,100);
-    const size=select("Pixel size",[["Original","Original"],["Fit","Fit within bounds"]]);
-    const width=number("Maximum width",2048,1,32768),height=number("Maximum height",2048,1,32768);
-    const resolution=select("Resolution metadata",[["Master","Keep original"],["Ppi","Pixels per inch"],["Omit","Omit"]]),ppi=number("Pixels per inch",300,1,65535);
+    const number=(label,value,control)=>{
+      const node=numberField(control,label,next=>{node.numericValue=next;});node.numericValue=value;node.update(value);return field(label,node);
+    };
+    const setNumber=(node,value)=>{node.cancelEditing();node.numericValue=value;node.update(value);};
+    form.append(element("p","",copy.help));
+    const destination=select(copy.destination,library.names.map((name,i)=>[i,name]));
+    const range=select(copy.range,["F16","F32"].includes(app.document_color().depth)?[["sdr",copy.sdr_rendition],["jpeg",copy.jpeg_gainmap],["avif",copy.avif_gainmap],["hdr",copy.format_pq],["exr",copy.format_exr]]:[["sdr","SDR"]]);
+    const clip=field(copy.clip_hdr,element("input"));clip.type="checkbox";
+    const format=select(copy.format,SDR_FORMATS.map(id=>[id,({Png:copy.format_png,Tiff:copy.format_tiff,Jpeg:copy.format_jpeg,Webp:copy.format_webp})[id]]));
+    const profile=select(copy.profile,model.profiles.map((p,i)=>[i,p.name]));
+    const depth=select(copy.depth,[["U8",copy.depth_8],["U16",copy.depth_16],["F32",copy.depth_float32]]);
+    const background=select(copy.transparency,[["Preserve",copy.preserve],["White",copy.white_background],["Black",copy.black_background]]);
+    const intent=select(copy.intent,[["RelativeColorimetric",copy.relative],["Perceptual",copy.perceptual],["Saturation",copy.saturation],["AbsoluteColorimetric",copy.absolute]]);
+    const dither=select(copy.dither,[["None",copy.dither_none],["Stochastic8",copy.dither_stochastic]]);
+    const quality=number(copy.quality,90,model.numeric.quality);
+    const size=select(copy.pixel_size,[["Original",copy.original_size],["Fit",copy.fit_bounds]]);
+    const width=number(copy.maximum_width,2048,model.numeric.dimension),height=number(copy.maximum_height,2048,model.numeric.dimension);
+    const resolution=select(copy.resolution,[["Master",copy.keep_resolution],["Ppi",copy.ppi],["Omit",copy.omit]]),ppi=number(copy.ppi,300,model.numeric.ppi);
     let metadataView=app.export_draft(recipe,{type:"refresh"}).metadata;
     const metadata=select(metadataView.label,metadataView.choices.map(c=>[c.value,c.label]));
     const removeLocation=field(metadataView.remove_location,element("input"));removeLocation.type="checkbox";
@@ -35,8 +38,8 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const load=()=>{
       if(!model.profiles.some(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))){model.profiles.push(recipe.profile);const option=element("option","",recipe.profile.name);option.value=model.profiles.length-1;profile.append(option);}
       range.value=recipe.format==="Exr"?"exr":recipe.format.startsWith("PngHdr")?"hdr":recipe.format.startsWith("JpegHdr")?"jpeg":recipe.format.startsWith("AvifHdr")?"avif":"sdr";clip.checked=recipe.format.endsWith("Mapped");format.value=range.value!=="sdr"?"Png":recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
-      intent.value=recipe.encoding.conversion.intent;dither.value=recipe.encoding.dither;quality.value=recipe.jpeg_quality;size.value=recipe.size.Fit?"Fit":"Original";
-      if(recipe.size.Fit)[width.value,height.value]=recipe.size.Fit.bounds;resolution.value=recipe.resolution.Ppi?"Ppi":recipe.resolution;if(recipe.resolution.Ppi)ppi.value=recipe.resolution.Ppi;
+      intent.value=recipe.encoding.conversion.intent;dither.value=recipe.encoding.dither;setNumber(quality,recipe.jpeg_quality);size.value=recipe.size.Fit?"Fit":"Original";
+      if(recipe.size.Fit){setNumber(width,recipe.size.Fit.bounds[0]);setNumber(height,recipe.size.Fit.bounds[1]);};resolution.value=recipe.resolution.Ppi?"Ppi":recipe.resolution;if(recipe.resolution.Ppi)setNumber(ppi,recipe.resolution.Ppi);
       metadata.value=recipe.metadata.keep;removeLocation.checked=recipe.metadata.remove_location;visible();
     };
     destination.onchange=()=>preference({type:"get",index:Number(destination.value)});
@@ -56,24 +59,24 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     metadata.onchange=removeLocation.onchange=()=>updateDraft({type:"metadata",value:readMetadata()});
     size.onchange=resolution.onchange=visible;load();
     const error=element("p","error-message");form.append(error);
-    form.append(button("Import ICC Profile…",async()=>{
+    form.append(button(profilesCopy.import,async()=>{
       try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});error.textContent="";}
       catch(e){error.textContent=String(e);}
     }));
-    form.append(button("Saved Profiles…",async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});invalidate();}catch(e){error.textContent=String(e);}}));
+    form.append(button(profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});invalidate();}catch(e){error.textContent=String(e);}}));
     const readRecipe=()=>({format:rangeFormat(),profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
-      encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:Number(quality.value),
-      size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:recipe.size.Fit?.enlarge??false}},
-      resolution:resolution.value==="Ppi"?{Ppi:Number(ppi.value)}:resolution.value,metadata:readMetadata()});
+      encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:quality.numericValue,
+      size:size.value==="Original"?"Original":{Fit:{bounds:[width.numericValue,height.numericValue],enlarge:recipe.size.Fit?.enlarge??false}},
+      resolution:resolution.value==="Ppi"?{Ppi:ppi.numericValue}:resolution.value,metadata:readMetadata()});
     const selected=()=>app.export_validate(app.export_draft(readRecipe(),{type:"refresh"}).recipe);
     updateDraft({type:"refresh"});
-    const presetName=field("Preset name",element("input"));presetName.maxLength=80;
+    const presetName=field(copy.preset_name,element("input"));presetName.maxLength=80;
     const presetButtons=element("div","document-size");
-    const presetAction=type=>{try{preference(type==="save"?{type,name:presetName.value,recipe:selected()}:{type,index:Number(destination.value),recipe:selected()});}catch(e){error.textContent=String(e);}};
-    const savePreset=button("Save Preset",()=>presetAction("save"));
-    const updatePreset=button("Update Preset",()=>presetAction("update"));
-    const removePreset=button("Delete Preset",()=>preference({type:"remove",index:Number(destination.value)}));
-    const resetPreset=button("Reset Destination",()=>preference({type:"reset",index:Number(destination.value)}));
+    const presetAction=type=>{if(!commitNumbers()||!form.reportValidity())return;try{preference(type==="save"?{type,name:presetName.value,recipe:selected()}:{type,index:Number(destination.value),recipe:selected()});}catch(e){error.textContent=String(e);}};
+    const savePreset=button(copy.save_preset,()=>presetAction("save"));
+    const updatePreset=button(copy.update_preset,()=>presetAction("update"));
+    const removePreset=button(copy.delete_preset,()=>preference({type:"remove",index:Number(destination.value)}));
+    const resetPreset=button(copy.reset_destination,()=>preference({type:"reset",index:Number(destination.value)}));
     const presetAvailability=()=>{updatePreset.disabled=removePreset.disabled=Number(destination.value)<4;resetPreset.disabled=Number(destination.value)>=4;};
     presetButtons.append(savePreset,updatePreset,removePreset,resetPreset);form.append(presetButtons);presetAvailability();
     let preferenceBusy=false;
@@ -83,7 +86,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
       catch(e){destination.value=String(currentPreset);error.textContent=String(e);}finally{preferenceBusy=false;inputs.forEach(n=>n.disabled=false);presetAvailability();}
     }
     const comparison=element("div","color-comparison"),status=element("p"),footer=element("footer");
-    const previewMode=select("Preview rendition",[["hdr","HDR reconstruction · SDR preview"],["sdr","Encoded SDR base"]]);previewMode.closest("label").hidden=true;
+    const previewMode=select(copy.preview_rendition,[["hdr",copy.hdr_preview],["sdr",copy.sdr_base]]);previewMode.closest("label").hidden=true;
     let rangeBlocked=false,completed;
     const invalidate=()=>{completed=null;comparison.replaceChildren();previewMode.closest("label").hidden=true;status.textContent="";rangeBlocked=false;choose.disabled=false;};
     const invalidateInput=e=>{if(e.target!==previewMode)invalidate();};
@@ -94,17 +97,18 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
       images.forEach((image,index)=>{const figure=element("figure"),canvas=element("canvas");[canvas.width,canvas.height]=image.extent;
         // These bounded previews already arrive as CPU pixels. Keep their 2D
         // storage on CPU, including while the scrollable comparison is offscreen.
-        canvas.getContext("2d",{willReadFrequently:true}).putImageData(new ImageData(new Uint8ClampedArray(image.pixels),...image.extent),0,0);canvas.setAttribute("aria-label",index?"Output preview":"Artwork preview");
-        const caption=index?(output.sdr_preview?(previewMode.value==="sdr"?"Encoded SDR base":"HDR reconstruction · SDR preview"):"Output"):"Artwork";
+        canvas.getContext("2d",{willReadFrequently:true}).putImageData(new ImageData(new Uint8ClampedArray(image.pixels),...image.extent),0,0);canvas.setAttribute("aria-label",index?copy.output_preview:copy.artwork_preview);
+        const caption=index?(output.sdr_preview?(previewMode.value==="sdr"?copy.sdr_base:copy.hdr_preview):copy.output):copy.artwork;
         figure.append(canvas,element("figcaption","",caption));comparison.append(figure);});
     };
     previewMode.onchange=()=>{if(completed)drawComparison();};
-    const cancel=button("Cancel",()=>{control?.cancel();finish(null);});
-    const choose=button("Choose File…",()=>{if(!form.reportValidity())return;try{finish({recipe:selected(),destination:Number(destination.value)});}catch(e){error.textContent=String(e);}},"suggested-action");
-    const preview=button("Preview Output",()=>{
-      if(running||!form.reportValidity())return;
+    const cancel=button(copy.common.cancel,()=>{control?.cancel();finish(null);});
+    const commitNumbers=()=>[quality,width,height,ppi].filter(node=>!node.closest("label").hidden).every(node=>node.commit());
+    const choose=button(copy.choose_file,()=>{if(!commitNumbers()||!form.reportValidity())return;try{finish({recipe:selected(),destination:Number(destination.value)});}catch(e){error.textContent=String(e);}},"suggested-action");
+    const preview=button(copy.preview,()=>{
+      if(running||!commitNumbers()||!form.reportValidity())return;
       let recipe;try{recipe=selected();}catch(e){error.textContent=String(e);return;}
-      invalidate();control?.free();control=app.capture_control();status.textContent="Preparing complete output comparison…";error.textContent="";
+      invalidate();control?.free();control=app.capture_control();status.textContent=copy.preparing_comparison;error.textContent="";
       const inputs=[...form.querySelectorAll('input,select,button')].filter(node=>node!==cancel);inputs.forEach(node=>node.disabled=true);
       running=(async()=>{
         try{
@@ -112,7 +116,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
           if(closed||control.cancelled())return;
           completed=output;previewMode.closest("label").hidden=!output.sdr_preview;drawComparison();
           rangeBlocked=["PngHdr","JpegHdr","AvifHdr"].includes(recipe.format)&&output.clipped_channels>0;
-          status.textContent=(output.sdr_preview?"Decoded JPEG/AVIF output, including compression and the encoded SDR base. HDR reconstruction is mapped for this SDR preview.":recipe.format==="Exr"?"Mapped SDR preview of lossless Float32 OpenEXR delivery.":recipe.format.startsWith("PngHdr")?"Mapped SDR preview of PQ delivery.":"sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts.")+(rangeBlocked?" Some colors exceed the delivery range. Enable Clip out-of-range HDR colors or choose OpenEXR.":output.clipped_channels>0?" Some colors exceed the output gamut and will be clipped.":"");
+          status.textContent=app.export_preview_status(recipe,Boolean(output.sdr_preview),output.clipped_channels>0);
         }catch(e){if(!closed&&!control.cancelled())error.textContent=String(e);}
         finally{running=null;if(!closed){inputs.forEach(node=>node.disabled=false);choose.disabled=rangeBlocked;presetAvailability();}}
       })();
@@ -125,51 +129,54 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
 }
 
 export function importProfile(app,element) {
+  const copy=app.profile_copy();
   return new Promise((resolve,reject)=>{
     const input=element("input");input.type="file";input.accept=".icc,.icm";input.hidden=true;document.body.append(input);
     input.oncancel=()=>{input.remove();resolve(null);};
-    input.onchange=async()=>{try{const file=input.files[0];if(!file){resolve(null);return;}if(file.size>16*1024*1024)throw new Error("ICC profile exceeds 16 MiB");resolve(await app.profile_library("import",undefined,new Uint8Array(await file.arrayBuffer())));}catch(e){reject(e);}finally{input.remove();}};
+    input.onchange=async()=>{try{const file=input.files[0];if(!file){resolve(null);return;}if(file.size>copy.read_bytes)throw new Error(copy.read_limit);resolve(await app.profile_library("import",undefined,new Uint8Array(await file.arrayBuffer())));}catch(e){reject(e);}finally{input.remove();}};
     input.click();
   });
 }
 
 export function chooseSourceProfile({app,dialog,element,button}) {
-  return dialog("Choose image interpretation",(form,finish)=>{
-    form.append(element("p","","This image has no declared color profile. Choose how to interpret its stored values. The original numbers will be retained."));
+  const copy=app.profile_copy();
+  return dialog(copy.interpret_title,(form,finish)=>{
+    form.append(element("p","",copy.interpret_help));
     const profiles=["Srgb","DisplayP3","AdobeRgb","ProPhoto"].map(space=>({Builtin:space}));
-    const select=element("select");select.setAttribute("aria-label","Interpret as");
+    const select=element("select");select.setAttribute("aria-label",copy.interpret_as);
     ["sRGB","Display P3","Adobe RGB (1998)","ProPhoto RGB"].forEach((name,i)=>{const option=element("option","",name);option.value=i;select.append(option);});form.append(select);
     const error=element("p","error-message");form.append(error);
-    form.append(button("Import ICC Profile…",async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;error.textContent="";}catch(e){error.textContent=String(e);}}));
-    form.append(button("Saved Profiles…",async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;}catch(e){error.textContent=String(e);}}));
-    const footer=element("footer");footer.append(button("Cancel",()=>finish(null)),button("Use Profile",()=>finish(profiles[Number(select.value)]),"suggested-action"));form.append(footer);
+    form.append(button(copy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;error.textContent="";}catch(e){error.textContent=String(e);}}));
+    form.append(button(copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;}catch(e){error.textContent=String(e);}}));
+    const footer=element("footer");footer.append(button(copy.common.cancel,()=>finish(null)),button(copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action"));form.append(footer);
   });
 }
 
 export function chooseProfileLibrary({app,element,button,manage=false}) {
+  const copy=app.profile_copy();
   return new Promise(resolve=>{
     const root=element("dialog","document-dialog profile-library"),form=element("form"),list=element("div"),error=element("p","error-message");
     form.method="dialog";let result=null,closed=false;
     const finish=value=>{result=value;root.close();};
     root.addEventListener("close",()=>{closed=true;root.remove();resolve(result);},{once:true});
-    form.append(element("h2","","Color Profile Library"),element("p","","Imported profiles are stored as exact copies. Removing an entry leaves original files and profiles embedded in drawings or export presets intact."),list,error);
-    const done=button("Done",()=>finish(null));
+    form.append(element("h2","",copy.library_title),element("p","",copy.library_help),list,error);
+    const done=button(copy.common.done,()=>finish(null));
     const run=async action=>{
       const inputs=[...form.querySelectorAll('button')];inputs.forEach(b=>b.disabled=true);error.textContent="";
       try{await action();}catch(e){if(!closed)error.textContent=String(e);}finally{if(!closed)inputs.forEach(b=>b.disabled=false);}
     };
     const refresh=async()=>{
       const entries=await app.profile_library("list");if(closed)return;
-      list.replaceChildren();if(!entries.length)list.append(element("p","","No imported profiles"));
+      list.replaceChildren();if(!entries.length)list.append(element("p","",copy.empty));
       for(const entry of entries){
         const row=element("section","profile-entry"),actions=element("div","document-size");
-        row.append(element("h3","",entry.name),element("p","",entry.issue??`${entry.channels} · ${entry.bytes} bytes · ${entry.id.slice(0,12)}`));
-        if(!manage&&!entry.issue)actions.append(button("Use Profile",()=>run(async()=>{const profile=await app.profile_library("get",entry.id);if(!closed)finish(profile);})));
-        actions.append(button(entry.visible===false?"Show in Profile Menus":"Hide from Profile Menus",()=>run(async()=>{await app.profile_library(entry.visible===false?"show":"hide",entry.id);await refresh();})));
-        actions.append(button("Remove",()=>run(async()=>{await app.profile_library("remove",entry.id);await refresh();})));row.append(actions);list.append(row);
+        row.append(element("h3","",entry.name),element("p","",entry.issue??entry.details));
+        if(!manage&&!entry.issue)actions.append(button(copy.use_profile,()=>run(async()=>{const profile=await app.profile_library("get",entry.id);if(!closed)finish(profile);})));
+        actions.append(button(entry.visible===false?copy.show:copy.hide,()=>run(async()=>{await app.profile_library(entry.visible===false?"show":"hide",entry.id);await refresh();})));
+        actions.append(button(copy.remove,()=>run(async()=>{await app.profile_library("remove",entry.id);await refresh();})));row.append(actions);list.append(row);
       }
     };
-    form.append(button("Import ICC Profile…",()=>run(async()=>{const profile=await importProfile(app,element);if(profile&&!manage&&!closed)finish(profile);else await refresh();})),done);
+    form.append(button(copy.import,()=>run(async()=>{const profile=await importProfile(app,element);if(profile&&!manage&&!closed)finish(profile);else await refresh();})),done);
     form.onsubmit=e=>e.preventDefault();root.append(form);document.body.append(root);root.showModal();run(refresh);
   });
 }

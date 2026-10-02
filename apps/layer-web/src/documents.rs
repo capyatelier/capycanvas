@@ -34,29 +34,53 @@ pub struct WebProject {
 impl WebApp {
     pub fn document_properties(&self) -> Result<js_sys::Promise, JsValue> {
         let info = layer_color::DocumentInfo::capture(self.session.engine().document());
+        let localization = self.session.localization().clone();
         Ok(future_to_promise(async move {
             let metadata = serde_json::to_string(&info).map_err(js)?;
-            JsFuture::from(raster_worker::call(
-                "properties",
-                &metadata,
-                &js_sys::Array::new(),
-            )?)
-            .await
+            let inspected = JsFuture::from(raster_worker::call("properties", &metadata, &js_sys::Array::new())?).await?;
+            let inspected: layer_color::InspectedDocumentInfo = serde_wasm_bindgen::from_value(inspected).map_err(js)?;
+            let view = layer_ui::document_properties(&inspected, &localization);
+            serialize(&view.rows.into_iter().chain(view.sources).collect::<Vec<_>>())
         }))
     }
+    pub fn export_copy(&self) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::color_feature_copy::ExportCopy::new(self.session.localization()))
+    }
+    pub fn profile_copy(&self) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::color_feature_copy::ProfileCopy::new(self.session.localization()))
+    }
+    pub fn document_color_copy(&self) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::color_feature_copy::DocumentColorCopy::new(self.session.localization()))
+    }
+    pub fn proof_dial_value(&self) -> String {
+        layer_ui::color_feature_copy::proof_dial_value(self.session.effective_sdr_rendition(), self.session.localization())
+    }
+    pub fn proof_copy(&self) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::color_feature_copy::ProofCopy::new(self.session.localization()))
+    }
+    pub fn color_source_preview(&self, name: &str, preview: &str, adds_layer: bool) -> String {
+        let localizer = self.session.localization();
+        let mut args = layer_ui::FluentArgs::new(); args.set("name", name); args.set("preview", preview);
+        let layer = if adds_layer {localizer.text(layer_ui::MessageId::COLOR_FEATURES_COLOR_ADDS_LAYER)} else {std::sync::Arc::from("")};
+        args.set("layer", layer.as_ref()); localizer.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_SOURCE_PREVIEW, &args)
+    }
+    pub fn export_preview_status(&self, recipe: JsValue, gainmap: bool, clipped: bool) -> Result<String, JsValue> {
+        let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
+        Ok(layer_ui::color_feature_copy::export_preview_status(self.session.localization(), recipe.format, gainmap, clipped))
+    }
     pub fn export_form(&self) -> Result<JsValue, JsValue> {
-        serialize(&layer_ui::ExportForm::new(self.session.engine().document()))
+        serialize(&layer_ui::ExportForm::new_localized(self.session.engine().document(), self.session.localization()))
     }
     pub fn export_draft(&self, recipe: JsValue, action: JsValue) -> Result<JsValue, JsValue> {
         let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
         let action: layer_ui::ExportDraftAction = serde_wasm_bindgen::from_value(action).map_err(js)?;
-        serialize(&recipe.draft(action))
+        serialize(&recipe.draft_localized(action, self.session.localization()))
     }
     pub fn export_validate(&self, recipe: JsValue) -> Result<JsValue, JsValue> {
         let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
         let document = self.session.engine().document();
-        recipe.validate().map_err(js)?;
-        recipe.output_extent([document.width, document.height]).map_err(js)?;
+        recipe.validate().map_err(|reason|js(reason.message(self.session.localization())))?;
+        recipe.output_extent([document.width, document.height]).map_err(|reason|js(reason.message(self.session.localization())))?;
         serialize(&recipe)
     }
 
@@ -241,7 +265,7 @@ impl WebApp {
             let source_kind = imported.source;
             let project = imported.project;
             hdr::admit_document(&project.document)?;
-            if !placing { admission.admit(&project).map_err(js)?; }
+            if !placing { admission.admit(&project).map_err(|reason| js(reason.message(&localization)))?; }
             if placing {
                 let source = project
                     .document
@@ -407,7 +431,7 @@ impl WebApp {
         candidate.inherit_window_state(&self.session).map_err(js)?;
         candidate.inherit_initial_drawing_tools(&self.session).map_err(js)?;
         let active = self.session.retained_document_tiles();
-        self.documents.admit(&active, &candidate.capture_project_recovery().map_err(js)?).map_err(js)?;
+        self.documents.admit(&active, &candidate.capture_project_recovery().map_err(js)?).map_err(|reason| js(reason.message(self.session.localization())))?;
         let config = &self.surface.as_ref().ok_or_else(|| js("Canvas unavailable"))?.config;
         candidate.renderer_mut().resize_surface(config.width, config.height).map_err(js)?;
         // All fallible candidate preparation precedes retiring the live editor.
@@ -429,5 +453,5 @@ impl WebApp {
 #[wasm_bindgen]
 pub fn raster_worker_properties(metadata: &str) -> Result<JsValue, JsValue> {
     let info: layer_color::DocumentInfo = serde_json::from_str(metadata).map_err(js)?;
-    serialize(&info.describe().map_err(js)?)
+    serialize(&info.inspect().map_err(js)?)
 }

@@ -72,7 +72,7 @@ async function execute({id,request}) {
       default: throw new Error("Unknown raster worker operation");
     }
     self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : (result?.bytes ? [result.bytes] : result?.buffers || []).map(bytes=>bytes.buffer));
-  } catch(error) { self.postMessage({id,error:String(error),retire:retire()}); }
+  } catch(error) { self.postMessage({id,error:String(error),color_feature_error:error?.color_feature_error,retire:retire()}); }
 }
 
 const outputs=new Map();
@@ -158,7 +158,7 @@ async function profileLibrary({operation,id},bytes) {
   const read=async id=>{
     const key=policy({type:"remove",id}).id;
     const data=await store("readonly",s=>s.get(key));
-    if(!data)throw new Error("Profile is no longer in the library");
+    if(!data)throw {color_feature_error:"ProfileMissing"};
     return data;
   };
   if(operation==="get")return profile(policy({type:"get",id},await read(id)));
@@ -174,7 +174,7 @@ async function profileLibrary({operation,id},bytes) {
   const entries=[];
   for(const entry of await inventory()){
     let data=new Uint8Array(),error=null;
-    try{if(!entry.issue)data=await read(entry.id);}catch(e){error=String(e);}
+    try{if(!entry.issue)data=await read(entry.id);}catch(e){error=e?.color_feature_error??{Diagnostic:String(e)};}
     entries.push({...policy({type:"inspect",entry,error},data),visible:!hidden.includes(entry.id)});
   }
   return entries.sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id));

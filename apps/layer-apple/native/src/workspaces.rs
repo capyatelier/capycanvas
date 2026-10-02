@@ -23,7 +23,7 @@ impl CapyApple {
             self.host.session.set_workspace_read_only(true);
             let platform = self.host.session.state().platform;
             self.workspaces = Some(
-                WorkspaceController::new(store, platform, time)
+                WorkspaceController::new_localized(store, platform, time, self.host.session.localization().clone())
                     .with_resume_key(format!("apple:scene:{scene}"), time),
             );
         }
@@ -42,7 +42,7 @@ impl CapyApple {
             let before = self.host.session.state().revision;
             match c.input(&mut self.host.session, input, time) {
                 Ok(change) => self.host.apply_change(before, change),
-                Err(error) => c.view.error = Some(error.to_string()),
+                Err(error) => c.view.error = Some(error.localized_message(self.host.session.localization())),
             }
         }
         let before = self.host.session.state().revision;

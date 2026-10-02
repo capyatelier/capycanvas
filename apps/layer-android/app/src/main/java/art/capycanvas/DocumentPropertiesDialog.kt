@@ -8,26 +8,35 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
-import org.json.JSONArray
+import org.json.JSONObject
 
 @Composable internal fun DocumentPropertiesDialog(host: CanvasHost, onDismiss: () -> Unit) {
-    var rows by remember { mutableStateOf<JSONArray?>(null) }
+    var view by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         try { withContext(NonCancellable) {
             val task = host.withNative { Native.documentInfoTask(it) }
-            rows = withContext(Dispatchers.IO) { JSONArray(Native.documentInfo(task)) }
+            view = withContext(Dispatchers.IO) { JSONObject(Native.documentInfo(task)) }
         } } catch (e: Exception) { error = e.message }
     }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Document Properties") },
-        confirmButton = { TextButton(onDismiss) { Text("Done") } }, text = {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(view?.getString("title") ?: host.bootstrap?.getString("preparing_document").orEmpty()) },
+        confirmButton = { TextButton(onDismiss) { Text(view?.getString("done") ?: host.bootstrap?.getJSONObject("common")?.getString("done").orEmpty()) } }, text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 580.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                rows?.let { values -> for (i in 0 until values.length()) {
+                view?.getJSONArray("rows")?.let { values -> for (i in 0 until values.length()) {
                     val row = values.getJSONArray(i)
                     Text(row.getString(0), style = MaterialTheme.typography.titleSmall)
                     Text(row.getString(1))
                 } }
-                if (rows == null && error == null) { CircularProgressIndicator() }
+                view?.let { properties ->
+                    val sources = properties.getJSONArray("sources")
+                    if (sources.length() > 0) Text(properties.getString("source_images"), style = MaterialTheme.typography.titleMedium)
+                    for (i in 0 until sources.length()) {
+                        val row = sources.getJSONArray(i)
+                        Text(row.getString(0), style = MaterialTheme.typography.titleSmall)
+                        Text(row.getString(1))
+                    }
+                }
+                if (view == null && error == null) { CircularProgressIndicator() }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         })

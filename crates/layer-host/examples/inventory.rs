@@ -22,7 +22,7 @@ fn workspace_host(platform: Platform, preset: WorkspacePreset) -> NativeHost {
     let [width, height] = layer_ui::DEFAULT_DOCUMENT_EXTENT;
     host.session = UiSession::from_project(
         Renderer::default(),
-        layer_ui::new_drawing(width, height).unwrap(),
+        layer_ui::new_drawing(width, height, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
         None,
         [2400, 1800],
         platform,
@@ -32,8 +32,8 @@ fn workspace_host(platform: Platform, preset: WorkspacePreset) -> NativeHost {
     // Match the settled app's task workspace and working tools. Bare C-ABI
     // creation precedes the coordinator's adoption and omits its menu routes.
     let layout = preset.layout(platform);
-    let mut capture = WorkspaceCapture::from_template(&layout).unwrap();
-    capture.working = preset.working_state();
+    let mut capture = WorkspaceCapture::from_template_canonical(&layout).unwrap();
+    capture.working = preset.working_state_canonical();
     host.session
         .adopt_workspace(PreparedWorkspace::new(capture).unwrap())
         .unwrap();

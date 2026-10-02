@@ -31,6 +31,27 @@ using V=IJsonValue;
 }
 namespace CapyUi {
 struct StrokeRecording;
+inline void captureTextComposition(TextBox const& entry) {
+    auto key=box_value(L"CapyTextComposition");
+    if(entry.Resources().HasKey(key))return;
+    entry.Resources().Insert(key,box_value(false));
+    entry.TextCompositionStarted([](TextBox const& entry,auto&&){entry.Resources().Insert(box_value(L"CapyTextComposition"),box_value(true));});
+    entry.TextCompositionEnded([](TextBox const& entry,auto&&){entry.Resources().Insert(box_value(L"CapyTextComposition"),box_value(false));});
+    entry.LostFocus([](auto&& sender,auto&&){sender.template as<TextBox>().Resources().Insert(box_value(L"CapyTextComposition"),box_value(false));});
+}
+inline bool textComposing(DependencyObject element) {
+    for(;element;element=VisualTreeHelper::GetParent(element))if(auto entry=element.try_as<TextBox>()){
+        auto key=box_value(L"CapyTextComposition");
+        return entry.Resources().HasKey(key)&&unbox_value<bool>(entry.Resources().Lookup(key));
+    }
+    return false;
+}
+inline bool focusedTextComposing(XamlRoot const& root) {
+    return root&&textComposing(FocusManager::GetFocusedElement(root).try_as<DependencyObject>());
+}
+inline bool composingKey(KeyRoutedEventArgs const& event) {
+    return event.Key()==static_cast<Windows::System::VirtualKey>(VK_PROCESSKEY)||textComposing(event.OriginalSource().try_as<DependencyObject>());
+}
 inline V S(hstring const& value){return JsonValue::CreateStringValue(value);}
 inline V N(double value){return JsonValue::CreateNumberValue(value);}
 inline V B(bool value){return JsonValue::CreateBooleanValue(value);}
@@ -96,14 +117,16 @@ inline Image panelGrip(hstring const& theme,bool vertical=false){
     result.HorizontalAlignment(HorizontalAlignment::Center);result.VerticalAlignment(VerticalAlignment::Center);
     result.RenderTransformOrigin({.5f,.5f});orientGrip(result,vertical);return result;
 }
-inline J numeric(J const& spec,double value,J const& operation){
+inline J numeric(CapyLocalization const* localization,J const& spec,double value,J const& operation){
     auto json=to_string(O({{L"control",spec},{L"value",N(value)},{L"operation",operation}}).Stringify());
-    std::unique_ptr<char,decltype(&capy_string_free)> result(capy_number(json.c_str()),capy_string_free);
+    std::unique_ptr<char,decltype(&capy_string_free)> result(capy_number(localization,json.c_str()),capy_string_free);
     if(!result)throw hresult_invalid_argument(to_hstring(capy_error()));
     return J::Parse(to_hstring(result.get()));
 }
 using Bindings=std::vector<std::function<void()>>;
+using NumericAdmissions=std::vector<std::function<bool(bool)>>;
 struct WorkspaceData {
+    std::shared_ptr<CapyLocalization> localization;
     J state,catalog,model;
     std::shared_ptr<FilterPreviewCache> previews;
     std::shared_ptr<LayerThumbnailCache> thumbnails;
@@ -145,10 +168,27 @@ struct WorkspaceData {
         for(auto const& [role,brush]:glassBrushes)brush.Color(glassColor(role.c_str()));
         for(auto const& [key,brush]:tintBrushes){auto value=color(str(palette,key.first.c_str(),L"#414141"));value.A=key.second;brush.Color(value);}
     }
+    J appearance(J const& options)const{
+        auto source=to_string(options.Stringify());
+        std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_document_appearance(localization.get(),source.c_str()),capy_string_free);
+        if(!raw)throw hresult_error(E_OUTOFMEMORY);
+        return J::Parse(to_hstring(raw.get()));
+    }
+    hstring caption(J const& request)const{
+        auto source=to_string(request.Stringify());
+        std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_native_caption(localization.get(),source.c_str()),capy_string_free);
+        if(!raw)throw hresult_error(E_OUTOFMEMORY);
+        auto result=J::Parse(to_hstring(raw.get()));
+        if(result.HasKey(L"error"))throw hresult_invalid_argument(str(result,L"error"));
+        return str(result,L"text");
+    }
+    hstring caption(wchar_t const* group,wchar_t const* key)const{return str(object(object(catalog,L"native_copy"),group),key);}
+    hstring common(wchar_t const* key)const{return str(object(object(catalog,L"bootstrap"),L"common"),key);}
     void dispatch(J const& action) const {send(to_string(action.Stringify()));}
     void dispatchDocument(J const& action,hstring const& epoch) const {
         dispatch(O({{L"windows_epoch",S(epoch)},{L"action",action}}));
     }
+    hstring language()const{return str(object(catalog,L"bootstrap"),L"active_tag");}
     hstring theme()const{return str(state,L"theme",L"dark");}
     SolidColorBrush brush(wchar_t const* role)const{
         auto found=paletteBrushes.find(role);if(found!=paletteBrushes.end())return found->second;
@@ -167,6 +207,9 @@ struct WorkspaceData {
     }
     double textSize()const{return num(catalog,L"text_size_pt",11)*96./72.;}
 };
+inline void inheritLanguage(FrameworkElement const& element,std::shared_ptr<WorkspaceData> const& data) {
+    auto language=data->language();if(!language.empty())element.Language(language);
+}
 inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"button",13);}
 inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){return data->glass(L"chip");}
 inline SolidColorBrush selected(std::shared_ptr<WorkspaceData> const& data){return data->glassSurfaces?data->glass(L"selection"):data->brush(L"selection");}
@@ -177,7 +220,7 @@ inline J displayColors(J const& state){
 inline SolidColorBrush accent(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"accent");}
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
-    result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
+    inheritLanguage(result,data);result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
     result.LineHeight(18);result.LineStackingStrategy(LineStackingStrategy::BlockLineHeight);
     if(bold)result.FontWeight(Windows::UI::Text::FontWeights::Bold());
     return result;
@@ -196,7 +239,7 @@ inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& res
 template<typename T=Button>
 inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
     T result;result.Content(box_value(text));result.FontSize(data->textSize());
-    result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
+    inheritLanguage(result,data);result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
     result.FontWeight(Windows::UI::Text::FontWeights::Bold());
     result.MinWidth(0);result.MinHeight(0);result.Padding(Thickness{0});
     result.BorderThickness(Thickness{0});result.CornerRadius(CornerRadius{6,6,6,6});
@@ -290,5 +333,5 @@ struct NumberPresentation {
     std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;
 };
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
-    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L"",bool inlineTrack=false,NumberPresentation const& presentation={});
+    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L"",bool inlineTrack=false,NumberPresentation const& presentation={},NumericAdmissions* admissions=nullptr);
 }

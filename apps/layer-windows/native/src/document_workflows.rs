@@ -94,12 +94,15 @@ enum Payload {
 }
 pub(crate) struct Task {
     pub id: u32,
+    localization: std::sync::Arc<layer_ui::Localizer>,
     pub control: CaptureControl,
     pub stage: &'static str,
     pub serial: u32,
     kind: &'static str,
     details: Value,
     preset_view: Value,
+    feature_copy: Value,
+    converted_name: String,
     error: Option<String>,
     payload: Payload,
 }
@@ -109,12 +112,15 @@ impl Task {
         if id == 0 {
             return Ok(Box::new(Self {
                 id,
+                localization: session.localization().clone(),
                 control: Default::default(),
                 stage: "options",
                 serial: 0,
                 kind: "profiles",
                 details: Value::Null,
                 preset_view: Value::Null,
+                feature_copy: Self::feature_copy(session.localization()),
+                converted_name: layer_ui::DocumentDeliveryMessage::ConvertedName { name: session.state().document_file.title().to_string() }.message(session.localization()),
                 error: None,
                 payload: Payload::Profiles,
             }));
@@ -262,20 +268,28 @@ impl Task {
         };
         Ok(Box::new(Self {
             id,
+            localization: session.localization().clone(),
             control: Default::default(),
             stage: "options",
             serial: 0,
             kind,
             details: Value::Null,
             preset_view: Value::Null,
+            feature_copy: Self::feature_copy(session.localization()),
+            converted_name: layer_ui::DocumentDeliveryMessage::ConvertedName { name: session.state().document_file.title().to_string() }.message(session.localization()),
             error: None,
             payload,
         }))
     }
+    fn feature_copy(localization: &layer_ui::Localizer) -> Value {
+        use layer_ui::color_feature_copy::{DocumentColorCopy, ExportCopy, ProfileCopy, ProofCopy};
+        json!({"color": DocumentColorCopy::new(localization), "export": ExportCopy::new(localization),
+            "profile": ProfileCopy::new(localization), "proof": ProofCopy::new(localization)})
+    }
     fn describe(&mut self) -> Result<(), String> {
         self.details = match &mut self.payload {
             Payload::Profiles => {
-                json!({"profiles":crate::color_storage::list(self.control.cancellation_flag())?})
+                json!({"profiles":crate::color_storage::list_view(self.control.cancellation_flag(), &self.localization)?})
             }
             Payload::Proof(task) => task.details(self.control.cancellation_flag())?,
             Payload::Export { task, .. } => {
@@ -284,25 +298,27 @@ impl Task {
                         layer_ui::ExportPresetAction::Get { index: 0 },
                         task.document(),
                         self.control.cancellation_flag(),
+                        &self.localization,
                     )
                     .or_else(|_| {
                         crate::color_storage::presets(
                             layer_ui::ExportPresetAction::List,
                             task.document(),
                             self.control.cancellation_flag(),
+                            &self.localization,
                         )
                     })?;
                     if let Some(recipe) = &view.recipe
                         && task.configure(recipe.clone()).is_err()
                     {
-                        task.configure(layer_ui::ExportRecipe::web_share())?;
+                        task.configure(layer_ui::ExportRecipe::web_share()).map_err(|reason| reason.message(&self.localization))?;
                     }
                     self.preset_view = serde_json::to_value(view).map_err(|e| e.to_string())?;
                 }
-                let mut details = task.details()?;
+                let mut details = task.details_localized(&self.localization)?;
                 details["presets"] = self.preset_view.clone();
-                details["profiles"] = serde_json::to_value(crate::color_storage::list(
-                    self.control.cancellation_flag(),
+                details["profiles"] = serde_json::to_value(crate::color_storage::list_view(
+                    self.control.cancellation_flag(), &self.localization,
                 )?)
                 .map_err(|e| e.to_string())?;
                 details
@@ -314,19 +330,19 @@ impl Task {
                     })?;
                 }
                 json!({"pending":task.images.pending_source().map(|s| &s.interpretation),"extensions":layer_color::photo::extensions().collect::<Vec<_>>(),
-                    "profiles":crate::color_storage::list(self.control.cancellation_flag())?, "clipboard":task.clipboard.as_ref().map(|p| json!({"path":p,"folder":p.parent(),"name":p.file_name().and_then(|s| s.to_str())}))})
+                    "profiles":crate::color_storage::list_view(self.control.cancellation_flag(), &self.localization)?, "clipboard":task.clipboard.as_ref().map(|p| json!({"path":p,"folder":p.parent(),"name":p.file_name().and_then(|s| s.to_str())}))})
             }
             Payload::Color(task) => task.details(),
             Payload::Source(task) => {
-                let mut details = task.details()?;
-                details["profiles"] = serde_json::to_value(crate::color_storage::list(
-                    self.control.cancellation_flag(),
+                let mut details = task.details_localized(&self.localization)?;
+                details["profiles"] = serde_json::to_value(crate::color_storage::list_view(
+                    self.control.cancellation_flag(), &self.localization,
                 )?)
                 .map_err(|e| e.to_string())?;
                 details
             }
             Payload::Info(info) => {
-                serde_json::to_value(info.describe()?).map_err(|e| e.to_string())?
+                serde_json::to_value(layer_ui::document_properties(&info.inspect()?, &self.localization)).map_err(|e| e.to_string())?
             }
             Payload::Histogram {
                 project,
@@ -348,6 +364,8 @@ impl Task {
                 json!({"axis":histogram.axis(),"histogram":histogram,"sampled_time":sampled_time})
             }
         };
+        self.details["feature_copy"] = self.feature_copy.clone();
+        if matches!(self.payload, Payload::Color(_)) { self.details["suggested_name"] = json!(self.converted_name); }
         Ok(())
     }
     /// Only the file worker calls this; errors keep a reviewable task to cancel.
@@ -369,11 +387,12 @@ impl Task {
                     crate::color_storage::import(
                         std::path::Path::new(&path),
                         self.control.cancellation_flag(),
+                        &self.localization,
                     )?;
                     self.describe()
                 }
                 Action::ProfileRemove { id } => {
-                    crate::color_storage::remove(&id, self.control.cancellation_flag())?;
+                    crate::color_storage::remove(&id, self.control.cancellation_flag(), &self.localization)?;
                     self.describe()
                 }
                 Action::ProofOptions { settings, profile_id } => {
@@ -396,10 +415,10 @@ impl Task {
                         return Err("No export is pending".into());
                     };
                     if let Some(id) = profile_id {
-                        recipe.profile = crate::color_storage::export_profile(&id, self.control.cancellation_flag())?;
+                        recipe.profile = crate::color_storage::export_profile(&id, self.control.cancellation_flag(), &self.localization)?;
                     }
-                    task.configure(recipe)?;
-                    task.compare(self.control.clone())?;
+                    task.configure(recipe).map_err(|reason| reason.message(&self.localization))?;
+                    task.compare(self.control.clone()).map_err(|reason| reason.message(&self.localization))?;
                     self.stage = "preview";
                     self.describe()
                 }
@@ -419,7 +438,7 @@ impl Task {
                     crate::document_io::atomic_write_seek(
                         std::path::Path::new(&path),
                         self.control.cancellation_flag(),
-                        |file| task.write(file, self.control.clone()),
+                        |file| task.write(file, self.control.clone()).map_err(|reason| reason.message(&self.localization)),
                     )?;
                     let remember = layer_ui::ExportPresetAction::Remember {
                         index: (*destination).min(3),
@@ -429,8 +448,9 @@ impl Task {
                         remember,
                         task.document(),
                         self.control.cancellation_flag(),
+                        &self.localization,
                     ) {
-                        *notice = Some(format!("Image saved; export preferences were not saved: {error}"));
+                        *notice = Some(layer_ui::DocumentDeliveryMessage::ExportPreferences { detail: error }.message(&self.localization));
                     }
                     self.stage = "saved";
                     Ok(())
@@ -440,7 +460,7 @@ impl Task {
                     profile_id,
                 } => {
                     if let Some(id) = profile_id {
-                        let value = crate::color_storage::export_profile(&id, self.control.cancellation_flag())?;
+                        let value = crate::color_storage::export_profile(&id, self.control.cancellation_flag(), &self.localization)?;
                         match &mut action {
                             layer_ui::ExportPresetAction::Save { recipe, .. }
                             | layer_ui::ExportPresetAction::Update { recipe, .. }
@@ -460,9 +480,10 @@ impl Task {
                         action,
                         task.document(),
                         self.control.cancellation_flag(),
+                        &self.localization,
                     )?;
                     if let Some(recipe) = &view.recipe {
-                        task.configure(recipe.clone())?;
+                        task.configure(recipe.clone()).map_err(|reason| reason.message(&self.localization))?;
                     }
                     if let Some(index) = view.index {
                         *destination = index;
@@ -489,7 +510,7 @@ impl Task {
                         return Err("No image interpretation is pending".into());
                     };
                     task.images.interpret(
-                        profile.resolve(self.control.cancellation_flag())?,
+                        profile.resolve(self.control.cancellation_flag(), &self.localization)?,
                         self.control.is_cancelled(),
                     )?;
                     self.read_images()
@@ -505,7 +526,7 @@ impl Task {
                             self.stage = "preview";
                         }
                         Payload::Source(task) if !copy => {
-                            task.work(serde_json::from_value::<Option<crate::color_storage::ProfileChoice>>(choice).map_err(|e| e.to_string())?.map(|p| p.resolve(self.control.cancellation_flag())).transpose()?, || self.control.is_cancelled())?;
+                            task.work(serde_json::from_value::<Option<crate::color_storage::ProfileChoice>>(choice).map_err(|e| e.to_string())?.map(|p| p.resolve(self.control.cancellation_flag(), &self.localization)).transpose()?, || self.control.is_cancelled())?;
                             self.stage = "source_candidate";
                         }
                         _ => return Err("This request cannot prepare an edit".into()),
@@ -975,11 +996,11 @@ mod tests {
         let profile_path = directory.join("test.icc");
         std::fs::write(&profile_path, &profile).unwrap();
         let cancel = Default::default();
-        crate::color_storage::import(&profile_path, &cancel).unwrap();
+        crate::color_storage::import(&profile_path, &cancel, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let inventory = crate::color_storage::list(&cancel).unwrap();
         let id = layer_ui::profile_library::profile_identity(&profile);
         assert!(inventory.iter().any(|p| p.id == id && p.issue.is_none()));
-        crate::color_storage::remove(&id, &cancel).unwrap();
+        crate::color_storage::remove(&id, &cancel, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
 
         // Proof uses the real Windows transport, shared transaction and D3D12
         // presenter. Viewing never enters the project/export or edit history.

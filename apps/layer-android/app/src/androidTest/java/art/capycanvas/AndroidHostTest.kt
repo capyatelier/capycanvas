@@ -43,7 +43,7 @@ class AndroidHostTest {
         // Ask an isolated, GPU-less Rust session for its defaults, not a Kotlin
         // copy of the workspace schema. Repeated runs must not collect toolbars.
         private val defaultWorkspace by lazy {
-            val handle = Native.create(false)
+            val handle = createEnglishHostForTest()
             try { JSONObject(Native.snapshot(handle)!!).getJSONObject("state").getJSONObject("workspace").toString() }
             finally { Native.destroy(handle) }
         }

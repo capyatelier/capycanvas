@@ -206,7 +206,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
             customization.target(b,{kind:"panel",panel});strip.append(draggable(b,{kind:"panel",panel}));
           }
           if(automatic)automaticTabs(strip);
-          const handle=grip(item);handle.classList.add("column-drawer-grip");handle.setAttribute("aria-label","Move panel group");tabs.append(handle);
+          const handle=grip(item);handle.classList.add("column-drawer-grip");tabs.append(handle);
         }
         // Shared placement includes tabs in the first column body.
         const body=r.bodies[0],b=r.placement.columns[0];place(tabs,{...b,height:resolved.tab_bar_height});

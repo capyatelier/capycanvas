@@ -60,6 +60,7 @@ private:
     winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher{nullptr};
     winrt::Windows::UI::ViewManagement::UISettings uiSettings;
     winrt::event_token colorValues{};
+    winrt::Microsoft::UI::Xaml::Input::FocusManager::GettingFocus_revoker textFocus;
     std::string SystemTheme();
     winrt::Microsoft::UI::Dispatching::DispatcherQueueController inputController{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueue inputDispatcher{nullptr};
@@ -125,6 +126,10 @@ private:
     std::atomic<bool> rendererDone{false};
     uint64_t sequence=0;
     void Start();
+    bool StartPrepared(CapyLaunch*);
+    bool launchReady=false,launchSucceeded=false;
+    std::shared_ptr<CapyLocalization> localization;
+    winrt::Windows::Data::Json::JsonObject bootstrap;
     void Resize();
     void PublishGlass();
     void ApplyResize();

@@ -9,7 +9,7 @@ pub use value::RgbColor;
 mod profile;
 pub use profile::{ColorProfile, ProfileReference, ConversionOptions, SampleDepth, ProfileChannels, RenderingIntent};
 mod output;
-pub use output::{OutputDither, OutputEncoding};
+pub use output::{OutputDither, OutputEncoding, OutputEncodingError};
 mod proof;
 pub use proof::ProofRecipe;
 pub mod source;

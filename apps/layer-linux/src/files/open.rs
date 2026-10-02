@@ -17,24 +17,26 @@ pub(super) async fn prepare(
     policy: layer_ui::PhotoOpenPolicy,
     working: layer_core::color::RgbSpace,
     names: layer_core::DocumentNames,
+    localization: &layer_ui::Localizer,
 ) -> Result<Option<(Project, Option<DocumentLocation>)>, String> {
-    let path = file.path().ok_or("Choose a file on this device")?;
+    let path = file.path().ok_or_else(|| layer_ui::DocumentHostError::ChooseDeviceFile.message(localization))?;
     let location = DocumentLocation {
         uri: file.uri().into(),
-        name: path.file_name().ok_or("Choose a filename")?.to_string_lossy().into_owned(),
+        name: path.file_name().ok_or_else(|| layer_ui::DocumentHostError::ChooseFilename.message(localization))?.to_string_lossy().into_owned(),
     };
-    let Some((mut project, location)) = run(window, path, location, policy, names).await? else {
+    let Some((mut project, location)) = run(window, path, location, policy, names, localization).await? else {
         return Ok(None);
     };
     if !window.is_visible() { return Ok(None); }
     if location.is_none() {
-        let source = Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or("Photo source unavailable")?);
+        let source = Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or_else(|| localization.text(layer_ui::MessageId::DOCUMENTS_ERROR_MISSING_SOURCE).to_string())?);
         let metadata = std::mem::take(&mut project.document.metadata);
-        let Some(source) = interpret_window(window, source, policy, working).await? else { return Ok(None); };
+        let Some(source) = interpret_window(window, source, policy, working, localization).await? else { return Ok(None); };
         let names = layer_core::DocumentNames { paint: project.document.layers[0].name.clone(),
             paper: project.document.layers[1].name.clone() };
         project = gio::spawn_blocking(move || policy.photo_project(source, metadata, names))
-            .await.map_err(|_| "Profile reader failed")??;
+            .await.map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(localization))?
+            .map_err(|detail| layer_ui::ColorFeatureError::Diagnostic(detail).profile_message(localization))?;
     }
     Ok(window.is_visible().then_some((project, location)))
 }
@@ -45,13 +47,16 @@ async fn run(
     location: DocumentLocation,
     policy: layer_ui::PhotoOpenPolicy,
     names: layer_core::DocumentNames,
+    localization: &layer_ui::Localizer,
 ) -> Result<Option<(Project, Option<DocumentLocation>)>, String> {
+    let copy = layer_ui::bootstrap_view(localization);
+    let failure = layer_ui::file_open_failure(localization, &location.name);
     let dialog = adw::AlertDialog::builder()
-        .heading("Opening image or project…")
-        .body("Reading the file and its color information.")
+        .heading(copy.opening_files.as_ref())
+        .body(copy.preparing_document.as_ref())
         .build();
     dialog.set_widget_name("document-open-progress");
-    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("cancel", copy.common.cancel.as_ref());
     dialog.set_close_response("cancel");
     let cancelled = Arc::new(AtomicBool::new(false));
     let signal = dialog.connect_response(Some("cancel"), {
@@ -71,7 +76,7 @@ async fn run(
         return Ok(None);
     }
     dialog.close();
-    result.map(Some)
+    result.map(Some).map_err(|detail| format!("{failure}\n{detail}"))
 }
 
 /// Shared by Open, Place and Paste. Choosing an interpretation changes no source
@@ -81,9 +86,9 @@ pub(super) async fn interpret(
     source: layer_core::color::source::SourceImage,
     policy: layer_ui::PhotoOpenPolicy,
 ) -> Result<Option<layer_core::color::source::SourceImage>, String> {
-    let working = w.gpu.borrow().as_ref().ok_or("Canvas unavailable")?
+    let working = w.gpu.borrow().as_ref().ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization))?
         .session.engine().document().color.space;
-    interpret_window(&w.window, source, policy, working).await
+    interpret_window(&w.window, source, policy, working, &w.localization).await
 }
 
 async fn interpret_window(
@@ -91,13 +96,15 @@ async fn interpret_window(
     mut source: layer_core::color::source::SourceImage,
     policy: layer_ui::PhotoOpenPolicy,
     working: layer_core::color::RgbSpace,
+    localization: &layer_ui::Localizer,
 ) -> Result<Option<layer_core::color::source::SourceImage>, String> {
     if !policy.needs_interpretation(&source)
     {
         return Ok(Some(source));
     }
+    let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
     let chooser = super::profile::ProfileChooser::for_window(
-        window, "Interpret as", "untagged-profile-space", working,
+        window, copy.interpret_as.as_ref(), "untagged-profile-space", working,
         super::profile::ProfilePurpose::Source(source.interpretation.clone()),
     );
     let space = chooser.row.clone();
@@ -105,14 +112,14 @@ async fn interpret_window(
     group.add(&space);
     let current = source.interpretation.profile.clone();
     let profile = gio::spawn_blocking(move || super::profile::describe(current)).await
-        .map_err(|_| "Profile reader failed")??;
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(localization))?.map_err(|reason| reason.profile_message(localization))?;
     (chooser.restore)(profile);
     let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
     body.append(&group);
     body.append(&chooser.error);
-    let dialog = adw::AlertDialog::builder().heading("Choose image interpretation").body("This image has no declared color profile. Choose how to interpret its stored values. The original numbers will be retained.").extra_child(&body).content_width(400).prefer_wide_layout(true).build();
+    let dialog = adw::AlertDialog::builder().heading(copy.interpret_title.as_ref()).body(copy.interpret_help.as_ref()).extra_child(&body).content_width(400).prefer_wide_layout(true).build();
     dialog.set_widget_name("untagged-profile-dialog");
-    dialog.add_responses(&[("cancel", "Cancel"), ("use", "Use Profile")]);
+    dialog.add_responses(&[("cancel", copy.common.cancel.as_ref()), ("use", copy.use_profile.as_ref())]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("use"));
     dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
@@ -137,7 +144,8 @@ async fn interpret_window(
         Ok(Some(source))
     })
     .await
-    .map_err(|_| "Profile validation worker failed".to_string())?
+    .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile validation worker failed".into()).profile_message(localization))?
+    .map_err(|detail| layer_ui::ColorFeatureError::Diagnostic(detail).profile_message(localization))
 }
 
 pub(crate) fn read(
@@ -148,7 +156,7 @@ pub(crate) fn read(
     cancelled: Arc<AtomicBool>,
 ) -> Result<(Project, Option<DocumentLocation>), String> {
     let file = super::reader::cancellable_file(path, cancelled.clone())
-        .map_err(|e| format!("Cannot open file: {e}"))?;
+        .map_err(|e| e.to_string())?;
     let imported = layer_ui::read_import(file, layer_ui::ImportIntent::Open, policy,
         names, Default::default(), Default::default(), &cancelled)?;
     Ok((imported.project, imported.source.adoption_location(Some(location))))

@@ -91,22 +91,22 @@ impl ToolbarBody {
     }
     fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
         let config = state.workspace.layout.panel(self.panel).unwrap();
+        let view = w.gpu.borrow().as_ref().and_then(|g| g.session.panel_view(self.panel).ok());
+        let Some(view) = view else { return; };
         if self.key.borrow().as_ref() != Some(config) {
             self.strip.clear();
             self.strip.set_tiles(config.tiles());
             self.strip.set_style(config.tile_style);
-            *self.items.borrow_mut() = config.tiles().iter().map(|tile| {
-                let item = toolbar_components::TileWidget::new(w, config, tile, config.tile_style);
+            *self.items.borrow_mut() = config.tiles().iter().filter_map(|tile| {
+                let choice = &view.tiles.iter().find(|view| view.id == tile.id && view.choice.control == tile.control)?.choice;
+                let item = toolbar_components::TileWidget::new(w, config, tile, config.tile_style, choice);
                 self.strip.append(&item.root());
-                item
+                Some(item)
             }).collect();
             *self.key.borrow_mut() = Some(config.clone());
         }
-        let view = w.gpu.borrow().as_ref().and_then(|g| g.session.panel_view(self.panel).ok());
-        if let Some(view) = view {
-            for (item, tile) in self.items.borrow().iter().zip(&view.tiles) {
-                item.refresh(w, tile, tile.component.as_ref());
-            }
+        for (item, tile) in self.items.borrow().iter().zip(&view.tiles) {
+            item.refresh(w, tile, tile.component.as_ref());
         }
     }
 }
@@ -254,7 +254,7 @@ impl View {
                         Body::Navigator(v)
                     }
                     Panel::Layers => {
-                        let v = Rc::new(LayerPanel::new());
+                        let v = Rc::new(LayerPanel::new(w.localization.clone()));
                         margins(&v.root, PANEL_CONTENT_INSET as i32);
                         v.bind(w);
                         v.root.set_height_request(360);
@@ -317,7 +317,7 @@ impl View {
                     let config = layout.panel(*panel).unwrap();
                     let presentation = layout.tab_presentation(*panel);
                     let button = w.action_button(
-                        config.title(),
+                        &config.title_localized(&w.localization),
                         UiAction::SelectPanelTab {
                             group: tabs.group,
                             panel: *panel,
@@ -329,7 +329,7 @@ impl View {
                     let icon = crate::icons::image(&format!("layer-{}-symbolic", config.icon()));
                     icon.set_visible(presentation.show_icon);
                     content.append(&icon);
-                    let label = gtk::Label::new(Some(config.title()));
+                    let label = gtk::Label::new(Some(&config.title_localized(&w.localization)));
                     label.set_visible(presentation.show_name);
                     content.append(&label);
                     if !presentation.show_name {
@@ -350,7 +350,7 @@ impl View {
                     .build());
                 header.append(&header_clip);
                 tab_clip = Some(header_clip);
-                let grip = tiles::grip();
+                let grip = tiles::grip(&w.localization.text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
                 grip.set_widget_name("column-drawer-grip");
                 grip.set_size_request(20, 24);
                 grip.set_halign(gtk::Align::End);

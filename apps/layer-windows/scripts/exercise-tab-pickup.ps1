@@ -44,7 +44,7 @@ function Cancel-Contact {
 function Tear-Off([string]$Panel,[switch]$Gradual,[switch]$Cancel) {
     $script:case="$Panel-$(if($Gradual){'gradual'}else{'direct'})-$(if($Cancel){'cancel'}else{'commit'})"
     $before=Layout
-    $at=Point "panel-tab-$Panel";$to=Point 'Drawing canvas' -Name
+    $at=Point "panel-tab-$Panel";$to=Point 'drawing-canvas'
     [CapyRowPointer]::Down($Device,$at.x,$at.y)
     Start-Sleep -Milliseconds 35
     if($Gradual){

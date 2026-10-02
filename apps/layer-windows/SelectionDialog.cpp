@@ -9,6 +9,7 @@ struct SelectionDialog::Impl:std::enable_shared_from_this<Impl>{
     XamlRoot xamlRoot{nullptr};
     StackPanel body;
     Bindings fields;
+    NumericAdmissions admissions;
     hstring built;
     bool showing=false,closing=false,programmatic=false,stopping=false,cancelPending=false,applyPending=false;
     std::function<void()> changed;
@@ -17,13 +18,14 @@ struct SelectionDialog::Impl:std::enable_shared_from_this<Impl>{
     bool settled()const{return !closing&&!cancelPending&&!applyPending;}
     void init(){
         dialog.XamlRoot(xamlRoot);dialog.Content(body);dialog.DefaultButton(ContentDialogButton::Primary);
-        dialog.PrimaryButtonText(L"Apply");dialog.CloseButtonText(L"Cancel");
+        dialog.PrimaryButtonText(data->common(L"apply"));dialog.CloseButtonText(data->common(L"cancel"));
         AutomationProperties::SetAutomationId(dialog,L"selection-resize-dialog");
         body.MinWidth(280);body.Spacing(8);
         auto weak=weak_from_this();
         dialog.PrimaryButtonClick([weak](auto&&,ContentDialogButtonClickEventArgs const& e){
             e.Cancel(true);
             if(auto self=weak.lock();self&&self->settled()&&self->view().Size()){
+                for(auto const& commit:self->admissions)if(!commit(false))return;
                 self->applyPending=true;self->dialog.IsPrimaryButtonEnabled(false);self->send(O({{L"op",S(L"apply_resize")}}));
             }
         });
@@ -31,6 +33,7 @@ struct SelectionDialog::Impl:std::enable_shared_from_this<Impl>{
             if(!self->stopping&&!self->programmatic&&self->view().Size()){
                 e.Cancel(true);
                 if(!self->cancelPending&&!self->applyPending){
+                    for(auto const& commit:self->admissions)commit(true);
                     self->cancelPending=true;self->dialog.IsPrimaryButtonEnabled(false);self->send(O({{L"op",S(L"cancel_resize")}}));
                 }
                 return;
@@ -45,13 +48,13 @@ struct SelectionDialog::Impl:std::enable_shared_from_this<Impl>{
     }
     void hide(){if(showing&&!closing){programmatic=true;closing=true;dialog.Hide();}}
     void build(J const& resize){
-        fields.clear();body.Children().Clear();
+        fields.clear();admissions.clear();body.Children().Clear();
         auto weak=weak_from_this();
-        auto control=number(data,L"Distance",object(resize,L"numeric"),
+        auto control=number(data,str(resize,L"label"),object(resize,L"numeric"),
             [weak]{if(auto self=weak.lock())return num(self->view(),L"radius");return 0.;},
             [weak](double value){if(auto self=weak.lock();self&&self->settled()&&!self->data->updating)
                 self->send(O({{L"op",S(L"resize_radius")},{L"radius",N(value)}}));},
-            fields,nullptr,false,L"selection-resize-distance");
+            fields,nullptr,false,L"selection-resize-distance",false,{},&admissions);
         body.Children().Append(control);
     }
     void apply(J const& snapshot,bool blocked){
@@ -69,8 +72,8 @@ struct SelectionDialog::Impl:std::enable_shared_from_this<Impl>{
         if(!showing){dialog.IsPrimaryButtonEnabled(true);show();}
     }
 };
-SelectionDialog::SelectionDialog(Dispatch send,Json catalog,XamlRoot root,std::function<void()> changed):impl(std::make_shared<Impl>()){
-    impl->data->send=std::move(send);impl->data->catalog=catalog;impl->xamlRoot=root;impl->changed=std::move(changed);impl->init();
+SelectionDialog::SelectionDialog(Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,XamlRoot root,std::function<void()> changed):impl(std::make_shared<Impl>()){
+    impl->data->send=std::move(send);impl->data->localization=localization;impl->data->catalog=catalog;impl->xamlRoot=root;impl->changed=std::move(changed);impl->init();
 }
 SelectionDialog::~SelectionDialog(){impl->stopping=true;impl->hide();}
 void SelectionDialog::Apply(Json const& snapshot,bool blocked){impl->apply(snapshot,blocked);}

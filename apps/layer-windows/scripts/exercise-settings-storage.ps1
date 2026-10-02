@@ -167,7 +167,7 @@ try {
     if((Model).state.settings.dark_base -ne '#304050' -or (Model).windows_workspace.id -ne $workspaceId -or (Model).windows_workspace.closing){throw 'Keep open lost preferences or released the workspace'}
     Wait-Until {
         $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas'))
         $canvas -and $canvas.Current.IsEnabled
     } 'Preferences did not release canvas input'
     if((Control 'Undo').Current.IsEnabled){throw 'The isolated document already has undo history'}

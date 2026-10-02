@@ -30,9 +30,9 @@ impl Default for SelectionDisplayOptions {
     }
 }
 impl SelectionDisplayOptions {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), NumericError> {
         for value in self.color {
-            NumericControl::percent().validate(value, "Overlay color")?;
+            NumericControl::percent().validate(value, MessageId::RESOURCES_MASK_OVERLAY_COLOR)?;
         }
         Ok(())
     }
@@ -212,17 +212,17 @@ impl SelectionMasks {
     }
 }
 
-fn load_selection_items(id: u64) -> Vec<ContextMenuItem> {
+fn load_selection_items(id: u64, localization: &Localizer) -> Vec<ContextMenuItem> {
     [
-        ("Load Selection", SelectionMode::New, false),
-        ("Add to Selection", SelectionMode::Add, false),
-        ("Subtract from Selection", SelectionMode::Subtract, false),
-        ("Intersect with Selection", SelectionMode::Intersect, false),
-        ("Load Inverted Selection", SelectionMode::New, true),
+        (MessageId::RESOURCES_SELECTION_MENU_LOAD_SELECTION, SelectionMode::New, false),
+        (MessageId::RESOURCES_SELECTION_MENU_ADD_TO_SELECTION, SelectionMode::Add, false),
+        (MessageId::RESOURCES_SELECTION_MENU_SUBTRACT_FROM_SELECTION, SelectionMode::Subtract, false),
+        (MessageId::RESOURCES_SELECTION_MENU_INTERSECT_WITH_SELECTION, SelectionMode::Intersect, false),
+        (MessageId::RESOURCES_SELECTION_MENU_LOAD_INVERTED_SELECTION, SelectionMode::New, true),
     ]
     .into_iter()
     .map(|(label, mode, inverted)| {
-        ContextMenuItem::command(label, UiAction::Selection { action: SelectionAction::LoadLayer { id, mode, inverted } })
+        ContextMenuItem::command(localization.text(label).as_ref(), UiAction::Selection { action: SelectionAction::LoadLayer { id, mode, inverted } })
     })
     .collect()
 }
@@ -264,14 +264,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn quick_mask_menu(&self) -> ContextMenu {
         ContextMenu {
-            title: "Quick Mask".into(),
+            title: self.localization().text(MessageId::RESOURCES_SELECTION_MENU_QUICK_MASK).to_string(),
             sections: vec![
                 vec![
                     self.selection_command_item(CommandId::ReturnToArtwork),
                     self.selection_command_item(CommandId::SaveSelectionLayer),
                 ],
                 vec![ContextMenuItem::submenu(
-                    "Modify",
+                    self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MODIFY).as_ref(),
                     vec![
                         [
                             CommandId::InvertSelection,
@@ -311,23 +311,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ..ContextMenuItem::command(label, UiAction::Invoke { command })
             }
         };
-        let mut load = load_selection_items(id.0).into_iter();
+        let mut load = load_selection_items(id.0, self.localization()).into_iter();
         let load: Vec<_> = load
             .next()
-            .map(|item| edited("Load Selection", CommandId::LoadSelectionLayer, item))
+            .map(|item| edited(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_LOAD_SELECTION).as_ref(), CommandId::LoadSelectionLayer, item))
             .into_iter()
             .chain(load)
             .collect();
         let roots = doc.layer_roots(&self.layer_interaction.selected);
         let multiple = roots.len() > 1 && self.layer_interaction.selected.contains(&id);
         let mut organize_items = vec![
-            organize("Rename…", LayerAction::BeginRename { id: id.0 }, unlocked),
+            organize(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_RENAME).as_ref(), LayerAction::BeginRename { id: id.0 }, unlocked),
             organize(
-                if multiple {
-                    "Duplicate Selected Layers"
-                } else {
-                    "Duplicate"
-                },
+                self.localization().text(if multiple { MessageId::RESOURCES_SELECTION_MENU_DUPLICATE_SELECTED_LAYERS } else { MessageId::RESOURCES_SELECTION_MENU_DUPLICATE }).as_ref(),
                 if multiple {
                     LayerAction::DuplicateSelected
                 } else {
@@ -336,11 +332,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 true,
             ),
             organize(
-                if multiple {
-                    "Delete Selected Layers"
-                } else {
-                    "Delete"
-                },
+                self.localization().text(if multiple { MessageId::RESOURCES_SELECTION_MENU_DELETE_SELECTED_LAYERS } else { MessageId::RESOURCES_SELECTION_MENU_DELETE }).as_ref(),
                 if multiple {
                     LayerAction::DeleteSelected
                 } else {
@@ -353,11 +345,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }),
             ),
             organize(
-                if layer.properties.locked {
-                    "Unlock Editing"
-                } else {
-                    "Lock Editing"
-                },
+                self.localization().text(if layer.properties.locked { MessageId::RESOURCES_SELECTION_MENU_UNLOCK_EDITING } else { MessageId::RESOURCES_SELECTION_MENU_LOCK_EDITING }).as_ref(),
                 LayerAction::Lock {
                     id: id.0,
                     value: !layer.properties.locked,
@@ -365,7 +353,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 !layer.properties.parent.is_some_and(|p| doc.is_locked(p)),
             ),
             organize(
-                "Group Selected Layers",
+                self.localization().text(MessageId::RESOURCES_SELECTION_MENU_GROUP_SELECTED_LAYERS).as_ref(),
                 LayerAction::GroupSelected,
                 doc.group_layers_edit(
                     &doc.layer_roots(&self.layer_interaction.selected),
@@ -376,7 +364,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .is_ok(),
             ),
             organize(
-                "Move to Root",
+                self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_TO_ROOT).as_ref(),
                 LayerAction::Reparent {
                     id: id.0,
                     parent: None,
@@ -386,7 +374,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ),
         ];
         let position = doc.layers.iter().position(|l| l.id == id).unwrap();
-        for (label, up) in [("Move Up", true), ("Move Down", false)] {
+        for (label, up) in [(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_UP), true), (self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_DOWN), false)] {
             let neighbor = if up {
                 doc.layers[..position]
                     .iter()
@@ -401,7 +389,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .map(|i| position + 1 + i)
             };
             organize_items.push(organize(
-                label,
+                label.as_ref(),
                 LayerAction::Reparent {
                     id: id.0,
                     parent: layer.properties.parent.map(|p| p.0),
@@ -426,27 +414,27 @@ impl<R: CanvasRenderer> UiSession<R> {
                 )
             })
             .collect();
-        organize_items.push(ContextMenuItem::submenu("Move into Group", vec![groups]));
+        organize_items.push(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_INTO_GROUP).as_ref(), vec![groups]));
         Ok(ContextMenu {
             title: layer.name.to_string(),
             sections: vec![
-                vec![ContextMenuItem::submenu("Load Selection", vec![load])],
+                vec![ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_LOAD_SELECTION).as_ref(), vec![load])],
                 vec![ContextMenuItem::submenu(
-                    "Modify",
+                    self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MODIFY).as_ref(),
                     vec![
                         vec![
                             action(
-                                "Replace from Current Selection",
+                                self.localization().text(MessageId::RESOURCES_SELECTION_MENU_REPLACE_FROM_CURRENT_SELECTION).as_ref(),
                                 SelectionAction::ReplaceLayer { id: id.0 },
                                 unlocked && self.current_selection().is_some(),
                             ),
                             edited(
-                                "Invert",
+                                self.localization().text(MessageId::RESOURCES_SELECTION_MENU_INVERT).as_ref(),
                                 CommandId::InvertSelectionLayer,
-                                action("Invert", SelectionAction::InvertLayer { id: id.0 }, unlocked),
+                                action(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_INVERT).as_ref(), SelectionAction::InvertLayer { id: id.0 }, unlocked),
                             ),
                             action(
-                                "Select All",
+                                self.localization().text(MessageId::RESOURCES_SELECTION_MENU_SELECT_ALL).as_ref(),
                                 SelectionAction::ClearLayer {
                                     id: id.0,
                                     full: true,
@@ -454,20 +442,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 unlocked,
                             ),
                             action(
-                                "Clear",
+                                self.localization().text(MessageId::RESOURCES_SELECTION_MENU_CLEAR).as_ref(),
                                 SelectionAction::ClearLayer {
                                     id: id.0,
                                     full: false,
                                 },
                                 unlocked,
                             ),
-                            action("Fill", SelectionAction::FillLayer { id: id.0 }, unlocked),
+                            action(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_FILL).as_ref(), SelectionAction::FillLayer { id: id.0 }, unlocked),
                         ],
                         self.refine_items(Some(id)),
                     ],
                 )],
                 vec![ContextMenuItem::submenu(
-                    "Organize",
+                    self.localization().text(MessageId::RESOURCES_SELECTION_MENU_ORGANIZE).as_ref(),
                     vec![organize_items.split_off(4)],
                 )],
                 organize_items,
@@ -535,24 +523,24 @@ impl<R: CanvasRenderer> UiSession<R> {
             .iter()
             .filter(|l| l.kind == LayerKind::Selection)
             .map(|l| {
-                ContextMenuItem::submenu(&self.saved_selection_label(l), vec![load_selection_items(l.id.0)])
+                ContextMenuItem::submenu(&self.saved_selection_label(l), vec![load_selection_items(l.id.0, self.localization())])
             })
             .collect()
     }
     pub(super) fn coverage_menu_items(&self, id: u64, mask: bool) -> Vec<ContextMenuItem> {
         let labels = if mask {
             [
-                "Load Mask as Selection",
-                "Add Mask to Selection",
-                "Subtract Mask from Selection",
-                "Intersect with Mask",
+                MessageId::RESOURCES_SELECTION_MENU_LOAD_MASK_AS_SELECTION,
+                MessageId::RESOURCES_SELECTION_MENU_ADD_MASK_TO_SELECTION,
+                MessageId::RESOURCES_SELECTION_MENU_SUBTRACT_MASK_FROM_SELECTION,
+                MessageId::RESOURCES_SELECTION_MENU_INTERSECT_WITH_MASK,
             ]
         } else {
             [
-                "Select Layer Opacity",
-                "Add Opacity to Selection",
-                "Subtract Opacity from Selection",
-                "Intersect with Layer Opacity",
+                MessageId::RESOURCES_SELECTION_MENU_SELECT_LAYER_OPACITY,
+                MessageId::RESOURCES_SELECTION_MENU_ADD_OPACITY_TO_SELECTION,
+                MessageId::RESOURCES_SELECTION_MENU_SUBTRACT_OPACITY_FROM_SELECTION,
+                MessageId::RESOURCES_SELECTION_MENU_INTERSECT_WITH_LAYER_OPACITY,
             ]
         };
         labels
@@ -565,7 +553,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ])
             .map(|(label, mode)| {
                 ContextMenuItem::command(
-                    label,
+                    self.localization().text(label).as_ref(),
                     UiAction::Selection {
                         action: SelectionAction::LoadCoverage { id, mask, mode },
                     },
@@ -762,16 +750,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_masks.colors.apply(ColorAction::SetSlot {
                     slot: ColorSlot::Foreground,
                     color: layer_core::color::RgbColor::BLACK,
-                })?;
+                }).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?;
                 self.selection_masks.colors.apply(ColorAction::SetSlot {
                     slot: ColorSlot::Background,
                     color: layer_core::color::RgbColor::WHITE,
-                })?;
+                }).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?;
                 self.selection_masks.colors.apply(ColorAction::Select {
                     slot: ColorSlot::Foreground,
-                })?;
+                }).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?;
             }
-            CommandId::SwapMaskColors => self.selection_masks.colors.apply(ColorAction::Swap)?,
+            CommandId::SwapMaskColors => self.selection_masks.colors.apply(ColorAction::Swap).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?,
             CommandId::ClearSelectionMask | CommandId::FillSelectionMask => {
                 let target = self
                     .selection_masks
@@ -1005,7 +993,7 @@ impl UiState {
 }
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn mask_color_action(&mut self, action: ColorAction) -> Result<(), String> {
-        self.selection_masks.colors.apply(action)?;
+        self.selection_masks.colors.apply(action).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?;
         self.refresh_tools();
         Ok(())
     }

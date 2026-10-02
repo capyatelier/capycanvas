@@ -10,12 +10,78 @@ use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_ui::{ContactPhase, Modifiers, PenButton, PointerButton, PointerKind, TouchPolicy, UiInput};
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     rc::Rc,
     time::Instant,
 };
 #[path = "tablet_input.rs"]
 mod tablet;
+
+#[derive(Default)]
+pub(crate) struct CompositionKeys {
+    owned: RefCell<BTreeSet<u32>>,
+    current: Cell<Option<u32>>,
+}
+impl CompositionKeys {
+    pub(crate) fn capture(&self, keycode: u32, composing: bool) -> bool {
+        self.current.set(Some(keycode));
+        if composing { self.owned.borrow_mut().insert(keycode); }
+        self.active()
+    }
+    pub(crate) fn active(&self) -> bool {
+        self.current.get().is_some_and(|key| self.owned.borrow().contains(&key))
+    }
+    pub(crate) fn release(&self, keycode: u32) -> bool {
+        let owned = self.owned.borrow_mut().remove(&keycode);
+        if self.current.get() == Some(keycode) { self.current.set(None); }
+        owned
+    }
+    pub(crate) fn clear(&self) {
+        self.current.set(None);
+        self.owned.borrow_mut().clear();
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct EntryComposition {
+    composing: Cell<bool>,
+    keys: CompositionKeys,
+}
+impl EntryComposition {
+    pub(crate) fn active(&self) -> bool { self.composing.get() || self.keys.active() }
+    fn clear(&self) { self.composing.set(false); self.keys.clear(); }
+}
+pub(crate) fn guard_entry_activation(entry: &gtk::Entry) -> Rc<EntryComposition> {
+    let ownership = Rc::new(EntryComposition::default());
+    if let Some(text) = entry.delegate().and_downcast::<gtk::Text>() {
+        text.connect_preedit_changed(glib::clone!(#[strong] ownership, move |_, preedit| ownership.composing.set(!preedit.is_empty())));
+        text.connect_activate(glib::clone!(#[strong] ownership, move |text| {
+            if ownership.active() { text.stop_signal_emission_by_name("activate"); }
+        }));
+    }
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(glib::clone!(#[strong] ownership, move |_, _, keycode, _| {
+        ownership.keys.capture(keycode, ownership.composing.get());
+        glib::Propagation::Proceed
+    }));
+    keys.connect_key_released(glib::clone!(#[strong] ownership, move |_, _, keycode, _| { ownership.keys.release(keycode); }));
+    entry.add_controller(keys);
+    let bubble = gtk::EventControllerKey::new();
+    bubble.set_propagation_phase(gtk::PropagationPhase::Bubble);
+    bubble.connect_key_pressed(glib::clone!(#[strong] ownership, move |_, _, _, _| {
+        if ownership.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
+    }));
+    entry.add_controller(bubble);
+    entry.connect_activate(glib::clone!(#[strong] ownership, move |entry| {
+        if ownership.active() { entry.stop_signal_emission_by_name("activate"); }
+    }));
+    let focus = gtk::EventControllerFocus::new();
+    focus.connect_leave(glib::clone!(#[strong] ownership, move |_| ownership.clear()));
+    entry.connect_unmap(glib::clone!(#[strong] ownership, move |_| ownership.clear()));
+    entry.add_controller(focus);
+    ownership
+}
 
 /// Only direct touch/stylus contacts open menus on a primary-button hold.
 pub(crate) fn touch_or_pen(gesture: &impl IsA<gtk::Gesture>) -> bool {
@@ -849,6 +915,24 @@ impl Input {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn composition_keys_retain_same_press_until_release_or_retirement() {
+        let keys = super::CompositionKeys::default();
+        assert!(keys.capture(36, true));
+        assert!(keys.active());
+        assert!(keys.capture(36, false));
+        assert!(!keys.capture(9, false));
+        assert!(!keys.release(9));
+        assert!(keys.capture(36, false));
+        assert!(keys.release(36));
+        assert!(!keys.capture(36, false));
+        assert!(!keys.active());
+        assert!(keys.capture(9, true));
+        keys.clear();
+        assert!(!keys.active());
+        assert!(!keys.capture(9, false));
+    }
+
     use super::*;
     #[test]
     fn native_clock_removes_initial_delivery_latency_without_reordering() {

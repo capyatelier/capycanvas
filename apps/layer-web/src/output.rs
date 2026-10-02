@@ -145,8 +145,8 @@ impl WebApp {
         let preview = preview.unwrap_or(false);
         let recipe: ExportRecipe = serde_wasm_bindgen::from_value(value).map_err(js)?;
         let document = self.session.engine().document();
-        recipe.validate().map_err(js)?;
-        recipe.output_extent([document.width, document.height]).map_err(js)?;
+        recipe.validate().map_err(|reason| js(reason.message(self.session.localization())))?;
+        recipe.output_extent([document.width, document.height]).map_err(|reason| js(reason.message(self.session.localization())))?;
         let snapshot = self.session.capture_project_export(id).map_err(js)?;
         let gpu = self
             .session
@@ -157,9 +157,16 @@ impl WebApp {
             .ok_or_else(|| js("Wait for the canvas"))?
             .snapshot_gpu();
         let control = control.inner.clone();
-        Ok(future_to_promise(render_output(
-            gpu, snapshot, recipe, control, preview, None,
-        )))
+        let localization = self.session.localization().clone();
+        Ok(future_to_promise(async move {
+            render_output(gpu, snapshot, recipe, control, preview, None).await.map_err(|error| {
+                if js_sys::Reflect::get(&error, &js("name")).ok().and_then(|name| name.as_string()).as_deref() == Some("AbortError") {
+                    error
+                } else {
+                    js(color_preferences::color_feature_reason(error).message(&localization))
+                }
+            })
+        }))
     }
 }
 
@@ -181,7 +188,7 @@ pub(super) async fn render_output(
         color: snapshot.project.document.color,
         resolution: recipe
             .output_resolution(snapshot.project.document.resolution)
-            .map_err(js)?,
+            .map_err(color_preferences::color_feature_rejection)?,
         recipe,
         original: None,
         preview,
@@ -210,7 +217,7 @@ pub(super) async fn render_output(
     } else {
         None
     };
-    let extent = metadata.recipe.output_extent(metadata.extent).map_err(js)?;
+    let extent = metadata.recipe.output_extent(metadata.extent).map_err(color_preferences::color_feature_rejection)?;
     let original = (flatten.is_none() && !metadata.recipe.format.is_hdr()).then(|| capture.output_source(
         extent, &metadata.recipe.interpretation(), metadata.recipe.encoding, metadata.recipe.background.matte(),
     )).flatten();
@@ -374,7 +381,7 @@ pub async fn raster_worker_output(
         })
     }).transpose()?;
     let recipe = &metadata.recipe;
-    recipe.validate().map_err(js)?;
+    recipe.validate().map_err(color_preferences::color_feature_rejection)?;
     let [exif, xmp, iptc] = metadata.photo.map(|index| {
         index.map(|index| std::sync::Arc::<[u8]>::from(js_sys::Uint8Array::new(&buffers.get(index)).to_vec()))
     });
@@ -385,7 +392,7 @@ pub async fn raster_worker_output(
     };
     delivery.photo.validate().map_err(js)?;
     let target = recipe.interpretation();
-    let extent = recipe.output_extent(metadata.extent).map_err(js)?;
+    let extent = recipe.output_extent(metadata.extent).map_err(color_preferences::color_feature_rejection)?;
     let output = WorkerFile {
         write,
         position: 0,

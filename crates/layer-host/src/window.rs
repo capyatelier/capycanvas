@@ -142,7 +142,7 @@ impl<P: Parked> DocumentWindow<P> {
                 .parked()
                 .find(|(key, _)| **key == id)
                 .map(|(_, p)| p.owner.session())
-                .ok_or_else(|| "Drawing tab is no longer open".into())
+                .ok_or_else(|| layer_ui::DocumentSessionError::TabClosed.message(host.session.localization()))
         }
     }
 
@@ -286,10 +286,10 @@ impl<P: Parked> DocumentWindow<P> {
             return Ok(None);
         }
         if !closing && !self.documents.contains_parked(target) {
-            return Err("Drawing tab is no longer open".into());
+            return Err(layer_ui::DocumentSessionError::TabClosed.message(host.session.localization()));
         }
         if !host.session.can_park_document() {
-            return Err("Finish the current operation before switching drawings".into());
+            return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(host.session.localization()).to_string());
         }
         if !self.park_ready(host)? {
             return Err("Wait for drawing capture before switching drawings".into());
@@ -297,7 +297,7 @@ impl<P: Parked> DocumentWindow<P> {
         if target != 0 {
             self.documents
                 .parked_owner_mut(target)
-                .ok_or("Drawing tab is no longer open")?
+                .ok_or_else(|| layer_ui::DocumentSessionError::TabClosed.message(host.session.localization()))?
                 .session_mut()
                 .inherit_window_state(&host.session)?;
         }
@@ -314,7 +314,7 @@ impl<P: Parked> DocumentWindow<P> {
             self.documents.exchange_with(target, tiles, |next| {
                 std::mem::swap(&mut host.session, next.session_mut());
                 exchange(next);
-            })?;
+            }).map_err(|reason| reason.message(host.session.localization()))?;
         }
         self.changed(host);
         host.startup = Default::default();
@@ -381,7 +381,7 @@ impl<P: Parked> DocumentWindow<P> {
             return Err("Wait for drawing capture before opening".into());
         }
         self.documents
-            .admit(&tiles, &next.capture_project_recovery()?)?;
+            .admit(&tiles, &next.capture_project_recovery()?).map_err(|reason| reason.message(host.session.localization()))?;
         next.initialize_document_location(open.location)?;
         if open.recovered {
             next.mark_recovered();
@@ -578,7 +578,7 @@ mod tests {
                 .switch(&mut host, 1, false, Default::default(), |_| {})
                 .err()
                 .as_deref(),
-            Some("Finish the current operation before switching drawings")
+            Some(layer_ui::DocumentTransportRefusal::SwitchOperation.message(host.session.localization()).as_ref())
         );
         assert_eq!(epoch(&mut window), before);
         let id = host.session.state().requests[0].id;

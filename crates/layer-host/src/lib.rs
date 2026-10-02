@@ -110,6 +110,19 @@ impl NativeHost {
     pub fn take_filter_preview_image(&mut self) -> Option<layer_render::FilterPreviewImage> {
         self.filter_preview_image.take()
     }
+    pub fn launch(platform: layer_ui::Platform, saved: &str, preferred_tags: &[&str]) -> Result<Self, String> {
+        Self::launch_localized(platform, saved, layer_ui::launch_localization(saved, preferred_tags))
+    }
+    pub fn launch_localized(platform: layer_ui::Platform, saved: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Result<Self, String> {
+        let mut host = Self::new_localized(platform, localization)?;
+        if !saved.is_empty() {
+            host.dispatch(UiAction::RestoreSavedSettings { saved: saved.to_owned() })?;
+        }
+        Ok(host)
+    }
+    pub fn bootstrap_view(&self) -> layer_ui::BootstrapView {
+        layer_ui::bootstrap_view(self.session.localization())
+    }
     pub fn new(platform: layer_ui::Platform) -> Result<Self, String> {
         Self::new_localized(platform, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
     }
@@ -763,7 +776,7 @@ impl NativeHost {
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Header { request } => self.header_request(request),
-            Query::Catalog => json!(layer_ui::ui_catalog()),
+            Query::Catalog => json!(layer_ui::ui_catalog_localized(self.session.localization())),
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
@@ -779,12 +792,12 @@ impl NativeHost {
             },
             Query::DocumentColor => json!(self.session.engine().document().color),
             Query::Requests => json!(self.session.state().requests),
-            Query::ExportForm => json!(layer_ui::ExportForm::new(self.session.engine().document())),
-            Query::ExportDraft { recipe, action } => json!(recipe.draft(action)),
+            Query::ExportForm => json!(layer_ui::ExportForm::new_localized(self.session.engine().document(), self.session.localization())),
+            Query::ExportDraft { recipe, action } => json!(recipe.draft_localized(action, self.session.localization())),
             Query::ExportValidate { recipe } => {
                 let document = self.session.engine().document();
-                recipe.validate()?;
-                recipe.output_extent([document.width, document.height])?;
+                recipe.validate().map_err(|reason|reason.message(self.session.localization()))?;
+                recipe.output_extent([document.width, document.height]).map_err(|reason|reason.message(self.session.localization()))?;
                 json!(recipe)
             }
             Query::RendererStats => json!(self.session.renderer_stats()),
@@ -803,7 +816,7 @@ impl NativeHost {
                 json!(
                     state
                         .settings
-                        .action_tooltip(&label, &action, state.platform)
+                        .action_tooltip_localized(&label, &action, state.platform, self.session.localization())
                 )
             }
             Query::ImageLayerDrop { target, fraction } => json!({"position": self.session.image_layer_drop_hint(target, fraction)}),
@@ -847,7 +860,7 @@ impl NativeHost {
             ),
             Query::PaletteAction { action, dry_run } => {
                 let result = if dry_run {
-                    self.session.state().colors.library.check(action)
+                    self.session.state().colors.library.check(action, self.session.localization())
                 } else {
                     self.dispatch(UiAction::Color {
                         action: layer_ui::ColorAction::Library { action },
@@ -1040,6 +1053,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn launch_restores_settings_before_gpu_or_view_publication() {
+        let saved = r#"{"language":{"Explicit":"ja"},"theme":"dark"}"#;
+        let mut host = NativeHost::launch(layer_ui::Platform::Android, saved, &["ko-KR", "en-GB"]).unwrap();
+        assert!(host.session.renderer_mut().0.is_none());
+        assert_eq!(host.session.localization().language(), layer_ui::UiLanguage::Japanese);
+        assert_eq!(host.session.state().settings.theme, Some(layer_ui::Theme::Dark));
+        assert_eq!(host.bootstrap_view().active_tag, "ja");
+        assert_eq!(host.bootstrap_view().shipped_tags, layer_ui::UiLanguage::ALL.map(layer_ui::UiLanguage::tag));
+        assert!(std::sync::Arc::ptr_eq(host.session.localization(), &layer_ui::launch_localization(saved, &["en"])));
+    }
+
+    #[test]
+    fn prepared_bootstrap_context_is_adopted_without_changing_active_language() {
+        let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+        let bootstrap = layer_ui::bootstrap_view(&localization);
+        let host = NativeHost::launch_localized(layer_ui::Platform::Mac, r#"{"theme":"dark"}"#, localization.clone()).unwrap();
+        assert!(std::sync::Arc::ptr_eq(host.session.localization(), &localization));
+        assert_eq!(host.bootstrap_view().active_tag, bootstrap.active_tag);
+        assert_eq!(host.session.state().settings.theme, Some(layer_ui::Theme::Dark));
+    }
+
+    #[test]
     fn hosts_keep_independent_launch_localization() {
         let japanese = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
         let korean = layer_ui::Localizer::shared(layer_ui::UiLanguage::Korean);
@@ -1136,7 +1171,7 @@ mod tests {
                 .zip(menus.as_array().unwrap())
             {
                 let expected =
-                    json!({"id":id,"label":id.label(),"model":host.session.application_menu(id)});
+                    json!({"id":id,"label":id.canonical_label(),"model":host.session.application_menu(id)});
                 assert_eq!(
                     host.query(json!({"type":"application_menu","menu":id}))
                         .unwrap(),
@@ -1582,7 +1617,7 @@ mod tests {
     fn export_validation_refuses_webp_beyond_its_encoder_limit_before_rendering() {
         use layer_ui::{ExportDraftAction, ExportFormat, ExportRecipe, ExportSize};
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
-        let webp = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Webp)).recipe;
+        let webp = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::Webp)).recipe;
         assert_eq!(app.query(json!({"type": "export_validate", "recipe": webp})).unwrap(), json!(webp));
         let enlarged = ExportRecipe { size: ExportSize::Fit { bounds: [20000, 20000], enlarge: true }, ..webp.clone() };
         let error = app.query(json!({"type": "export_validate", "recipe": enlarged})).unwrap_err();

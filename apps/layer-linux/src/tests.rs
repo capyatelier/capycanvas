@@ -5141,7 +5141,7 @@ fn native_group_tab_styles() {
                         let bounds = button.compute_bounds(&w.surface).unwrap();
                         assert_eq!(bounds.width(), bounds.height(), "icon-only tabs are square");
                     }
-                    assert_eq!(label.text(), layout.panel(*panel).unwrap().title());
+                    assert_eq!(label.text(), layout.panel(*panel).unwrap().canonical_title());
                     assert_eq!(
                         button.compute_bounds(&w.surface).unwrap().height(),
                         TAB_BAR_HEIGHT
@@ -5930,7 +5930,7 @@ fn native_workspace_management() {
         );
         activate(
             &workspace_menu,
-            &format!("{} panel", Panel::Brushes.label()),
+            &format!("{} panel", Panel::Brushes.canonical_label().as_ref()),
         );
         assert!(
             state(&w)
@@ -5942,7 +5942,7 @@ fn native_workspace_management() {
         workspace_menu.popup();
         activate(
             &workspace_menu,
-            &format!("{} panel", Panel::Brushes.label()),
+            &format!("{} panel", Panel::Brushes.canonical_label().as_ref()),
         );
         assert!(
             state(&w)
@@ -5966,7 +5966,7 @@ fn native_workspace_management() {
         activate(&menu, "Duplicate Tools toolbar…");
         let name = named::<adw::EntryRow>(w.window.upcast_ref(), "edit-toolbar-name");
         assert_eq!(name.text(), "Tools Copy");
-        name.set_text(Panel::Brushes.label());
+        name.set_text(Panel::Brushes.canonical_label().as_ref());
         assert!(!prompt().is_response_enabled("confirm"));
         name.set_text("Painting Tools");
         assert!(prompt().is_response_enabled("confirm"));
@@ -5977,7 +5977,7 @@ fn native_workspace_management() {
             .layout
             .panels
             .iter()
-            .find(|p| p.title() == "Painting Tools")
+            .find(|p| p.canonical_title() == "Painting Tools")
             .unwrap()
             .id;
         open_context(ContextTarget::Ribbon { panel });
@@ -5986,7 +5986,7 @@ fn native_workspace_management() {
         snapshot(&format!("rename-{theme:?}"));
         confirm_prompt();
         assert_eq!(
-            state(&w).workspace.layout.panel(panel).unwrap().title(),
+            state(&w).workspace.layout.panel(panel).unwrap().canonical_title(),
             "Painting"
         );
 
@@ -6267,7 +6267,7 @@ fn native_workspace_management() {
         workspace_menu.popup();
         activate(&workspace_menu, "Undo Layout Change");
         assert_eq!(
-            state(&w).workspace.layout.panel(panel).unwrap().title(),
+            state(&w).workspace.layout.panel(panel).unwrap().canonical_title(),
             "Painting"
         );
     }
@@ -6545,7 +6545,7 @@ fn native_panel_customization() {
         let panel = layout
             .panels
             .iter()
-            .find(|p| p.title() == format!("Illustration {theme:?}"))
+            .find(|p| p.canonical_title() == format!("Illustration {theme:?}"))
             .unwrap()
             .id;
         let toolbar = w.panel_widget(panel).downcast::<TileStrip>().unwrap();
@@ -6885,7 +6885,7 @@ fn native_menu_sections() {
             .iter()
             .filter_map(|p| p.upgrade())
             .filter_map(|p| p.downcast::<gtk::PopoverMenu>().ok())
-            .find(|p| p.parent().unwrap().tooltip_text().as_deref() == Some(&id.label()))
+            .find(|p| p.parent().unwrap().tooltip_text().as_deref() == Some(&id.canonical_label()))
             .unwrap();
         popup.popup();
         pump(100);
@@ -6970,7 +6970,7 @@ fn native_menu_sections() {
             pump(200);
             capture_popover(
                 menu.upcast_ref(),
-                &format!("{dir}/{}-{theme:?}.png", id.label()),
+                &format!("{dir}/{}-{theme:?}.png", id.canonical_label()),
             );
             menu.popdown();
             pump(100);
@@ -7617,7 +7617,7 @@ fn native_ribbon_allocation() {
         strip.append(&gtk::Button::from_icon_name("document-edit-symbolic"));
     }
     strip.set_tiles(&controls);
-    strip.set_grip(&tiles::grip());
+    strip.set_grip(&tiles::grip(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English).text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL)));
     for (axis, edge) in [(Axis::Horizontal, Edge::Top), (Axis::Vertical, Edge::Left)] {
         let mut layout = DockLayout::default();
         layout.bands.retain(|b| b.id == 1);
@@ -8171,7 +8171,7 @@ fn native_slider_feedback() {
         NumericControl::percent(),
         NumericControl::pressure(),
     ] {
-        let control = crate::number_control::NumberControl::new(spec.clone(), "Value", "");
+        let control = crate::number_control::NumberControl::new(spec.clone(), "Value", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
         let scale = slider(&control);
         let notifications = Rc::new(RefCell::new(Vec::new()));
         control.connect_value_changed({
@@ -8260,13 +8260,13 @@ fn native_number_controls() {
     body.set_margin_end(18);
     body.add_css_class("dock-panel");
     let size =
-        crate::number_control::NumberControl::new(NumericControl::brush_size(), "Brush size", "");
-    let alpha = crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "");
+        crate::number_control::NumberControl::new(NumericControl::brush_size(), "Brush size", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+    let alpha = crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
     let small = crate::number_control::NumberControl::new(
         NumericControl::number(0.0, 16.0, 1.0, 0),
         "Small integer",
         "",
-    );
+     layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
     for field in [&size, &alpha, &small] {
         body.append(field);
     }
@@ -8277,7 +8277,7 @@ fn native_number_controls() {
         NumericControl::percent(),
         "A long slider name that must not wrap",
         "",
-    );
+     layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
     narrow.set_value(0.5);
     let narrow_container = adw::Clamp::builder()
         .maximum_size(176)
@@ -8289,7 +8289,7 @@ fn native_number_controls() {
         NumericControl::pressure(),
         "Pressure response",
         "Adjust how pen pressure affects your brush. The value centers against this complete label block.",
-    );
+     layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
     described.set_value(1.0);
     body.append(&described);
     window.set_content(Some(&body));
@@ -12920,4 +12920,281 @@ fn enable_individual_column_panels(w: &Rc<Workspace>, group: u32) {
     w.dispatch(UiAction::Customize {
         action: CustomizationAction::SetColumnDrawers { column, drawers: true },
     });
+}
+
+#[test]
+#[ignore = "private display native_numeric_preedit_guard"]
+fn native_numeric_preedit_guard() {
+    gtk::init().unwrap();
+    let app = native_test_app("art.capycanvas.NumericPreedit");
+    for theme in [Theme::Light, Theme::Dark] {
+        adw::StyleManager::default().set_color_scheme(if theme == Theme::Dark { adw::ColorScheme::ForceDark } else { adw::ColorScheme::ForceLight });
+        let control = crate::number_control::NumberControl::new(NumericControl::brush_size(), "Size", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+        control.set_value(32.);
+        let window = adw::ApplicationWindow::builder().application(&*app).content(&control).build();
+        window.present();
+        pump(60);
+        let entry = descendant::<gtk::Entry>(&control).unwrap();
+        let text = entry.delegate().and_downcast::<gtk::Text>().unwrap();
+        let stack = descendant::<gtk::Stack>(&control).unwrap();
+        let track = control.last_child().unwrap();
+        let steps = [track.first_child().and_downcast::<gtk::Button>().unwrap(), track.last_child().and_downcast::<gtk::Button>().unwrap()];
+        let scale = descendant::<gtk::Scale>(&control).unwrap();
+        let display = stack.child_by_name("value").and_downcast::<gtk::Button>().unwrap();
+        let display_controllers = display.observe_controllers();
+        let wheel = (0..display_controllers.n_items()).find_map(|i| display_controllers.item(i).and_downcast::<gtk::EventControllerScroll>()).unwrap();
+        stack.set_visible_child_name("entry");
+        entry.grab_focus();
+        entry.set_text("１２＋３ ｐｘ");
+        let controllers = entry.observe_controllers();
+        let keys = (0..controllers.n_items()).find_map(|i| controllers.item(i).and_downcast::<gtk::EventControllerKey>().filter(|controller| controller.name().as_deref() == Some("numeric-editor-cancel"))).unwrap();
+        for preedit in ["にほんご", "简体", "繁體", "한국어", "１２"] {
+            text.emit_preedit_changed(preedit);
+            for key in [gdk::Key::Escape, gdk::Key::Return, gdk::Key::Down] {
+                assert!(!keys.emit_by_name::<bool>("key-pressed", &[&key, &0u32, &gdk::ModifierType::empty()]));
+            }
+            entry.emit_by_name::<()>("activate", &[]);
+            for button in &steps { button.emit_clicked(); }
+            scale.set_value(0.7);
+            assert!(wheel.emit_by_name::<bool>("scroll", &[&0f64, &1f64]));
+            assert_eq!(entry.text(), "１２＋３ ｐｘ");
+            assert_eq!(stack.visible_child_name().as_deref(), Some("entry"));
+            assert_eq!(control.value(), 32.);
+        }
+        text.emit_preedit_changed("");
+        assert!(!control.commit_text());
+        assert_eq!(control.value(), 32.);
+        assert_eq!(entry.text(), "１２＋３ ｐｘ");
+        let capture = (0..controllers.n_items()).find_map(|i| controllers.item(i).and_downcast::<gtk::EventControllerKey>().filter(|controller| controller.name().as_deref() == Some("numeric-composition-capture"))).unwrap();
+        let changed = std::rc::Rc::new(std::cell::Cell::new(0));
+        control.connect_value_changed(glib::clone!(#[strong] changed, move |_| changed.set(changed.get() + 1)));
+        assert!(!control.input_valid());
+        text.emit_preedit_changed("한국어");
+        assert!(!capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+        text.emit_preedit_changed("");
+        entry.set_text("12+3 px");
+        assert!(!control.input_valid());
+        for _ in 0..2 {
+            assert!(!capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+            entry.emit_by_name::<()>("activate", &[]);
+            assert!(keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+            assert_eq!(entry.text(), "12+3 px");
+            assert_eq!(stack.visible_child_name().as_deref(), Some("entry"));
+            assert_eq!(control.value(), 32.);
+            assert_eq!(changed.get(), 0);
+        }
+        capture.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+        entry.emit_by_name::<()>("activate", &[]);
+        assert_eq!(control.value(), 32.);
+        capture.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
+        assert!(control.input_valid());
+        assert!(control.tooltip_text().is_none());
+        assert_eq!(control.value(), 32.);
+        assert_eq!(changed.get(), 0);
+        assert!(!capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+        entry.emit_by_name::<()>("activate", &[]);
+        assert_eq!(changed.get(), 1);
+        capture.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
+        assert_eq!(control.value(), 15.);
+        assert_eq!(stack.visible_child_name().as_deref(), Some("value"));
+        for (literal, reason) in [("一二", layer_ui::NumericError::InvalidExpression), ("１２＋", layer_ui::NumericError::InvalidExpression), ("２３", layer_ui::NumericError::InvalidExpression), ("２＋３", layer_ui::NumericError::InvalidExpression), ("1/0", layer_ui::NumericError::FiniteNumber)] {
+            stack.set_visible_child_name("entry");
+            entry.set_text(literal);
+            for button in &steps { button.emit_clicked(); }
+            scale.set_value(0.7);
+            assert!(wheel.emit_by_name::<bool>("scroll", &[&0f64, &1f64]));
+            assert_eq!(entry.text(), literal);
+            assert_eq!(control.value(), 15.);
+            assert_eq!(stack.visible_child_name().as_deref(), Some("entry"));
+            assert_eq!(control.tooltip_text().as_deref(), Some(reason.message(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).as_str()));
+        }
+        entry.set_text("16");
+        steps[1].emit_clicked();
+        assert_eq!(control.value(), 17.);
+        stack.set_visible_child_name("entry");
+        entry.set_text("４８");
+        let refusal = control.tooltip_text();
+        text.emit_preedit_changed("にほんご");
+        assert!(!capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+        text.emit_preedit_changed("");
+        assert!(keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+        assert_eq!(entry.text(), "４８");
+        assert_eq!(control.value(), 17.);
+        assert_eq!(control.tooltip_text(), refusal);
+        assert_eq!(stack.visible_child_name().as_deref(), Some("entry"));
+        capture.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+        assert!(!capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+        assert!(keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+        capture.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+        assert_eq!(control.value(), 17.);
+        assert_eq!(stack.visible_child_name().as_deref(), Some("value"));
+        let spin_control = crate::number_control::NumberControl::new(NumericControl::number(0., 16., 1., 0), "Count", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+        spin_control.set_value(4.);
+        let spin = descendant::<gtk::SpinButton>(&spin_control).unwrap();
+        let spin_window = adw::ApplicationWindow::builder().application(&*app).content(&spin_control).build();
+        spin_window.present();
+        pump(40);
+        for (literal, reason) in [("一二", layer_ui::NumericError::InvalidExpression), ("１２＋", layer_ui::NumericError::InvalidExpression), ("２３", layer_ui::NumericError::InvalidExpression), ("２＋３", layer_ui::NumericError::InvalidExpression), ("1/0", layer_ui::NumericError::FiniteNumber)] {
+            spin.set_text(literal);
+            assert!(!spin_control.commit_text());
+            spin.update();
+            for step in [gtk::ScrollType::StepUp, gtk::ScrollType::StepDown] { spin.emit_change_value(step); }
+            assert_eq!(spin.value(), 4.);
+            assert_eq!(spin.text(), literal);
+            assert_eq!(spin_control.value(), 4.);
+            assert_eq!(spin_control.tooltip_text().as_deref(), Some(reason.message(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).as_str()));
+        }
+        let spin_controllers = spin.observe_controllers();
+        let spin_keys = (0..spin_controllers.n_items()).find_map(|i| spin_controllers.item(i).and_downcast::<gtk::EventControllerKey>().filter(|controller| controller.name().as_deref() == Some("numeric-editor-cancel"))).unwrap();
+        assert!(spin_keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &0u32, &gdk::ModifierType::empty()]));
+        assert_eq!(spin_control.value(), 4.);
+        assert_eq!(spin.text(), "4");
+        spin.set_text("１２＋３");
+        let spin_text = spin.delegate().and_downcast::<gtk::Text>().unwrap();
+        spin_text.emit_preedit_changed("にほんご");
+        assert!(!spin_keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &0u32, &gdk::ModifierType::empty()]));
+        assert!(!spin_control.commit_text());
+        spin.update();
+        spin_text.emit_by_name::<()>("activate", &[]);
+        spin.emit_change_value(gtk::ScrollType::StepDown);
+        assert_eq!(spin.text(), "１２＋３");
+        assert_eq!(spin_control.value(), 4.);
+        spin_text.emit_preedit_changed("");
+        assert!(!spin_control.commit_text());
+        assert_eq!(spin_control.value(), 4.);
+        assert_eq!(spin.text(), "１２＋３");
+        assert!(!spin_control.input_valid());
+        let spin_capture = (0..spin_controllers.n_items()).find_map(|i| spin_controllers.item(i).and_downcast::<gtk::EventControllerKey>().filter(|controller| controller.name().as_deref() == Some("numeric-composition-capture"))).unwrap();
+        spin_text.emit_preedit_changed("简体");
+        assert!(!spin_capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+        spin_text.emit_preedit_changed("");
+        spin.set_text("12+3");
+        assert!(!spin_control.input_valid());
+        assert!(!spin_control.commit_text());
+        spin.update();
+        spin_text.emit_by_name::<()>("activate", &[]);
+        spin.emit_change_value(gtk::ScrollType::StepDown);
+        assert_eq!(spin.text(), "12+3");
+        assert_eq!(spin_control.value(), 4.);
+        spin_capture.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
+        assert!(spin_control.input_valid());
+        assert!(spin_control.tooltip_text().is_none());
+        assert_eq!(spin_control.value(), 4.);
+        assert!(!spin_capture.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+        assert!(spin_control.commit_text());
+        assert_eq!(spin_control.value(), 15.);
+        spin_capture.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
+        spin.set_text("２０００");
+        assert!(!spin_control.commit_text());
+        assert_eq!(spin_control.value(), 15.);
+        spin.set_text("2000");
+        assert!(spin_control.commit_text());
+        assert_eq!(spin_control.value(), 16.);
+        spin_window.close();
+        window.close();
+        pump(40);
+    }
+}
+
+#[test]
+#[ignore = "private display native_text_language"]
+fn native_text_language() {
+    {
+        let (app, _) = crate::application("art.capycanvas.TextLanguageCold");
+        app.register(None::<&gtk::gio::Cancellable>).unwrap();
+        let label = gtk::Label::new(Some("Capy Canvas"));
+        let window = adw::ApplicationWindow::builder().application(&app).content(&label).build();
+        window.present();
+        pump(30);
+        assert_eq!(label.layout().context().language(), Some(gtk::pango::Language::from_string(crate::launch_localization().language().tag())));
+        window.close();
+        pump(10);
+        app.quit();
+    }
+    gtk::init().unwrap();
+    for (index, language) in layer_ui::UiLanguage::ALL.into_iter().enumerate() {
+        let app = adw::Application::builder().application_id(format!("art.capycanvas.TextLanguage{index}")).build();
+        app.register(None::<&gtk::gio::Cancellable>).unwrap();
+        let localization = layer_ui::Localizer::shared(language);
+        crate::text_language::install(&app, &localization);
+        let expected = gtk::pango::Language::from_string(language.tag());
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let label = gtk::Label::new(Some("日本語 简体 繁體 한국어"));
+        let entry = gtk::Entry::new();
+        content.append(&label);
+        content.append(&entry);
+        let window = adw::ApplicationWindow::builder().application(&app).content(&content).build();
+        for theme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
+            adw::StyleManager::default().set_color_scheme(theme);
+            window.present();
+            pump(60);
+            assert_eq!(label.layout().context().language(), Some(expected.clone()));
+            assert_eq!(label.layout().unknown_glyphs_count(), 0);
+            assert_eq!(entry.pango_context().language(), Some(expected.clone()));
+            let text = entry.delegate().and_downcast::<gtk::Text>().unwrap();
+            assert_eq!(text.pango_context().language(), Some(expected.clone()));
+            let added = gtk::Label::new(Some("漢字 한글"));
+            content.append(&added);
+            pump(20);
+            assert_eq!(added.layout().context().language(), Some(expected.clone()));
+            added.add_css_class("title-1");
+            pump(20);
+            assert_eq!(added.layout().context().language(), Some(expected.clone()));
+            let other = adw::Window::builder().transient_for(&window).build();
+            content.remove(&added);
+            other.set_content(Some(&added));
+            other.present();
+            pump(20);
+            assert_eq!(added.layout().context().language(), Some(expected.clone()));
+            other.close();
+        }
+        window.close();
+        pump(20);
+        app.quit();
+    }
+}
+
+#[test]
+#[ignore = "private display and hardware GPU numeric size Apply"]
+fn native_numeric_size_apply_refuses_uncommitted_text() {
+    let app = native_test_app("art.capycanvas.NumericSizeApply");
+    for theme in [Theme::Light, Theme::Dark] {
+        let w = Workspace::new(&app);
+        w.window.present();
+        until(|| w.gpu.borrow().is_some() && w.workspaces.ready(), "numeric Apply workspace ready");
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for image in [false, true] {
+            w.dispatch(UiAction::Invoke { command: if image { CommandId::ImageSize } else { CommandId::CanvasSize } });
+            pump(60);
+            let dialog = if image { &w.image_size.dialog } else { &w.canvas_size.dialog };
+            let field = find_named(dialog.upcast_ref(), if image { "image-size-width" } else { "canvas-size-width" }).unwrap();
+            let number = descendant::<crate::number_control::NumberControl>(&field).unwrap();
+            let spin = descendant::<gtk::SpinButton>(&number).unwrap();
+            let before = ui_session(&w).engine().document().clone();
+            let old_value = number.value();
+            for literal in ["一二", "１２＋", "１２＋３", "２＋３", "２３", "1/0"] {
+                spin.set_text(literal);
+                assert!(!number.commit_text());
+                assert!(!dialog.is_response_enabled("apply"));
+                assert!(!find_button(dialog.upcast_ref(), "Apply").unwrap().is_sensitive());
+                w.window.grab_focus();
+                pump(30);
+                assert_eq!(spin.text(), literal);
+                assert_eq!(number.value(), old_value);
+                let current = ui_session(&w).engine().document().clone();
+                assert_eq!((current.width, current.height, current.revision), (before.width, before.height, before.revision));
+                assert!(if image { state(&w).layer_tools.image_size.is_some() } else { state(&w).layer_tools.canvas_size.is_some() });
+            }
+            spin.set_text(if image { "256" } else { "512" });
+            assert!(number.commit_text());
+            pump(30);
+            assert!(dialog.is_response_enabled("apply"));
+            find_button(dialog.upcast_ref(), "Apply").unwrap().emit_clicked();
+            pump(180);
+            assert_eq!(ui_session(&w).engine().document().width, if image { 256 } else { 512 });
+            assert!(if image { state(&w).layer_tools.image_size.is_none() } else { state(&w).layer_tools.canvas_size.is_none() });
+        }
+        w.window.close();
+        pump(60);
+    }
 }

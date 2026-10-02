@@ -4,31 +4,36 @@ use layer_render_wgpu::snapshot::CaptureControl;
 use std::cell::RefCell;
 
 pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
+    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization));
+    let localization = w.localization.clone();
     let (workflow, background, time) = {
         let gpu = w.gpu.borrow();
-        let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
+        let session = &gpu.as_ref().ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization))?.session;
         (SourceWorkflow::begin(session, id)?, session.engine().view().background_rgba_linear, session.engine().animation_time())
     };
     let color = workflow.project.document.color;
     let project = workflow.project.clone();
     let original_gpu = w.snapshot_gpu()?;
     let workflow = Rc::new(RefCell::new(workflow));
-    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color());
-    comparison.invalidate("Converting the retained original…");
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color(), &w.localization);
+    comparison.invalidate(copy.rasterizing.as_ref());
     let explanation = gtk::Label::builder()
         .wrap(true)
         .xalign(0.)
-        .label("Preparing the comparison…")
+        .label(copy.rasterize_comparison.as_ref())
         .build();
     explanation.set_widget_name("rasterize-reduction");
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.append(&explanation);
     content.append(&comparison.widget);
-    let dialog = adw::AlertDialog::builder().heading("Rasterize Retained Source")
-        .body(&format!("Convert the original image to {} · {}-bit pixels. Its full size and position, existing paint edits and masks stay intact. The original profile and precision remain available through Undo.", color.space.name(), color.depth.bits()))
+    let mut args = layer_ui::FluentArgs::new(); args.set("space", color.space.name());
+    let bits = color.depth.bits().to_string(); args.set("bits", bits.as_str());
+    let details = localization.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_RASTERIZE_DETAILS, &args);
+    let dialog = adw::AlertDialog::builder().heading(copy.rasterize_title.as_ref())
+        .body(&details)
         .prefer_wide_layout(true).content_width(520).extra_child(&content).build();
     dialog.set_widget_name("rasterize-source-dialog");
-    dialog.add_responses(&[("cancel", "Cancel"), ("apply", "Rasterize")]);
+    dialog.add_responses(&[("cancel", copy.common.cancel.as_ref()), ("apply", copy.rasterize.as_ref())]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("cancel"));
     dialog.set_response_appearance("apply", adw::ResponseAppearance::Suggested);
@@ -43,7 +48,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let control = CaptureControl::default();
     let worker_workflow = workflow.borrow().clone();
     let memory_budget = layer_color::photo::PhotoMemoryBudget::current().source_bytes;
-    let task = glib::MainContext::default().spawn_local(glib::clone!(
+    let task = glib::MainContext::default().spawn_local(glib::clone!( #[strong] copy,
         #[weak] w,
         #[weak] explanation,
         #[strong] comparison,
@@ -57,15 +62,18 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
             if control.is_cancelled() { return; }
             let result = result.and_then(|(image, clipped)| {
                 let gpu = w.gpu.borrow();
-                let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
+                let session = &gpu.as_ref().ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization))?.session;
                 let preview = workflow.borrow_mut().preview(session, image, control.is_cancelled(), original_gpu.same_device(&session.engine().backend().snapshot_gpu()?))?;
                 explanation.set_label(if clipped > 0 {
-                    "Some source colors are outside the document color space and will be clipped. Compare the complete result before applying."
-                } else { "Compare the complete result before applying. Rasterized images use the document’s editing precision." });
+                    copy.source_clipped.as_ref()
+                } else { copy.rasterize_compare.as_ref() });
                 comparison.request(preview, background, time);
                 Ok(())
             });
-            if let Err(error) = result { comparison.invalidate(&error); }
+            if let Err(error) = result {
+                let message = layer_ui::ColorFeatureError::Diagnostic(error).profile_message(&w.localization);
+                comparison.invalidate(&message);
+            }
         }
     ));
     let response = crate::alert::choose(dialog, &w.window).await;
@@ -77,9 +85,9 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     if response != "apply" {
         return Ok(false);
     }
-    if !compared { return Err("No completed source comparison".into()); }
+    if !compared { return Err(localization.text(layer_ui::MessageId::DOCUMENTS_ERROR_SOURCE_NOT_PREPARED).to_string()); }
     let mut gpu = w.gpu.borrow_mut();
-    let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
+    let session = &mut gpu.as_mut().ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization))?.session;
     let current = original_gpu.same_device(&session.engine().backend().snapshot_gpu()?);
     workflow.borrow_mut().comparison_completed()?;
     workflow.borrow_mut().commit(session, false, current)?;

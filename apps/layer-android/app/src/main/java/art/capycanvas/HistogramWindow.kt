@@ -21,7 +21,7 @@ import kotlin.math.ln
 @Composable internal fun HistogramWindow(host: CanvasHost, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     var result by remember { mutableStateOf<JSONObject?>(null) }
-    var status by remember { mutableStateOf("Preparing inspection…") }
+    var status by remember { mutableStateOf(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_preparing")) }
     var attempted by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var automatic by remember { mutableStateOf(true) }
@@ -30,9 +30,10 @@ import kotlin.math.ln
     var cancel by remember { mutableStateOf(0L) }
     val file = host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")
     val key = "${file?.optLong("epoch")}:${file?.optLong("revision")}"
+    val staleCaption = remember(status) { JSONObject(Native.nativeCaption(obj("type" to "inspection_changed", "status" to status).toString())).getString("text") }
     fun refresh() {
         if (busy || host.drawingTabs.switching) return
-        attempted = key; busy = true; status = "Updating · complete composite at full resolution"
+        attempted = key; busy = true; status = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_updating")
         scope.launch {
             val control = Native.captureControl(); cancel = control
             host.drawingTabs.registerInspection(control, currentCoroutineContext().job)
@@ -43,9 +44,9 @@ import kotlin.math.ln
                     val task = host.withNative { Native.inspectionTask(it, control) }
                     withContext(Dispatchers.IO) { JSONObject(Native.inspectionHistogram(task)) }
                 }
-                ensureActive(); result = next; status = if (next.isNull("sampled_time")) "Current committed drawing" else "Animated effects · snapshot at ${"%.2f".format(next.getDouble("sampled_time"))} s"
+                ensureActive(); result = next; status = if (next.isNull("sampled_time")) host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_current") else JSONObject(Native.nativeCaption(obj("type" to "inspection_sample", "seconds" to next.getDouble("sampled_time")).toString())).getString("text")
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { status = e.message ?: "Could not inspect the drawing" }
+            catch (e: Exception) { status = e.message ?: host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_failed") }
             finally { host.drawingTabs.releaseInspection(control); cancel = 0; Native.captureFree(control); busy = false }
         }
     }
@@ -58,9 +59,9 @@ import kotlin.math.ln
     Popup(alignment = Alignment.TopEnd, offset = IntOffset(-24, 120), properties = PopupProperties(focusable = false), onDismissRequest = onClose) {
         Surface(shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
             Column(Modifier.width(380.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Histogram", style = MaterialTheme.typography.titleMedium); TextButton(onClose) { Text("Close") } }
-                ColorChoice("Channel", listOf("0" to "RGB", "1" to "Red", "2" to "Green", "3" to "Blue", "4" to "Luminance"), channel) { channel = it }
-                Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(logarithmic, { logarithmic = it }); Text("Log scale"); Checkbox(automatic, { automatic = it }); Text("Auto update") }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("histogram"), style = MaterialTheme.typography.titleMedium); TextButton(onClose) { Text(host.bootstrap!!.getJSONObject("common").getString("close")) } }
+                ColorChoice(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("channel"), listOf("0" to "RGB", "1" to host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("red"), "2" to host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("green"), "3" to host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("blue"), "4" to host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("luminance")), channel) { channel = it }
+                Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(logarithmic, { logarithmic = it }); Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("log_scale")); Checkbox(automatic, { automatic = it }); Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("auto_update")) }
                 val histogram = result?.getJSONObject("histogram")
                 val axis=result?.getJSONObject("axis")
                 val bins=axis?.getJSONArray("bins")?.let{it.getInt(0) until it.getInt(1)} ?: (0..255)
@@ -86,9 +87,9 @@ import kotlin.math.ln
                         Text("${listOf("R","G","B","Y")[i]}: below 0 ${c.getLong("below")}, above 1 ${c.getLong("above")} · black ${c.getLong("black")}, white ${c.getLong("white")}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                Text(if (result != null && "${result!!.getLong("epoch")}:${result!!.getLong("revision")}" != key && !busy) "Drawing changed · showing previous inspection" else status)
-                Text((if(histogram?.getJSONObject("color")?.getString("depth") in listOf("F16","F32")) "Linear RGB and luminance: ${axis!!.getJSONArray("stops").values().joinToString(" to "){"%.1f".format((it as Number).toDouble())}} EV. Dashed line: reference white (0 EV). Zero and negative values counted separately. " else "Encoded document RGB · linear luminance Y. ")+"Includes visible paper; excludes transparent pixels and display overlays.", style = MaterialTheme.typography.bodySmall)
-                TextButton({ refresh() }, enabled = !busy) { Text("Refresh") }
+                Text(if (result != null && "${result!!.getLong("epoch")}:${result!!.getLong("revision")}" != key && !busy) staleCaption else status)
+                Text((if(histogram?.getJSONObject("color")?.getString("depth") in listOf("F16","F32")) "Linear RGB and luminance: ${axis!!.getJSONArray("stops").values().joinToString(" to "){"%.1f".format((it as Number).toDouble())}} EV. Dashed line: reference white (0 EV). Zero and negative values counted separately. Includes visible paper; excludes transparent pixels and display overlays." else host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_help")), style = MaterialTheme.typography.bodySmall)
+                TextButton({ refresh() }, enabled = !busy) { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("refresh")) }
             }
         }
     }

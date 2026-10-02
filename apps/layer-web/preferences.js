@@ -1,9 +1,12 @@
+import { composingKey } from "./text-input.js";
 import {chooseProfileLibrary} from './export-controls.js';
 import {createShortcutPage} from './shortcut-page.js';
 // DOM adapter for the same PreferencesView as GTK. Definitions, dependencies,
 // validation, search, recording and conflicts are all resolved in Rust.
-export function createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view }) {
+export function createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view, nativeCopy }) {
   const dialog = document.getElementById("settings");
+  const bootstrap = app.bootstrap_view();
+  const profileCopy = app.profile_copy();
   const send = (action) => dispatch({ type: "preferences", action });
   const close = () => dispatch({ type: "close_settings" });
   const context = element("div", "panel-context-menu preference-context-menu");
@@ -33,7 +36,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
               input.setRangeText(replacement, start, end, "end");
               input.dispatchEvent(new Event("input", { bubbles: true }));
             }
-          } catch { error.textContent = "Clipboard access was denied by your browser."; }
+          } catch (failure) { console.error(failure); error.textContent = app.document_delivery_message({type:"clipboard_shared",detail:String(failure)}); }
         });
         item.setAttribute("role", "menuitem");
         item.append(element("span", "command-label", label), element("span", "shortcut-hint", shortcut));
@@ -79,6 +82,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
     if (heldPointer !== null && (e.pointerId == null || heldPointer === e.pointerId)) { heldPointer = null; e.preventDefault(); e.stopImmediatePropagation(); }
   }, { capture: true });
   dialog.addEventListener("keydown", e => {
+    if (composingKey(e)) return;
     if (e.key === "Escape" && context.matches(":popover-open")) { dismissContext(); e.preventDefault(); e.stopImmediatePropagation(); }
     else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
       const line = e.target.closest("[data-preference]");
@@ -124,29 +128,30 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   const root = element("div", "preferences-layout");
   const sidebar = element("aside", "preferences-sidebar");
   const sidebarHeader = element("header", "dialog-header");
-  sidebarHeader.append(element("h2", "", "Preferences"));
+  const sidebarTitle = element("h2");
+  sidebarHeader.append(sidebarTitle);
   const searchToggle = button("", () => send({ type: "toggle_search", open: !view()?.searching }), "preferences-search-toggle");
-  searchToggle.append(icon("search")); searchToggle.setAttribute("aria-label", "Search preferences");
+  searchToggle.append(icon("search")); searchToggle.setAttribute("aria-label", "");
   sidebarHeader.append(searchToggle);
   const navigation = element("nav", "preferences-navigation");
-  navigation.setAttribute("aria-label", "Preferences categories");
+  navigation.setAttribute("aria-label", "");
   const content = element("div", "preferences-content");
   const header = element("header", "dialog-header");
   const title = element("h2"); title.id = "settings-title";
   const back = button("", () => root.classList.remove("show-content"), "preferences-back");
-  back.append(icon("go-previous")); back.setAttribute("aria-label", "Preferences categories");
+  back.append(icon("go-previous")); back.setAttribute("aria-label", "");
   const subpageBack = button("", () => shortcutPage.back(view()), "subpage-back"); subpageBack.append(icon("go-previous"));
-  subpageBack.id = "shortcut-category-back"; subpageBack.setAttribute("aria-label", "Back"); subpageBack.hidden = true;
-  const exit = button("", close, "dialog-close"); exit.append(icon("window-close")); exit.setAttribute("aria-label", "Close preferences");
+  subpageBack.id = "shortcut-category-back"; subpageBack.setAttribute("aria-label", bootstrap.common.back); subpageBack.hidden = true;
+  const exit = button("", close, "dialog-close"); exit.append(icon("window-close")); exit.setAttribute("aria-label", "");
   exit.id = "close-settings";
   header.append(back, subpageBack, title, exit);
   const search = element("input", "preferences-search");
-  search.type = "search"; search.placeholder = "Search preferences"; search.id = "settings-search";
-  search.setAttribute("aria-label", "Search preferences");
+  search.type = "search"; search.placeholder = ""; search.id = "settings-search";
+  search.setAttribute("aria-label", "");
   search.addEventListener("input", () => send({ type: "search", query: search.value }));
-  search.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); send({ type: "toggle_search", open: false }); } });
+  search.addEventListener("keydown", e => { if (!composingKey(e) && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); send({ type: "toggle_search", open: false }); } });
   const searchResults = element("div", "preferences-search-results");
-  const empty = element("p", "preferences-empty", "No matching preferences");
+  const empty = element("p", "preferences-empty");
   sidebar.append(sidebarHeader, search, navigation, searchResults, empty);
   const pages = element("div", "preferences-pages");
   // Match the native page's gently tightening width (400→600), then its
@@ -231,6 +236,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
                 if (!view()?.error) input.value = current().custom;
               };
               input.addEventListener("keydown", e => {
+                if (composingKey(e)) return;
                 if (e.key === "Enter") { e.preventDefault(); commit(); }
               });
               input.addEventListener("change", () => { if (input.value.trim() !== current().custom) commit(); });
@@ -298,7 +304,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
           line.append(widget); list.append(line); fields.set(row.id, { line, input, widget, controls: [input, ...widget.querySelectorAll("button")] });
         }
       }
-      if(page.id==="color")node.append(button("Manage Color Profiles…",()=>chooseProfileLibrary({app,element,button,manage:true})));
+      if(page.id==="color")node.append(button(profileCopy.manage,()=>chooseProfileLibrary({app,element,button,manage:true})));
     }
   }
   return function refresh(model) {
@@ -311,6 +317,14 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       return;
     }
     if (!fields.size) build(model);
+    if (searchToggle.getAttribute("aria-label") !== model.search_label) searchToggle.setAttribute("aria-label", model.search_label);
+    if (navigation.getAttribute("aria-label") !== model.title) navigation.setAttribute("aria-label", model.title);
+    if (back.getAttribute("aria-label") !== model.title) back.setAttribute("aria-label", model.title);
+    if (exit.getAttribute("aria-label") !== model.close_label) exit.setAttribute("aria-label", model.close_label);
+    if (search.placeholder !== model.search_placeholder) search.placeholder = model.search_placeholder;
+    if (search.getAttribute("aria-label") !== model.search_label) search.setAttribute("aria-label", model.search_label);
+    if (empty.textContent !== nativeCopy.shortcuts.no_matching_preferences) empty.textContent = nativeCopy.shortcuts.no_matching_preferences;
+    if (sidebarTitle.textContent !== model.title) sidebarTitle.textContent = model.title;
     if (contextId) {
       const row = model.pages.find(p => p.id === model.page)?.groups.flatMap(g => g.rows).find(r => r.id === contextId);
       if (!row?.visible) dismissContext();

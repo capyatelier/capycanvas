@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         host.shaderInput()
+        if (host.textComposition.owns(event)) return super.dispatchKeyEvent(event)
         if (host.headerKeyHandler?.invoke(event) == true) return true
         if (host.drawingTabs.key(event)) return true
         if (host.palettes.key(event)) return true
@@ -180,6 +181,7 @@ internal fun CanvasHost.claimsDeviceKey(event: KeyEvent): Boolean {
 
 /** Both the Activity and native dialog windows forward the same key schema. */
 internal fun CanvasHost.key(event: KeyEvent) {
+    if (textComposition.owns(event)) return
     if (rangeControlFocus != null && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
         KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
         KeyEvent.KEYCODE_MOVE_HOME, KeyEvent.KEYCODE_MOVE_END, KeyEvent.KEYCODE_ESCAPE)) return

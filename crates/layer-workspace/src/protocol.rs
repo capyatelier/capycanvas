@@ -202,8 +202,8 @@ impl CommitBatch {
                     history: layer_ui::LayoutHistory::new(&layer_ui::DockLayout::default()),
                     working: working.clone(),
                 }
-                .validate()
-                .map_err(StoreError::invalid)?;
+                .validate_structure()
+                .map_err(StoreError::workspace)?;
             }
             let metadata_json = metadata.as_ref().map(serde_json::to_string).transpose()?;
             let content_json = content

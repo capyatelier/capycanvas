@@ -101,7 +101,7 @@ struct PalettePanel: View {
             }.buttonStyle(.plain).disabled(!view["can_name"].bool || covered).opacity(view["can_name"].bool ? 1 : 0.4)
                 .frame(width: cells.width(count - 1), height: PaletteCells.tile)
                 .offset(x: cells.x(count - 1), y: cells.y(count - 1))
-                .help("Add current color to this palette").accessibilityLabel("Add current color to this palette")
+                .help(controller.copy["add_current"].string).accessibilityLabel(controller.copy["add_current"].string)
                 .accessibilityIdentifier("palette-add-color")
         }.frame(width: cells.width, height: cells.height(rows: cells.rows(count)), alignment: .topLeading)
             .background(NativeReorderInput(model: grid))
@@ -180,7 +180,7 @@ private struct PaletteHistory: View {
                         PaletteRecentTile(controller: controller, tile: history[index], enabled: enabled, hdr: hdr, viewing: viewing)
                     } else if history.isEmpty && index < 5 {
                         SquircleShape.control.fill(palette["text"].opacity(0.05)).padding(3)
-                            .accessibilityElement().accessibilityLabel("Colors appear here after painting")
+                            .accessibilityElement().accessibilityLabel(controller.copy["history_empty"].string)
                             .accessibilityIdentifier("palette-empty-\(index)")
                     }
                 }.frame(width: cells.width(index), height: PaletteCells.tile).offset(x: cells.x(index), y: cells.y(index))
@@ -193,8 +193,8 @@ private struct PaletteHistory: View {
             }.buttonStyle(EditorControlButtonStyle()).disabled(!enabled)
                 .frame(width: cells.width(capacity - 1), height: PaletteCells.tile)
                 .offset(x: cells.x(capacity - 1), y: cells.y(capacity - 1))
-                .help(expanded ? "Collapse color history" : "Expand color history")
-                .accessibilityLabel(expanded ? "Collapse color history" : "Expand color history")
+                .help(expanded ? controller.copy["collapse_history"].string : controller.copy["expand_history"].string)
+                .accessibilityLabel(expanded ? controller.copy["collapse_history"].string : controller.copy["expand_history"].string)
                 .accessibilityIdentifier(expanded ? "palette-history-collapse" : "palette-history-expand")
         }.frame(width: cells.width, height: cells.height(rows: rows), alignment: .topLeading)
             .accessibilityElement(children: .contain).accessibilityIdentifier(expanded ? "palette-history-grid" : "palette-history")
@@ -222,11 +222,13 @@ private struct PaletteRecentTile: View {
 }
 
 private struct PaletteFooter: View {
+    @State private var chooseCaption = ""
     @ObservedObject var controller: PaletteController
     let view: JSON
     var measuring = false
     @Environment(\.editorPalette) private var palette
     @FocusState private var editorFocused: Bool
+    private func refreshCaption() { chooseCaption = NativeTextContext.caption(["type": "choose_palette", "name": view["name"].string]) }
     var body: some View {
         let selection = controller.selection(view)
         let name = selection?["name"].string ?? view["color_name"].string
@@ -237,12 +239,12 @@ private struct PaletteFooter: View {
                     SharedIcon(name: "chevron-down", size: 12).rotationEffect(.degrees(180))
                 }.padding(.horizontal, 4).frame(minHeight: 24).contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle()).frame(maxWidth: 150, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-                .help("Choose a palette · " + view["name"].string).accessibilityLabel("Choose a palette")
+                .help(chooseCaption).accessibilityLabel(controller.copy["choose"].string)
                 .accessibilityValue(view["name"].string).accessibilityIdentifier("palette-chooser")
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 0) {
                 if controller.editing && !measuring {
-                    TextField("Color name", text: Binding(get: { controller.editText }, set: { controller.editText = String($0.prefix(64)) }))
+                    TextField(controller.copy["name"].string, text: Binding(get: { controller.editText }, set: { controller.editText = String($0.prefix(64)) }))
                         .textFieldStyle(.plain).multilineTextAlignment(.trailing)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .frame(minWidth: 64, maxWidth: 180).frame(height: 24)
@@ -250,22 +252,22 @@ private struct PaletteFooter: View {
                         .overlay { if controller.message?.error == true { SquircleShape.control.strokeBorder(Color(red: 0.93, green: 0.33, blue: 0.33), lineWidth: 1) } }
                         .focused($editorFocused)
                         .onAppear { DispatchQueue.main.async { editorFocused = true } }
-                        .onSubmit { controller.commitName(controller.editText) }
-                        .onKeyPress(.escape) { controller.cancelEditing(); return .handled }
+                        .onSubmit { if !NativeTextContext.composing { controller.commitName(controller.editText) } }
+                        .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; controller.cancelEditing(); return .handled }
                         .onChange(of: editorFocused) { _, focused in if !focused { controller.commitName(controller.editText) } }
                         .accessibilityIdentifier("palette-name-editor")
                 } else {
                     Button { controller.focused = true; controller.beginEditing() } label: {
                         Text(name).lineLimit(1).padding(.horizontal, 2).frame(minHeight: 24).contentShape(Rectangle())
                     }.buttonStyle(.plain).disabled(!view["can_name"].bool).opacity(view["can_name"].bool ? 1 : 0.4)
-                        .help(name + " · Click to rename").accessibilityLabel(name).accessibilityIdentifier("palette-color-name")
+                        .help(controller.copy["rename_help"].string).accessibilityLabel(name).accessibilityIdentifier("palette-color-name")
                 }
                 Text(view["color_detail"].string).font(.system(size: 12)).foregroundStyle(palette["text"].opacity(0.6))
                     .lineLimit(1).padding(.trailing, 2)
                     .help("sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity")
                     .accessibilityIdentifier("palette-color-detail")
             }
-        }.accessibilityElement(children: .contain).accessibilityIdentifier("palette-footer")
+        }.accessibilityElement(children: .contain).accessibilityIdentifier("palette-footer").onAppear { refreshCaption() }.onChange(of: view["name"].string) { _, _ in refreshCaption() }
     }
 }
 
@@ -284,13 +286,13 @@ private struct PaletteChooser: View {
             HStack(spacing: 4) {
                 HStack(spacing: 6) {
                     SharedIcon(name: "search", size: 14).opacity(0.6)
-                    TextField("Find a palette", text: $query).textFieldStyle(.plain).focused($searching)
-                        .onKeyPress(.escape) { controller.chooser = false; return .handled }
+                    TextField(store.catalog["native_copy"]["palettes"]["find"].string, text: $query).textFieldStyle(.plain).focused($searching)
+                        .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; controller.chooser = false; return .handled }
                         .accessibilityIdentifier("palette-search")
                 }.padding(.horizontal, 6).frame(height: 24).background(palette["input"], in: SquircleShape.control)
                 Button { controller.openMenu(.library, owner: rows.owner) } label: {
                     SharedIcon(name: "plus").frame(width: 24, height: 24).contentShape(Rectangle())
-                }.buttonStyle(EditorControlButtonStyle()).help("New or import palette").accessibilityLabel("New or import palette")
+                }.buttonStyle(EditorControlButtonStyle()).help(controller.copy["new_import"].string).accessibilityLabel(controller.copy["new_import"].string)
                     .accessibilityIdentifier("palette-library-add")
                     .editorPopover(isPresented: controller.menuPresented(.library, owner: rows.owner), placement: .inward) { menu }
             }
@@ -303,7 +305,7 @@ private struct PaletteChooser: View {
                         .onPreferenceChange(PaletteRowFrames.self) { rows.frames = $0 }
                 }.accessibilityIdentifier("palette-list")
                 if matches.isEmpty {
-                    Text("No matching palettes").foregroundStyle(palette["text"].opacity(0.6)).accessibilityIdentifier("palette-empty-search")
+                    Text(store.catalog["native_copy"]["palettes"]["no_matches"].string).foregroundStyle(palette["text"].opacity(0.6)).accessibilityIdentifier("palette-empty-search")
                 }
             }.frame(maxHeight: .infinity)
         }.accessibilityElement(children: .contain).accessibilityIdentifier("palette-browser")

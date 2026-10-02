@@ -197,7 +197,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
             );
             let export = ProjectJob(pointer);
             let recipe = layer_ui::ExportRecipe::web_share()
-                .draft(layer_ui::ExportDraftAction::Format(if hdr {
+                .draft_canonical(layer_ui::ExportDraftAction::Format(if hdr {
                     layer_ui::ExportFormat::PngHdr
                 } else {
                     layer_ui::ExportFormat::Png

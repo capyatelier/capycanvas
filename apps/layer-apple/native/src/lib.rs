@@ -57,17 +57,61 @@ impl CapyApple {
         result
     }
 }
+fn control_localization() -> Result<&'static std::sync::Arc<layer_ui::Localizer>, String> {
+    active_localization().map_err(str::to_owned)
+}
+
+#[cfg(test)]
+fn fixture_localization() -> &'static std::sync::Arc<layer_ui::Localizer> {
+    LOCALIZATION.get_or_init(|| layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+}
+
 /// # Safety
 /// Returned handle must have one serial owner and be destroyed exactly once.
+#[cfg(test)]
 #[unsafe(no_mangle)]
 pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
+    apple_launch_localized(platform, "", fixture_localization().clone())
+}
+static LOCALIZATION: std::sync::OnceLock<std::sync::Arc<layer_ui::Localizer>> = std::sync::OnceLock::new();
+fn active_localization() -> Result<&'static std::sync::Arc<layer_ui::Localizer>, &'static str> {
+    LOCALIZATION.get().ok_or("apple_launch_not_initialized")
+}
+#[derive(serde::Deserialize)]
+struct AppleLaunch {
+    saved: String,
+    preferred_languages: Vec<String>,
+}
+/// # Safety
+/// JSON must be valid NUL-terminated UTF-8 for this call. A non-null bootstrap
+/// output must be writable and its result released with capy_apple_string_free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_launch(platform: u32, json: *const c_char, bootstrap: *mut *mut c_char) -> *mut CapyApple {
+    if !bootstrap.is_null() { unsafe { *bootstrap = std::ptr::null_mut() }; }
     catch_unwind(|| {
+        if json.is_null() { return std::ptr::null_mut(); }
+        let Ok(source) = (unsafe { CStr::from_ptr(json) }).to_str() else { return std::ptr::null_mut(); };
+        let Ok(launch) = serde_json::from_str::<AppleLaunch>(source) else { return std::ptr::null_mut(); };
+        let tags: Vec<&str> = launch.preferred_languages.iter().map(String::as_str).collect();
+        let localization = if platform <= 1 {
+            LOCALIZATION.get_or_init(|| layer_ui::launch_localization(&launch.saved, &tags)).clone()
+        } else { layer_ui::launch_localization(&launch.saved, &tags) };
+        if !bootstrap.is_null() {
+            let Ok(view) = serde_json::to_string(&layer_ui::bootstrap_view(&localization)) else { return std::ptr::null_mut(); };
+            let Ok(view) = CString::new(view) else { return std::ptr::null_mut(); };
+            unsafe { *bootstrap = view.into_raw() };
+        }
+        apple_launch_localized(platform, &launch.saved, localization)
+    }).unwrap_or(std::ptr::null_mut())
+}
+fn apple_launch_localized(platform: u32, saved: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> *mut CapyApple {
+    catch_unwind(AssertUnwindSafe(move || {
         let platform = match platform {
             0 => layer_ui::Platform::Ios,
             1 => layer_ui::Platform::Mac,
             _ => return None,
         };
-        let mut host = NativeHost::new(platform).ok()?;
+        let mut host = NativeHost::launch_localized(platform, saved, localization).ok()?;
         host.ui_color = layer_host::UiColor::Tagged(DISPLAY_SPACE);
         host.dispatch(layer_ui::UiAction::RestoreWorkspace {
             workspace: Box::new(layer_ui::WorkspaceState::for_platform(platform)),
@@ -84,7 +128,7 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             dismissed_contacts: Default::default(),
             workspaces: None,
         })))
-    })
+    }))
     .ok()
     .flatten()
     .unwrap_or(std::ptr::null_mut())
@@ -124,7 +168,8 @@ pub unsafe extern "C" fn capy_apple_string_free(text: *mut c_char) {
 pub unsafe extern "C" fn capy_apple_numeric(json: *const c_char) -> *mut c_char {
     unsafe { stateless_json(json, "Missing numeric request", |source| {
         let request: layer_ui::NumericRequest = serde_json::from_str(source).map_err(|e| e.to_string())?;
-        serde_json::to_value(request.resolve()?).map_err(|e| e.to_string())
+        let localization = control_localization()?;
+        serde_json::to_value(request.resolve().map_err(|reason| reason.message(localization))?).map_err(|e| e.to_string())
     }) }
 }
 /// Shared tagged color forms, display previews and sampled gradient ramps.
@@ -134,7 +179,7 @@ pub unsafe extern "C" fn capy_apple_numeric(json: *const c_char) -> *mut c_char 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_color_ui(json: *const c_char) -> *mut c_char {
     unsafe { stateless_json(json, "Missing color request", |source| {
-        layer_ui::color_ui(serde_json::from_str(source).map_err(|e| e.to_string())?)
+        layer_ui::color_ui_localized(serde_json::from_str(source).map_err(|e| e.to_string())?, control_localization()?)
     }) }
 }
 /// # Safety
@@ -143,7 +188,37 @@ pub unsafe extern "C" fn capy_apple_color_ui(json: *const c_char) -> *mut c_char
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_toolbar_ui(json: *const c_char) -> *mut c_char {
     unsafe { stateless_json(json, "Missing toolbar request", |source| {
-        layer_ui::toolbar_ui(serde_json::from_str(source).map_err(|e| e.to_string())?)
+        layer_ui::toolbar_ui(serde_json::from_str(source).map_err(|e| e.to_string())?, control_localization()?)
+    }) }
+}
+/// # Safety
+/// `json` is readable NUL-terminated UTF-8 for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_native_caption(json: *const c_char) -> *mut c_char {
+    unsafe { stateless_json(json, "Missing caption request", |source| {
+        let request: layer_ui::NativeCaption = serde_json::from_str(source).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({"text": request.message(control_localization()?)}))
+    }) }
+}
+/// # Safety
+/// `json` is readable NUL-terminated UTF-8 for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_numeric_labels(json: *const c_char) -> *mut c_char {
+    unsafe { stateless_json(json, "Missing numeric label request", |source| {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Request { label: String }
+        let request: Request = serde_json::from_str(source).map_err(|e| e.to_string())?;
+        serde_json::to_value(layer_ui::NumericLabels::new(&request.label, control_localization()?)).map_err(|e| e.to_string())
+    }) }
+}
+/// # Safety
+/// `json` is readable NUL-terminated UTF-8 for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_document_appearance(json: *const c_char) -> *mut c_char {
+    unsafe { stateless_json(json, "Missing document options", |source| {
+        let options: layer_ui::NewDocumentOptions = serde_json::from_str(source).map_err(|e| e.to_string())?;
+        serde_json::to_value(options.appearance(control_localization()?)).map_err(|e| e.to_string())
     }) }
 }
 unsafe fn stateless_json(json: *const c_char, missing: &str,
@@ -304,6 +379,7 @@ pub unsafe extern "C" fn capy_apple_request(
                     a.metal.set_headroom(&mut a.host,headroom)?;
                     serde_json::Value::Null
                 },
+                Some("bootstrap") => serde_json::to_value(a.host.bootstrap_view()).map_err(|e| e.to_string())?,
                 Some("document_tabs") => a.tabs_request(value)?,
                 Some("touch_policy") => {
                     let tap_ms = value["tap_ms"].as_u64().and_then(|ms| u32::try_from(ms).ok()).ok_or("Missing touch timing")?;

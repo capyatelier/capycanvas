@@ -8,6 +8,7 @@ type Wake = Mutex<Option<Box<dyn Fn() + Send>>>;
 pub(super) struct Hub {
     state: Mutex<State>,
     file: Mutex<SettingsFile>,
+    localization: Arc<layer_ui::Localizer>,
 }
 struct State {
     settings: Settings,
@@ -17,36 +18,38 @@ struct State {
     listeners: Vec<Weak<Wake>>,
 }
 impl Hub {
-    pub(super) fn open(file: SettingsFile, defaults: Settings) -> Result<Arc<Self>, String> {
-        static PROFILES: OnceLock<Mutex<HashMap<PathBuf, Weak<Hub>>>> = OnceLock::new();
+    pub(super) fn with_launch(file: SettingsFile, launch: impl FnOnce(Option<&str>) -> Result<NativeHost, String>) -> Result<(NativeHost, Arc<Self>), String> {
+        static PROFILES: OnceLock<Mutex<HashMap<PathBuf, Arc<Hub>>>> = OnceLock::new();
         let mut profiles = PROFILES.get_or_init(Default::default).lock().unwrap();
-        profiles.retain(|_, value| value.strong_count() != 0);
-        if let Some(hub) = profiles.get(&file.directory).and_then(Weak::upgrade) {
-            return Ok(hub);
+        if let Some(hub) = profiles.get(&file.directory).cloned() {
+            let saved = String::from_utf8(hub.state.lock().unwrap().bytes.clone()).map_err(|error| error.to_string())?;
+            let native = NativeHost::launch_localized(layer_ui::Platform::Windows, &saved, hub.localization.clone())?;
+            return Ok((native, hub));
         }
-        let (settings, load_error) = match file.load() {
-            Ok(value) => (value.unwrap_or(defaults), None),
-            Err(error) => (
-                defaults,
-                Some(format!(
-                    "{error} Defaults are in use; the next change replaces the saved file."
-                )),
-            ),
+        let (saved, load_error) = match file.load_saved() {
+            Ok(value) => (value, None),
+            Err(error) => (None, Some(format!("{error} Defaults are in use; the next change replaces the saved file."))),
         };
+        let native = launch(saved.as_deref())?;
+        let settings = native.session.state().settings.clone();
         let bytes = encode(&settings)?;
         let key = file.directory.clone();
         let hub = Arc::new(Self {
-            state: Mutex::new(State {
-                settings,
-                bytes,
-                load_error,
-                dirty: false,
-                listeners: Vec::new(),
-            }),
+            localization: native.session.localization().clone(),
+            state: Mutex::new(State { settings, bytes, load_error, dirty: false, listeners: Vec::new() }),
             file: Mutex::new(file),
         });
-        profiles.insert(key, Arc::downgrade(&hub));
-        Ok(hub)
+        profiles.insert(key, hub.clone());
+        Ok((native, hub))
+    }
+    #[cfg(test)]
+    pub(super) fn open(file: SettingsFile, defaults: Settings) -> Result<Arc<Self>, String> {
+        Self::with_launch(file, |saved| {
+            let mut native = NativeHost::new_localized(layer_ui::Platform::Windows, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))?;
+            let settings = saved.map(|saved| Settings::restore_localized(saved, native.session.localization())).unwrap_or(defaults);
+            native.dispatch(UiAction::RestoreSettings { settings })?;
+            Ok(native)
+        }).map(|(_, hub)| hub)
     }
     pub(super) fn load_error(&self) -> Option<String> {
         self.state.lock().unwrap().load_error.clone()
@@ -115,7 +118,7 @@ impl Subscription {
                 &mut value,
             );
             let settings: Settings = serde_json::from_value(value).map_err(|e| e.to_string())?;
-            settings.validate()?;
+            settings.validate_localized(&self.hub.localization)?;
             let bytes = encode(&settings)?;
             let changed = state.settings != settings;
             state.dirty |= changed;

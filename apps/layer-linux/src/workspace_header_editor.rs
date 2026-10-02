@@ -25,11 +25,11 @@ impl Editor {
         content.add_css_class("header-editor-content");
         root.set_child(Some(&content));
         let sizes = std::array::from_fn(|i| {
-            let button = gtk::ToggleButton::with_label(HeaderSize::ALL[i].label());
+            let button = gtk::ToggleButton::new();
             button.set_widget_name(&format!("header-size-{i}"));
             button
         });
-        let canvas_info = gtk::CheckButton::with_label("Show footer");
+        let canvas_info = gtk::CheckButton::new();
         canvas_info.set_widget_name("header-canvas-info");
         Self {
             root,
@@ -53,32 +53,31 @@ impl Editor {
     pub fn bind(&self, w: &Rc<Workspace>) {
         for (source, chip) in &self.components {
             let source = *source;
-            let (label, icon) = match source {
-                HeaderDragSource::Tools => ("Add Tools…", "list-add-symbolic"),
+            let label = match source {
+                HeaderDragSource::Tools => w.localization.text(layer_ui::MessageId::WORKSPACE_ADD_TOOLS_MENU).to_string(),
+                HeaderDragSource::Component(item) => item.palette_label(&w.localization),
+                HeaderDragSource::Item(_) => unreachable!(),
+            };
+            let icon = match source {
+                HeaderDragSource::Tools => "list-add-symbolic",
                 HeaderDragSource::Component(item) => match item {
-                    HeaderItem::Capy => ("Capy", "layer-zen-looking-up-symbolic"),
-                    HeaderItem::Menu => ("Main Menu", "layer-menu-symbolic"),
-                    HeaderItem::MenuLabels => ("Menu Labels", "view-list-symbolic"),
-                    HeaderItem::Settings => ("Settings", "layer-settings-symbolic"),
-                    HeaderItem::Fullscreen => ("Full Screen", "layer-fullscreen-enter-symbolic"),
-                    HeaderItem::Workspaces => ("Workspaces", "view-grid-symbolic"),
-                    HeaderItem::DocumentTitle => ("Document Title", "text-x-generic-symbolic"),
-                    HeaderItem::Clock => ("Clock", "preferences-system-time-symbolic"),
-                    HeaderItem::Battery => ("Battery", "battery-level-100-symbolic"),
-                    HeaderItem::Space => ("Space", "insert-object-symbolic"),
-                    _ => unreachable!(),
+                    HeaderItem::Capy => "layer-zen-looking-up-symbolic", HeaderItem::Menu => "layer-menu-symbolic",
+                    HeaderItem::MenuLabels => "view-list-symbolic", HeaderItem::Settings => "layer-settings-symbolic",
+                    HeaderItem::Fullscreen => "layer-fullscreen-enter-symbolic", HeaderItem::Workspaces => "view-grid-symbolic",
+                    HeaderItem::DocumentTitle => "text-x-generic-symbolic", HeaderItem::Clock => "preferences-system-time-symbolic",
+                    HeaderItem::Battery => "battery-level-100-symbolic", HeaderItem::Space => "insert-object-symbolic", _ => unreachable!(),
                 },
                 HeaderDragSource::Item(_) => unreachable!(),
             };
             let name = match source {
-                HeaderDragSource::Tools => "tools".into(),
-                HeaderDragSource::Component(item) => item.label().to_lowercase().replace(' ', "-"),
+                HeaderDragSource::Tools => "tools",
+                HeaderDragSource::Component(item) => item.id(),
                 _ => unreachable!(),
             };
             chip.set_widget_name(&format!("header-component-{name}"));
             chip.add_css_class("header-component");
-            chip.set_tooltip_text(Some(&format!("Drag {label} into the title bar")));
-            chip.update_property(&[gtk::accessible::Property::Label(label)]);
+            chip.set_tooltip_text(Some(&layer_ui::header_drag_label(&label, &w.localization)));
+            chip.update_property(&[gtk::accessible::Property::Label(&label)]);
             w.register_drag(chip, DragTarget::Header(source));
             // One inert drag surface, including its padding, icon and label.
             // No button/activation behavior or separate handle hit target.
@@ -91,7 +90,7 @@ impl Editor {
             content.set_widget_name(&format!("header-add-{name}"));
             content.add_css_class("header-component-body");
             content.append(&crate::icons::image(icon));
-            content.append(&gtk::Label::new(Some(label)));
+            content.append(&gtk::Label::new(Some(&label)));
             chip.append(&content);
             self.content.append(chip);
         }
@@ -106,9 +105,10 @@ impl Editor {
         let choices = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         choices.add_css_class("linked");
         choices.set_homogeneous(true);
-        choices.update_property(&[gtk::accessible::Property::Label("Title bar size")]);
+        choices.update_property(&[gtk::accessible::Property::Label(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_SIZE))]);
         for (i, button) in self.sizes.iter().enumerate() {
-            button.set_tooltip_text(Some(&format!("{} title bar", HeaderSize::ALL[i].label())));
+            button.set_label(&HeaderSize::ALL[i].localized_label(&w.localization));
+            button.set_tooltip_text(Some(&HeaderSize::ALL[i].tooltip(&w.localization)));
             button.connect_clicked(glib::clone!(
                 #[weak]
                 w,
@@ -124,6 +124,7 @@ impl Editor {
             choices.append(button);
         }
         options.append(&choices);
+        self.canvas_info.set_label(Some(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_SHOW_FOOTER)));
         self.canvas_info.connect_toggled(glib::clone!(
             #[weak]
             w,
@@ -141,10 +142,10 @@ impl Editor {
         options.append(&self.canvas_info);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         footer.set_halign(gtk::Align::End);
-        let cancel = w.action_button("Cancel", HeaderAction::Cancel.action());
+        let cancel = w.action_button(&w.localization.text(layer_ui::MessageId::COMMON_CANCEL), HeaderAction::Cancel.action());
         cancel.set_widget_name("header-edit-cancel");
         footer.append(&cancel);
-        let done = w.action_button("Done", HeaderAction::Edit { editing: false }.action());
+        let done = w.action_button(&w.localization.text(layer_ui::MessageId::COMMON_DONE), HeaderAction::Edit { editing: false }.action());
         done.set_widget_name("header-edit-done");
         done.add_css_class("suggested-action");
         footer.append(&done);

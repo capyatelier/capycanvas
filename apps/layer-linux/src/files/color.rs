@@ -15,6 +15,7 @@ struct Choice {
     flattened: bool,
 }
 struct Conversion {
+    copy: layer_ui::color_feature_copy::DocumentColorCopy,
     workspace: std::rc::Weak<Workspace>,
     gpu: layer_render_wgpu::snapshot::SnapshotGpu,
     original: Project,
@@ -32,7 +33,7 @@ impl Conversion {
     fn request(self: &Rc<Self>, choice: Choice) {
         self.workflow.borrow_mut().candidate = None;
         self.comparison
-            .invalidate("Preparing the complete comparison…");
+            .invalidate(self.copy.preparing_comparison.as_ref());
         self.pending.set(Some(choice));
         if let Some(active) = self.active.borrow().as_ref() {
             active.cancel();
@@ -44,7 +45,7 @@ impl Conversion {
         glib::MainContext::default().spawn_local(glib::clone!(#[strong(rename_to = state)] self, async move {
             while let Some(choice) = state.pending.take().filter(|_| !state.closed.get()) {
                 if !choice.flattened && choice.change.target(state.original.document.color) == state.original.document.color {
-                    state.comparison.invalidate("Choose a different profile or bit depth to compare.");
+                    state.comparison.invalidate(state.copy.choose_different.as_ref());
                     continue;
                 }
                 let plan = match state.workflow.borrow_mut().select(Some(choice.change), choice.flattened) {
@@ -74,9 +75,9 @@ impl Conversion {
                     state.workflow.borrow().identity.validate(session, control.is_cancelled(), state.gpu.same_device(&w.snapshot_gpu()?))?;
                     let project = prepared.project;
                     state.detail.set_label(if prepared.statistics.clipped_channels > 0 {
-                        "Some colors exceed the destination gamut and will be clipped. Compare the complete result before applying."
-                    } else if choice.flattened { "The layered original will stay open." }
-                    else { "Compare the complete result before applying." });
+                        state.copy.clipped_comparison.as_ref()
+                    } else if choice.flattened { state.copy.layered_open.as_ref() }
+                    else { state.copy.compare_before_apply.as_ref() });
                     let mut brush = session.engine().configured_brush().clone();
                     let mut view = session.engine().view();
                     layer_render::remap_document_colors(state.original.document.color.space, project.document.color.space, &mut brush, &mut view);
@@ -123,6 +124,8 @@ pub(super) async fn run(
     id: u32,
     operation: DocumentColorOperation,
 ) -> Result<bool, String> {
+    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization));
+    let export_copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization);
     let (workflow, background, time) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
@@ -134,16 +137,16 @@ pub(super) async fn run(
     };
     let project = workflow.original.clone();
     let color = project.document.color;
-    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project.clone(), w.view_color());
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project.clone(), w.view_color(), &w.localization);
     let detail = gtk::Label::builder()
         .wrap(true)
         .xalign(0.)
-        .label("Choose the destination to compare.")
+        .label(copy.choose_destination.as_ref())
         .build();
     detail.set_widget_name("document-color-detail");
     let group = adw::PreferencesGroup::new();
     let space = choice(
-        "Profile",
+        export_copy.profile.as_ref(),
         "document-color-space",
         &RgbSpace::ALL.map(|s| s.name()),
         false,
@@ -157,38 +160,38 @@ pub(super) async fn run(
     space.set_visible(operation != DocumentColorOperation::Depth);
     group.add(&space);
     let depth = choice(
-        "Bit depth",
+        export_copy.depth.as_ref(),
         "document-color-depth",
-        &["8-bit SDR", "16-bit SDR", "16-bit float HDR", "32-bit float HDR"],
+        &[copy.depth_8.as_ref(), copy.depth_16.as_ref(), copy.depth_float16.as_ref(), copy.depth_float32.as_ref()],
         false,
     );
     depth.set_selected(if color.depth.is_float() { 2 } else { u32::from(color.depth == SampleDepth::U8) });
     depth.set_visible(operation == DocumentColorOperation::Depth);
     group.add(&depth);
     let result = choice(
-        "Result",
+        copy.result.as_ref(),
         "document-color-result",
-        &["Convert editable layers", "Create flattened copy"],
+        &[copy.convert_layers.as_ref(), copy.create_flattened.as_ref()],
         true,
     );
     result.set_visible(operation == DocumentColorOperation::Convert);
     group.add(&result);
     let intent = choice(
-        "Rendering intent",
+        export_copy.intent.as_ref(),
         "document-color-intent",
         &[
-            "Relative colorimetric",
-            "Perceptual",
-            "Saturation",
-            "Absolute colorimetric",
+            export_copy.relative.as_ref(),
+            export_copy.perceptual.as_ref(),
+            export_copy.saturation.as_ref(),
+            export_copy.absolute.as_ref(),
         ],
         true,
     );
     intent.set_visible(operation == DocumentColorOperation::Convert);
     group.add(&intent);
     let dither = adw::SwitchRow::builder()
-        .title("Reduce banding")
-        .subtitle("Dither 8-bit gradients")
+        .title(export_copy.reduce_banding.as_ref())
+        .subtitle(export_copy.dither_gradients.as_ref())
         .visible(operation == DocumentColorOperation::Depth)
         .build();
     dither.set_widget_name("document-color-dither");
@@ -199,12 +202,12 @@ pub(super) async fn run(
     content.append(&comparison.widget);
     let request = DocumentRequest::ChangeColor { operation };
     let dialog = adw::AlertDialog::builder().heading(request.title(&w.localization).as_ref()).body(match operation {
-        DocumentColorOperation::Assign => "Keep RGB numbers and change how committed pixels are interpreted. Appearance may change. Retained originals keep their own profiles.",
-        DocumentColorOperation::Convert => "Editable layers may change blending and adjustments. A flattened copy preserves their combined appearance as far as gamut and precision allow and keeps the layered original.",
-        DocumentColorOperation::Depth => "Change editing precision independently of the profile. Compare reductions before applying. Undo restores the exact original state.",
+        DocumentColorOperation::Assign => copy.assign_native_help.as_ref(),
+        DocumentColorOperation::Convert => copy.convert_native_help.as_ref(),
+        DocumentColorOperation::Depth => copy.depth_native_help.as_ref(),
     }).extra_child(&content).prefer_wide_layout(true).content_width(520).build();
     dialog.set_widget_name("document-color-dialog");
-    dialog.add_responses(&[("cancel", "Cancel"), ("apply", "Apply")]);
+    dialog.add_responses(&[("cancel", copy.common.cancel.as_ref()), ("apply", copy.common.apply.as_ref())]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("cancel"));
     dialog.set_response_appearance("apply", adw::ResponseAppearance::Suggested);
@@ -215,6 +218,7 @@ pub(super) async fn run(
         move |ready| dialog.set_response_enabled("apply", ready)
     )));
     let state = Rc::new(Conversion {
+        copy: copy.as_ref().clone(),
         gpu: w.snapshot_gpu()?,
         workspace: Rc::downgrade(w),
         original: project,
@@ -228,7 +232,7 @@ pub(super) async fn run(
         running: Cell::new(false),
         closed: Cell::new(false),
     });
-    let refresh: Rc<dyn Fn()> = Rc::new(glib::clone!(
+    let refresh: Rc<dyn Fn()> = Rc::new(glib::clone!( #[strong] copy,
         #[strong]
         state,
         #[weak]
@@ -253,7 +257,7 @@ pub(super) async fn run(
             ][intent.selected() as usize];
             dither.set_sensitive(depth == SampleDepth::U8);
             let flattened = operation == DocumentColorOperation::Convert && result.selected() == 1;
-            dialog.set_response_label("apply", if flattened { "Create Copy" } else { "Apply" });
+            dialog.set_response_label("apply", if flattened { copy.create_copy.as_ref() } else { copy.common.apply.as_ref() });
             let space = RgbSpace::ALL[space.selected() as usize];
             state.request(Choice {
                 flattened,
@@ -320,6 +324,7 @@ async fn adopt(
     workflow: &mut ColorWorkflow,
     original_gpu: &layer_render_wgpu::snapshot::SnapshotGpu,
 ) -> Result<bool, String> {
+    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization));
     {
         let mut gpu = w.gpu.borrow_mut();
         let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
@@ -334,13 +339,13 @@ async fn adopt(
             .prepare_color(project, brush, view, time)?;
     }
     let dialog = adw::AlertDialog::builder()
-        .heading("Preparing color change")
+        .heading(copy.preparing_title.as_ref())
         .body(
-            "Preparing the complete canvas. Your current drawing is unchanged until this finishes.",
+            copy.preparing_help.as_ref(),
         )
         .build();
     dialog.set_widget_name("document-color-progress");
-    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("cancel", copy.common.cancel.as_ref());
     dialog.set_close_response("cancel");
     let cancelled = Rc::new(Cell::new(false));
     dialog.connect_response(None, {

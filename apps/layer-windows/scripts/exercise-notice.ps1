@@ -20,12 +20,12 @@ function Notice{(Model).state.notice}
 function NoticeText{$text=Shown 'canvas-notice-text';if($text -and (Shown 'canvas-notice')){$text.Current.Name}}
 function Center($Element){$r=$Element.Current.BoundingRectangle;@([int]($r.X+$r.Width/2),[int]($r.Y+$r.Height/2))}
 function Click([string]$Device,[int[]]$At){[CapyRowPointer]::Down($Device,$At[0],$At[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 120}
-function Focused{(Find 'Drawing canvas' -Name).Current.HasKeyboardFocus}
+function Focused{(Find 'drawing-canvas').Current.HasKeyboardFocus}
 function Lock([bool]$Value){
  $pattern=(Control 'layer-lock').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
  if(($pattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $Value){$pattern.Toggle()}
  Wait-Until {[bool](Model).state.layer_tools.editing_layer.locked -eq $Value} "Layer lock did not become $Value"
- (Find 'Drawing canvas' -Name).SetFocus()
+ (Find 'drawing-canvas').SetFocus()
 }
 try {
  Enter-CapyEnvironment
@@ -41,15 +41,15 @@ try {
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
  [CapyRowPointer]::Initialize([uint32]$review.Id)
- Wait-Until {$b=(Find 'Drawing canvas' -Name).Current.BoundingRectangle;$b.Width -gt 1200} 'Maximized canvas did not settle' 10
+ Wait-Until {$b=(Find 'drawing-canvas').Current.BoundingRectangle;$b.Width -gt 1200} 'Maximized canvas did not settle' 10
  Invoke-Id 'canvas-fit';Start-Sleep -Milliseconds 300
  (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
- $canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+ $canvas=(Find 'drawing-canvas').Current.BoundingRectangle
  $point=@([int]($canvas.X+$canvas.Width*.5),[int]($canvas.Y+$canvas.Height*.4))
  if(Shown 'canvas-notice'){throw 'A notice showed before any refusal'}
 
- (Find 'Drawing canvas' -Name).SetFocus()
+ (Find 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Key([uint32]$review.Id,0x4F)
  Wait-Until {((Model).state.commands|Where-Object id -eq 'move').selected} 'O did not choose Move'
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x41)
@@ -101,12 +101,12 @@ try {
  Wait-Until {!(Model).state.layer_tools.has_selection} 'Deselect did not clear the selection'
  $count=(Model).state.layers.Count;Invoke 'layer-new'
  Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer was not created'
- (Find 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x57)
+ (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x57)
  Wait-Until {((Model).state.commands|Where-Object id -eq 'auto_select').selected} 'W did not choose Auto Select'
  $source=Control 'tool-action-selection_reference'
  $source.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
  Wait-Until {((Model).state.commands|Where-Object id -eq 'selection_reference').selected} 'Reference sampling was not chosen'
- (Find 'Drawing canvas' -Name).SetFocus()
+ (Find 'drawing-canvas').SetFocus()
  Click 'mouse' $point
  Wait-Until {(NoticeText) -eq 'This tool samples reference layers, and none is marked' -and (Shown 'canvas-notice-action')} 'The Wand refusal did not offer a reference'
  $action=Shown 'canvas-notice-action'

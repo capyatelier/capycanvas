@@ -109,7 +109,7 @@ try {
     }
     if((Model).state.document_file.modified){throw 'Camera controls modified the document'}
     if(((Control 'navigator-overview').GetRuntimeId() -join ':') -ne $identity){throw 'Camera updates replaced the native overview'}
-    $canvas=Control 'Drawing canvas' -Name -Arranged
+    $canvas=Control 'drawing-canvas' -Arranged
     $canvas.SetFocus()
     [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
     [CapyRowPointer]::Initialize([uint32]$review.Id)
@@ -138,7 +138,7 @@ try {
     (Control 'document-height').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('64')
     Invoke 'Create' -Name
     Wait-Until {(Model).state.tabs[0].width -eq 128 -and (Model).state.tabs[0].height -eq 64 -and !(Model).state.document_file.busy} 'Different-aspect document was not adopted' 45
-    Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Document dialog input gate did not clear'
+    Wait-Until {(Control 'drawing-canvas').Current.IsEnabled} 'Document dialog input gate did not clear'
     if(((Control 'navigator-overview').GetRuntimeId() -join ':') -ne $identity){throw 'Document replacement rebuilt the Navigator'}
     Wait-Until {
         $replacement=Capture 'replacement'

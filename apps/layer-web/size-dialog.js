@@ -1,11 +1,11 @@
 
-export function openSizeDialog({element,button,host,name,body,apply,cancel}) {
+export function openSizeDialog({element,button,host,name,body,copy,apply,cancel}) {
   const dialog=element('dialog','document-dialog size-dialog');dialog.id=`${name}-dialog`;
   const form=element('form');form.method='dialog';
   const title=element('h2');title.id=`${name}-title`;title.tabIndex=-1;title.autofocus=true;dialog.setAttribute('aria-labelledby',title.id);
   const message=element('p','size-dialog-message');message.setAttribute('role','status');
-  const footer=element('footer'),applyButton=button('Apply',apply,'suggested-action');
-  footer.append(button('Cancel',cancel),applyButton);
+  const footer=element('footer'),applyButton=button(copy.apply_label,apply,'suggested-action');
+  footer.append(button(copy.cancel_label,cancel),applyButton);
   form.append(title,...body,message,footer);
   form.addEventListener('submit',e=>{e.preventDefault();apply();});
   dialog.addEventListener('cancel',e=>{e.preventDefault();cancel();});

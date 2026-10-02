@@ -171,6 +171,7 @@ struct CustomizationCopy {
     prompt: Option<(customization::ToolbarPrompt, CustomizationLayoutKey, String, Option<String>, std::sync::Arc<customization::ToolbarPromptView>)>,
     manager: Option<(customization::ToolbarManager, CustomizationLayoutKey, std::sync::Arc<customization::ToolbarManagerView>)>,
     header_tools: Vec<(ToolbarControl, String)>,
+    color_picker_buttons: Vec<(ToolbarControl, std::sync::Arc<str>)>,
     workspace_labels: Option<std::sync::Arc<WorkspaceMenuCopy>>,
 }
 /// A host-owned session: call inline or put the entire owner behind a host
@@ -293,7 +294,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             camera.input_transform(),
         )
         .map_err(|e| e.to_string())?;
-        let mut colors = ColorState::default();
+        let mut colors = ColorState::new_localized(&localization);
         colors.set_rgb_space(engine.document().color.space)?;
         colors.set_document_depth(engine.document().color.depth)?;
         let brush = tools::WorkspaceToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
@@ -410,7 +411,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             notices: Default::default(),
             pending_filters: None,
         };
-        session.state.colors.library.ensure_starters();
+        session.state.colors.library.ensure_starters_localized(&session.state.localization);
         session.refresh_feedback_config();
         session.apply_brush()?;
         session.refresh_document();
@@ -495,7 +496,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .layout
                 .header
                 .projected_for(self.state.platform)
-                .context_menu(id, self.state.customization.header_editing),
+                .context_menu_localized(id, self.state.customization.header_editing, self.localization()),
             _ => self
                 .state
                 .workspace
@@ -584,6 +585,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let workspaces = workspace.menu(
                 self.require_workspace_idle().is_ok(),
                 durable_layout(&self.state.workspace.layout) != workspace.baseline,
+                self.localization(),
             );
             let toolbars =
                 ContextMenuItem::submenu(&self.localization().text(MessageId::WORKSPACE_QUICK_ACCESS_TOOLBARS), vec![toolbars, toolbar_actions]);
@@ -651,7 +653,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn tool_picker(&self) -> Option<ToolPickerView> {
         let picker = self.state.customization.picker.as_ref()?;
-        let validity = picker.validate(&self.state.workspace.layout);
+        let validity = picker.validate(&self.state.workspace.layout, self.localization());
         let mut copy = self.customization_copy.borrow_mut();
         if copy.picker.as_ref().is_none_or(|(previous, layout, _)| previous != picker || !layout.matches(&self.state.workspace.layout) || layout.target_validity.as_ref() != Some(&validity)) {
             let mut key = CustomizationLayoutKey::new(&self.state.workspace.layout);
@@ -674,6 +676,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some((_, label)) = copy.header_tools.iter().find(|(id, _)| *id == control) { return label.clone(); }
         let label = customization::tool_choice_localized(control, self.localization()).label;
         copy.header_tools.push((control, label.clone()));
+        label
+    }
+
+    pub fn color_picker_button_label(&self, control: ToolbarControl) -> std::sync::Arc<str> {
+        if let Some((_, label)) = self.customization_copy.borrow().color_picker_buttons.iter().find(|(id, _)| *id == control) { return label.clone(); }
+        let title = match control { ToolbarControl::ColorPicker => self.localization().text(MessageId::WORKSPACE_TOOL_COLOR_PICKER).to_string(), _ => self.header_tool_label(control) };
+        let shortcut = self.state.settings.action_shortcut_localized(&UiAction::Invoke { command: CommandId::Eyedropper }, self.state.platform, self.localization());
+        let mut args = FluentArgs::new(); args.set("tool", title); args.set("shortcut", shortcut.as_str());
+        let label: std::sync::Arc<str> = self.localization().format(if shortcut.is_empty() {
+            MessageId::WORKSPACE_COLOR_PICKER_BUTTON
+        } else {
+            MessageId::WORKSPACE_COLOR_PICKER_BUTTON_SHORTCUT
+        }, &args).into();
+        self.customization_copy.borrow_mut().color_picker_buttons.push((control, label.clone()));
         label
     }
 
@@ -1181,26 +1197,25 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.chrome_hidden = false;
                         return Ok(reply);
                     }
-                    if key == "escape" {
+                    if key == "escape" && !editing {
                         self.interaction.keyboard_chrome = true;
                         reply.dismiss_popups = true;
-                        if !editing && self.cancel_layer_gesture()? {
+                        if self.cancel_layer_gesture()? {
                             self.interaction.pointer = None;
                             reply.cancel_paint = true;
                             reply.change = self.changed(regions::DOCUMENT, true);
                             reply.handled = true;
-                        } else if !editing
-                            && self.selection_masks.target().is_some()
+                        } else if self.selection_masks.target().is_some()
                             && self.command_flags(CommandId::ReturnToArtwork).0
                         {
                             reply.change = self.dispatch(UiAction::Invoke { command: CommandId::ReturnToArtwork })?;
                             reply.handled = true;
-                        } else if !editing && self.escape_edits_layer_content(modifiers) {
+                        } else if self.escape_edits_layer_content(modifiers) {
                             reply.change = self.dispatch(UiAction::Invoke { command: CommandId::EditLayerContent })?;
                             reply.handled = true;
                         }
                     }
-                    if key == "escape"
+                    if key == "escape" && !editing
                         && !self.interaction.facts.popup_open
                         && self.divider_drag.is_none()
                     {
@@ -1223,7 +1238,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             reply.handled = true;
                         }
                     }
-                    if key == "escape"
+                    if key == "escape" && !editing
                         && self.state.customization.has_drawer()
                         && !self.interaction.facts.popup_open
                     {
@@ -2640,7 +2655,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let binding = control.slider().ok_or("Not a brush slider")?;
                 let field = binding.field(&self.state).ok_or("This slider is unavailable")?;
                 self.state.settings.slider_bookmarks.entry(self.state.brush.preset.to_string())
-                    .or_default().toggle(&binding, field.value)?;
+                    .or_default().toggle(&binding, field.value, &self.state.localization)?;
                 save_settings = true;
                 (BRUSH, false)
             }
@@ -3071,29 +3086,29 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (BRUSH, false)
             }
             UiAction::SetBrushSize { value } if self.selection_brush_active() => {
-                self.selection_tools.options.brush.edit("selection_brush_size",value)?;
+                self.selection_tools.options.brush.edit("selection_brush_size",value, &self.state.localization)?;
                 self.refresh_tools();
                 (BRUSH,true)
             }
             UiAction::SetBrushOpacity { value } if self.selection_brush_active() => {
-                self.selection_tools.options.brush.edit("selection_brush_opacity",value)?;
+                self.selection_tools.options.brush.edit("selection_brush_opacity",value, &self.state.localization)?;
                 self.refresh_tools();
                 (BRUSH,true)
             }
             UiAction::SetBrushSize { value } => {
-                NumericControl::brush_size().validate(value, "Brush size")?;
+                NumericControl::brush_size().validate(value, MessageId::TOOL_SETTING_SIZE).map_err(|reason| reason.message(&self.state.localization))?;
                 self.state.brush.diameter = value;
                 self.apply_brush()?;
                 self.tools
-                    .set_override(self.state.brush.preset, "size", value)?;
+                    .set_override(self.state.brush.preset, "size", value, &self.state.localization)?;
                 (BRUSH, false)
             }
             UiAction::SetBrushOpacity { value } => {
-                NumericControl::percent().validate(value, "Opacity")?;
+                NumericControl::percent().validate(value, MessageId::TOOL_SETTING_OPACITY).map_err(|reason| reason.message(&self.state.localization))?;
                 self.state.brush.opacity = value;
                 self.apply_brush()?;
                 self.tools
-                    .set_override(self.state.brush.preset, "opacity", value)?;
+                    .set_override(self.state.brush.preset, "opacity", value, &self.state.localization)?;
                 (BRUSH, false)
             }
             UiAction::SetColor { rgba } => {
@@ -3110,6 +3125,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 action: ColorAction::Library { action },
             } => {
                 let mut affected = BRUSH;
+                let action = self.state.colors.library.prepare_creation(action, self.localization())?;
                 if let Some(color) = self.state.colors.library.apply(action)? {
                     if self.selection_masks.target().is_some() {
                         self.mask_color_action(ColorAction::Definition { color })?;
@@ -3133,7 +3149,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Err("HDR intensity requires an HDR drawing".into());
                 }
                 self.state.colors.set_document_depth(self.engine.document().color.depth)?;
-                self.state.colors.apply(action)?;
+                self.state.colors.apply(action).map_err(|reason|reason.message(ColorInputModel::DocumentRgb, self.localization()))?;
                 self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
                 (BRUSH, false)
@@ -3207,14 +3223,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .ok_or("This setting is not used by the selected tool")?;
                 let value = setting
                     .numeric
-                    .resolve(setting.value as f64, NumericOperation::Step { steps: steps as f64 })?
+                    .resolve(setting.value as f64, NumericOperation::Step { steps: steps as f64 }).map_err(|reason| reason.message(&self.state.localization))?
                     .value as f32;
                 return self.dispatch(UiAction::SetToolSetting { id, value });
             }
             UiAction::SetToolSetting { id, value } => {
                 if id.starts_with("tonal_") {
                     if !self.tonal_active() {return Err("Choose Tonal range first".into());}
-                    self.selection_tools.options.tonal.edit(&id,value)?;self.queue_tonal(None)?;self.refresh_tools();
+                    self.selection_tools.options.tonal.edit(&id,value, &self.state.localization)?;self.queue_tonal(None)?;self.refresh_tools();
                     return Ok(self.changed(BRUSH | COMMANDS,true));
                 } else if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
@@ -3222,17 +3238,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.layer_interaction.tool.region().is_some()
                     && id != "opacity" && !id.starts_with("selection_")
                 {
-                    self.region_tools.edit(&id, value)?;
+                    self.region_tools.edit(&id, value, &self.state.localization)?;
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, false));
                 }
                 if id.starts_with("selection_brush_") {
-                    self.selection_tools.options.brush.edit(&id, value)?;
+                    self.selection_tools.options.brush.edit(&id, value, &self.state.localization)?;
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, true));
                 }
                 if id.starts_with("selection_") {
-                    self.selection_tools.options.edit(&id, value)?;
+                    self.selection_tools.options.edit(&id, value, &self.state.localization)?;
                     self.region_tools.cancel();
                     if self.tonal_active() {self.queue_tonal(None)?;}
                     self.refresh_tools();
@@ -3520,7 +3536,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (SETTINGS | COMMANDS, true)
             }
             UiAction::RestoreSavedSettings { saved } => {
-                self.apply_settings(Settings::restore(&saved))?;
+                self.apply_settings(Settings::restore_localized(&saved, self.localization()))?;
                 (SETTINGS | COMMANDS, true)
             }
             UiAction::CompleteRequest { id, error } => {
@@ -5008,12 +5024,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn edit_brush(&mut self, id: &str, value: f32) -> Result<(), String> {
-        let brush = tool_settings::edit(self.engine.configured_brush(), id, value)?;
+        let brush = tool_settings::edit(self.engine.configured_brush(), id, value, &self.state.localization)?;
         self.state.brush.diameter = brush.diameter;
         self.state.brush.opacity = brush.opacity;
         self.engine.set_brush(brush).map_err(error)?;
         self.apply_brush()?;
-        self.tools.set_override(self.state.brush.preset, id, value)
+        self.tools.set_override(self.state.brush.preset, id, value, &self.state.localization)
     }
 
     fn apply_brush(&mut self) -> Result<(), String> {
@@ -5143,7 +5159,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .filter(|c| c.id == "opacity" || (c.id == "size" && paint != FigurePaint::Fill))
                 .map(|mut c| {
                     if c.id == "size" {
-                        c.label = self.state.localization.text(MessageId::TOOL_CONTROL_LINE_WIDTH);
+                        c.label_id = MessageId::TOOL_CONTROL_LINE_WIDTH;
+                        c.label = self.state.localization.text(c.label_id);
                     }
                     c
                 })
@@ -5359,6 +5376,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         // Static presentation data changes with the applied keymap/platform,
         // not every pen event or frame's command-availability update.
         if bindings_changed {
+            self.customization_copy.borrow_mut().color_picker_buttons.clear();
             for command in &mut self.state.commands {
                 command.tooltip = self.state.settings.action_tooltip_localized(
                     &command.label,
@@ -5678,6 +5696,48 @@ mod tests {
             assert_panels(&s);
             assert!(s.panel_view(Panel::Toolbar).unwrap().tiles.last().unwrap().tooltip.contains("K"));
         }
+    }
+
+    #[test]
+    fn active_header_projection_retains_tool_copy_and_literal_toolbar_names() {
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        let mut s = UiSession::new_localized(Recorder::default(),
+            Document::new("Literal {document}", 1000, 1000, layer_core::DocumentNames { paint: "Literal paint".into(), paper: "Literal paper".into() }),
+            [1000, 1000], Platform::Gtk, japanese.clone()).unwrap();
+        if !s.state.workspace.layout.header.entries().any(|entry| entry.item == HeaderItem::Settings) {
+            s.dispatch(HeaderAction::Add { zone: HeaderZone::Right, before: None, item: HeaderItem::Settings }.action()).unwrap();
+        }
+        for control in [ToolbarControl::Brush { id: s.state.brush.preset }, ToolbarControl::Size { pixels: 8 }, ToolbarControl::Panel { panel: Panel::Brushes }] {
+            s.dispatch(HeaderAction::Add { zone: HeaderZone::Right, before: None, item: HeaderItem::Tool { control } }.action()).unwrap();
+        }
+        let view = s.header_view_with(false);
+        let settings = view.model.entries().find(|entry| entry.item == HeaderItem::Settings).unwrap().id;
+        assert_eq!(view.items.iter().find(|item| item.id == settings).unwrap().label, "設定");
+        assert_eq!(view.sizes[0].label.as_ref(), "小");
+        let picker_control = ToolbarControl::ColorPicker;
+        let picker_caption = s.color_picker_button_label(picker_control);
+        let retained: Vec<_> = s.customization_copy.borrow().header_tools.iter().map(|(control, label)| (*control, label.as_ptr())).collect();
+        for size in [8., 17.] {
+            s.dispatch(UiAction::SetBrushSize { value: size }).unwrap();
+            s.dispatch(UiAction::SetZoom { zoom: size / 8. }).unwrap();
+            s.set_viewport([640. + size, 480.], [640 + size as u32, 480]).unwrap();
+            let next = s.header_view_with(false);
+            assert!(std::sync::Arc::ptr_eq(&view.sizes[0].label, &next.sizes[0].label));
+            assert!(std::sync::Arc::ptr_eq(&picker_caption, &s.color_picker_button_label(picker_control)));
+            assert_eq!(s.customization_copy.borrow().header_tools.iter().map(|(control, label)| (*control, label.as_ptr())).collect::<Vec<_>>(), retained);
+        }
+        customize(&mut s, CustomizationAction::RenameToolbar { panel: Panel::Toolbar });
+        customize(&mut s, CustomizationAction::ToolbarName { name: "Literal {toolbar}".into() });
+        customize(&mut s, CustomizationAction::ConfirmToolbar);
+        assert_eq!(s.panel_view(Panel::Toolbar).unwrap().title, "Literal {toolbar}");
+        assert_eq!(s.engine().document().id.as_ref(), "Literal {document}");
+        let mut settings = s.state.settings.clone();
+        settings.shortcuts.insert(CommandId::Eyedropper.shortcut_id(), vec![KeyChord::new("k", Modifiers::default())]);
+        s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
+        let changed = s.color_picker_button_label(picker_control);
+        assert!(!std::sync::Arc::ptr_eq(&picker_caption, &changed));
+        assert!(changed.contains("（K）"));
+        assert!(!changed.contains("（I）"));
     }
 
     #[test]
@@ -6249,7 +6309,7 @@ mod tests {
         s.dispatch(HeaderAction::Edit { editing: false }.action())
             .unwrap();
         let saved = s.capture_workspace().unwrap();
-        saved.validate().unwrap();
+        saved.validate_structure().unwrap();
         assert!(!saved.history.layout().canvas_info.visible);
         assert_eq!(saved.history.generation, original.history.generation + 1);
         assert_eq!(
@@ -6545,11 +6605,12 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec![
-                vec!["New Workspace…", "Manage Workspaces…"],
+                vec!["New Workspace…", "Workspaces"],
                 vec!["Layout History…", "Restore Starting Layout…"],
                 vec!["Reset All Brushes…"],
             ]
         );
+        assert_eq!(workspaces.sections[1][1].action, Some(UiAction::WorkspaceManager { command: WorkspaceCommand::Manage }));
         assert!(
             s.command(CommandId::ResetLayout)
                 .tooltip
@@ -10061,7 +10122,7 @@ mod tests {
         );
         edit(&mut s, CustomizationAction::ConfirmToolbar);
         assert_eq!(
-            s.state.workspace.layout.panel(copied.id).unwrap().title(),
+            s.state.workspace.layout.panel(copied.id).unwrap().canonical_title(),
             "Painting"
         );
         edit(
@@ -10583,6 +10644,35 @@ mod tests {
             ChromeFacts::default(),
         );
         assert!(!next.handled && next.chrome_hidden && !next.paint);
+    }
+
+    #[test]
+    fn native_editor_escape_preserves_popups_and_drawers() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            customize(&mut s, CustomizationAction::ShowAllControls { panel: Panel::Brushes });
+            assert!(s.state.customization.expanded.is_some());
+            let reply = key(&mut s, "Escape", true, false, true);
+            assert!(!reply.handled);
+            assert!(!reply.dismiss_popups);
+            assert_eq!(s.state.customization.expanded, Some(Panel::Brushes));
+            key(&mut s, "Escape", false, false, true);
+            let reply = key(&mut s, "Escape", true, false, false);
+            assert!(reply.handled && reply.dismiss_popups);
+            assert!(s.state.customization.expanded.is_none());
+            key(&mut s, "Escape", false, false, false);
+            s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport: [1200., 900.] }).unwrap();
+            let column = s.state.workspace.layout.collapsed_column_for_group(5).unwrap();
+            s.state.workspace.layout.column_stack_mut(column).drawers = true;
+            customize(&mut s, CustomizationAction::ToggleColumnDrawer { group: 5, panel: Panel::Brushes });
+            assert!(!s.state.customization.column_drawers.is_empty());
+            let reply = key(&mut s, "Escape", true, false, true);
+            assert!(!reply.handled && !reply.dismiss_popups);
+            assert!(!s.state.customization.column_drawers.is_empty());
+            key(&mut s, "Escape", false, false, true);
+            assert!(key(&mut s, "Escape", true, false, false).handled);
+            assert!(s.state.customization.column_drawers.is_empty());
+        }
     }
 
     #[test]
@@ -11241,7 +11331,7 @@ mod tests {
     fn application_menus_reuse_live_models_and_selection_commands_are_undoable() {
         let mut app = session(Platform::Gtk);
         assert_eq!(
-            ApplicationMenu::ALL.map(|m| m.label().to_string()),
+            ApplicationMenu::ALL.map(|m| m.canonical_label().to_string()),
             [
                 "File", "Edit", "Layer", "Select", "Filter", "View", "Window", "Help"
             ]
@@ -14934,7 +15024,10 @@ mod tests {
                 divider: None,
             })
             .unwrap();
-        assert!(reply.handled);
+        assert!(!reply.handled && !reply.dismiss_popups);
+        assert!(app.state.customization.expanded.is_some());
+        key(&mut app, "Escape", false, false, true);
+        assert!(key(&mut app, "Escape", true, false, false).handled);
         assert!(app.state.customization.expanded.is_none());
     }
     #[test]

@@ -9,7 +9,29 @@ use std::{
     rc::{Rc, Weak},
 };
 
+struct LayerCopy {
+    layer: layer_ui::native_copy::LayerCopy,
+    reference: std::sync::Arc<str>,
+    load_selection: std::sync::Arc<str>,
+}
+impl LayerCopy {
+    fn new(localization: &layer_ui::Localizer) -> Self {
+        Self {
+            layer: layer_ui::NativeCopy::new(localization).layers,
+            reference: localization.text(layer_ui::MessageId::COMMAND_SELECTION_REFERENCE),
+            load_selection: localization.text(layer_ui::MessageId::RESOURCES_SELECTION_MENU_LOAD_SELECTION),
+        }
+    }
+}
+fn caption(widget: &impl IsA<gtk::Widget>, text: &str) {
+    if widget.as_ref().tooltip_text().as_deref() != Some(text) {
+        widget.as_ref().set_tooltip_text(Some(text));
+        widget.as_ref().update_property(&[gtk::accessible::Property::Label(text)]);
+    }
+}
+
 pub struct LayerPanel {
+    copy: Rc<LayerCopy>,
     pub root: gtk::Box,
     pub header: gtk::Box,
     pub footer: gtk::Box,
@@ -36,6 +58,7 @@ pub struct LayerPanel {
 }
 #[derive(Clone)]
 struct Row {
+    copy: Rc<LayerCopy>,
     id: Cell<u64>,
     swipe: crate::swipe_row::SwipeRow,
     content_image: gtk::Picture,
@@ -64,7 +87,7 @@ fn button(icon: &str, tooltip: &str) -> gtk::Button {
     let b = crate::icons::button(icon);
     b.add_css_class("flat");
     b.add_css_class("layer-icon");
-    b.set_tooltip_text(Some(tooltip));
+    caption(&b, tooltip);
     b
 }
 fn action(w: &Rc<Workspace>, action: A) {
@@ -126,7 +149,7 @@ fn toggle(icon: &str, tooltip: &str) -> gtk::ToggleButton {
     crate::icons::set_button(&button, icon);
     button.add_css_class("flat");
     button.add_css_class("layer-icon");
-    button.set_tooltip_text(Some(tooltip));
+    caption(&button, tooltip);
     button
 }
 fn finish_name(
@@ -334,7 +357,8 @@ impl LayerPanel {
             })).collect::<Vec<_>>()
         })
     }
-    pub fn new() -> Self {
+    pub fn new(localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
+        let copy = Rc::new(LayerCopy::new(&localization));
         let owner: Rc<RefCell<Weak<Workspace>>> = Rc::default();
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("layers-panel");
@@ -373,7 +397,7 @@ impl LayerPanel {
         let options = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         options.set_homogeneous(true);
         let blend = gtk::MenuButton::new();
-        let blend_label = gtk::Label::new(Some(layer_core::LayerBlend::Normal.label()));
+        let blend_label = gtk::Label::new(Some(localization.text(layer_ui::MessageId::RESOURCES_BLEND_NORMAL).as_ref()));
         blend_label.set_xalign(0.);
         blend_label.set_hexpand(true);
         blend_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -383,21 +407,20 @@ impl LayerPanel {
         blend.set_always_show_arrow(true);
         blend.set_hexpand(true);
         blend.set_widget_name("layer-blend");
-        blend.set_tooltip_text(Some("Layer blend mode"));
-        blend.update_property(&[gtk::accessible::Property::Label("Layer blend mode")]);
+        caption(&blend, copy.layer.blend.as_ref());
         let blend_menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         blend.set_popover(Some(&blend_menu));
         options.append(&blend);
-        let opacity = NumberControl::inline(NumericControl::layer_opacity(), "Layer opacity");
+        let opacity = NumberControl::inline(NumericControl::layer_opacity(), copy.layer.opacity.as_ref(), localization);
         options.append(&opacity);
         header.append(&options);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        let alpha = toggle("layer-alpha-lock-symbolic", "Alpha lock");
-        let lock = toggle("layer-lock-symbolic", "Lock editing");
-        let clip = toggle("layer-clip-symbolic", "Clip to layer below");
+        let alpha = toggle("layer-alpha-lock-symbolic", copy.layer.alpha_lock.as_ref());
+        let lock = toggle("layer-lock-symbolic", copy.layer.lock_editing.as_ref());
+        let clip = toggle("layer-clip-symbolic", copy.layer.clip.as_ref());
         let reference = toggle(
             "layer-reference-symbolic",
-            "Use selected layers as references",
+            copy.reference.as_ref(),
         );
         reference.add_css_class("layer-reference");
         for b in [&alpha, &lock, &clip, &reference] {
@@ -409,6 +432,8 @@ impl LayerPanel {
         let rows: Rc<RefCell<HashMap<usize, Row>>> = Rc::default();
         factory.connect_setup(glib::clone!(
             #[strong]
+            copy,
+            #[strong]
             context,
             #[strong]
             rows,
@@ -419,12 +444,12 @@ impl LayerPanel {
                 let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
                 root.add_css_class("layer-row");
                 root.add_css_class("customizable-target");
-                let eye = button("layer-eye-symbolic", "Show layer");
+                let eye = button("layer-eye-symbolic", copy.layer.show.as_ref());
                 eye.add_css_class("layer-column");
                 root.append(&eye);
                 let selection = button(
                     "layer-selection-empty-symbolic",
-                    "Select layer without changing drawing target",
+                    copy.layer.select_row_help.as_ref(),
                 );
                 selection.add_css_class("layer-column");
                 root.append(&selection);
@@ -433,16 +458,16 @@ impl LayerPanel {
                 clipping.add_css_class("layer-clipping");
                 thumbnails.append(&clipping);
                 let (content, content_image, content_preview, content_frame) =
-                    thumbnail("Edit layer content");
+                    thumbnail(copy.layer.edit_content.as_ref());
                 let effect_icon = gtk::Image::new();
                 effect_icon.set_pixel_size(24);
                 effect_icon.set_can_target(false);
                 content_preview.add_overlay(&effect_icon);
                 thumbnails.append(&content);
-                let link = button("layer-link-symbolic", "Link mask to layer");
+                let link = button("layer-link-symbolic", copy.layer.link_mask_to_layer.as_ref());
                 link.add_css_class("layer-link");
                 thumbnails.append(&link);
-                let (mask, mask_image, _, mask_frame) = thumbnail("Edit layer mask");
+                let (mask, mask_image, _, mask_frame) = thumbnail(copy.layer.edit_mask.as_ref());
                 thumbnails.append(&mask);
                 root.append(&thumbnails);
                 let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -461,6 +486,7 @@ impl LayerPanel {
                     .max_length(128)
                     .has_frame(false)
                     .build();
+                let name_composition = crate::input::guard_entry_activation(&name_entry);
                 name_entry.add_css_class("layer-name-entry");
                 let name_stack = gtk::Stack::new();
                 name_stack.set_hhomogeneous(false);
@@ -475,7 +501,7 @@ impl LayerPanel {
                 meta.set_width_chars(1);
                 text.append(&meta);
                 root.append(&text);
-                let load_selection = button("layer-selection-load-symbolic", "Load selection");
+                let load_selection = button("layer-selection-load-symbolic", copy.load_selection.as_ref());
                 load_selection.add_css_class("layer-thumbnail");
                 load_selection.set_valign(gtk::Align::Center);
                 thumbnails.insert_child_after(&load_selection, Some(&content));
@@ -509,10 +535,11 @@ impl LayerPanel {
                                 let w = owner.borrow().upgrade()?;
                                 let gpu = w.gpu.borrow();
                                 let state = gpu.as_ref()?.session.state();
-                                Some(state.settings.action_tooltip(
+                                Some(state.settings.action_tooltip_localized(
                                     &button.tooltip_text().unwrap_or_default(),
                                     &row_button_action(&row, kind),
                                     state.platform,
+                                    &w.localization,
                                 ))
                             }
                         ));
@@ -626,6 +653,8 @@ impl LayerPanel {
                 name_entry.add_controller(focus);
                 let keys = gtk::EventControllerKey::new();
                 keys.connect_key_pressed(glib::clone!(
+                    #[strong]
+                    name_composition,
                     #[weak]
                     item,
                     #[weak]
@@ -638,7 +667,9 @@ impl LayerPanel {
                     glib::Propagation::Proceed,
                     move |_, key, _, _| {
                         if key == gdk::Key::Escape {
-                            finish_name(&owner, &item, &name_stack, &name_entry, true);
+                            if !name_composition.active() {
+                                finish_name(&owner, &item, &name_stack, &name_entry, true);
+                            }
                             glib::Propagation::Stop
                         } else {
                             glib::Propagation::Proceed
@@ -832,6 +863,7 @@ impl LayerPanel {
                 rows.borrow_mut().insert(
                     item.as_ptr() as usize,
                     Row {
+                        copy: copy.clone(),
                         id: Cell::new(0),
                         swipe,
                         content_image,
@@ -905,6 +937,7 @@ impl LayerPanel {
         footer.add_css_class("layer-footer");
         root.append(&footer);
         Self {
+            copy: copy.clone(),
             root,
             header,
             footer,
@@ -918,11 +951,11 @@ impl LayerPanel {
             lock,
             mask_action: button(
                 "layer-mask-symbolic",
-                "Add mask from selection, or reveal all",
+                copy.layer.add_mask.as_ref(),
             ),
             reference,
             clip,
-            delete: button("layer-delete-symbolic", "Delete selected layers"),
+            delete: button("layer-delete-symbolic", copy.layer.delete_selected.as_ref()),
             context,
             owner,
             rows,
@@ -1000,7 +1033,7 @@ impl LayerPanel {
         for (icon, label, a) in [
             (
                 "layer-add-layer-symbolic",
-                "New layer",
+                self.copy.layer.new_layer.as_ref(),
                 A::New {
                     group: false,
                     clipped: false,
@@ -1008,7 +1041,7 @@ impl LayerPanel {
             ),
             (
                 "layer-folder-symbolic",
-                "New group",
+                self.copy.layer.new_group.as_ref(),
                 A::New {
                     group: true,
                     clipped: false,
@@ -1024,7 +1057,7 @@ impl LayerPanel {
             ));
             self.footer.append(&b);
         }
-        let selection = button("layer-selection-brush-symbolic", "New Selection Layer");
+        let selection = button("layer-selection-brush-symbolic", self.copy.layer.new_selection_layer.as_ref());
         selection.connect_clicked(glib::clone!(#[weak] w, move |_| w.dispatch(UiAction::Invoke { command: layer_ui::CommandId::NewSelectionLayer })));
         self.footer.append(&selection);
         let mask = &self.mask_action;
@@ -1074,7 +1107,7 @@ impl LayerPanel {
             }
         ));
         self.footer.append(mask);
-        let import = button("layer-image-symbolic", "Import image as layer");
+        let import = button("layer-image-symbolic", self.copy.layer.import_image.as_ref());
         import.set_widget_name("import-image-layer");
         w.bind_action_tooltip(&import, UiAction::Invoke { command: layer_ui::CommandId::ImportImage });
         import.connect_clicked(glib::clone!(#[weak] w, move |_| {
@@ -1094,7 +1127,7 @@ impl LayerPanel {
             move |_| action(&w, A::DeleteSelected)
         ));
         self.footer.append(&self.delete);
-        let more = button("layer-more-symbolic", "Layer actions");
+        let more = button("layer-more-symbolic", self.copy.layer.actions.as_ref());
         more.set_hexpand(true);
         more.set_halign(gtk::Align::End);
         let context = &self.context;
@@ -1261,8 +1294,7 @@ impl LayerPanel {
             .set_active(state.layer_tools.references_selected);
         self.reference
             .set_sensitive(state.layer_tools.can_reference);
-        self.reference
-            .set_tooltip_text(Some(state.layer_tools.reference_action_label));
+        caption(&self.reference, self.copy.reference.as_ref());
         let rename = state.layer_tools.rename_layer.and_then(|id| {
             self.rows
                 .borrow()
@@ -1412,6 +1444,7 @@ fn active(w: &Workspace) -> Option<u64> {
 }
 impl Row {
     fn refresh(&self, s: &LayerState) {
+        let copy = &self.copy;
         if self.id.replace(s.id) != s.id {
             self.swipe.reset();
             self.name_stack.set_visible_child_name("name");
@@ -1425,7 +1458,7 @@ impl Row {
         self.content_image.set_visible(s.selection_layer || s.content_icon.is_none() || s.content_icon_color.is_some());
         crate::icons::set_colored(&self.effect_icon, s.content_icon.as_deref(), s.content_icon_color);
         self.load_selection.set_visible(s.selection_layer);
-        self.load_selection.set_tooltip_text(Some(s.load_selection_tooltip));
+        caption(&self.load_selection, copy.load_selection.as_ref());
         self.load_selection.set_widget_name(&format!("selection-load-{}", s.id));
         self.name.set_text(&s.label);
         self.name.set_tooltip_text(Some(&s.label));
@@ -1441,16 +1474,12 @@ impl Row {
         self.mask_frame.set_visible(s.mask_selected);
         let drawing_target = s.drawing;
         crate::icons::set_button(&self.selection, s.selection_icon);
-        self.selection
-            .set_tooltip_text(Some(if drawing_target && s.reference {
-                "Drawing target · Reference layer · Click to select"
-            } else if drawing_target {
-                "Drawing target · Click to select"
-            } else if s.reference {
-                "Reference layer · Click to select"
-            } else {
-                "Select layer without changing drawing target"
-            }));
+        caption(&self.selection, copy.layer.select_row_help.as_ref());
+        self.selection.update_property(&[gtk::accessible::Property::Description(if s.reference { copy.reference.as_ref() } else { "" })]);
+        self.selection.update_state(&[gtk::accessible::State::Selected(Some(s.selected))]);
+        if let Some(icon) = self.selection.child() {
+            icon.update_property(&[gtk::accessible::Property::Label(if drawing_target { copy.layer.drawing_target.as_ref() } else { "" })]);
+        }
         self.clipping.set_opacity(if s.clipped { 1. } else { 0. });
         crate::icons::set_button(
             &self.eye,
@@ -1460,19 +1489,15 @@ impl Row {
                 "layer-eye-hidden-symbolic"
             },
         );
-        self.eye.set_tooltip_text(Some(match (s.selection_layer,s.visible) {
-            (true,true) => "Hide selection overlay", (true,false) => "Show selection overlay",
-            (false,true) => "Hide layer", (false,false) => "Show layer",
-        }));
+        caption(&self.eye, match (s.selection_layer,s.visible) {
+            (true,true) => copy.layer.hide_selection.as_ref(), (true,false) => copy.layer.show_selection.as_ref(),
+            (false,true) => copy.layer.hide.as_ref(), (false,false) => copy.layer.show.as_ref(),
+        });
         self.link.set_visible(s.has_mask);
         self.mask.set_visible(s.has_mask);
         crate::icons::set_button(&self.link, "layer-link-symbolic");
         self.link.set_opacity(if s.mask_linked { 1. } else { 0.35 });
-        self.link.set_tooltip_text(Some(if s.mask_linked {
-            "Unlink mask from layer"
-        } else {
-            "Link mask to layer"
-        }));
+        caption(&self.link, if s.mask_linked { copy.layer.unlink_mask.as_ref() } else { copy.layer.link_mask_to_layer.as_ref() });
         self.mask_image
             .set_opacity(if s.mask_enabled { 1. } else { 0.4 });
         self.grip.set_visible(s.can_drop_below);
@@ -1486,15 +1511,11 @@ impl Row {
                     "layer-folder-open-symbolic"
                 },
             );
-            self.content.set_tooltip_text(Some(if s.collapsed {
-                "Expand group"
-            } else {
-                "Collapse group"
-            }));
+            caption(&self.content, if s.collapsed { copy.layer.expand.as_ref() } else { copy.layer.collapse.as_ref() });
         } else {
             self.content.remove_css_class("layer-folder");
             self.content.set_child(Some(&self.content_preview));
-            self.content.set_tooltip_text(Some("Select layer content"));
+            caption(&self.content, copy.layer.edit_content.as_ref());
         }
         crate::icons::set(
             &self.lock,
@@ -1506,12 +1527,37 @@ impl Row {
         );
         self.lock
             .set_opacity(if s.locked || s.alpha_locked { 1. } else { 0. });
-        self.lock.set_tooltip_text(Some(if s.locked {
-            "Editing locked"
-        } else {
-            "Alpha locked"
-        }));
+        self.lock.update_state(&[gtk::accessible::State::Hidden(!s.locked && !s.alpha_locked)]);
+        caption(&self.lock, if s.locked { copy.layer.locked.as_ref() } else { copy.layer.alpha_locked.as_ref() });
         self.meta.set_text(&s.description);
         self.meta.set_visible(!s.description.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "private display native_layers_control_copy"]
+    fn native_layers_control_copy() {
+        adw::init().unwrap();
+        for theme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
+            adw::StyleManager::default().set_color_scheme(theme);
+            for language in layer_ui::UiLanguage::ALL {
+                let context = layer_ui::Localizer::shared(language);
+                let expected = layer_ui::NativeCopy::new(&context).layers;
+                let panel = LayerPanel::new(context.clone());
+                assert_eq!(panel.blend.tooltip_text().as_deref(), Some(expected.blend.as_ref()));
+                assert_eq!(panel.blend_label.text().as_str(), context.text(layer_ui::MessageId::RESOURCES_BLEND_NORMAL).as_ref());
+                assert_eq!(panel.alpha.tooltip_text().as_deref(), Some(expected.alpha_lock.as_ref()));
+                assert_eq!(panel.lock.tooltip_text().as_deref(), Some(expected.lock_editing.as_ref()));
+                assert_eq!(panel.clip.tooltip_text().as_deref(), Some(expected.clip.as_ref()));
+                assert_eq!(panel.delete.tooltip_text().as_deref(), Some(expected.delete_selected.as_ref()));
+                assert_eq!(panel.mask_action.tooltip_text().as_deref(), Some(expected.add_mask.as_ref()));
+                assert!(std::sync::Arc::ptr_eq(&panel.copy.layer.blend, &expected.blend));
+                assert!(gtk::test_accessible_has_property(&panel.blend, gtk::AccessibleProperty::Label));
+            }
+        }
     }
 }

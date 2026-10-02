@@ -14,12 +14,14 @@ pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
     color: JString,
 ) -> jobjectArray {
     let result = (|| {
+        let localization = crate::launch::active_localization()?;
         let bytes = env.convert_byte_array(bytes).map_err(error)?;
         let mut library = layer_ui::ExportPresets::restore(&bytes);
         let request = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
         let color: layer_core::color::DocumentColor =
             serde_json::from_str(&read(&mut env, &color)?).map_err(error)?;
-        let view = library.operate(request, color)?;
+        let mut view = library.operate(request, color).map_err(|reason| reason.preset_message(localization))?;
+        view.localize_names(color, localization);
         let result = env
             .new_object_array(2, "java/lang/Object", JObject::null())
             .map_err(error)?;
@@ -30,7 +32,7 @@ pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
             .map_err(error)?;
         if view.changed {
             let bytes = env
-                .byte_array_from_slice(&library.encode()?)
+                .byte_array_from_slice(&library.encode().map_err(|reason| reason.preset_message(localization))?)
                 .map_err(error)?;
             env.set_object_array_element(&result, 1, bytes)
                 .map_err(error)?;
@@ -45,9 +47,10 @@ pub extern "system" fn Java_art_capycanvas_Native_profileLibrary(
     mut env: JNIEnv, _: JClass, request: JString, bytes: JByteArray,
 ) -> jni::sys::jstring {
     let result = (|| {
+        let localization = crate::launch::active_localization()?;
         let action: layer_ui::profile_library::ProfileLibraryAction = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
         let bytes = env.convert_byte_array(bytes).map_err(error)?;
-        serde_json::to_string(&action.execute(&bytes)?).map_err(error)
+        serde_json::to_string(&action.execute_localized(&bytes, localization).map_err(|reason| reason.profile_message(localization))?).map_err(error)
     })();
     crate::android::string(&mut env, result)
 }

@@ -6,17 +6,22 @@ import {createHistogram} from './histogram.js';
 import {chooseExport,chooseSourceProfile} from './export-controls.js';
 
 export const exportFormats={
-  Exr:["exr","image/x-exr","OpenEXR image"],
-  PngHdr:["png","image/png","HDR PQ PNG"],PngHdrMapped:["png","image/png","HDR PQ PNG"],
-  JpegHdr:["jpg","image/jpeg","HDR gain-map JPEG"],JpegHdrMapped:["jpg","image/jpeg","HDR gain-map JPEG"],
-  AvifHdr:["avif","image/avif","HDR gain-map AVIF"],AvifHdrMapped:["avif","image/avif","HDR gain-map AVIF"],
-  Png:["png","image/png","PNG image"],Tiff:["tif","image/tiff","TIFF image"],Jpeg:["jpg","image/jpeg","JPEG image"],
-  Webp:["webp","image/webp","WebP image"],
+  Exr:["exr","image/x-exr"],
+  PngHdr:["png","image/png"],PngHdrMapped:["png","image/png"],
+  JpegHdr:["jpg","image/jpeg"],JpegHdrMapped:["jpg","image/jpeg"],
+  AvifHdr:["avif","image/avif"],AvifHdrMapped:["avif","image/avif"],
+  Png:["png","image/png"],Tiff:["tif","image/tiff"],Jpeg:["jpg","image/jpeg"],
+  Webp:["webp","image/webp"],
 };
 import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,state,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged}) {
+export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged}) {
+  const common=bootstrap.common,exportCopy=app.export_copy(),colorCopy=app.document_color_copy();
+  const formatLabels={Exr:exportCopy.format_exr,PngHdr:exportCopy.format_pq,PngHdrMapped:exportCopy.format_pq_clipped,
+    JpegHdr:exportCopy.format_jpeg_hdr,JpegHdrMapped:exportCopy.format_jpeg_hdr,AvifHdr:exportCopy.format_avif_hdr,AvifHdrMapped:exportCopy.format_avif_hdr,
+    Png:exportCopy.format_png,Tiff:exportCopy.format_tiff,Jpeg:exportCopy.format_jpeg,Webp:exportCopy.format_webp};
+  const deliveryMessage=(type,values)=>app.document_delivery_message({type,...values});
   const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
   let nextHandle=0,closing=false,changing=false,batching=false;
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
@@ -30,7 +35,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     const finish=value=>{result=value;root.close();};
     build(form,finish);root.showModal();
   });
-  const cancel=(footer,finish)=>footer.append(button("Cancel",()=>finish(null)));
+  const cancel=(footer,finish)=>footer.append(button(common.cancel,()=>finish(null)));
   const proof=createProof({app,dialog,element,button,icon,applyChange,wake,dispatch,contentChanged});
   async function newDocument() {
     const spec=app.editor_models(innerWidth,innerHeight).document_options;
@@ -47,9 +52,11 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
         preset.replaceChildren(...[["custom",model.text.custom],...model.presets.map(p=>[presetKey(p.id),p.name])].map(([key,label])=>{const option=element("option","",label);option.value=key;return option;}));
         preset.value="custom";remove.disabled=true;
       });remove.dataset.documentAction="remove-preset";remove.disabled=!selectedPreset()?.remove;form.append(remove);
-      const fields=model.options.extent.map((value,i)=>{
-        const input=element("input");Object.assign(input,{type:"number",min:spec.min_dimension,max:spec.max_dimension,step:1,value,required:true});
-        return field(i?"height":"width",i?model.text.height:model.text.width,input);
+      const dimensions=[...model.options.extent];
+      const fields=dimensions.map((value,i)=>{
+        const number=numberField(spec.numeric,i?model.text.height:model.text.width,next=>{dimensions[i]=next;edited();describe();});
+        number.classList.add("document-size");number.entry.dataset.documentField=i?"height":"width";number.entry.required=true;
+        number.update(value);form.append(number);return number;
       });
       const space=select("space",model.text.space,model.spaces,model.options.color.space);
       const depth=select("depth",model.text.depth,model.depths,model.options.color.depth);
@@ -58,25 +65,25 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
       const summary=element("p","document-color-summary"),note=element("p","document-color-note");form.append(summary,note);
       const background=select("background",model.text.background,model.backgrounds,model.options.background);
       let chosen=model.options.blend_space;
-      const read=()=>({extent:fields.map(i=>Number(i.value)),color:{space:space.value,depth:depth.value},background:background.value,blend_space:chosen});
-      const describe=()=>{if(!fields.every(input=>input.validity.valid))return;const appearance=app.new_document_appearance(read());
+      const read=()=>({extent:[...dimensions],color:{space:space.value,depth:depth.value},background:background.value,blend_space:chosen});
+      const describe=()=>{const appearance=app.new_document_appearance(read());
         blending.disabled=!appearance.blending_editable;blending.value=appearance.blending;
         blendingNote.textContent=appearance.blending_help;summary.textContent=appearance.summary;
         note.textContent=appearance.note??"";note.hidden=appearance.note==null;
       };
       const edited=()=>{preset.value="custom";remove.disabled=true;};
-      for(const input of fields){input.addEventListener("input",edited);input.addEventListener("change",describe);}
+      for(const number of fields)number.entry.addEventListener("input",edited);
       for(const input of [space,depth,background])input.addEventListener("change",()=>{edited();describe();});
       blending.onchange=()=>{chosen=blending.value;edited();describe();};
       preset.onchange=()=>{const p=selectedPreset();remove.disabled=!p?.remove;if(!p)return;
-        fields.forEach((f,i)=>f.value=p.options.extent[i]);space.value=p.options.color.space;depth.value=p.options.color.depth;background.value=p.options.background;chosen=p.options.blend_space;describe();
+        fields.forEach((number,i)=>{dimensions[i]=p.options.extent[i];number.cancelEditing();number.update(dimensions[i]);});space.value=p.options.color.space;depth.value=p.options.color.depth;background.value=p.options.background;chosen=p.options.blend_space;describe();
       };
       describe();
       const name=field("preset-name",model.text.preset_name,element("input"));name.maxLength=64;
       const remember=element("input");remember.type="checkbox";field("remember",model.text.remember,remember);
       const error=element("p","error-message");form.append(error);
       const footer=element("footer"),cancelNew=button(model.text.cancel,()=>finish(null));cancelNew.dataset.documentAction="cancel";footer.append(cancelNew);
-      const create=button(model.text.create,()=>{if(!form.reportValidity())return;const options=read();try{
+      const create=button(model.text.create,()=>{if(!fields.every(number=>number.commit())||!form.reportValidity())return;const options=read();try{
         applyChange(app.dispatch({type:"new_document_preferences",action:{type:"remember",options,name:name.value,defaults:remember.checked}}));
         finish(options);
       }catch(e){error.textContent=String(e);}},"suggested-action");create.dataset.documentAction="create";
@@ -91,7 +98,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   window.addEventListener("blur",()=>{ownedClip=null;});
   document.addEventListener("visibilitychange",()=>{if(document.hidden)ownedClip=null;});
   const clipboardRead=()=>{
-    if(!navigator.clipboard?.read)throw new Error("Image paste is unavailable in this browser. Use Import Image as Layer.");
+    if(!navigator.clipboard?.read)throw new Error(delivery.clipboard_unavailable);
     return navigator.clipboard.read();
   };
   // Called synchronously from the key or click task: browsers accept a
@@ -112,14 +119,14 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
       control=app.capture_control();
       if(task.large()){
         progress=element("aside","file-progress");progress.setAttribute("role","status");
-        progress.append(element("span","",task.progress()),button("Cancel",()=>{control.cancel();progress.firstChild.textContent="Cancelling…";}));
+        progress.append(element("span","",task.progress()),button(common.cancel,()=>{control.cancel();progress.firstChild.textContent=delivery.cancelling;}));
         document.body.append(progress);
       }
       clip=await gpuOperation(()=>task.run(control,nonce));
       deliver(new Blob([clip.png()],{type:"image/png"}));
       const failure=await writeError;
       app.adopt_clip(clip);clip=null;ownedClip=nonce;
-      if(failure)message(`Other apps can't read this copy: ${failure.message??failure}`);
+      if(failure)message(deliveryMessage("clipboard_shared",{detail:String(failure.message??failure)}));
       applyChange(app.finish_document(id,true));
     } catch(error) {
       fail(error);
@@ -141,19 +148,19 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     const formats=app.photo_formats(),preferred=formats.flatMap(f=>f.mime_types.flatMap(m=>[`web ${m}`,m]));
     const files=[];
     for(const item of items) {
-      const type=preferred.find(type=>item.types.includes(type));if(!type)throw new Error(`Copy a supported image (${formats.map(f=>f.name).join(', ')}) to paste.`);
+      const type=preferred.find(type=>item.types.includes(type));if(!type)throw new Error(deliveryMessage("clipboard_formats",{formats:formats.map(f=>f.name).join(", ")}));
       const blob=await item.getType(type),mime=type.replace(/^web /,"");
-      if(blob.size>512*1024*1024)throw new Error("Clipboard image exceeds 512 MiB");
+      if(blob.size>512*1024*1024)throw new Error(delivery.clipboard_too_large);
       const extension=formats.find(f=>f.mime_types.includes(mime)).extensions[0];
-      files.push(new File([blob],`Pasted image.${extension}`,{type:mime}));
+      files.push(new File([blob],deliveryMessage("pasted_image",{extension}),{type:mime}));
     }
-    if(!files.length)throw new Error("Copy an image to paste, or import the original file.");
+    if(!files.length)throw new Error(delivery.clipboard_empty);
     return files;
   }
   function chooseFile(placing=false) {
     const formats=app.photo_formats(),accept=Object.fromEntries(formats.flatMap(f=>f.mime_types.map(m=>[m,f.extensions.map(e=>'.'+e)])));
     if(!placing)accept['application/octet-stream']=['.capy'];
-    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:true,types:[{description:placing?"Images":"Drawing or photo",accept}]})
+    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:true,types:[{description:placing?delivery.images:delivery.drawing_or_photo,accept}]})
       .then(async handles=>Promise.all(handles.map(async handle=>({file:await handle.getFile(),handle}))));
     return new Promise(resolve=>{
       const input=element("input");input.type="file";input.multiple=true;input.accept=Object.values(accept).flat().join(',');input.hidden=true;document.body.append(input);
@@ -164,11 +171,11 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   async function download(bytes,name,mime) {
     const url=URL.createObjectURL(new Blob([bytes],{type:mime}));
     try {
-      return await dialog("Download file",(form,finish)=>{
-        form.append(element("p","",`Download “${name}”, then confirm it was saved.`));
+      return await dialog(delivery.download_file,(form,finish)=>{
+        form.append(element("p","",deliveryMessage("download_confirm",{name})));
         const footer=element("footer");cancel(footer,finish);
-        const done=button("File saved",()=>finish(true),"suggested-action");done.disabled=true;
-        const start=button("Download",()=>{const a=element("a");a.href=url;a.download=name;a.click();done.disabled=false;});
+        const done=button(delivery.file_saved,()=>finish(true),"suggested-action");done.disabled=true;
+        const start=button(delivery.download,()=>{const a=element("a");a.href=url;a.download=name;a.click();done.disabled=false;});
         footer.append(start,done);form.append(footer);
       });
     } finally {URL.revokeObjectURL(url);}
@@ -177,7 +184,8 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     const old=request.location && handles.get(request.location.uri);
     if(old)return{location:request.location,handle:old};
     if(window.showSaveFilePicker) {
-      const [extension,mime,description]=recipe?exportFormats[recipe.format]:["capy","application/octet-stream","Capy Canvas drawing"];
+      const [extension,mime]=recipe?exportFormats[recipe.format]:["capy","application/octet-stream"];
+      const description=recipe?formatLabels[recipe.format]:delivery.drawing_type;
       const name=recipe?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name;
       const handle=await window.showSaveFilePicker({suggestedName:name,types:[{description,accept:{[mime]:["."+extension]}}]});
       return{location:location(handle.name,handle),handle};
@@ -199,29 +207,29 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
         const spec=app.editor_models(innerWidth,innerHeight).document_options;
         const decision=await dialog(r.title,(form,finish)=>{
           form.append(element("p","",spec.unsaved_description));const footer=element("footer");cancel(footer,finish);
-          footer.append(button(spec.discard_label,()=>finish("discard")),button("Save",()=>finish("save"),"suggested-action"));form.append(footer);
+          footer.append(button(spec.discard_label,()=>finish("discard")),button(common.save,()=>finish("save"),"suggested-action"));form.append(footer);
         });
         applyChange(app.respond_document(id,decision??"cancel"));return;
       }
       if(r.type==="properties") {
         const rows=await app.document_properties();
-        await dialog("Document Properties",(form,finish)=>{for(const [name,value]of rows){form.append(element("h3","",name),element("p","source-details",value));}form.append(button("Done",()=>finish(true)));});
+        await dialog(app.state().commands.find(c=>c.id==="document_properties").label,(form,finish)=>{for(const [name,value]of rows){form.append(element("h3","",name),element("p","source-details",value));}form.append(button(common.done,()=>finish(true)));});
         applyChange(app.finish_document(id,true));
       } else if(["change_color","color_history","repair_source_profile","rasterize_source"].includes(r.type)) {
         candidate=await chooseDocumentColor({app,dialog,element,button,gpuOperation,request:r,id});
         if(candidate?.is_copy?.()) {
           const master=app.state().document_file.location;
-          const target=await destination({name:(master?.name??"Drawing.capy").replace(/\.[^.]+$/,"")+" converted.capy"});
-          if(!target.location.name.toLowerCase().endsWith(".capy"))throw new Error("Use a .capy filename for the converted drawing.");
+          const target=await destination({name:deliveryMessage("converted_name",{name:(master?.name??app.document_tabs(0).tabs.find(t=>String(t.id)===String(app.document_tabs(0).selected)).title).replace(/\.[^.]+$/,"")})});
+          if(!target.location.name.toLowerCase().endsWith(".capy"))throw new Error(delivery.converted_filename_invalid);
           const original=handles.get(master?.uri);
-          if(original&&target.handle&&await original.isSameEntry?.(target.handle))throw new Error("Choose a different file to keep the editable drawing.");
+          if(original&&target.handle&&await original.isSameEntry?.(target.handle))throw new Error(colorCopy.choose_different);
           const progress=element("aside","file-progress");progress.setAttribute("role","status");
           let cancelled=false;
-          progress.append(element("span","","Preparing converted copy…"),button("Cancel",()=>{cancelled=true;candidate.cancel();}));document.body.append(progress);
+          progress.append(element("span","",delivery.preparing_converted_copy),button(common.cancel,()=>{cancelled=true;candidate.cancel();}));document.body.append(progress);
           try {
             const bytes=await app.save_color_copy(candidate);
             if(cancelled)throw new DOMException("Converted copy cancelled","AbortError");
-            progress.firstChild.textContent="Writing converted copy…";progress.querySelector("button").disabled=true;
+            progress.firstChild.textContent=delivery.writing_converted_copy;progress.querySelector("button").disabled=true;
             let success;
             if(target.handle){const stream=await target.handle.createWritable();try{await stream.write(bytes);await stream.close();success=true;}catch(error){try{await stream.abort();}catch{}throw error;}}
             else success=!!await download(bytes,target.location.name,"application/octet-stream");
@@ -259,25 +267,25 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
           } catch(error) { message(String(error)); }
           return;
         }
-        const choice=r.type==="export"?await chooseExport({app,dialog,element,button,gpuOperation,id}):null;
+        const choice=r.type==="export"?await chooseExport({app,dialog,element,button,numberField,gpuOperation,id}):null;
         const recipe=choice?.recipe??null;
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
         const target=await destination(r,recipe);
         if(recipe){
           const extension=exportFormats[recipe.format][0];
           const extensions=extension==='jpg'?['jpg','jpeg']:extension==='tif'?['tif','tiff']:[extension];
-          if(!extensions.includes(target.location.name.split('.').at(-1).toLowerCase()))throw new Error(`Use a .${extensions[0]} filename for this image format.`);
+          if(!extensions.includes(target.location.name.split('.').at(-1).toLowerCase()))throw new Error(deliveryMessage("export_extension",{extension:extensions[0]}));
           const master=handles.get(app.state().document_file.location?.uri);
-          if(master&&target.handle&&await master.isSameEntry?.(target.handle))throw new Error("Choose a different file to keep the editable drawing.");
+          if(master&&target.handle&&await master.isSameEntry?.(target.handle))throw new Error(colorCopy.choose_different);
         }
         let output,control,progress;
         try {
           if(recipe){
             control=app.capture_control();progress=element("aside","file-progress");progress.setAttribute("role","status");
-            progress.append(element("span","","Preparing image…"),button("Cancel",()=>{control.cancel();progress.firstChild.textContent="Cancelling…";}));document.body.append(progress);
+            progress.append(element("span","",exportCopy.preparing),button(common.cancel,()=>{control.cancel();progress.firstChild.textContent=delivery.cancelling;}));document.body.append(progress);
           }
           const bytes=r.type==="save"?await app.save_project(id,target.location):(output=await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
-          if(progress){progress.firstChild.textContent="Writing image…";progress.querySelector('button').disabled=true;}
+          if(progress){progress.firstChild.textContent=exportCopy.writing_image;progress.querySelector('button').disabled=true;}
 
           let success;
           if(target.handle) {
@@ -286,7 +294,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
             catch(error){try{await stream.abort();}catch{}throw error;}
           } else success=!!await download(bytes,target.location.name,recipe?exportFormats[recipe.format][1]:"application/octet-stream");
           applyChange(app.finish_document(id,success));
-          if(success&&recipe)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(`Image saved; export preferences were not saved: ${error}`);}
+          if(success&&recipe)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(deliveryMessage("export_preferences",{detail:String(error)}));}
           if(success && r.type==="save" && !app.state().document_file.modified) {
             await recovery.retire(ownerId);
           }
@@ -295,7 +303,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
           if(wasCancelled)throw new DOMException("Image export cancelled","AbortError");throw error;
         } finally {
           progress?.remove();control?.free();
-          if(output)try{await rasterWorker({operation:"output-close",metadata:output.token,buffers:[]});}catch(error){message(`Temporary output cleanup failed: ${error}`);}
+          if(output)try{await rasterWorker({operation:"output-close",metadata:output.token,buffers:[]});}catch(error){message(deliveryMessage("output_cleanup",{detail:String(error)}));}
         }
       } else throw new Error(`Unknown document operation: ${r.type}`);
     } catch(error) {
@@ -308,7 +316,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   async function readyToPark(){
     const deadline=performance.now()+30000;
     while(!app.document_park_ready()){
-      if(performance.now()>deadline)throw Error('Finish the current operation before switching drawings.');
+      if(performance.now()>deadline)throw Error(delivery.switch_operation);
       wake();await new Promise(resolve=>setTimeout(resolve,8));
     }
   }
@@ -317,17 +325,17 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     if(spilling)return spilling;
     const run=async()=>{
       try{while(await app.spill_document_tiles()){}app.document_storage_result();}
-      catch(error){app.document_storage_result(String(error));message(`${error}\nThe drawing is retained in memory. Free disk space or close some tabs.`);}
+      catch(error){app.document_storage_result(String(error));message(app.document_storage_retained(String(error)));}
     };
     spilling=run().finally(()=>spilling=null);return spilling;
   }
   async function transition(action,capture=true){
-    if(changing)throw Error('A drawing change is already in progress.');
+    if(changing)throw Error(delivery.change_in_progress);
     changing=true;tabs.cancel();
-    const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','','Switching drawing…'));document.body.append(blocker);
+    const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','',delivery.switching_drawing));document.body.append(blocker);
     try{
       await proof.pause();await histogram.retire();await readyToPark();
-      if(capture)await recovery.capture().catch(error=>message(`Recovery unavailable: ${error}`));
+      if(capture)await recovery.capture().catch(error=>message(app.document_recovery_unavailable(String(error))));
       await action();
       await trim();
       await recovery.ensure();
@@ -336,18 +344,18 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   }
   async function select(id){
     if(id==null||String(id)===String(app.document_tabs(0).selected))return;
-    if(active.size||batching||closing||document.querySelector('dialog[open]'))throw Error('Finish the current dialog before switching drawings.');
+    if(active.size||batching||closing||document.querySelector('dialog[open]'))throw Error(delivery.switch_dialog);
     await transition(()=>applyChange(app.select_document(BigInt(id))));
   }
   async function close(id){
     await select(id);
-    if(changing||batching||active.size)throw Error('Finish the current operation before closing the drawing.');
+    if(changing||batching||active.size)throw Error(delivery.close_operation);
     const deadline=performance.now()+30000;
     while(!app.document_close_available()){
-      if(performance.now()>deadline)throw Error('Finish the current operation before closing the drawing.');
+      if(performance.now()>deadline)throw Error(delivery.close_operation);
       wake();await new Promise(resolve=>setTimeout(resolve,8));
     }
-    if(String(id)!==String(app.document_tabs(0).selected))throw Error('The selected drawing changed before closing.');
+    if(String(id)!==String(app.document_tabs(0).selected))throw Error(delivery.selected_changed);
     dispatch({type:'invoke',command:'close_document'});
   }
   async function openDrawing({request=null,file=null,options,recovered=false,bytes}){
@@ -355,13 +363,13 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     if(request===null&&!recovered){
       const change=app.dispatch({type:'invoke',command:file?'open_document':'new_document'});
       const pending=app.state().requests.find(r=>r.kind.type==='document'&&['new','open'].includes(r.kind.request.type));
-      if(!pending)throw Error('Finish the current operation before opening a drawing.');
+      if(!pending)throw Error(delivery.open_operation);
       request=pending.id;active.add(request);
       applyChange(change);
     }
     const id=request??0,fileState=app.state().document_file,target=file?location(file.file.name,file.handle):null;
     const progress=element('aside','file-progress');progress.setAttribute('role','status');let cancelled=false,candidate;
-    progress.append(element('span','','Preparing drawing…'),button('Cancel',()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}));document.body.append(progress);
+    progress.append(element('span','',bootstrap.preparing_document),button(common.cancel,()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}));document.body.append(progress);
     try{
       if(file)bytes=new Uint8Array(await file.file.arrayBuffer());
       candidate=await gpuOperation(()=>app.prepare_document(id,bytes,0,0,fileState.epoch,fileState.revision,recovered,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
@@ -374,15 +382,15 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     }finally{candidate?.free();progress.remove();if(request!==null)active.delete(request);}
   }
   async function openBatch(files,request=null){
-    if(batching)throw Error('Another file batch is still opening.');
+    if(batching)throw Error(delivery.batch_opening);
     batching=true;
     try{for(const [index,file] of files.entries()){
       try{await openDrawing({request:index===0?request:null,file});}
-      catch(error){if(error?.name==='AbortError')break;if(files.length===1)throw error;message(`Could not open ${file.file.name}: ${error}`);}
+      catch(error){if(error?.name==='AbortError')break;if(files.length===1)throw error;console.error(error);message(app.file_open_failure(file.file.name));}
     }}finally{batching=false;tabs.refresh(true);}
   }
   async function openFiles(files){
-    if(active.size||batching||changing||closing||document.querySelector('dialog[open]'))throw Error('Finish the current operation before opening drawings.');
+    if(active.size||batching||changing||closing||document.querySelector('dialog[open]'))throw Error(delivery.open_drawings_operation);
     await openBatch(files.map(value=>value.file?value:{file:value}));
   }
   const recovery=createDocumentRecovery({app,call:rasterWorker,dialog,element,button,message,restore:bytes=>openDrawing({recovered:true,bytes}),settled:trim,

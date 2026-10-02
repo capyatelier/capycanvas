@@ -39,7 +39,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
             {L"value",parameter().Size()?JsonValue::CreateStringValue(entry.Text()):JsonValue::CreateNullValue()}}));
     }
     void init(Canvas const& root){
-        host=root;auto weak=weak_from_this();auto metrics=style();
+        host=root;inheritLanguage(frame,data);auto weak=weak_from_this();auto metrics=style();
         host.Loaded([weak](auto&&,auto&&){
             auto self=weak.lock();if(!self||self->focusChanged)return;
             self->focusChanged=self->host.XamlRoot().Content().GettingFocus(auto_revoke,[weak](auto&&,Input::GettingFocusEventArgs const& e){
@@ -52,19 +52,19 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         for(auto width:{GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Auto}}){
             ColumnDefinition column;column.Width(width);header.ColumnDefinitions().Append(column);
         }
-        entry.MinHeight(32);entry.Padding({32,5,6,6});entry.PlaceholderText(L"Search commands");entry.IsSpellCheckEnabled(false);
-        AutomationProperties::SetAutomationId(entry,L"command-search");AutomationProperties::SetName(entry,L"Search commands");
+        entry.MinHeight(32);entry.Padding({32,5,6,6});entry.PlaceholderText(data->caption(L"search",L"search_commands"));entry.IsSpellCheckEnabled(false);
+        AutomationProperties::SetAutomationId(entry,L"command-search");AutomationProperties::SetName(entry,data->caption(L"search",L"search_commands"));
         field.Children().Append(entry);header.Children().Append(field);
         unit.VerticalAlignment(VerticalAlignment::Center);unit.Opacity(.7);unit.Visibility(Visibility::Collapsed);
         Grid::SetColumn(unit,1);header.Children().Append(unit);
-        close=button(data,L"Close command search",[weak]{if(auto self=weak.lock())self->send(O({{L"type",S(L"close")}}));});
+        close=button(data,data->caption(L"search",L"close_search"),[weak]{if(auto self=weak.lock())self->send(O({{L"type",S(L"close")}}));});
         close.Width(32);close.Height(32);close.Padding({0,0,0,0});
         AutomationProperties::SetAutomationId(close,L"command-search-close");
         Grid::SetColumn(close,2);header.Children().Append(close);
         body.Children().Append(header);
-        results.Spacing(2);AutomationProperties::SetAutomationId(results,L"command-results");AutomationProperties::SetName(results,L"Commands");
+        results.Spacing(2);AutomationProperties::SetAutomationId(results,L"command-results");AutomationProperties::SetName(results,data->caption(L"search",L"commands"));
         body.Children().Append(results);
-        empty.Text(L"No matching commands");empty.Opacity(.6);empty.Margin({0,12,0,12});empty.HorizontalAlignment(HorizontalAlignment::Center);
+        empty.Text(data->caption(L"search",L"no_matches"));empty.Opacity(.6);empty.Margin({0,12,0,12});empty.HorizontalAlignment(HorizontalAlignment::Center);
         empty.Visibility(Visibility::Collapsed);body.Children().Append(empty);
         detail.Opacity(.7);detail.FontSize(12);detail.Height(20);detail.Margin({inset,0,inset,0});
         detail.TextTrimming(TextTrimming::CharacterEllipsis);AutomationProperties::SetAutomationId(detail,L"command-search-detail");
@@ -72,7 +72,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         frame.Child(body);frame.Padding({inset,inset,inset,inset});double radius=num(metrics,L"radius",12);frame.CornerRadius({radius,radius,radius,radius});frame.BorderThickness({1,1,1,1});
         frame.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->open&&self->changed)self->changed();});
         frame.Shadow(ThemeShadow());frame.Translation({0,0,32});
-        AutomationProperties::SetAutomationId(frame,L"command-bar");AutomationProperties::SetName(frame,L"Command search");
+        AutomationProperties::SetAutomationId(frame,L"command-bar");AutomationProperties::SetName(frame,data->caption(L"search",L"title"));
         popup.Child(frame);popup.IsLightDismissEnabled(true);
         popup.Closed([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->open&&!self->updating){
             self->open=false;self->data->popup(false);self->send(O({{L"type",S(L"close")}}));self->restoreFocus();
@@ -81,6 +81,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         entry.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->view.Size()&&!self->parameter().Size())
             self->send(O({{L"type",S(L"query")},{L"text",S(self->entry.Text())}}));});
         frame.PreviewKeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->view.Size()){
+            if(composingKey(e))return;
             using Windows::System::VirtualKey;
             switch(e.Key()){
                 case VirtualKey::Up:case VirtualKey::Down:
@@ -148,21 +149,21 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         view=value.GetObject();auto input=parameter();bool entering=input.Size()!=0;
         auto numeric=object(object(input,L"parameter"),L"numeric");auto suffix=str(numeric,L"unit");
         unit.Text(suffix);unit.Visibility(suffix.empty()?Visibility::Collapsed:Visibility::Visible);
-        AutomationProperties::SetName(entry,entering?str(input,L"label"):hstring(L"Search commands"));
+        AutomationProperties::SetName(entry,entering?str(input,L"label"):data->caption(L"search",L"search_commands"));
         auto nextParameter=str(input,L"id");
         if(!open||nextParameter!=parameterId){
             entry.Text(entering?str(object(input,L"parameter"),L"text"):str(view,L"query"));
             if(entering)entry.SelectAll();
         }
         parameterId=nextParameter;
-        entry.PlaceholderText(entering?L"Enter a value":L"Search commands");
+        entry.PlaceholderText(entering?data->caption(L"search",L"enter_value"):data->caption(L"search",L"search_commands"));
         if(theme!=data->theme()){theme=data->theme();paint();signature=L"";}
         auto nextSignature=array(view,L"results").Stringify()+theme;
         if(nextSignature!=signature){signature=nextSignature;buildRows();}
         auto chosen=uint32_t(num(view,L"selected"));
         for(uint32_t i=0;i<rows.size();++i){
             rows[i].Background(i==chosen?Brush(data->tint(L"text",26)):Brush(clear()));
-            AutomationProperties::SetItemStatus(rows[i],i==chosen?L"Selected":L"");
+            AutomationProperties::SetItemStatus(rows[i],i==chosen?data->caption(L"search",L"selected"):L"");
         }
         results.Visibility(entering?Visibility::Collapsed:Visibility::Visible);
         empty.Visibility(!entering&&!array(view,L"results").Size()?Visibility::Visible:Visibility::Collapsed);

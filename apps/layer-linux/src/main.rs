@@ -48,6 +48,7 @@ mod timing;
 mod tool_panels;
 mod tool_extra;
 mod tooltips;
+mod text_language;
 mod transparency_choice;
 mod wayland;
 mod workspace;
@@ -96,13 +97,31 @@ fn main() -> gtk::glib::ExitCode {
     result
 }
 
+fn launch_localization() -> &'static std::sync::Arc<layer_ui::Localizer> {
+    static ACTIVE: std::sync::OnceLock<std::sync::Arc<layer_ui::Localizer>> = std::sync::OnceLock::new();
+    ACTIVE.get_or_init(|| {
+        let preference = match preferences::load_language_preference() {
+            Ok(preference) => preference,
+            Err(error) => {
+                eprintln!("{error}; using system language");
+                layer_ui::LanguagePreference::System
+            }
+        };
+        let languages = glib::language_names_with_category("LC_MESSAGES");
+        let tags = languages.iter().map(|tag| tag.as_str()).collect::<Vec<_>>();
+        layer_ui::Localizer::shared(layer_ui::resolve_launch_language(preference, &tags))
+    })
+}
+
 fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Workspace>>>>) {
+    launch_localization();
     let app = adw::Application::builder()
         .application_id(id)
         .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN)
         .build();
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
-    app.connect_startup(|_| {
+    app.connect_startup(|app| {
+        text_language::install(app, launch_localization());
         let css = stylesheet_provider();
         gtk::style_context_add_provider_for_display(
             &gtk::gdk::Display::default().unwrap(),
@@ -133,8 +152,7 @@ fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Work
 }
 
 fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>) {
-    files::launch::install(app, active, layer_ui::photo_document_names("",
-        &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)));
+    files::launch::install(app, active, layer_ui::photo_document_names("", launch_localization()));
     let settings_changed =
         gtk::gio::SimpleAction::new("settings-changed", Some(glib::VariantTy::STRING));
     settings_changed.connect_activate(glib::clone!(
@@ -200,7 +218,7 @@ fn open_workspace(
     });
     let localization = active.borrow().last()
         .map(|w| w.localization.clone())
-        .unwrap_or_else(|| layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+        .unwrap_or_else(|| launch_localization().clone());
     let workspace = match project {
         None => workspace::Workspace::new_localized(app, localization),
         Some(project) => workspace::Workspace::with_project_localized(app, Some(project), localization),

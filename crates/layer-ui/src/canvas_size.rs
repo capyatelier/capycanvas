@@ -1,6 +1,7 @@
 //! Canvas geometry commands: Canvas Size, anchored in a shared dialog model,
 //! and Crop Canvas to Selection. Both keep every pixel; hosts only present.
 use super::*;
+use std::sync::Arc;
 use layer_core::{CanvasGeometry, CanvasRect};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,11 +13,11 @@ pub enum CanvasSizeUnit {
 }
 impl CanvasSizeUnit {
     pub const ALL: [Self; 2] = [Self::Pixels, Self::Percent];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Pixels => "Pixels",
-            Self::Percent => "Percent",
-        }
+    pub fn localized_label(self, localization: &Localizer) -> Arc<str> {
+        localization.text(match self {
+            Self::Pixels => MessageId::RESOURCES_SIZE_PIXELS,
+            Self::Percent => MessageId::RESOURCES_SIZE_PERCENT,
+        })
     }
     pub(super) fn round(self, value: f64) -> f64 {
         match self {
@@ -49,18 +50,18 @@ impl CanvasAnchor {
         let index = self as u32;
         [index % 3, index / 3]
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::TopLeft => "Top left",
-            Self::Top => "Top",
-            Self::TopRight => "Top right",
-            Self::Left => "Left",
-            Self::Center => "Center",
-            Self::Right => "Right",
-            Self::BottomLeft => "Bottom left",
-            Self::Bottom => "Bottom",
-            Self::BottomRight => "Bottom right",
-        }
+    pub fn localized_label(self, localization: &Localizer) -> Arc<str> {
+        localization.text(match self {
+            Self::TopLeft => MessageId::RESOURCES_SIZE_ANCHOR_TOP_LEFT,
+            Self::Top => MessageId::RESOURCES_SIZE_ANCHOR_TOP,
+            Self::TopRight => MessageId::RESOURCES_SIZE_ANCHOR_TOP_RIGHT,
+            Self::Left => MessageId::RESOURCES_SIZE_ANCHOR_LEFT,
+            Self::Center => MessageId::RESOURCES_SIZE_ANCHOR_CENTER,
+            Self::Right => MessageId::RESOURCES_SIZE_ANCHOR_RIGHT,
+            Self::BottomLeft => MessageId::RESOURCES_SIZE_ANCHOR_BOTTOM_LEFT,
+            Self::Bottom => MessageId::RESOURCES_SIZE_ANCHOR_BOTTOM,
+            Self::BottomRight => MessageId::RESOURCES_SIZE_ANCHOR_BOTTOM_RIGHT,
+        })
     }
 }
 
@@ -79,29 +80,31 @@ pub enum CanvasSizeAction {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasAnchorChoice {
     pub anchor: CanvasAnchor,
-    pub label: &'static str,
+    pub label: Arc<str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasUnitChoice {
     pub unit: CanvasSizeUnit,
-    pub label: &'static str,
+    pub label: Arc<str>,
 }
 
 /// The open Canvas Size dialog. Values are in `unit`, and are changes from
 /// the current size when `relative` is set.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasSizeView {
-    pub title: &'static str,
-    pub labels: [&'static str; 2],
+    pub title: Arc<str>,
+    pub apply_label: Arc<str>,
+    pub cancel_label: Arc<str>,
+    pub labels: [Arc<str>; 2],
     pub values: [f64; 2],
     pub numeric: [NumericControl; 2],
     pub unit: CanvasSizeUnit,
     pub units: Vec<CanvasUnitChoice>,
     pub relative: bool,
-    pub relative_label: &'static str,
+    pub relative_label: Arc<str>,
     pub anchor: CanvasAnchor,
-    pub anchor_label: &'static str,
+    pub anchor_label: Arc<str>,
     pub anchors: Vec<CanvasAnchorChoice>,
     /// The resulting size, or why it can't be applied.
     pub message: String,
@@ -140,7 +143,7 @@ pub(super) fn set_size_unit(current: [u32; 2], values: &mut [f64; 2], unit: &mut
 }
 
 impl CanvasSizeDraft {
-    fn new(current: [u32; 2]) -> Self {
+    fn new(current: [u32; 2], localization: &Localizer) -> Self {
         Self {
             current,
             values: current.map(f64::from),
@@ -148,17 +151,19 @@ impl CanvasSizeDraft {
             relative: false,
             anchor: CanvasAnchor::Center,
             view: CanvasSizeView {
-                title: "Canvas Size",
-                labels: ["Width", "Height"],
+                title: localization.text(MessageId::RESOURCES_SIZE_CANVAS_TITLE),
+                apply_label: localization.text(MessageId::COMMON_APPLY),
+                cancel_label: localization.text(MessageId::COMMON_CANCEL),
+                labels: [localization.text(MessageId::RESOURCES_SIZE_WIDTH), localization.text(MessageId::RESOURCES_SIZE_HEIGHT)],
                 values: [0.; 2],
                 numeric: [number(1., 1., 0, "px"), number(1., 1., 0, "px")],
                 unit: CanvasSizeUnit::Pixels,
-                units: CanvasSizeUnit::ALL.map(|unit| CanvasUnitChoice { unit, label: unit.label() }).into(),
+                units: CanvasSizeUnit::ALL.map(|unit| CanvasUnitChoice { unit, label: unit.localized_label(localization) }).into(),
                 relative: false,
-                relative_label: "Relative",
+                relative_label: localization.text(MessageId::RESOURCES_SIZE_RELATIVE),
                 anchor: CanvasAnchor::Center,
-                anchor_label: "Anchor",
-                anchors: CanvasAnchor::ALL.map(|anchor| CanvasAnchorChoice { anchor, label: anchor.label() }).into(),
+                anchor_label: localization.text(MessageId::RESOURCES_SIZE_ANCHOR),
+                anchors: CanvasAnchor::ALL.map(|anchor| CanvasAnchorChoice { anchor, label: anchor.localized_label(localization) }).into(),
                 message: String::new(),
                 can_apply: false,
             },
@@ -207,7 +212,7 @@ impl CanvasSizeDraft {
         self.relative = relative;
     }
 
-    fn update(&mut self, document: &Document, limits: layer_core::GeometryLimits) {
+    fn update(&mut self, document: &Document, limits: layer_core::GeometryLimits, localization: &Localizer) {
         let limit = f64::from(limits.canvas_dimension());
         self.view.numeric = std::array::from_fn(|axis| {
             let current = f64::from(self.current[axis]);
@@ -225,9 +230,9 @@ impl CanvasSizeDraft {
         let [width, height] = self.current;
         (self.view.message, self.view.can_apply) = match self.size() {
             None => (layer_core::CanvasGeometryError::Empty.to_string(), false),
-            Some(size) if size == self.current => (format!("Current size: {width} × {height} px"), false),
+            Some(size) if size == self.current => (size_message(localization, MessageId::RESOURCES_SIZE_CURRENT, [width, height]), false),
             Some(size) => match document.check_canvas_geometry(&CanvasGeometry::crop(self.rect(size)), limits) {
-                Ok(()) => (format!("New size: {} × {} px", size[0], size[1]), true),
+                Ok(()) => (size_message(localization, MessageId::RESOURCES_SIZE_NEW, size), true),
                 Err(error) => (error.to_string(), false),
             },
         };
@@ -268,8 +273,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
-        let mut draft = CanvasSizeDraft::new([doc.width, doc.height]);
-        draft.update(doc, self.engine.geometry_limits());
+        let mut draft = CanvasSizeDraft::new([doc.width, doc.height], self.localization());
+        draft.update(doc, self.engine.geometry_limits(), self.localization());
         self.canvas_size = Some(draft);
         self.refresh_tools();
         Ok(())
@@ -282,7 +287,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         let draft = self.canvas_size.as_mut().ok_or("Canvas Size is not open")?;
-        let finite = |value: f64| if value.is_finite() { Ok(value) } else { Err("Enter a number") };
+        let finite = |value: f64| if value.is_finite() { Ok(value) } else { Err(NumericError::FiniteNumber.message(&self.state.localization)) };
         match action {
             CanvasSizeAction::Width { value } => draft.values[0] = draft.unit.round(finite(value)?),
             CanvasSizeAction::Height { value } => draft.values[1] = draft.unit.round(finite(value)?),
@@ -309,7 +314,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let limits = self.engine.geometry_limits();
         let draft = self.canvas_size.as_mut().unwrap();
-        draft.update(self.engine.document(), limits);
+        draft.update(self.engine.document(), limits, &self.state.localization);
         self.refresh_tools();
         Ok(())
     }
@@ -339,5 +344,28 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn follow_canvas_origin(&mut self, origin: [i32; 2]) {
         self.state.camera.follow_document_origin(origin.map(|v| v as f32));
         self.sync_camera();
+    }
+}
+
+pub(super) fn size_message(localization: &Localizer, message: MessageId, [width, height]: [u32; 2]) -> String {
+    let mut args = FluentArgs::new(); args.set("width", width.to_string()); args.set("height", height.to_string());
+    localization.format(message, &args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::test_support::{session, invoke};
+    #[test]
+    fn retained_canvas_size_status_survives_ordinary_publication() {
+        let mut session = session(Platform::Gtk);
+        invoke(&mut session, CommandId::CanvasSize);
+        let message = session.canvas_size.as_ref().unwrap().view.message.as_ptr();
+        for size in [8., 17.] {
+            session.dispatch(UiAction::SetBrushSize { value: size }).unwrap();
+            session.dispatch(UiAction::SetZoom { zoom: size / 8. }).unwrap();
+            session.set_viewport([640. + size, 480.], [640 + size as u32, 480]).unwrap();
+            assert_eq!(session.canvas_size.as_ref().unwrap().view.message.as_ptr(), message);
+        }
     }
 }

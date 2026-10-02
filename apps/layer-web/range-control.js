@@ -12,7 +12,7 @@ export function createRangeControl({ app, bounds, label, icon, onChange, prefix 
   let values = bounds.map(f => f.value), domain, contact, retired = false;
   const spec = bounds[0].numeric;
   const inputs = bounds.map((f, i) => {
-    const input = createNumberField({ control: f.numeric, label: `${f.label} — ${label}`, icon, inline: true, valueOnly: true,
+    const input = createNumberField({ control: f.numeric, label: `${f.label} — ${label}`, labels:app.numeric_labels(`${f.label} — ${label}`), icon, inline: true, valueOnly: true,
       resolve: request => app.number_input(request), onChange: value => { if (!retired) onChange(i, value); } });
     input.dataset[`${prefix}Setting`] = f.id;
     return input;
@@ -23,7 +23,7 @@ export function createRangeControl({ app, bounds, label, icon, onChange, prefix 
     input.setAttribute('aria-label', `${f.label} — ${label}`); input.title = input.getAttribute('aria-label');
     const thumb = document.createElement('span'); thumb.className = `interval-thumb ${i ? 'upper' : 'lower'}`;
     track.append(input, thumb);
-    input.oninput = () => change(i, Number(input.value));
+    input.oninput = () => { if (inputs.every(number => number.commit())) change(i, Number(input.value)); else paint(); };
     return { input, thumb };
   });
   root.append(inputs[0], track, inputs[1]);
@@ -62,7 +62,7 @@ export function createRangeControl({ app, bounds, label, icon, onChange, prefix 
   track.addEventListener('pointerdown', e => {
     if (e.button || contact || retired) return;
     e.preventDefault(); e.stopPropagation();
-    inputs.forEach(n => n.cancelEditing());
+    if (!inputs.every(number => number.commit())) return;
     const b = track.getBoundingClientRect(), x = e.clientX-b.x;
     const positions = values.map(v => 8+(v-domain[0])/(domain[1]-domain[0])*(b.width-16));
     const index = Math.abs(positions[1]-positions[0]) < 1 ? Number(x>=positions[0]) : Number(Math.abs(x-positions[1])<Math.abs(x-positions[0]));

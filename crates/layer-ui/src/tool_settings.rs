@@ -64,6 +64,8 @@ tool_action_groups! {
 pub struct ToolSetting {
     pub id: &'static str,
     pub label: Arc<str>,
+    #[serde(skip)]
+    pub(crate) label_id: MessageId,
     pub group: Arc<str>,
     pub numeric: NumericControl,
     pub value: f32,
@@ -325,6 +327,7 @@ pub(crate) fn controls(brush: &BrushSnapshot, localizer: &Localizer) -> Vec<Tool
             Some(ToolSetting {
                 id: d.id,
                 label: localizer.text(d.label),
+                label_id: d.label,
                 group: d.group.map(|id| localizer.text(id)).unwrap_or_else(|| Arc::from("")),
                 numeric: (d.numeric)(),
                 value: *(d.field)(&mut brush)?,
@@ -333,7 +336,11 @@ pub(crate) fn controls(brush: &BrushSnapshot, localizer: &Localizer) -> Vec<Tool
         .collect()
 }
 
-pub(crate) fn edit(brush: &BrushSnapshot, id: &str, value: f32) -> Result<BrushSnapshot, String> {
+pub(crate) fn edit(brush: &BrushSnapshot, id: &str, value: f32, localizer: &Localizer) -> Result<BrushSnapshot, String> {
+    edit_value(brush, id, value).map_err(|reason| reason.message(localizer))
+}
+
+pub(crate) fn edit_value(brush: &BrushSnapshot, id: &str, value: f32) -> Result<BrushSnapshot, crate::WorkspaceValidationError> {
     if id == COLOR_MIXING {
         let space = ColorMixSpace::ALL
             .into_iter()
@@ -350,7 +357,7 @@ pub(crate) fn edit(brush: &BrushSnapshot, id: &str, value: f32) -> Result<BrushS
         .iter()
         .find(|d| d.id == id)
         .ok_or("Unknown tool setting")?;
-    (d.numeric)().validate(value, &Localizer::shared(UiLanguage::English).text(d.label))?;
+    (d.numeric)().validate(value, d.label)?;
     let mut next = brush.clone();
     *(d.field)(&mut next).ok_or("This setting is not used by the selected tool")? = value;
     next.validate().map_err(|e| e.to_string())?;
@@ -382,7 +389,7 @@ mod tests {
             for (control, expected) in controls.iter().zip(&canonical) {
                 assert_eq!((control.id, control.value, &control.numeric), (expected.id, expected.value, &expected.numeric));
                 assert!(!control.label.is_empty());
-                control.numeric.validate(control.value, &control.label).unwrap();
+                control.numeric.validate(control.value, control.label.as_ref()).unwrap();
             }
         }
     }
@@ -393,14 +400,14 @@ mod tests {
             let brush = default_brush(crate::preset(choice.id).unwrap());
             for control in controls(&brush, &Localizer::shared(UiLanguage::English)) {
                 assert_eq!(
-                    edit(&brush, control.id, control.value).unwrap(),
+                    edit(&brush, control.id, control.value, &Localizer::shared(UiLanguage::English)).unwrap(),
                     brush,
                     "{}: {}",
                     choice.label,
                     control.id
                 );
                 for value in [control.numeric.min as f32, control.numeric.max as f32] {
-                    edit(&brush, control.id, value).unwrap();
+                    edit(&brush, control.id, value, &Localizer::shared(UiLanguage::English)).unwrap();
                 }
             }
         }
@@ -421,8 +428,8 @@ mod tests {
             assert_eq!(ids.contains(&"momentum"), momentum, "{preset:?}");
         }
         let crystals = default_brush(DefaultBrushPreset::LiquifyCrystals);
-        assert_eq!(edit(&crystals, "distortion", 0.9).unwrap().deform.distortion, 0.9);
-        assert!(edit(&crystals, "momentum", 0.5).is_err());
+        assert_eq!(edit(&crystals, "distortion", 0.9, &Localizer::shared(UiLanguage::English)).unwrap().deform.distortion, 0.9);
+        assert!(edit(&crystals, "momentum", 0.5, &Localizer::shared(UiLanguage::English)).is_err());
     }
 
     #[test]
@@ -437,15 +444,15 @@ mod tests {
             ("flow", f32::NAN),
             ("size", 3000.0),
         ] {
-            assert!(edit(&brush, id, value).is_err());
+            assert!(edit(&brush, id, value, &Localizer::shared(UiLanguage::English)).is_err());
         }
     }
 
     #[test]
     fn bristle_controls_preserve_relative_scale_when_resizing_and_round_trip() {
         let brush = default_brush(DefaultBrushPreset::BristlePaintbrush);
-        let scaled = edit(&brush, "bristle_scale", 2.).unwrap();
-        let resized = edit(&scaled, "size", 1000.).unwrap();
+        let scaled = edit(&brush, "bristle_scale", 2., &Localizer::shared(UiLanguage::English)).unwrap();
+        let resized = edit(&scaled, "size", 1000., &Localizer::shared(UiLanguage::English)).unwrap();
         assert_eq!(scaled.contact, resized.contact);
         let restored: BrushSnapshot =
             serde_json::from_str(&serde_json::to_string(&resized).unwrap()).unwrap();

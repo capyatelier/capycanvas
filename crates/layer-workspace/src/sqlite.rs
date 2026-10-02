@@ -302,6 +302,7 @@ impl SqliteStore {
                         generations: row.generations,
                         claim: row.claim,
                         error: None,
+                        unavailable_name: false,
                     })
                 })();
                 match result {
@@ -315,11 +316,11 @@ impl SqliteStore {
                         Ok(summary_fallback(
                             id,
                             Some(&kind),
-                            &name,
+                            Some(&name),
                             row.as_ref().is_some_and(|r| r.builtin),
                             row.as_ref().map(|r| r.generations).unwrap_or_default(),
                             row.and_then(|r| r.claim),
-                            error.to_string(),
+                            error,
                         ))
                     }
                 }

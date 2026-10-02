@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "native/include/capy_windows.h"
 #include "FilterPreviews.h"
 #include <functional>
 #include <memory>
@@ -9,7 +10,7 @@ class WorkspaceView {
 public:
     using Json = winrt::Windows::Data::Json::JsonObject;
     using Dispatch = std::function<void(std::string)>;
-    WorkspaceView(Dispatch dispatch, Json catalog, Dispatch overviews, PreviewTransport previews,std::function<void(bool)> popupChanged, Dispatch document, Dispatch input);
+    WorkspaceView(Dispatch dispatch, Json catalog,std::shared_ptr<CapyLocalization> localization, Dispatch overviews, PreviewTransport previews,std::function<void(bool)> popupChanged, Dispatch document, Dispatch input);
     ~WorkspaceView();
     winrt::Microsoft::UI::Xaml::Controls::Canvas Root() const;
     bool Apply(Json const& snapshot);

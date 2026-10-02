@@ -25,9 +25,9 @@ fn image_size_scales_down_with_constrained_proportions_in_one_undo_step() {
     let before = s.engine.document().clone();
     invoke(&mut s, CommandId::ImageSize);
     let view = image_size_view(&s);
-    assert_eq!((view.title, view.values, view.unit), ("Image Size", [1000., 800.], CanvasSizeUnit::Pixels));
+    assert_eq!((view.title.as_ref(), view.values, view.unit), ("Image Size", [1000., 800.], CanvasSizeUnit::Pixels));
     assert_eq!((view.constrain, view.resample, view.resolution), (true, ImageResample::Automatic, 72.));
-    assert_eq!(view.resamples.iter().map(|r| r.label).collect::<Vec<_>>(), ["Automatic", "Bicubic", "Lanczos", "Bilinear", "Nearest neighbor"]);
+    assert_eq!(view.resamples.iter().map(|r| r.label.as_ref()).collect::<Vec<_>>(), ["Automatic", "Bicubic", "Lanczos", "Bilinear", "Nearest neighbor"]);
     assert!(!view.can_apply);
     assert_eq!(view.message, "Current size: 1000 × 800 px");
     image_size(&mut s, ImageSizeAction::Width { value: 500.4 });

@@ -35,7 +35,7 @@ impl WorkingEncoder {
         destination: &SourceInterpretation,
         encoding: OutputEncoding,
     ) -> Result<Self, String> {
-        encoding.validate(destination.depth)?;
+        encoding.validate(destination.depth).map_err(|_| "Output dithering requires 8-bit delivery".to_string())?;
         let options = encoding.conversion;
         validate_options(options)?;
         let mut destination = destination.clone();

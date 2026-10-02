@@ -15,6 +15,7 @@ import SwiftUI
     private let identity = UUID()
     private let document: UInt64
     private weak var store: EditorStore?
+    var copy: JSON { store?.bootstrap["recovery"] ?? JSON() }
     private var file = JSON()
     private var policy = ""
     private var pendingWork: JSON?

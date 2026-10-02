@@ -139,8 +139,9 @@ pub extern "system" fn Java_art_capycanvas_Native_documentInfo(
     let info = unsafe { Box::from_raw(handle as *mut layer_color::DocumentInfo) };
     string(
         &mut env,
-        info.describe()
-            .and_then(|rows| serde_json::to_string(&rows).map_err(error)),
+        ( || { let inspected = info.inspect()?;
+            let rows = layer_ui::document_properties(&inspected, crate::launch::active_localization()?);
+            serde_json::to_string(&rows).map_err(error) })(),
     )
 }
 
@@ -157,10 +158,11 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
         let recipe: layer_ui::ExportRecipe =
             serde_json::from_str(&crate::android::read(&mut env, &recipe)?).map_err(error)?;
         let (previews,stats)=crate::inspection::on_worker("capy-output-preview", "Output preview worker failed", move || {
+            let localization = crate::launch::active_localization()?;
             let mut renderer=job.gpu.capture(job.project,job.background,job.time,job.control).map_err(error)?;
             let before=renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?;
-            let output=layer_host::export::preview_recipe(&mut renderer,[512,384],layer_core::color::RgbSpace::Srgb,1.,&recipe)?;
-            let json=serde_json::json!({"extent":recipe.size.extent(renderer.extent())?,"clipped_channels":output.clipped,"range_blocked":output.range_blocked});
+            let output=layer_host::export::preview_recipe(&mut renderer,[512,384],layer_core::color::RgbSpace::Srgb,1.,&recipe).map_err(|reason| reason.message(localization))?;
+            let json=serde_json::json!({"extent":recipe.size.extent(renderer.extent()).map_err(|reason| reason.message(localization))?,"clipped_channels":output.clipped,"range_blocked":output.range_blocked});
             Ok::<_,String>(([before,output.after].into_iter().chain(output.sdr_base).collect::<Vec<_>>(),json.to_string()))
         })?;
         let result = env

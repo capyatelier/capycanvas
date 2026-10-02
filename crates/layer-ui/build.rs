@@ -6,7 +6,7 @@ mod localization_inventory;
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../assets/locales");
     let languages = ["en", "ja", "zh-Hans", "zh-Hant", "ko"];
-    let domains = ["common", "commands", "settings", "tools", "documents", "workspace", "shortcuts", "toolbar", "resources"];
+    let domains = ["common", "commands", "settings", "tools", "documents", "workspace", "shortcuts", "toolbar", "resources", "creation", "color-features"];
     let mut english_sources = Vec::new();
     let mut keys = BTreeSet::new();
     let mut constants = BTreeSet::new();

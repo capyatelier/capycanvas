@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "native/include/capy_windows.h"
 #include "CanvasQueryQueue.h"
 #include <functional>
 #include <memory>
@@ -9,7 +10,7 @@ class HeaderView {
 public:
     using Json=winrt::Windows::Data::Json::JsonObject;
     using Dispatch=std::function<void(std::string)>;
-    HeaderView(Dispatch send,Json catalog,std::function<void(bool)> popup,
+    HeaderView(Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,std::function<void(bool)> popup,
         std::function<void()> layout,std::function<void()> fullscreen,std::function<void()> newWindow,PreviewTransport queries,Dispatch input,Dispatch documents);
     ~HeaderView();
     winrt::Microsoft::UI::Xaml::Controls::Grid Root()const;

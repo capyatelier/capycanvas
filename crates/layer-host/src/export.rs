@@ -3,7 +3,7 @@
 use crate::{Renderer, tasks::Preview};
 use layer_core::color::RgbSpace;
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu, SnapshotPreview, SnapshotRenderer};
-use layer_ui::{DocumentExport, ExportFormat, ExportRecipe, UiSession};
+use layer_ui::{ColorFeatureError, DocumentExport, ExportFormat, ExportRecipe, UiSession};
 use serde_json::{Value, json};
 use std::io::{BufWriter, Seek, Write};
 
@@ -12,7 +12,7 @@ pub fn write_recipe(
     renderer: &mut SnapshotRenderer,
     output: impl Write + Seek,
     recipe: &ExportRecipe,
-) -> Result<layer_color::OutputStatistics, String> {
+) -> Result<layer_color::OutputStatistics, ColorFeatureError> {
     recipe.validate()?;
     let (target, matte, clip) = (
         recipe.interpretation(),
@@ -27,16 +27,16 @@ pub fn write_recipe(
             output,
             &target,
             recipe.encoding,
-            matte.ok_or("Choose a JPEG background")?,
+            matte.ok_or(ColorFeatureError::ExportCombination)?,
             recipe.jpeg_quality,
         ),
         ExportFormat::Webp => renderer.write_webp(output, &target, recipe.encoding, matte),
         ExportFormat::PngHdr | ExportFormat::PngHdrMapped => renderer.write_hdr_png(output, clip),
         ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => {
-            let format = recipe.format.gainmap().ok_or("Unsupported gain-map format")?;
+            let format = recipe.format.gainmap().ok_or(ColorFeatureError::ExportCombination)?;
             renderer.write_gainmap(output, format, recipe.jpeg_quality, matte, clip)
         }
-    }
+    }.map_err(ColorFeatureError::from)
 }
 
 pub struct RecipePreview {
@@ -57,7 +57,7 @@ pub fn preview_recipe(
     space: RgbSpace,
     headroom: f32,
     recipe: &ExportRecipe,
-) -> Result<RecipePreview, String> {
+) -> Result<RecipePreview, ColorFeatureError> {
     recipe.validate()?;
     renderer.set_output_extent(recipe.output_extent(renderer.extent())?)?;
     let matte = recipe.background.matte();
@@ -142,7 +142,7 @@ impl ExportTask {
         &self.previews
     }
 
-    pub fn configure(&mut self, recipe: ExportRecipe) -> Result<(), String> {
+    pub fn configure(&mut self, recipe: ExportRecipe) -> Result<(), ColorFeatureError> {
         recipe.validate_for_document(self.document())?;
         self.recipe = recipe;
         self.previews.clear();
@@ -168,7 +168,7 @@ impl ExportTask {
     }
 
     /// Previews are the artwork, the delivery, and a gain-map's SDR base.
-    pub fn compare(&mut self, control: CaptureControl) -> Result<(), String> {
+    pub fn compare(&mut self, control: CaptureControl) -> Result<(), ColorFeatureError> {
         let (space, recipe) = (self.space, self.recipe.clone());
         let renderer = self.renderer(control)?;
         let before = renderer.preview_document([512, 384], space)?;
@@ -188,7 +188,10 @@ impl ExportTask {
         Ok(())
     }
 
-    pub fn details(&self) -> Result<Value, String> {
+    #[cfg(test)]
+    fn details(&self) -> Result<Value, String> { self.details_localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)) }
+
+    pub fn details_localized(&self, localizer: &layer_ui::Localizer) -> Result<Value, String> {
         let document = self.document();
         let extent = [document.width, document.height];
         let name = std::path::Path::new(&self.name).file_stem();
@@ -197,11 +200,11 @@ impl ExportTask {
             "extent": extent,
             "resolution": document.resolution,
             "recipe": self.recipe,
-            "form": layer_ui::ExportForm::new(document),
-            "suggested_name": name.and_then(|s| s.to_str()).unwrap_or("Export"),
+            "form": layer_ui::ExportForm::new_localized(document, localizer),
+            "suggested_name": name.and_then(|s| s.to_str()).unwrap_or(localizer.text(layer_ui::MessageId::COLOR_FEATURES_EXPORT_EXPORT).as_ref()),
             "extension": self.recipe.format.extension(),
-            "format_name": self.recipe.format.name(),
-            "output_extent": self.recipe.size.extent(extent)?,
+            "format_name": self.recipe.format.localized_name(localizer),
+            "output_extent": self.recipe.size.extent(extent).map_err(|reason|reason.message(localizer))?,
             "clipped_channels": self.clipped,
             "has_sdr_preview": self.previews.len() == 3,
             "range_blocked": self.range_blocked,
@@ -213,12 +216,9 @@ impl ExportTask {
         &mut self,
         stream: impl Write + Seek,
         control: CaptureControl,
-    ) -> Result<(), String> {
+    ) -> Result<(), ColorFeatureError> {
         if self.range_blocked {
-            return Err(
-                "Some colors exceed the selected HDR output range. Enable clipping or choose SDR output."
-                    .into(),
-            );
+            return Err(ColorFeatureError::HdrRangeBlocked);
         }
         let recipe = self.recipe.clone();
         let document = self.document();
@@ -289,7 +289,7 @@ mod tests {
 
     fn written(task: &mut ExportTask) -> Result<Vec<u8>, String> {
         let mut bytes = Vec::new();
-        task.write(Cursor::new(&mut bytes), Default::default())?;
+        task.write(Cursor::new(&mut bytes), Default::default()).map_err(|reason|reason.diagnostic())?;
         Ok(bytes)
     }
 
@@ -298,7 +298,7 @@ mod tests {
         let (host, mut task) = export([100., -0.5, 2., 1.]);
         let format = |format| {
             ExportRecipe::web_share()
-                .draft(ExportDraftAction::Format(format))
+                .draft_canonical(ExportDraftAction::Format(format))
                 .recipe
         };
         task.configure(format(ExportFormat::PngHdr)).unwrap();
@@ -356,7 +356,7 @@ mod tests {
         host.dispatch(UiAction::Invoke { command: CommandId::ExportDocument }).unwrap();
         let request = host.session.state().requests.last().unwrap().id;
         let mut task = ExportTask::capture(&host.session, request, "Photo.capy", RgbSpace::Srgb).unwrap();
-        let webp = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Webp)).recipe;
+        let webp = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::Webp)).recipe;
         assert_eq!(webp.filename("Photo.capy"), "Photo.webp");
         task.configure(webp.clone()).unwrap();
         task.compare(Default::default()).unwrap();
@@ -392,7 +392,7 @@ mod tests {
         let mut oversized = webp;
         oversized.size = layer_ui::ExportSize::Fit { bounds: [20000, 20000], enlarge: true };
         let error = task.configure(oversized.clone()).unwrap_err();
-        assert!(error.contains("16,384 pixels per side"), "{error}");
+        assert_eq!(error, ColorFeatureError::WebpLimit);
         oversized.format = ExportFormat::Png;
         task.configure(oversized).unwrap();
         drop((task, host));
@@ -403,7 +403,7 @@ mod tests {
     fn gainmap_previews_keep_before_after_and_base() {
         let (host, mut task) = export([4., 2., 1., 1.]);
         let recipe = ExportRecipe::web_share()
-            .draft_for_color(
+            .draft_for_color_canonical(
                 task.document().color,
                 ExportDraftAction::Format(ExportFormat::AvifHdr),
             )

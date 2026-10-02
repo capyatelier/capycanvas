@@ -28,27 +28,29 @@ impl HdrPaint {
             stops,
         })
     }
-    pub fn at_intensity(color: RgbColor, space: RgbSpace, stops: f32) -> Result<Self, String> {
+    pub fn at_intensity(color: RgbColor, space: RgbSpace, stops: f32) -> Result<Self, ColorEditorError> {
         Self::validate_stops(stops)?;
         let p = scale_linear(color.linear_in(space)?, -stops);
         Ok(Self { base: if stops == 0. { color } else { RgbColor::from_linear(space, p)? }, stops })
     }
-    pub fn validate_stops(stops: f32) -> Result<(), String> {
-        if !stops.is_finite() || !(-149. ..=128.).contains(&stops) {
-            return Err("Intensity must be between −149 and +128 EV; the color must fit the document precision".into());
-        }
+    pub fn validate_stops(stops: f32) -> Result<(), ColorEditorError> {
+        if !stops.is_finite() { return Err(ColorEditorError::Intensity(crate::NumericError::FiniteNumber)); }
+        if !(-149. ..=128.).contains(&stops) { return Err(intensity_range(-149., 128.)); }
         Ok(())
     }
-    pub fn color(self, space: RgbSpace) -> Result<RgbColor, String> {
+    pub fn color(self, space: RgbSpace) -> Result<RgbColor, ColorEditorError> {
         let p = scale_linear(self.base.linear_in(space)?, self.stops);
-        layer_core::color::hdr::validate_pixel(layer_core::color::SampleDepth::F32, p).map_err(str::to_string)?;
-        RgbColor::from_linear(space, p)
+        layer_core::color::hdr::validate_pixel_typed(layer_core::color::SampleDepth::F32, p)?;
+        Ok(RgbColor::from_linear(space, p)?)
     }
 }
-pub(super) fn validate_intensity(depth: layer_core::color::SampleDepth, stops: f32) -> Result<(), String> {
+fn intensity_range(min: f64, max: f64) -> ColorEditorError {
+    ColorEditorError::Intensity(crate::NumericError::Range { label: crate::MessageId::NATIVE_COLOR_INTENSITY_EV.into(), min, max })
+}
+pub(super) fn validate_intensity(depth: layer_core::color::SampleDepth, stops: f32) -> Result<(), ColorEditorError> {
     HdrPaint::validate_stops(stops)?;
     if depth != layer_core::color::SampleDepth::F32 && !(-16. ..=65504f32.log2()).contains(&stops) {
-        return Err("Intensity must be between −16 and +16 EV (half-float limit)".into());
+        return Err(intensity_range(-16., f64::from(65504f32.log2())));
     }
     Ok(())
 }
@@ -59,8 +61,8 @@ impl ColorState {
         }
         super::form::mapped_preview(color, self.rgb_space, RgbSpace::Srgb, Some(recipe)).unwrap().rgba
     }
-    pub fn view_mapped(&self, recipe: layer_core::color::hdr::SdrRendition) -> ColorPanelView {
-        let mut view=self.view();
+    pub fn view_mapped(&self, recipe: layer_core::color::hdr::SdrRendition, localizer: &crate::Localizer) -> ColorPanelView {
+        let mut view=self.view_in_localized(RgbSpace::Srgb, localizer);
         if self.hdr_picker.is_none() {return view;}
         view.rendition=Some(recipe);
         let base=self.picker_base().linear_in(self.rgb_space).unwrap();
@@ -113,7 +115,7 @@ impl ColorState {
         self.hdr_picker
             .map_or(self.definition(), |p| p[self.index()].base)
     }
-    pub(super) fn set_hdr_intensity(&mut self, stops: f32) -> Result<(), String> {
+    pub(super) fn set_hdr_intensity(&mut self, stops: f32) -> Result<(), ColorEditorError> {
         validate_intensity(self.hdr_depth, stops)?;
         let mut paint = self
             .hdr_picker
@@ -121,18 +123,18 @@ impl ColorState {
         paint.stops = stops;
         let color = paint.color(self.rgb_space)?;
         // Base and remembered coordinates are unchanged, including at black.
-        self.set_color_with_picker(color, Some(paint))
+        Ok(self.set_color_with_picker(color, Some(paint))?)
     }
-    pub(super) fn set_picker_rgba(&mut self, rgba: [f32; 4]) -> Result<(), String> {
+    pub(super) fn set_picker_rgba(&mut self, rgba: [f32; 4]) -> Result<(), ColorEditorError> {
         if self.hdr_picker.is_none() {
-            return self.set_rgba(rgba);
+            return Ok(self.set_rgba(rgba)?);
         }
         let paint = HdrPaint {
             base: RgbColor::new(self.rgb_space, rgba)?,
             stops: self.hdr_intensity(),
         };
         let color = paint.color(self.rgb_space)?;
-        self.set_color_with_picker(color, Some(paint))
+        Ok(self.set_color_with_picker(color, Some(paint))?)
     }
     pub(super) fn validate_hdr_picker(&self) -> Result<(), String> {
         if let Some(paints) = self.hdr_picker {
@@ -364,7 +366,7 @@ mod float32_tests {
         let mut pixels = vec![[0.; 4]; 49];
         assert!(state.render_field_linear(7, &mut pixels));
         assert!(pixels.into_iter().flatten().all(f32::is_finite));
-        assert!(state.view_mapped(Default::default()).intensity_ramp.into_iter().flatten().all(f32::is_finite));
+        assert!(state.view_mapped(Default::default(), &crate::Localizer::shared(crate::UiLanguage::English)).intensity_ramp.into_iter().flatten().all(f32::is_finite));
         state.set_hdr_intensity(-149.).unwrap();
         state.validate().unwrap();
         let before = state.clone();

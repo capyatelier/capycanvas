@@ -111,7 +111,7 @@ function Walk([double]$FromX,[double]$FromY,[double]$ToX,[double]$ToY){
  }
 }
 function Start-Slide([double]$Grab=8){
- (Control 'Drawing canvas' -Name).SetFocus()
+ (Control 'drawing-canvas').SetFocus()
  $source=(Control 'panel-tab-tool_settings').Current.BoundingRectangle
  $neighbor=(Control 'panel-tab-sizes').Current.BoundingRectangle
  $startX=$source.Left+$Grab*$scale;$startY=$source.Top+$source.Height/2
@@ -162,7 +162,7 @@ try{
  Wait-Until {$null -eq (Find-Preview)} 'Cancelled pointer retained the overlay'
  Wait-Until {((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -eq $normal} 'Cancellation changed the workspace'
  $position=Start-Slide
- $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+ $canvas=(Control 'drawing-canvas').Current.BoundingRectangle
  $x=$canvas.Left+$canvas.Width*.55;$y=$canvas.Top+$canvas.Height*.6
  Walk $position.x $position.y $x $y
  Wait-Until {(Current-Group).floating -and $null -eq (Find-Preview)} 'Tear-off did not release the attached preview'
@@ -191,7 +191,7 @@ try{
  # A GPU overview must follow the same placement as its retained native controls.
  # Place it over an opaque Tool Set region so seeing white cannot be mistaken
  # for the ordinary drawing canvas behind the panel.
- (Control 'Drawing canvas' -Name).SetFocus()
+ (Control 'drawing-canvas').SetFocus()
  Capture 'navigator-before' -Composed
  $source=(Control 'panel-tab-navigator').Current.BoundingRectangle
  $startX=$source.Left+8*$scale;$startY=$source.Top+$source.Height/2

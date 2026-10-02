@@ -1,3 +1,4 @@
+import { composingKey } from "./text-input.js";
 import { createToolbarComponent } from "./toolbar-components.js";
 import { colorButton, pickerButtonAction } from './color-controls.js';
 // DOM presentation of the shared Rust customization models. This module owns
@@ -27,6 +28,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (context.matches(":popover-open") && !context.contains(e.target)) context.hidePopover();
   }, { capture: true });
   window.addEventListener("keydown", (e) => {
+    if (composingKey(e)) return;
     if (e.key === "Escape" && context.matches(":popover-open")) {
       context.hidePopover(); e.preventDefault(); e.stopPropagation();
     }
@@ -140,7 +142,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   for (const event of ["pointerup", "pointercancel", "dragstart", "scroll"])
     window.addEventListener(event, cancelHold, { capture: true });
   window.addEventListener("blur", dismissContext);
-  window.addEventListener("keydown", e => { if (e.key === "Escape") cancelHold(); });
+  window.addEventListener("keydown", e => { if (!composingKey(e) && e.key === "Escape") cancelHold(); });
   workspace.addEventListener("pointercancel", dismissContext, { capture: true });
   workspace.addEventListener("click", (e) => {
     if (heldPointer === e.pointerId) { heldPointer = null; e.preventDefault(); e.stopImmediatePropagation(); }
@@ -291,6 +293,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
           tileResize.observe(strip);
         }
         for (const tile of view.tiles) refreshTile(panel.querySelector(`[data-tile="${tile.id}"]`), tile);
+        panel.querySelector(".panel-grip").updatePanelTitle(view.title);
       } else {
         for (const control of view.controls) {
           let row = panel.querySelector(`[data-control="${control.control}"]`);
@@ -398,6 +401,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   prompt.addEventListener("cancel", e => { e.preventDefault(); cancelPrompt(); });
   prompt.addEventListener("close", () => { if (app.toolbar_prompt()) cancelPrompt(); });
   promptName.addEventListener("keydown", e => {
+    if (composingKey(e)) return;
     if (e.key === "Enter" && !promptConfirm.disabled) { e.preventDefault(); promptConfirm.click(); }
   });
   function refreshPrompt() {

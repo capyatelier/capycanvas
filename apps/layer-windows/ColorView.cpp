@@ -345,11 +345,11 @@ struct View:std::enable_shared_from_this<View>{
     bool previewing()const{return WorkspaceData::previewing(data->colorPreview);}
     J model()const{return previewing()?object(data->colorPreview,L"view"):object(data->model,L"color_panel");}
     J paintColors()const{return previewing()?object(data->colorPreview,L"colors"):displayColors(data->state);}
-    static J geometry(double size,bool hdr){return colorUi(O({{L"type",S(L"layout")},{L"size",N(size)},{L"hdr",B(hdr)}})).GetObject();}
-    J arcAt(double fraction)const{return colorUi(O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"fraction",N(fraction)}})).GetObject();}
+    static J geometry(std::shared_ptr<WorkspaceData> const& data,double size,bool hdr){return colorUi(data->localization.get(),O({{L"type",S(L"layout")},{L"size",N(size)},{L"hdr",B(hdr)}})).GetObject();}
+    J arcAt(double fraction)const{return colorUi(data->localization.get(),O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"fraction",N(fraction)}})).GetObject();}
     void pickIntensity(Point position){
         A point;point.Append(N(position.X));point.Append(N(position.Y));
-        auto hit=colorUi(O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"point",point}})).GetObject();
+        auto hit=colorUi(data->localization.get(),O({{L"type",S(L"arc")},{L"size",N(panelSize)},{L"point",point}})).GetObject();
         auto fraction=hit.GetNamedValue(L"fraction",JsonValue::CreateNullValue());
         if(fraction.ValueType()==JsonValueType::Number)setIntensity(-2+8*fraction.GetNumber());
     }
@@ -361,7 +361,7 @@ struct View:std::enable_shared_from_this<View>{
     }
     hstring editingContext()const{return str(model(),L"shape")+L"/"+str(displayColors(data->state),L"paint_slot");}
     void send(J const& action){data->dispatch(O({{L"type",S(L"color")},{L"action",action}}));}
-    void cancel(){pointer.reset();part=0;root.ReleasePointerCaptures();AutomationProperties::SetItemStatus(root,L"Ready");}
+    void cancel(){pointer.reset();part=0;root.ReleasePointerCaptures();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
     void pick(Point position){
         if(!pointer||context!=editingContext()||side<1)return;
         A location;location.Append(N(position.X));location.Append(N(position.Y));
@@ -380,13 +380,13 @@ struct View:std::enable_shared_from_this<View>{
     }
     void init(){
         auto weak=weak_from_this();
-        root.UseLayoutRounding(false);root.Background(clear());root.MinWidth(128);root.MinHeight(128);AutomationProperties::SetName(root,L"Color controls");AutomationProperties::SetAutomationId(root,L"color-controls");AutomationProperties::SetItemStatus(root,L"Ready");
+        root.UseLayoutRounding(false);root.Background(clear());root.MinWidth(128);root.MinHeight(128);AutomationProperties::SetName(root,data->caption(L"color",L"controls"));AutomationProperties::SetAutomationId(root,L"color-controls");AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));
         root.Children().Append(stage);stage.HorizontalAlignment(HorizontalAlignment::Center);stage.VerticalAlignment(VerticalAlignment::Center);
-        AutomationProperties::SetAutomationId(stage,L"color-panel");AutomationProperties::SetName(stage,L"Color picker");
-        wheel.Background(clear());AutomationProperties::SetName(image,L"Color wheel");
+        AutomationProperties::SetAutomationId(stage,L"color-panel");AutomationProperties::SetName(stage,data->caption(L"color",L"picker"));
+        wheel.Background(clear());AutomationProperties::SetName(image,data->caption(L"color",L"wheel"));
         AutomationProperties::SetAutomationId(image,L"color-wheel");
         image.IsHitTestVisible(false);image.Stretch(Stretch::Fill);wheel.Children().Append(image);stage.Children().Append(wheel);
-        drawError.Text(L"Color wheel unavailable");drawError.TextWrapping(TextWrapping::Wrap);drawError.FontSize(12);
+        drawError.Text(data->caption(L"color",L"wheel_unavailable"));drawError.TextWrapping(TextWrapping::Wrap);drawError.FontSize(12);
         drawError.Foreground(data->brush(L"text"));drawError.IsHitTestVisible(false);drawError.Visibility(Visibility::Collapsed);wheel.Children().Append(drawError);
         root.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
         // The host owns capture; shared geometry limits it to wheel contacts.
@@ -396,7 +396,7 @@ struct View:std::enable_shared_from_this<View>{
             if(self->pointer||!p.IsInContact()||(p.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse&&!p.Properties().IsLeftButtonPressed()))return;
             auto at=p.Position();auto shape=str(self->model(),L"shape");
             auto part=capy_color_hit(at.X,at.Y,float(self->side),shape==L"circle"?2:shape==L"triangle"?1:0);
-            if(part&&self->root.CapturePointer(e.Pointer())){self->pointer=p.PointerId();self->part=part;AutomationProperties::SetItemStatus(self->root,L"Picking");self->pick(at);e.Handled(true);}
+            if(part&&self->root.CapturePointer(e.Pointer())){self->pointer=p.PointerId();self->part=part;AutomationProperties::SetItemStatus(self->root,self->data->caption(L"color",L"picking"));self->pick(at);e.Handled(true);}
         }});
         root.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             if(self->pointer==e.Pointer().PointerId()){self->pick(e.GetCurrentPoint(self->wheel).Position());e.Handled(true);}
@@ -405,7 +405,7 @@ struct View:std::enable_shared_from_this<View>{
             if(self->pointer==e.Pointer().PointerId()){self->cancel();e.Handled(true);}
         }});
         root.PointerCanceled([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId())self->cancel();});
-        root.PointerCaptureLost([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->pointer.reset();self->part=0;AutomationProperties::SetItemStatus(self->root,L"Ready");}});
+        root.PointerCaptureLost([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->pointer.reset();self->part=0;AutomationProperties::SetItemStatus(self->root,self->data->caption(L"header",L"ready"));}});
         root.Loaded([weak](auto&&,auto&&){if(auto self=weak.lock()){
             self->scaleChanged=self->root.XamlRoot().Changed(auto_revoke,[weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
             self->refresh();
@@ -415,16 +415,16 @@ struct View:std::enable_shared_from_this<View>{
         listener=data->colorView([weak]{if(auto self=weak.lock())self->refresh();});
         drawing.worker=std::make_shared<FieldWorker>();
         drawing.worker->deliver=[weak](FieldResult result){if(auto self=weak.lock()){self->drawing.ready=std::move(result);self->key=L"";self->refresh();}};
-        edit=control(L"Edit Color",[weak]{if(auto self=weak.lock();self&&!self->transparentSlot())self->editColor(self->edit);});
+        edit=control(data->caption(L"color",L"edit"),[weak]{if(auto self=weak.lock();self&&!self->transparentSlot())self->editColor(self->edit);});
         Grid editContent;auto pencil=icon(L"pencil",data->theme());pencil.HorizontalAlignment(HorizontalAlignment::Center);pencil.VerticalAlignment(VerticalAlignment::Center);
         editContent.Children().Append(editFill);editContent.Children().Append(pencil);edit.Content(editContent);
-        tooltip(edit,L"Edit Color\u2026");AutomationProperties::SetAutomationId(edit,L"color-edit");
+        tooltip(edit,data->caption(L"color",L"edit"));AutomationProperties::SetAutomationId(edit,L"color-edit");
         edit.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->editHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
         edit.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->editHovered=false;self->refresh();}});
         stage.Children().Append(edit);
         for(int i=0;i<2;i++){
             bool white=i==0;
-            quick[i]=control(white?L"Paint with white":L"Paint with black",[weak,white]{if(auto self=weak.lock())self->send(O({{L"op",S(L"quick_color")},{L"white",B(white)}}));});
+            quick[i]=control(white?data->caption(L"color",L"paint_white"):data->caption(L"color",L"paint_black"),[weak,white]{if(auto self=weak.lock())self->send(O({{L"op",S(L"quick_color")},{L"white",B(white)}}));});
             Grid sample;sample.Background(nullptr);sample.Children().Append(quickEdges[i]);sample.Children().Append(quickPaint[i]);
             quickPaint[i].Margin({1,1,1,1});quick[i].Content(sample);stage.Children().Append(quick[i]);
             AutomationProperties::SetAutomationId(quick[i],white?L"color-white":L"color-black");
@@ -449,13 +449,13 @@ struct View:std::enable_shared_from_this<View>{
                     MenuFlyoutItem item;item.Text(text);AutomationProperties::SetAutomationId(item,id);
                     item.Click([weak,run](auto&&,auto&&){if(auto self=weak.lock())run(*self);});menu.Items().Append(item);
                 };
-                add(L"Edit Color…",L"color-swatch-edit",[slot](View& self){self.send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));self.editColor(self.edit);});
-                add(L"Palettes…",L"color-swatch-palettes",[slot](View& self){
+                add(data->caption(L"color",L"edit_menu"),L"color-swatch-edit",[slot](View& self){self.send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));self.editColor(self.edit);});
+                add(data->caption(L"color",L"palettes"),L"color-swatch-palettes",[slot](View& self){
                     self.send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));
                     QueryWorkspace(self.data->query,O({{L"type",S(L"reveal_panel")},{L"panel",S(L"palettes")}}),[](J){});
                 });
                 menu.Items().Append(MenuFlyoutSeparator());
-                add(L"Swap foreground and background",L"color-swatch-swap",[](View& self){self.send(O({{L"op",S(L"swap")}}));});
+                add(data->caption(L"color",L"swap"),L"color-swatch-swap",[](View& self){self.send(O({{L"op",S(L"swap")}}));});
                 TrackPopup(menu,data);pick.ContextFlyout(menu);
             }
             AutomationProperties::SetAutomationId(pick,L"color-"+slot);
@@ -467,12 +467,12 @@ struct View:std::enable_shared_from_this<View>{
             pick.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
         }
         for(int i=0;i<2;i++){
-            shapes[i]=control(L"Color shape",[weak,i]{if(auto self=weak.lock())self->send(O({{L"op",S(L"shape")},{L"shape",array(self->model(),L"other_shapes").GetAt(i)}}));});
+            shapes[i]=control(data->caption(L"color",L"shape"),[weak,i]{if(auto self=weak.lock())self->send(O({{L"op",S(L"shape")},{L"shape",array(self->model(),L"other_shapes").GetAt(i)}}));});
             stage.Children().Append(shapes[i]);AutomationProperties::SetAutomationId(shapes[i],L"color-shape-"+to_hstring(i));
             shapes[i].PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->shapeHovered[i]=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
             shapes[i].PointerExited([weak,i](auto&&,auto&&){if(auto self=weak.lock()){self->shapeHovered[i]=false;self->refresh();}});
         }
-        swap=control(L"Swap foreground and background",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"swap")}}));});
+        swap=control(data->caption(L"color",L"swap"),[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"swap")}}));});
         stage.Children().Append(swap);AutomationProperties::SetAutomationId(swap,L"color-swap");
         Grid swapContent;swapGlyph=icon(L"color-swap",data->theme());swapGlyph.HorizontalAlignment(HorizontalAlignment::Center);swapGlyph.VerticalAlignment(VerticalAlignment::Center);
         swapContent.Children().Append(swapFill);swapContent.Children().Append(swapGlyph);swap.Content(swapContent);
@@ -501,12 +501,12 @@ struct View:std::enable_shared_from_this<View>{
         arcTrack.DoubleTapped([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->transparentSlot())self->setIntensity(0);});
         intensity.Minimum(-2);intensity.Maximum(6);intensity.StepFrequency(.01);intensity.SmallChange(.1);intensity.LargeChange(1);
         intensity.Width(1);intensity.Height(1);intensity.Opacity(0);intensity.IsHitTestVisible(false);intensity.Visibility(Visibility::Collapsed);
-        AutomationProperties::SetName(intensity,L"Color intensity");AutomationProperties::SetAutomationId(intensity,L"color-intensity");
+        AutomationProperties::SetName(intensity,data->caption(L"color",L"intensity"));AutomationProperties::SetAutomationId(intensity,L"color-intensity");
         intensity.ValueChanged([weak](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){if(auto self=weak.lock();self&&!self->syncingIntensity&&!self->transparentSlot())self->setIntensity(e.NewValue());});
         intensity.PreviewKeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock();self&&e.Key()==winrt::Windows::System::VirtualKey::Home){self->setIntensity(0);e.Handled(true);}});
         stage.Children().Append(arc);stage.Children().Append(intensity);
-        readout=control(L"Switch color readout",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_readout")}}));});
-        MenuFlyout editMenu;MenuFlyoutItem editItem;editItem.Text(L"Edit Color…");
+        readout=control(data->caption(L"color",L"switch_readout"),[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_readout")}}));});
+        MenuFlyout editMenu;MenuFlyoutItem editItem;editItem.Text(data->caption(L"color",L"edit_menu"));
         AutomationProperties::SetAutomationId(editItem,L"edit-color");editItem.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->editColor(self->readout);});
         editMenu.Items().Append(editItem);TrackPopup(editMenu,data);readout.ContextFlyout(editMenu);
         AutomationProperties::SetAutomationId(readout,L"color-readout");stage.Children().Append(readout);
@@ -632,17 +632,17 @@ struct View:std::enable_shared_from_this<View>{
         if(available<128)return;
         if(std::abs(frameWidth-available)>.01||std::abs(frameHeight-height)>.01||layoutScale!=scale||layoutHdr!=hdr){
             frameWidth=available;frameHeight=height;layoutScale=scale;layoutHdr=hdr;
-            root.MinHeight(std::ceil(num(geometry(128,hdr),L"height")));
-            double size=available;auto next=geometry(size,hdr);
+            root.MinHeight(std::ceil(num(geometry(data,128,hdr),L"height")));
+            double size=available;auto next=geometry(data,size,hdr);
             if(fitHeight&&num(next,L"height")>height){
                 if(!hdr)size=std::floor(std::min(available,height)*scale)/scale;
                 else{
                     int low=128,high=int(available);
-                    while(low<high){int middle=(low+high+1)/2;if(num(geometry(middle,true),L"height")<=height)low=middle;else high=middle-1;}
+                    while(low<high){int middle=(low+high+1)/2;if(num(geometry(data,middle,true),L"height")<=height)low=middle;else high=middle-1;}
                     size=low;
                 }
                 if(size<128)return;
-                next=geometry(size,hdr);
+                next=geometry(data,size,hdr);
             }
             cancel();endArc(true);panelSize=size;layout=next;arcKey=L"";
             double stageHeight=num(layout,L"height",size);
@@ -697,7 +697,7 @@ struct View:std::enable_shared_from_this<View>{
                 RotateTransform rotation;rotation.CenterX(8);rotation.CenterY(8);rotation.Angle(array(layout,L"shape_rotations").GetNumberAt(i));
                 for(auto child:glyph.Children())child.as<Shapes::Path>().Data().Transform(rotation);
                 content.Children().Append(glyph);shapes[i].Content(content);shapeGlyphs[i]=glyph;
-                auto title=L"Use "+hstring(shape==L"circle"?L"Okhsv":shape==L"triangle"?L"HLS":L"HSV")+L" "+shape;
+                auto title=data->caption(O({{L"type",S(L"color_shape")},{L"shape",S(shape)}}));
                 AutomationProperties::SetName(shapes[i],title);tooltip(shapes[i],title);
             }
         }
@@ -713,7 +713,7 @@ struct View:std::enable_shared_from_this<View>{
             quickEdges[i].Fill(data->brush(L"panel"));quickEdges[i].Stroke(fill(ring));quickEdges[i].StrokeThickness(chosen||quickHovered[i]?2:1);
             quickPaint[i].Fill(fill(rgba(array(preset,L"rgba"))));
             auto name=str(preset,L"label");AutomationProperties::SetName(quick[i],name);tooltip(quick[i],name);
-            AutomationProperties::SetItemStatus(quick[i],chosen?L"Selected":L"");
+            AutomationProperties::SetItemStatus(quick[i],chosen?data->caption(L"search",L"selected"):L"");
         }
         updateArc(view);
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
@@ -724,7 +724,7 @@ struct View:std::enable_shared_from_this<View>{
             if(!(selected||hovered[i]))stroke.A=64;
             swatchEdges[i].Stroke(fill(stroke));swatchEdges[i].StrokeThickness(selected||hovered[i]?2:1);
             swatchPaint[i].Fill(fill(rgba(array(swatch,L"rgba"))));
-            AutomationProperties::SetName(swatches[i],str(swatch,L"label"));AutomationProperties::SetItemStatus(swatches[i],selected?L"Selected":L"");
+            AutomationProperties::SetName(swatches[i],str(swatch,L"label"));AutomationProperties::SetItemStatus(swatches[i],selected?data->caption(L"search",L"selected"):L"");
         }
         bool preview=previewing();
         auto nextKey=view.Stringify()+to_hstring(side)+L"/"+to_hstring(scale)+(preview?L"/preview":L"");
@@ -739,8 +739,8 @@ struct View:std::enable_shared_from_this<View>{
                     if(code!=DXGI_ERROR_DEVICE_REMOVED&&code!=DXGI_ERROR_DEVICE_RESET&&code!=D2DERR_RECREATE_TARGET&&code!=E_SURFACE_CONTENTS_LOST)throw;
                     drawing.draw(image,view,colors,side,scale,preview,true);
                 }
-                key=nextKey;drawError.Visibility(Visibility::Collapsed);AutomationProperties::SetItemStatus(image,L"Ready");
-            }catch(hresult_error const&){drawError.Visibility(Visibility::Visible);AutomationProperties::SetItemStatus(image,L"Color wheel could not be drawn");}
+                key=nextKey;drawError.Visibility(Visibility::Collapsed);AutomationProperties::SetItemStatus(image,data->caption(L"header",L"ready"));
+            }catch(hresult_error const&){drawError.Visibility(Visibility::Visible);AutomationProperties::SetItemStatus(image,data->caption(L"color",L"wheel_failed"));}
         }
         updateReadout(view);
     }
@@ -749,7 +749,7 @@ struct View:std::enable_shared_from_this<View>{
 }
 double ColorPanelNaturalHeight(std::shared_ptr<WorkspaceData> const& data,double width,double scale){
     auto size=std::max(128.,std::floor(width*scale)/scale);
-    return num(View::geometry(size,flag(object(data->model,L"color_panel"),L"hdr")),L"height",size);
+    return num(View::geometry(data,size,flag(object(data->model,L"color_panel"),L"hdr")),L"height",size);
 }
 FrameworkElement ColorPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,bool fitHeight){
     auto view=std::make_shared<View>(data,fitHeight);view->init();bindings.emplace_back([view]{view->refresh();});return view->root;

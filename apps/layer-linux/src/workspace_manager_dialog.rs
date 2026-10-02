@@ -17,6 +17,7 @@ pub(crate) struct ManagerUi {
     pub note: gtk::Label,
     rows: RefCell<Vec<String>>,
     rows_key: RefCell<String>,
+    row_captions: RefCell<std::collections::BTreeMap<String, (String, String)>>,
     details_key: RefCell<String>,
     rebuilding: Cell<bool>,
     actions: gtk::Box,
@@ -37,8 +38,9 @@ pub(crate) struct ManagerUi {
 }
 impl ManagerUi {
     pub fn new() -> Self {
+        let localization = crate::launch_localization();
         let dialog = adw::Dialog::builder()
-            .title("Manage Workspaces")
+            .title(&*localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES))
             .content_width(520)
             .content_height(540)
             .build();
@@ -47,8 +49,8 @@ impl ManagerUi {
         let header = adw::HeaderBar::new();
         let create = crate::icons::button("layer-plus-symbolic");
         create.set_widget_name("workspace-manager-new");
-        create.set_tooltip_text(Some("New Workspace"));
-        create.update_property(&[gtk::accessible::Property::Label("New Workspace")]);
+        create.set_tooltip_text(Some(&localization.text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE)));
+        create.update_property(&[gtk::accessible::Property::Label(&localization.text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE))]);
         header.pack_end(&create);
         view.add_top_bar(&header);
         let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -72,7 +74,7 @@ impl ManagerUi {
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 10);
         sidebar.set_size_request(220, -1);
         let search = gtk::SearchEntry::new();
-        search.set_placeholder_text(Some("Search"));
+        search.set_placeholder_text(Some(&localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_SEARCH)));
         search.set_widget_name("workspace-manager-search");
         sidebar.append(&search);
         let actions = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -101,13 +103,13 @@ impl ManagerUi {
         );
         split.set_end_child(Some(&details_view));
         body.append(&split);
-        let apply = gtk::Button::with_label("Switch to Workspace");
+        let apply = gtk::Button::with_label(&localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SWITCH));
         apply.set_widget_name("workspace-manager-apply");
         apply.add_css_class("suggested-action");
         apply.set_sensitive(false);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         footer.set_homogeneous(true);
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&localization.text(layer_ui::MessageId::COMMON_CANCEL));
         cancel.connect_clicked(glib::clone!(
             #[weak]
             dialog,
@@ -132,6 +134,7 @@ impl ManagerUi {
             note,
             rows: RefCell::new(Vec::new()),
             rows_key: RefCell::new(String::new()),
+            row_captions: RefCell::new(std::collections::BTreeMap::new()),
             details_key: RefCell::new(String::new()),
             rebuilding: Cell::new(false),
             actions,
@@ -240,6 +243,7 @@ impl ManagerUi {
         let Some(page) = view.page else {
             self.page.set(None);
             self.rows_key.borrow_mut().clear();
+            self.row_captions.borrow_mut().clear();
             if self.presented.get() {
                 self.closing.set(true);
                 self.dialog.close();
@@ -283,11 +287,7 @@ impl ManagerUi {
             ManagerPage::ThisWorkspace | ManagerPage::ToolbarLibrary
         );
         let compact = !toolbar;
-        let empty = gtk::Label::new(Some(match page {
-            ManagerPage::Workspaces => "No matching workspaces.",
-            ManagerPage::History => "No layout versions.",
-            _ => "No matching toolbars.",
-        }));
+        let empty = gtk::Label::new(Some(&w.localization.text(layer_ui::MessageId::NATIVE_HEADER_NO_ITEMS)));
         margins(&empty, 18);
         self.list.set_placeholder(Some(&empty));
         self.footer.set_visible(compact);
@@ -342,6 +342,7 @@ impl ManagerUi {
         self.rebuilding.set(true);
         if *self.rows_key.borrow() != key && self.dragged.borrow().is_none() {
             *self.rows_key.borrow_mut() = key;
+            self.row_captions.borrow_mut().retain(|id, _| page == ManagerPage::Workspaces && view.rows.iter().any(|row| &row.id == id));
             let scroll = self
                 .list
                 .ancestor(gtk::ScrolledWindow::static_type())
@@ -393,8 +394,8 @@ impl ManagerUi {
         handle.set_pixel_size(12);
         handle.set_size_request(16, 44);
         handle.set_cursor_from_name(Some("grab"));
-        handle.set_tooltip_text(Some("Drag to reorder"));
-        handle.update_property(&[gtk::accessible::Property::Label("Drag to reorder")]);
+        handle.set_tooltip_text(Some(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM)));
+        handle.update_property(&[gtk::accessible::Property::Label(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM))]);
         row.add_prefix(&handle);
         if item.current {
             row.add_suffix(&crate::icons::image("layer-check-symbolic"));
@@ -402,8 +403,8 @@ impl ManagerUi {
         if pinned.contains(&item.id) {
             let pin = crate::icons::image("layer-pin-symbolic");
             pin.add_css_class("dim-label");
-            pin.set_tooltip_text(Some("Shown in top bar"));
-            pin.update_property(&[gtk::accessible::Property::Label("Shown in top bar")]);
+            pin.set_tooltip_text(Some(&w.localization.text(layer_ui::MessageId::NATIVE_HEADER_SHOWN_TOP)));
+            pin.update_property(&[gtk::accessible::Property::Label(&w.localization.text(layer_ui::MessageId::NATIVE_HEADER_SHOWN_TOP))]);
             row.add_suffix(&pin);
         }
         let actions = item
@@ -419,7 +420,12 @@ impl ManagerUi {
             })
             .cloned()
             .collect();
-        let more = actions_menu(w, &format!("Options for {}", item.title), actions);
+        let mut captions = self.row_captions.borrow_mut();
+        let caption = captions.entry(item.id.clone()).or_insert_with(|| (item.title.clone(), layer_ui::NativeCaption::OptionsFor { title: item.title.clone() }.message(&w.localization)));
+        if caption.0 != item.title {
+            *caption = (item.title.clone(), layer_ui::NativeCaption::OptionsFor { title: item.title.clone() }.message(&w.localization));
+        }
+        let more = actions_menu(w, &caption.1, actions);
         self.add_switcher_actions(w, &more, &item.id, pinned);
         more.set_valign(gtk::Align::Center);
         row.add_suffix(&more);
@@ -436,7 +442,7 @@ impl ManagerUi {
         let Some(details) = &view.details else {
             if view.rows.is_empty() {
                 self.details
-                    .append(&gtk::Label::new(Some("No items found.")));
+                    .append(&gtk::Label::new(Some(&w.localization.text(layer_ui::MessageId::NATIVE_HEADER_NO_ITEMS))));
             }
             return;
         };
@@ -460,8 +466,8 @@ impl ManagerUi {
             self.details.append(&widget);
         }
         if !secondary.is_empty() {
-            let more = actions_menu(w, "More options", secondary);
-            more.set_label("More…");
+            let more = actions_menu(w, &w.localization.text(layer_ui::MessageId::COMMON_MORE), secondary);
+            more.set_label(&w.localization.text(layer_ui::MessageId::COMMON_MORE));
             self.details.append(&more);
         }
     }
@@ -486,7 +492,7 @@ impl ManagerUi {
         if self.prompt.borrow().is_some() || view.busy {
             return;
         }
-        let dialog = prompt_dialog(&prompt, self.draft.borrow().clone(), view.error.as_deref());
+        let dialog = prompt_dialog(&prompt, self.draft.borrow().clone(), view.error.as_deref(), &w.localization);
         dialog.connect_response(
             None,
             glib::clone!(
@@ -525,13 +531,14 @@ fn prompt_dialog(
     prompt: &ManagerPrompt,
     draft: Option<(String, String, Option<String>)>,
     error: Option<&str>,
+    localization: &std::sync::Arc<layer_ui::Localizer>,
 ) -> adw::AlertDialog {
     let dialog = adw::AlertDialog::builder()
         .heading(&prompt.title)
         .body(&prompt.message)
         .build();
     dialog.set_widget_name("workspace-prompt");
-    dialog.add_responses(&[("cancel", "Cancel"), ("confirm", &prompt.confirm)]);
+    dialog.add_responses(&[("cancel", &localization.text(layer_ui::MessageId::COMMON_CANCEL)), ("confirm", &prompt.confirm)]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("confirm"));
     dialog.set_response_appearance(
@@ -558,10 +565,12 @@ fn prompt_dialog(
     if prompt.name.is_some() {
         let entry = gtk::Entry::builder()
             .text(&name)
-            .placeholder_text("Name")
+            .placeholder_text(&*localization.text(layer_ui::MessageId::COMMON_NAME))
             .activates_default(true)
             .build();
         entry.set_widget_name("workspace-item-name");
+        crate::input::guard_entry_activation(&entry);
+        let localization = localization.clone();
         entry.connect_changed(glib::clone!(
             #[weak]
             dialog,
@@ -574,7 +583,7 @@ fn prompt_dialog(
                     &result
                         .as_ref()
                         .err()
-                        .map_or_else(String::new, ToString::to_string),
+                        .map_or_else(String::new, |reason| reason.localized_message(&localization)),
                 );
                 validation.set_visible(result.is_err());
             }
@@ -588,9 +597,10 @@ fn prompt_dialog(
     if prompt.description.is_some() {
         let entry = gtk::Entry::builder()
             .text(&description)
-            .placeholder_text("Description (optional)")
+            .placeholder_text(&*localization.text(layer_ui::MessageId::COMMON_DESCRIPTION))
             .build();
         entry.set_widget_name("workspace-item-description");
+        crate::input::guard_entry_activation(&entry);
         form.append(&entry);
     }
     if !prompt.choices.is_empty() {

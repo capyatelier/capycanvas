@@ -129,6 +129,8 @@ pub struct ActionPickerView {
     pub query: String,
     pub modified: bool,
     pub nothing: bool,
+    pub nothing_label: std::sync::Arc<str>,
+    pub nothing_visible: bool,
     pub sections: Vec<PickerSection>,
 }
 
@@ -153,6 +155,14 @@ pub(crate) fn scope_label_localized(scope: &BindingScope, l: &Localizer) -> Stri
         BindingScope::Application => String::new(),
         BindingScope::Canvas => l.text(MessageId::SHORTCUT_CANVAS).to_string(),
         BindingScope::Tools { categories } => categories.iter().map(|c| c.localized_label(l).to_string()).collect::<Vec<_>>().join(", "),
+    }
+}
+
+fn scope_caption(scope: &BindingScope, l: &Localizer) -> String {
+    match scope {
+        BindingScope::Application => String::new(),
+        BindingScope::Canvas => l.text(MessageId::SHORTCUT_ON_CANVAS).to_string(),
+        BindingScope::Tools { categories } => shortcut_context_summary(l, tools_phrase(categories, l)),
     }
 }
 
@@ -507,6 +517,7 @@ pub(crate) fn rows_localized(settings: &Settings, platform: Platform, state: &Sh
                 gestures,
                 detail,
                 subgroup: subgroup.into(),
+                scope_caption: scope_caption(&definition.scope, l),
                 scope,
                 id: definition.id.clone(),
                 label: definition.label.resolve(l),
@@ -579,6 +590,12 @@ pub(crate) fn view_localized(
             })
             .collect::<Vec<_>>()
     };
+    let nothing_label = l.text(MessageId::SHORTCUT_NOTHING);
+    let canonical_nothing = Localizer::shared(UiLanguage::English).text(MessageId::SHORTCUT_NOTHING);
+    let nothing_visible = |query: &str| {
+        let query = crate::search::normalize(query.trim());
+        matches(&query, &nothing_label) || matches(&query, &canonical_nothing)
+    };
     let brush = |row: &ShortcutRow| (!row.subgroup.is_empty()).then(|| shortcut_brush_detail(l, row.subgroup.clone()));
     let modifier_picker = state.modifier_picker.as_ref().zip(state.picker.as_ref()).map(|((key, category), (_, picker_query))| {
         let hold = settings.hold_keys(platform).into_iter().find(|h| h.key == *key);
@@ -598,6 +615,8 @@ pub(crate) fn view_localized(
             query: picker_query.clone(),
             modified: false,
             nothing: current.is_empty(),
+            nothing_label: nothing_label.clone(),
+            nothing_visible: nothing_visible(picker_query),
             sections: sections(picker_query, &|row, d| {
                 hold_id(&d.id)?;
                 Some(PickerAction {
@@ -622,6 +641,8 @@ pub(crate) fn view_localized(
             query: picker_query.clone(),
             modified: false,
             nothing: current.is_empty(),
+            nothing_label: nothing_label.clone(),
+            nothing_visible: nothing_visible(picker_query),
             sections: sections(picker_query, &|row, d| {
                 let keys = settings.shortcut_label_localized(&d.id, platform, l);
                 let detail = if hold_id(&d.id).is_some() { Some(l.text(MessageId::SHORTCUT_HELD_MODE).to_string()) } else { (!keys.is_empty()).then_some(keys) };
@@ -648,6 +669,8 @@ pub(crate) fn view_localized(
             query: picker_query.clone(),
             modified: settings.gestures.contains_key(trigger.id),
             nothing: current.is_empty(),
+            nothing_label: nothing_label.clone(),
+            nothing_visible: nothing_visible(picker_query),
             sections: sections(picker_query, &|row, d| {
                 let held = trigger.held.then(|| hold_id(&d.id)).flatten();
                 let keys = settings.shortcut_label_localized(&d.id, platform, l);
@@ -769,9 +792,9 @@ mod tests {
         let all = definitions(Platform::Gtk);
         let held = all.iter().find(|(definition, _)| definition.id == "hold.eyedropper").unwrap();
         assert_eq!(held.0.target.as_deref(), Some("command.Eyedropper"));
-        assert_eq!(held.0.label.resolve(&localizer), "押している間は色を採取");
-        assert_eq!(held_label(&all, "command.Eyedropper", &localizer), "色を採取");
-        assert_eq!(target_label(&all, "command.Eyedropper", &localizer), "色を採取");
+        assert_eq!(held.0.label.resolve(&localizer), "押している間は「色を取得」");
+        assert_eq!(held_label(&all, "command.Eyedropper", &localizer), "色を取得");
+        assert_eq!(target_label(&all, "command.Eyedropper", &localizer), "色を取得");
     }
 
     #[test]
@@ -780,7 +803,7 @@ mod tests {
         let localizer = Localizer::shared(UiLanguage::Japanese);
         for context in [None, Some(ToolCategory::Drawing)] {
             let state = ShortcutPageState { context, ..Default::default() };
-            for query in ["Sample color", "色を採取"] {
+            for query in ["Sample color", "色を取得"] {
                 let rows = modifier_rows_localized(&settings, Platform::Gtk, &state, query, &localizer);
                 assert!(rows.iter().any(|row| row.key.key == "alt" && row.visible), "{context:?}: {query}");
             }
@@ -805,7 +828,7 @@ mod tests {
         assert_eq!(shortcut_key_context(&english, "Alt".into(), ToolCategory::Selection.localized_label(&english).to_string()), "Alt · Selection tools");
         let japanese = Localizer::shared(UiLanguage::Japanese);
         let page = view_localized(&settings, Platform::Gtk, &state, "", &[], &japanese);
-        assert_eq!(page.contexts.iter().find(|choice| choice.category == Some(ToolCategory::Selection)).unwrap().label, "選択ツール");
+        assert_eq!(page.contexts.iter().find(|choice| choice.category == Some(ToolCategory::Selection)).unwrap().label, "選択範囲のツール");
     }
 
     #[test]
@@ -821,6 +844,34 @@ mod tests {
                 assert_eq!(!row.detail.is_empty(), shared_name, "{command:?} {language:?}");
             }
         }
+    }
+
+    #[test]
+    fn picker_nothing_search_and_scope_captions_are_shared_projections() {
+        let settings = Settings::default();
+        let saved = serde_json::to_string(&settings).unwrap();
+        for language in [UiLanguage::English, UiLanguage::Japanese] {
+            let l = Localizer::shared(language);
+            let mut state = ShortcutPageState::default();
+            let rows = rows_localized(&settings, Platform::Gtk, &state, "", &l);
+            let all = definitions(Platform::Gtk);
+            for row in &rows {
+                let scope = &all.iter().find(|(d, _)| d.id == row.id).unwrap().0.scope;
+                match scope {
+                    BindingScope::Application => assert!(row.scope_caption.is_empty()),
+                    BindingScope::Canvas => assert_eq!(row.scope_caption, l.text(MessageId::SHORTCUT_ON_CANVAS).as_ref()),
+                    BindingScope::Tools { categories } => assert_eq!(row.scope_caption, shortcut_context_summary(&l, tools_phrase(categories, &l))),
+                }
+            }
+            for (query, visible) in [(l.text(MessageId::SHORTCUT_NOTHING).to_string(), true), ("ＮＯＴＨＩＮＧ".into(), true), ("unmatched action xyz".into(), false)] {
+                state.picker = Some(("touch.tap.2".into(), query));
+                let picker = view_localized(&settings, Platform::Gtk, &state, "", &rows, &l).picker.unwrap();
+                assert_eq!(picker.nothing_visible, visible);
+                assert_eq!(picker.nothing_label, l.text(MessageId::SHORTCUT_NOTHING));
+                assert_eq!(picker.trigger, "touch.tap.2");
+            }
+        }
+        assert_eq!(serde_json::to_string(&settings).unwrap(), saved);
     }
 
 }

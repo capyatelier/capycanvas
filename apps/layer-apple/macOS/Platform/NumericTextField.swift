@@ -3,6 +3,7 @@ import AppKit
 
 /// AppKit owns text selection, first responder and text-editor key commands.
 struct NumericTextField: NSViewRepresentable {
+    @Environment(\.capyInterfaceLanguage) private var interfaceLanguage
     let label: String
     @Binding var text: String
     @Binding var focused: Bool
@@ -30,7 +31,7 @@ struct NumericTextField: NSViewRepresentable {
             context.coordinator.parent.focused = true
             return beginning
         }
-        if field.stringValue != text { field.stringValue = text }
+        if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true && field.stringValue != text { field.stringValue = text }
         field.placeholderString = label
         field.font = .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
         field.textColor = NSColor(color); field.isEnabled = enabled
@@ -61,6 +62,7 @@ struct NumericTextField: NSViewRepresentable {
         }
         func controlTextDidEndEditing(_ notification: Notification) { if parent.focused { parent.focused = false } }
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard !textView.hasMarkedText() else { return false }
             switch selector {
             case #selector(NSResponder.cancelOperation(_:)): parent.cancel(); return true
             case #selector(NSResponder.insertNewline(_:)): _ = parent.submit(true); return true
@@ -76,7 +78,7 @@ struct NumericTextField: NSViewRepresentable {
         var beginEditing: () -> Bool = { true }
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-            guard let editor = currentEditor() as? NSTextView,
+            guard let editor = currentEditor() as? NSTextView, !editor.hasMarkedText(),
                 event.charactersIgnoringModifiers?.lowercased() == "z",
                 flags == .command || flags == [.command, .shift] else {
                 return super.performKeyEquivalent(with: event)

@@ -47,7 +47,7 @@ function Sample([string]$Name,$Points){
     try{@($Points|ForEach-Object {$image.GetPixel($_.x-$origin[0],$_.y-$origin[1]).G})}finally{$image.Dispose()}
 }
 function Zoom([int]$Steps){
-    (Control 'Drawing canvas' -Name).SetFocus()
+    (Control 'drawing-canvas').SetFocus()
     for($i=0;$i -lt $Steps;$i++){[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0xBB);Start-Sleep -Milliseconds 120}
 }
 try {

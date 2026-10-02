@@ -171,6 +171,7 @@ import QuartzCore
         view?.wake()
     }
     func key(_ event: NSEvent, pressed: Bool) {
+        guard (event.window?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return }
         let key = AppleKeyName.name(event)
         guard !key.isEmpty else { return }
         modifiers = event.modifierFlags

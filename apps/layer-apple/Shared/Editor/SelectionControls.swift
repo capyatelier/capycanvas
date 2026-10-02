@@ -81,19 +81,21 @@ struct SelectionRefinePanel: View {
     @ObservedObject var store: EditorStore
     let view: JSON
     let palette: EditorPalette
+    @Environment(\.capyCommonCopy) private var common
+    @State private var commitNumber: ((Bool) -> Bool)?
     private func send(_ action: [String: Any]) { store.dispatch(["type": "selection", "action": action]) }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(view["title"].string).fontWeight(.bold).accessibilityIdentifier("selection-refine-title")
             NumberControl(store: store, label: view["label"].string, value: view["radius"].number,
-                control: view["numeric"], identifier: "selection-refine-value") { value, completion in
+                control: view["numeric"], identifier: "selection-refine-value", registerAdmission: { _, admission in commitNumber = admission }) { value, completion in
                 send(["op": "resize_radius", "radius": value]); completion(nil)
             }.id(view["kind"].string)
             HStack(spacing: 8) {
                 Spacer()
-                Button("Cancel") { send(["op": "cancel_resize"]) }.buttonStyle(.bordered)
+                Button(common["cancel"].string) { _ = commitNumber?(true); send(["op": "cancel_resize"]) }.buttonStyle(.bordered)
                     .accessibilityIdentifier("selection-refine-cancel")
-                Button("Apply") { send(["op": "apply_resize"]) }.buttonStyle(.borderedProminent).tint(palette.accent)
+                Button(common["apply"].string) { if commitNumber?(false) != false { send(["op": "apply_resize"]) } }.buttonStyle(.borderedProminent).tint(palette.accent)
                     .accessibilityIdentifier("selection-refine-apply")
             }.focusable(false)
         }.padding(.top, 14).padding(.horizontal, 16).padding(.bottom, 12)

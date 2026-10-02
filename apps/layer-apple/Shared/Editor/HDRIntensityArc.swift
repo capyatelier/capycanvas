@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct HDRIntensityArc: View {
+    @Environment(\.capyNativeCopy) private var nativeCopy
     @ObservedObject var store: EditorStore
     let geometry: JSON
     let caption: JSON
@@ -51,18 +52,18 @@ struct HDRIntensityArc: View {
             }.buttonStyle(.plain)
                 .offset(x: caption[0].number - EditorTextMetrics.width(label, size: font, weight: .regular, monospacedDigits: true) / 2,
                     y: caption[1].number - EditorTextMetrics.ascent(size: font))
-                .accessibilityLabel("HDR intensity").accessibilityIdentifier("color-intensity")
+                .accessibilityLabel(nativeCopy["color"]["intensity"].string).accessibilityIdentifier("color-intensity")
                 .accessibilityAdjustableAction { set(model["intensity"].number + ($0 == .increment ? 0.1 : -0.1)) }
                 .popover(isPresented: $editing) {
                     let draft = ColorUI.resolve(["type": "form", "request": ["color": model["definition"].raw,
                         "document_space": model["rgb_space"].raw, "intensity": model["intensity"].number, "document_depth": model["document_depth"].raw, "change_intensity_text": input]])
                     VStack(spacing: 12) {
-                        Text("Intensity (EV)").font(.headline)
-                        TextField("Intensity (EV)", text: $input).textFieldStyle(.roundedBorder)
+                        Text(store.catalog["native_copy"]["color"]["intensity_ev"].string).font(.headline)
+                        TextField(store.catalog["native_copy"]["color"]["intensity_ev"].string, text: $input).textFieldStyle(.roundedBorder)
                         if !draft["error"].isNull { Text(draft["error"].string).font(.caption).foregroundStyle(.red) }
                         HStack {
-                            Button("Cancel") { editing = false }.keyboardShortcut(.cancelAction)
-                            Button("Apply") { set(draft["draft"]["intensity"].number); editing = false }
+                            Button(store.bootstrap["common"]["cancel"].string) { editing = false }.keyboardShortcut(.cancelAction)
+                            Button(store.bootstrap["common"]["apply"].string) { set(draft["draft"]["intensity"].number); editing = false }
                                 .disabled(!draft["error"].isNull || draft["value"].isNull).keyboardShortcut(.defaultAction)
                         }
                     }.padding(16).frame(width: 220)

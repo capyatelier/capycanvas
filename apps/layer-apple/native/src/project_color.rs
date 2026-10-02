@@ -37,11 +37,14 @@ pub unsafe extern "C" fn capy_apple_project_candidate(app: *mut CapyApple, task:
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_project_compare(task: *const CapyProjectTask) -> i32 {
     let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
-    task.perform(|payload| match payload {
+    task.perform(|payload| {
+        let localization = control_localization()?;
+        match payload {
         Payload::Source(source) => source.compare(task.control.clone()),
-        Payload::Export(export) => export.compare(task.control.clone()),
+        Payload::Export(export) => export.compare(task.control.clone()).map_err(|reason| reason.message(localization)),
         Payload::Color(_) => Ok(()),
         _ => Err("Not an editable color/source task".into()),
+        }
     })
 }
 /// # Safety
@@ -50,9 +53,12 @@ pub unsafe extern "C" fn capy_project_compare(task: *const CapyProjectTask) -> i
 pub unsafe extern "C" fn capy_project_export_options(task: *const CapyProjectTask, recipe: *const c_char) -> i32 {
     let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
     let recipe = unsafe { read_title(recipe) }.map(str::to_owned);
-    task.perform(|payload| match payload {
-        Payload::Export(export) => export.configure(serde_json::from_str(&recipe?).map_err(|e| e.to_string())?),
+    task.perform(|payload| {
+        let localization = control_localization()?;
+        match payload {
+        Payload::Export(export) => export.configure(serde_json::from_str(&recipe?).map_err(|e| e.to_string())?).map_err(|reason| reason.message(localization)),
         _ => Err("Not an export task".into()),
+        }
     })
 }
 /// # Safety
@@ -63,10 +69,10 @@ pub unsafe extern "C" fn capy_project_details(task: *const CapyProjectTask) -> *
     let mut json = String::new();
     let result = task.perform(|payload| {
         json = match payload {
-            Payload::Info(info) => serde_json::to_string(&info.describe()?),
+            Payload::Info(info) => serde_json::to_string(&layer_ui::document_properties(&info.inspect()?, control_localization()?)),
             Payload::Inspection(inspection) => serde_json::to_string(&inspection.histogram(task)?),
-            Payload::Source(source) => serde_json::to_string(&source.details()?),
-            Payload::Export(export) => serde_json::to_string(&export.details()?),
+            Payload::Source(source) => serde_json::to_string(&source.details_localized(control_localization()?)?),
+            Payload::Export(export) => serde_json::to_string(&export.details_localized(control_localization()?)?),
             Payload::Color(color) => serde_json::to_string(&color.details()),
             _ => return Err("No document details are available".into()),
         }.map_err(|e| e.to_string())?;

@@ -46,12 +46,12 @@ try{
  Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated canvas did not start' 45
  $handle=$review.MainWindowHandle;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
- Wait-Until {$c=Camera;$b=(Control 'Drawing canvas' -Name).Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
+ Wait-Until {$c=Camera;$b=(Control 'drawing-canvas').Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close for gesture space'}
  Invoke 'canvas-fit';Select-Tool 'pen';Start-Sleep -Milliseconds 200
  Wait-Until {(Model).canvas_ready -and !(Model).state.document_file.busy} 'Canvas did not settle before input'
  $area=(Camera).work_area
- $bounds=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+ $bounds=(Control 'drawing-canvas').Current.BoundingRectangle
  $cx=[int]($bounds.X+$area[0]+$area[2]/2);$cy=[int]($bounds.Y+$area[1]+$area[3]/2)
  if($area[2] -lt 600 -or $area[3] -lt 500){throw 'Available canvas is too small for multi-touch acceptance'}
  [CapyCanvasTouch]::SetForegroundWindow($handle)|Out-Null

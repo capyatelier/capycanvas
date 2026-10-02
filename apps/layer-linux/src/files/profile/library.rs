@@ -7,6 +7,7 @@ use std::{
 };
 
 use layer_ui::profile_library as policy;
+use layer_ui::ColorFeatureError;
 static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone, Debug)]
@@ -14,24 +15,19 @@ pub(super) struct Entry {
     pub(super) path: PathBuf,
     pub(super) name: String,
     pub(super) channels: Option<ProfileChannels>,
-    pub(super) issue: Option<String>,
+    pub(super) issue: Option<ColorFeatureError>,
     pub(super) visible: bool,
 }
 impl Entry {
-    fn description(&self) -> String {
-        if let Some(issue) = &self.issue {
-            return issue.clone();
-        }
-        let channels = match self.channels.unwrap() {
-            ProfileChannels::Rgb => "RGB",
-            ProfileChannels::Gray => "Grayscale",
-            ProfileChannels::Cmyk => "CMYK",
-        };
-        if self.visible {
-            channels.into()
-        } else {
-            format!("{channels} · Hidden")
-        }
+    pub(super) fn display_name(&self, localizer: &layer_ui::Localizer) -> String {
+        if self.channels.is_none() {
+            let id = self.path.file_stem().unwrap_or_default().to_string_lossy().chars().take(12).collect::<String>();
+            layer_ui::color_feature_copy::profile_unavailable(localizer, &id)
+        } else if self.name.is_empty() { localizer.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string() }
+        else { self.name.clone() }
+    }
+    fn description(&self, localizer: &layer_ui::Localizer) -> String {
+        self.issue.as_ref().map(|reason|reason.profile_message(localizer)).unwrap_or_else(|| layer_ui::color_feature_copy::profile_visibility(localizer, self.channels, self.visible))
     }
 }
 pub(super) fn directory() -> PathBuf {
@@ -47,10 +43,8 @@ pub(super) fn directory() -> PathBuf {
     glib::user_data_dir().join("capycanvas/color-profiles")
 }
 // Display metadata only: the ICC bytes and digest remain authoritative.
-fn saved_name(path: &Path, description: String) -> String {
-    if description != UNNAMED_PROFILE {
-        return description;
-    }
+fn saved_name(path: &Path, description: Option<String>) -> String {
+    if let Some(description) = description { return description; }
     let mut name = String::new();
     if std::fs::File::open(path.with_extension("name"))
         .and_then(|file| file.take(1024).read_to_string(&mut name))
@@ -61,30 +55,30 @@ fn saved_name(path: &Path, description: String) -> String {
             return name.trim().to_owned();
         }
     }
-    description
+    String::new()
 }
-fn read_profile(path: &Path) -> Result<(Vec<u8>, String, ProfileChannels), String> {
+fn read_profile(path: &Path) -> Result<(Vec<u8>, Option<String>, ProfileChannels), ColorFeatureError> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("Choose a profile file".into());
+        return Err(ColorFeatureError::ProfileChooseFile);
     }
     let mut bytes = Vec::new();
     file.take(layer_color::MAX_ICC_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() > layer_color::MAX_ICC_BYTES {
-        return Err("ICC profile exceeds the size limit".into());
+        return Err(ColorFeatureError::ProfileReadLimit);
     }
     let profile = ColorProfile::Icc(bytes.clone().into());
     let channels = layer_color::profile_channels(&profile)?;
-    let name = layer_color::profile_description(&profile)?;
+    let name = layer_color::profile_description_optional(&profile)?;
     Ok((bytes, name, channels))
 }
-fn inventory(directory: &Path) -> Result<Vec<policy::ProfileRecord>, String> {
+fn inventory(directory: &Path) -> Result<Vec<policy::ProfileRecord>, ColorFeatureError> {
     let reader = match std::fs::read_dir(directory) {
         Ok(reader) => reader,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(e.to_string().into()),
     };
     let mut records = Vec::new();
     for entry in reader {
@@ -98,31 +92,29 @@ fn inventory(directory: &Path) -> Result<Vec<policy::ProfileRecord>, String> {
     }
     Ok(policy::profile_inventory(records))
 }
-pub(super) fn list(directory: &Path) -> Result<Vec<Entry>, String> {
+pub(super) fn list(directory: &Path) -> Result<Vec<Entry>, ColorFeatureError> {
     let mut result = Vec::new();
     for record in inventory(directory)? {
         let path = directory.join(format!("{}.icc", record.id));
         let bytes = if record.issue.is_some() { Ok(vec![]) } else { read_profile(&path).map(|(bytes, _, _)| bytes) };
         let entry = policy::inspect_library_entry(&record, bytes.as_deref().map_err(Clone::clone));
-        result.push(Entry { visible: !path.with_extension("hidden").exists(), name: saved_name(&path, entry.name), path, channels: entry.channels, issue: entry.issue });
+        result.push(Entry { visible: !path.with_extension("hidden").exists(), name: saved_name(&path, (!entry.name.is_empty()).then_some(entry.name)), path, channels: entry.channels, issue: entry.issue });
     }
     result.sort_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
     Ok(result)
 }
-fn import(directory: &Path, source: &Path) -> Result<Vec<Entry>, String> {
-    let (bytes, mut name, _) = read_profile(source)?;
-    if name == UNNAMED_PROFILE {
-        name = source
+fn import(directory: &Path, source: &Path) -> Result<Vec<Entry>, ColorFeatureError> {
+    let (bytes, name, _) = read_profile(source)?;
+    let name = name.unwrap_or_else(|| source
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
-            .into_owned();
-    }
+            .into_owned());
     store(directory, &bytes, &name)
 }
 
 // Store exactly the bytes the picker validated, without reopening the source.
-pub(super) fn store(directory: &Path, bytes: &[u8], name: &str) -> Result<Vec<Entry>, String> {
+pub(super) fn store(directory: &Path, bytes: &[u8], name: &str) -> Result<Vec<Entry>, ColorFeatureError> {
     let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
     let entry = policy::prepare_profile_import(inventory(directory)?, bytes)?;
     let target = directory.join(format!("{}.icc", entry.id));
@@ -136,33 +128,33 @@ pub(super) fn store(directory: &Path, bytes: &[u8], name: &str) -> Result<Vec<En
     layer_core::atomic_write(&target, |file| file.write_all(bytes).map_err(|e| e.to_string()))?;
     list(directory)
 }
-fn remove(directory: &Path, path: &Path) -> Result<Vec<Entry>, String> {
+fn remove(directory: &Path, path: &Path) -> Result<Vec<Entry>, ColorFeatureError> {
     let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
-    let id = path.file_stem().and_then(|s| s.to_str()).ok_or("Select an imported profile")?;
+    let id = path.file_stem().and_then(|s| s.to_str()).ok_or(ColorFeatureError::SelectImportedProfile)?;
     policy::ProfileLibraryAction::Remove { id: id.into() }.execute(&[])?;
-    if path != directory.join(format!("{id}.icc")) { return Err("Select an imported profile".into()); }
+    if path != directory.join(format!("{id}.icc")) { return Err(ColorFeatureError::SelectImportedProfile); }
     for extension in ["name", "hidden"] {
         match std::fs::remove_file(path.with_extension(extension)) {
             Ok(()) => (),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e.to_string().into()),
         }
     }
     std::fs::remove_file(path).map_err(|e| e.to_string())?;
     list(directory)
 }
 
-fn set_visible(directory: &Path, path: &Path, visible: bool) -> Result<Vec<Entry>, String> {
+fn set_visible(directory: &Path, path: &Path, visible: bool) -> Result<Vec<Entry>, ColorFeatureError> {
     let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
     if !list(directory)?.iter().any(|e| e.path == path) {
-        return Err("This profile is no longer saved".into());
+        return Err(ColorFeatureError::ProfileMissing);
     }
     let marker = path.with_extension("hidden");
     if visible {
         match std::fs::remove_file(marker) {
             Ok(()) => (),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e.to_string().into()),
         }
     } else {
         layer_core::atomic_write(&marker, |_| Ok(()))?;
@@ -173,14 +165,14 @@ pub(super) fn read_entry(
     path: &Path,
     working: RgbSpace,
     purpose: &ProfilePurpose,
-) -> Result<ExportProfile, String> {
+) -> Result<ExportProfile, ColorFeatureError> {
     let mut profile = super::read(path, working, purpose)?;
     let ColorProfile::Icc(bytes) = &profile.profile else {
         unreachable!()
     };
-    let id = path.file_stem().and_then(|s| s.to_str()).ok_or("Select an imported profile")?;
+    let id = path.file_stem().and_then(|s| s.to_str()).ok_or(ColorFeatureError::SelectImportedProfile)?;
     policy::read_library_profile(id, bytes, false)?;
-    profile.name = saved_name(path, layer_color::profile_description(&profile.profile)?);
+    profile.name = saved_name(path, layer_color::profile_description_optional(&profile.profile)?);
     Ok(profile)
 }
 mod manager;
@@ -205,8 +197,8 @@ mod tests {
             }
         }
         assert_eq!(
-            layer_color::profile_description(&ColorProfile::Icc(bytes.clone().into())).unwrap(),
-            UNNAMED_PROFILE
+            layer_color::profile_description_optional(&ColorProfile::Icc(bytes.clone().into())).unwrap(),
+            None
         );
         std::fs::write(&original, &bytes).unwrap();
         let chosen = read(&original, RgbSpace::Srgb, &ProfilePurpose::Output).unwrap();
@@ -276,11 +268,7 @@ mod tests {
             .unwrap()
             .set_len(layer_color::MAX_ICC_BYTES as u64 + 1)
             .unwrap();
-        assert!(
-            import(&store, &original)
-                .unwrap_err()
-                .contains("size limit")
-        );
+        assert_eq!(import(&store, &original).unwrap_err(), ColorFeatureError::ProfileReadLimit);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

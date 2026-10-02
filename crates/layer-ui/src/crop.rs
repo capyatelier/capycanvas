@@ -377,6 +377,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let pixels = |label| tool_settings::ToolSetting {
             id: "",
             label: localizer.text(label),
+            label_id: label,
             group: localizer.text(MessageId::TOOL_CONTROL_GROUP_SIZE),
             numeric: NumericControl::number(1., limit, 1., 0).unit("px"),
             value: 0.,
@@ -392,14 +393,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         vec![
             tool_settings::ToolSetting { id: "crop_width", value: w, ..pixels(MessageId::TOOL_CONTROL_CROP_WIDTH) },
             tool_settings::ToolSetting { id: "crop_height", value: h, ..pixels(MessageId::TOOL_CONTROL_CROP_HEIGHT) },
-            tool_settings::ToolSetting { id: "crop_angle", label: localizer.text(MessageId::TOOL_CONTROL_CROP_STRAIGHTEN), group: std::sync::Arc::from(""), numeric: degrees, value: session.frame.angle },
+            tool_settings::ToolSetting { id: "crop_angle", label: localizer.text(MessageId::TOOL_CONTROL_CROP_STRAIGHTEN), label_id: MessageId::TOOL_CONTROL_CROP_STRAIGHTEN, group: std::sync::Arc::from(""), numeric: degrees, value: session.frame.angle },
         ]
     }
 
     pub(super) fn set_crop_control(&mut self, id: &str, value: f32) -> Result<(), String> {
         self.require_idle()?;
         let control = self.crop_controls().into_iter().find(|c| c.id == id).ok_or("No crop setting")?;
-        control.numeric.validate(value, &control.label)?;
+        control.numeric.validate(value, control.label.as_ref()).map_err(|reason| reason.message(self.localization()))?;
         if id == "crop_angle" {
             return self.set_crop_angle(value);
         }

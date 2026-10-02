@@ -2,20 +2,25 @@
 use super::*;
 
 impl Default for WorkspaceWorkingState {
-    fn default() -> Self {
+    fn default() -> Self { Self::new_localized(&Localizer::shared(UiLanguage::English)) }
+}
+impl WorkspaceWorkingState {
+    pub fn new_localized(localization: &Localizer) -> Self {
         let region = region_tools::RegionTools::default();
         let layer = art_layers::LayerInteraction::default();
+        let mut colors = ColorState::new_localized(localization);
+        colors.library.ensure_starters_localized(localization);
         Self {
             version: 1,
             preset: layer_core::DefaultBrushPreset::GPen as u32,
             tools: WorkspaceToolMemory::default(),
-            colors: ColorState::default(),
+            colors,
             canvas_tool: LayerCanvasTool::Paint,
             selection: SelectionOptions::default(),
             region_values: region
-                .controls(&Localizer::shared(UiLanguage::English))
+                .fields()
                 .into_iter()
-                .map(|c| (c.id.into(), c.value))
+                .map(|(id, _, _, _, value)| (id.into(), value))
                 .collect(),
             region_sources: region.source,
             gradient: layer.gradient,
@@ -25,14 +30,17 @@ impl Default for WorkspaceWorkingState {
     }
 }
 impl WorkspaceCapture {
-    pub fn from_template(layout: &DockLayout) -> Result<Self, String> {
+    pub fn from_template_canonical(layout: &DockLayout) -> Result<Self, String> {
+        Self::from_template_localized(layout, &Localizer::shared(UiLanguage::English))
+    }
+    pub fn from_template_localized(layout: &DockLayout, localization: &Localizer) -> Result<Self, String> {
         layout.validate()?;
         Ok(Self {
             history: LayoutHistory::new(layout),
-            working: WorkspaceWorkingState::default(),
+            working: WorkspaceWorkingState::new_localized(localization),
         })
     }
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate_structure(&self) -> Result<(), WorkspaceValidationError> {
         PreparedWorkspace::new(self.clone()).map(|_| ())
     }
 }
@@ -42,7 +50,7 @@ pub struct PreparedWorkspace {
     region_tools: region_tools::RegionTools,
 }
 impl PreparedWorkspace {
-    pub fn new(capture: WorkspaceCapture) -> Result<Self, String> {
+    pub fn new(capture: WorkspaceCapture) -> Result<Self, WorkspaceValidationError> {
         capture.history.validate()?;
         let state = &capture.working;
         if state.version != 1 {
@@ -60,7 +68,7 @@ impl PreparedWorkspace {
         brush.validate().map_err(error)?;
         let mut region_tools = region_tools::RegionTools::default();
         for (id, &value) in &state.region_values {
-            region_tools.edit(id, value)?;
+            region_tools.edit_value(id, value)?;
         }
         region_tools.source = state.region_sources;
         Ok(Self {
@@ -83,7 +91,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         config.id = Panel::Toolbar;
         config.validate()?;
         let PanelContent::Toolbar { name, tiles } = &config.content else {
-            return Err("Choose a toolbar".into());
+            return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_CHOOSE_A_TOOLBAR).to_string());
         };
         let title = name.clone().unwrap_or_else(|| config.id.localized_label(self.localization()).to_string());
         let name = &title;
@@ -91,12 +99,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let before = self.state.workspace.clone();
         let mut layout = before.layout.clone();
         if exact_name {
-            layout.check_toolbar_name(name, replace)?;
+            layout.toolbar_name_refusal(name, replace).map_err(|reason| reason.message(self.localization()).to_string())?;
         }
         let panel = if let Some(panel) = replace {
             layout.panel(panel)?;
             if panel.kind() != PanelKind::Tiles {
-                return Err("Choose a toolbar to replace".into());
+                return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_CHOOSE_A_TOOLBAR_TO_REPLACE).to_string());
             }
             let name = if layout.check_toolbar_name(name, Some(panel)).is_ok() {
                 name.clone()
@@ -152,7 +160,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn begin_workspace_transition(&mut self) -> Result<(), String> {
         self.require_workspace_idle()?;
         if self.workspace_transition {
-            return Err("A workspace change is already in progress".into());
+            return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_A_WORKSPACE_CHANGE_IS_ALREADY_IN_PROGRESS).to_string());
         }
         self.workspace_transition = true;
         self.refresh_commands();
@@ -185,7 +193,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.navigator_drag.is_some()
             || self.state.document_file.busy
         {
-            return Err("Finish the current interaction before switching workspaces".into());
+            return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_FINISH_THE_CURRENT_INTERACTION_BEFORE_SWITCHING_WORKSPACES).to_string());
         }
         Ok(())
     }
@@ -205,9 +213,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             selection: self.selection_tools.options.clone(),
             region_values: self
                 .region_tools
-                .controls(self.localization())
+                .fields()
                 .into_iter()
-                .map(|c| (c.id.into(), c.value))
+                .map(|(id, _, _, _, value)| (id.into(), value))
                 .collect(),
             region_sources: self.region_tools.source,
             gradient: self.layer_interaction.gradient,
@@ -225,7 +233,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn reset_workspace_brushes(&mut self) -> Result<UiChange, String> {
         self.require_workspace_idle()?;
         if self.workspace_preview.is_some() {
-            return Err("Finish previewing the workspace first".into());
+            return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_FINISH_PREVIEWING_THE_WORKSPACE_FIRST).to_string());
         }
         if self.tools.overrides.is_empty() {
             return Ok(UiChange::default());
@@ -246,7 +254,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Captures use a committed gesture boundary; callers must not use disk alone.
     pub fn capture_workspace(&mut self) -> Result<WorkspaceCapture, String> {
         if self.workspace_history.gesture_start().is_some() {
-            return Err("Finish arranging the workspace first".into());
+            return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_FINISH_ARRANGING_THE_WORKSPACE_FIRST).to_string());
         }
         let mut committed = self
             .workspace_preview
@@ -270,7 +278,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn begin_workspace_layout_preview(&mut self) -> Result<(), String> {
         self.require_workspace_idle()?;
         if !self.workspace_transition || self.workspace_preview.is_some() {
-            return Err("Layout preview is already open or not ready".into());
+            return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_LAYOUT_PREVIEW_IS_ALREADY_OPEN_OR_NOT_READY).to_string());
         }
         // A workspace/layout picker can open while the title editor is showing
         // an uncommitted preview. Its own baseline must already be durable:
@@ -282,7 +290,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn preview_workspace_layout(&mut self, layout: &DockLayout) -> Result<UiChange, String> {
         if self.workspace_preview.is_none() {
-            return Err("Open a layout preview first".into());
+            return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_OPEN_A_LAYOUT_PREVIEW_FIRST).to_string());
         }
         layout.validate()?;
         let insets = self.state.workspace.layout.titlebar_insets;
@@ -325,14 +333,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn adopt_workspace(&mut self, prepared: PreparedWorkspace) -> Result<UiChange, String> {
         self.require_workspace_idle()?;
         if self.workspace_preview.is_some() {
-            return Err("Finish previewing the layout first".into());
+            return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_FINISH_PREVIEWING_THE_LAYOUT_FIRST).to_string());
         }
         let PreparedWorkspace {
             capture,
             region_tools,
         } = prepared;
         let mut working = capture.working;
-        working.colors.library.ensure_starters();
+        working.colors.library.ensure_starters_localized(self.localization());
         let space = self.engine.document().color.space;
         working.colors.set_rgb_space(space)?;
         working.colors.set_document_depth(self.engine.document().color.depth)?;
@@ -405,7 +413,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let layout = &state.workspace.layout;
         let group = layout
             .panel_group(panel)
-            .ok_or("Panel has no workspace group")?;
+            .ok_or_else(|| self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_PANEL_HAS_NO_WORKSPACE_GROUP).to_string())?;
         let action = if let Some(column) = layout.collapsed_column_for_group(group) {
             let settings = layout.column_stack(column);
             let open = if settings.drawers {

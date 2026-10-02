@@ -6,7 +6,7 @@ namespace {
 double valueWidth(std::shared_ptr<WorkspaceData> const& data,J const& spec){
     double widest=0;
     for(auto key:{L"min",L"max"}){
-        std::wstring text=str(numeric(spec,num(spec,key),O({{L"type",S(L"format")}})),L"text").c_str();
+        std::wstring text=str(numeric(data->localization.get(),spec,num(spec,key),O({{L"type",S(L"format")}})),L"text").c_str();
         for(auto& ch:text)if(ch>=L'0'&&ch<=L'9')ch=L'8';
         TextBlock measure;measure.FontSize(data->textSize());measure.FontFamily(FontFamily(L"Segoe UI"));measure.Text(text);
         measure.Measure({1000,1000});widest=std::max(widest,double(measure.DesiredSize().Width));
@@ -90,7 +90,7 @@ void RangeControl::paint(){
 }
 void RangeControl::set(int index,double value){
     if(retired)return;
-    auto resolved=num(numeric(object(bounds[0],L"numeric"),values[index],O({{L"type",S(L"value")},{L"value",N(value)}})),L"value");
+    auto resolved=num(numeric(data->localization.get(),object(bounds[0],L"numeric"),values[index],O({{L"type",S(L"value")},{L"value",N(value)}})),L"value");
     double next=index?std::max(values[0],resolved):std::min(values[1],resolved);
     if(next==values[index])return;
     values[index]=next;paint();
@@ -102,7 +102,7 @@ void RangeControl::pick(double x){
     auto control=J::Parse(object(bounds[0],L"numeric").Stringify());
     control.SetNamedValue(L"soft_min",N(contact->domain[0]));control.SetNamedValue(L"soft_max",N(contact->domain[1]));
     double width=track.ActualWidth();
-    auto result=numeric(control,contact->before,O({{L"type",S(L"position")},{L"position",N((x-contact->offset-8)/std::max(1.,width-16))}}));
+    auto result=numeric(data->localization.get(),control,contact->before,O({{L"type",S(L"position")},{L"position",N((x-contact->offset-8)/std::max(1.,width-16))}}));
     set(contact->index,num(result,L"value"));
 }
 void RangeControl::end(bool cancel){

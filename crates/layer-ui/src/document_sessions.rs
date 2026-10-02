@@ -94,9 +94,9 @@ impl<T> DocumentSessions<T> {
     }
     /// A host such as Web can leave a fresh drawing after closing the final
     /// tab. Its identity must be new, without retaining the discarded owner.
-    pub fn start_empty(&mut self, localization: &Localizer) -> Result<u64, String> {
+    pub fn start_empty(&mut self, localization: &Localizer) -> Result<u64, DocumentSessionError> {
         if !self.tabs.order().is_empty() || !self.parked.is_empty() {
-            return Err("Drawings are still open".into());
+            return Err(DocumentSessionError::DrawingsStillOpen);
         }
         let id = self.tabs.add();
         self.untitled = DocumentTabLabel::untitled(id, localization);
@@ -131,9 +131,9 @@ impl<T> DocumentSessions<T> {
         id: u64,
         outgoing: T,
         tiles: RetainedTiles,
-    ) -> Result<T, (String, T)> {
+    ) -> Result<T, (DocumentSessionError, T)> {
         let Some(next) = self.parked.remove(&id) else {
-            return Err(("Drawing tab is no longer open".into(), outgoing));
+            return Err((DocumentSessionError::TabClosed, outgoing));
         };
         self.park(self.selected(), outgoing, tiles);
         self.tabs.select(id);
@@ -146,14 +146,14 @@ impl<T> DocumentSessions<T> {
         id: u64,
         active: &mut T,
         tiles: RetainedTiles,
-    ) -> Result<(), String> {
+    ) -> Result<(), DocumentSessionError> {
         self.exchange_with(id, tiles, |incoming| std::mem::swap(active, incoming))
     }
     /// Swap a host slot through its owner's representation (for example a
     /// boxed editor), without moving large sessions through collection frames.
-    pub fn exchange_with(&mut self, id:u64, tiles:RetainedTiles, swap:impl FnOnce(&mut T)) -> Result<(),String> {
+    pub fn exchange_with(&mut self, id:u64, tiles:RetainedTiles, swap:impl FnOnce(&mut T)) -> Result<(),DocumentSessionError> {
         let Some(mut incoming) = self.parked.remove(&id) else {
-            return Err("Drawing tab is no longer open".into());
+            return Err(DocumentSessionError::TabClosed);
         };
         swap(&mut incoming.owner);
         self.park(self.selected(), incoming.owner, tiles);
@@ -203,7 +203,7 @@ impl<T> DocumentSessions<T> {
     pub fn storage_completed(&mut self, result: Result<(), String>) {
         self.storage_error = result.err();
     }
-    pub fn admit(&self, active: &RetainedTiles, candidate: &Project) -> Result<(), String> {
+    pub fn admit(&self, active: &RetainedTiles, candidate: &Project) -> Result<(), DocumentSessionError> {
         self.admission(active).admit(candidate)
     }
     /// Freeze admission inputs before asynchronous decoding. Recheck against the
@@ -219,17 +219,87 @@ impl<T> DocumentSessions<T> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentSessionError {
+    DrawingsStillOpen,
+    TabClosed,
+    StorageUnavailable { detail: String },
+    MetadataBudgetExceeded,
+}
+impl DocumentSessionError {
+    pub fn message(&self, localization: &Localizer) -> String {
+        match self {
+            Self::DrawingsStillOpen => localization.text(MessageId::DOCUMENTS_REFUSAL_DRAWINGS_STILL_OPEN).to_string(),
+            Self::TabClosed => localization.text(MessageId::DOCUMENTS_REFUSAL_TAB_CLOSED).to_string(),
+            Self::MetadataBudgetExceeded => localization.text(MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET).to_string(),
+            Self::StorageUnavailable { detail } => {
+                let mut args = FluentArgs::new(); args.set("detail", detail.as_str());
+                localization.format(MessageId::DOCUMENTS_REFUSAL_ADMISSION_STORAGE, &args)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentTransportRefusal {
+    SnapshotChanged,
+    OpenSnapshotChanged,
+    RestoreOperation,
+    RecoveryGpuChanged,
+    SwitchGpuChanged,
+    PaintingUnavailable,
+    RecoveryServiceUnavailable,
+    RecoveryInProgress,
+    SwitchOperation,
+    ChangeInProgress,
+    SwitchDialog,
+    CloseOperation,
+    SelectedChanged,
+    OpenOperation,
+    BatchOpening,
+    OpenDrawingsOperation,
+}
+impl DocumentTransportRefusal {
+    pub fn message(self, localization: &Localizer) -> std::sync::Arc<str> {
+        localization.text(match self {
+            Self::SnapshotChanged => MessageId::DOCUMENTS_REFUSAL_SNAPSHOT_CHANGED,
+            Self::OpenSnapshotChanged => MessageId::DOCUMENTS_REFUSAL_OPEN_SNAPSHOT_CHANGED,
+            Self::RestoreOperation => MessageId::DOCUMENTS_REFUSAL_RESTORE_OPERATION,
+            Self::RecoveryGpuChanged => MessageId::DOCUMENTS_REFUSAL_RECOVERY_GPU_CHANGED,
+            Self::SwitchGpuChanged => MessageId::DOCUMENTS_REFUSAL_SWITCH_GPU_CHANGED,
+            Self::PaintingUnavailable => MessageId::DOCUMENTS_REFUSAL_PAINTING_UNAVAILABLE,
+            Self::RecoveryServiceUnavailable => MessageId::DOCUMENTS_REFUSAL_RECOVERY_SERVICE_UNAVAILABLE,
+            Self::RecoveryInProgress => MessageId::DOCUMENTS_REFUSAL_RECOVERY_IN_PROGRESS,
+
+            Self::SwitchOperation => MessageId::DOCUMENTS_REFUSAL_SWITCH_OPERATION,
+            Self::ChangeInProgress => MessageId::DOCUMENTS_REFUSAL_CHANGE_IN_PROGRESS,
+            Self::SwitchDialog => MessageId::DOCUMENTS_REFUSAL_SWITCH_DIALOG,
+            Self::CloseOperation => MessageId::DOCUMENTS_REFUSAL_CLOSE_OPERATION,
+            Self::SelectedChanged => MessageId::DOCUMENTS_REFUSAL_SELECTED_CHANGED,
+            Self::OpenOperation => MessageId::DOCUMENTS_REFUSAL_OPEN_OPERATION,
+            Self::BatchOpening => MessageId::DOCUMENTS_REFUSAL_BATCH_OPENING,
+            Self::OpenDrawingsOperation => MessageId::DOCUMENTS_REFUSAL_OPEN_DRAWINGS_OPERATION,
+        })
+    }
+}
+pub fn document_storage_retained(localization: &Localizer, detail: &str) -> String {
+    let mut args = FluentArgs::new(); args.set("detail", detail);
+    localization.format(MessageId::DOCUMENTS_STORAGE_RETAINED, &args)
+}
+pub fn document_recovery_unavailable(localization: &Localizer, detail: &str) -> String {
+    let mut args = FluentArgs::new(); args.set("detail", detail);
+    localization.format(MessageId::DOCUMENTS_RECOVERY_UNAVAILABLE, &args)
+}
+
 pub struct DocumentAdmission {
     existing: usize,
     limit: usize,
     storage_error: Option<String>,
 }
 impl DocumentAdmission {
-    pub fn admit(&self, candidate: &Project) -> Result<(), String> {
+    pub fn admit(&self, candidate: &Project) -> Result<(), DocumentSessionError> {
         if let Some(error) = &self.storage_error {
-            return Err(format!(
-                "{error}\nFree disk space or close some tabs before opening another drawing."
-            ));
+            return Err(DocumentSessionError::StorageUnavailable { detail: error.clone() });
         }
         let metadata = layer_core::Editor::new(candidate.document.clone())
             .retained_tiles()
@@ -240,7 +310,7 @@ impl DocumentAdmission {
             .saturating_add(2 * 1024 * 1024)
             > self.limit
         {
-            return Err("Too much drawing data is open. Save and close some tabs before opening another drawing.".into());
+            return Err(DocumentSessionError::MetadataBudgetExceeded);
         }
         Ok(())
     }
@@ -354,9 +424,29 @@ mod tests {
         assert!(
             tabs.admit(&inventory(), &project)
                 .unwrap_err()
+                .message(&english())
                 .contains("Disk full")
         );
         assert_eq!(tabs.exchange(1, "second", inventory()).unwrap(), "first");
         assert_eq!(tabs.order(), &[1, 2]);
+    }
+}
+
+#[cfg(test)]
+mod refusal_copy_tests {
+    use super::*;
+    #[test]
+    fn active_document_refusals_retain_cached_copy_and_literal_detail() {
+        let localization = Localizer::shared(crate::UiLanguage::Japanese);
+        let a = DocumentTransportRefusal::SwitchOperation.message(&localization);
+        let b = DocumentTransportRefusal::SwitchOperation.message(&localization);
+        assert!(std::sync::Arc::ptr_eq(&a, &b));
+        assert_eq!(a.as_ref(), "描画を切り替える前に、現在の操作を終えてください。");
+        assert_eq!(DocumentSessionError::TabClosed.message(&localization), "描画タブはすでに閉じています");
+        let detail = "literal {detail} 🖌";
+        let message = document_storage_retained(&localization, detail);
+        assert!(message.contains(detail));
+        assert!(message.contains("描画はメモリ内に保持されています"));
+        assert!(document_recovery_unavailable(&localization, detail).contains(detail));
     }
 }

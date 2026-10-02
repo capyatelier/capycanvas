@@ -16,6 +16,11 @@ private extension EditorStore {
 
 private struct CanvasSizeForm: View {
     @ObservedObject var store: EditorStore
+    @State private var admissions: [String: (Bool) -> Bool] = [:]
+    private func finish(_ discard: Bool) -> Bool {
+        let results = admissions.values.map { $0(discard) }
+        return results.allSatisfy { $0 }
+    }
     private var view: JSON { store.state["layer_tools"]["canvas_size"] }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -23,11 +28,11 @@ private struct CanvasSizeForm: View {
             ForEach(["width", "height"].indices, id: \.self) { axis in
                 let op = axis == 0 ? "width" : "height"
                 NumberControl(store: store, label: view["labels"][axis].string, value: view["values"][axis].number,
-                    control: view["numeric"][axis], identifier: "canvas-size-" + op, entryWidth: 96) { value, completion in
+                    control: view["numeric"][axis], identifier: "canvas-size-" + op, entryWidth: 96, registerAdmission: { key, admission in admissions[key] = admission }) { value, completion in
                     store.canvasSize(["op": op, "value": value]); completion(nil)
                 }.id(view["numeric"][axis].stableKey)
             }
-            CanvasSizeChoices(store: store, view: view)
+            CanvasSizeChoices(store: store, view: view, finish: finish)
         }.padding(20).frame(width: 380)
     }
 }
@@ -35,8 +40,11 @@ private struct CanvasSizeForm: View {
 private struct CanvasSizeChoices: View {
     let store: EditorStore
     let view: JSON
-    @FocusedValue(\.editorTextCommit) private var commitText
-    private func choose(_ action: [String: Any]) { commitText?(); store.canvasSize(action) }
+    let finish: (Bool) -> Bool
+    private func choose(_ action: [String: Any]) {
+        guard finish(false) else { return }
+        store.canvasSize(action)
+    }
     var body: some View {
         let palette = EditorPalette(source: store.state["palette"])
         Picker("Unit", selection: Binding(get: { view["unit"].string }, set: { choose(["op": "unit", "unit": $0]) })) {
@@ -61,9 +69,9 @@ private struct CanvasSizeChoices: View {
             .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("canvas-size-message")
         HStack {
             Spacer()
-            Button("Cancel") { store.canvasSize(["op": "cancel"]) }.keyboardShortcut(.cancelAction)
+            Button(view["cancel_label"].string) { _ = finish(true); store.canvasSize(["op": "cancel"]) }.keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("canvas-size-cancel")
-            Button("Apply") { choose(["op": "apply"]) }.keyboardShortcut(.defaultAction).disabled(!view["can_apply"].bool)
+            Button(view["apply_label"].string) { choose(["op": "apply"]) }.keyboardShortcut(.defaultAction).disabled(!view["can_apply"].bool)
                 .accessibilityIdentifier("canvas-size-apply")
         }
     }

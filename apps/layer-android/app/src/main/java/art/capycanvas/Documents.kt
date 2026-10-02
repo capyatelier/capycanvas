@@ -281,14 +281,16 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         if (host.snapshot?.optBoolean("brush_ready") == true) host.recovery.start()
     }
     val recovery = host.recovery
+    val recoveryCopy = host.bootstrap!!.getJSONObject("recovery")
+    val common = host.bootstrap!!.getJSONObject("common")
     if (recovery.candidate != null) AlertDialog(
         onDismissRequest = { recovery.dismiss(false) },
-        title = { Text("Recover drawing?") },
-        text = { Text(if (recovery.working) "Preparing drawing…" else "An unsaved drawing from a closed window is available.") },
-        confirmButton = { TextButton({ recovery.recover() }, enabled = !recovery.working, modifier = Modifier.testTag("recover-drawing")) { Text("Recover") } },
+        title = { Text(recoveryCopy.getString("title")) },
+        text = { Text(recoveryCopy.getString(if (recovery.working) "restoring" else "explanation")) },
+        confirmButton = { TextButton({ recovery.recover() }, enabled = !recovery.working, modifier = Modifier.testTag("recover-drawing")) { Text(recoveryCopy.getString("restore")) } },
         dismissButton = { Row {
-            TextButton({ recovery.dismiss(false) }, enabled = !recovery.working) { Text("Keep for Later") }
-            TextButton({ recovery.dismiss(true) }, enabled = !recovery.working) { Text("Discard") }
+            TextButton({ recovery.dismiss(false) }, enabled = !recovery.working) { Text(recoveryCopy.getString("later")) }
+            TextButton({ recovery.dismiss(true) }, enabled = !recovery.working) { Text(recoveryCopy.getString("discard")) }
         } }
     )
     var histogramOpen by remember { mutableStateOf(false) }
@@ -305,7 +307,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 Text(if (controller.publishing) "Writing image…" else if (controller.exportCancelled) "Cancelling…" else if (controller.opening) "Preparing drawing…" else "Preparing image…")
-                TextButton(controller::cancelExport, enabled = !controller.publishing && !controller.exportCancelled) { Text("Cancel") }
+                TextButton(controller::cancelExport, enabled = !controller.publishing && !controller.exportCancelled) { Text(common.getString("cancel")) }
             }
         }
     }
@@ -385,10 +387,10 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             }
             "confirm_close" -> AlertDialog(onDismissRequest = { controller.close(id, "cancel") }, title = { Text(document.getString("title")) },
                 text = { Text(options.getString("unsaved_description")) }, confirmButton = {
-                    TextButton({ controller.close(id, "save") }, Modifier.testTag("document-close-save")) { Text("Save") }
+                    TextButton({ controller.close(id, "save") }, Modifier.testTag("document-close-save")) { Text(common.getString("save")) }
                 }, dismissButton = {
                     Row {
-                        TextButton({ controller.close(id, "cancel") }, Modifier.testTag("document-close-cancel")) { Text("Cancel") }
+                        TextButton({ controller.close(id, "cancel") }, Modifier.testTag("document-close-cancel")) { Text(common.getString("cancel")) }
                         TextButton({ controller.close(id, "discard") }, Modifier.testTag("document-close-discard")) { Text(options.getString("discard_label")) }
                     }
                 })

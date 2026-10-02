@@ -105,11 +105,11 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             target.Children().Append(node);cells.push_back(node);
         }
         if(!entries.Size())for(int i=0;i<5;i++){Border blank,fill;blank.Padding({3,3,3,3});fill.CornerRadius({6,6,6,6});fill.Background(data->tint(L"text",13));blank.Child(fill);
-            tooltip(blank,L"Colors appear here after painting");target.Children().Append(blank);cells.push_back(blank);}
-        auto toggle=button(data,open?L"Collapse color history":L"Expand color history",[weak,open]{if(auto self=weak.lock())self->expand(!open);});
+            tooltip(blank,data->caption(L"palettes",L"history_empty"));target.Children().Append(blank);cells.push_back(blank);}
+        auto toggle=button(data,open?data->caption(L"palettes",L"collapse_history"):data->caption(L"palettes",L"expand_history"),[weak,open]{if(auto self=weak.lock())self->expand(!open);});
         toggle.Height(Cell);toggle.Padding({0,0,0,0});auto chevron=icon(L"chevron-down",data->theme());chevron.RenderTransformOrigin({.5f,.5f});
         if(open){RotateTransform turn;turn.Angle(180);chevron.RenderTransform(turn);}
-        toggle.Content(chevron);tooltip(toggle,open?L"Collapse color history":L"Expand color history");
+        toggle.Content(chevron);tooltip(toggle,open?data->caption(L"palettes",L"collapse_history"):data->caption(L"palettes",L"expand_history"));
         AutomationProperties::SetAutomationId(toggle,open?L"palette-history-collapse":L"palette-history-expand");
         target.Children().Append(toggle);cells.push_back(toggle);
     }
@@ -124,7 +124,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(!show){selector.Focus(FocusState::Programmatic);return;}
         filter();
         Control target=search;
-        if(!typing)for(auto child:list.Children())if(auto row=child.try_as<Button>();row&&AutomationProperties::GetItemStatus(row)==L"Selected")target=row;
+        if(!typing)for(auto child:list.Children())if(auto row=child.try_as<Button>();row&&unbox_value_or<bool>(row.Tag(),false))target=row;
         target.Focus(FocusState::Programmatic);
     }
     void filter(){
@@ -189,7 +189,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(kind==L"new_palette"||kind==L"rename_palette"){
             bool renaming=kind==L"rename_palette";uint64_t id=renaming?uint64_t(num(command,L"id")):0;
             if(renaming&&paletteName(id).empty())return;
-            nameDialog(renaming?L"Rename Palette":L"New Palette",renaming?paletteName(id):L"",[id,renaming](hstring value){
+            nameDialog(renaming?data->caption(L"palettes",L"rename_title"):data->caption(L"palettes",L"new_title"),renaming?paletteName(id):L"",[id,renaming](hstring value){
                 return renaming?O({{L"op",S(L"rename_palette")},{L"id",N(double(id))},{L"name",S(value)}}):O({{L"op",S(L"create_palette")},{L"name",S(value)}});
             });
             return;
@@ -205,9 +205,9 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     }
     fire_and_forget nameDialog(hstring title,hstring value,std::function<J(hstring)> action){
         auto lifetime=shared_from_this();
-        ContentDialog dialog;dialog.XamlRoot(root.XamlRoot());dialog.Title(box_value(title));dialog.PrimaryButtonText(L"Save");dialog.CloseButtonText(L"Cancel");
+        ContentDialog dialog;dialog.XamlRoot(root.XamlRoot());dialog.Title(box_value(title));dialog.PrimaryButtonText(data->common(L"save"));dialog.CloseButtonText(data->common(L"cancel"));
         dialog.DefaultButton(ContentDialogButton::Primary);dialog.RequestedTheme(data->theme()==L"light"?ElementTheme::Light:ElementTheme::Dark);
-        StackPanel content;content.Spacing(8);TextBox input;input.Header(box_value(L"Name"));input.MaxLength(64);input.Text(value);AutomationProperties::SetAutomationId(input,L"palette-name-input");
+        StackPanel content;content.Spacing(8);TextBox input;input.Header(box_value(data->common(L"name")));input.MaxLength(64);input.Text(value);AutomationProperties::SetAutomationId(input,L"palette-name-input");
         TextBlock error;error.Foreground(SolidColorBrush(winrt::Windows::UI::Color{255,0xee,0x55,0x55}));error.TextWrapping(TextWrapping::Wrap);
         content.Children().Append(input);content.Children().Append(error);dialog.Content(content);
         auto weak=weak_from_this();auto generation=std::make_shared<uint64_t>(0);
@@ -233,8 +233,8 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     }
     fire_and_forget removeDialog(uint64_t id){
         auto lifetime=shared_from_this();auto title=paletteName(id);if(title.empty())co_return;
-        ContentDialog dialog;dialog.XamlRoot(root.XamlRoot());dialog.Title(box_value(L"Remove Palette?"));
-        dialog.Content(box_value(L"Remove “"+title+L"” and its saved colors?"));dialog.PrimaryButtonText(L"Remove");dialog.CloseButtonText(L"Cancel");
+        ContentDialog dialog;dialog.XamlRoot(root.XamlRoot());dialog.Title(box_value(data->caption(L"palettes",L"remove_title")));
+        dialog.Content(box_value(data->caption(O({{L"type",S(L"remove_palette")},{L"name",S(title)}}))));dialog.PrimaryButtonText(data->common(L"remove"));dialog.CloseButtonText(data->common(L"cancel"));
         dialog.DefaultButton(ContentDialogButton::Close);dialog.RequestedTheme(data->theme()==L"light"?ElementTheme::Light:ElementTheme::Dark);
         data->popup(true);ContentDialogResult result=ContentDialogResult::None;
         try{result=co_await dialog.ShowAsync();}catch(hresult_error const&){}
@@ -244,7 +244,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     fire_and_forget importFile(){
         auto lifetime=shared_from_this();
         if(!data->windowId)co_return;
-        Pickers::FileOpenPicker open(Microsoft::UI::WindowId{data->windowId});open.CommitButtonText(L"Import palette");
+        Pickers::FileOpenPicker open(Microsoft::UI::WindowId{data->windowId});open.CommitButtonText(data->caption(L"palettes",L"import"));
         for(auto ext:array(files(),L"extensions"))open.FileTypeFilter().Append(L"."+ext.GetString());
         data->popup(true);hstring path;
         try{auto picked=co_await open.PickSingleFileAsync();if(picked)path=picked.Path();}catch(hresult_error const&){}
@@ -258,7 +258,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         auto title=paletteName(id);if(title.empty()||!data->windowId)co_return;
         hstring extension;for(auto v:array(files(),L"formats"))if(str(v.GetObject(),L"format")==format)extension=L"."+str(v.GetObject(),L"extension");
         if(extension.empty())co_return;
-        Pickers::FileSavePicker save(Microsoft::UI::WindowId{data->windowId});save.CommitButtonText(L"Export palette");
+        Pickers::FileSavePicker save(Microsoft::UI::WindowId{data->windowId});save.CommitButtonText(data->caption(L"palettes",L"export"));
         save.DefaultFileExtension(extension);save.SuggestedFileName(title);
         save.FileTypeChoices().Insert(label.empty()?extension:label,single_threaded_vector<hstring>({extension}));
         data->popup(true);hstring path;
@@ -319,7 +319,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         auto patch=paint();fillPatch(patch,array(source.swatch,L"rgba"));ghost.Child(patch);ghost.IsHitTestVisible(false);
         ThemeShadow shadow;ghost.Shadow(shadow);ghost.Translation({0,0,16});
         d.ghost=Primitives::Popup();d.ghost.XamlRoot(root.XamlRoot());d.ghost.Child(ghost);d.ghost.IsHitTestVisible(false);d.ghost.IsOpen(true);
-        source.node.Opacity(0);AutomationProperties::SetItemStatus(root,L"Dragging");
+        source.node.Opacity(0);AutomationProperties::SetItemStatus(root,data->caption(L"header",L"dragging"));
         auto weak=weak_from_this();scrollCarry=0;
         scrollTimer=root.DispatcherQueue().CreateTimer();scrollTimer.Interval(std::chrono::milliseconds(16));
         scrollTimer.Tick([weak](auto&&,auto&&){if(auto self=weak.lock())self->autoscroll();});scrollTimer.Start();
@@ -378,7 +378,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(d.started){
             if(d.ghost)d.ghost.IsOpen(false);
             for(auto& [id,t]:tiles){if(t.animation){t.node.StopAnimation(t.animation);t.animation=nullptr;}t.node.Translation({0,0,0});t.node.Opacity(1);}
-            AutomationProperties::SetItemStatus(root,L"Ready");AutomationProperties::SetItemStatus(grid,L"");
+            AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));AutomationProperties::SetItemStatus(grid,L"");
         }
         if(!cancel&&d.started&&d.action.Size()){library(d.action);if(tiles.contains(d.id))tiles.at(d.id).node.Focus(FocusState::Programmatic);}
     }
@@ -392,10 +392,10 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     void sync(){
         std::optional<J> s=selected?swatch(*selected):std::nullopt;
         for(auto& [id,t]:tiles){bool on=selected==id;t.node.BorderBrush(on?accent(data):clear());t.node.BorderThickness(on?Thickness{2,2,2,2}:Thickness{0,0,0,0});
-            AutomationProperties::SetItemStatus(t.node,on?L"Selected":L"");}
+            AutomationProperties::SetItemStatus(t.node,on?data->caption(L"search",L"selected"):L"");}
         auto label=s?str(*s,L"name"):str(view(),L"color_name");
         if(nameLabel.Text()!=label)nameLabel.Text(label);
-        tooltip(name,label+L" · Click to rename");AutomationProperties::SetName(name,label);
+        tooltip(name,data->caption(L"palettes",L"rename_help"));AutomationProperties::SetName(name,label);
     }
     void choices(){
         list.Children().Clear();auto weak=weak_from_this();
@@ -413,8 +413,8 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             StackPanel cells;cells.Orientation(Orientation::Horizontal);cells.CornerRadius({3,3,3,3});cells.VerticalAlignment(VerticalAlignment::Center);
             for(auto rgba:array(palette,L"preview")){Border cell;cell.Width(12);cell.Height(18);cell.Background(SolidColorBrush(rgbaColor(rgba.GetArray())));cells.Children().Append(cell);}
             Grid::SetColumn(cells,1);content.Children().Append(cells);row.Content(content);
-            bool active=flag(palette,L"active");row.Background(active?selectionBrush():clear());
-            AutomationProperties::SetName(row,title);AutomationProperties::SetItemStatus(row,active?L"Selected":L"");AutomationProperties::SetAutomationId(row,L"palette-choice-"+to_hstring(id));
+            bool active=flag(palette,L"active");row.Background(active?selectionBrush():clear());row.Tag(box_value(active));
+            AutomationProperties::SetName(row,title);AutomationProperties::SetItemStatus(row,active?data->caption(L"search",L"selected"):L"");AutomationProperties::SetAutomationId(row,L"palette-choice-"+to_hstring(id));
             tooltip(row,title);
             row.ContextRequested([weak,id,title](winrt::Windows::Foundation::IInspectable const& sender,ContextRequestedEventArgs const& e){e.Handled(true);
                 if(auto self=weak.lock())self->menu(O({{L"kind",S(L"palette")},{L"id",N(double(id))}}),sender.as<FrameworkElement>(),title);});
@@ -448,7 +448,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(nextHistory!=historyKey){historyKey=nextHistory;historyTiles(history,historyCells,false);historyTiles(expanded,expandedCells,true);}
         if(nextChoices!=choicesKey){choicesKey=nextChoices;choices();}
         if(selectorLabel.Text()!=str(v,L"name"))selectorLabel.Text(str(v,L"name"));
-        tooltip(selector,L"Choose a palette · "+str(v,L"name"));AutomationProperties::SetName(selector,L"Choose a palette");
+        auto nextName=str(v,L"name");if(unbox_value_or<hstring>(selector.Tag(),L"\0")!=nextName){selector.Tag(box_value(nextName));tooltip(selector,data->caption(O({{L"type",S(L"choose_palette")},{L"name",S(nextName)}})));}AutomationProperties::SetName(selector,data->caption(L"palettes",L"choose"));
         if(detail.Text()!=str(v,L"color_detail"))detail.Text(str(v,L"color_detail"));
         sync();arrange();
         auto status=files();auto generation=uint64_t(num(status,L"generation"));
@@ -461,6 +461,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(key==viewKey)return;viewKey=key;render();
     }
     void keys(KeyRoutedEventArgs const& e){
+        if(composingKey(e))return;
         using K=winrt::Windows::System::VirtualKey;auto key=e.Key();
         if(key==K::Escape){
             if(drag){finish(true);}else if(editing)cancelName();else if(chooser.Visibility()==Visibility::Visible)browse(false);else if(expanded.Visibility()==Visibility::Visible)expand(false);else return;
@@ -476,35 +477,35 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     }
     void init(){
         auto weak=weak_from_this();
-        root.Padding({8,6,8,6});root.RowSpacing(6);root.MinWidth(0);root.Tag(O({{L"native_keys",B(true)}}));AutomationProperties::SetAutomationId(root,L"palettes-panel");AutomationProperties::SetName(root,L"Palettes");
+        root.Padding({8,6,8,6});root.RowSpacing(6);root.MinWidth(0);root.Tag(O({{L"native_keys",B(true)}}));AutomationProperties::SetAutomationId(root,L"palettes-panel");AutomationProperties::SetName(root,data->caption(L"palettes",L"title"));
         for(auto star:{true,false,false,false}){RowDefinition row;row.Height(star?GridLength{1,GridUnitType::Star}:GridLength{1,GridUnitType::Auto});root.RowDefinitions().Append(row);}
         auto divider=[&]{Border line;line.Height(1);line.Background(data->tint(L"text",38));return line;};
-        normal.Spacing(6);history.Height(Cell);AutomationProperties::SetAutomationId(history,L"palette-history");AutomationProperties::SetName(history,L"Recent colors");
-        tooltip(history,L"Recent colors — added only when used in artwork");
+        normal.Spacing(6);history.Height(Cell);AutomationProperties::SetAutomationId(history,L"palette-history");AutomationProperties::SetName(history,data->caption(L"palettes",L"recent"));
+        tooltip(history,data->caption(L"palettes",L"history_help"));
         normal.Children().Append(history);normal.Children().Append(divider());
         scroll.MinHeight(84);scroll.MaxHeight(172);scroll.HorizontalScrollMode(ScrollMode::Disabled);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
-        scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Hidden);scroll.Content(grid);AutomationProperties::SetAutomationId(grid,L"palette-swatches");AutomationProperties::SetName(grid,L"Saved colors");
+        scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Hidden);scroll.Content(grid);AutomationProperties::SetAutomationId(grid,L"palette-swatches");AutomationProperties::SetName(grid,data->caption(L"palettes",L"saved"));
         normal.Children().Append(scroll);body.Children().Append(normal);body.Children().Append(overlays);
         expanded.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(expanded,L"palette-history-expanded");overlays.Children().Append(expanded);
         chooser.RowSpacing(6);chooser.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(chooser,L"palette-chooser");
         for(auto star:{false,true}){RowDefinition row;row.Height(star?GridLength{1,GridUnitType::Star}:GridLength{1,GridUnitType::Auto});chooser.RowDefinitions().Append(row);}
         Grid searchRow;searchRow.ColumnSpacing(4);ColumnDefinition field;field.Width({1,GridUnitType::Star});searchRow.ColumnDefinitions().Append(field);
         ColumnDefinition square;square.Width({24,GridUnitType::Pixel});searchRow.ColumnDefinitions().Append(square);
-        search.PlaceholderText(L"Find a palette");search.Height(24);search.MinHeight(24);search.Padding({6,2,6,2});search.Background(data->brush(L"input"));search.BorderThickness({0,0,0,0});
-        search.FontSize(data->textSize());AutomationProperties::SetName(search,L"Find a palette");AutomationProperties::SetAutomationId(search,L"palette-search");
+        search.PlaceholderText(data->caption(L"palettes",L"find"));search.Height(24);search.MinHeight(24);search.Padding({6,2,6,2});search.Background(data->brush(L"input"));search.BorderThickness({0,0,0,0});
+        search.FontSize(data->textSize());AutomationProperties::SetName(search,data->caption(L"palettes",L"find"));AutomationProperties::SetAutomationId(search,L"palette-search");
         search.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->filter();});searchRow.Children().Append(search);
-        more=button(data,L"New or import palette",[]{});more.Width(24);more.Height(24);more.Padding({0,0,0,0});more.Content(icon(L"plus",data->theme()));
-        tooltip(more,L"New or import palette");AutomationProperties::SetAutomationId(more,L"palette-library-add");
-        more.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->menu(O({{L"kind",S(L"library")}}),self->more,L"Palettes");});
+        more=button(data,data->caption(L"palettes",L"new_import"),[]{});more.Width(24);more.Height(24);more.Padding({0,0,0,0});more.Content(icon(L"plus",data->theme()));
+        tooltip(more,data->caption(L"palettes",L"new_import"));AutomationProperties::SetAutomationId(more,L"palette-library-add");
+        more.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->menu(O({{L"kind",S(L"library")}}),self->more,self->data->caption(L"palettes",L"title"));});
         Grid::SetColumn(more,1);searchRow.Children().Append(more);chooser.Children().Append(searchRow);
         Grid resultsHost;list.Spacing(0);results.Content(list);results.HorizontalScrollMode(ScrollMode::Disabled);results.VerticalScrollBarVisibility(ScrollBarVisibility::Hidden);
-        AutomationProperties::SetAutomationId(list,L"palette-list");AutomationProperties::SetName(list,L"Palettes");resultsHost.Children().Append(results);
-        empty=label(data,L"No matching palettes");empty.Opacity(.55);empty.HorizontalAlignment(HorizontalAlignment::Center);empty.VerticalAlignment(VerticalAlignment::Center);empty.IsHitTestVisible(false);
+        AutomationProperties::SetAutomationId(list,L"palette-list");AutomationProperties::SetName(list,data->caption(L"palettes",L"title"));resultsHost.Children().Append(results);
+        empty=label(data,data->caption(L"palettes",L"no_matches"));empty.Opacity(.55);empty.HorizontalAlignment(HorizontalAlignment::Center);empty.VerticalAlignment(VerticalAlignment::Center);empty.IsHitTestVisible(false);
         empty.Visibility(Visibility::Collapsed);resultsHost.Children().Append(empty);Grid::SetRow(resultsHost,1);chooser.Children().Append(resultsHost);
         overlays.Children().Append(chooser);root.Children().Append(body);
         auto footerLine=divider();Grid::SetRow(footerLine,1);root.Children().Append(footerLine);
         footer.ColumnSpacing(4);ColumnDefinition left;left.Width({1,GridUnitType::Auto});footer.ColumnDefinitions().Append(left);ColumnDefinition right;right.Width({1,GridUnitType::Star});footer.ColumnDefinitions().Append(right);
-        selector=button(data,L"Choose a palette",[]{});selector.Height(24);selector.MinHeight(24);selector.Padding({4,0,4,0});selector.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
+        selector=button(data,data->caption(L"palettes",L"choose"),[]{});selector.Height(24);selector.MinHeight(24);selector.Padding({4,0,4,0});selector.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());
         StackPanel selectorContent;selectorContent.Orientation(Orientation::Horizontal);selectorContent.Spacing(4);selectorLabel=label(data,L"");selectorLabel.TextTrimming(TextTrimming::CharacterEllipsis);
         selectorLabel.VerticalAlignment(VerticalAlignment::Center);selectorContent.Children().Append(selectorLabel);auto up=icon(L"chevron-down",data->theme(),12);up.RenderTransformOrigin({.5f,.5f});
         RotateTransform flip;flip.Angle(180);up.RenderTransform(flip);up.VerticalAlignment(VerticalAlignment::Center);selectorContent.Children().Append(up);selector.Content(selectorContent);
@@ -514,22 +515,22 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         selector.Click([weak](auto&&,auto&&){if(auto self=weak.lock()){bool touch=self->openerTouch;self->openerTouch=false;self->browse(self->chooser.Visibility()!=Visibility::Visible,!touch);}});
         footer.Children().Append(selector);
         info.HorizontalAlignment(HorizontalAlignment::Right);info.MinWidth(0);
-        name=button(data,L"Color name",[weak]{if(auto self=weak.lock())self->editName();});name.Height(24);name.MinHeight(24);name.Padding({2,0,2,0});
+        name=button(data,data->caption(L"palettes",L"name"),[weak]{if(auto self=weak.lock())self->editName();});name.Height(24);name.MinHeight(24);name.Padding({2,0,2,0});
         name.HorizontalAlignment(HorizontalAlignment::Right);name.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());nameLabel=label(data,L"");nameLabel.TextTrimming(TextTrimming::CharacterEllipsis);name.Content(nameLabel);
         AutomationProperties::SetAutomationId(name,L"palette-name");info.Children().Append(name);
         editor.MaxLength(64);editor.Height(24);editor.MinHeight(24);editor.Padding({6,2,6,2});editor.TextAlignment(TextAlignment::Right);editor.Background(data->brush(L"input"));editor.BorderThickness({0,0,0,0});
-        editor.FontSize(data->textSize());editor.Visibility(Visibility::Collapsed);AutomationProperties::SetName(editor,L"Color name");AutomationProperties::SetAutomationId(editor,L"palette-name-editor");
-        editor.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==winrt::Windows::System::VirtualKey::Enter)if(auto self=weak.lock()){e.Handled(true);self->commitName();if(!self->editing)self->name.Focus(FocusState::Programmatic);}});
+        editor.FontSize(data->textSize());editor.Visibility(Visibility::Collapsed);AutomationProperties::SetName(editor,data->caption(L"palettes",L"name"));AutomationProperties::SetAutomationId(editor,L"palette-name-editor");
+        editor.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(composingKey(e))return;if(e.Key()==winrt::Windows::System::VirtualKey::Enter)if(auto self=weak.lock()){e.Handled(true);self->commitName();if(!self->editing)self->name.Focus(FocusState::Programmatic);}});
         editor.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->editing&&self->editor.Visibility()==Visibility::Visible)self->commitName();});
         info.Children().Append(editor);
         detail=label(data,L"");detail.FontSize(data->textSize()*.9);detail.Opacity(.55);detail.HorizontalAlignment(HorizontalAlignment::Right);detail.Margin({0,0,2,0});
-        tooltip(detail,L"sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity");
+        tooltip(detail,data->caption(L"palettes",L"hex_help"));
         AutomationProperties::SetAutomationId(detail,L"palette-detail");info.Children().Append(detail);
         Grid::SetColumn(info,1);footer.Children().Append(info);Grid::SetRow(footer,2);root.Children().Append(footer);
         note.TextWrapping(TextWrapping::Wrap);note.FontSize(data->textSize());note.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(note,L"palette-message");
         AutomationProperties::SetLiveSetting(note,Microsoft::UI::Xaml::Automation::Peers::AutomationLiveSetting::Polite);Grid::SetRow(note,3);root.Children().Append(note);
-        add=tileButton(L"Add current color to this palette");add.Background(data->brush(L"input"));add.Padding({0,0,0,0});add.Content(icon(L"plus",data->theme()));
-        tooltip(add,L"Add current color to this palette");AutomationProperties::SetAutomationId(add,L"palette-add");
+        add=tileButton(data->caption(L"palettes",L"add_current"));add.Background(data->brush(L"input"));add.Padding({0,0,0,0});add.Content(icon(L"plus",data->theme()));
+        tooltip(add,data->caption(L"palettes",L"add_current"));AutomationProperties::SetAutomationId(add,L"palette-add");
         add.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->addColor();});grid.Children().Append(add);
         scroll.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
         body.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock()){

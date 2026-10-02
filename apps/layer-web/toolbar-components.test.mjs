@@ -81,6 +81,16 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
 
   // Real handle drags must expose the compact targets before committing them.
   const panel = await evaluate("document.querySelector('[data-toolbar-component=brush_size_slider]').closest('[data-panel]').dataset.panel");
+  const originalTitle=await evaluate(`layerApp.app.panel_view(${JSON.stringify(panel)}).title`);
+  await evaluate(`window.retainedToolbarGrip=document.querySelector('.toolbar-controls[data-panel="${panel}"] > .panel-grip')`);
+  const renamedTitle='名称 {ink} toolbar';
+  await send({type:'customize',action:{type:'rename_toolbar',panel}});
+  await send({type:'customize',action:{type:'toolbar_name',name:renamedTitle}});
+  await send({type:'customize',action:{type:'confirm_toolbar'}});
+  assert.deepEqual(await evaluate(`(()=>{const grip=document.querySelector('.toolbar-controls[data-panel="${panel}"] > .panel-grip');return [grip===retainedToolbarGrip,grip.getAttribute('aria-label')];})()`),[true,'Move '+renamedTitle],'renaming preserves the toolbar grip and refreshes its literal-name caption');
+  await send({type:'customize',action:{type:'rename_toolbar',panel}});
+  await send({type:'customize',action:{type:'toolbar_name',name:originalTitle}});
+  await send({type:'customize',action:{type:'confirm_toolbar'}});
   const [w, h, top] = await evaluate('[innerWidth,innerHeight,document.querySelector("#header").getBoundingClientRect().bottom]');
   for (const device of ['mouse', 'touch', 'pen']) for (const edge of ['left', 'right', 'top', 'bottom']) for (const alignment of ['start', 'center', 'end']) {
     await send({ type: 'move_panel', panel, target: { kind: 'float', position: [w / 2 - 120, h / 2 - 120] } });
@@ -159,6 +169,19 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   await send({ type: 'customize', action: { type: 'set_tile_style', panel: 'commands', style: 'small' } });
   await click('[data-toolbar-setting=size] .number-value', 'touch');
   assert.ok(await evaluate('!document.querySelector("[data-toolbar-setting=size] .number-entry").hidden'));
+  for (const preedit of [false, true]) {
+    const before = await evaluate('layerApp.state().brush.diameter');
+    const raw = preedit ? '１２＋３' : '１２＋';
+    await evaluate(`(()=>{const root=document.querySelector('[data-toolbar-setting=size] .number-control');
+      root.valueButton.click();root.entry.value=${JSON.stringify(raw)};root.entry.dispatchEvent(new Event('input',{bubbles:true}));
+      if(${preedit})root.entry.dispatchEvent(new CompositionEvent('compositionstart',{data:root.entry.value,bubbles:true}));
+      root.valueButton.dispatchEvent(new WheelEvent('wheel',{deltaY:-1,bubbles:true,cancelable:true}));
+      root.valueButton.dispatchEvent(new PointerEvent('pointerdown',{pointerId:989,pointerType:'pen',button:0,clientY:100,bubbles:true,cancelable:true}));
+      root.valueButton.dispatchEvent(new PointerEvent('pointermove',{pointerId:989,pointerType:'pen',clientY:50,bubbles:true,cancelable:true}));
+    })()`);
+    assert.deepEqual(await evaluate(`(()=>{const root=document.querySelector('[data-toolbar-setting=size] .number-control');return [layerApp.state().brush.diameter,root.entry.value,root.entry.hidden];})()`),[before,raw,false],'toolbar wheel and scrub preserve rejected or composing drafts');
+    await evaluate(`(()=>{const root=document.querySelector('[data-toolbar-setting=size] .number-control');if(${preedit})root.entry.dispatchEvent(new CompositionEvent('compositionend',{data:root.entry.value,bubbles:true}));root.cancelEditing();})()`);
+  }
   await click('#canvas', 'touch');
   assert.ok(await evaluate('document.querySelector("[data-toolbar-setting=size] .number-entry").hidden'));
   await click('[data-toolbar-component=tool_options] > .toolbar-more');

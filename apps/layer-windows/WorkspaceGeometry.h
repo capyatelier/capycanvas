@@ -70,10 +70,10 @@ inline CornerRadius facingCorners(double r,hstring const& direction){
     else if(direction==L"left")c.TopLeft=c.BottomLeft=0;else if(direction==L"right")c.TopRight=c.BottomRight=0;
     return c;
 }
-inline std::array<bool,4> sourceCorners(J const& source,J const& container){
+inline std::array<bool,4> sourceCorners(std::shared_ptr<WorkspaceData> const& data,J const& source,J const& container){
     std::array<bool,4> result{};
     auto request=O({{L"type",S(L"drawer_source_corners")},{L"anchor",object(source,L"bounds")},{L"direction",S(str(source,L"direction"))},{L"container",container}});
-    std::unique_ptr<char,decltype(&capy_string_free)> reply(capy_toolbar_ui(to_string(request.Stringify()).c_str()),capy_string_free);
+    std::unique_ptr<char,decltype(&capy_string_free)> reply(capy_toolbar_ui(data->localization.get(),to_string(request.Stringify()).c_str()),capy_string_free);
     if(!reply)return result;auto value=JsonValue::Parse(to_hstring(reply.get()));if(value.ValueType()!=JsonValueType::Array)return result;
     auto list=value.GetArray();for(uint32_t i=0;i<4&&i<list.Size();++i)result[i]=list.GetBooleanAt(i);
     return result;
@@ -82,7 +82,7 @@ struct AutomaticTab{Button tab{nullptr};TextBlock name{nullptr};std::wstring key
 inline bool automaticTabs(std::shared_ptr<WorkspaceData> const& data,double group){
     return str(object(data->model,L"windows_tab_styles"),to_hstring(uint32_t(group)).c_str())==L"automatic";
 }
-inline void fitAutomaticTabs(std::vector<AutomaticTab> const& tabs,double available,std::map<std::wstring,double>& widths){
+inline void fitAutomaticTabs(std::shared_ptr<WorkspaceData> const& data,std::vector<AutomaticTab> const& tabs,double available,std::map<std::wstring,double>& widths){
     if(tabs.empty()||available<=0)return;
     A pairs;
     for(auto const& t:tabs){
@@ -95,7 +95,7 @@ inline void fitAutomaticTabs(std::vector<AutomaticTab> const& tabs,double availa
         A pair;pair.Append(N(found->second));pair.Append(N(36));pairs.Append(pair);
     }
     auto request=O({{L"type",S(L"automatic_tab_names")},{L"available",N(available)},{L"widths",pairs}});
-    std::unique_ptr<char,decltype(&capy_string_free)> reply(capy_toolbar_ui(to_string(request.Stringify()).c_str()),capy_string_free);
+    std::unique_ptr<char,decltype(&capy_string_free)> reply(capy_toolbar_ui(data->localization.get(),to_string(request.Stringify()).c_str()),capy_string_free);
     if(!reply)return;auto names=JsonValue::Parse(to_hstring(reply.get()));if(names.ValueType()!=JsonValueType::Array)return;
     auto list=names.GetArray();
     for(uint32_t i=0;i<tabs.size()&&i<list.Size();++i)tabs[i].name.Visibility(list.GetBooleanAt(i)?Visibility::Visible:Visibility::Collapsed);

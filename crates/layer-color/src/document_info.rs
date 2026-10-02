@@ -46,64 +46,45 @@ impl DocumentInfo {
                 .collect(),
         }
     }
-    pub fn describe(&self) -> Result<Vec<(String, String)>, String> {
-        let mut rows = vec![
-            (
-                "Canvas size".into(),
-                format!("{} × {} pixels", self.extent[0], self.extent[1]),
-            ),
-            ("Working color space".into(), self.color.space.name().into()),
-            (
-                "Bit depth".into(),
-                self.color.depth.label().into(),
-            ),
-            ("Blending".into(), self.blend_space.label().into()),
-            (
-                "Resolution metadata".into(),
-                self.resolution.map_or_else(
-                    || "Not specified".into(),
-                    |r| {
-                        let [x, y] = r.pixels_per_inch();
-                        format!("{x:.2} × {y:.2} pixels per inch")
-                    },
-                ),
-            ),
-        ];
-        if self.color.depth.is_float() { rows.push(("HDR reference white".into(), format!("203 cd/m² · linear RGB · finite magnitude ≤ {}", self.color.depth.max_linear()))); }
-        for source in &self.sources {
-            let i = &source.interpretation;
-            let profile = crate::profile_description(&i.profile)?;
-            let channels = match i.channels {
-                layer_core::color::source::SourceChannels::Rgb
-                | layer_core::color::source::SourceChannels::Rgba => "RGB",
-                layer_core::color::source::SourceChannels::Gray
-                | layer_core::color::source::SourceChannels::GrayAlpha => "Grayscale",
-                layer_core::color::source::SourceChannels::Cmyk => "CMYK",
-            };
-            let tag = if i.profile_assumed {
-                "Profile assumed"
-            } else {
-                "Source profile"
-            };
-            let retained = if source.kind == SourceKind::Rasterized {
-                "Rasterized in document coordinates."
-            } else if matches!(i.profile, ColorProfile::Icc(_)) {
-                "Original samples and embedded ICC retained."
-            } else {
-                "Original samples and color interpretation retained."
-            };
-            rows.push((
-                source.name.clone(),
-                format!(
-                    "{} × {} px · {}-bit {channels}\n{tag}: {profile}\n{retained}",
-                    source.extent[0],
-                    source.extent[1],
-                    i.depth.bits()
-                ),
-            ));
-        }
-        Ok(rows)
+    pub fn inspect(&self) -> Result<InspectedDocumentInfo, String> {
+        Ok(InspectedDocumentInfo {
+            extent: self.extent,
+            color: self.color,
+            blend_space: self.blend_space,
+            resolution: self.resolution,
+            sources: self.sources.iter().map(|source| Ok(InspectedSourceInfo {
+                name: source.name.clone(),
+                extent: source.extent,
+                kind: source.kind,
+                channels: source.interpretation.channels,
+                bits: source.interpretation.depth.bits(),
+                profile_description: crate::profile_description_optional(&source.interpretation.profile)?,
+                profile_assumed: source.interpretation.profile_assumed,
+                embedded: matches!(source.interpretation.profile, ColorProfile::Icc(_)),
+            })).collect::<Result<Vec<_>, String>>()?,
+        })
     }
+
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InspectedDocumentInfo {
+    pub extent: [u32; 2],
+    pub color: DocumentColor,
+    pub blend_space: BlendSpace,
+    pub resolution: Option<ImageResolution>,
+    pub sources: Vec<InspectedSourceInfo>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct InspectedSourceInfo {
+    pub name: String,
+    pub extent: [u32; 2],
+    pub kind: SourceKind,
+    pub channels: layer_core::color::source::SourceChannels,
+    pub bits: u8,
+    pub profile_description: Option<String>,
+    pub profile_assumed: bool,
+    pub embedded: bool,
 }
 
 #[cfg(test)]
@@ -112,12 +93,8 @@ mod tests {
     #[test]
     fn properties_show_how_layers_blend() {
         let mut document = Document::new("Properties", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let rows = |document: &Document| DocumentInfo::capture(document).describe().unwrap();
-        assert!(rows(&document).contains(&("Blending".into(), "Linear light".into())));
+        assert_eq!(DocumentInfo::capture(&document).inspect().unwrap().blend_space, BlendSpace::Linear);
         document.blend_space = BlendSpace::Perceptual;
-        let described = rows(&document);
-        let position = |label: &str| described.iter().position(|(l, _)| l == label).unwrap();
-        assert_eq!(described[position("Blending")].1, "Perceptual");
-        assert_eq!(position("Blending"), position("Bit depth") + 1);
+        assert_eq!(DocumentInfo::capture(&document).inspect().unwrap().blend_space, BlendSpace::Perceptual);
     }
 }

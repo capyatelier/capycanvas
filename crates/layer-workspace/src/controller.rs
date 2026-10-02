@@ -248,14 +248,8 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     startup_error: Option<StoreError>,
 }
 impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
-    pub fn new(store: S, platform: Platform, now: u64) -> Self {
-        Self::new_localized(store, platform, now, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
-    }
     pub fn new_localized(store: S, platform: Platform, now: u64, localization: Arc<layer_ui::Localizer>) -> Self {
         Self::new_owned_localized(store, platform, Owner::fresh(), now, localization)
-    }
-    pub fn new_owned(store: S, platform: Platform, owner: Owner, now: u64) -> Self {
-        Self::new_owned_localized(store, platform, owner, now, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
     }
     pub fn localization(&self) -> &Arc<layer_ui::Localizer> {
         &self.localization
@@ -400,12 +394,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         match self.startup? {
             Startup::Stored => None,
             Startup::Replaced => {
-                Some("Saved workspaces couldn't be opened, so they were reset.".into())
+                Some(self.localization.text(layer_ui::MessageId::WORKSPACE_STORAGE_RESET_NOTICE).to_string())
             }
-            Startup::InMemory => Some(format!(
-                "Workspace changes in this window won't be saved: {}",
-                self.startup_error.as_ref()?
-            )),
+            Startup::InMemory => Some(message(&self.localization, layer_ui::MessageId::WORKSPACE_STORAGE_VOLATILE_NOTICE, &[("detail", self.startup_error.as_ref()?.localized_message(&self.localization))])),
         }
     }
     pub fn observe<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) {
@@ -504,7 +495,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     let item = items.iter().find(|item| item.id == id)?;
                     Some(WorkspaceRow {
                         current: active.as_ref() == Some(&id),
-                        title: m.display_name(&item.id, &item.metadata),
+                        title: m.summary_display_name(&item),
                         subtitle: String::new(),
                         actions: Vec::new(),
                         id,
@@ -659,7 +650,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         };
         if page == ManagerPage::ThisWorkspace {
             let panel = serde_json::from_str(&id)
-                .map_err(|e| StoreError::invalid(format!("Invalid toolbar identity: {e}")))?;
+                .map_err(|error| {
+                    eprintln!("Invalid toolbar identity: {error}");
+                    let mut reason = StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InvalidToolbarIdentity); reason.message = error.to_string(); reason
+                })?;
             self.view.details = Some(self.manager.toolbar_details(panel, true)?);
             return Ok(change);
         }
@@ -679,7 +673,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         .and_then(|c| c.history.revisions.get(&id).map(|r| r.layout.clone()))
                         .map(|layout| (None, Some(layout)))
                         .ok_or_else(|| {
-                            StoreError::invalid("This layout version is no longer retained.")
+                            StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisLayoutVersionIsNoLongerRetained)
                         });
                 }
                 let stored = match m.current_record().filter(|s| s.entity.id == id) {
@@ -719,7 +713,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         ) && (self.view.ready || !matches!(input, WorkspaceInput::Close))
         {
             self.view.error = if matches!(input, WorkspaceInput::Cancel | WorkspaceInput::Dismiss) {
-                self.manager.error().map(|error| error.to_string())
+                self.manager.error().map(|error| error.localized_message(&self.localization))
             } else {
                 None
             };
@@ -729,7 +723,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         match input {
             WorkspaceInput::EditSwitcher { edit } => {
                 if !self.view.ready || self.terminating {
-                    return Err(StoreError::invalid("Open a workspace before editing its switcher."));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::OpenAWorkspaceBeforeEditingItsSwitcher));
                 }
                 self.view.switcher_error = None;
                 self.preference_edits.push_back(edit);
@@ -797,7 +791,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             }
             WorkspaceInput::DiscardClose => {
                 if !self.terminating || self.view.closed {
-                    return Err(StoreError::invalid("Close the window first."));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::CloseTheWindowFirst));
                 }
                 self.discard = true;
                 self.close_after_task = true;
@@ -831,9 +825,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         self.view.busy = true;
                         return Ok(change);
                     }
-                    return Err(StoreError::invalid(
-                        "Wait for the current workspace operation to finish.",
-                    ));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::WaitForTheCurrentWorkspaceOperationToFinish));
                 }
                 self.observe(session, now);
                 change = match input {
@@ -881,7 +873,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             .and_then(|e| e.capture().ok())
             .map(|c| c.history.current);
         if page == ManagerPage::History && history.is_none() {
-            return Err(StoreError::invalid("Open a workspace first."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::OpenAWorkspaceFirst));
         }
         self.start_transition(session)?;
         let change = self.stop_preview(session);
@@ -913,9 +905,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         let source = match &action {
             ManagerAction::Reset(id) => {
                 if self.manager.active_id().as_ref() != Some(id) {
-                    return Err(StoreError::invalid(
-                        "Switch to this workspace before restoring its layout.",
-                    ));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::SwitchToThisWorkspaceBeforeRestoringItsLayout));
                 }
                 current.as_ref().map(|e| e.metadata.clone())
             }
@@ -962,14 +952,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         let (Some(action), Some(prompt)) =
             (self.view.prompt_action.clone(), self.view.prompt.clone())
         else {
-            return Err(StoreError::invalid("Open a workspace dialog first."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::OpenAWorkspaceDialogFirst));
         };
         if prompt.name.is_some() {
             validate_name(&name)?;
         }
         let choice = choice.or(prompt.selected).unwrap_or_default();
         if !prompt.choices.is_empty() && !prompt.choices.iter().any(|c| c.id == choice) {
-            return Err(StoreError::invalid("Choose one of the listed options."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseOneOfTheListedOptions));
         }
         let mut change = self.stop_preview(session);
         self.start_transition(session)?;
@@ -1026,13 +1016,13 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }
                 ManagerAction::UpdateToolbar(id) => {
                     let panel = serde_json::from_str(&choice)
-                        .map_err(|_| StoreError::invalid("Choose a toolbar."))?;
+                        .map_err(|_| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAToolbar))?;
                     m.update_toolbar_from(&id, panel, now).await?;
                     Outcome::Done
                 }
                 ManagerAction::ReplaceToolbar(panel) => {
                     if choice.is_empty() {
-                        return Err(StoreError::invalid("Choose a saved toolbar."));
+                        return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseASavedToolbar));
                     }
                     m.flush().await?;
                     let config = m.toolbar_config(Some(&choice), None).await?;
@@ -1050,9 +1040,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     }
                 }
                 _ => {
-                    return Err(StoreError::invalid(
-                        "This action does not use a workspace form.",
-                    ));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisActionDoesNotUseAWorkspaceForm));
                 }
             })
         });
@@ -1198,7 +1186,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 self.run(async move {
                     let active = m
                         .active_id()
-                        .ok_or_else(|| StoreError::invalid("Open a workspace."))?;
+                        .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::OpenAWorkspace))?;
                     Ok(Outcome::adopt(
                         m.change_layout(&active, Some(&id), now).await?,
                     ))
@@ -1270,7 +1258,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             WorkspaceCommand::ResetBrushes => form(ManagerAction::ResetBrushes),
             WorkspaceCommand::ResetLayout => {
                 form(ManagerAction::Reset(self.manager.active_id().ok_or_else(
-                    || StoreError::invalid("Open a workspace first."),
+                    || StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::OpenAWorkspaceFirst),
                 )?))
             }
             WorkspaceCommand::Switch { id } => Some(WorkspaceInput::Switch { id }),
@@ -1325,7 +1313,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     None => Ok(UiChange::default()),
                 }) {
                 Ok(c) => merge(&mut self.routed, c),
-                Err(error) => self.view.error = Some(error.to_string()),
+                Err(error) => self.view.error = Some(error.localized_message(&self.localization)),
             }
         }
     }
@@ -1336,10 +1324,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         now: u64,
     ) -> Result<UiChange> {
         if self.view.owner_lost || !self.manager.lease_valid(now) {
-            return Err(StoreError::new(
-                ErrorKind::OwnedElsewhere,
-                "Workspace ownership changed while loading the toolbar. Try again.",
-            ));
+            return Err(StoreError::known(ErrorKind::OwnedElsewhere, WorkspaceRefusal::WorkspaceOwnershipChangedWhileLoadingTheToolbar));
         }
         let (_, change) = session
             .install_workspace_toolbar(
@@ -1379,7 +1364,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     }
                     self.pending_binding = self.manager.binding();
                 }
-                Err(error) => self.view.switcher_error = Some(error.to_string()),
+                Err(error) => self.view.switcher_error = Some(error.localized_message(&self.localization)),
             }
             self.preferences_edited = false;
         }
@@ -1445,7 +1430,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         if self.view.page.is_some() && !self.suspended {
                             match self.select(session, self.view.selected.clone(), now) {
                                 Ok(c) => merge(&mut change, c),
-                                Err(e) => self.view.error = Some(e.to_string()),
+                                Err(e) => self.view.error = Some(e.localized_message(&self.localization)),
                             }
                         }
                     }
@@ -1457,7 +1442,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }
                 Err(e) => {
                     if !self.restart(e.clone(), now) {
-                        self.view.error = Some(e.to_string());
+                        self.view.error = Some(e.localized_message(&self.localization));
                         if self.view.page.is_none() && self.view.prompt.is_none() {
                             self.end_transition(session);
                         }
@@ -1476,7 +1461,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 match self.install_toolbar(session, install, now) {
                     Ok(c) => merge(&mut change, c),
                     Err(e) => {
-                        self.view.error = Some(e.to_string());
+                        self.view.error = Some(e.localized_message(&self.localization));
                         if self.view.page.is_none() && self.view.prompt.is_none() {
                             self.end_transition(session);
                         }
@@ -1490,7 +1475,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Ok(incoming) => self.incoming = Some(incoming),
                 Err(e) => {
                     if !self.restart(e.clone(), now) {
-                        self.view.error = Some(e.to_string());
+                        self.view.error = Some(e.localized_message(&self.localization));
                     }
                 }
             }
@@ -1545,7 +1530,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             let prepared = incoming
                 .entity
                 .capture()
-                .and_then(|c| PreparedWorkspace::new(c).map_err(StoreError::invalid));
+                .and_then(|c| PreparedWorkspace::new(c).map_err(StoreError::workspace));
             if prepared.is_ok()
                 && let Some(notice) = self.startup_notice()
             {
@@ -1593,7 +1578,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Err(e) => {
                     if !self.restart(e.clone(), now) {
                         self.incoming = Some(incoming);
-                        self.view.error = Some(e.to_string());
+                        self.view.error = Some(e.localized_message(&self.localization));
                     }
                 }
             }
@@ -1618,7 +1603,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 match shown {
                     Ok(c) => merge(&mut change, c),
                     Err(e) => {
-                        self.view.error = Some(e.to_string());
+                        self.view.error = Some(e.localized_message(&self.localization));
                         self.view.selected = None;
                     }
                 }
@@ -1645,7 +1630,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         self.view.owner_lost = true;
                         session.set_workspace_read_only(true);
                     }
-                    self.renew_error = Some(e.to_string());
+                    self.renew_error = Some(e.localized_message(&self.localization));
                     self.view.error = self.renew_error.clone();
                 }
             }
@@ -1706,7 +1691,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         {
             match self.input(session, input, now) {
                 Ok(c) => merge(&mut change, c),
-                Err(e) => self.view.error = Some(e.to_string()),
+                Err(e) => self.view.error = Some(e.localized_message(&self.localization)),
             }
         }
         if presentation_changed {
@@ -1721,7 +1706,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             {
                 match self.select(session, None, now) {
                     Ok(c) => merge(&mut change, c),
-                    Err(error) => self.view.error = Some(error.to_string()),
+                    Err(error) => self.view.error = Some(error.localized_message(&self.localization)),
                 }
             }
         }

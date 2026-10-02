@@ -16,6 +16,7 @@ struct NewDrawingForm: View {
     let error: String?
     let busy: Bool
     let completion: (NewDrawingChoice?) -> Void
+    @State private var appearance: JSON
     @State private var options: JSON
     @State private var width: String
     @State private var height: String
@@ -25,6 +26,7 @@ struct NewDrawingForm: View {
         self.spec = spec; self.error = error; self.busy = busy; self.completion = completion
         let options = spec["creation"]["options"]
         _options = State(initialValue: options)
+        _appearance = State(initialValue: JSON())
         _width = State(initialValue: String(options["extent"][0].uint))
         _height = State(initialValue: String(options["extent"][1].uint))
     }
@@ -35,10 +37,11 @@ struct NewDrawingForm: View {
         return options.replacing("extent", with: JSON([width, height]))
     }
     private var presets: [JSON] { spec["creation"]["presets"].array }
-    private var preset: Binding<Int> {
-        Binding(get: { presets.firstIndex { $0["options"].stableKey == selectedOptions?.stableKey } ?? -1 }, set: { index in
-            guard presets.indices.contains(index) else { return }
-            options = presets[index]["options"]
+    private var text: JSON { spec["creation"]["text"] }
+    private var preset: Binding<String> {
+        Binding(get: { presets.first { $0["options"].stableKey == selectedOptions?.stableKey }?["id"].stableKey ?? "custom" }, set: { id in
+            guard let chosen = presets.first(where: { $0["id"].stableKey == id }) else { return }
+            options = chosen["options"]
             width = String(options["extent"][0].uint); height = String(options["extent"][1].uint)
         })
     }
@@ -52,9 +55,9 @@ struct NewDrawingForm: View {
             Text(spec["title"].string).font(.headline)
             EditorScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    FormPicker("Preset", selection: preset) {
-                        Text("Custom").tag(-1)
-                        ForEach(presets.indices, id: \.self) { Text(presets[$0]["name"].string).tag($0) }
+                    FormPicker(text["preset"].string, selection: preset) {
+                        Text(text["custom"].string).tag("custom")
+                        ForEach(presets.indices, id: \.self) { Text(presets[$0]["name"].string).tag(presets[$0]["id"].stableKey) }
                     }.accessibilityIdentifier("new-document-preset")
                     Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 12) {
                         GridRow {
@@ -66,24 +69,24 @@ struct NewDrawingForm: View {
                             dimension($height, label: spec["labels"][1].string, id: "new-document-height")
                         }
                     }
-                    FormPicker("Background", selection: Binding(get: { options["background"].string }, set: {
+                    FormPicker(text["background"].string, selection: Binding(get: { options["background"].string }, set: {
                         options = options.replacing("background", with: JSON($0))
                     })) {
-                        Text("White").tag("White"); Text("Transparent").tag("Transparent")
+                        ForEach(spec["creation"]["backgrounds"].array, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
                     }.accessibilityIdentifier("new-document-background")
-                    FormPicker("Color space", selection: color("space")) {
+                    FormPicker(text["space"].string, selection: color("space")) {
                         ForEach(spec["creation"]["spaces"].array, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
                     }.accessibilityIdentifier("new-document-space")
-                    FormPicker("Bit depth", selection: color("depth")) {
-                        Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16"); Text("16-bit float HDR").tag("F16"); Text("32-bit float HDR").tag("F32")
+                    FormPicker(text["depth"].string, selection: color("depth")) {
+                        ForEach(spec["creation"]["depths"].array, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
                     }.accessibilityIdentifier("new-document-depth")
-                    if options["color"]["space"].string == "ProPhoto" && options["color"]["depth"].string == "U8" {
-                        Text("16-bit is recommended for ProPhoto's wider color range.").font(.caption)
+                    if !appearance["note"].isNull {
+                        Text(appearance["note"].string).font(.caption)
                     }
                     Divider()
-                    TextField("Save as preset (optional)", text: $presetName).textFieldStyle(.roundedBorder)
+                    TextField(text["save_preset"].string, text: $presetName).textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("new-document-preset-name")
-                    Toggle("Use as defaults", isOn: $useAsDefaults).accessibilityIdentifier("new-document-defaults")
+                    Toggle(text["use_defaults"].string, isOn: $useAsDefaults).accessibilityIdentifier("new-document-defaults")
                     if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("new-document-error") }
                 }
             }
@@ -95,7 +98,8 @@ struct NewDrawingForm: View {
                     .keyboardShortcut(.defaultAction).disabled(selectedOptions == nil)
                     .accessibilityIdentifier("new-document-create")
             }
-        }.disabled(busy).padding(24).frame(minWidth: 320, idealWidth: 400, maxWidth: 500,
+        }.onAppear { appearance = NativeTextContext.appearance(options) }
+            .onChange(of: options.stableKey) { _, _ in appearance = NativeTextContext.appearance(options) }.disabled(busy).padding(24).frame(minWidth: 320, idealWidth: 400, maxWidth: 500,
             minHeight: 440, idealHeight: 540)
     }
     private func create() {

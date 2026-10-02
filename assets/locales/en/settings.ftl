@@ -147,10 +147,44 @@ settings-search = Search preferences
 settings-search-placeholder = Search preferences
 settings-clear-search = Clear search
 settings-no-results = No preferences found.
-settings-number-range = { $setting } must be between { $min } and { $max }.
 settings-invalid-color = Enter a six-digit color such as #3584e4.
 settings-reset-hint = { $value } · { $shortcut }
 
 settings-not-open = Settings are not open
 settings-native-prediction-unavailable = Native stroke prediction isn't available on this device.
 settings-native-prediction-disable = Turn off native stroke prediction to change this setting.
+settings-keymap-invalid = This isn't a CapyCanvas keymap
+settings-keymap-invalid-detail = This isn't a CapyCanvas keymap: { $detail }
+settings-keymap-newer-version = This keymap was made by a newer version of CapyCanvas
+settings-keymap-unavailable-name = Keymap “{ $name }”
+settings-keymap-preview-binding = { $action }: { $keys }
+settings-keymap-preview-change = { $action }: { $before } → { $after }
+settings-keymap-preview-heading = Import { $name }?
+settings-keymap-preview-none = No shortcuts change.
+settings-keymap-preview-entry = { "  " }{ $item }
+settings-shortcut-default-empty = Default: none
+settings-shortcut-default = Default: { $keys }
+settings-modifier-hold-help = Hold { $label } to use an action until you let go.
+settings-keymap-title-capy = CapyCanvas
+settings-keymap-title-photoshop = Photoshop Style
+settings-keymap-title-krita = Krita Style
+settings-keymap-title-clipstudio = Clip Studio Paint Style
+settings-keymap-title-procreate = Procreate Style
+settings-keymap-title-gimp = GIMP Style
+settings-keymap-title-affinity = Affinity Style
+settings-keymap-preview-added = { $count ->
+    [one] Added: { $count }
+   *[other] Added: { $count }
+    }
+settings-keymap-preview-changed = { $count ->
+    [one] Changed: { $count }
+   *[other] Changed: { $count }
+    }
+settings-keymap-preview-removed = { $count ->
+    [one] Removed: { $count }
+   *[other] Removed: { $count }
+    }
+settings-keymap-preview-unavailable = { $count ->
+    [one] Not available: { $count }
+   *[other] Not available: { $count }
+    }

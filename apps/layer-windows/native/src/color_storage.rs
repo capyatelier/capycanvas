@@ -18,10 +18,10 @@ pub(crate) enum ProfileChoice {
     Direct(ColorProfile),
 }
 impl ProfileChoice {
-    pub fn resolve(self, cancel: &AtomicBool) -> Result<ColorProfile, String> {
+    pub fn resolve(self, cancel: &AtomicBool, localization: &layer_ui::Localizer) -> Result<ColorProfile, String> {
         match self {
             Self::Direct(profile) => Ok(profile),
-            Self::Library { library } => profile(&library, cancel),
+            Self::Library { library } => profile(&library, cancel, localization),
         }
     }
 }
@@ -96,12 +96,12 @@ pub(crate) fn list(cancel: &AtomicBool) -> Result<Vec<ProfileEntry>, String> {
             .map(|record| {
                 check_cancelled(cancel)?;
                 let bytes = if record.issue.is_some() {
-                    Err("Unavailable profile".into())
+                    Err(layer_ui::ColorFeatureError::ProfileMissing)
                 } else {
                     read(
                         &directory.join(format!("{}.icc", record.id)),
                         policy::PROFILE_READ_LIMIT,
-                    )
+                    ).map_err(layer_ui::ColorFeatureError::Diagnostic)
                 };
                 Ok(policy::inspect_library_entry(
                     &record,
@@ -111,35 +111,38 @@ pub(crate) fn list(cancel: &AtomicBool) -> Result<Vec<ProfileEntry>, String> {
             .collect()
     })
 }
-pub(crate) fn profile(id: &str, cancel: &AtomicBool) -> Result<ColorProfile, String> {
+pub(crate) fn list_view(cancel: &AtomicBool, localization: &layer_ui::Localizer) -> Result<Vec<serde_json::Value>, String> {
+    Ok(list(cancel)?.iter().map(|entry| entry.localized_view(localization)).collect())
+}
+pub(crate) fn profile(id: &str, cancel: &AtomicBool, localization: &layer_ui::Localizer) -> Result<ColorProfile, String> {
     if !policy::valid_profile_id(id) {
-        return Err("Select an imported profile".into());
+        return Err(layer_ui::ColorFeatureError::SelectImportedProfile.profile_message(localization));
     }
     locked(cancel, |directory| {
         let bytes = read(
             &directory.join(format!("{id}.icc")),
             policy::PROFILE_READ_LIMIT,
         )?;
-        policy::read_library_profile(id, &bytes, true)?
+        policy::read_library_profile(id, &bytes, true).map_err(|reason| reason.profile_message(localization))?
             .profile
-            .ok_or("Profile is unavailable".into())
+            .ok_or_else(|| layer_ui::ColorFeatureError::ProfileMissing.profile_message(localization))
     })
 }
-pub(crate) fn export_profile(id: &str, cancel: &AtomicBool) -> Result<layer_ui::ExportProfile, String> {
-    let profile = profile(id, cancel)?;
+pub(crate) fn export_profile(id: &str, cancel: &AtomicBool, localization: &layer_ui::Localizer) -> Result<layer_ui::ExportProfile, String> {
+    let profile = profile(id, cancel, localization)?;
     Ok(layer_ui::ExportProfile {
         channels: layer_color::profile_channels(&profile)?,
-        name: layer_color::profile_description(&profile)?,
+        name: layer_ui::profile_library::profile_display_name(&profile, localization)?,
         profile,
     })
 }
-pub(crate) fn import(path: &Path, cancel: &AtomicBool) -> Result<(), String> {
+pub(crate) fn import(path: &Path, cancel: &AtomicBool, localization: &layer_ui::Localizer) -> Result<(), String> {
     let bytes = read(path, policy::PROFILE_READ_LIMIT)?;
-    preserve(&bytes, cancel)
+    preserve(&bytes, cancel, localization)
 }
-pub(crate) fn preserve(bytes: &[u8], cancel: &AtomicBool) -> Result<(), String> {
+pub(crate) fn preserve(bytes: &[u8], cancel: &AtomicBool, localization: &layer_ui::Localizer) -> Result<(), String> {
     locked(cancel, |directory| {
-        let entry = policy::prepare_profile_import(inventory(directory)?, bytes)?;
+        let entry = policy::prepare_profile_import(inventory(directory)?, bytes).map_err(|reason| reason.profile_message(localization))?;
         atomic_write(
             &directory.join(format!("{}.icc", entry.id)),
             cancel,
@@ -151,8 +154,8 @@ pub(crate) fn preserve(bytes: &[u8], cancel: &AtomicBool) -> Result<(), String> 
         )
     })
 }
-pub(crate) fn remove(id: &str, cancel: &AtomicBool) -> Result<(), String> {
-    policy::ProfileLibraryAction::Remove { id: id.into() }.execute(&[])?;
+pub(crate) fn remove(id: &str, cancel: &AtomicBool, localization: &layer_ui::Localizer) -> Result<(), String> {
+    policy::ProfileLibraryAction::Remove { id: id.into() }.execute(&[]).map_err(|reason| reason.profile_message(localization))?;
     locked(cancel, |directory| {
         fs::remove_file(directory.join(format!("{id}.icc")))
             .map_err(|e| io_error("remove profile", e))
@@ -162,6 +165,7 @@ pub(crate) fn presets(
     action: layer_ui::ExportPresetAction,
     document: &layer_core::Document,
     cancel: &AtomicBool,
+    localization: &layer_ui::Localizer,
 ) -> Result<layer_ui::ExportPresetView, String> {
     locked(cancel, |directory| {
         let path = directory.join("export-presets.json");
@@ -170,9 +174,10 @@ pub(crate) fn presets(
         } else {
             Default::default()
         };
-        let view = library.operate(action, document.color)?;
+        let mut view = library.operate(action, document.color).map_err(|reason| reason.preset_message(localization))?;
+        view.localize_names(document.color, localization);
         if view.changed {
-            let bytes = library.encode()?;
+            let bytes = library.encode().map_err(|reason| reason.preset_message(localization))?;
             atomic_write(&path, cancel, |file| {
                 file.write_all(&bytes)
                     .map_err(|e| io_error("save export presets", e))

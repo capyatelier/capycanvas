@@ -1003,7 +1003,7 @@ impl Workspace {
     pub(crate) fn refresh_document_view(self: &Rc<Self>) { self.refresh(regions::ALL); }
     pub(crate) fn document_canvas_error(self: &Rc<Self>, error: &str) {
         self.gpu_error(error);
-        self.status.set_text(error); self.status.set_visible(true);
+        self.status.set_text(&layer_ui::bootstrap_view(&self.localization).canvas_init_failed); self.status.set_visible(true);
         self.restart_canvas.set_visible(true);
     }
     #[cfg(test)]
@@ -1073,7 +1073,7 @@ impl Workspace {
         surface.set_overflow(gtk::Overflow::Hidden);
         let header = header::Header::new();
         let system_status = crate::system_status::SystemStatus::new();
-        let view_info = crate::zoom_readout::ZoomReadout::new();
+        let view_info = crate::zoom_readout::ZoomReadout::new(localization.clone());
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let proof = crate::proof_view::ProofView::new();
         let local_tone=crate::local_tone_view::LocalToneView::new();
@@ -1108,16 +1108,16 @@ impl Workspace {
         let navigator_overviews = Rc::new(crate::navigator::Overviews::default());
         let navigator = crate::navigator::Navigator::new(&navigator_overviews);
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        let layer_panel = crate::layers::LayerPanel::new();
+        let layer_panel = crate::layers::LayerPanel::new(localization.clone());
         let effects = Rc::new(crate::effects::EffectPanels::new());
         let size_number = crate::number_control::NumberControl::new(
             NumericControl::brush_size(),
             "Brush size",
             "",
-        );
+         localization.clone());
         size_number.set_widget_name("brush-size");
         let opacity =
-            crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "");
+            crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "", localization.clone());
         opacity.set_width_request(100);
         let color = crate::color_editor::ColorButton::new();
         let status = gtk::Label::new(None);
@@ -1125,7 +1125,7 @@ impl Workspace {
         status.add_css_class("error");
         status.add_css_class("workspace-notice");
         status.set_wrap(true);
-        let restart_canvas = gtk::Button::with_label("Restart canvas");
+        let restart_canvas = gtk::Button::with_label(&layer_ui::bootstrap_view(&localization).restart_canvas);
         restart_canvas.set_widget_name("restart-canvas");
         restart_canvas.set_halign(gtk::Align::Center);
         restart_canvas.set_visible(false);
@@ -1523,7 +1523,7 @@ impl Workspace {
                     Some(
                         state
                             .settings
-                            .action_tooltip(&label, &action, state.platform),
+                            .action_tooltip_localized(&label, &action, state.platform, g.session.localization()),
                     )
                 }
             ),
@@ -2527,13 +2527,14 @@ impl Workspace {
                 Err(error) => {
                     eprintln!("Canvas recovery failed: {error}");
                     self.refresh(regions::ALL);
-                    self.status.set_text("Canvas stopped. Automatic recovery failed. Reopen a saved drawing or recovery copy.");
+                    self.status.set_text(&layer_ui::bootstrap_view(&self.localization).canvas_recovery_failed);
                     self.status.set_visible(true);
                     return;
                 }
             }
         }
-        self.status.set_text("Canvas stopped. The interrupted work was canceled. Save the drawing or restart the canvas to continue.");
+        let copy = layer_ui::bootstrap_view(&self.localization);
+        self.status.set_text(if self.gpu.borrow().is_some() { &copy.canvas_stopped } else { &copy.canvas_init_failed });
         self.status.set_visible(true);
     }
     fn restart_gpu(self: &Rc<Self>) {
@@ -2553,7 +2554,7 @@ impl Workspace {
             Some(Err(error)) => {
                 eprintln!("Canvas restart failed: {error}");
                 self.status
-                    .set_text("Canvas could not restart. Save your drawing, then reopen it.");
+                    .set_text(&layer_ui::bootstrap_view(&self.localization).canvas_restart_failed);
             }
             None => (),
         }
@@ -2842,7 +2843,8 @@ impl Workspace {
                     // Keep the window opaque on failure, then reveal the GPU
                     // again after a successful resize, palette change or restart.
                     self.window.remove_css_class("native-canvas-background");
-                    self.status.set_text(&format!("Canvas background unavailable: {error}"));
+                    eprintln!("Canvas background unavailable: {error}");
+                    self.status.set_text(&layer_ui::bootstrap_view(&self.localization).canvas_init_failed);
                     self.status.set_visible(true);
                 }
             }
@@ -2968,8 +2970,7 @@ impl Workspace {
     fn reconcile_layout(self: &Rc<Self>, layout: &DockLayout) {
         *self.surface.imp().layout.borrow_mut() = layout.clone();
         let resolved = self.resolved();
-        self.customization
-            .reconcile_toolbars(self, layout, &resolved);
+        if !self.customization.reconcile_toolbars(self, layout, &resolved) { return; }
         let same_groups = self.groups.borrow().len() == resolved.groups.len()
             && self.groups.borrow().iter().all(|view| {
                 resolved.groups.iter().any(|g| {
@@ -3056,7 +3057,7 @@ impl Workspace {
                         .child(&tab_bar)
                         .build());
                     header.append(&scroll);
-                    let grip = tiles::grip();
+                    let grip = tiles::grip(&self.localization.text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
                     grip.set_size_request(20, 24);
                     grip.set_halign(gtk::Align::End);
                     grip.set_valign(gtk::Align::Center);
@@ -3081,7 +3082,7 @@ impl Workspace {
                     footer.add_css_class("panel-footer");
                     footer.set_widget_name(&format!("panel-footer-grip-{}", group.id));
                     footer.set_height_request(bounds.height as i32);
-                    let grip = tiles::grip();
+                    let grip = tiles::grip(&self.localization.text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
                     grip.set_hexpand(true);
                     grip.set_halign(gtk::Align::Center);
                     grip.set_valign(gtk::Align::Center);

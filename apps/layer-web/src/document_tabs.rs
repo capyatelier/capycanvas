@@ -166,10 +166,10 @@ impl WebApp {
             return self.document_changed();
         }
         if !self.documents.contains_parked(id) {
-            return Err(js("Drawing tab is no longer open"));
+            return Err(js(layer_ui::DocumentSessionError::TabClosed.message(self.session.localization())));
         }
         if !self.session.can_park_document() {
-            return Err(js("Finish the current operation before switching drawings"));
+            return Err(js(layer_ui::DocumentTransportRefusal::SwitchOperation.message(self.session.localization()).as_ref()));
         }
         let tiles = self.session.park_document().map_err(js)?;
         self.retire_document_gpu();
@@ -177,7 +177,7 @@ impl WebApp {
         next.inherit_window_state(&self.session).map_err(js)?;
         self.documents
             .exchange_in_place(id, &mut self.session, tiles)
-            .map_err(js)?;
+            .map_err(|reason| js(reason.message(self.session.localization())))?;
         self.document_changed()
     }
 
@@ -207,7 +207,7 @@ impl WebApp {
             self.session.park_document().map_err(js)?;
             self.retire_document_gpu();
             self.documents.close_selected();
-            self.documents.start_empty(next.localization()).map_err(js)?;
+            self.documents.start_empty(next.localization()).map_err(|reason| js(reason.message(next.localization())))?;
             self.session = next;
         }
         self.document_changed()
@@ -222,7 +222,7 @@ impl WebApp {
         self.documents
             .parked()
             .find_map(|(&key, p)| (id == key).then_some(&p.owner))
-            .ok_or_else(|| js("Drawing tab is no longer open"))
+            .ok_or_else(|| js(layer_ui::DocumentSessionError::TabClosed.message(self.session.localization())))
     }
     fn retire_document_gpu(&mut self) {
         if let Some(control) = self.tone.pending.take() {

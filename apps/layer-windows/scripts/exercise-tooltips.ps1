@@ -33,7 +33,7 @@ try{
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
  $panel=@((Model).panels|Where-Object {$_.tiles.Count -gt 0})[0]
  $target=Center ("tile-"+$panel.id+"-"+$panel.tiles[0].id)
- $away=Center 'Drawing canvas' -Name
+ $away=Center 'drawing-canvas'
  [CapyRowPointer]::Hover($target.x,$target.y)
  Wait-Until {Tooltip} "Mouse hover did not show the $($target.name) tooltip" 5
  [CapyRowPointer]::Hover($away.x,$away.y)

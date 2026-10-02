@@ -24,7 +24,7 @@ struct ScreenReport: Equatable {
 
 final class NativeOwner: @unchecked Sendable {
     private let queue: DispatchQueue
-    private let handle: OpaquePointer
+    private var handle: OpaquePointer?
     private var layer: CAMetalLayer?
     private var surfaceSize: (width: UInt32, height: UInt32, scale: Float)?
     private var gpuHealth: DispatchSourceTimer?
@@ -90,10 +90,8 @@ final class NativeOwner: @unchecked Sendable {
         // the last frame before idle, rather than inheriting a worker pool.
         let queue = DispatchQueue(label: "art.capycanvas.render", qos: .userInteractive,
             autoreleaseFrequency: .workItem)
-        guard let handle = queue.sync(execute: { capy_apple_create(platform) }) else {
-            throw HostFailure(message: "Could not create the native canvas session")
-        }
-        self.queue = queue; self.handle = handle; self.receive = receive
+        let preferredLanguages = Locale.preferredLanguages
+        self.queue = queue; self.receive = receive
         self.persistence = persistence; self.managedWorkspaces = managedWorkspaces
         #if DEBUG
         initialActions = fixtureActions
@@ -105,7 +103,21 @@ final class NativeOwner: @unchecked Sendable {
         // restoration, and the UI thread never waits for the filesystem.
         let loaded = PersistenceLoad()
         queue.suspend()
-        queue.async { [self] in restore(loaded.value()) }
+        queue.async { [self] in
+            do {
+                let saved = loaded.value().settings.map { String(decoding: $0, as: UTF8.self) } ?? ""
+                let launch = try JSON(["saved": saved, "preferred_languages": preferredLanguages]).encoded()
+                var bootstrap: UnsafeMutablePointer<CChar>?
+                handle = launch.withCString { capy_apple_launch(platform, $0, &bootstrap) }
+                if let bootstrap {
+                    defer { capy_apple_string_free(bootstrap) }
+                    let view = try JSON.decode(String(cString: bootstrap))
+                    receive(JSON(["bootstrap": view.raw]), nil)
+                }
+                guard handle != nil else { throw HostFailure(message: "Native session initialization failed") }
+                restore()
+            } catch { receive(nil, error.localizedDescription) }
+        }
         persistence.load(observer: observerID, changed: { [weak self] change in
             self?.perform { [weak self] in
                 guard let self else { return }
@@ -129,6 +141,7 @@ final class NativeOwner: @unchecked Sendable {
         if result < 0 { throw HostFailure(message: capy_apple_error(handle).map(String.init(cString:)) ?? "Native operation failed") }
     }
     private func request(_ kind: UInt32, _ value: JSON = JSON()) throws -> JSON? {
+        guard let handle else { throw HostFailure(message: "Native session is unavailable") }
         let source = try value.encoded()
         let result = source.withCString { capy_apple_request(handle, kind, $0) }
         guard let result else {
@@ -189,13 +202,8 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(nil, error.localizedDescription) }
         }
     }
-    private func restore(_ loaded: EditorPersistence.Loaded) {
+    private func restore() {
         storageError = nil
-        if let data = loaded.settings {
-            do {
-                _ = try request(0, JSON(["type": "restore_saved_settings", "saved": String(decoding: data, as: UTF8.self)]))
-            } catch { storageError = "Could not restore settings: \(error.localizedDescription)" }
-        }
         do {
             try publish()
         } catch { receive(nil, error.localizedDescription) }

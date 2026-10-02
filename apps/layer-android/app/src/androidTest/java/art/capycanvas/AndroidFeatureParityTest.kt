@@ -29,7 +29,7 @@ class AndroidFeatureParityTest {
         host.awaitReady(compose = compose)
         savedWorkspace = JSONObject(state().getJSONObject("workspace").toString())
         savedSettings = JSONObject(state().getJSONObject("settings").toString())
-        val native = Native.create(false)
+        val native = createEnglishHostForTest()
         try { defaultWorkspace = JSONObject(Native.snapshot(native)!!).getJSONObject("state").getJSONObject("workspace") }
         finally { Native.destroy(native) }
         action(obj("type" to "close_settings"))

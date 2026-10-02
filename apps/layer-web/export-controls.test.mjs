@@ -1,5 +1,6 @@
 import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { chooseExport, SDR_FORMATS } from "./export-controls.js";
 import { exportFormats } from "./documents.js";
@@ -25,6 +26,19 @@ class FakeElement extends SharedElement {
 
 const element = (tag, className, text) => new FakeElement(tag, className, text);
 const button = (text, action, className = "") => { const node = element("button", className, text); node.addEventListener("click", action); return node; };
+const numberField = (control, label, changed) => {
+  const root = element("div"), entry = element("input"); root.append(entry); root.entry = entry;
+  root.setAttribute = (name, value) => entry.setAttribute(name, value);
+  root.update = value => { entry.value = String(value); };
+  root.cancelEditing = () => { entry.composing = false; };
+  root.commit = () => {
+    if (entry.composing || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(entry.value)) return false;
+    const value = Number(entry.value);
+    if (!Number.isFinite(value) || value < control.min || value > control.max) return false;
+    changed(value); return true;
+  };
+  return root;
+};
 const WEBP_LIMIT = "WebP export is limited to 16,384 pixels per side. Fit the size within that or choose another format.";
 const base = {
   format: "Png", profile: { name: "sRGB", profile: { Builtin: "Srgb" } }, depth: "U16", background: "Preserve",
@@ -33,8 +47,25 @@ const base = {
 };
 const METADATA_CHOICES = [["All", "All"], ["CopyrightContact", "Copyright & Contact"], ["None", "None"]];
 
+const catalog = readFileSync(new URL("../../assets/locales/en/color-features.ftl", import.meta.url), "utf8") + "\n" + readFileSync(new URL("../../assets/locales/en/common.ftl", import.meta.url), "utf8");
+const source = readFileSync(new URL("../../crates/layer-ui/src/color_feature_copy.rs", import.meta.url), "utf8");
+function sharedCopy(name) {
+  const implementation = source.split(`impl ${name} {`)[1].split("\n}")[0];
+  const copy = {};
+  for (const [, field, id] of implementation.matchAll(/([a-z_]+): localizer\.text\(MessageId::([A-Z_0-9]+)\)/g)) {
+    const key = id.toLowerCase().replaceAll("_", "-");
+    const label = catalog.match(new RegExp(`^${key} = (.*)$`, "m"));
+    assert.ok(label, `${key} exists in the shared English catalog`);
+    copy[field] = label[1];
+  }
+  copy.common = { cancel: "Cancel", done: "Done", apply: "Apply" };
+  return copy;
+}
+const exportCopy = sharedCopy("ExportCopy");
+const sdrLabels = SDR_FORMATS.map(id => [id, ({Png:exportCopy.format_png,Tiff:exportCopy.format_tiff,Jpeg:exportCopy.format_jpeg,Webp:exportCopy.format_webp})[id]]);
+
 function fakeApp({ extent = [20000, 400], photo = false } = {}) {
-  const calls = { drafts: [], validated: [], rendered: 0 };
+  const calls = { drafts: [], validated: [], rendered: 0, preferences: [] };
   const draft = (recipe, action) => {
     const format = action.type === "format" ? action.value : recipe.format;
     const metadata = action.type === "metadata" ? action.value : recipe.metadata;
@@ -53,8 +84,9 @@ function fakeApp({ extent = [20000, 400], photo = false } = {}) {
   };
   return {
     calls,
-    export_form: () => ({ profiles: [base.profile], metadata: photo }),
-    export_presets: async () => ({ names: ["Web", "Print", "Archive", "Last"], recipe: base, index: 0 }),
+    export_form: () => ({ profiles: [base.profile], metadata: photo, copy: exportCopy, numeric: { dimension: { min: 1, max: 32768 }, ppi: { min: 1, max: 65535 }, quality: { min: 1, max: 100 } } }),
+    profile_copy: () => sharedCopy("ProfileCopy"),
+    export_presets: async action => { if (action?.type !== "get") calls.preferences.push(action); return { names: ["Web", "Print", "Archive", "Last"], recipe: base, index: 0 }; },
     document_color: () => ({ space: "Srgb", depth: "U8" }),
     export_draft: draft,
     export_validate: recipe => {
@@ -69,7 +101,7 @@ function fakeApp({ extent = [20000, 400], photo = false } = {}) {
 
 async function openDialog(app) {
   let form;
-  const result = chooseExport({ app, element, button, id: 7, gpuOperation: run => run(),
+  const result = chooseExport({ app, element, button, numberField, id: 7, gpuOperation: run => run(),
     dialog: (title, build) => new Promise(resolve => { form = element("form"); build(form, resolve); }) });
   while (!form) await new Promise(resolve => setImmediate(resolve));
   const labelled = name => form.querySelectorAll("select,input").find(n => n.getAttribute("aria-label") === name);
@@ -79,17 +111,17 @@ async function openDialog(app) {
 }
 
 test("WebP joins the SDR formats with its file type", () => {
-  assert.deepEqual(SDR_FORMATS.map(([id]) => id), ["Png", "Tiff", "Jpeg", "Webp"]);
-  assert.deepEqual(SDR_FORMATS.at(-1), ["Webp", "WebP · lossless"], "the shared format name");
-  assert.deepEqual(exportFormats.Webp, ["webp", "image/webp", "WebP image"]);
-  for (const [id] of SDR_FORMATS) assert.ok(exportFormats[id], `${id} has a file type`);
+  assert.deepEqual(SDR_FORMATS, ["Png", "Tiff", "Jpeg", "Webp"]);
+  assert.deepEqual(sdrLabels.at(-1), ["Webp", "WebP · lossless"], "the shared format name");
+  assert.deepEqual(exportFormats.Webp, ["webp", "image/webp"]);
+  for (const id of SDR_FORMATS) assert.ok(exportFormats[id], `${id} has a file type`);
 });
 
 test("choosing WebP drafts 8-bit output through the shared recipe", async () => {
   const app = fakeApp({ extent: [800, 600] });
   const dialog = await openDialog(app);
   const format = dialog.labelled("Format"), depth = dialog.labelled("Bit depth");
-  assert.deepEqual(format.options.map(o => [o.value, o.textContent]), SDR_FORMATS);
+  assert.deepEqual(format.options.map(o => [o.value, o.textContent]), sdrLabels);
   format.value = "Webp"; format.onchange();
   assert.deepEqual(app.calls.drafts.at(-1), { type: "format", value: "Webp" });
   assert.equal(format.value, "Webp");
@@ -159,4 +191,25 @@ test("OpenEXR explains that it keeps no metadata, and drawings show no Metadata 
   assert.equal(drawing.labelled("Metadata").closest("label").hidden, true, "a new drawing has no photo metadata");
   assert.equal(drawing.labelled("Remove location").closest("label").hidden, true);
   assert.equal(drawing.form.children.find(n => n.className === "export-metadata-note").hidden, true);
+});
+
+test("export refuses unfinished numeric text before validating or rendering", async () => {
+  const app = fakeApp({ extent: [800, 600] }), dialog = await openDialog(app);
+  const size = dialog.labelled("Pixel size"); size.value = "Fit"; size.onchange();
+  const width = dialog.labelled(exportCopy.maximum_width);
+  const before = app.calls.validated.length;
+  for (const literal of ["bad", "Infinity", "２０４８"]) {
+    width.value = literal;
+    dialog.pressed("Choose File…").click(); dialog.pressed("Preview Output").click();
+    dialog.pressed(exportCopy.save_preset).click(); dialog.pressed(exportCopy.update_preset).click();
+    assert.equal(app.calls.validated.length, before); assert.equal(app.calls.rendered, 0);
+    assert.equal(app.calls.preferences.length, 0);
+  }
+  width.value = "1024"; width.composing = true;
+  dialog.pressed("Choose File…").click();
+  dialog.pressed(exportCopy.save_preset).click(); dialog.pressed(exportCopy.update_preset).click();
+  assert.equal(app.calls.validated.length, before);
+  assert.equal(app.calls.preferences.length, 0);
+  width.composing = false; dialog.pressed("Choose File…").click();
+  assert.deepEqual((await dialog.result).recipe.size.Fit.bounds, [1024, 2048]);
 });

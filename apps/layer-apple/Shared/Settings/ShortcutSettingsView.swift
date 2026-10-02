@@ -79,36 +79,36 @@ private struct RootPane: View {
     private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }
     var body: some View {
         Form {
-            Section("Keymap") {
+            Section(store.catalog["native_copy"]["shortcuts"]["keymap"].string) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Preset")
-                        if keymap["outdated"].bool { Text("Updated since you chose it").font(.caption).foregroundStyle(.secondary) }
+                        Text(store.catalog["native_copy"]["shortcuts"]["preset"].string)
+                        if keymap["outdated"].bool { Text(store.catalog["native_copy"]["shortcuts"]["updated"].string).font(.caption).foregroundStyle(.secondary) }
                     }
                     Spacer()
-                    Picker("Keymap preset", selection: Binding(get: { keymap["selected"].string },
+                    Picker(store.catalog["native_copy"]["shortcuts"]["keymap_preset"].string, selection: Binding(get: { keymap["selected"].string },
                         set: { action(["type": "select_keymap", "id": $0]) })) {
                         ForEach(keymap["presets"].array, id: \.shortcutID) { preset in
                             Text(preset["title"].string).tag(preset["id"].string)
                         }
                     }.labelsHidden().fixedSize().accessibilityIdentifier("keymap-preset")
                     Menu {
-                        Button("Import…") { action(["type": "choose_keymap_file"]) }.accessibilityIdentifier("keymap-import-button")
-                        Button("Export…") { action(["type": "export_keymap"]) }.accessibilityIdentifier("keymap-export-button")
-                        Button("Differences…") { action(["type": "keymap_details", "open": true]) }.accessibilityIdentifier("keymap-details-button")
+                        Button(store.catalog["native_copy"]["shortcuts"]["import_menu"].string) { action(["type": "choose_keymap_file"]) }.accessibilityIdentifier("keymap-import-button")
+                        Button(store.catalog["native_copy"]["shortcuts"]["export_menu"].string) { action(["type": "export_keymap"]) }.accessibilityIdentifier("keymap-export-button")
+                        Button(store.catalog["native_copy"]["shortcuts"]["differences"].string) { action(["type": "keymap_details", "open": true]) }.accessibilityIdentifier("keymap-details-button")
                         Divider()
-                        Button("Reset All Shortcuts", role: .destructive) { action(["type": "reset_all_shortcuts"]) }
+                        Button(store.catalog["native_copy"]["shortcuts"]["reset_all"].string, role: .destructive) { action(["type": "reset_all_shortcuts"]) }
                             .accessibilityIdentifier("reset-all-shortcuts")
                     } label: {
                         SharedIcon(name: "more")
                     }.menuStyle(.button).buttonStyle(.borderless).menuIndicator(.hidden).fixedSize()
-                        .accessibilityLabel("Keymap options").help("Keymap options").accessibilityIdentifier("keymap-menu")
+                        .accessibilityLabel(store.catalog["native_copy"]["shortcuts"]["keymap_options"].string).help(store.catalog["native_copy"]["shortcuts"]["keymap_options"].string).accessibilityIdentifier("keymap-menu")
                 }
             }
-            Section("Shortcuts") {
+            Section(store.catalog["native_copy"]["shortcuts"]["title"].string) {
                 ShortcutSearchField(store: store)
                 HStack {
-                    Picker("Kind of tool", selection: Binding(get: { page["context"].stableKey },
+                    Picker(store.catalog["native_copy"]["shortcuts"]["tool_kind"].string, selection: Binding(get: { page["context"].stableKey },
                         set: { key in
                             let choice = page["contexts"].array.first { $0["category"].stableKey == key }
                             action(["type": "shortcut_context", "category": choice?["category"].raw ?? NSNull()])
@@ -116,17 +116,17 @@ private struct RootPane: View {
                         ForEach(page["contexts"].array, id: \.categoryKey) { choice in
                             Text(choice["label"].string).tag(choice["category"].stableKey)
                         }
-                    }.labelsHidden().help("Show what shortcuts do with a kind of tool").accessibilityIdentifier("shortcut-context")
-                    Picker("Actions", selection: Binding(get: { page["show"].string },
+                    }.labelsHidden().help(store.catalog["native_copy"]["shortcuts"]["tool_shortcuts"].string).accessibilityIdentifier("shortcut-context")
+                    Picker(store.catalog["native_copy"]["shortcuts"]["actions"].string, selection: Binding(get: { page["show"].string },
                         set: { action(["type": "shortcut_show", "show": $0]) })) {
                         ForEach(page["shows"].array, id: \.showKey) { choice in
                             Text(choice["label"].string).tag(choice["show"].string)
                         }
-                    }.labelsHidden().help("Choose which actions to list").accessibilityIdentifier("shortcut-show")
+                    }.labelsHidden().help(store.catalog["native_copy"]["shortcuts"]["choose_actions"].string).accessibilityIdentifier("shortcut-show")
                 }
                 if !page["filtering"].bool {
                     ForEach(page["categories"].array, id: \.shortcutID) { category in
-                        ShortcutNavigationRow(label: category["id"].string, value: String(category["count"].uint)) {
+                        ShortcutNavigationRow(label: category["label"].string, value: String(category["count"].uint)) {
                             action(["type": "shortcut_category", "id": category["id"].string])
                         }.accessibilityIdentifier("shortcut-category-" + category["id"].string)
                     }
@@ -142,7 +142,7 @@ private struct RootPane: View {
             if page["filtering"].bool {
                 let modifiers = page["modifiers"].array.filter { $0["visible"].bool }
                 if !modifiers.isEmpty {
-                    Section("Modifier keys") { ModifierRows(store: store, modifiers: modifiers) }
+                    Section(page["categories"].array.first { $0["id"].string == "Modifier keys" }?["label"].string ?? "") { ModifierRows(store: store, modifiers: modifiers) }
                 }
                 ShortcutResults(store: store)
             }
@@ -154,7 +154,7 @@ private struct CategoryPane: View {
     @ObservedObject var store: EditorStore
     private var page: JSON { store.snapshot["preferences"]["shortcut_page"] }
     var body: some View {
-        PaneHeader(title: page["category"].string) {
+        PaneHeader(title: page["categories"].array.first { $0["id"].string == page["category"].string }?["label"].string ?? "") {
             store.dispatch(["type": "preferences", "action": ["type": "shortcut_category", "id": NSNull()]])
         }
         Form {
@@ -164,10 +164,10 @@ private struct CategoryPane: View {
                     Button {
                         store.dispatch(["type": "preferences", "action": ["type": "add_modifier_key"]])
                     } label: {
-                        Label { Text("Add Modifier Key") } icon: { SharedIcon(name: "plus") }
+                        Label { Text(store.catalog["native_copy"]["shortcuts"]["add_modifier"].string) } icon: { SharedIcon(name: "plus") }
                     }.accessibilityIdentifier("add-modifier-key")
                 } footer: {
-                    Text("Hold a key to use a tool or mode until you let go.")
+                    Text(store.catalog["native_copy"]["shortcuts"]["hold_key_help"].string)
                 }
             }
             ShortcutResults(store: store)
@@ -213,10 +213,9 @@ private struct ShortcutRow: View {
     let row: JSON
     private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }
     private var subtitle: String {
-        let scope = row["scope"].string
-        let phrase = scope.isEmpty ? "" : scope == "Canvas" ? "On the canvas" : "With \(scope.lowercased()) tools"
-        return [row["detail"].string, phrase].filter { !$0.isEmpty }.joined(separator: " · ")
+        [row["detail"].string, row["scope_caption"].string].filter { !$0.isEmpty }.joined(separator: " · ")
     }
+
     var body: some View {
         HStack {
             Button { action(["type": "edit_shortcut", "id": row["id"].string]) } label: {
@@ -231,7 +230,7 @@ private struct ShortcutRow: View {
             }.buttonStyle(.plain).accessibilityIdentifier("shortcut-" + row["id"].string)
             if row["modified"].bool {
                 Button { action(["type": "reset_shortcut", "id": row["id"].string]) } label: { SharedIcon(name: "reset") }
-                    .buttonStyle(.borderless).accessibilityLabel("Reset to default").help("Reset to default")
+                    .buttonStyle(.borderless).accessibilityLabel(store.catalog["native_copy"]["shortcuts"]["reset_default"].string).help(store.catalog["native_copy"]["shortcuts"]["reset_default"].string)
                     .accessibilityIdentifier("shortcut-reset-" + row["id"].string)
             }
         }.background(NativePenScroll().frame(width: 0, height: 0))
@@ -246,7 +245,7 @@ private struct ModifierKeyPane: View {
         PaneHeader(title: editor["label"].string) { action(["type": "close_modifier_key"]) }
         Form {
             Section {
-                Toggle("Same for every tool", isOn: Binding(get: { !editor["per_tool"].bool },
+                Toggle(store.catalog["native_copy"]["shortcuts"]["same_all_tools"].string, isOn: Binding(get: { !editor["per_tool"].bool },
                     set: { action(["type": "modifier_key_per_tool", "key": editor["key"].raw, "per_tool": !$0]) }))
                     .accessibilityIdentifier("modifier-same")
                 ForEach(editor["actions"].array, id: \.categoryKey) { row in
@@ -258,7 +257,7 @@ private struct ModifierKeyPane: View {
                 HStack {
                     Spacer()
                     if editor["modified"].bool {
-                        Button("Reset to Default") { action(["type": "reset_modifier_key", "key": editor["key"].raw]) }
+                        Button(store.catalog["native_copy"]["shortcuts"]["reset_default"].string) { action(["type": "reset_modifier_key", "key": editor["key"].raw]) }
                             .accessibilityIdentifier("modifier-reset")
                     }
                 }
@@ -267,7 +266,7 @@ private struct ModifierKeyPane: View {
             }
             Section {
                 Button(role: .destructive) { action(["type": "remove_modifier_key", "key": editor["key"].raw]) } label: {
-                    Label { Text("Remove Modifier Key") } icon: { SharedIcon(name: "delete") }
+                    Label { Text(store.catalog["native_copy"]["shortcuts"]["remove_modifier"].string) } icon: { SharedIcon(name: "delete") }
                 }.accessibilityIdentifier("modifier-remove")
             }
         }.formStyle(.grouped)
@@ -289,7 +288,7 @@ struct GestureTriggerSections: View {
             Section(section.title) {
                 ForEach(section.rows, id: \.shortcutID) { row in
                     ShortcutNavigationRow(label: row["label"].string, detail: row["detail"].string, value: row["action"].string) {
-                        let pen = row["section"].string == "Pen buttons"
+                        let pen = row["id"].string.hasPrefix("pen.button.")
                         store.dispatch(["type": "preferences", "action": pen ? ["type": "edit_pen_button", "trigger": row["id"].string]
                             : ["type": "open_action_picker", "trigger": row["id"].string]])
                     }.accessibilityIdentifier("trigger-" + row["id"].string)
@@ -308,7 +307,7 @@ struct PenButtonPane: View {
             PaneHeader(title: editor["label"].string) { action(["type": "close_pen_button"]) }
             Form {
                 Section {
-                    Toggle("Same for every tool", isOn: Binding(get: { !editor["per_tool"].bool },
+                    Toggle(store.catalog["native_copy"]["shortcuts"]["same_all_tools"].string, isOn: Binding(get: { !editor["per_tool"].bool },
                         set: { action(["type": "pen_button_per_tool", "trigger": editor["trigger"].raw, "per_tool": !$0]) }))
                         .accessibilityIdentifier("pen-button-same")
                     ForEach(editor["actions"].array, id: \.categoryKey) { row in
@@ -320,12 +319,12 @@ struct PenButtonPane: View {
                     HStack {
                         Spacer()
                         if editor["modified"].bool {
-                            Button("Reset to Default") { action(["type": "reset_trigger", "trigger": editor["trigger"].raw]) }
+                            Button(store.catalog["native_copy"]["shortcuts"]["reset_default"].string) { action(["type": "reset_trigger", "trigger": editor["trigger"].raw]) }
                                 .accessibilityIdentifier("pen-button-reset")
                         }
                     }
                 } footer: {
-                    Text("Tools, brushes and modes last while the button is held. Other actions run once.")
+                    Text(store.catalog["native_copy"]["shortcuts"]["pen_action_help"].string)
                 }
             }.formStyle(.grouped)
         }
@@ -333,12 +332,13 @@ struct PenButtonPane: View {
 }
 
 private struct PaneHeader: View {
+    @Environment(\.capyCommonCopy) private var commonCopy
     let title: String
     let back: () -> Void
     var body: some View {
         HStack(spacing: 8) {
             Button(action: back) { SharedIcon(name: "go-previous").contentShape(Rectangle()) }
-                .buttonStyle(.borderless).accessibilityLabel("Back").help("Back").accessibilityIdentifier("settings-back")
+                .buttonStyle(.borderless).accessibilityLabel(commonCopy["back"].string).help(commonCopy["back"].string).accessibilityIdentifier("settings-back")
             Text(title).font(.headline).accessibilityIdentifier("shortcut-pane-title")
             Spacer()
         }.padding(.horizontal, 20).padding(.top, 12)
@@ -369,7 +369,7 @@ private struct ShortcutSearchField: View {
     @ObservedObject var store: EditorStore
     private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }
     var body: some View {
-        EditorTextField("Search or press a shortcut", value: store.snapshot["preferences"]["shortcut_query"].string) {
+        EditorTextField(store.catalog["native_copy"]["shortcuts"]["search_or_press"].string, value: store.snapshot["preferences"]["shortcut_query"].string) {
             action(["type": "search_shortcuts", "query": $0])
         }
             .editorSearchInput().textFieldStyle(.roundedBorder).accessibilityIdentifier("shortcut-search")
@@ -413,8 +413,8 @@ private struct RecordingRow: View {
                 }
             }
             Spacer()
-            Button("Cancel") { action(["type": "cancel_shortcut"]) }.accessibilityIdentifier("shortcut-cancel")
-            Button(capture["existing"].bool ? "Open" : capture["conflict"].isNull ? "Add" : "Reassign") {
+            Button(store.bootstrap["common"]["cancel"].string) { action(["type": "cancel_shortcut"]) }.accessibilityIdentifier("shortcut-cancel")
+            Button(capture["existing"].bool ? store.catalog["native_copy"]["shortcuts"]["open"].string : capture["conflict"].isNull ? store.catalog["native_copy"]["shortcuts"]["add"].string : store.catalog["native_copy"]["shortcuts"]["reassign"].string) {
                 action(["type": "confirm_shortcut", "replace": !capture["conflict"].isNull])
             }.buttonStyle(.borderedProminent).disabled(capture["chord"].isNull || !capture["error"].isNull)
                 .accessibilityIdentifier("shortcut-confirm")
@@ -446,7 +446,7 @@ private struct ShortcutEditorSheet: View {
                             Spacer()
                             Button { action(["type": "remove_shortcut", "id": editor["id"].string, "index": index]) } label: {
                                 SharedIcon(name: "delete")
-                            }.buttonStyle(.borderless).accessibilityLabel("Remove shortcut")
+                            }.buttonStyle(.borderless).accessibilityLabel(store.catalog["native_copy"]["shortcuts"]["remove_shortcut"].string)
                                 .accessibilityIdentifier("shortcut-remove-\(index)")
                         }
                     }
@@ -456,14 +456,14 @@ private struct ShortcutEditorSheet: View {
                         Button {
                             action(["type": "begin_shortcut", "id": editor["id"].string])
                         } label: {
-                            Label { Text("Add Shortcut") } icon: { SharedIcon(name: "plus") }
+                            Label { Text(store.catalog["native_copy"]["shortcuts"]["add_shortcut"].string) } icon: { SharedIcon(name: "plus") }
                         }.accessibilityIdentifier("shortcut-add")
                     }
                 } header: {
                     HStack {
                         Spacer()
                         if editor["modified"].bool {
-                            Button("Reset to Default") { action(["type": "reset_shortcut", "id": editor["id"].string]) }
+                            Button(store.catalog["native_copy"]["shortcuts"]["reset_default"].string) { action(["type": "reset_shortcut", "id": editor["id"].string]) }
                                 .accessibilityIdentifier("shortcut-reset")
                         }
                     }
@@ -474,13 +474,13 @@ private struct ShortcutEditorSheet: View {
                 if !editor["gestures"].array.isEmpty {
                     Section {
                         ForEach(editor["gestures"].array.indices, id: \.self) { index in Text(editor["gestures"][index].string) }
-                    } header: { Text("Pen and Touch") } footer: { Text("Change these on the Pen & Input page.") }
+                    } header: { Text(store.catalog["native_copy"]["shortcuts"]["pen_touch"].string) } footer: { Text(store.catalog["native_copy"]["shortcuts"]["pen_page_help"].string) }
                 }
             }.formStyle(.grouped)
                 .navigationTitle(editor["label"].string)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { action(["type": capture.isNull ? "close_shortcut_editor" : "cancel_shortcut"]) }
+                        Button(store.bootstrap["common"]["done"].string) { action(["type": capture.isNull ? "close_shortcut_editor" : "cancel_shortcut"]) }
                             .accessibilityIdentifier("shortcut-editor-done")
                     }
                 }
@@ -494,9 +494,9 @@ private struct ModifierCaptureSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Text("Press the key or button to hold.").foregroundStyle(.secondary)
+                Text(store.catalog["native_copy"]["shortcuts"]["press_hold_key"].string).foregroundStyle(.secondary)
                 if !capture.isNull { Section { RecordingRow(store: store, capture: capture) } }
-            }.formStyle(.grouped).navigationTitle("New Modifier Key")
+            }.formStyle(.grouped).navigationTitle(store.catalog["native_copy"]["shortcuts"]["new_modifier"].string)
         }.frame(minWidth: 360, idealWidth: 420, minHeight: 220)
     }
 }
@@ -505,21 +505,18 @@ struct ActionPickerSheet: View {
     @ObservedObject var store: EditorStore
     private var picker: JSON { store.snapshot["preferences"]["shortcut_page"]["picker"] }
     private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }
-    private var offersNothing: Bool {
-        let query = picker["query"].string.trimmingCharacters(in: .whitespaces).lowercased()
-        return query.isEmpty || "nothing".contains(query)
-    }
+    private var offersNothing: Bool { picker["nothing_visible"].bool }
     var body: some View {
         NavigationStack {
             Form {
                 if !picker["description"].string.isEmpty {
                     Text(picker["description"].string).foregroundStyle(.secondary).accessibilityIdentifier("action-picker-description")
                 }
-                EditorTextField("Search actions", value: picker["query"].string) {
+                EditorTextField(store.catalog["native_copy"]["shortcuts"]["search_actions"].string, value: picker["query"].string) {
                     action(["type": "search_action_picker", "query": $0])
                 }.editorSearchInput().textFieldStyle(.roundedBorder).accessibilityIdentifier("action-picker-search")
                 if offersNothing {
-                    Section { choice(id: "", label: "Nothing", detail: "", selected: picker["nothing"].bool) }
+                    Section { choice(id: "", label: picker["nothing_label"].string, detail: "", selected: picker["nothing"].bool) }
                 }
                 ForEach(picker["sections"].array.indices, id: \.self) { index in
                     let section = picker["sections"][index]
@@ -530,19 +527,19 @@ struct ActionPickerSheet: View {
                     }
                 }
                 if !offersNothing && picker["sections"].array.isEmpty {
-                    ContentUnavailableView("No Results Found", systemImage: "magnifyingglass", description: Text("Try a different search."))
+                    ContentUnavailableView(store.catalog["native_copy"]["shortcuts"]["no_results"].string, systemImage: "magnifyingglass", description: Text(store.catalog["native_copy"]["shortcuts"]["search_help"].string))
                 }
             }.formStyle(.grouped)
                 .navigationTitle(picker["title"].string)
                 .toolbar {
                     if picker["modified"].bool {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Reset") { action(["type": "reset_trigger", "trigger": picker["trigger"].string]) }
+                            Button(store.bootstrap["common"]["reset"].string) { action(["type": "reset_trigger", "trigger": picker["trigger"].string]) }
                                 .accessibilityIdentifier("action-picker-reset")
                         }
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { action(["type": "close_action_picker"]) }.accessibilityIdentifier("action-picker-close")
+                        Button(store.bootstrap["common"]["done"].string) { action(["type": "close_action_picker"]) }.accessibilityIdentifier("action-picker-close")
                     }
                 }
         }.frame(minWidth: 380, idealWidth: 460, minHeight: 420)
@@ -579,7 +576,7 @@ private struct KeymapDetailsSheet: View {
                 }
                 Section {
                     if keymap["differences"].array.isEmpty {
-                        difference("No differences", "This keymap uses the CapyCanvas defaults.")
+                        difference(store.catalog["native_copy"]["shortcuts"]["no_differences"].string, store.catalog["native_copy"]["shortcuts"]["defaults_help"].string)
                     }
                     ForEach(keymap["differences"].array.indices, id: \.self) { index in
                         difference(keymap["differences"][index]["trigger"].string, keymap["differences"][index]["note"].string)
@@ -589,7 +586,7 @@ private struct KeymapDetailsSheet: View {
                 .navigationTitle(keymap["title"].string)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
+                        Button(store.bootstrap["common"]["done"].string) {
                             store.dispatch(["type": "preferences", "action": ["type": "keymap_details", "open": false]])
                         }.accessibilityIdentifier("keymap-details-done")
                     }
@@ -614,13 +611,13 @@ private struct KeymapImportSheet: View {
     private var preview: JSON { store.snapshot["preferences"]["keymap"]["import"] }
     private func action(_ value: [String: Any]) { store.dispatch(["type": "preferences", "action": value]) }
     private var sections: [(String, [JSON])] {
-        [("Added", preview["added"].array), ("Changed", preview["changed"].array), ("Removed", preview["removed"].array),
-         ("Not available", preview["unavailable"].array)].filter { !$0.1.isEmpty }
+        [(store.catalog["native_copy"]["shortcuts"]["added"].string, preview["added"].array), (store.catalog["native_copy"]["shortcuts"]["changed"].string, preview["changed"].array), (store.catalog["native_copy"]["shortcuts"]["removed"].string, preview["removed"].array),
+         (store.catalog["native_copy"]["shortcuts"]["not_available"].string, preview["unavailable"].array)].filter { !$0.1.isEmpty }
     }
     var body: some View {
         NavigationStack {
             Form {
-                if sections.isEmpty { Text("No shortcuts change.") }
+                if sections.isEmpty { Text(store.catalog["native_copy"]["shortcuts"]["no_changes"].string) }
                 ForEach(sections, id: \.0) { title, items in
                     Section("\(title) (\(items.count))") {
                         ForEach(items.indices, id: \.self) { index in Text(items[index].string) }
@@ -630,10 +627,10 @@ private struct KeymapImportSheet: View {
                 .navigationTitle("Import \(preview["title"].string)?")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { action(["type": "cancel_keymap_import"]) }.accessibilityIdentifier("cancel-keymap-import")
+                        Button(store.bootstrap["common"]["cancel"].string) { action(["type": "cancel_keymap_import"]) }.accessibilityIdentifier("cancel-keymap-import")
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Import") { action(["type": "confirm_keymap_import"]) }.accessibilityIdentifier("confirm-keymap-import")
+                        Button(store.bootstrap["common"]["import"].string) { action(["type": "confirm_keymap_import"]) }.accessibilityIdentifier("confirm-keymap-import")
                     }
                 }
         }.frame(minWidth: 380, idealWidth: 460, minHeight: 320)

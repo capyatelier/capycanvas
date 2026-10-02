@@ -7,7 +7,12 @@ import UniformTypeIdentifiers
     @Published var presented = false
     private(set) var confirmingWindow = false
     private weak var store: EditorStore?
+    var common: JSON { store?.bootstrap["common"] ?? JSON() }
+    var copy: JSON { store?.catalog["native_copy"]["header"] ?? JSON() }
     private var request: UInt64?
+    private var closeCaptions: [UInt64: String] = [:]
+    private var closeTitles: [UInt64: String] = [:]
+    func closeCaption(_ id: UInt64) -> String { closeCaptions[id] ?? "" }
     init(store: EditorStore) { self.store = store }
     var rows: [JSON] { view["tabs"].array }
     var selected: UInt64 { view["selected"].uint }
@@ -18,7 +23,18 @@ import UniformTypeIdentifiers
     func receive() {
         guard let store else { return }
         let next = store.snapshot["document_tabs"]
-        if !SnapshotProjection.equal(view.raw, next.raw) { view = next }
+        if !SnapshotProjection.equal(view.raw, next.raw) {
+            view = next
+            var captions: [UInt64: String] = [:]
+            var titles: [UInt64: String] = [:]
+            for row in rows {
+                let id = row["id"].uint, title = row["title"].string
+                titles[id] = title
+                captions[id] = closeTitles[id] == title ? closeCaptions[id]
+                    : NativeTextContext.caption(["type": "close_drawing", "title": title])
+            }
+            closeTitles = titles; closeCaptions = captions
+        }
         if let command = store.state["requests"].array.first(where: { $0["kind"]["type"].string == "drawings" }), request != command["id"].uint {
             request = command["id"].uint; presented = true
             store.dispatch(["type": "complete_request", "id": command["id"].uint, "error": NSNull()])
@@ -255,7 +271,7 @@ private struct DrawingTabList: View {
                     if vertical {
                         HStack(spacing: 5) {
                             SharedIcon(name: "grip", size: 12).frame(width: 24, height: 44).contentShape(Rectangle())
-                                .modifier(DrawingMeasure(id: id, part: \.grip)).accessibilityLabel("Move drawing")
+                                .modifier(DrawingMeasure(id: id, part: \.grip)).accessibilityLabel(store.catalog["native_copy"]["header"]["move_drawing"].string)
                             pick(row, alignment: .leading)
                             close(row).buttonStyle(.plain).frame(width: 24, height: 44)
                         }.padding(.horizontal, 7).frame(height: 48)
@@ -275,9 +291,9 @@ private struct DrawingTabList: View {
                     .zIndex(interaction.dragged == id ? 1 : 0)
                     .editorPopover(isPresented: Binding(get: { interaction.menu == id }, set: { if !$0 { interaction.menu = nil } })) {
                         VStack(alignment: .leading) {
-                            Button("Move Earlier") { tabs.edit(["op":"step", "id":id,"forward":false]); interaction.menu = nil }
-                            Button("Move Later") { tabs.edit(["op":"step", "id":id,"forward":true]); interaction.menu = nil }
-                            Button("Close Drawing") { interaction.menu = nil; tabs.close(id) }
+                            Button(store.catalog["native_copy"]["header"]["move_earlier"].string) { tabs.edit(["op":"step", "id":id,"forward":false]); interaction.menu = nil }
+                            Button(store.catalog["native_copy"]["header"]["move_later"].string) { tabs.edit(["op":"step", "id":id,"forward":true]); interaction.menu = nil }
+                            Button(store.catalog["native_copy"]["header"]["close_drawing"].string) { interaction.menu = nil; tabs.close(id) }
                         }.padding(12)
                     }
             }
@@ -308,7 +324,7 @@ private struct DrawingTabList: View {
     private func close(_ row: JSON) -> some View {
         let id = row["id"].uint
         return Button { tabs.close(id) } label: { Image(systemName: "xmark").font(.caption).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
-            .accessibilityLabel("Close " + row["title"].string).accessibilityIdentifier("drawing-close-\(id)")
+            .accessibilityLabel(tabs.closeCaption(id)).accessibilityIdentifier("drawing-close-\(id)")
             .modifier(DrawingMeasure(id: id, part: \.close))
     }
     private func update() {
@@ -364,13 +380,13 @@ struct DrawingTabsPresentation: ViewModifier {
             if tabs.busy { ProgressView("Switching drawing…").padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) }
         }.sheet(isPresented: $tabs.presented) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Drawings").font(.headline)
+                Text(store.catalog["native_copy"]["header"]["drawings"].string).font(.headline)
                 EditorScrollView { DrawingTabList(store: store, tabs: tabs, vertical: true) }
                 if !tabs.view["storage_error"].isNull { Text(tabs.view["storage_error"].string).foregroundStyle(.red) }
                 HStack {
-                    Button("Undo Tab Order") { tabs.edit(["op":"history","redo":false]) }.disabled(!tabs.view["can_undo"].bool)
-                    Button("Redo Tab Order") { tabs.edit(["op":"history","redo":true]) }.disabled(!tabs.view["can_redo"].bool)
-                    Spacer(); Button("Done") { tabs.presented = false }.keyboardShortcut(.cancelAction)
+                    Button(tabs.copy["undo_order"].string) { tabs.edit(["op":"history","redo":false]) }.disabled(!tabs.view["can_undo"].bool)
+                    Button(tabs.copy["redo_order"].string) { tabs.edit(["op":"history","redo":true]) }.disabled(!tabs.view["can_redo"].bool)
+                    Spacer(); Button(store.bootstrap["common"]["done"].string) { tabs.presented = false }.keyboardShortcut(.cancelAction)
                 }
             }.padding(20).frame(minWidth: 340, idealWidth: 480, minHeight: 260, idealHeight: 440)
                 .modifier(EditorPopupPresentation()).modifier(EditorPopoverHost())

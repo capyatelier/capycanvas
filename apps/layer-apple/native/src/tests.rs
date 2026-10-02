@@ -3,6 +3,7 @@ use super::*;
 use serde_json::{Value, json};
 
 fn stateless(call: unsafe extern "C" fn(*const c_char) -> *mut c_char, request: impl Into<Vec<u8>>) -> Value {
+    fixture_localization();
     let source = CString::new(request).unwrap();
     let output = unsafe { call(source.as_ptr()) };
     assert!(!output.is_null());
@@ -1526,6 +1527,9 @@ fn stateless_color_forms_preserve_tagged_precision_and_convert_previews() {
 
 #[test]
 fn stateless_numeric_input_uses_shared_policy_without_a_session() {
+    let launch = CString::new(json!({"saved":"", "preferred_languages":["en"]}).to_string()).unwrap();
+    let prepared = App(unsafe { capy_apple_launch(0, launch.as_ptr(), std::ptr::null_mut()) });
+    assert!(!prepared.0.is_null());
     let control = serde_json::to_value(layer_ui::ui_catalog()).unwrap()["layer_opacity"].clone();
     let resolve = |operation| stateless(capy_apple_numeric,
         json!({"control":control,"value":1.,"operation":operation}).to_string());
@@ -1714,4 +1718,60 @@ fn apple_color_actions_change_real_paint_and_transparent_eraser_pixels() {
         app.draw_frame();
         assert!(app.pixels() == painted);
     }
+}
+
+#[test]
+fn apple_launch_resolves_saved_preference_before_native_session() {
+    for platform in [0, 1] {
+        let saved = json!({"language": {"Explicit": "en"}}).to_string();
+        let source = CString::new(json!({"saved": saved, "preferred_languages": ["ja-JP", "ko-KR", "en-US"]}).to_string()).unwrap();
+        let app = App(unsafe { capy_apple_launch(platform, source.as_ptr(), std::ptr::null_mut()) });
+        assert!(!app.0.is_null());
+        let localization = unsafe { (*app.0).host.session.localization().clone() };
+        assert_eq!(localization.language(), layer_ui::UiLanguage::English);
+        let bootstrap = app.request(2, json!({"type": "bootstrap"})).unwrap();
+        assert_eq!(bootstrap["active_tag"], "en");
+        assert_eq!(bootstrap["shipped_tags"], json!(["en", "ja", "zh-Hans", "zh-Hant", "ko"]));
+        assert_eq!(bootstrap["preparing_canvas"], localization.text(layer_ui::MessageId::COMMON_PREPARING_CANVAS).as_ref());
+        app.action(json!({"type": "restore_saved_settings", "saved": "{\"language\":{\"Explicit\":\"ja\"}}"}));
+        assert!(std::sync::Arc::ptr_eq(&localization, unsafe { (*app.0).host.session.localization() }));
+    }
+}
+
+#[test]
+fn apple_launch_rejects_invalid_transport_without_a_session() {
+    assert!(unsafe { capy_apple_launch(0, std::ptr::null(), std::ptr::null_mut()) }.is_null());
+    let malformed = CString::new("{}").unwrap();
+    assert!(unsafe { capy_apple_launch(0, malformed.as_ptr(), std::ptr::null_mut()) }.is_null());
+    let valid = CString::new(r#"{"saved":"","preferred_languages":[]}"#).unwrap();
+    assert!(unsafe { capy_apple_launch(9, valid.as_ptr(), std::ptr::null_mut()) }.is_null());
+}
+
+#[test]
+fn apple_launch_prepared_context_survives_restore_and_invalid_platform_keeps_bootstrap_copy() {
+    let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+    let app = App(apple_launch_localized(1, "", localization.clone()));
+    assert!(!app.0.is_null());
+    app.action(json!({"type": "restore_saved_settings", "saved": "{\"language\":{\"Explicit\":\"en\"}}"}));
+    assert!(std::sync::Arc::ptr_eq(&localization, unsafe { (*app.0).host.session.localization() }));
+    assert_eq!(app.request(2, json!({"type": "bootstrap"})).unwrap()["active_tag"], "ja");
+    let source = CString::new(r#"{"saved":"","preferred_languages":["en"]}"#).unwrap();
+    let mut bootstrap = std::ptr::null_mut();
+    assert!(unsafe { capy_apple_launch(9, source.as_ptr(), &mut bootstrap) }.is_null());
+    assert!(!bootstrap.is_null());
+    let view: Value = serde_json::from_slice(unsafe { CStr::from_ptr(bootstrap) }.to_bytes()).unwrap();
+    unsafe { capy_apple_string_free(bootstrap) };
+    assert_eq!(view["canvas_init_failed"], "Could not initialize canvas");
+    assert_eq!(view["canvas_ready"], "Canvas ready");
+}
+
+#[test]
+fn stateless_native_captions_keep_the_prepared_context_and_literal_titles() {
+    let localization = fixture_localization().clone();
+    let title = "{ $title } 🖌 日本語\u{2068}user\u{2069}";
+    let value = stateless(capy_apple_native_caption, json!({"type":"close_drawing", "title":title}).to_string());
+    assert_eq!(value["text"], format!("Close {title}"));
+    assert!(std::sync::Arc::ptr_eq(&localization, control_localization().unwrap()));
+    let appearance = stateless(capy_apple_document_appearance, serde_json::to_string(&layer_ui::NewDocumentOptions::default()).unwrap());
+    assert!(appearance["summary"].as_str().is_some_and(|value| !value.is_empty()));
 }

@@ -17,6 +17,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -153,19 +155,19 @@ internal class LayerSwipe {
                             .clickable(enabled = controls.getBoolean("blend")) {
                                 active?.let { host.query(obj("type" to "layer_blend_menu","id" to it.getLong("id"))) { menu -> blendMenu = menu as? JSONObject } }
                             }.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(active?.getString("blend_label") ?: "Normal",Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
-                            SharedIcon("chevron-down", "Layer blend mode",Modifier.size(12.dp))
+                            Text(active?.getString("blend_label").orEmpty(),Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
+                            SharedIcon("chevron-down", host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("blend"),Modifier.size(12.dp))
                         }
                         blendMenu?.let { WorkspaceMenu(host,it) { blendMenu=null } }
                     }
-                    NumericSetting("Layer opacity",active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f),
+                    NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("opacity"),active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f),
                         enabled=controls.getBoolean("opacity"),inline=true) { host.dispatch(obj("type" to "set_layer_opacity","opacity" to it)) }
                 }
                 Row(horizontalArrangement=Arrangement.spacedBy(2.dp)) {
                     for ((icon, label, property, op, capability) in listOf(
-                        listOf("alpha-lock","Alpha lock","alpha_locked","alpha_lock","alpha_lock"),
-                        listOf("lock","Lock editing","locked","lock","edit_lock"),
-                        listOf("clip","Clip to layer below","clipped","clip","clip"))) {
+                        listOf("alpha-lock",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("alpha_lock"),"alpha_locked","alpha_lock","alpha_lock"),
+                        listOf("lock",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("lock_editing"),"locked","lock","edit_lock"),
+                        listOf("clip",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("clip"),"clipped","clip","clip"))) {
                         LayerButton(host,icon,label,enabled=controls.getBoolean(capability),selected=active?.optBoolean(property)==true,
                             action=active?.let { obj("type" to "layer","action" to obj("op" to op,"id" to it.getLong("id"),"value" to !it.getBoolean(property))) })
                     }
@@ -197,14 +199,14 @@ internal class LayerSwipe {
                 }
             }
             Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { footerHeight = it.height / density.density }.padding(horizontal=6.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(2.dp)) {
-                LayerButton(host,"add-layer","New layer",action=obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
-                LayerButton(host,"folder","New group",action=obj("type" to "layer","action" to obj("op" to "new","group" to true,"clipped" to false)))
-                LayerButton(host,"selection-brush","New Selection Layer",action=obj("type" to "invoke","command" to "new_selection_layer"))
-                LayerButton(host,"mask","Add layer mask",enabled=controls.getBoolean("mask"),action=active?.let { obj("type" to "layer","action" to obj("op" to "add_mask","id" to it.getLong("id"),"replace" to false)) })
-                LayerButton(host,"image","Import image as layer", action=obj("type" to "invoke", "command" to "import_image"))
-                LayerButton(host,"delete","Delete selected layers",enabled=view.getBoolean("can_delete"),action=obj("type" to "layer","action" to obj("op" to "delete_selected")))
+                LayerButton(host,"add-layer",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("new_layer"),action=obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
+                LayerButton(host,"folder",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("new_group"),action=obj("type" to "layer","action" to obj("op" to "new","group" to true,"clipped" to false)))
+                LayerButton(host,"selection-brush",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("new_selection_layer"),action=obj("type" to "invoke","command" to "new_selection_layer"))
+                LayerButton(host,"mask",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("add_mask"),enabled=controls.getBoolean("mask"),action=active?.let { obj("type" to "layer","action" to obj("op" to "add_mask","id" to it.getLong("id"),"replace" to false)) })
+                LayerButton(host,"image",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("import_image"), action=obj("type" to "invoke", "command" to "import_image"))
+                LayerButton(host,"delete",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("delete_selected"),enabled=view.getBoolean("can_delete"),action=obj("type" to "layer","action" to obj("op" to "delete_selected")))
                 Spacer(Modifier.weight(1f))
-                LayerButton(host,"more","Layer actions") { active?.let { contextMenu(it,it.getBoolean("mask_selected"),panelOrigin+Offset(0f,40f)) } }
+                LayerButton(host,"more",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("actions")) { active?.let { contextMenu(it,it.getBoolean("mask_selected"),panelOrigin+Offset(0f,40f)) } }
             }
         }
         drag?.let { d -> layers.find { it.getLong("id")==d.id }?.let { layer ->
@@ -232,6 +234,8 @@ internal class LayerSwipe {
     preview:Boolean=false,context:(Boolean,Offset)->Unit={_,_->},held:(Boolean)->Unit={},cancelContext:()->Unit={},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->}) {
     val colors=LocalPalette.current
     val id=layer.getLong("id")
+    val label=layer.getString("label")
+    val rowCaption=remember(label) { JSONObject(Native.nativeCaption(obj("type" to "layer_row", "title" to label).toString())).getString("text") }
     val latest by rememberUpdatedState(layer)
     var origin by remember { mutableStateOf(Offset.Zero) }
     var press by remember { mutableStateOf(Offset.Zero) }
@@ -256,7 +260,7 @@ internal class LayerSwipe {
         if (!focused || (contactActive && !contactMenus)) return
         if (!contactActive || (holdEligible && !longPressed)) { longPressed=true; context(mask,origin+press) }
     }
-    Box(modifier.fillMaxWidth().heightIn(min=40.dp).clipToBounds().then(if(preview) Modifier else Modifier.testTag("layer-row-$id")).onGloballyPositioned {
+    Box(modifier.semantics { contentDescription = rowCaption }.fillMaxWidth().heightIn(min=40.dp).clipToBounds().then(if(preview) Modifier else Modifier.testTag("layer-row-$id")).onGloballyPositioned {
             rowBounds=it.boundsInRoot(); origin=rowBounds.topLeft
             if(swipe.owner===swipeOwner)swipe.bounds=rowBounds
         }
@@ -340,14 +344,14 @@ internal class LayerSwipe {
             Box(Modifier.width((shift/density).dp).fillMaxHeight().background(Color(0xffc62828))
                 .testTag("layer-delete-$id").clickable(enabled=layer.getBoolean("can_delete")) {
                     swipe.close(); host.layer(obj("op" to "delete","id" to id))
-                },contentAlignment=Alignment.Center) { Text("Delete",color=Color.White,maxLines=1) }
+                },contentAlignment=Alignment.Center) { Text(host.bootstrap!!.getJSONObject("common").getString("delete"),color=Color.White,maxLines=1) }
         }
         Row(Modifier.fillMaxWidth().heightIn(min=40.dp).offset { IntOffset(-shift.roundToInt(),0) }
             .background(if(layer.getBoolean("selected")) colors.active else Color.Transparent)
             .padding(horizontal=6.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {
-        LayerButton(host,if(layer.getBoolean("visible")) "eye" else "eye-hidden",if(layer.optBoolean("selection_layer"))"Show or hide selection overlay" else if(layer.getBoolean("visible"))"Hide layer" else "Show layer",
+        LayerButton(host,if(layer.getBoolean("visible")) "eye" else "eye-hidden",if(layer.optBoolean("selection_layer"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("visible")) "hide_selection" else "show_selection") else if(layer.getBoolean("visible"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("hide") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("show"),
             action=obj("type" to "set_layer_visibility","id" to id,"visible" to !layer.getBoolean("visible")))
-        LayerButton(host,iconName(layer.getString("selection_icon")),"Select layer without changing drawing target",
+        LayerButton(host,iconName(layer.getString("selection_icon")),host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("select_row_help"),
             action=obj("type" to "layer","action" to obj("op" to "toggle_selection","id" to id)))
         Spacer(Modifier.width((layer.getInt("depth")*8).coerceAtMost(24).dp))
         Box(Modifier.width(3.dp).height(28.dp).alpha(if(layer.getBoolean("clipped"))1f else 0f).background(Color(0xffe999a5),SquircleShape(1.dp)))
@@ -355,7 +359,7 @@ internal class LayerSwipe {
             val group=!mask && layer.getBoolean("group")
             val selected=if(mask)layer.getBoolean("mask_selected") else layer.getBoolean("editing") && !layer.getBoolean("mask_selected")
             val operation=if(group)obj("op" to "collapse","id" to id) else obj("op" to "select","id" to id,"mask" to mask)
-            val label=if(group) "Expand or collapse group" else if(mask) "Edit layer mask" else if(layer.optBoolean("selection_layer")) "Edit selection layer" else "Edit layer content"
+            val label=if(group) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse") else if(mask) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_mask") else if(layer.optBoolean("selection_layer")) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_selection") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_content")
             ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp)) {
             Box(Modifier.fillMaxSize().then(if(mask && !preview) Modifier.onGloballyPositioned { maskBounds=it.boundsInRoot() } else Modifier)
                 .then(if(group)Modifier else Modifier.background(colors.input,SquircleShape(3.dp)))
@@ -387,7 +391,7 @@ internal class LayerSwipe {
                         }
                     }
                 },contentAlignment=Alignment.Center) {
-                if(group) SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open","Expand or collapse group",Modifier.size(28.dp))
+                if(group) SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse"),Modifier.size(28.dp))
                 else {
                 if(mask || layer.optBoolean("selection_layer") || layer.isNull("content_icon") || !layer.isNull("content_icon_color")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
                 if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,Modifier.size(24.dp),tint=if(layer.isNull("content_icon_color")) colors.text else Color(android.graphics.Color.parseColor(layer.getString("content_icon_color"))))
@@ -405,7 +409,7 @@ internal class LayerSwipe {
             }
         }
         if(layer.getBoolean("has_mask")) {
-            LayerButton(host,"link",if(layer.getBoolean("mask_linked"))"Unlink mask from layer" else "Link mask to layer",
+            LayerButton(host,"link",if(layer.getBoolean("mask_linked"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("unlink_mask") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("link_mask_to_layer"),
                 Modifier.size(12.dp,24.dp).alpha(if(layer.getBoolean("mask_linked"))1f else .35f),
                 action=obj("type" to "layer","action" to obj("op" to "link_mask","id" to id,"value" to !layer.getBoolean("mask_linked"))))
             thumb(true)
@@ -415,17 +419,17 @@ internal class LayerSwipe {
                 var name by remember { mutableStateOf(TextFieldValue(layer.getString("label"),TextRange(0,layer.getString("label").length))) }
                 val focus=remember { FocusRequester() }; var hadFocus by remember { mutableStateOf(false) }; var done by remember { mutableStateOf(false) }
                 fun finish() { if(!done) { done=true; host.layer(if(name.text.isBlank())obj("op" to "cancel_rename") else obj("op" to "rename","id" to id,"name" to name.text)) } }
-                BasicTextField(name,{name=it},Modifier.fillMaxWidth().focusRequester(focus).onFocusChanged { if(hadFocus && !it.isFocused)finish(); hadFocus=it.isFocused; host.editingText=it.isFocused },
-                    textStyle=LocalTextStyle.current.copy(color=colors.text),singleLine=true,keyboardOptions=KeyboardOptions(imeAction=ImeAction.Done),keyboardActions=KeyboardActions(onDone={finish()}))
+                BasicTextField(name,{name=it;host.textComposition.update(focus,name,hadFocus)},Modifier.fillMaxWidth().focusRequester(focus).onFocusChanged { if(hadFocus && !it.isFocused)finish(); hadFocus=it.isFocused; host.editingText=it.isFocused;host.textComposition.update(focus,name,hadFocus) },
+                    textStyle=LocalTextStyle.current.copy(color=colors.text),singleLine=true,keyboardOptions=KeyboardOptions(imeAction=ImeAction.Done),keyboardActions=KeyboardActions(onDone={if(name.composition==null)finish()}))
                 LaunchedEffect(id) { focus.requestFocus() }
-                DisposableEffect(id) { onDispose { host.editingText=false } }
+                DisposableEffect(id) { onDispose { host.editingText=false;host.textComposition.clear(focus) } }
             } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={if(layer.optBoolean("can_rename"))host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={openContext(false)}),
                 maxLines=1,overflow=TextOverflow.Ellipsis)
             val meta=layer.getString("description")
             if(meta.isNotEmpty())Text(meta,color=colors.secondary,maxLines=1,overflow=TextOverflow.Ellipsis)
         }
         SharedIcon(if(layer.getBoolean("locked"))"lock" else "alpha-lock",null,Modifier.size(12.dp).alpha(if(layer.getBoolean("locked") || layer.getBoolean("alpha_locked"))1f else 0f))
-        SharedIcon("grip","Drag layer",Modifier.size(12.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))
+        SharedIcon("grip",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("move_layer"),Modifier.size(12.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))
         }
     }
 }

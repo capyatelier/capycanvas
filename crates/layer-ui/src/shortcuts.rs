@@ -448,6 +448,7 @@ pub struct ShortcutRow {
     pub subgroup: String,
     pub detail: String,
     pub scope: String,
+    pub scope_caption: String,
     pub bindings: Vec<Vec<String>>,
     pub gestures: Vec<String>,
     pub shortcut: String,
@@ -861,7 +862,8 @@ impl Settings {
         keys
     }
 
-    pub fn action_tooltip(&self, label: &str, action: &UiAction, platform: Platform) -> String { self.action_tooltip_localized(label, action, platform, &Localizer::shared(UiLanguage::English)) }
+    #[cfg(test)]
+    fn action_tooltip_english(&self, label: &str, action: &UiAction, platform: Platform) -> String { self.action_tooltip_localized(label, action, platform, &Localizer::shared(UiLanguage::English)) }
     pub fn action_tooltip_localized(&self, label: &str, action: &UiAction, platform: Platform, l: &Localizer) -> String {
         let shortcut = self.action_shortcut_localized(action, platform, l);
         if shortcut.is_empty() {
@@ -1184,7 +1186,7 @@ mod tests {
             command: CommandId::ZenMode,
         };
         assert_eq!(
-            settings.action_tooltip("Zen mode", &zen, Platform::Gtk),
+            settings.action_tooltip_english("Zen mode", &zen, Platform::Gtk),
             "Zen mode (Tab)"
         );
         settings.shortcuts.insert(
@@ -1192,7 +1194,7 @@ mod tests {
             vec![key("j", true, false), key("k", true, true)],
         );
         assert_eq!(
-            settings.action_tooltip("Translated label", &zen, Platform::Web),
+            settings.action_tooltip_english("Translated label", &zen, Platform::Web),
             "Translated label (Ctrl+J / Ctrl+Shift+K)"
         );
         assert_eq!(
@@ -1203,7 +1205,7 @@ mod tests {
             .shortcuts
             .insert(CommandId::ZenMode.shortcut_id(), Vec::new());
         assert_eq!(
-            settings.action_tooltip("Zen mode", &zen, Platform::Gtk),
+            settings.action_tooltip_english("Zen mode", &zen, Platform::Gtk),
             "Zen mode"
         );
         let new = UiAction::Layer {

@@ -102,18 +102,20 @@ import kotlinx.coroutines.withContext
     }
     if (state.getJSONObject("layer_tools").optString("tool") in listOf("pick_visible", "pick_layer")) {
         val picker=state.getJSONObject("color_picker")
+        val copy=remember(host.catalog) { host.catalog.getJSONObject("native_copy").getJSONObject("sampler") }
+        val sizeLabels=remember(copy) { copy.array("sizes").values().associate { value -> (value as JSONArray).getInt(0) to value.getString(1) } }
         ProvideTextStyle(LocalTextStyle.current.copy(fontSize=13.sp)) {
         Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth().testTag("picker-setting-source"),verticalAlignment=Alignment.CenterVertically) {
-                Text("Source",Modifier.width(76.dp),maxLines=1)
-                PropertyChoice("Source",if(picker.optBoolean("can_sample_layer"))listOf("Visible color","Selected layer") else listOf("Visible color"),if(picker.getBoolean("layer"))1 else 0,onOpenChanged={host.pickerPopupOpen=it}) {
+                Text(copy.getString("source"),Modifier.width(76.dp),maxLines=1)
+                PropertyChoice(copy.getString("source"),if(picker.optBoolean("can_sample_layer"))listOf(copy.getString("visible_color"),copy.getString("selected_layer")) else listOf(copy.getString("visible_color")),if(picker.getBoolean("layer"))1 else 0,onOpenChanged={host.pickerPopupOpen=it}) {
                     host.dispatch(obj("type" to "color_picker","action" to obj("kind" to "source","layer" to (it==1))))
                 }
             }
             val sizes=picker.array("sample_sizes").values().map{(it as Number).toInt()}
             Row(Modifier.fillMaxWidth().testTag("picker-setting-size"),verticalAlignment=Alignment.CenterVertically) {
-                Text("Sample size",Modifier.width(76.dp),maxLines=1)
-                PropertyChoice("Sample size",sizes.map{if(it==1)"Single pixel" else "$it px circle"},sizes.indexOf(picker.getInt("sample_width")),onOpenChanged={host.pickerPopupOpen=it}) {
+                Text(copy.getString("sample_size"),Modifier.width(76.dp),maxLines=1)
+                PropertyChoice(copy.getString("sample_size"),sizes.map{sizeLabels.getValue(it)},sizes.indexOf(picker.getInt("sample_width")),onOpenChanged={host.pickerPopupOpen=it}) {
                     host.dispatch(obj("type" to "set_color_sample_size","width" to sizes[it]))
                 }
             }
@@ -121,6 +123,7 @@ import kotlinx.coroutines.withContext
         }
         return
     }
+    val controlCopy = remember(host.catalog) { host.catalog.getJSONObject("native_copy").getJSONObject("tool_controls") }
     val modes = setOf("selection_new", "selection_add", "selection_subtract", "selection_intersect")
     val actions = state.array("tool_actions").objects()
     val commands = state.array("commands").let { list -> remember(list) { list.objects().associateBy { it.getString("id") } } }
@@ -140,7 +143,7 @@ import kotlinx.coroutines.withContext
                 }
             }
         }
-        if (actions.any { it.getString("command") in modes }) SelectionMenuButton(host, "Selection Actions…", "selection")
+        if (actions.any { it.getString("command") in modes }) SelectionMenuButton(host, controlCopy.getString("selection_menu"), "selection")
         var group = ""
         state.array("tool_settings").objects().forEach { field ->
             val next = field.getString("group")
@@ -172,9 +175,10 @@ import kotlinx.coroutines.withContext
 }
 
 @Composable private fun TonalSettingsControls(host: CanvasHost, state: JSONObject) {
+    val copy = remember(host.catalog) { host.catalog.getJSONObject("native_copy").getJSONObject("tool_controls") }
     val commands = state.array("commands").let { list -> remember(list) { list.objects().associateBy { it.getString("id") } } }
     val actions = state.array("tool_actions").objects()
-    val modes = obj("id" to "selection-mode", "label" to "Selection mode", "segmented" to true, "items" to JSONArray(actions.map { action ->
+    val modes = obj("id" to "selection-mode", "label" to copy.getString("selection_mode"), "segmented" to true, "items" to JSONArray(actions.map { action ->
         val command = commands.getValue(action.getString("command"))
         obj("icon" to command.getString("icon"), "label" to command.getString("label"), "selected" to command.getBoolean("selected"),
             "action" to obj("type" to "invoke", "command" to action.getString("command")))
@@ -187,7 +191,7 @@ import kotlinx.coroutines.withContext
         val fields = state.array("tool_settings").objects()
         if (fields.any { it.getString("id") == "tonal_lower" }) {
             val bounds = listOf("tonal_lower", "tonal_upper").map { id -> fields.first { it.getString("id") == id } }
-            RangeControl(bounds, "Range in stops relative to reference white (0)", Modifier.fillMaxWidth()) { index, value ->
+            RangeControl(bounds, copy.getString("range_hint"), Modifier.fillMaxWidth()) { index, value ->
                 host.dispatch(obj("type" to "set_tool_setting", "id" to bounds[index].getString("id"), "value" to value))
             }
         }

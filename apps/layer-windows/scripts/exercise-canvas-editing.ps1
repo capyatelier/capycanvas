@@ -68,9 +68,9 @@ function Export-Png([string]$Name) {
  $before=(Model).state.document_file|ConvertTo-Json -Compress
  Wait-Until {((Model).state.commands|Where-Object id -eq 'export_document').enabled} 'Export stayed disabled'
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'export_document'
- Invoke 'Preview export' -Name
+ Invoke 'Preview Output' -Name
  Wait-Until {(Model).windows_document.stage -eq 'preview'} 'Export preview did not prepare' 60
- Invoke 'Export…' -Name
+ Invoke 'Export' -Name
  $picker=Control 'Save As' -Name
  if($picker.Current.ClassName -ne '#32770' -or $picker.Current.ProcessId -ne $review.Id){throw 'Export picker is not owned'}
  $entry=@{value=$null};Wait-Until {
@@ -89,7 +89,7 @@ function Export-Png([string]$Name) {
  $owner=[uint32]0;$button=[IntPtr]$save.value.Current.NativeWindowHandle
  [CapyEditingCapture]::GetWindowThreadProcessId($button,[ref]$owner)|Out-Null
  if($owner -ne $review.Id -or ![CapyEditingCapture]::PostMessage($button,245,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Cannot invoke owned export Save button'}
- Wait-Until {(Test-Path -LiteralPath $path) -and !(Model).state.document_file.busy -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'PNG export did not complete' 45
+ Wait-Until {(Test-Path -LiteralPath $path) -and !(Model).state.document_file.busy -and (Control 'drawing-canvas').Current.IsEnabled} 'PNG export did not complete' 45
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $before){throw 'PNG export changed the document checkpoint'}
  $bitmap=[Drawing.Bitmap]::new($path)
  try{
@@ -146,11 +146,11 @@ try{
  Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated editing canvas did not start' 45
  $handle=$review.MainWindowHandle;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
- Wait-Until {$c=(Model).state.camera;$b=(Control 'Drawing canvas' -Name).Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
+ Wait-Until {$c=(Model).state.camera;$b=(Control 'drawing-canvas').Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close'}
  $fitRevision=(Model).state.camera.revision
  Invoke 'canvas-fit';Wait-Until {(Model).state.camera.revision -gt $fitRevision} 'Fit did not update the camera'
- $camera=(Model).state.camera;$area=$camera.work_area;$bounds=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+ $camera=(Model).state.camera;$area=$camera.work_area;$bounds=(Control 'drawing-canvas').Current.BoundingRectangle
  $cx=[int]($bounds.X+$area[0]+$area[2]/2);$cy=[int]($bounds.Y+$area[1]+$area[3]/2)
  @{camera=$camera;canvas=$bounds}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'camera.json')
  if($area[2] -lt 900 -or $area[3] -lt 600){throw 'Canvas too small for artwork gesture checks'}

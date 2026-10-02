@@ -41,7 +41,7 @@ function Check-Caption {
 function Wait-Canvas {
     Wait-Until {
         $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas'))
         $canvas -and $canvas.Current.IsEnabled
     } 'Modal input gate did not clear'
     Check-Caption

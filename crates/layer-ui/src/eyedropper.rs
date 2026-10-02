@@ -149,7 +149,7 @@ pub struct PickerPreview<'a> {
 impl<R: CanvasRenderer> crate::UiSession<R> {
     pub fn color_preview(&self) -> PickerPreview<'_> {
         let colors = self.state().preview_colors();
-        let view = colors.view_mapped(self.effective_sdr_rendition());
+        let view = colors.view_mapped(self.effective_sdr_rendition(), self.localization());
         PickerPreview { picker: &self.state().color_picker, colors, view }
     }
 }

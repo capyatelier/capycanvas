@@ -2,8 +2,9 @@
 //! its print resolution, from a shared dialog model. Paint layers and masks
 //! resample on the GPU; placed photos, selections, guides and effect
 //! distances scale as metadata. Hosts only present the view.
-use super::canvas_size::{CanvasSizeUnit, CanvasUnitChoice, number, set_size_unit};
+use super::canvas_size::{CanvasSizeUnit, CanvasUnitChoice, number, set_size_unit, size_message};
 use super::*;
+use std::sync::Arc;
 use layer_core::Edit;
 use layer_core::{CanvasGeometry, ImageResolution, Interpolation};
 
@@ -22,14 +23,14 @@ pub enum ImageResample {
 }
 impl ImageResample {
     pub const ALL: [Self; 5] = [Self::Automatic, Self::Bicubic, Self::Lanczos, Self::Bilinear, Self::Nearest];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Automatic => "Automatic",
-            Self::Bicubic => "Bicubic",
-            Self::Lanczos => "Lanczos",
-            Self::Bilinear => "Bilinear",
-            Self::Nearest => "Nearest neighbor",
-        }
+    pub fn localized_label(self, localization: &Localizer) -> Arc<str> {
+        localization.text(match self {
+            Self::Automatic => MessageId::RESOURCES_SIZE_RESAMPLE_AUTOMATIC,
+            Self::Bicubic => MessageId::RESOURCES_SIZE_RESAMPLE_BICUBIC,
+            Self::Lanczos => MessageId::RESOURCES_SIZE_RESAMPLE_LANCZOS,
+            Self::Bilinear => MessageId::RESOURCES_SIZE_RESAMPLE_BILINEAR,
+            Self::Nearest => MessageId::RESOURCES_SIZE_RESAMPLE_NEAREST,
+        })
     }
     /// The filter for scaling `from` pixels to `to`. Automatic keeps detail
     /// sharp when reducing and smooth when enlarging.
@@ -47,7 +48,7 @@ impl ImageResample {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ImageResampleChoice {
     pub resample: ImageResample,
-    pub label: &'static str,
+    pub label: Arc<str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -67,19 +68,21 @@ pub enum ImageSizeAction {
 /// resolution is in pixels per inch.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ImageSizeView {
-    pub title: &'static str,
-    pub labels: [&'static str; 2],
+    pub title: Arc<str>,
+    pub apply_label: Arc<str>,
+    pub cancel_label: Arc<str>,
+    pub labels: [Arc<str>; 2],
     pub values: [f64; 2],
     pub numeric: [NumericControl; 2],
     pub unit: CanvasSizeUnit,
     pub units: Vec<CanvasUnitChoice>,
-    pub resolution_label: &'static str,
+    pub resolution_label: Arc<str>,
     pub resolution: f64,
     pub resolution_numeric: NumericControl,
     pub constrain: bool,
-    pub constrain_label: &'static str,
+    pub constrain_label: Arc<str>,
     pub resample: ImageResample,
-    pub resample_label: &'static str,
+    pub resample_label: Arc<str>,
     pub resamples: Vec<ImageResampleChoice>,
     /// The resulting size, or why it can't be applied.
     pub message: String,
@@ -99,7 +102,7 @@ pub(super) struct ImageSizeDraft {
 
 
 impl ImageSizeDraft {
-    fn new(current: [u32; 2], resolution: Option<ImageResolution>) -> Self {
+    fn new(current: [u32; 2], resolution: Option<ImageResolution>, localization: &Localizer) -> Self {
         let ppi = resolution.map_or(DEFAULT_PPI, |r| r.pixels_per_inch()[0].round().max(1.));
         Self {
             current,
@@ -110,20 +113,22 @@ impl ImageSizeDraft {
             constrain: true,
             resample: ImageResample::Automatic,
             view: ImageSizeView {
-                title: "Image Size",
-                labels: ["Width", "Height"],
+                title: localization.text(MessageId::RESOURCES_SIZE_IMAGE_TITLE),
+                apply_label: localization.text(MessageId::COMMON_APPLY),
+                cancel_label: localization.text(MessageId::COMMON_CANCEL),
+                labels: [localization.text(MessageId::RESOURCES_SIZE_WIDTH), localization.text(MessageId::RESOURCES_SIZE_HEIGHT)],
                 values: [0.; 2],
                 numeric: [number(1., 1., 0, "px"), number(1., 1., 0, "px")],
                 unit: CanvasSizeUnit::Pixels,
-                units: CanvasSizeUnit::ALL.map(|unit| CanvasUnitChoice { unit, label: unit.label() }).into(),
-                resolution_label: "Resolution",
+                units: CanvasSizeUnit::ALL.map(|unit| CanvasUnitChoice { unit, label: unit.localized_label(localization) }).into(),
+                resolution_label: localization.text(MessageId::RESOURCES_SIZE_RESOLUTION),
                 resolution: ppi,
                 resolution_numeric: number(1., 10_000., 0, "ppi"),
                 constrain: true,
-                constrain_label: "Constrain proportions",
+                constrain_label: localization.text(MessageId::RESOURCES_SIZE_CONSTRAIN),
                 resample: ImageResample::Automatic,
-                resample_label: "Resample",
-                resamples: ImageResample::ALL.map(|resample| ImageResampleChoice { resample, label: resample.label() }).into(),
+                resample_label: localization.text(MessageId::RESOURCES_SIZE_RESAMPLE),
+                resamples: ImageResample::ALL.map(|resample| ImageResampleChoice { resample, label: resample.localized_label(localization) }).into(),
                 message: String::new(),
                 can_apply: false,
             },
@@ -161,7 +166,7 @@ impl ImageSizeDraft {
         self.resolution != self.ppi
     }
 
-    fn update(&mut self, document: &Document, limits: layer_core::GeometryLimits) {
+    fn update(&mut self, document: &Document, limits: layer_core::GeometryLimits, localization: &Localizer) {
         let limit = f64::from(limits.canvas_dimension());
         self.view.numeric = std::array::from_fn(|axis| match self.unit {
             CanvasSizeUnit::Pixels => number(1., limit, 0, "px"),
@@ -176,13 +181,13 @@ impl ImageSizeDraft {
         (self.view.message, self.view.can_apply) = match self.size() {
             None => (layer_core::CanvasGeometryError::Empty.to_string(), false),
             Some(size) if size == self.current && self.resolution_changed() => {
-                (format!("Only the resolution changes, to {} ppi", self.resolution), true)
+                ({ let mut args = FluentArgs::new(); args.set("resolution", self.resolution.to_string()); localization.format(MessageId::RESOURCES_SIZE_RESOLUTION_ONLY, &args) }, true)
             }
-            Some(size) if size == self.current => (format!("Current size: {width} × {height} px"), false),
+            Some(size) if size == self.current => (size_message(localization, MessageId::RESOURCES_SIZE_CURRENT, [width, height]), false),
             Some(size) => {
                 let geometry = CanvasGeometry::resize(self.current, size, self.resample.interpolation(self.current, size));
                 match document.check_canvas_geometry(&geometry, limits) {
-                    Ok(()) => (format!("New size: {} × {} px", size[0], size[1]), true),
+                    Ok(()) => (size_message(localization, MessageId::RESOURCES_SIZE_NEW, size), true),
                     Err(error) => (error.to_string(), false),
                 }
             }
@@ -199,8 +204,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
-        let mut draft = ImageSizeDraft::new([doc.width, doc.height], doc.resolution);
-        draft.update(doc, self.engine.geometry_limits());
+        let mut draft = ImageSizeDraft::new([doc.width, doc.height], doc.resolution, self.localization());
+        draft.update(doc, self.engine.geometry_limits(), self.localization());
         self.image_size = Some(draft);
         self.refresh_tools();
         Ok(())
@@ -213,13 +218,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         let draft = self.image_size.as_mut().ok_or("Image Size is not open")?;
-        let finite = |value: f64| if value.is_finite() { Ok(value) } else { Err("Enter a number") };
+        let finite = |value: f64| if value.is_finite() { Ok(value) } else { Err(NumericError::FiniteNumber.message(&self.state.localization)) };
         match action {
             ImageSizeAction::Width { value } => draft.set(0, finite(value)?),
             ImageSizeAction::Height { value } => draft.set(1, finite(value)?),
             ImageSizeAction::Unit { unit } => set_size_unit(draft.current, &mut draft.values, &mut draft.unit, unit),
             ImageSizeAction::Resolution { value } => {
-                draft.view.resolution_numeric.validate(finite(value)? as f32, draft.view.resolution_label)?;
+                draft.view.resolution_numeric.validate(finite(value)? as f32, draft.view.resolution_label.as_ref()).map_err(|reason| reason.message(&self.state.localization))?;
                 draft.resolution = value.round();
             }
             ImageSizeAction::Constrain { constrain } => {
@@ -233,7 +238,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let limits = self.engine.geometry_limits();
         let draft = self.image_size.as_mut().unwrap();
-        draft.update(self.engine.document(), limits);
+        draft.update(self.engine.document(), limits, &self.state.localization);
         self.refresh_tools();
         Ok(())
     }
@@ -263,5 +268,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.image_size = None;
         self.refresh_tools();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::test_support::{session, invoke};
+    #[test]
+    fn retained_image_size_status_survives_ordinary_publication() {
+        let mut session = session(Platform::Gtk);
+        invoke(&mut session, CommandId::ImageSize);
+        let message = session.image_size.as_ref().unwrap().view.message.as_ptr();
+        for size in [8., 17.] {
+            session.dispatch(UiAction::SetBrushSize { value: size }).unwrap();
+            session.dispatch(UiAction::SetZoom { zoom: size / 8. }).unwrap();
+            session.set_viewport([640. + size, 480.], [640 + size as u32, 480]).unwrap();
+            assert_eq!(session.image_size.as_ref().unwrap().view.message.as_ptr(), message);
+        }
     }
 }

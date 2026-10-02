@@ -606,7 +606,7 @@ export async function checkParity({ call, evaluate, settle }) {
   const savedLayout = await evaluate("layerApp.app.layout(1200,900)");
   const fresh = await evaluate(`(async () => {
     const surface=document.createElement('canvas');surface.width=1200;surface.height=900;
-    const session=layerApp.app.constructor.create(surface);
+    const session=layerApp.app.constructor.create(surface, null, [layerApp.app.language_tag()]);
     try {
       session.dispatch({type:'restore_workspace',workspace:${JSON.stringify(savedWorkspace)}});
       return {workspace:session.state().workspace,layout:session.layout(1200,900)};

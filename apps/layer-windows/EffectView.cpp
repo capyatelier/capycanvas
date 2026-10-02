@@ -19,7 +19,7 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
     hstring editingContext;
     std::shared_ptr<ColorForm> form;
     void rebuild(){
-        fields.Children().Clear();form=std::make_shared<ColorForm>();auto weak=weak_from_this();
+        fields.Children().Clear();form=std::make_shared<ColorForm>(property->data);auto weak=weak_from_this();
         form->init([weak,expected=editingContext](J value){if(auto self=weak.lock();self&&(!self->context||self->context()==expected))self->set(value);},property->id()+L"-color");
         fields.Children().Append(form->root);
     }

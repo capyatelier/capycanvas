@@ -25,6 +25,7 @@ private struct CommandSearchBar: View {
     @Environment(\.editorPalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var style: JSON { store.catalog["command_search_style"] }
+    private var copy: JSON { store.catalog["native_copy"]["search"] }
     private var inset: CGFloat { style["inset"].isNull ? 12 : style["inset"].number }
     private var gap: CGFloat { style["gap"].isNull ? 8 : style["gap"].number }
     private var textSize: CGFloat { store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3 }
@@ -100,11 +101,11 @@ private struct CommandSearchBar: View {
                     lineWidth: focused ? 2 : 1))
                 Button { send(["type": "close"]) } label: {
                     SharedIcon(name: "close").frame(width: rowHeight - 12, height: rowHeight - 12).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("command-search-close").accessibilityLabel("Close command search")
+                }.buttonStyle(.plain).accessibilityIdentifier("command-search-close").accessibilityLabel(copy["close_search"].string)
             }
             if parameter.isNull {
                 if results.isEmpty {
-                    Text("No matching commands").opacity(0.65).frame(maxWidth: .infinity).padding(inset)
+                    Text(copy["no_matches"].string).opacity(0.65).frame(maxWidth: .infinity).padding(inset)
                 } else {
                     ScrollViewReader { proxy in
                         ViewThatFits(in: .vertical) {
@@ -128,8 +129,8 @@ private struct CommandSearchBar: View {
     }
 
     @ViewBuilder private var field: some View {
-        let label = parameter.isNull ? "Search commands" : parameter["label"].string
-        let prompt = parameter.isNull ? "Search commands" : "Enter a value"
+        let label = parameter.isNull ? copy["search_commands"].string : parameter["label"].string
+        let prompt = parameter.isNull ? copy["search_commands"].string : copy["enter_value"].string
         #if os(iOS)
         NumericTextField(label: label, text: $text, focused: $focused, fontSize: textSize, color: palette["text"],
             identifier: "command-search", submit: { toCanvas in
@@ -142,10 +143,10 @@ private struct CommandSearchBar: View {
         TextField(prompt, text: $text, selection: $selection)
             .textFieldStyle(.plain).editorSearchInput().focused($focused)
             .accessibilityIdentifier("command-search").accessibilityLabel(label)
-            .onSubmit { send(["type": "commit", "text": text]); focused = true }
-            .onKeyPress(.escape) { back(); return .handled }
-            .onKeyPress(.upArrow) { move(-1) }
-            .onKeyPress(.downArrow) { move(1) }
+            .onSubmit { guard !NativeTextContext.composing else { return }; send(["type": "commit", "text": text]); focused = true }
+            .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; back(); return .handled }
+            .onKeyPress(.upArrow) { NativeTextContext.composing ? .ignored : move(-1) }
+            .onKeyPress(.downArrow) { NativeTextContext.composing ? .ignored : move(1) }
         #endif
     }
 

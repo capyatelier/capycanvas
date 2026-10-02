@@ -18,7 +18,7 @@ pub struct ZoomReadout {
 }
 
 impl ZoomReadout {
-    pub fn new() -> Rc<Self> {
+    pub fn new(localization: std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
         let label = gtk::Label::new(Some("100% · 0°"));
         let root = gtk::Button::builder().child(&label).build();
         root.set_widget_name("canvas-view-info");
@@ -31,7 +31,7 @@ impl ZoomReadout {
         let menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         menu.set_widget_name("zoom-menu");
         menu.set_position(gtk::PositionType::Top);
-        let field = NumberControl::inline(NumericControl::zoom(), "Zoom");
+        let field = NumberControl::inline(NumericControl::zoom(), "Zoom", localization);
         field.set_widget_name(FIELD);
         field.set_size_request(220, -1);
         Rc::new(Self {

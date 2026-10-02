@@ -124,7 +124,7 @@ private class BarFrame {
                 if (dock.canvasBar != bounds) { dock.canvasBar = bounds; dock.canvasBarSlot = bounds; dock.refresh() }
             }
             .panelSurface(BarElevation, shape).glass(shape, key = glass)
-            .semantics { contentDescription = "Canvas actions" }) {
+            .semantics { contentDescription = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("canvas_actions") }) {
             CompositionLocalProvider(LocalPalette provides colors.onGlass) {
                 Surface(Modifier.fillMaxSize(), color = colors.onGlass.panelFill, contentColor = colors.text) {
                     Row(Modifier.padding(BarPadding.dp).clipToBounds(), horizontalArrangement = Arrangement.spacedBy(BarGap.dp),
@@ -160,12 +160,12 @@ private class BarFrame {
 
 @Composable private fun CanvasBarMore(host: CanvasHost, context: JSONObject, shown: Int) {
     val button = remember { WindowlessMenuButton() }
-    HoverTip("More") {
+    HoverTip(host.bootstrap!!.getJSONObject("common").getString("more")) {
         Box(Modifier.size(BarItemHeight.dp).testTag("canvas-bar-more").clip(ControlShape).focusProperties { canFocus = false }
-            .opensWindowlessMenu(button, "More") { load ->
+            .opensWindowlessMenu(button, host.bootstrap!!.getJSONObject("common").getString("more")) { load ->
                 host.query(obj("type" to "canvas_bar_menu", "context" to context, "shown" to shown)) { load(it as? JSONObject) }
             }, contentAlignment = Alignment.Center) {
-            SharedIcon("more", "More", Modifier.size(16.dp))
+            SharedIcon("more", host.bootstrap!!.getJSONObject("common").getString("more"), Modifier.size(16.dp))
             WindowlessMenuHost(host, button)
         }
     }

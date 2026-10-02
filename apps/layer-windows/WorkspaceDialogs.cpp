@@ -74,7 +74,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         for(auto target:{L"picker",L"toolbar_prompt",L"toolbar_manager"})if(object(customization,target).Size())cancel(target);
     }
     void init(){
-        dialog.XamlRoot(xamlRoot);dialog.Content(body);dialog.DefaultButton(ContentDialogButton::Primary);
+        dialog.XamlRoot(xamlRoot);inheritLanguage(dialog,data);dialog.Content(body);dialog.DefaultButton(ContentDialogButton::Primary);
         dialog.Resources().Insert(box_value(L"ContentDialogMaxWidth"),box_value(620.));
         dialog.Resources().Insert(box_value(L"ContentDialogMinWidth"),box_value(0.));
         body.RowSpacing(12);
@@ -114,6 +114,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         }});
         dialog.PrimaryButtonClick([weak](auto&&,ContentDialogButtonClickEventArgs const& e){
             e.Cancel(true);
+            if(auto self=weak.lock();self&&focusedTextComposing(self->xamlRoot))return;
             if(auto self=weak.lock();self&&!self->closing&&!self->cancelPending&&!self->nameDraft){
                 auto view=self->view();if(!view.Size())return;
                 if(self->kind==L"toolbar_manager"){
@@ -246,9 +247,9 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
         if(!showing)show();
     }
 };
-WorkspaceDialogs::WorkspaceDialogs(Dispatch send,Json catalog,XamlRoot root,std::function<void()> changed,Dispatch report):
+WorkspaceDialogs::WorkspaceDialogs(Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,XamlRoot root,std::function<void()> changed,Dispatch report):
     impl(std::make_shared<Impl>()){
-    impl->data->send=std::move(send);impl->data->catalog=catalog;impl->xamlRoot=root;
+    impl->data->send=std::move(send);impl->data->localization=localization;impl->data->catalog=catalog;impl->xamlRoot=root;
     impl->changed=std::move(changed);impl->report=std::move(report);impl->init();
 }
 WorkspaceDialogs::~WorkspaceDialogs()=default;

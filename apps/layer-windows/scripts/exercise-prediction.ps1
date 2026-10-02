@@ -30,7 +30,7 @@ function Draw([string]$Device){
  # Preferences and the input pane can move or resize the window. Read current
  # physical bounds after they close instead of reusing startup coordinates.
  Start-Sleep -Milliseconds 300
- $canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+ $canvas=(Find 'drawing-canvas').Current.BoundingRectangle
  $model=Model;$area=$model.layout.work_area;$density=$canvas.Width/$model.layout.viewport[0]
  $x=[int]($canvas.X+($area.x+$area.width*.4)*$density);$y=[int]($canvas.Y+($area.y+$area.height*.5)*$density)
  if($Device -eq 'pen'){

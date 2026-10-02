@@ -1,6 +1,6 @@
 //! Shared click-to-select/fill policy. Hosts forward input and render controls;
 //! source choice, cancellation, stale-result handling and edits stay here.
-use crate::localization::{Localizer, MessageId, UiLanguage};
+use crate::localization::{Localizer, MessageId};
 use super::*;
 use layer_core::{Edit, Point, Selection};
 use layer_render::RegionRequest;
@@ -49,7 +49,7 @@ impl Default for RegionTools {
     }
 }
 impl RegionTools {
-    pub fn controls(&self, localizer: &Localizer) -> Vec<ToolSetting> {
+    pub(super) fn fields(&self) -> [(&'static str, MessageId, Option<MessageId>, NumericControl, f32); 4] {
         let distance = layer_render::RegionRefinement::MAX_DISTANCE as f64;
         [
             (
@@ -81,25 +81,27 @@ impl RegionTools {
                 self.refinement.smoothing,
             ),
         ]
-        .into_iter()
+    }
+    pub fn controls(&self, localizer: &Localizer) -> Vec<ToolSetting> {
+        self.fields().into_iter()
         .map(|(id, label, group, numeric, value)| ToolSetting {
             id,
             label: localizer.text(label),
+            label_id: label,
             group: group.map(|id| localizer.text(id)).unwrap_or_else(|| std::sync::Arc::from("")),
             numeric,
             value,
         })
         .collect()
     }
-    pub fn edit(&mut self, id: &str, value: f32) -> Result<(), String> {
-        let control = self
-            .controls(&Localizer::shared(UiLanguage::English))
-            .into_iter()
-            .find(|c| c.id == id)
-            .ok_or("Unknown region setting")?;
-        control.numeric.validate(value, &control.label)?;
+    pub fn edit(&mut self, id: &str, value: f32, localizer: &Localizer) -> Result<(), String> {
+        self.edit_value(id, value).map_err(|reason| reason.message(localizer))
+    }
+    pub fn edit_value(&mut self, id: &str, value: f32) -> Result<(), WorkspaceValidationError> {
+        let (_, label, _, numeric, _) = self.fields().into_iter().find(|field| field.0 == id).ok_or("Unknown region setting")?;
+        numeric.validate(value, label)?;
         if matches!(id, "gap_closing" | "expansion") && value.fract() != 0. {
-            return Err(format!("{} needs a whole number of pixels", control.label));
+            return Err(NumericError::WholePixels { label: label.into() }.into());
         }
         match id {
             "tolerance" => self.tolerance = value,

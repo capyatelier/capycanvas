@@ -33,11 +33,20 @@ private fun typedValue(control: JSONObject, value: Float, text: String): Float? 
     JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to obj("type" to "expression", "text" to text)).toString())).number("value")
 }.getOrNull()
 
-/** Sends an action of a size panel's dialog model. [choose] first ends any
- * typing, so the typed value reaches the draft before the choice. */
-internal class SizePanelActions(private val host: CanvasHost, private val type: String, val endTyping: () -> Unit) {
-    fun send(action: JSONObject) = host.dispatch(obj("type" to type, "action" to action))
-    fun choose(action: JSONObject) { endTyping(); send(action) }
+internal class SizePanelActions(private val dispatch: (JSONObject) -> Unit, private val clearFocus: () -> Unit) {
+    private val commits = linkedMapOf<Any, (Boolean) -> Boolean>()
+    fun register(owner: Any, commit: ((Boolean) -> Boolean)?) {
+        if (commit == null) commits.remove(owner) else commits[owner] = commit
+    }
+    fun send(action: JSONObject) = dispatch(action)
+    fun endTyping(cancel: Boolean = false): Boolean {
+        val accepted = commits.values.toList().map { it(cancel) }.all { it }
+        if (accepted) clearFocus()
+        return accepted
+    }
+    fun choose(action: JSONObject) {
+        if (endTyping(action.getString("op") == "cancel")) send(action)
+    }
 }
 
 /** The Canvas Size and Image Size panels: in the main window at the top of the
@@ -46,7 +55,7 @@ internal class SizePanelActions(private val host: CanvasHost, private val type: 
 @Composable internal fun SizePanel(host: CanvasHost, dock: DockInteraction, workArea: JSONObject, type: String, tag: String,
     view: JSONObject, content: @Composable ColumnScope.(SizePanelActions) -> Unit) {
     val focus = LocalFocusManager.current
-    val actions = remember(host, type) { SizePanelActions(host, type) { focus.clearFocus() } }
+    val actions = remember(host, type, focus) { SizePanelActions({ host.dispatch(obj("type" to type, "action" to it)) }, { focus.clearFocus() }) }
     BackHandler { actions.choose(obj("op" to "cancel")) }
     val colors = LocalPalette.current
     val ime = WindowInsets.ime
@@ -67,8 +76,8 @@ internal class SizePanelActions(private val host: CanvasHost, private val type: 
             content(actions)
             Text(view.getString("message"), Modifier.testTag("$tag-message"), color = colors.secondary)
             Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SizePanelButton("Cancel", "$tag-cancel", null, true) { actions.choose(obj("op" to "cancel")) }
-                SizePanelButton("Apply", "$tag-apply", colors.accent, view.getBoolean("can_apply")) { actions.choose(obj("op" to "apply")) }
+                SizePanelButton(view.getString("cancel_label"), "$tag-cancel", null, true) { actions.choose(obj("op" to "cancel")) }
+                SizePanelButton(view.getString("apply_label"), "$tag-apply", colors.accent, view.getBoolean("can_apply")) { actions.choose(obj("op" to "apply")) }
             }
         }
     }
@@ -86,9 +95,11 @@ internal class SizePanelActions(private val host: CanvasHost, private val type: 
 
 /** A number field whose typed values reach the draft as soon as they read as numbers. */
 @Composable internal fun SizeNumber(actions: SizePanelActions, label: String, value: Float, control: JSONObject, id: String, op: String) {
+    val register = remember(actions) { { owner: Any, commit: ((Boolean) -> Boolean)? -> actions.register(owner, commit) } }
     key(control.toString()) {
         NumericSetting(label, value, control, settings = true, id = id,
-            onText = { text -> typedValue(control, value, text)?.takeIf { it != value }?.let { actions.send(obj("op" to op, "value" to it)) } }) {
+            registerCommit = register,
+            onText = { text -> if (text.composition == null) typedValue(control, value, text.text)?.takeIf { it != value }?.let { actions.send(obj("op" to op, "value" to it)) } }) {
             actions.send(obj("op" to op, "value" to it))
         }
     }

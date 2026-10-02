@@ -3,22 +3,14 @@ use super::*;
 /// A display label only. Never use it as a profile identity or to skip a CMM
 /// conversion. Embedded bytes remain authoritative even for familiar names.
 pub fn profile_description(profile: &ColorProfile) -> Result<String, String> {
-    if let ColorProfile::Builtin(space) = profile {
-        return Ok(space.name().into());
-    }
+    Ok(profile_description_optional(profile)?.unwrap_or_else(|| "Embedded ICC profile".into()))
+}
+pub fn profile_description_optional(profile: &ColorProfile) -> Result<Option<String>, String> {
+    if let ColorProfile::Builtin(space) = profile { return Ok(Some(space.name().into())); }
     let opened = open(profile)?;
-    let label = label(&opened)
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(256)
-        .collect::<String>()
-        .trim()
-        .to_string();
-    Ok(if label.is_empty() {
-        "Embedded ICC profile".into()
-    } else {
-        label
-    })
+    let Some(label) = label(&opened) else { return Ok(None); };
+    let label = label.chars().filter(|c| !c.is_control()).take(256).collect::<String>().trim().to_owned();
+    Ok((!label.is_empty()).then_some(label))
 }
 
 /// Choose a supported editing gamut from matrix-profile colorants in the D50
@@ -92,7 +84,7 @@ pub fn suggested_working_space(profile: &ColorProfile) -> Result<Option<RgbSpace
     Ok(None)
 }
 
-fn label(profile: &Profile) -> String {
+fn label(profile: &Profile) -> Option<&str> {
     use moxcms::ProfileText;
     let label = match &profile.description {
         Some(ProfileText::PlainString(s)) => Some(s.as_str()),
@@ -108,7 +100,7 @@ fn label(profile: &Profile) -> String {
         }),
         None => None,
     };
-    label.unwrap_or("Embedded ICC profile").into()
+    label
 }
 
 #[cfg(test)]
@@ -135,6 +127,21 @@ mod tests {
                 profile_description(&profile).unwrap()
             );
             assert_eq!(suggested, Some(space));
+        }
+    }
+    #[test]
+    fn absent_profile_description_is_distinct_from_literal_default_looking_name() {
+        let mut profile = builtin(RgbSpace::Srgb).unwrap();
+        profile.description = None;
+        let unnamed = ColorProfile::Icc(profile.encode().unwrap().into());
+        assert_eq!(profile_description_optional(&unnamed).unwrap(), None);
+        for name in ["Embedded ICC profile", "埋め込みICCプロファイル", "내 프로파일"] {
+            describe(&mut profile, name);
+            assert_eq!(label(&profile), Some(name));
+            if name.is_ascii() {
+                let definition = ColorProfile::Icc(profile.encode().unwrap().into());
+                assert_eq!(profile_description_optional(&definition).unwrap().as_deref(), Some(name));
+            }
         }
     }
     #[test]

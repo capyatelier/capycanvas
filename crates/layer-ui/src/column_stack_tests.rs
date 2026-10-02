@@ -492,7 +492,7 @@ fn check_paint_default_stack(platform: Platform) {
     let layout = crate::WorkspacePreset::Illustrator.layout(platform);
     let capture = crate::WorkspaceCapture {
         history: crate::LayoutHistory::new(&layout),
-        working: crate::WorkspacePreset::Illustrator.working_state(),
+        working: crate::WorkspacePreset::Illustrator.working_state_canonical(),
     };
     let assert_open = |s: &UiSession<Recorder>| {
         let resolved = s.layout(STACK_VIEW);

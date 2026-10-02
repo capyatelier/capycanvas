@@ -1374,7 +1374,7 @@ fn new_mode_commands_follow_the_command_checklist() {
         let row = rows.iter().find(|(d, _)| d.id == command.shortcut_id()).unwrap();
         assert_eq!(row.1.id(), section, "{command:?}");
         assert!(s.state.settings.command_keys(command).is_empty(), "{command:?} has no default keys");
-        assert!(!crate::customization::tool_choice(ToolbarControl::Command { command }).description.is_empty());
+        assert!(!crate::customization::canonical_tool_choice(ToolbarControl::Command { command }).description.is_empty());
         let entry = s.command_catalog().into_iter().find(|d| d.id == command_catalog::identity(&UiAction::Invoke { command })).unwrap();
         assert!(!entry.description.is_empty(), "{command:?}");
         assert!(entry.disabled_reason.as_deref().is_none_or(|r| r != "Unavailable in the current tool or edit target"), "{command:?}");
@@ -1396,7 +1396,7 @@ fn lasso_fill_is_a_tool_command() {
 
 #[test]
 fn localized_crop_bar_preserves_actions_and_fallback_captions() {
-    for (language, apply) in [(UiLanguage::English, "Apply"), (UiLanguage::Japanese, "適用")] {
+    for (language, apply, cancel) in [(UiLanguage::English, "Apply", "Cancel"), (UiLanguage::Japanese, "適用", "キャンセル")] {
         let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk,
             Localizer::shared(language)).unwrap();
         invoke(&mut s, CommandId::Crop);
@@ -1404,7 +1404,7 @@ fn localized_crop_bar_preserves_actions_and_fallback_captions() {
         assert_eq!(bar.context.kind, CanvasBarKind::Crop);
         let completion = bar_items(&bar.completion);
         assert!(completion.contains(&(CommandId::ApplyTransform, apply, false)));
-        assert!(completion.contains(&(CommandId::CancelTransform, "Cancel", false)));
+        assert!(completion.contains(&(CommandId::CancelTransform, cancel, false)));
         bar_edit(&mut s, CommandId::CancelTransform);
         assert!(!s.operation.active());
     }

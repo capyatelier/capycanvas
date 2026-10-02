@@ -12,8 +12,11 @@ use std::{
 };
 
 pub(crate) struct Form {
+    localization: std::sync::Arc<layer_ui::Localizer>,
     editor: RefCell<ColorEditor>,
     updating: Cell<bool>,
+    composing: [Cell<bool>; 5],
+    intensity_error: RefCell<Option<String>>,
     dialog: adw::AlertDialog,
     model: adw::ComboRow,
     fields: [adw::EntryRow; 4],
@@ -31,7 +34,7 @@ impl Form {
     fn populate(&self) {
         self.updating.set(true);
         let editor = self.editor.borrow();
-        let labels = editor.model().labels();
+        let labels = editor.model().localized_labels(&self.localization);
         self.model.set_selected(
             ColorInputModel::ALL
                 .iter()
@@ -39,30 +42,26 @@ impl Form {
                 .unwrap() as u32,
         );
         for (i, row) in self.fields.iter().enumerate() {
-            row.set_title(labels[i]);
+            row.set_title(&labels[i]);
             row.set_visible(!labels[i].is_empty());
             row.set_text(&editor.fields()[i]);
         }
-        self.description.set_text(&editor.description());
+        self.description.set_text(&editor.localized_description(&self.localization));
         drop(editor);
         self.updating.set(false);
         self.refresh_preview();
     }
     fn refresh_preview(&self) {
+        if self.composing.iter().any(Cell::get) { self.dialog.set_response_enabled("apply", false); return; }
         let view = self.view.get();
         let color: Result<(RgbColor, RgbColor), String> = (|| {
             let editor = self.editor.borrow();
-            if self.hdr {
-                let stops = self.intensity.text().trim().parse::<f32>().map_err(|_| "Enter a finite EV value".to_string())?;
-                if !stops.is_finite() || editor.intensity() != Some(stops) {
-                    return Err("Enter an EV value within the document’s color range".into());
-                }
-            }
-            Ok((editor.color()?, editor.base_color()?))
+            if let Some(reason) = self.intensity_error.borrow().as_ref() { return Err(reason.clone()); }
+            editor.colors_localized(&self.localization)
         })();
         match color {
             Ok((color, base)) => {
-                let text = layer_ui::color_validation(color, self.space, view.space(), self.hdr).unwrap();
+                let text = layer_ui::color_validation_localized(color, self.space, view.space(), self.hdr, &self.localization).unwrap();
                 self.validation.remove_css_class("error");
                 self.validation.set_text(&text);
                 self.dialog.set_response_enabled("apply", true);
@@ -151,26 +150,28 @@ fn choose_with_intensity(
     if hdr {
         editor.set_model(ColorInputModel::LinearRgb).unwrap();
         let stops = intensity.unwrap_or_else(|| definition.brightness_ev(space).ok().flatten().unwrap_or(0.).max(0.));
-        if let Err(error) = editor.enable_hdr(stops) { workspace.changed(Err(error)); return; }
+        if let Err(error) = editor.enable_hdr(stops) { workspace.changed(Err(error.message(editor.model(), &workspace.localization))); return; }
     }
+    let copy = layer_ui::NativeCopy::new(&workspace.localization).color;
+    let common = layer_ui::CommonCopy::new(&workspace.localization);
     let dialog = adw::AlertDialog::builder()
-        .heading("Edit Color")
+        .heading(copy.edit.as_ref())
         .content_width(400)
         .build();
     dialog.set_widget_name("edit-color-dialog");
-    dialog.add_responses(&[("cancel", "Cancel"), ("apply", "Use Color")]);
+    dialog.add_responses(&[("cancel", common.cancel.as_ref()), ("apply", copy.use_color.as_ref())]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("apply"));
     dialog.set_response_appearance("apply", adw::ResponseAppearance::Suggested);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     let group = adw::PreferencesGroup::new();
-    let model = adw::ComboRow::builder().title("Model").build();
+    let model = adw::ComboRow::builder().title(copy.model.as_ref()).build();
     model.set_widget_name("edit-color-model");
     model.set_model(Some(&gtk::StringList::new(
-        &ColorInputModel::ALL.map(ColorInputModel::name),
+        &ColorInputModel::ALL.map(|model| model.localized_name(&workspace.localization)).iter().map(|name|name.as_ref()).collect::<Vec<_>>(),
     )));
     group.add(&model);
-    let intensity = adw::EntryRow::builder().title("Intensity (EV)").build();
+    let intensity = adw::EntryRow::builder().title(copy.intensity_ev.as_ref()).build();
     intensity.set_widget_name("edit-color-ev");
     intensity.set_visible(hdr);
     if hdr { intensity.set_text(&editor.intensity().unwrap().to_string()); }
@@ -188,11 +189,11 @@ fn choose_with_intensity(
     let preview = ColorPatch::new(false);
     preview.set_height_request(48);
     preview.set_widget_name("edit-color-preview");
-    preview.update_property(&[gtk::accessible::Property::Label("EV-adjusted color")]);
+    preview.update_property(&[gtk::accessible::Property::Label(copy.adjusted.as_ref())]);
     let base_preview = ColorPatch::new(false);
     base_preview.set_height_request(48);
     base_preview.set_widget_name("edit-color-base-preview");
-    base_preview.update_property(&[gtk::accessible::Property::Label("Color before EV adjustment")]);
+    base_preview.update_property(&[gtk::accessible::Property::Label(copy.base.as_ref())]);
     base_preview.set_visible(hdr);
     let colors = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     colors.set_homogeneous(true);
@@ -202,8 +203,8 @@ fn choose_with_intensity(
     labels.set_homogeneous(true);
     labels.add_css_class("caption");
     labels.add_css_class("dim-label");
-    labels.append(&gtk::Label::new(Some("Base")));
-    labels.append(&gtk::Label::new(Some("Adjusted")));
+    labels.append(&gtk::Label::new(Some(copy.base.as_ref())));
+    labels.append(&gtk::Label::new(Some(copy.adjusted.as_ref())));
     labels.set_visible(hdr);
     let comparison = gtk::Box::new(gtk::Orientation::Vertical, 4);
     comparison.set_widget_name("edit-color-comparison");
@@ -223,8 +224,11 @@ fn choose_with_intensity(
         .build());
     dialog.set_extra_child(Some(&scroll));
     let form = Rc::new(Form {
+        localization: workspace.localization.clone(),
         editor: RefCell::new(editor),
         updating: Cell::new(false),
+        composing: std::array::from_fn(|_| Cell::new(false)),
+        intensity_error: RefCell::new(None),
         dialog,
         model,
         fields,
@@ -243,12 +247,13 @@ fn choose_with_intensity(
     let weak = Rc::downgrade(&form);
     form.intensity.connect_changed(move |row| {
         let Some(form) = weak.upgrade() else { return; };
-        if form.updating.get() { return; }
-        let result = row.text().trim().parse::<f32>().map_err(|_| "Enter a finite EV value".to_string())
-            .and_then(|stops| form.editor.borrow_mut().set_intensity(stops));
+        if form.updating.get() || form.composing[4].get() { return; }
+        let result = layer_ui::color_intensity_input(&row.text(), &form.localization)
+            .and_then(|stops| { let mut editor = form.editor.borrow_mut(); editor.set_intensity(stops).map_err(|reason| reason.message(editor.model(), &form.localization)) });
         match result {
-            Ok(()) => form.populate(),
+            Ok(()) => { form.intensity_error.borrow_mut().take(); form.populate(); },
             Err(error) => {
+                *form.intensity_error.borrow_mut() = Some(error.clone());
                 form.validation.add_css_class("error");
                 form.validation.set_text(&error);
                 form.dialog.set_response_enabled("apply", false);
@@ -261,7 +266,7 @@ fn choose_with_intensity(
             let Some(form) = weak.upgrade() else {
                 return;
             };
-            if form.updating.get() {
+            if form.updating.get() || form.composing[i].get() {
                 return;
             }
             let result = form.editor.borrow_mut().set_field(i, row.text().into());
@@ -272,6 +277,18 @@ fn choose_with_intensity(
                 form.refresh_preview();
             }
         });
+    }
+    for (i, row) in form.fields.iter().chain([&form.intensity]).enumerate() {
+        if let Some(text) = row.delegate().and_downcast::<gtk::Text>() {
+            let weak = Rc::downgrade(&form);
+            let row = row.downgrade();
+            text.connect_preedit_changed(move |_, preedit| {
+                let Some(form) = weak.upgrade() else { return; };
+                form.composing[i].set(!preedit.is_empty());
+                if preedit.is_empty() { if let Some(row) = row.upgrade() { row.emit_by_name::<()>("changed", &[]); } }
+                form.refresh_preview();
+            });
+        }
     }
     let weak = Rc::downgrade(&form);
     form.model.connect_selected_notify(move |row| {
@@ -319,7 +336,7 @@ fn choose_with_intensity(
                 workspace.changed(Err("The document changed; reopen Edit Color".into()));
                 return;
             }
-            match form.editor.borrow().color() {
+            match form.editor.borrow().color_localized(&workspace.localization) {
                 Ok(color) => accepted(&workspace, color, form.editor.borrow().intensity()),
                 Err(error) => workspace.changed(Err(error)),
             }

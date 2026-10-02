@@ -44,6 +44,11 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 use crate::events::{CapyPointer, validate_batch};
+pub struct CapyLaunch {
+    native: Option<NativeHost>,
+    settings: Option<crate::settings::PreparedSettings>,
+    bootstrap: CString,
+}
 pub struct CapyHost {
     // An acquired image drops before its surface; the panel is detached on the
     // UI thread before destruction. The surface retains its native COM reference.
@@ -70,6 +75,7 @@ pub struct CapyHost {
     blank_presented: bool,
     prediction_frames: Option<[u64; 2]>, // opt-in, accumulated across document switches
     services: Option<crate::settings::SettingsService>,
+    launch_settings: Option<crate::settings::PreparedSettings>,
     filters: Option<crate::filter_packages::FilterService>,
     documents: Option<crate::documents::DocumentService>,
     workspaces: Option<crate::workspace_service::WorkspaceService<layer_workspace::StoreWorker>>,
@@ -103,11 +109,11 @@ impl CapyHost {
             self.live_contacts.insert(sample.id, *sample);
         }
     }
-    unsafe fn new(panel: *mut c_void, width: u32, height: u32, scale: f32) -> Result<Self, String> {
+    unsafe fn new(panel: *mut c_void, width: u32, height: u32, scale: f32, launch: &mut CapyLaunch) -> Result<Self, String> {
         if panel.is_null() || width == 0 || height == 0 || !scale.is_finite() || scale <= 0.0 {
             return Err("Invalid Windows canvas surface".into());
         }
-        let mut native = NativeHost::new(layer_ui::Platform::Windows)?;
+        let mut native = launch.native.take().ok_or("Windows launch was already adopted")?;
         crate::workspace::initialize(&mut native)?;
         native.startup = Default::default();
         native.resize(width, height, scale)?;
@@ -150,6 +156,7 @@ impl CapyHost {
             blank_presented: false,
             prediction_frames: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| [0; 2]),
             services: None,
+            launch_settings: launch.settings.take(),
             filters: None,
             documents: None,
             workspaces: None,
@@ -404,18 +411,57 @@ impl CapyHost {
     }
 }
 /// # Safety
+/// Call on the startup worker. `tags` is readable NUL-terminated JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_launch(tags: *const c_char) -> *mut CapyLaunch {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tags: Vec<String> = serde_json::from_str(unsafe { read_json(tags) }?).map_err(err)?;
+        let (native, settings) = crate::settings::SettingsService::launch(&tags.iter().map(String::as_str).collect::<Vec<_>>())?;
+        let bootstrap = CString::new(serde_json::to_string(&native.bootstrap_view()).map_err(err)?).map_err(err)?;
+        Ok::<_, String>(CapyLaunch { native: Some(native), settings: Some(settings), bootstrap })
+    }));
+    match result {
+        Ok(Ok(launch)) => Box::into_raw(Box::new(launch)),
+        Ok(Err(error)) => { fail(error); std::ptr::null_mut() },
+        Err(_) => { fail("Windows launch panic"); std::ptr::null_mut() },
+    }
+}
+/// # Safety
+/// The launch remains alive and exclusively owned until this call returns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_launch_view(launch: *const CapyLaunch) -> *const c_char {
+    unsafe { launch.as_ref() }.map_or(std::ptr::null(), |launch| launch.bootstrap.as_ptr())
+}
+/// # Safety
+/// Borrow a live, unadopted launch exclusively for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_launch_localization(launch: *const CapyLaunch) -> *mut crate::CapyLocalization {
+    unsafe { launch.as_ref() }.and_then(|launch| launch.native.as_ref()).map_or(std::ptr::null_mut(), |native| {
+        Box::into_raw(Box::new(crate::CapyLocalization { localizer: native.session.localization().clone() }))
+    })
+}
+/// # Safety
+/// Free a uniquely owned launch once, after its surface adoption or cancellation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_launch_free(launch: *mut CapyLaunch) {
+    if !launch.is_null() { drop(unsafe { Box::from_raw(launch) }); }
+}
+/// # Safety
 /// Call on the panel's XAML thread. `panel` must point to a live
 /// ISwapChainPanelNative interface. Keep the panel alive until the swap chain
-/// is detached on that thread and the returned host is destroyed.
+/// is detached on that thread and the returned host is destroyed. `launch` must
+/// be live, exclusively owned, and not previously adopted.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_create(
     panel: *mut c_void,
     width: u32,
     height: u32,
     scale: f32,
+    launch: *mut CapyLaunch,
 ) -> *mut CapyHost {
     match catch_unwind(AssertUnwindSafe(|| unsafe {
-        CapyHost::new(panel, width, height, scale)
+        let launch = launch.as_mut().ok_or("Missing Windows launch")?;
+        CapyHost::new(panel, width, height, scale, launch)
     })) {
         Ok(Ok(host)) => Box::into_raw(Box::new(host)),
         Ok(Err(e)) => {
@@ -482,14 +528,10 @@ pub unsafe extern "C" fn capy_start_services(
         }
         if host.services.is_none() {
             let context = context as usize;
-            host.services = Some(crate::settings::SettingsService::open(
-                &mut host.native,
-                move || {
-                    if let Some(wake) = wake {
-                        wake(context as *mut c_void);
-                    }
-                },
-            ));
+            let settings = host.launch_settings.take().ok_or("Missing Windows launch preferences")?;
+            host.services = Some(settings.start(&mut host.native, move || {
+                if let Some(wake) = wake { wake(context as *mut c_void); }
+            }));
         }
         host.documents.as_mut().unwrap().start_recovery()?;
         if host.filters.is_none() {
@@ -507,7 +549,7 @@ pub unsafe extern "C" fn capy_start_services(
             let directory = crate::settings::data_directory()?;
             let worker = layer_workspace::StoreWorker::shared(&directory).map_err(err)?;
             let service =
-                crate::workspace_service::WorkspaceService::new(worker, directory, move || {
+                crate::workspace_service::WorkspaceService::new(worker, directory, host.native.session.localization().clone(), move || {
                     if let Some(wake) = wake {
                         wake(context as *mut c_void);
                     }
@@ -1089,13 +1131,16 @@ pub unsafe extern "C" fn capy_document_preview(host: *mut CapyHost, json: *const
 /// Stateless shared numeric policy; safe on the UI thread without a host.
 /// # Safety
 /// `json` must be null or a readable NUL-terminated buffer that remains unchanged
-/// for the duration of this call. Free a nonnull result with `capy_string_free`.
+/// for the duration of this call. The immutable context must be live and
+/// unmodified. Free a nonnull result with `capy_string_free`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_number(json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn capy_number(context: *const crate::CapyLocalization, json: *const c_char) -> *mut c_char {
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<CString, String> {
         let request: layer_ui::NumericRequest =
             serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
-        CString::new(serde_json::to_string(&request.resolve()?).map_err(err)?).map_err(err)
+        let context = unsafe { context.as_ref() }.ok_or("Missing numeric localization")?;
+        let value = request.resolve().map_err(|reason| reason.message(&context.localizer))?;
+        CString::new(serde_json::to_string(&value).map_err(err)?).map_err(err)
     }));
     match result {
         Ok(Ok(value)) => value.into_raw(),

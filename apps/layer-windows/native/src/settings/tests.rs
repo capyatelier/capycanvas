@@ -2,6 +2,11 @@ use super::*;
 use crate::test_support::TempDir;
 use std::{sync::mpsc, time::Duration};
 
+impl SettingsFile {
+    fn load(&self) -> Result<Option<Settings>, String> {
+        self.load_saved().map(|saved| saved.map(|saved| Settings::restore_localized(&saved, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))))
+    }
+}
 fn storage(directory: &TempDir) -> SettingsFile {
     SettingsFile::new(directory.path.clone()).unwrap()
 }
@@ -658,4 +663,40 @@ fn stopped_storage_reports_the_latest_close_write_and_allows_discard() {
     service.discard_close(&mut host);
     assert!(service.close_status().ready);
     service.finish(&mut host).unwrap();
+}
+
+#[test]
+fn prepared_launch_restores_before_views_and_keeps_the_profile_context() {
+    let directory = TempDir::new();
+    let literal = "HDR { $name } 🖌 日本語";
+    let mut initial = edited(1.5);
+    initial.language = layer_ui::LanguagePreference::Explicit(layer_ui::UiLanguage::English);
+    initial.new_document.presets.push(layer_ui::NewDocumentPreset { name: literal.into(), options: initial.new_document.defaults });
+    let saved = serde_json::to_string(&initial).unwrap();
+    fs::write(directory.path.join("settings.json"), &saved).unwrap();
+    let (first, prepared) = SettingsService::launch_at(Ok(storage(&directory)), &["ja-JP", "ko", "en"]).unwrap();
+    assert_eq!(first.session.localization().language(), layer_ui::UiLanguage::English);
+    assert_eq!(first.session.state().settings.pressure_gamma, 1.5);
+    assert_eq!(first.session.state().settings.new_document.presets[0].name, literal);
+    assert_eq!(fs::read_to_string(directory.path.join("settings.json")).unwrap(), saved);
+    let active = first.session.localization().clone();
+    drop(first);drop(prepared);
+    let (reopened, _) = shared::Hub::with_launch(storage(&directory), |_| panic!("Closing all windows must retain the launch context")).unwrap();
+    assert!(Arc::ptr_eq(reopened.session.localization(), &active));
+    let japanese = TempDir::new();
+    fs::write(japanese.path.join("settings.json"), &saved).unwrap();
+    let (native, hub) = shared::Hub::with_launch(storage(&japanese), |saved| NativeHost::launch_localized(layer_ui::Platform::Windows, saved.unwrap_or_default(), layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese))).unwrap();
+    let retained = native.session.localization().clone();
+    assert!(!Arc::ptr_eq(&active, &retained));
+    let mut subscriber = shared::Subscription::new(hub.clone(), || {});
+    let mut desired = native.session.state().settings.clone();
+    desired.language = layer_ui::LanguagePreference::System;
+    subscriber.edit(&desired).unwrap();
+    drop(native);drop(subscriber);drop(hub);
+    let (later, prepared) = SettingsService::launch_at(Ok(storage(&japanese)), &["en-US"]).unwrap();
+    drop(prepared);
+    assert!(Arc::ptr_eq(later.session.localization(), &retained));
+    assert_eq!(later.session.state().settings.language, layer_ui::LanguagePreference::System);
+    assert_eq!(later.session.state().settings.pressure_gamma, 1.5);
+    assert_eq!(later.session.state().settings.new_document.presets[0].name, literal);
 }

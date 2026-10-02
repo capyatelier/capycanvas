@@ -17,14 +17,14 @@ struct PaletteFiles: ViewModifier {
                 set: { if $0 == nil, controller.dialog?.kind != .remove { controller.dialog = nil } })) { dialog in
                 PaletteNameForm(controller: controller, dialog: dialog).modifier(EditorPopupPresentation())
             }
-            .alert("Remove Palette?", isPresented: Binding(get: { controller.dialog?.kind == .remove },
+            .alert(controller.copy["remove_title"].string, isPresented: Binding(get: { controller.dialog?.kind == .remove },
                 set: { if !$0, controller.dialog?.kind == .remove { controller.dialog = nil } }), presenting: controller.dialog) { dialog in
-                Button("Cancel", role: .cancel) { controller.dialog = nil }
-                Button("Remove", role: .destructive) {
+                Button(controller.common["cancel"].string, role: .cancel) { controller.dialog = nil }
+                Button(controller.common["remove"].string, role: .destructive) {
                     controller.dialog = nil
                     if let id = dialog.palette { controller.apply(["op": "remove_palette", "id": id]) }
                 }.accessibilityIdentifier("palette-remove-confirm")
-            } message: { dialog in Text("Remove “\(dialog.name)” and its saved colors?") }
+            } message: { dialog in Text(controller.removeCaption) }
     }
 }
 
@@ -45,15 +45,15 @@ private struct PaletteNameForm: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(dialog.kind == .rename ? "Rename Palette" : "New Palette").font(.headline)
-            TextField("Name", text: Binding(get: { name }, set: { name = String($0.prefix(64)) }))
+            Text(dialog.kind == .rename ? controller.copy["rename_title"].string : controller.copy["new_title"].string).font(.headline)
+            TextField(controller.copy["palette_name"].string, text: Binding(get: { name }, set: { name = String($0.prefix(64)) }))
                 .textFieldStyle(.roundedBorder).focused($focused).onSubmit(save)
                 .accessibilityIdentifier("palette-library-name")
             if let error { Text(error).foregroundStyle(.red).font(.callout).accessibilityIdentifier("palette-name-error") }
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { controller.dialog = nil }.keyboardShortcut(.cancelAction)
-                Button("Save", action: save).keyboardShortcut(.defaultAction).disabled(error != nil || saving)
+                Button(controller.common["cancel"].string, role: .cancel) { controller.dialog = nil }.keyboardShortcut(.cancelAction)
+                Button(controller.common["save"].string, action: save).keyboardShortcut(.defaultAction).disabled(error != nil || saving)
                     .accessibilityIdentifier("palette-name-save")
             }
         }.padding(20).frame(minWidth: 320)

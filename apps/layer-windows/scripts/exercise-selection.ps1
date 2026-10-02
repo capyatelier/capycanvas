@@ -42,8 +42,8 @@ function Tap($at,[string]$Device='mouse'){[CapyRowPointer]::Down($Device,$at.x,$
 function Command([string]$Id){(Model).state.commands|Where-Object id -eq $Id}
 function Tools{(Model).state.layer_tools}
 function Key([uint16]$Code){
-    Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Drawing canvas stayed disabled'
-    (Control 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::KeyAt($Code,$paper.x,$paper.y)
+    Wait-Until {(Control 'drawing-canvas').Current.IsEnabled} 'Drawing canvas stayed disabled'
+    (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::KeyAt($Code,$paper.x,$paper.y)
 }
 function Switch-Workspace([string]$Name,[string]$Id){
     $found=@{switch=$null;menu=$null}
@@ -57,7 +57,7 @@ function Switch-Workspace([string]$Name,[string]$Id){
     Wait-Until {(Model).windows_workspace.id -eq $Id -and !(Model).windows_workspace.busy} "$Name did not open" 20
 }
 function Canvas-Points{
-    $area=(Model).state.camera.work_area;$bounds=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+    $area=(Model).state.camera.work_area;$bounds=(Control 'drawing-canvas').Current.BoundingRectangle
     $script:center=@{x=[int]($bounds.X+$area[0]+$area[2]/2);y=[int]($bounds.Y+$area[1]+$area[3]/2)}
     $script:paper=@{x=$center.x;y=$center.y-90}
 }

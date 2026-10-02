@@ -194,6 +194,7 @@ pub struct ToolSettings {
 }
 impl ToolSettings {
     pub fn new() -> Self {
+        let localization = crate::launch_localization();
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let form = body();
         let picker = crate::color_picker::Settings::new();
@@ -203,11 +204,11 @@ impl ToolSettings {
         modes.set_widget_name("selection-mode-row");
         modes.add_css_class("linked");
         modes.add_css_class("selection-modes");
-        modes.update_property(&[gtk::accessible::Property::Label("Selection mode")]);
+        modes.update_property(&[gtk::accessible::Property::Label(&ToolActionGroup::SelectionMode.localized_label(localization))]);
         mode_container.append(&modes);
         let selection_menu = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
         let selection_actions = gtk::MenuButton::builder()
-            .label("Selection Actions…")
+            .label(localization.text(layer_ui::MessageId::MENU_SELECT).as_ref())
             .popover(&selection_menu)
             .build();
         selection_actions.set_widget_name("selection-actions");
@@ -316,7 +317,7 @@ impl ToolSettings {
                         if let Some(w) = weak.upgrade() {
                             w.dispatch(UiAction::ToolbarEdit { context, action: Box::new(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 }) });
                         }
-                    });
+                    }, workspace.localization.clone());
                     self.form.append(&range.root);
                     fields.extend([(control.clone(), range.inputs[0].clone()), (upper.clone(), range.inputs[1].clone())]);
                     self.range.replace(Some(range));
@@ -335,8 +336,8 @@ impl ToolSettings {
                     }
                 }
                 let input = if compact {
-                    NumberControl::labeled_inline(control.numeric.clone(), &control.label, &control.tooltip(), &inline_labels, &inline_values)
-                } else { NumberControl::new(control.numeric.clone(), &control.label, "") };
+                    NumberControl::labeled_inline(control.numeric.clone(), &control.label, &control.tooltip(), &inline_labels, &inline_values, workspace.localization.clone())
+                } else { NumberControl::new(control.numeric.clone(), &control.label, "", workspace.localization.clone()) };
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;
                 input.connect_value_changed(glib::clone!(
@@ -367,11 +368,10 @@ impl ToolSettings {
                     let image = crate::icons::image(&format!("layer-{}-symbolic", command.icon.unwrap()));
                     image.set_pixel_size(20);
                     if state.layer_tools.tool.selection_tool() == Some(layer_ui::SelectionTool::Brush) {
-                        let label = if action.command == layer_ui::CommandId::SelectionAdd { "Add" } else { "Subtract" };
                         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                         row.set_halign(gtk::Align::Center);
                         row.append(&image);
-                        row.append(&gtk::Label::new(Some(label)));
+                        row.append(&gtk::Label::new(Some(&command.label)));
                         button.set_child(Some(&row));
                         button.set_size_request(44,44);
                     } else { button.set_child(Some(&image)); }
@@ -510,7 +510,7 @@ impl SizePanel {
     pub fn new(workspace: &Rc<Workspace>) -> Self {
         let root = body();
         root.set_spacing(12);
-        let number = NumberControl::new(layer_ui::NumericControl::brush_size(), "Brush size", "");
+        let number = NumberControl::new(layer_ui::NumericControl::brush_size(), &workspace.localization.text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE), "", workspace.localization.clone());
         number.connect_value_changed(glib::clone!(
             #[weak]
             workspace,
@@ -830,6 +830,8 @@ impl ColorWheel {
     }
 }
 pub struct ColorPanel {
+    shape_descriptions: [String; 3],
+    localization: std::sync::Arc<layer_ui::Localizer>,
     pub root: gtk::Box,
     initialized: Cell<bool>,
     wheel: ColorWheel,
@@ -846,6 +848,10 @@ pub struct ColorPanel {
 }
 impl ColorPanel {
     pub fn new() -> Self {
+        let localization = crate::launch_localization().clone();
+        let copy = layer_ui::NativeCopy::new(&localization).color;
+        let shape_descriptions = [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle]
+            .map(|shape| layer_ui::NativeCaption::ColorShape { shape }.message(&localization));
         let root = body();
         root.add_css_class("color-panel");
         let wheel: ColorWheel = glib::Object::new();
@@ -858,44 +864,39 @@ impl ColorPanel {
         *wheel.imp().intensity.borrow_mut() = Some(intensity.clone());
         let edit_color: WheelButton = glib::Object::new();
         edit_color.set_icon_name("document-edit-symbolic");
-        edit_color.set_tooltip_text(Some("Edit Color…"));
-        edit_color.update_property(&[gtk::accessible::Property::Label("Edit Color")]);
+        edit_color.set_tooltip_text(Some(&copy.edit_menu));
+        edit_color.update_property(&[gtk::accessible::Property::Label(&copy.edit)]);
         edit_color.add_css_class("flat");
         edit_color.add_css_class("color-utility");
         edit_color.add_css_class("color-swap");
         edit_color.set_widget_name("color-edit-button");
         let mut quick_colors = Vec::new();
-        for preset in ColorState::default().quick_colors().into_iter().rev() {
+        for white in [true, false] {
+            let label = if white { &copy.paint_white } else { &copy.paint_black };
             let button: WheelButton = glib::Object::new();
             button.add_css_class("flat");
             button.add_css_class("color-swatch");
-            button.set_tooltip_text(Some(preset.label));
-            button.update_property(&[gtk::accessible::Property::Label(preset.label)]);
-            button.set_widget_name(if preset.white { "color-White" } else { "color-Black" });
+            button.set_tooltip_text(Some(label));
+            button.update_property(&[gtk::accessible::Property::Label(label)]);
+            button.set_widget_name(if white { "color-White" } else { "color-Black" });
             let sample = ColorPatch::new(true);
             sample.set_size_request(12, 12);
             button.set_child(Some(&sample));
             button.set_parent(&wheel);
             wheel.imp().corners.borrow_mut().push(button.clone());
-            quick_colors.push((preset.white, button, sample));
+            quick_colors.push((white, button, sample));
         }
         let mut swatches = Vec::new();
         for (slot, label) in [
-            (ColorSlot::Background, "Background color"),
-            (ColorSlot::Foreground, "Foreground color"),
-            (ColorSlot::Transparent, "Transparent paint"),
+            (ColorSlot::Background, localization.text(layer_ui::MessageId::COMMANDS_BACKGROUND_COLOR)),
+            (ColorSlot::Foreground, localization.text(layer_ui::MessageId::COMMANDS_FOREGROUND_COLOR)),
+            (ColorSlot::Transparent, localization.text(layer_ui::MessageId::COMMANDS_TRANSPARENT_PAINT)),
         ] {
             let button: WheelButton = glib::Object::new();
             button.add_css_class("flat");
             button.add_css_class("color-swatch");
-            button.set_tooltip_text(Some(if slot == ColorSlot::Transparent {
-                label
-            } else if slot == ColorSlot::Foreground {
-                "Foreground color · Double-click to edit"
-            } else {
-                "Background color · Double-click to edit"
-            }));
-            button.update_property(&[gtk::accessible::Property::Label(label)]);
+            button.set_tooltip_text(Some(&label));
+            button.update_property(&[gtk::accessible::Property::Label(&label)]);
             button.set_widget_name(&format!("color-{slot:?}"));
             let sample = ColorPatch::new(true);
             sample.set_size_request(16, 16);
@@ -919,9 +920,9 @@ impl ColorPanel {
         swap.add_css_class("color-utility");
         swap.add_css_class("color-swap");
         swap.set_widget_name("color-swap");
-        swap.set_tooltip_text(Some("Swap foreground and background"));
+        swap.set_tooltip_text(Some(&copy.swap));
         swap.update_property(&[gtk::accessible::Property::Label(
-            "Swap foreground and background",
+            &copy.swap,
         )]);
         swap.set_parent(&wheel);
         wheel.imp().corners.borrow_mut().push(swap.clone());
@@ -942,17 +943,17 @@ impl ColorPanel {
         menu_swap.set_widget_name("color-swap-menu");
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.append(&crate::icons::image("layer-color-swap-symbolic"));
-        row.append(&gtk::Label::new(Some("Swap foreground and background")));
+        row.append(&gtk::Label::new(Some(&copy.swap)));
         menu_swap.set_child(Some(&row));
         menu_swap.update_property(&[gtk::accessible::Property::Label(
-            "Swap foreground and background",
+            &copy.swap,
         )]);
-        let menu_edit = gtk::Button::with_label("Edit Color…");
+        let menu_edit = gtk::Button::with_label(&copy.edit_menu);
         menu_edit.add_css_class("flat");
         menu_edit.set_widget_name("color-edit-menu");
         let actions = gtk::Box::new(gtk::Orientation::Vertical, 4);
         actions.append(&menu_edit);
-        let menu_library = gtk::Button::with_label("Palettes…");
+        let menu_library = gtk::Button::with_label(&copy.palettes);
         menu_library.add_css_class("flat");
         menu_library.set_widget_name("color-library-menu");
         actions.append(&menu_library);
@@ -960,6 +961,7 @@ impl ColorPanel {
         menu.set_child(Some(&actions));
         *wheel.imp().menu.borrow_mut() = Some(menu);
         Self {
+            localization, shape_descriptions,
             root,
             wheel,
             initialized: Cell::new(false),
@@ -1232,23 +1234,21 @@ impl ColorPanel {
         self.wheel.queue_draw();
         for (button, shape) in self.shape_buttons.iter().zip(state.other_shapes()) {
             let (icon, description) = match shape {
-                ColorShape::Circle => ("layer-color-circle-symbolic", "Use Okhsv circle"),
-                ColorShape::Square => ("layer-color-square-symbolic", "Use HSV square"),
-                ColorShape::Triangle => ("layer-color-triangle-symbolic", "Use HLS triangle"),
+                ColorShape::Circle => ("layer-color-circle-symbolic", &self.shape_descriptions[0]),
+                ColorShape::Square => ("layer-color-square-symbolic", &self.shape_descriptions[1]),
+                ColorShape::Triangle => ("layer-color-triangle-symbolic", &self.shape_descriptions[2]),
             };
             crate::icons::set_button(button, icon);
             button.set_tooltip_text(Some(description));
             button.update_property(&[gtk::accessible::Property::Label(description)]);
         }
-        let gamut = layer_ui::color_validation(state.definition(), state.rgb_space(), view.space(), hdr)
-            .unwrap_or_default();
-        let description = format!("{}. {}", gamut, state.readout_description());
+        let description = state.picker_description_localized(view.space(), hdr, &self.localization);
         self.readout.set_tooltip_text(Some(&description));
         self.readout
             .update_property(&[gtk::accessible::Property::Label(&description)]);
         self.readout.queue_draw();
         for (white, button, sample) in &self.quick_colors {
-            let preset = &state.quick_colors()[usize::from(*white)];
+            let preset = &state.quick_colors_localized(&self.localization)[usize::from(*white)];
             selected(button, preset.selected);
             sample.set_display_color(if *white { layer_core::color::RgbColor::WHITE } else { layer_core::color::RgbColor::BLACK }, ViewColor::Srgb, 1.);
         }

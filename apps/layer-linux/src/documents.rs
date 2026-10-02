@@ -807,7 +807,7 @@ impl Documents {
             return Err("Wait for the drawing canvas to finish opening".into());
         }
         if self.changing.replace(true) {
-            return Err("Drawing switch already in progress".into());
+            return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(&w.localization).to_string());
         }
         let deadline = Instant::now() + Duration::from_secs(30);
         // Alert responses precede their closing animation. A completed New/Open
@@ -815,7 +815,7 @@ impl Documents {
         while w.servicing.get() || w.window.visible_dialog().is_some() {
             if Instant::now() >= deadline || !w.window.is_visible() {
                 self.changing.set(false);
-                return Err("Finish the current dialog before switching drawings".into());
+                return Err(layer_ui::DocumentTransportRefusal::SwitchDialog.message(&w.localization).to_string());
             }
             glib::timeout_future(Duration::from_millis(8)).await;
         }
@@ -827,7 +827,7 @@ impl Documents {
         {
             if Instant::now() >= deadline || !w.window.is_visible() {
                 self.changing.set(false);
-                return Err("Finish the current canvas operation before switching drawings".into());
+                return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(&w.localization).to_string());
             }
             w.wake();
             glib::timeout_future(Duration::from_millis(8)).await;
@@ -862,7 +862,7 @@ impl Documents {
         recovery.drain().await;
         if !w.window.is_visible() {
             self.changing.set(false);
-            return Err("The drawing window was closed".into());
+            return Err(layer_ui::bootstrap_view(&w.localization).editor_closed.to_string());
         }
         self.paused.set(true);
         let parked = w.gpu.borrow_mut().as_mut().map(|g| {
@@ -893,9 +893,7 @@ impl Documents {
         if let Some(error) = error {
             w.document_canvas_error(&error);
         } else if let Some(error) = storage_error {
-            w.changed(Err(format!(
-                "{error}\nThe drawing is retained in memory. Free disk space or close some tabs."
-            )));
+            w.changed(Err(layer_ui::document_storage_retained(&w.localization, &error)));
         }
         self.refresh(w);
         w.area.grab_focus();
@@ -913,10 +911,10 @@ impl Documents {
             return Ok(());
         }
         if !self.model.borrow().contains_parked(id) {
-            return Err("Drawing tab is no longer open".into());
+            return Err(layer_ui::DocumentSessionError::TabClosed.message(&w.localization));
         }
         self.prepare_switch(w).await?;
-        let previous = self.park(w).ok_or("Canvas unavailable")?;
+        let previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization))?;
         let tiles = previous.session.retained_document_tiles();
         let error = {
             let mut model = self.model.borrow_mut();
@@ -938,16 +936,16 @@ impl Documents {
         (project, location, origin): Prepared,
     ) -> Result<(), String> {
         if !w.window.is_visible() || self.closing_window.get() {
-            return Err("The drawing window was closed".into());
+            return Err(layer_ui::bootstrap_view(&w.localization).editor_closed.to_string());
         }
         let retry_storage = self.model.borrow().storage_error().is_some();
         if retry_storage {
             self.trim().await;
         }
         let active = w.gpu.borrow().as_ref().map(|g| g.session.retained_document_tiles()).unwrap_or_default();
-        self.model.borrow().admit(&active, &project)?;
+        self.model.borrow().admit(&active, &project).map_err(|reason| reason.message(&w.localization))?;
         self.prepare_switch(w).await?;
-        let mut previous = self.park(w).ok_or("Canvas unavailable")?;
+        let mut previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization))?;
         if self.closing_window.get() || self.cancel_open.get() {
             let error = previous.reattach(&w.area).err();
             *w.gpu.borrow_mut() = Some(previous);

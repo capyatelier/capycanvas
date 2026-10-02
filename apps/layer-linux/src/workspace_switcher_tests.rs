@@ -408,7 +408,6 @@ fn check_active_workspace_delete(occupied_default: bool) {
         .color
         .depth;
     expected.working.colors.set_document_depth(depth).unwrap();
-    expected.working.colors.library.ensure_starters();
     for confirm in [false, true] {
         w.workspaces.ui.show(&w, ManagerPage::Workspaces);
         pump(400);

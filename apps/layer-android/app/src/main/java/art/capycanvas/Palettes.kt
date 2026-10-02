@@ -449,6 +449,7 @@ private fun DrawScope.checker() {
 }
 
 @Composable private fun HistoryRow(controller: PaletteController, view: JSONObject, cells: PaletteCells, covered: Boolean, expanded: Boolean, rows: Int) {
+    val host = LocalCanvasHost.current
     val history = view.array("history").objects()
     val capacity = cells.columns * rows
     CellLayout(cells, capacity, Modifier.fillMaxWidth().height(cells.height(rows).dp).testTag(if (expanded) "palette-history-grid" else "palette-history")) {
@@ -456,10 +457,10 @@ private fun DrawScope.checker() {
             val tile = history.getOrNull(index)
             if (tile != null) key(tile.getJSONObject("color").toString()) { HistoryTile(controller, tile, covered) }
             else if (history.isEmpty() && index < 5) Box(Modifier.padding(3.dp).clip(ControlShape).background(LocalPalette.current.text.copy(alpha = .05f))
-                .testTag("palette-empty-$index").semantics { contentDescription = "Colors appear here after painting" })
+                .testTag("palette-empty-$index").semantics { contentDescription = host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("history_empty") })
             else Spacer(Modifier)
         }
-        PaletteButton("chevron-down", if (expanded) "Collapse color history" else "Expand color history",
+        PaletteButton("chevron-down", if (expanded) host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("collapse_history") else host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("expand_history"),
             Modifier.testTag(if (expanded) "palette-history-collapse" else "palette-history-expand"), enabled = !covered, flipped = expanded) {
             controller.chooser = false; controller.expanded = !expanded
         }
@@ -492,6 +493,7 @@ private fun DrawScope.checker() {
 
 @Composable private fun SwatchGrid(controller: PaletteController, view: JSONObject, swatches: List<JSONObject>, cells: PaletteCells,
     geometry: PaletteGeometry, owner: Any, covered: Boolean) {
+    val host = LocalCanvasHost.current
     val drag = controller.drag?.takeIf { it.geometry === geometry }
     val viewOrder = swatches.map { it.getLong("id") }
     val order = drag?.order ?: controller.settle?.takeIf { it != viewOrder }
@@ -505,7 +507,7 @@ private fun DrawScope.checker() {
             }
         }
         key("add") {
-            PaletteButton("plus", "Add current color to this palette", Modifier.testTag("palette-add-color"),
+            PaletteButton("plus", host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("add_current"), Modifier.testTag("palette-add-color"),
                 enabled = view.getBoolean("can_name") && !covered, background = LocalPalette.current.input) {
                 if (controller.editing) controller.commitName(controller.editText) { controller.store() } else controller.store()
             }
@@ -596,12 +598,15 @@ private fun DrawScope.checker() {
 }
 
 @Composable private fun PaletteFooter(controller: PaletteController, view: JSONObject, selected: JSONObject?, static: Boolean = false) {
+    val host = LocalCanvasHost.current
     val colors = LocalPalette.current
     val name = selected?.getString("name") ?: view.getString("color_name")
+    val paletteName=view.getString("name")
+    val chooseCaption=remember(paletteName) { JSONObject(Native.nativeCaption(obj("type" to "choose_palette", "name" to paletteName).toString())).getString("text") }
     Row(Modifier.fillMaxWidth().testTag("palette-footer"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        HoverTip("Choose a palette · ${view.getString("name")}") {
+        HoverTip(chooseCaption) {
             Row(Modifier.heightIn(min = 24.dp).widthIn(max = 150.dp).clip(ControlShape).paletteFocus(controller)
-                .clickable(role = Role.Button, onClickLabel = "Choose a palette") {
+                .clickable(role = Role.Button, onClickLabel = host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("choose")) {
                     if (controller.editing) controller.commitName(controller.editText)
                     controller.expanded = false; controller.chooser = !controller.chooser
                 }.testTag("palette-chooser").padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically,
@@ -614,7 +619,7 @@ private fun DrawScope.checker() {
             if (controller.editing && !static) NameEditor(controller, name)
             else HoverTip("$name · Click to rename") {
                 Text(name, Modifier.heightIn(min = 24.dp).clip(ControlShape).alpha(if (view.getBoolean("can_name")) 1f else .4f).paletteFocus(controller)
-                    .clickable(enabled = view.getBoolean("can_name"), role = Role.Button, onClickLabel = "Name this color") {
+                    .clickable(enabled = view.getBoolean("can_name"), role = Role.Button, onClickLabel = host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("name")) {
                         controller.beginEditing()
                     }.testTag("palette-color-name").padding(horizontal = 2.dp, vertical = 3.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -634,23 +639,26 @@ private fun DrawScope.checker() {
     var hadFocus by remember { mutableStateOf(false) }
     SideEffect { controller.editText = value.text }
     LaunchedEffect(Unit) { focus.requestFocus() }
-    DisposableEffect(Unit) { onDispose { host.editingText = false } }
-    BasicTextField(value, { if (it.text.length <= 64) value = it },
+    DisposableEffect(Unit) { onDispose { host.editingText = false; host.textComposition.clear(focus) } }
+    BasicTextField(value, { value = it; host.textComposition.update(focus, value, hadFocus) },
         Modifier.widthIn(min = 64.dp, max = 180.dp).height(24.dp).paletteFocus(controller).focusRequester(focus).testTag("palette-name-editor")
             .background(colors.input, ControlShape)
             .then(if (controller.message?.second == true) Modifier.border(1.dp, Color(0xffee5555), ControlShape) else Modifier)
             .onPreviewKeyEvent { event ->
-                if (event.key == Key.Escape && event.type == KeyEventType.KeyDown) { controller.editing = false; controller.message = null; true } else false
+                if (host.textComposition.owns(event.nativeKeyEvent)) false
+                else if (event.key == Key.Escape && event.type == KeyEventType.KeyDown) { controller.editing = false; controller.message = null; true } else false
             }
             .onFocusChanged {
                 if (hadFocus && !it.isFocused) controller.commitName(value.text)
                 hadFocus = it.isFocused; host.editingText = it.isFocused
+                host.textComposition.update(focus, value, hadFocus)
             }.padding(horizontal = 6.dp, vertical = 3.dp),
         singleLine = true, textStyle = LocalTextStyle.current.copy(color = colors.text), cursorBrush = SolidColor(colors.accent),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { controller.commitName(value.text) }))
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { if (value.composition == null) controller.commitName(value.text) }))
 }
 
 @Composable private fun PaletteChooser(controller: PaletteController, view: JSONObject, owner: Any, modifier: Modifier) {
+    val host = LocalCanvasHost.current
     val colors = LocalPalette.current
     var query by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
@@ -661,8 +669,8 @@ private fun DrawScope.checker() {
     Column(modifier.blockInput().testTag("palette-browser"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             CoreTextField(query, { query = it }, Modifier.weight(1f).paletteFocus(controller).focusRequester(focus).testTag("palette-search"), height = 24.dp,
-                shape = ControlShape, placeholder = { Text("Find a palette") }, leadingIcon = { SharedIcon("search", null, Modifier.size(14.dp)) })
-            PaletteButton("plus", "New or import palette", Modifier.size(24.dp).onGloballyPositioned { addBounds = it.boundsInRoot() }
+                shape = ControlShape, placeholder = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("find")) }, leadingIcon = { SharedIcon("search", null, Modifier.size(14.dp)) })
+            PaletteButton("plus", host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("new_import"), Modifier.size(24.dp).onGloballyPositioned { addBounds = it.boundsInRoot() }
                 .testTag("palette-library-add")) {
                 controller.openMenu(obj("kind" to "library"), addBounds.bottomLeft, owner, false)
             }
@@ -671,7 +679,7 @@ private fun DrawScope.checker() {
             LazyColumn(Modifier.fillMaxSize().testTag("palette-list")) {
                 items(matches, key = { it.getLong("id") }) { palette -> PaletteRow(controller, palette, owner) }
             }
-            if (matches.isEmpty()) Text("No matching palettes", Modifier.align(Alignment.Center).testTag("palette-empty-search"), color = colors.secondary)
+            if (matches.isEmpty()) Text(host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("no_matches"), Modifier.align(Alignment.Center).testTag("palette-empty-search"), color = colors.secondary)
         }
     }
 }
@@ -748,11 +756,11 @@ private fun DrawScope.checker() {
                         val buffer = ByteArray(limit); var length = 0
                         while (length < buffer.size) { val n = input.read(buffer, length, buffer.size - length); if (n < 0) break; length += n }
                         buffer.copyOf(length)
-                    } ?: error("Could not read the palette file")
+                    } ?: error(host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("read_failed"))
                     JSONObject(Native.paletteFile(obj("type" to "import", "file_name" to name).toString(), bytes)[0] as String).getJSONObject("action")
                 }
                 controller.apply(action) { error -> if (error == null) controller.chooser = false }
-            } catch (e: Exception) { controller.message = (e.message ?: "Could not import the palette") to true }
+            } catch (e: Exception) { controller.message = (e.message ?: host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("import_failed")) to true }
         }
     }
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
@@ -763,7 +771,7 @@ private fun DrawScope.checker() {
                     (resolver.openOutputStream(uri, "wt") ?: error("Could not open the export destination")).use { it.write(export.second) }
                 }
                 controller.message = export.first.optString("notice").takeUnless { export.first.isNull("notice") }?.let { it to false }
-            } catch (e: Exception) { controller.message = (e.message ?: "Could not export the palette") to true }
+            } catch (e: Exception) { controller.message = (e.message ?: host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("export_failed")) to true }
         }
     }
     LaunchedEffect(controller.importRequest) { if (controller.importRequest > 0) importer.launch(arrayOf("*/*")) }
@@ -779,7 +787,7 @@ private fun DrawScope.checker() {
             val metadata = JSONObject(result[0] as String)
             pending = metadata to (result[1] as ByteArray)
             exporter.launch(metadata.getString("file_name"))
-        } catch (e: Exception) { controller.message = (e.message ?: "Could not export the palette") to true }
+        } catch (e: Exception) { controller.message = (e.message ?: host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("export_failed")) to true }
     }
     controller.dialog?.let { dialog -> PaletteDialogs(host, dialog) }
 }
@@ -788,11 +796,12 @@ private fun DrawScope.checker() {
     val controller = host.palettes
     val close = { controller.dialog = null }
     if (dialog.kind == "remove") {
+        val removeCaption=remember(dialog.initial) { JSONObject(Native.nativeCaption(obj("type" to "remove_palette", "name" to dialog.initial).toString())).getString("text") }
         AlertDialog(onDismissRequest = close, modifier = Modifier.testTag("palette-remove-dialog"),
-            title = { Text("Remove Palette?") }, text = { Text("Remove “${dialog.initial}” and its saved colors?") },
-            dismissButton = { TextButton(close) { Text("Cancel") } },
+            title = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("remove_title")) }, text = { Text(removeCaption) },
+            dismissButton = { TextButton(close) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } },
             confirmButton = { TextButton({ close(); controller.apply(obj("op" to "remove_palette", "id" to dialog.id)) },
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Remove") } })
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(host.bootstrap!!.getJSONObject("common").getString("remove")) } })
         return
     }
     var name by remember(dialog) { mutableStateOf(dialog.initial) }
@@ -800,13 +809,13 @@ private fun DrawScope.checker() {
     fun action() = if (dialog.kind == "rename") obj("op" to "rename_palette", "id" to dialog.id, "name" to name) else obj("op" to "create_palette", "name" to name)
     LaunchedEffect(name) { host.paletteAction(action(), dryRun = true) { error = it } }
     AlertDialog(onDismissRequest = close, modifier = Modifier.testTag("palette-name-dialog"),
-        title = { Text(if (dialog.kind == "rename") "Rename Palette" else "New Palette") },
+        title = { Text(if (dialog.kind == "rename") host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("rename_title") else host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("new_title")) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("palette-library-name"), maxLength = 64, focusRequest = 1)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         } },
-        dismissButton = { TextButton(close) { Text("Cancel") } },
+        dismissButton = { TextButton(close) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } },
         confirmButton = { TextButton({
             controller.apply(action()) { if (it == null) { close(); controller.chooser = false } else error = it }
-        }, enabled = error == null, modifier = Modifier.testTag("palette-name-save")) { Text("Save") } })
+        }, enabled = error == null, modifier = Modifier.testTag("palette-name-save")) { Text(host.bootstrap!!.getJSONObject("common").getString("save")) } })
 }

@@ -137,7 +137,7 @@ try {
     Select-Panel 'properties'
     $radius=Control 'Radius' -Name -Type ([System.Windows.Automation.ControlType]::Edit)
     $radius.SetFocus();$radius.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('7')
-    (Control 'Drawing canvas' -Name).SetFocus()
+    (Control 'drawing-canvas').SetFocus()
     Wait-Until {(Property 'radius').value.value -eq 7} 'Runtime parameter did not use shared numeric controls'
     Capture 'tent-controls'
     Select-Panel 'adjustments'

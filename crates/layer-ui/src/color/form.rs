@@ -33,7 +33,10 @@ pub enum ColorUiRequest {
         rendition: Option<layer_core::color::hdr::SdrRendition>,
     },
 }
-pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
+#[cfg(test)]
+fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> { color_ui_localized(request, &crate::Localizer::shared(crate::UiLanguage::English)) }
+
+pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localization::Localizer) -> Result<serde_json::Value, String> {
     let value = match request {
         ColorUiRequest::IntensityPoint {size,point,minimum,maximum} => {
             if !point.iter().all(|v|v.is_finite()) || !minimum.is_finite() || !maximum.is_finite() || minimum>=maximum || minimum < -149. || maximum>128. {return Err("Invalid intensity range".into());}
@@ -41,7 +44,7 @@ pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
             return Ok(serde_json::json!(minimum+a.fraction(point)*(maximum-minimum)));
         },
         ColorUiRequest::IntensityArc {size,stops,depth,base,document_space,recipe,headroom} => {
-            super::hdr_picker::HdrPaint::validate_stops(stops)?;
+            super::hdr_picker::HdrPaint::validate_stops(stops).map_err(|reason|reason.message(ColorInputModel::DocumentRgb, localizer))?;
             let a=HdrIntensityArc::new(size).ok_or("Invalid picker extent")?;
             let minimum=(-2f32).min(stops.floor()); let limit=if depth==Some(layer_core::color::SampleDepth::F32) {128.} else {65504f32.log2()}; let maximum=6f32.max(stops.ceil()).min(limit);
             let samples=(0..=80).map(|i|{
@@ -74,7 +77,7 @@ pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
             let arc=HdrIntensityArc::new(size).ok_or("Invalid HDR arc size")?;
             return Ok(serde_json::json!({"geometry":arc,"point":arc.point(fraction),"path":(0..=64).map(|i|arc.point(i as f32/64.)).collect::<Vec<_>>(),"hit":point.is_some_and(|p|arc.contains(p)),"fraction":point.map(|p|arc.fraction(p))}));
         }
-        ColorUiRequest::Form { request } => serde_json::to_value(color_form(request)?),
+        ColorUiRequest::Form { request } => serde_json::to_value(color_form_localized(request, localizer)?),
         ColorUiRequest::Preview {
             colors,
             document_space,
@@ -138,8 +141,8 @@ pub struct ColorFormRequest {
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorFormView {
     pub draft: ColorFormRequest,
-    pub models: Vec<(ColorInputModel, &'static str)>,
-    pub labels: [&'static str; 4],
+    pub models: Vec<(ColorInputModel, std::sync::Arc<str>)>,
+    pub labels: [std::sync::Arc<str>; 4],
     pub description: String,
     pub validation: Option<String>,
     pub value: Option<RgbColor>,
@@ -172,47 +175,68 @@ pub(super) fn mapped_preview(color:RgbColor, document:RgbSpace, display:RgbSpace
 }
 
 /// Color definition and gamut feedback shared with GTK's Edit Color dialog.
-pub fn color_validation(color: RgbColor, document: RgbSpace, display: RgbSpace, hdr: bool) -> Result<String, String> {
-    let mut text = format!("Defined in {}", color.space.name());
-    if !if hdr { color.in_hdr_gamut(document)? } else { color.in_gamut(document)? } {
-        text.push_str(" · Outside document gamut");
-    }
+pub fn color_validation_localized(color: RgbColor, document: RgbSpace, display: RgbSpace, hdr: bool, localizer: &crate::localization::Localizer) -> Result<String, String> {
+    use crate::localization::MessageId;
+    let defined = match color.space {
+        RgbSpace::Srgb => MessageId::COLOR_DEFINED_SRGB,
+        RgbSpace::DisplayP3 => MessageId::COLOR_DEFINED_DISPLAY_P3,
+        RgbSpace::AdobeRgb => MessageId::COLOR_DEFINED_ADOBE_RGB,
+        RgbSpace::ProPhoto => MessageId::COLOR_DEFINED_PROPHOTO,
+    };
+    let mut text = localizer.text(defined).to_string();
+    let mut append = |id| { text.push(' '); text.push_str(&localizer.text(id)); };
+    if !if hdr { color.in_hdr_gamut(document)? } else { color.in_gamut(document)? } { append(MessageId::COLOR_OUTSIDE_DOCUMENT_GAMUT); }
     if !if hdr { color.in_hdr_gamut(display)? } else { color.in_gamut(display)? } {
-        text.push_str(&format!(" · Outside {} preview gamut", display.name()));
+        append(match display {
+            RgbSpace::Srgb => MessageId::COLOR_OUTSIDE_SRGB_PREVIEW_GAMUT,
+            RgbSpace::DisplayP3 => MessageId::COLOR_OUTSIDE_DISPLAY_P3_PREVIEW_GAMUT,
+            RgbSpace::AdobeRgb => MessageId::COLOR_OUTSIDE_ADOBE_RGB_PREVIEW_GAMUT,
+            RgbSpace::ProPhoto => MessageId::COLOR_OUTSIDE_PROPHOTO_PREVIEW_GAMUT,
+        });
     }
-    if hdr && color.brightness_ev(document)?.is_some_and(|v| v > 0.00001) { text.push_str(" · Above SDR white"); }
+    if hdr && color.brightness_ev(document)?.is_some_and(|v| v > 0.00001) { append(MessageId::COLOR_ABOVE_SDR_WHITE); }
     Ok(text)
 }
 
-pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
+#[cfg(test)]
+fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> { color_form_localized(request, &crate::localization::Localizer::shared(crate::localization::UiLanguage::English)) }
+
+pub fn color_form_localized(request: ColorFormRequest, localizer: &crate::localization::Localizer) -> Result<ColorFormView, String> {
     let mut editor = ColorEditor::new(request.color, request.document_space)?;
     if let Some(depth)=request.document_depth {editor.set_document_depth(depth);}
-    editor.set_model(request.model)?;
+    editor.set_model(request.model).map_err(|reason|reason.message(editor.model(),localizer))?;
     let intensity=request.intensity.or_else(||request.document_depth.filter(|d|d.is_float()).map(|_|request.color.brightness_ev(request.document_space).ok().flatten().unwrap_or(0.).max(0.)));
-    if let Some(stops) = intensity { editor.enable_hdr(stops)?; }
+    if let Some(stops) = intensity { editor.enable_hdr(stops).map_err(|reason|reason.message(editor.model(),localizer))?; }
     if let Some(fields) = request.fields {
         for (i, text) in fields.into_iter().enumerate() {
             editor.set_field(i, text)?;
         }
     }
     let mut error = None;
-    let typed_intensity = request.change_intensity_text.as_deref().map(|s| s.trim().parse::<f32>().map_err(|_| "Enter a finite HDR intensity in EV".to_string())).transpose();
+    let typed_intensity = request.change_intensity_text.as_deref().map(|s| super::editor::color_intensity_input(s, localizer)).transpose();
     let change_intensity = match typed_intensity { Ok(value) => value.or(request.change_intensity), Err(message) => { error = Some(message); None } };
-    if let Some(stops) = change_intensity {
-        if let Err(message) = editor.set_intensity(stops) { error = Some(message); }
-    }
-    if let Some(model) = request.change_model {
-        if let Err(message) = editor.set_model(model) {
-            error = Some(message);
-        }
-    }
-    let value = match editor.color() {
+    let mut value = match editor.color() {
         Ok(color) => Some(color),
-        Err(message) => {
-            error = Some(message);
+        Err(reason) => {
+            error = Some(reason.message(editor.model(),localizer));
             None
         }
     };
+    if let Some(color) = value {
+        if let Some(stops) = change_intensity {
+            match editor.set_intensity_color(stops,color) {
+                Ok(color) => value=Some(color),
+                Err(reason) => error=Some(reason.message(editor.model(),localizer)),
+            }
+        }
+        if let Some(model) = request.change_model {
+            match editor.set_model_color(model,value.unwrap()) {
+                Ok(()) => value=Some(editor.definition()),
+                Err(reason) => error=Some(reason.message(editor.model(),localizer)),
+            }
+        }
+    }
+    let base = value.and_then(|color|editor.intensity().and_then(|_|editor.base_for_color(color).ok()));
     let preview = value
         .map(|color| mapped_preview(color, request.document_space, request.display_space, request.rendition))
         .transpose()?;
@@ -232,15 +256,15 @@ pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
         },
         models: ColorInputModel::ALL
             .into_iter()
-            .map(|model| (model, model.name()))
+            .map(|model| (model, model.localized_name(localizer)))
             .collect(),
-        labels: editor.model().labels(),
-        description: editor.description(),
-        validation: value.map(|c|color_validation(c,request.document_space,request.display_space,editor.intensity().is_some())).transpose()?,
+        labels: editor.model().localized_labels(localizer),
+        description: editor.localized_description(localizer),
+        validation: value.map(|c|color_validation_localized(c,request.document_space,request.display_space,editor.intensity().is_some(),localizer)).transpose()?,
         value,
         preview,
-        base: editor.intensity().and_then(|_| editor.base_color().ok()),
-        base_preview: editor.intensity().and_then(|_| editor.base_color().ok()).map(|c| mapped_preview(c,request.document_space,request.display_space,request.rendition)).transpose()?,
+        base,
+        base_preview: base.map(|c| mapped_preview(c,request.document_space,request.display_space,request.rendition)).transpose()?,
         error,
     })
 }
@@ -274,8 +298,9 @@ mod tests {
         assert_eq!(form.value,Some(color));
         assert_eq!(form.draft.intensity,Some(2.));
         assert!(form.base_preview.is_some());
-        assert!(form.validation.as_deref().unwrap().contains("Above SDR white"));
-        assert!(form.validation.as_deref().unwrap().contains("Outside document gamut"));
+        assert!(!color.in_hdr_gamut(RgbSpace::Srgb).unwrap());
+        assert!(form.validation.as_deref().unwrap().contains("Above SDR white."));
+        assert!(form.validation.as_deref().unwrap().contains("Outside the document gamut."));
         assert_eq!(color_form(form.draft).unwrap().value,Some(color));
     }
     #[test]

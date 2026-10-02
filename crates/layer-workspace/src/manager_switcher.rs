@@ -1,4 +1,5 @@
 //! Application-level switcher preferences never claim or edit a workspace.
+use crate::WorkspaceRefusal;
 use super::*;
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +17,7 @@ pub(crate) fn validate_ids(ids: &[String]) -> Result<()> {
             .iter()
             .any(|id| id.is_empty() || id.len() > 512 || !seen.insert(id))
     {
-        return Err(StoreError::invalid("Invalid workspace switcher order."));
+        return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InvalidWorkspaceSwitcherOrder));
     }
     Ok(())
 }
@@ -94,7 +95,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     /// Hosts with a switcher call this at startup and when refreshing the list.
     pub async fn refresh_switcher(&self) -> Result<()> {
         let StoreResponse::Switcher(ids) = self.execute(StoreRequest::Switcher).await? else {
-            return Err(StoreError::invalid("Unexpected workspace switcher reply."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceSwitcherReply));
         };
         if let Some(ids) = &ids {
             validate_ids(ids)?;
@@ -102,7 +103,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let StoreResponse::WorkspaceOrder(order) =
             self.execute(StoreRequest::WorkspaceOrder).await?
         else {
-            return Err(StoreError::invalid("Unexpected workspace order reply."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceOrderReply));
         };
         if let Some(order) = &order {
             validate_ids(order)?;
@@ -127,9 +128,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .iter()
                     .any(|i| i.id == id && i.metadata.kind == ItemKind::Workspace)
                 {
-                    return Err(StoreError::invalid(
-                        "This workspace is no longer available.",
-                    ));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisWorkspaceIsNoLongerAvailable));
                 }
                 // Freeze the initial/legacy row order before visibility changes.
                 if self.state.borrow().workspace_order.is_none() {
@@ -141,7 +140,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         })
                         .await?
                     else {
-                        return Err(StoreError::invalid("Unexpected workspace order reply."));
+                        return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceOrderReply));
                     };
                     self.state.borrow_mut().workspace_order = saved;
                 }
@@ -159,9 +158,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let mut ids = self.workspace_ids();
                 if !ids.contains(&id) || before.as_ref().is_some_and(|target| !ids.contains(target))
                 {
-                    return Err(StoreError::invalid(
-                        "This workspace is no longer available.",
-                    ));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisWorkspaceIsNoLongerAvailable));
                 }
                 if before.as_ref() == Some(&id) {
                     return Ok(());
@@ -189,7 +186,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let _ = self.refresh_switcher().await;
                 Err(error)
             }
-            _ => Err(StoreError::invalid("Unexpected workspace switcher reply.")),
+            _ => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceSwitcherReply)),
         }
     }
 }

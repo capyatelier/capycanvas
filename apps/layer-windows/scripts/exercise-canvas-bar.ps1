@@ -27,7 +27,7 @@ function MenuOpen{
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem))
  $null -ne [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
-function AnchorCenter{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+function AnchorCenter{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Find 'drawing-canvas').Current.BoundingRectangle
  @([int]($r.X+$c.translation[0]+$c.zoom*($a[0]+$a[2])/2),[int]($r.Y+$c.translation[1]+$c.zoom*($a[1]+$a[3])/2))}
 function Center($Element){$r=$Element.Current.BoundingRectangle;@([int]($r.X+$r.Width/2),[int]($r.Y+$r.Height/2))}
 function Tap([string]$Id,[string]$Device){
@@ -63,11 +63,11 @@ try {
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
  [CapyRowPointer]::Initialize([uint32]$review.Id)
- Wait-Until {$b=(Find 'Drawing canvas' -Name).Current.BoundingRectangle;$b.Width -gt 1200} 'Maximized canvas did not settle' 10
+ Wait-Until {$b=(Find 'drawing-canvas').Current.BoundingRectangle;$b.Width -gt 1200} 'Maximized canvas did not settle' 10
  Invoke-Id 'canvas-fit';Start-Sleep -Milliseconds 300
  (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
- $canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+ $canvas=(Find 'drawing-canvas').Current.BoundingRectangle
  $cx=[int]($canvas.X+$canvas.Width*.5);$cy=[int]($canvas.Y+$canvas.Height*.45)
  if(Bar){throw 'The bar showed before any selection or transform'}
 
@@ -106,7 +106,7 @@ try {
  Wait-Until {$null -ne (Owned 'Copy Selection to New Layer' -Name)} 'The Copy to Layer menu has no Copy Selection to New Layer' 5
  (Owned 'Copy Selection to New Layer' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {@((Model).state.layers).Count -eq $layers+1 -and !(MenuOpen)} 'Copy Selection to New Layer did not add a layer through the bar menu' 5
- (Find 'Drawing canvas' -Name).SetFocus()
+ (Find 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
  Wait-Until {@((Model).state.layers).Count -eq $layers -and (Paint) -eq $paint} 'One Undo did not remove the copied layer' 5
  $checks.selection_menus_copy_to_layer_one_undo_step='passed'
@@ -165,7 +165,7 @@ try {
  Tap 'canvas-bar-apply_transform' 'touch'
  Wait-Until {(Kind) -ne 'transform' -and (Model).state.document_file.revision -ne $revision} 'Apply on the bar did not commit the transform' 10
  $applied=Paint
- (Find 'Drawing canvas' -Name).SetFocus()
+ (Find 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
  Wait-Until {(Paint) -eq $paint} 'One Undo did not restore the pixels before the transform' 5
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x59)
@@ -173,7 +173,7 @@ try {
  $checks.apply_one_undo_step='passed'
 
  $before=Paint;$revision=(Model).state.document_file.revision
- (Find 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x54)
+ (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x54)
  Wait-Until {(Kind) -eq 'transform' -and (Bar)} 'Ctrl+T did not start a transform' 10
  $modeId=@((Model).state.canvas_bar.items|Where-Object {$_.option.Choice.segmented})[0].option.Choice.id
  $warp=[array]::IndexOf(@((Choice $modeId).items|ForEach-Object label),'Warp')
@@ -181,16 +181,16 @@ try {
  Tap ("canvas-bar-choice-$modeId-$warp") 'touch'
  Wait-Until {@((Choice $modeId).items)[$warp].selected -and @((Model).state.canvas_bar.items|Where-Object {$_.option.Choice -and !$_.option.Choice.segmented -and $_.option.Choice.label -eq 'Grid'}).Count} 'Warp did not offer its Grid choice' 5
  Capture 'warp-dark'
- (Find 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+ (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
  Wait-Until {(Kind) -ne 'transform'} 'Escape did not cancel the Warp transform' 5
  if((Paint) -ne $before -or (Model).state.document_file.revision -ne $revision){throw 'Cancelling the transform changed the drawing'}
  $checks.warp_mode_and_escape_cancel='passed'
 
- (Find 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
+ (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
  Wait-Until {(Model).chrome_hidden -or (Model).state.workspace.zen_mode} 'Tab did not enter Zen' 5
  Wait-Until {(Bar)} 'The bar did not stay visible in Zen' 5
  Capture 'zen'
- (Find 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
+ (Find 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)
  Wait-Until {!(Model).state.workspace.zen_mode} 'Tab did not leave Zen' 5
  $checks.visible_in_zen='passed'
 

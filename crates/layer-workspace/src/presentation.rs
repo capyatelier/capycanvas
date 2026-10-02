@@ -108,11 +108,11 @@ pub struct ManagerDetails {
 impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn toolbar_details(&self, panel: Panel, idle: bool) -> Result<ManagerDetails, StoreError> {
         if panel.kind() != layer_ui::PanelKind::Tiles {
-            return Err(StoreError::invalid("Choose a toolbar."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAToolbar));
         }
         let current = self
             .current()
-            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+            .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
         let capture = current.capture()?;
         let config = capture
             .history
@@ -185,12 +185,12 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     }
             })
             .filter(|i| {
-                layer_ui::normalize_search(&format!("{} {} {}", self.display_name(&i.id, &i.metadata), i.metadata.name, i.metadata.description))
+                layer_ui::normalize_search(&format!("{} {} {}", self.summary_display_name(&i), i.metadata.name, i.metadata.description))
                     .contains(&layer_ui::normalize_search(query))
             })
             .map(|i| {
                 let subtitle = if let Some(error) = &i.error {
-                    message(&self.localization, layer_ui::MessageId::WORKSPACE_UNAVAILABLE, &[("error", error.to_string())])
+                    message(&self.localization, layer_ui::MessageId::WORKSPACE_UNAVAILABLE, &[("error", error.localized_message(&self.localization))])
                 } else if active.as_ref() == Some(&i.id) {
                     self.localization.text(layer_ui::MessageId::WORKSPACE_CURRENT_WORKSPACE).to_string()
                 } else if i
@@ -207,7 +207,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 };
                 WorkspaceRow {
                     id: i.id.clone(),
-                    title: self.display_name(&i.id, &i.metadata),
+                    title: self.summary_display_name(&i),
                     subtitle,
                     current: false,
                     actions: Vec::new(),

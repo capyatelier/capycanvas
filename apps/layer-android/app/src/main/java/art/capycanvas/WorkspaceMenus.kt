@@ -79,9 +79,9 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
         if (button.menu == null && button.closedAt < button.pressedAt) load { button.menu = it }
     }
 
-@Composable internal fun WindowlessMenuHost(host: CanvasHost, button: WindowlessMenuButton) {
+@Composable internal fun WindowlessMenuHost(host: CanvasHost, button: WindowlessMenuButton, command: ((JSONObject) -> Unit)? = null) {
     PopupOwner(button.menu != null)
-    button.menu?.let { WorkspaceMenu(host, it, focusable = false) { button.menu = null; button.closedAt = android.os.SystemClock.uptimeMillis() } }
+    button.menu?.let { WorkspaceMenu(host, it, focusable = false, command = command) { button.menu = null; button.closedAt = android.os.SystemClock.uptimeMillis() } }
 }
 
 @Composable internal fun WorkspaceMenuItems(host: CanvasHost, sections: JSONArray,

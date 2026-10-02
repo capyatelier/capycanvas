@@ -204,7 +204,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const info = app.toolbar_ui({ type: 'numeric_info', id: field.id, control: field.numeric, compact: true, units: true });
     let units = true;
     const change = value => send(context, { type: 'set_tool_setting', id: field.id, value });
-    const number = createNumberField({ control: field.numeric, label: field.label, icon, inline: true,
+    const number = createNumberField({ control: field.numeric, label: field.label, labels:app.numeric_labels(field.label), icon, inline: true,
       widthSamples: info.samples, onChange: change,
       resolve: request => app.toolbar_ui({ type: 'number', request, compact: true, units }) });
     captureSliderContacts(number);
@@ -233,25 +233,26 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     function scrub(node) {
       let contact, scrubbed = false;
       node.addEventListener('pointerdown', e => {
-        if (e.button || e.pointerType === 'mouse') return;
+        if (e.button || e.pointerType === 'mouse' || !number.commit()) return;
         scrubbed = false;
         contact = { id: e.pointerId, y: e.clientY, fill: app.number_input({ control: field.numeric, value: current, operation: { type: 'format' } }).fill, moved: false };
       });
       node.addEventListener('pointermove', e => {
         if (contact?.id !== e.pointerId || (!contact.moved && Math.abs(e.clientY - contact.y) < 8)) return;
+        if (!number.commit()) { contact = null; return; }
         contact.moved = true; node.setPointerCapture(e.pointerId); e.preventDefault();
-        number.cancelEditing(); number.apply({ type: 'position', position: contact.fill + (contact.y - e.clientY) / 200 });
+        number.apply({ type: 'position', position: contact.fill + (contact.y - e.clientY) / 200 });
       });
       node.addEventListener('pointerup', e => { if (contact?.id === e.pointerId) { scrubbed = contact.moved; contact = null; } });
       node.addEventListener('click', e => { if (scrubbed) { e.stopImmediatePropagation(); e.preventDefault(); scrubbed = false; } }, true);
       node.addEventListener('lostpointercapture', () => { contact = null; });
       for (const type of ['workspace-drag-held', 'workspace-context-claimed']) row.addEventListener(type, () => { contact = null; });
       node.addEventListener('pointercancel', () => { contact = null; });
-      node.addEventListener('wheel', e => { e.preventDefault(); number.cancelEditing(); number.apply({ type: 'step', steps: e.deltaY < 0 ? 1 : -1 }); }, { passive: false });
+      node.addEventListener('wheel', e => { e.preventDefault(); if (!number.commit()) return; number.apply({ type: 'step', steps: e.deltaY < 0 ? 1 : -1 }); }, { passive: false });
     }
     scrub(number.valueButton); scrub(face);
     face.addEventListener('click', () => {
-      const editor = createNumberField({ control: field.numeric, label: field.label, icon, resolve: request => app.number_input(request), onChange: change });
+      const editor = createNumberField({ control: field.numeric, label: field.label, labels:app.numeric_labels(field.label), icon, resolve: request => app.number_input(request), onChange: change });
       editor.update(current); openPopup(face, editor);
     });
     row.append(label, glyph, number, face);

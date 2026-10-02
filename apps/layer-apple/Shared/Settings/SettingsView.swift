@@ -12,7 +12,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             VStack {
-                EditorTextField("Search settings", value: model["query"].string) {
+                EditorTextField(store.catalog["native_copy"]["shortcuts"]["search_settings"].string, value: model["query"].string) {
                     action(["type": "search", "query": $0])
                 }
                     .editorSearchInput().textFieldStyle(.roundedBorder).padding(.horizontal).focused($searching)
@@ -31,7 +31,7 @@ struct SettingsView: View {
                             .accessibilityIdentifier("settings-page-" + p["id"].string)
                     }
                 }
-            }.navigationTitle("Settings")
+            }.navigationTitle(store.catalog["native_copy"]["shortcuts"]["settings"].string)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 220)
         } detail: {
             detail.navigationTitle(page["title"].string)
@@ -64,7 +64,7 @@ struct SettingsView: View {
                         }
                     }.background(NativePenScroll().frame(width: 0, height: 0))
                 }
-                if model["search_results"].array.isEmpty { Text("No matching settings") }
+                if model["search_results"].array.isEmpty { Text(store.catalog["native_copy"]["shortcuts"]["no_matching_settings"].string) }
             }
         } else if model["page"].string == "shortcuts" {
             ShortcutSettingsView(store: store)
@@ -213,7 +213,7 @@ private struct SettingsDoneButton: View {
     // publishes it; a native text field can otherwise trigger a focus loop.
     @FocusedValue(\.editorTextCommit) private var commitText
     var body: some View {
-        Button("Done") {
+        Button(store.bootstrap["common"]["done"].string) {
             commitText?()
             store.dispatch(["type": "close_settings"])
         }.accessibilityIdentifier("settings-done")

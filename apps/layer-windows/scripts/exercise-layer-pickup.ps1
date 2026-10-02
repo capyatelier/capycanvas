@@ -223,7 +223,7 @@ try {
     foreach($presentation in @('floating','drawer')){
         $script:case="$presentation-setup"
         if($presentation -eq 'floating'){
-            $at=Point 'panel-tab-layers';$to=Point 'Drawing canvas' -Name
+            $at=Point 'panel-tab-layers';$to=Point 'drawing-canvas'
             # Arrange the host with mouse input; each row below is tested with
             # the requested device. Tab tear-off has its own acceptance fixture.
             [CapyRowPointer]::Down('mouse',$at.x,$at.y);Start-Sleep -Milliseconds 35

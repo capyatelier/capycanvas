@@ -263,7 +263,7 @@ pub fn prepare_document_color(
     let old = candidate.document.color;
     let target = change.target(old);
     if old.depth.is_float() && !target.depth.is_float() { return Err("Export an SDR rendition to reduce HDR range; the editable HDR master remains unchanged".into()); }
-    change.encoding().validate(target.depth)?;
+    change.encoding().validate(target.depth).map_err(|_| "Output dithering requires 8-bit delivery".to_string())?;
     if target == old {
         return Ok(PreparedDocumentColor {
             project: candidate,

@@ -137,11 +137,8 @@ $pixelWidth=$Width*$scale;$pixelHeight=$Height*$scale
 if($pixelWidth -ne [Math]::Round($pixelWidth) -or $pixelHeight -ne [Math]::Round($pixelHeight)){throw 'Choose a viewport with integral physical dimensions'}
 $client=[CapyEditorCapture+Rect]::new();$outer=[CapyEditorCapture+Rect]::new()
 if(![CapyEditorCapture]::GetClientRect($handle,[ref]$client) -or ![CapyEditorCapture]::GetWindowRect($handle,[ref]$outer)){throw 'Cannot measure native client'}
-$surface=Find 'Drawing canvas' ([System.Windows.Automation.ControlType]::Custom)
-if(!$surface){
-    $surface=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
-}
+$surface=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas'))
 $surfaceRect=$surface.Current.BoundingRectangle
 if(![CapyEditorCapture]::MoveWindow($handle,$outer.left,$outer.top,
     [int]($outer.right-$outer.left+$pixelWidth-$surfaceRect.Width),

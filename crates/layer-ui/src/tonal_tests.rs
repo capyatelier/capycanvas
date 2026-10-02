@@ -261,8 +261,7 @@ mod tonal_checks {
         assert_eq!(s.engine.document().selection, before);
         let capture = s.capture_workspace().unwrap();
         PreparedWorkspace::new(
-            serde_json::from_str(&serde_json::to_string(&capture).unwrap()).unwrap(),
-        )
+            serde_json::from_str(&serde_json::to_string(&capture).unwrap()).unwrap())
         .unwrap();
     }
     #[test]
@@ -325,21 +324,21 @@ mod tonal_checks {
     #[test]
     fn tonal_controls_reject_invalid_values() {
         let mut options = TonalOptions::default();
-        assert!(options.edit("tonal_lower", 0.).is_err());
+        assert!(options.edit("tonal_lower", 0., &Localizer::shared(UiLanguage::English)).is_err());
         for value in [f32::NAN, -1., 3.] {
-            assert!(options.edit("tonal_softness", value).is_err());
+            assert!(options.edit("tonal_softness", value, &Localizer::shared(UiLanguage::English)).is_err());
         }
         options.tone = 7;
-        options.edit("tonal_lower", 2.).unwrap();
+        options.edit("tonal_lower", 2., &Localizer::shared(UiLanguage::English)).unwrap();
         assert_eq!(options.custom, [-1.5, -1.5]);
-        options.edit("tonal_upper", -2.).unwrap();
+        options.edit("tonal_upper", -2., &Localizer::shared(UiLanguage::English)).unwrap();
         assert_eq!(options.custom, [-1.5, -1.5]);
-        options.edit("tonal_lower", -6.).unwrap();
-        options.edit("tonal_upper", 2.).unwrap();
+        options.edit("tonal_lower", -6., &Localizer::shared(UiLanguage::English)).unwrap();
+        options.edit("tonal_upper", 2., &Localizer::shared(UiLanguage::English)).unwrap();
         assert_eq!(options.custom, [-6., 2.]);
         for id in ["tonal_lower", "tonal_upper"] {
             for value in [f32::NAN, f32::INFINITY, -150., 129.] {
-                assert!(options.edit(id, value).is_err());
+                assert!(options.edit(id, value, &Localizer::shared(UiLanguage::English)).is_err());
                 assert_eq!(options.custom, [-6., 2.]);
             }
         }

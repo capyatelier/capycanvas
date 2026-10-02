@@ -1,6 +1,7 @@
 // Separate review executable: /p:CapyControlFixture=true.
 // Uses the production numeric control and Rust resolver without a document/GPU.
 #include "pch.h"
+#include "ControlContext.h"
 #include "UiControls.h"
 #include <fstream>
 #include <iterator>
@@ -10,6 +11,7 @@ namespace {
 int resultCode=0;
 struct Fixture : std::enable_shared_from_this<Fixture> {
     struct Item {hstring key;StackPanel root;J row;};
+    std::shared_ptr<CapyLocalization> localization;
     Window window;Canvas surface;ContentControl viewport;
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
     Bindings bindings;std::vector<Item> items;J source;
@@ -69,7 +71,7 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
             (name!=L"windows-light"&&name!=L"windows-dark"))
             throw hresult_invalid_argument(L"Expected the synthetic Windows numeric fixture");
         output=path.parent_path()/(L"native-"+std::wstring(name)+L".json");
-        data->catalog=object(source,L"catalog");data->state=O({{L"theme",S(str(source,L"theme"))},{L"palette",object(source,L"palette")}});
+        data->localization=localization;data->catalog=object(source,L"catalog");data->state=O({{L"theme",S(str(source,L"theme"))},{L"palette",object(source,L"palette")}});
         surface.Width(num(source,L"width"));surface.Height(num(source,L"height"));
         surface.HorizontalAlignment(HorizontalAlignment::Left);surface.VerticalAlignment(VerticalAlignment::Top);
         surface.Background(data->brush(L"panel"));
@@ -116,7 +118,8 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
 struct App : ApplicationT<App,Markup::IXamlMetadataProvider> {
     Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata;
     std::shared_ptr<Fixture> fixture;
-    App(){
+    std::shared_ptr<CapyLocalization> localization;
+    App(std::shared_ptr<CapyLocalization> context):localization(std::move(context)){
         UnhandledException([this](auto&&,UnhandledExceptionEventArgs const& args){
             resultCode=1;args.Handled(true);
             if(fixture){std::ofstream error(fixture->output.parent_path()/L"numeric-fixture-error.log");error<<to_string(args.Message());}
@@ -130,12 +133,13 @@ struct App : ApplicationT<App,Markup::IXamlMetadataProvider> {
         Resources().MergedDictionaries().Append(XamlControlsResources());
         wchar_t path[32768];auto length=GetEnvironmentVariableW(L"CAPY_NUMBER_FIXTURE",path,32768);
         if(!length||length>=32768||!std::filesystem::path(path).is_absolute())throw hresult_invalid_argument(L"CAPY_NUMBER_FIXTURE must be an absolute fixture path");
-        fixture=std::make_shared<Fixture>();fixture->init(path);
+        fixture=std::make_shared<Fixture>();fixture->localization=localization;fixture->init(path);
     }
 };
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
+    auto localization=fixtureContext(L"CAPY_NUMBER_FIXTURE");
     init_apartment(apartment_type::single_threaded);
-    Application::Start([](auto&&){make<App>();});
+    Application::Start([localization](auto&&){make<App>(localization);});
     return resultCode;
 }

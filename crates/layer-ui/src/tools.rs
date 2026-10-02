@@ -289,6 +289,9 @@ const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
 fn brush_choice(preset: DefaultBrushPreset, label: MessageId, group: ToolGroup, localizer: &Localizer) -> BrushChoice {
     BrushChoice { id: preset as u32, label: localizer.text(label), category: group.localized_label(localizer), group, icon: group.icon() }
 }
+pub fn brush_ids() -> impl Iterator<Item = u32> {
+    PRESETS.iter().map(|preset| preset.0 as u32)
+}
 pub fn brush_catalog() -> impl Iterator<Item = BrushChoice> {
     let english = Localizer::shared(UiLanguage::English);
     PRESETS.iter().map(move |&(preset, label, group)| brush_choice(preset, label, group, &english))
@@ -582,9 +585,9 @@ impl WorkspaceToolMemory {
         if is_drawing(group.tool()) { self.drawing = Some(id); }
         if is_sculpt(group.tool()) { self.sculpt = Some(id); }
     }
-    pub fn set_override(&mut self, id: u32, setting: &str, value: f32) -> Result<(), String> {
+    pub fn set_override(&mut self, id: u32, setting: &str, value: f32, localizer: &Localizer) -> Result<(), String> {
         let defaults = layer_core::default_brush(preset(id)?);
-        crate::tool_settings::edit(&defaults, setting, value)?;
+        crate::tool_settings::edit(&defaults, setting, value, localizer)?;
         let default = crate::tool_settings::value(&defaults, setting).ok_or("Unknown tool setting")?;
         if value == default {
             if let Some(values) = self.overrides.get_mut(&id) {
@@ -601,7 +604,7 @@ impl WorkspaceToolMemory {
         }
         Ok(())
     }
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), crate::WorkspaceValidationError> {
         for (id, includes) in [(self.drawing, is_drawing as fn(Tool) -> bool), (self.sculpt, is_sculpt)] {
             if let Some(id) = id {
                 preset(id)?;
@@ -623,7 +626,7 @@ impl WorkspaceToolMemory {
         for (&id, values) in &self.overrides {
             let mut brush = layer_core::default_brush(preset(id)?);
             for (setting, &value) in values {
-                brush = crate::tool_settings::edit(&brush, setting, value)?;
+                brush = crate::tool_settings::edit_value(&brush, setting, value)?;
             }
         }
         Ok(())
@@ -661,7 +664,7 @@ impl WorkspaceToolMemory {
         let mut brush = layer_core::default_brush(preset);
         if let Some(values) = self.overrides.get(&(preset as u32)) {
             for (setting, &value) in values {
-                brush = crate::tool_settings::edit(&brush, setting, value)
+                brush = crate::tool_settings::edit_value(&brush, setting, value)
                     .expect("validated workspace brush override");
             }
         }
@@ -707,7 +710,7 @@ mod tests {
                 let selected = view.groups.iter().find(|g| g.selected).unwrap();
                 assert_eq!((&selected.label, selected.icon), (&category.label, category.icon));
                 assert_eq!(view.subtools.iter().find(|b| b.selected).unwrap().icon, choice.icon);
-                assert_eq!(crate::customization::tool_choice(ToolbarControl::Brush { id: choice.id }).icon, choice.icon);
+                assert_eq!(crate::customization::canonical_tool_choice(ToolbarControl::Brush { id: choice.id }).icon, choice.icon);
             }
         }
     }

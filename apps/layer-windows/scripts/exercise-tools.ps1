@@ -233,7 +233,7 @@ Select-Tool 'pen'
 # A toolbar selection can open a drawer; its outside-contact dismissal would
 # consume the controlled stroke. Dismiss it explicitly before testing artwork.
 if((Model).state.customization.drawer){
-    $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
+    $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas'))
     $canvas.SetFocus();[CapyRowPointer]::Key($ProcessId,0x1B)
     Wait-Until {$null -eq (Model).state.customization.drawer} 'Tool drawer did not dismiss before the stroke'
 }

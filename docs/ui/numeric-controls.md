@@ -27,7 +27,9 @@ Every host shares the same touch-first numeric controls.
   settings preserve the common label alignment with nonnumeric rows.
 - Text commits on Enter/IME Done or focus loss. Escape cancels. Invalid
   expressions keep the previous value; typed finite results clamp to hard
-  bounds. Native GTK spin controls use their standard invalid-input behavior.
+  bounds. Refused text stays in the editor with its localized error. Pending
+  commits must succeed before step buttons or dialog Apply can proceed. Native
+  composition holds text and value until the IME finishes.
 
 ## One numeric policy
 
@@ -35,7 +37,7 @@ Every host shares the same touch-first numeric controls.
 resolution, digits, display scale/unit and range mapping. Its constructor
 defaults to a spin control for whole numbers with at most 64 step intervals,
 otherwise a slider; definitions can explicitly override the kind. Prediction
-time (0–64 ms) is a spin row, with the unit beside the value. Brush size is a
+time (0–64 ms) uses a slider, with the unit beside the value. Brush size is a
 logarithmic slider over 0.5–2048 px. Opacity is displayed as a percentage;
 the pressure slider uses a linear range.
 
@@ -50,12 +52,29 @@ of brush area, not quadratic diameter response.
 `fasteval` (MIT) evaluates bounded mathematical expressions such as `85/2`,
 `sqrt(2)` and `pi`. Unit suffixes are accepted. Nonfinite values, string
 literals and diagnostic printing are rejected. The evaluator has no host I/O.
+Numeric expressions retain their ASCII number, operator and function syntax;
+full-width and compatibility number forms are rejected. Leading and trailing
+Unicode whitespace and the field's exact unit suffix, including pressure's ×,
+remain accepted. The raw
+expression is limited to 256 UTF-8 bytes. Entered text stays literal during
+editing. Settings text keeps its strict number grammar and range refusal; it
+does not accept expressions or unit suffixes. Search normalization is independent
+of numeric parsing.
+
 The resulting number goes through the existing typed app/preference action,
 which remains authoritative for availability, dependencies, application and
 persistence.
 
+Numeric refusals carry `NumericError`, with literal labels or explicit static
+catalog references. The shared UI formats the whole refusal with its active
+`Localizer`; successful values, stepping and slider motion do not format error
+messages. Workspace admission uses the same validation without a language
+context. Storage preserves typed numeric detail until the shared UI presents it.
+
 GTK calls the policy directly; web uses `WebApp.number_input`; Android uses
-the stateless `Native.number` JNI call, and Windows uses `capy_number`. No GPU handle/lock or UI-state snapshot
+the stateless `Native.number` JNI call, Apple uses `capy_apple_numeric`, and Windows
+uses `capy_number`. Native numeric callers retain the prepared launch language
+context; they do not select a language for each request. No GPU handle/lock or UI-state snapshot
 is needed to evaluate a number. Hosts own native focus, gesture capture,
 unfinished text and transient display state only.
 
@@ -67,7 +86,10 @@ size forward and back through the GTK session: model refreshes do not emit
 edits, and deferred GTK range changes compare values at the core's numeric
 resolution, avoiding f64/f32 rounding loops. Android instrumented tests cover
 native editing, expression evaluation, slider geometry and settings input
-isolation.
+isolation. `native_numeric_preedit_guard` covers both GTK widget branches and
+step buttons using native preedit signals; actual IME journeys remain separate.
+`native_numeric_size_apply_refuses_uncommitted_text` checks Canvas Size and Image
+Size Apply in both themes, including refusal without document edits.
 
 References: [GTK Scale](https://docs.gtk.org/gtk4/class.Scale.html),
 [Adwaita SpinRow](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1-latest/class.SpinRow.html),

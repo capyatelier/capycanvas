@@ -3,6 +3,7 @@
 use crate::{ExportProfile, ExportRecipe};
 use layer_core::{binary_payload, color::{ColorProfile, DocumentColor, ProfileChannels, ProfileReference}};
 use serde::{Deserialize, Serialize};
+use crate::ColorFeatureError;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,22 +30,28 @@ impl ExportPresets {
         "Custom",
     ];
 
+    pub fn localized_names(&self, color: DocumentColor, localizer: &crate::Localizer) -> Vec<String> {
+        use crate::MessageId as M;
+        let editing = if color.depth.is_float() {M::COLOR_FEATURES_EXPORT_FURTHER_EDITING_SDR} else {M::COLOR_FEATURES_EXPORT_FURTHER_EDITING};
+        [M::COLOR_FEATURES_EXPORT_WEB_SHARE, M::COLOR_FEATURES_EXPORT_WIDE_COLOR, editing, M::COLOR_FEATURES_EXPORT_CUSTOM]
+            .into_iter().map(|id| localizer.text(id).to_string()).chain(self.names().map(str::to_owned)).collect()
+    }
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.named.iter().map(|v| v.name.as_str())
     }
-    fn resolve(&self, recipe: &ExportRecipe<usize>) -> Result<ExportRecipe, String> {
+    fn resolve(&self, recipe: &ExportRecipe<usize>) -> Result<ExportRecipe, ColorFeatureError> {
         let profile = self
             .profiles
             .get(recipe.profile)
-            .ok_or("Preset profile is missing")?;
+            .ok_or(ColorFeatureError::PresetProfileMissing)?;
         let recipe = recipe.clone().with_profile(profile.clone());
         recipe.validate()?;
         Ok(recipe)
     }
-    pub fn recipe(&self, index: usize, document: DocumentColor) -> Result<ExportRecipe, String> {
+    pub fn recipe(&self, index: usize, document: DocumentColor) -> Result<ExportRecipe, ColorFeatureError> {
         Ok(self.stored_recipe(index, document)?.for_color(document))
     }
-    fn stored_recipe(&self, index: usize, document: DocumentColor) -> Result<ExportRecipe, String> {
+    fn stored_recipe(&self, index: usize, document: DocumentColor) -> Result<ExportRecipe, ColorFeatureError> {
         if index < 4 {
             if let Some(recipe) = &self.destinations[index] {
                 return self.resolve(recipe);
@@ -59,7 +66,7 @@ impl ExportPresets {
             &self
                 .named
                 .get(index - 4)
-                .ok_or("Select a saved preset")?
+                .ok_or(ColorFeatureError::PresetSelectSaved)?
                 .recipe,
         )
     }
@@ -95,7 +102,7 @@ impl ExportPresets {
                 });
         }
     }
-    fn change(&mut self, f: impl FnOnce(&mut Self) -> Result<(), String>) -> Result<(), String> {
+    fn change(&mut self, f: impl FnOnce(&mut Self) -> Result<(), ColorFeatureError>) -> Result<(), ColorFeatureError> {
         self.validate()?;
         let mut next = self.clone();
         f(&mut next)?;
@@ -106,9 +113,9 @@ impl ExportPresets {
     }
     /// Remember only after a successful delivery. Named presets require an
     /// explicit update; temporary edits to one belong to the Custom destination.
-    pub fn remember(&mut self, destination: usize, recipe: ExportRecipe) -> Result<(), String> {
+    pub fn remember(&mut self, destination: usize, recipe: ExportRecipe) -> Result<(), ColorFeatureError> {
         if destination >= 4 {
-            return Err("Choose a delivery destination".into());
+            return Err(ColorFeatureError::PresetChooseDestination);
         }
         recipe.validate()?;
         self.change(|next| {
@@ -117,11 +124,11 @@ impl ExportPresets {
             Ok(())
         })
     }
-    pub fn save(&mut self, name: &str, recipe: ExportRecipe) -> Result<usize, String> {
+    pub fn save(&mut self, name: &str, recipe: ExportRecipe) -> Result<usize, ColorFeatureError> {
         let name = name.trim();
         Self::validate_name(name)?;
         if self.named.len() >= Self::MAX_NAMES {
-            return Err("The export preset limit is 64".into());
+            return Err(ColorFeatureError::PresetLimit);
         }
         if Self::DESTINATIONS
             .iter()
@@ -129,7 +136,7 @@ impl ExportPresets {
             .chain(self.names())
             .any(|v| v.to_lowercase() == name.to_lowercase())
         {
-            return Err("An export preset already uses this name".into());
+            return Err(ColorFeatureError::PresetNameUsed);
         }
         recipe.validate()?;
         self.change(|next| {
@@ -142,11 +149,11 @@ impl ExportPresets {
         })?;
         Ok(self.named.len() + 3)
     }
-    pub fn update(&mut self, index: usize, recipe: ExportRecipe) -> Result<(), String> {
+    pub fn update(&mut self, index: usize, recipe: ExportRecipe) -> Result<(), ColorFeatureError> {
         let index = index
             .checked_sub(4)
             .filter(|i| *i < self.named.len())
-            .ok_or("Select a saved preset")?;
+            .ok_or(ColorFeatureError::PresetSelectSaved)?;
         recipe.validate()?;
         self.change(|next| {
             let recipe = next.intern(recipe);
@@ -154,53 +161,51 @@ impl ExportPresets {
             Ok(())
         })
     }
-    pub fn remove(&mut self, index: usize) -> Result<(), String> {
+    pub fn remove(&mut self, index: usize) -> Result<(), ColorFeatureError> {
         let index = index
             .checked_sub(4)
             .filter(|i| *i < self.named.len())
-            .ok_or("Select a saved preset")?;
+            .ok_or(ColorFeatureError::PresetSelectSaved)?;
         self.change(|next| {
             next.named.remove(index);
             Ok(())
         })
     }
-    pub fn reset_destination(&mut self, index: usize) -> Result<(), String> {
+    pub fn reset_destination(&mut self, index: usize) -> Result<(), ColorFeatureError> {
         if index >= 4 {
-            return Err("Choose a delivery destination".into());
+            return Err(ColorFeatureError::PresetChooseDestination);
         }
         self.change(|next| {
             next.destinations[index] = None;
             Ok(())
         })
     }
-    fn validate_name(name: &str) -> Result<(), String> {
+    fn validate_name(name: &str) -> Result<(), ColorFeatureError> {
         if name.trim() != name
             || name.is_empty()
             || name.chars().count() > 80
             || name.chars().any(char::is_control)
         {
-            return Err(
-                "Use a preset name of 1 to 80 characters without control characters".into(),
-            );
+            return Err(ColorFeatureError::PresetNameInvalid);
         }
         Ok(())
     }
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), ColorFeatureError> {
         if self.named.len() > Self::MAX_NAMES || self.profiles.len() > Self::MAX_NAMES + 4 {
-            return Err("Too many export presets or profiles".into());
+            return Err(ColorFeatureError::PresetEntryLimit);
         }
         let mut bytes = 0usize;
         for profile in &self.profiles {
             if profile.name.len() > 1024 {
-                return Err("Export profile name is too long".into());
+                return Err(ColorFeatureError::PresetProfileNameLimit);
             }
             match &profile.profile {
                 ColorProfile::Builtin(_) if profile.channels != ProfileChannels::Rgb => {
-                    return Err("Builtin export profiles are RGB".into());
+                    return Err(ColorFeatureError::PresetBuiltinChannels);
                 }
                 ColorProfile::Icc(data) => {
                     if data.is_empty() {
-                        return Err("Preset ICC profile is empty".into());
+                        return Err(ColorFeatureError::PresetEmptyProfile);
                     }
                     bytes = bytes.saturating_add(data.len());
                 }
@@ -208,7 +213,7 @@ impl ExportPresets {
             }
         }
         if bytes > Self::MAX_PROFILE_BYTES {
-            return Err("Export preset profiles exceed 16 MiB".into());
+            return Err(ColorFeatureError::PresetProfileBytesLimit);
         }
         let mut names: Vec<String> = Self::DESTINATIONS
             .iter()
@@ -218,7 +223,7 @@ impl ExportPresets {
             Self::validate_name(&named.name)?;
             let name = named.name.to_lowercase();
             if names.contains(&name) {
-                return Err("Duplicate export preset name".into());
+                return Err(ColorFeatureError::PresetDuplicateName);
             }
             names.push(name);
         }
@@ -232,7 +237,7 @@ impl ExportPresets {
         }
         Ok(())
     }
-    pub fn encode(&self) -> Result<Vec<u8>, String> {
+    pub fn encode(&self) -> Result<Vec<u8>, ColorFeatureError> {
         self.validate()?;
         let mut payloads = Vec::new();
         let metadata = ExportPresets {
@@ -240,22 +245,22 @@ impl ExportPresets {
                 ProfileReference::detach(&p.profile, &mut payloads))).collect(),
             destinations: self.destinations.clone(), named: self.named.clone(),
         };
-        binary_payload::encode(b"CAPYPRESETS\x01", &metadata, &payloads, Self::MAX_FILE_BYTES)
+        binary_payload::encode(b"CAPYPRESETS\x01", &metadata, &payloads, Self::MAX_FILE_BYTES).map_err(ColorFeatureError::from)
     }
     /// Presets saved by any build. A copy this build cannot read counts as
     /// empty, and the next save replaces it.
     pub fn restore(bytes: &[u8]) -> Self {
         Self::decode(bytes).unwrap_or_default()
     }
-    pub fn decode(bytes: &[u8]) -> Result<Self, String> {
+    pub fn decode(bytes: &[u8]) -> Result<Self, ColorFeatureError> {
         if bytes.len() > Self::MAX_FILE_BYTES {
-            return Err("Export preset file exceeds 64 MiB".into());
+            return Err(ColorFeatureError::PresetFileLimit);
         }
         let (metadata, blocks): (ExportPresets<ProfileReference>, _) =
             binary_payload::decode(b"CAPYPRESETS\x01", bytes, Self::MAX_FILE_BYTES)?;
         if blocks.len() > Self::MAX_NAMES + 4
             || blocks.iter().map(|b| b.len()).sum::<usize>() > Self::MAX_PROFILE_BYTES {
-            return Err("Export preset profiles exceed 16 MiB".into());
+            return Err(ColorFeatureError::PresetProfileBytesLimit);
         }
         let payloads: Vec<std::sync::Arc<[u8]>> = blocks.into_iter().map(Into::into).collect();
         let mut used = std::collections::BTreeSet::new();
@@ -264,10 +269,29 @@ impl ExportPresets {
             let profile = p.profile.resolve(&payloads)?;
             Ok(p.with_profile(profile))
         }).collect::<Result<_, String>>()?;
-        if used.len() != payloads.len() { return Err("Unused preset ICC payload".into()); }
+        if used.len() != payloads.len() { return Err(ColorFeatureError::PresetUnusedProfile); }
         let value = Self { profiles, destinations: metadata.destinations, named: metadata.named };
         value.validate()?;
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod localized_name_tests {
+    use super::*;
+    #[test]
+    fn builtin_presentation_preserves_default_looking_literal_preset_names() {
+        let mut presets = ExportPresets::default();
+        for name in ["Further editing (SDR)", "カスタム", "自分の色", "내 프리셋"] { presets.save(name, ExportRecipe::web_share()).unwrap(); }
+        let saved = presets.encode().unwrap();
+        for language in [crate::UiLanguage::English, crate::UiLanguage::Japanese, crate::UiLanguage::Korean] {
+            let context = crate::Localizer::shared(language);
+            let color = DocumentColor {depth: layer_core::color::SampleDepth::F32, ..DocumentColor::default()};
+            let names = presets.localized_names(color, &context);
+            assert_eq!(&names[4..], &["Further editing (SDR)", "カスタム", "自分の色", "내 프리셋"]);
+            assert_eq!(presets.encode().unwrap(), saved);
+            assert_eq!(ExportPresets::restore(&saved).localized_names(color, &context), names);
+        }
     }
 }
 
@@ -353,7 +377,7 @@ mod tests {
         let older = ExportPresets::decode(&older).unwrap();
         assert_eq!(older.recipe(named, document).unwrap().metadata, ExportMetadata::default());
         let hdr = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };
-        let mut hdr_jpeg = ExportRecipe::web_share().draft(crate::ExportDraftAction::Format(crate::ExportFormat::JpegHdr)).recipe;
+        let mut hdr_jpeg = ExportRecipe::web_share().draft_canonical(crate::ExportDraftAction::Format(crate::ExportFormat::JpegHdr)).recipe;
         hdr_jpeg.metadata = rights.metadata;
         library.remember(0, hdr_jpeg).unwrap();
         assert_eq!(library.recipe(0, document).unwrap().metadata, rights.metadata, "the SDR fallback of an HDR preset keeps its metadata");
@@ -364,11 +388,11 @@ mod tests {
         use crate::{ExportBackground, ExportDraftAction, ExportFormat, ExportSize};
         let hdr = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };
         let sdr = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U8 };
-        let mut jpeg = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::JpegHdr)).recipe;
+        let mut jpeg = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::JpegHdr)).recipe;
         jpeg.jpeg_quality = 75;
         jpeg.size = ExportSize::Fit { bounds: [640, 480], enlarge: false };
         let exr = ExportRecipe::further_editing(hdr);
-        let avif = ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::AvifHdrMapped)).recipe;
+        let avif = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::AvifHdrMapped)).recipe;
         let mut library = ExportPresets::default();
         library.remember(0, jpeg.clone()).unwrap();
         library.remember(2, exr.clone()).unwrap();
@@ -405,7 +429,7 @@ mod tests {
         let mut malformed = before.clone();
         malformed.named[0].recipe.profile = 100;
         let bytes = binary_payload::encode(b"CAPYPRESETS\x01", &malformed, &[] as &[&[u8]], ExportPresets::MAX_FILE_BYTES).unwrap();
-        assert!(ExportPresets::decode(&bytes).unwrap_err().contains("missing"));
+        assert_eq!(ExportPresets::decode(&bytes).unwrap_err(), ColorFeatureError::PresetProfileMissing);
         let mut bad = ExportRecipe::web_share();
         bad.jpeg_quality = 0;
         assert!(library.remember(0, bad).is_err());
@@ -427,19 +451,28 @@ pub enum ExportPresetAction {
     Reset { index: usize },
     Remember { index: usize, recipe: ExportRecipe },
 }
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ExportPresetView {
     pub names: Vec<String>,
     pub index: Option<usize>,
     pub recipe: Option<ExportRecipe>,
     pub changed: bool,
 }
+impl ExportPresetView {
+    pub fn localize_names(&mut self, color: DocumentColor, localizer: &crate::Localizer) {
+        use crate::MessageId as M;
+        let editing = if color.depth.is_float() {M::COLOR_FEATURES_EXPORT_FURTHER_EDITING_SDR} else {M::COLOR_FEATURES_EXPORT_FURTHER_EDITING};
+        for (name,id) in self.names.iter_mut().take(4).zip([M::COLOR_FEATURES_EXPORT_WEB_SHARE,M::COLOR_FEATURES_EXPORT_WIDE_COLOR,editing,M::COLOR_FEATURES_EXPORT_CUSTOM]) {
+            *name = localizer.text(id).to_string();
+        }
+    }
+}
 impl ExportPresets {
     pub fn operate(
         &mut self,
         action: ExportPresetAction,
         color: DocumentColor,
-    ) -> Result<ExportPresetView, String> {
+    ) -> Result<ExportPresetView, ColorFeatureError> {
         match &action {
             ExportPresetAction::Save { recipe, .. }
             | ExportPresetAction::Update { recipe, .. }
@@ -496,7 +529,7 @@ fn worker_protocol_validates_before_mutation_and_lists_only_names() {
     let mut library = ExportPresets::default();
     let recipe = ExportRecipe::wide_color();
     let hdr = ExportRecipe::web_share()
-        .draft(crate::ExportDraftAction::Format(crate::ExportFormat::Exr))
+        .draft_canonical(crate::ExportDraftAction::Format(crate::ExportFormat::Exr))
         .recipe;
     assert!(
         library

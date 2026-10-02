@@ -184,26 +184,29 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
     LaunchedEffect(focusRequest) {
         if (focusRequest != 0L && value.isNotEmpty()) {
             text = TextFieldValue(value, TextRange(value.length))
+            host.textComposition.clear(requester)
             requester.requestFocus()
         }
     }
-    DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
+    DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false; host.textComposition.clear(requester) } }
     val colors = LocalPalette.current
     Column(modifier.background(colors.input, shape)) {
         label?.let { Box(Modifier.padding(start = 10.dp, top = 6.dp)) { it() } }
         BasicTextField(text, { next ->
-            val changed = next.text != text.text
+            val previous = text.text
             text = next
-            if (next.text.length > maxLength) text = TextFieldValue(next.text.take(maxLength))
-            if (changed && onCommit == null) onChange(text.text)
+            if (next.composition == null && next.text.length > maxLength) text = TextFieldValue(next.text.take(maxLength))
+            host.textComposition.update(requester, text, focused)
+            if (text.text != previous && onCommit == null) onChange(text.text)
         },
             Modifier.fillMaxWidth().height(height).focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) onCommit?.invoke(text.text)
                 focused = it.isFocused; host.editingText = focused
+                host.textComposition.update(requester, text, focused)
             },
             enabled = enabled, singleLine = true, textStyle = textStyle.copy(color = colors.text),
             cursorBrush = SolidColor(colors.accent), keyboardOptions = keyboardOptions.copy(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+            keyboardActions = KeyboardActions(onDone = { if (text.composition == null) focusManager.clearFocus() }),
             decorationBox = { field ->
                 Row(Modifier.fillMaxSize().padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {

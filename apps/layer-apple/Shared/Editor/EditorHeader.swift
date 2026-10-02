@@ -47,7 +47,7 @@ import SwiftUI
                 width = ceil(ApplicationMenus.naturalWidth(store.snapshot["application_menus"].array, textSize: textSize))
                 compact = tile
             case "clock":
-                let text = editing && !store.state["fullscreen"].bool ? "Clock" : status.time
+                let text = editing && !store.state["fullscreen"].bool ? metadata(entry)["label"].string : status.time
                 width = max(tile, EditorTextMetrics.width(text, size: 44.0 / 3, weight: .regular, monospacedDigits: true) + 16)
                 compact = width
             default: break
@@ -85,7 +85,7 @@ import SwiftUI
                 ApplicationMenuButton(store: store) { SharedIcon(name: "menu", size: size["icon"].number)
                     .frame(width: size["tile"].number, height: size["tile"].number) }
                     .buttonStyle(HeaderButtonStyle(radius: radius))
-                    .accessibilityLabel("Main Menu").accessibilityIdentifier("header-recovery-menu")
+                    .accessibilityLabel(store.bootstrap["application_menus"].string).accessibilityIdentifier("header-recovery-menu")
                     .offset(x: store.headerLeadingInset + 6, y: 6)
             }
             ForEach(0..<3, id: \.self) { zone in
@@ -99,7 +99,7 @@ import SwiftUI
                             EditorMenuButton(menu: { overflow(zone) }, identifier: "header-overflow-menu") { overflowIcon }
                         }
                     }.buttonStyle(HeaderButtonStyle(inBar: !editing && overflowInBar(zone), radius: radius))
-                        .accessibilityLabel("More title bar items")
+                        .accessibilityLabel(store.catalog["native_copy"]["header"]["more_items"].string)
                         .accessibilityIdentifier("header-overflow-\(zone)").placed(geometry["overflow"][zone])
                 }
             }
@@ -186,7 +186,7 @@ import SwiftUI
     }
     private func metadata(_ entry: JSON) -> JSON {
         view["items"].array.first { $0["id"].uint == entry["id"].uint }
-            ?? view["components"].array.first { $0["item"].stableKey == entry["item"].stableKey } ?? JSON(["label":"Add Tools…"])
+            ?? view["components"].array.first { $0["item"].stableKey == entry["item"].stableKey } ?? JSON(["label":store.catalog["native_copy"]["header"]["add_tools"].string])
     }
     private var overflowIcon: some View {
         SharedIcon(name: "menu", size: size["icon"].number)
@@ -277,7 +277,7 @@ private struct HeaderItemControl: View {
             case "menu":
                 ApplicationMenuButton(store: store) { SharedIcon(name: "menu", size: size["icon"].number).frame(maxWidth: .infinity, maxHeight: .infinity) }
                     .buttonStyle(HeaderButtonStyle(hovering: hovering, inBar: inBar, radius: radius))
-                    .accessibilityLabel("Main Menu").accessibilityIdentifier("application-menus")
+                    .accessibilityLabel(store.bootstrap["application_menus"].string).accessibilityIdentifier("application-menus")
                     .modifier(HeaderControlMeasurement(id: "application-menus"))
             case "menu_labels": ApplicationMenus(store: store, iconSize: size["icon"].number, tileSize: size["tile"].number, radius: radius)
             case "settings": tile("settings") { store.invoke("settings") }.accessibilityIdentifier("settings-button")
@@ -285,19 +285,19 @@ private struct HeaderItemControl: View {
             case "workspaces":
                 if let workspaces = store.workspaces {
                     WorkspaceSwitcher(workspaces: workspaces, palette: palette, maximumWidth: width, tile: size["tile"].number)
-                } else { Text("Workspaces").lineLimit(1) }
+                } else { Text(store.catalog["native_copy"]["header"]["workspaces"].string).lineLimit(1) }
             case "document_title":
                 DrawingTabsHeader(store: store, tabs: store.drawingTabs, width: width, tile: size["tile"].number, gap: size["gap"].number)
                     .modifier(HeaderControlMeasurement(id: "document-title"))
             case "clock":
-                Text(editing && !store.state["fullscreen"].bool ? "Clock" : status.time).monospacedDigit().lineLimit(1)
+                Text(editing && !store.state["fullscreen"].bool ? description["label"].string : status.time).monospacedDigit().lineLimit(1)
                     .accessibilityIdentifier("system-clock").modifier(HeaderCaption(enabled: !editing))
                     .modifier(HeaderControlMeasurement(id: "system-clock"))
             case "battery":
                 if let battery = status.battery, store.state["fullscreen"].bool {
                     BatteryIndicator(battery: battery, dark: store.state["theme"].string == "dark")
                         .modifier(HeaderCaption(enabled: !editing))
-                } else { Text("Battery").lineLimit(1) }
+                } else { Text(description["label"].string).lineLimit(1) }
             case "space": Color.clear.contentShape(Rectangle()).modifier(HeaderCaption(enabled: !editing))
             case "tool":
                 if entry["item"]["control"]["kind"].string == "color" {
@@ -352,7 +352,7 @@ private struct HeaderEditorBank: View {
     private var entries: [JSON] { view["model"]["zones"].array.flatMap(\.array) }
     var body: some View {
         ConfigurationFlow(spacing: 6, trailingLast: true) {
-            chip("Add Tools…", source: JSON(["kind":"tools"]))
+            chip(store.catalog["native_copy"]["header"]["add_tools"].string, source: JSON(["kind":"tools"]))
             ForEach(view["components"].array.indices, id: \.self) { index in
                 let component = view["components"][index]
                 if !component["singleton"].bool || !entries.contains(where: { $0["item"].stableKey == component["item"].stableKey }) {
@@ -360,14 +360,14 @@ private struct HeaderEditorBank: View {
                 }
             }
             HStack(spacing: 8) {
-                Picker("Title bar size", selection: Binding(get: { view["model"]["size"].string }, set: { header.action(["type":"set_size", "size":$0]) })) {
+                Picker(store.catalog["native_copy"]["header"]["title_bar"].string, selection: Binding(get: { view["model"]["size"].string }, set: { header.action(["type":"set_size", "size":$0]) })) {
                     ForEach(view["sizes"].array.indices, id: \.self) { index in Text(view["sizes"][index]["label"].string).tag(view["sizes"][index]["id"].string) }
                 }.labelsHidden().fixedSize().accessibilityIdentifier("header-size")
-                Toggle("Show footer", isOn: Binding(get: { store.state["workspace"]["layout"]["canvas_info"]["visible"].bool },
+                Toggle(store.catalog["native_copy"]["header"]["show_footer"].string, isOn: Binding(get: { store.state["workspace"]["layout"]["canvas_info"]["visible"].bool },
                     set: { header.action(["type":"canvas_info", "visible":$0]) })).fixedSize()
                     .accessibilityIdentifier("header-footer")
-                Button("Cancel") { header.action(["type":"cancel"]) }.accessibilityIdentifier("header-cancel")
-                Button("Done") { header.action(["type":"edit", "editing":false]) }.accessibilityIdentifier("header-done")
+                Button(store.bootstrap["common"]["cancel"].string) { header.action(["type":"cancel"]) }.accessibilityIdentifier("header-cancel")
+                Button(store.bootstrap["common"]["done"].string) { header.action(["type":"edit", "editing":false]) }.accessibilityIdentifier("header-done")
             }.frame(height: 36)
         }.padding(6).background(EditorPalette(source: store.state["palette"])["panel"], in: SquircleShape.surface)
             .padding(.horizontal, 6)

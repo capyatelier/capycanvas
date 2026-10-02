@@ -390,13 +390,13 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
 
 #[test]
 fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders() {
-    for (language, source) in [(UiLanguage::English, "Source"), (UiLanguage::Japanese, "ソース")] {
+    for (language, source, sample_size) in [(UiLanguage::English, "Source", "Sample size"), (UiLanguage::Japanese, "参照対象", "取得範囲")] {
     let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk,
         Localizer::shared(language)).unwrap();
     invoke(&mut s, CommandId::Eyedropper);
     let choices = s.state().tool_options();
     assert!(choices.iter().any(|o| matches!(o, ToolOption::Choice { id: "variant", label, .. } if label.as_ref() == source)));
-    assert!(choices.iter().any(|o| matches!(o, ToolOption::Choice { id: "sample-size", label, .. } if label.as_ref() == "Sample size")));
+    assert!(choices.iter().any(|o| matches!(o, ToolOption::Choice { id: "sample-size", label, .. } if label.as_ref() == sample_size)));
     s.dispatch(UiAction::SetColorSampleSize { width: 101 })
         .unwrap();
     for id in ["variant", "sample-size"] {
@@ -928,17 +928,17 @@ fn slider_bookmark_taps_are_nearby_bounded_and_choose_the_closest_mark() {
             for sign in [-1., 1.] {
                 let near = mark + sign * 16. / travel;
                 assert_eq!(
-                    slider_bookmark_value(control, &[value], near, travel).unwrap(),
+                    slider_bookmark_value(control, &[value], near, travel, &Localizer::shared(UiLanguage::English)).unwrap(),
                     value as f64
                 );
                 let far = mark + sign * 24. / travel;
                 assert_ne!(
-                    slider_bookmark_value(control, &[value], far, travel).unwrap(),
+                    slider_bookmark_value(control, &[value], far, travel, &Localizer::shared(UiLanguage::English)).unwrap(),
                     value as f64
                 );
                 // The same nearby position remains unsnapped during a drag.
                 assert_ne!(
-                    slider_bookmark_value(control, &[], near, travel).unwrap(),
+                    slider_bookmark_value(control, &[], near, travel, &Localizer::shared(UiLanguage::English)).unwrap(),
                     value as f64
                 );
             }
@@ -949,21 +949,21 @@ fn slider_bookmark_taps_are_nearby_bounded_and_choose_the_closest_mark() {
                 &[value, neighbor],
                 fill(neighbor as f64) - 0.001,
                 200.
-            )
+            , &Localizer::shared(UiLanguage::English))
             .unwrap(),
             neighbor as f64
         );
         // A very short track must not turn most of its range into a tap target.
         assert_eq!(
-            slider_bookmark_value(control, &[value], mark + 0.14, 40.).unwrap(),
+            slider_bookmark_value(control, &[value], mark + 0.14, 40., &Localizer::shared(UiLanguage::English)).unwrap(),
             value as f64
         );
         assert_ne!(
-            slider_bookmark_value(control, &[value], mark + 0.16, 40.).unwrap(),
+            slider_bookmark_value(control, &[value], mark + 0.16, 40., &Localizer::shared(UiLanguage::English)).unwrap(),
             value as f64
         );
         for travel in [0., -1., f64::NAN, f64::INFINITY] {
-            assert!(slider_bookmark_value(control, &[value], mark, travel).is_err());
+            assert!(slider_bookmark_value(control, &[value], mark, travel, &Localizer::shared(UiLanguage::English)).is_err());
         }
         for value in [numeric.min as f32, numeric.max as f32] {
             let position = if value == numeric.min as f32 {
@@ -972,7 +972,7 @@ fn slider_bookmark_taps_are_nearby_bounded_and_choose_the_closest_mark() {
                 0.99
             };
             assert_eq!(
-                slider_bookmark_value(control, &[value], position, 200.).unwrap(),
+                slider_bookmark_value(control, &[value], position, 200., &Localizer::shared(UiLanguage::English)).unwrap(),
                 value as f64
             );
         }
@@ -992,7 +992,7 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
         64.,
         180.,
         1.,
-    )
+     &Localizer::shared(UiLanguage::English))
     .unwrap();
     assert_eq!(size.stamp.width, 64.);
     assert_eq!(size.stamp.y, size.stamp.x);
@@ -1007,7 +1007,7 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
         0.42,
         180.,
         1.,
-    )
+     &Localizer::shared(UiLanguage::English))
     .unwrap();
     assert_eq!(opacity.text, "Opacity: 42 %");
     assert_eq!(opacity.opacity, 0.42);
@@ -1019,7 +1019,7 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
             1.,
             180.,
             1.
-        )
+        , &Localizer::shared(UiLanguage::English))
         .unwrap()
         .stamp
     );
@@ -1031,7 +1031,7 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
     ] {
         let tile = style.size()[1];
         let layout =
-            slider_preview_layout(ToolbarControl::BrushOpacitySlider, style, 1., 0., 1.).unwrap();
+            slider_preview_layout(ToolbarControl::BrushOpacitySlider, style, 1., 0., 1., &Localizer::shared(UiLanguage::English)).unwrap();
         assert_eq!(layout.radius, style.corner_radius());
         assert_eq!(
             layout.bookmark,
@@ -1050,11 +1050,11 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
         );
         assert_eq!(layout.viewport.y, tile);
         let size =
-            slider_preview_layout(ToolbarControl::BrushSizeSlider, style, 64., 0., 1.).unwrap();
+            slider_preview_layout(ToolbarControl::BrushSizeSlider, style, 64., 0., 1., &Localizer::shared(UiLanguage::English)).unwrap();
         assert_eq!(size.header_fade, 65. * tile / 54., "{style:?} header fade");
         assert!(layout.stamp.y >= tile);
     }
-    assert!(slider_bookmark_value(ToolbarControl::BrushSizeSlider, &[], f64::NAN, 200.).is_err());
+    assert!(slider_bookmark_value(ToolbarControl::BrushSizeSlider, &[], f64::NAN, 200., &Localizer::shared(UiLanguage::English)).is_err());
     assert!(
         slider_preview_layout(
             ToolbarControl::BrushSizeSlider,
@@ -1062,7 +1062,7 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
             f32::INFINITY,
             180.,
             1.
-        )
+        , &Localizer::shared(UiLanguage::English))
         .is_err()
     );
     let invalid = r#"{"size":[64,32],"opacity":[]}"#;

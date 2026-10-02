@@ -75,7 +75,7 @@ class AndroidColorPanelTest {
             activity = it; host = it.host; owner = it.window.decorView.descendant<ViewRootForTest>()!!; density = it.resources.displayMetrics.density
         }
         action(obj("type" to "close_settings"))
-        val defaults = Native.create(false)
+        val defaults = createEnglishHostForTest()
         try { action(obj("type" to "restore_workspace", "workspace" to JSONObject(Native.snapshot(defaults)!!).getJSONObject("state").getJSONObject("workspace"))) }
         finally { Native.destroy(defaults) }
         if (state().getJSONObject("workspace").optBoolean("zen_mode")) action(obj("type" to "invoke", "command" to "zen_mode"))
@@ -83,7 +83,7 @@ class AndroidColorPanelTest {
             "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
         fixture = JSONObject(state().getJSONObject("workspace").toString())
         resize(280)
-        referenceHandle = Native.create(false)
+        referenceHandle = createEnglishHostForTest()
     }
     @After fun cleanup() {
         try { if (contact) event(MotionEvent.ACTION_CANCEL) }

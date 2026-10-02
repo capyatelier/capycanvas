@@ -2,6 +2,7 @@ import SwiftUI
 
 /// A nonmodal inspector leaves the canvas reachable while analysis runs.
 struct HistogramPresentation: View {
+    @Environment(\.capyNativeCopy) private var nativeCopy
     @ObservedObject var model: HistogramController
     let palette: EditorPalette
     @State private var channel = 0
@@ -15,29 +16,29 @@ struct HistogramPresentation: View {
                 EditorScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("Histogram").font(.headline)
+                            Text(model.copy["histogram"].string).font(.headline)
                             Spacer()
-                            Button("Close", action: model.close).accessibilityIdentifier("histogram-close")
+                            Button(model.common["close"].string, action: model.close).accessibilityIdentifier("histogram-close")
                         }
-                        Picker("Channel", selection: $channel) {
-                            ForEach(Array(["RGB", "Red", "Green", "Blue", "Luminance"].enumerated()), id: \.offset) { index, title in
+                        Picker(model.copy["channel"].string, selection: $channel) {
+                            ForEach(Array(["RGB", model.copy["red"].string, model.copy["green"].string, model.copy["blue"].string, model.copy["luminance"].string].enumerated()), id: \.offset) { index, title in
                                 Text(title).tag(index)
                             }
                         }.accessibilityIdentifier("histogram-channel")
                         HStack {
-                            Toggle("Log counts", isOn: $logarithmic)
-                            Toggle("Auto update", isOn: $model.automatic)
+                            Toggle(model.copy["log_counts"].string, isOn: $logarithmic)
+                            Toggle(model.copy["auto_update"].string, isOn: $model.automatic)
                         }
-                        HistogramChart(channels: histogram["channels"].array, indices: indices, logarithmic: logarithmic, axis: model.result["axis"])
+                        HistogramChart(label: model.copy["distribution"].string, channels: histogram["channels"].array, indices: indices, logarithmic: logarithmic, axis: model.result["axis"])
                             .frame(height: 140).background(palette["bg"])
                         HistogramAxis(axis: model.result["axis"]).frame(height: 18)
                         Button { details.toggle() } label: {
                             HStack(spacing: 4) {
                                 SharedIcon(name: "chevron-down", size: 12).rotationEffect(.degrees(details ? 0 : -90))
-                                Text("Details")
+                                Text(model.copy["details"].string)
                             }.contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityIdentifier("histogram-details")
-                            .accessibilityValue(details ? "Expanded" : "Collapsed")
+                            .accessibilityValue(details ? nativeCopy["layers"]["expanded"].string : nativeCopy["layers"]["collapsed"].string)
                         if details {
                         if !histogram.isNull {
                             let color = histogram["color"]
@@ -49,12 +50,12 @@ struct HistogramPresentation: View {
                                     .font(.caption).accessibilityIdentifier("histogram-channel-\(i)")
                             }
                         }
-                        Text(model.result["axis"]["description"].string + ". Includes visible paper; excludes transparent pixels and display overlays.")
+                        Text(model.result["axis"]["hdr"].bool ? model.result["axis"]["description"].string + ". Includes visible paper; excludes transparent pixels and display overlays." : model.copy["inspection_help"].string)
                             .font(.caption)
                         }
-                        Text(model.stale && !model.busy ? "Drawing changed · showing previous inspection. \(model.status)" : model.status)
+                        Text(model.stale && !model.busy ? model.staleStatus : model.status)
                             .accessibilityIdentifier("histogram-status")
-                        Button("Refresh", action: model.refresh).disabled(model.busy).accessibilityIdentifier("histogram-refresh")
+                        Button(model.copy["refresh"].string, action: model.refresh).disabled(model.busy).accessibilityIdentifier("histogram-refresh")
                     }.padding(16)
                 }
                 .frame(width: min(380, max(0, geometry.size.width - 24)))
@@ -70,6 +71,7 @@ struct HistogramPresentation: View {
 }
 
 private struct HistogramChart: View {
+    let label: String
     let channels: [JSON]
     let indices: [Int]
     let logarithmic: Bool
@@ -99,7 +101,7 @@ private struct HistogramChart: View {
                 path.addLine(to: CGPoint(x: size.width, y: size.height)); path.closeSubpath()
                 context.fill(path, with: .color(colors[i].opacity(i == 3 ? 0.8 : 0.53)))
             }
-        }.accessibilityLabel("Histogram distribution")
+        }.accessibilityLabel(label)
     }
 }
 

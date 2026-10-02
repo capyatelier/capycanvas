@@ -41,7 +41,7 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
         bar.Height(44);bar.Background(clear());bar.Children().Append(ramp);bar.Children().Append(dots);dots.IsHitTestVisible(false);
         brush.StartPoint({0,0});brush.EndPoint({1,0});brush.ColorInterpolationMode(ColorInterpolationMode::SRgbLinearInterpolation);
         ramp.Fill(brush);ramp.Height(32);Canvas::SetLeft(ramp,6);
-        AutomationProperties::SetName(bar,L"Gradient");AutomationProperties::SetAutomationId(bar,property->id()+L"-gradient");
+        AutomationProperties::SetName(bar,data->caption(L"color",L"gradient"));AutomationProperties::SetAutomationId(bar,property->id()+L"-gradient");
         bar.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
         bar.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->bar);
@@ -54,13 +54,13 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
         }});
         positionGate.Content(positionFields);positionGate.IsTabStop(false);positionGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         root.Children().Append(bar);root.Children().Append(positionGate);
-        root.Children().Append(ColorField(property,L"Color",[weak]{if(auto self=weak.lock())return object(self->stop(),L"color");return J{};},
+        root.Children().Append(ColorField(property,data->caption(L"color",L"color"),[weak]{if(auto self=weak.lock())return object(self->stop(),L"color");return J{};},
             [weak](J color){if(auto self=weak.lock())self->change(self->selected,num(self->stop(),L"position"),color);},fields,
             [weak]{if(auto self=weak.lock())return self->context();return hstring{};}));
         StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(6);
-        auto add=button(data,L"Add stop",[weak]{if(auto self=weak.lock())self->addMiddle();});
-        remove=button(data,L"Remove stop",[weak]{if(auto self=weak.lock()){int index=self->selected;self->selected=std::max(0,index-1);self->change(index,0,JsonValue::CreateNullValue(),true);}});
-        auto reset=button(data,L"Reset gradient",[weak]{if(auto self=weak.lock()){self->selected=0;++self->generation;self->property->reset();self->refresh();}});
+        auto add=button(data,data->caption(L"color",L"add_stop"),[weak]{if(auto self=weak.lock())self->addMiddle();});
+        remove=button(data,data->caption(L"color",L"remove_stop"),[weak]{if(auto self=weak.lock()){int index=self->selected;self->selected=std::max(0,index-1);self->change(index,0,JsonValue::CreateNullValue(),true);}});
+        auto reset=button(data,data->caption(L"color",L"reset_gradient"),[weak]{if(auto self=weak.lock()){self->selected=0;++self->generation;self->property->reset();self->refresh();}});
         int i=0;for(auto pick:{add,remove,reset}){
             pick.Height(28);pick.Width(28);pick.Content(icon(std::array<hstring,3>{L"plus",L"minus",L"undo"}[i],data->theme()));
             CapyUi::tooltip(pick,AutomationProperties::GetName(pick));
@@ -75,7 +75,7 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
         auto nextContext=context();
         if(nextContext!=positionContext){
             positionContext=nextContext;positionBindings.clear();positionFields.Children().Clear();auto weak=weak_from_this();
-            positionFields.Children().Append(number(data,L"Position",object(data->catalog,L"opacity"),
+            positionFields.Children().Append(number(data,data->caption(L"color",L"position"),object(data->catalog,L"opacity"),
                 [weak]{if(auto self=weak.lock())return num(self->stop(),L"position");return 0.;},
                 [weak,expected=positionContext](double value){if(auto self=weak.lock();self&&self->context()==expected)self->change(self->selected,value);},
                 positionBindings,nullptr,false,property->id()+L"-position"));
@@ -85,7 +85,7 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
         double width=std::max(0.,bar.ActualWidth()-12);
         auto next=O({{L"stops",all},{L"width",N(width)},{L"selected",N(selected)},{L"color_context",object(data->model,L"color_panel")}}).Stringify();
         if(next==drawn)return;drawn=next;ramp.Width(width);brush.GradientStops().Clear();dots.Children().Clear();
-        auto samples=colorUi(O({{L"type",S(L"gradient")},{L"stops",all},
+        auto samples=colorUi(data->localization.get(),O({{L"type",S(L"gradient")},{L"stops",all},
             {L"document_space",S(str(object(data->model,L"color_panel"),L"rgb_space",L"Srgb"))},{L"rendition",object(data->model,L"color_panel").GetNamedValue(L"rendition",JsonValue::CreateNullValue())}})).GetArray();
         for(uint32_t i=0;i<samples.Size();++i){GradientStop entry;entry.Offset(double(i)/(samples.Size()-1));
             entry.Color(displayColor(samples.GetObjectAt(i)));brush.GradientStops().Append(entry);}

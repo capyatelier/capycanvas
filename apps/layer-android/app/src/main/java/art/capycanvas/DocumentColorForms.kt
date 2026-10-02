@@ -33,7 +33,9 @@ import org.json.JSONObject
     var options by remember { mutableStateOf(JSONObject(model.getJSONObject("options").toString())) }
     var width by remember { mutableStateOf(options.getJSONArray("extent").getInt(0).toString()) }
     var height by remember { mutableStateOf(options.getJSONArray("extent").getInt(1).toString()) }
-    var preset by remember { mutableStateOf("custom") }
+    var preset by remember { mutableStateOf(model.objectOrNull("selected")?.toString() ?: "custom") }
+    val text=model.getJSONObject("text")
+    val appearance=remember(options.toString()) { JSONObject(Native.documentAppearance(options.toString())) }
     var name by remember { mutableStateOf("") }
     var defaults by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -58,14 +60,14 @@ import org.json.JSONObject
                 } catch (e: Exception) { error = e.message ?: "Could not create the drawing" }
                 finally { saving = false }
             }
-        }) { Text("Create") } }, dismissButton = { TextButton(onDismiss, Modifier.testTag("new-document-cancel"), enabled = !saving) { Text("Cancel") } },
+        }) { Text(text.getString("create")) } }, dismissButton = { TextButton(onDismiss, Modifier.testTag("new-document-cancel"), enabled = !saving) { Text(text.getString("cancel")) } },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val presets = model.getJSONArray("presets")
-                ColorChoice("Preset", listOf("custom" to "Custom") + presets.objects().mapIndexed { i, p -> i.toString() to p.getString("name") }, preset) { id ->
+                ColorChoice(text.getString("preset"), listOf("custom" to text.getString("custom")) + presets.objects().map { p -> p.getJSONObject("id").toString() to p.getString("name") }, preset) { id ->
                     preset = id
-                    id.toIntOrNull()?.let { index ->
-                        options = JSONObject(presets.getJSONObject(index).getJSONObject("options").toString())
+                    presets.objects().firstOrNull { it.getJSONObject("id").toString() == id }?.let { chosen ->
+                        options = JSONObject(chosen.getJSONObject("options").toString())
                         width = options.getJSONArray("extent").getInt(0).toString(); height = options.getJSONArray("extent").getInt(1).toString()
                     }
                 }
@@ -74,20 +76,17 @@ import org.json.JSONObject
                     OutlinedTextField(height, { height = it }, label = { Text(spec.getString("height_label")) }, modifier = Modifier.weight(1f).testTag("new-document-height"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
                 }
                 val spaces = model.getJSONArray("spaces")
-                ColorChoice("Color space", (0 until spaces.length()).map { spaces.getJSONArray(it).let { a -> a.getString(0) to a.getString(1) } }, options.getJSONObject("color").getString("space")) { color("space", it) }
-                ColorChoice("Bit depth", listOf("U8" to "8-bit SDR", "U16" to "16-bit SDR", "F16" to "16-bit float HDR", "F32" to "32-bit float HDR"), options.getJSONObject("color").getString("depth")) { color("depth", it) }
+                ColorChoice(text.getString("space"), (0 until spaces.length()).map { spaces.getJSONArray(it).let { a -> a.getString(0) to a.getString(1) } }, options.getJSONObject("color").getString("space")) { color("space", it) }
+                ColorChoice(text.getString("depth"), model.getJSONArray("depths").let { a -> (0 until a.length()).map { a.getJSONArray(it).let { c -> c.getString(0) to c.getString(1) } } }, options.getJSONObject("color").getString("depth")) { color("depth", it) }
                 val blending = model.getJSONObject("blending")
-                val linearOnly = blending.getJSONArray("linear_only").let { a -> (0 until a.length()).any { a.getString(it) == options.getJSONObject("color").getString("depth") } }
-                val blendChoices = blending.getJSONArray("choices").objects()
-                val blendSpace = if (linearOnly) "Linear" else options.getString("blend_space")
-                ColorChoice(blending.getString("label"), blendChoices.map { it.getString("id") to it.getString("label") }, blendSpace, enabled = !linearOnly) {
+                ColorChoice(blending.getString("label"), blending.getJSONArray("choices").objects().map { it.getString("id") to it.getString("label") }, appearance.getString("blending"), enabled = appearance.getBoolean("blending_editable")) {
                     options = JSONObject(options.toString()).put("blend_space", it)
                 }
-                Text(if (linearOnly) blending.getString("float_reason") else blendChoices.first { it.getString("id") == blendSpace }.getString("description"),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("new-document-blending-note"))
-                ColorChoice("Background", listOf("White" to "White", "Transparent" to "Transparent"), options.getString("background")) { options = JSONObject(options.toString()).put("background", it) }
-                OutlinedTextField(name, { name = it }, label = { Text("Save as preset (optional)") }, singleLine = true)
-                Row { Checkbox(defaults, { defaults = it }); Text("Use as defaults", Modifier.padding(top = 12.dp)) }
+                Text(appearance.getString("blending_help"), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("new-document-blending-note"))
+                ColorChoice(text.getString("background"), model.getJSONArray("backgrounds").let { a -> (0 until a.length()).map { a.getJSONArray(it).let { c -> c.getString(0) to c.getString(1) } } }, options.getString("background")) { options = JSONObject(options.toString()).put("background", it) }
+                OutlinedTextField(name, { name = it }, label = { Text(text.getString("save_preset")) }, singleLine = true)
+                Row { Checkbox(defaults, { defaults = it }); Text(text.getString("use_defaults"), Modifier.padding(top = 12.dp)) }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         })

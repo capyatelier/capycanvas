@@ -66,7 +66,7 @@ function Request-Close([switch]$WithPreferences) {
     if(!$WithPreferences){
         Wait-Until {
             $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
+                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas'))
             $canvas -and $canvas.Current.IsEnabled
         } 'Native document dialog did not finish closing'
     }

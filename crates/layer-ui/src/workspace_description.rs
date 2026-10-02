@@ -314,13 +314,5 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Lay
 }
 
 fn header_label(item: crate::HeaderItem, localization: &Localizer) -> String {
-    use crate::HeaderItem as H;
-    localization.text(match item {
-        H::Capy => MessageId::WORKSPACE_HEADER_CAPY, H::Menu => MessageId::WORKSPACE_HEADER_MENU,
-        H::MenuLabels => MessageId::WORKSPACE_HEADER_MENU_LABELS, H::Settings => MessageId::WORKSPACE_HEADER_SETTINGS,
-        H::Fullscreen => MessageId::WORKSPACE_HEADER_FULLSCREEN, H::Workspaces => MessageId::WORKSPACE_HEADER_WORKSPACES,
-        H::DocumentTitle => MessageId::WORKSPACE_HEADER_DOCUMENT_TITLE, H::Clock => MessageId::WORKSPACE_HEADER_CLOCK,
-        H::Battery => MessageId::WORKSPACE_HEADER_BATTERY, H::Space => MessageId::WORKSPACE_HEADER_SPACE,
-        H::Tool { control } => return crate::tool_choice_localized(control, localization).label,
-    }).to_string()
+    item.localized_label(localization)
 }

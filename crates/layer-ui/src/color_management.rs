@@ -9,14 +9,25 @@ use serde_json::{Value, json};
 pub fn proof_view<R: CanvasRenderer>(session: &UiSession<R>) -> Value {
     let document = session.engine().document();
     let recipe = session.effective_sdr_rendition();
+    let numbers = {
+
+            let mut numbers = crate::proof_panel::localized_pad(session.localization())["axes"].as_array().unwrap().clone();
+            numbers.extend(crate::proof_panel::localized_numbers(session.localization()).as_array().unwrap().clone());
+            for number in &mut numbers {
+                number["value"] = match number["key"].as_str().unwrap() {
+                    "contrast" => json!(f64::from(recipe.contrast.log2())), "balance" => json!(f64::from(recipe.balance)),
+                    "exposure" => json!(recipe.exposure), _ => json!(recipe.highlight_color),
+                };
+            }
+            numbers
+            };
     json!({"mode":session.proof_panel_mode(), "hdr":document.color.depth.is_float(), "depth":document.color.depth,
         "recipe":recipe, "pad":crate::proof_panel::sdr_pad_values(recipe),
         "readouts":[format!("{:.0}%",recipe.contrast*100.), format!("{:+.0}%",recipe.balance*100.),
             format!("{:+.0}%",recipe.exposure*25.),format!("{:.0}%",recipe.highlight_color*100.)],
-        "numbers":crate::proof_panel::sdr_tone_pad().axes.iter().map(|a|json!({"key":a.key,"label":a.label,"numeric":a.numeric,"value":if a.key=="contrast" {f64::from(recipe.contrast.log2())} else {f64::from(recipe.balance)}}))
-            .chain(crate::proof_panel::sdr_number_controls().iter().map(|a|json!({"key":a.key,"label":a.label,"numeric":a.numeric,"value":if a.key=="exposure" {recipe.exposure} else {recipe.highlight_color}}))).collect::<Vec<_>>(), "icons":crate::proof_panel::SDR_READOUT_ICONS,
+        "numbers":numbers, "icons":crate::proof_panel::SDR_READOUT_ICONS,
         "print":document.proof.as_ref().map(|p|json!({"name":p.name})), "gamut_warning":session.state().gamut_warning,
-        "intents":crate::proof_panel::PROOF_INTENTS, "simulations":crate::proof_panel::ProofSimulation::CHOICES})
+        "intents":crate::proof_panel::proof_intents(session.localization()), "simulations":crate::proof_panel::proof_simulations(session.localization())})
 }
 
 /// Hosts plot the shared bins and axis; nonpositive HDR values have no stop coordinate.
@@ -91,13 +102,13 @@ impl PickerField {
         }
         let mut colors = crate::ColorState::default();
         colors.set_rgb_space(self.space)?;
-        colors.apply(crate::ColorAction::Shape { shape: self.shape })?;
+        colors.apply(crate::ColorAction::Shape { shape: self.shape }).map_err(|reason|format!("{reason:?}"))?;
         let geometry = crate::ColorWheelGeometry::new(128.).unwrap();
         colors.apply(crate::ColorAction::PickWheel {
             part: crate::ColorWheelPart::Hue,
             point: colors.wheel_hue_marker(&geometry, self.hue),
             size: 128.,
-        })?;
+        }).map_err(|reason|format!("{reason:?}"))?;
         if !colors.render_field_base_linear(side, pixels) {
             return Err("Invalid picker extent".into());
         }

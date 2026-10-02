@@ -73,6 +73,16 @@ roll, as Apple documents in
   overflow the oldest token is released with its last known values. Blur and
   cancellation release the contact's tokens.
 
+## Text composition
+
+Native marked text takes precedence over shortcut capture and numeric submit,
+cancel, stepping and artwork undo. Search and rename key handlers also defer to
+native composition. UIKit's numeric field carries the active interface tag in
+its accessibility language and text-input context identifier; system keyboard
+selection and system font fallback remain native. The SwiftUI locale carries the active tag for interface text and font fallback.
+The recovery date explicitly uses the system locale; system status formatters
+and shared numeric strings retain their existing formatting.
+
 ## Checks
 
 ```sh

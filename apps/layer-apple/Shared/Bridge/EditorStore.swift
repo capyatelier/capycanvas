@@ -11,7 +11,11 @@ import SwiftUI
     @Published var displayDetails = DisplayDetails()
     @Published var displayHeadroom: Double = 1
     @Published var catalog = JSON()
+    @Published private(set) var bootstrap = JSON()
+    @Published private(set) var interfaceLanguage = ""
+    var bootstrapChanged: (() -> Void)?
     @Published var failure: String?
+    private var lastCanvasDiagnostic: String?
     @Published var canvasSubmitted = false
     @Published private(set) var restartingCanvas = false
     @Published var storageFailure: String?
@@ -124,13 +128,24 @@ import SwiftUI
     }
     private func receive(_ next: JSON?, _ error: String?) {
         if next?["display_poll"].bool == true { observeDisplayHeadroom?(); return }
-        if let error { failure = error }
+        if let error {
+            if failure != error { NSLog("Capy Canvas native diagnostic: %@", error) }
+            failure = error
+        }
         if let next {
+            if !next["bootstrap"].isNull {
+                bootstrap = next["bootstrap"]; interfaceLanguage = bootstrap["active_tag"].string
+                bootstrapChanged?(); wake?(); return
+            }
             if !next["persistence"].isNull {
                 storagePending = next["persistence"]["pending"].uint != 0
                 canRetryStorage = next["persistence"]["can_retry"].bool
                 storageFailure = next["persistence"]["error"].isNull ? nil : next["persistence"]["error"].string
                 return
+            }
+            if !next["error"].isNull && lastCanvasDiagnostic != next["error"].string {
+                lastCanvasDiagnostic = next["error"].string
+                NSLog("Capy Canvas renderer diagnostic: %@", next["error"].string)
             }
             let hadRenderer = snapshot["gpu_ready"].bool
             let documentEpoch = state["document_file"]["epoch"].uint, hand = handCursor
@@ -145,6 +160,7 @@ import SwiftUI
                 if hadRenderer != snapshot["gpu_ready"].bool {
                     filterPreviews.reset()
                     if !snapshot["gpu_ready"].bool { canvasSubmitted = false }
+                    bootstrapChanged?()
                 }
                 filterPreviews.refresh()
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
@@ -182,11 +198,13 @@ import SwiftUI
         interruptInput?()
         restartingCanvas = true
         canvasSubmitted = false
+        bootstrapChanged?()
         native.restartCanvas { [weak self] error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.restartingCanvas = false
                 self.failure = error
+                self.bootstrapChanged?()
                 self.wake?()
             }
         }

@@ -272,3 +272,5 @@ fun findNode(match: (SemanticsNode) -> Boolean, first: ViewRootForTest? = null):
     (listOfNotNull(first) + semanticsRoots().filter { it !== first }).firstNotNullOfOrNull { root -> root.find(match)?.let { root to it } }
 
 fun findTag(tag: String, first: ViewRootForTest? = null) = findNode(hasTag(tag), first)
+
+internal fun createEnglishHostForTest(profiling: Boolean = false): Long = Native.create("", arrayOf("en"), profiling)

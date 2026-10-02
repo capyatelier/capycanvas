@@ -67,7 +67,7 @@ private struct NavigatorDrawing: View {
                 })
                 .onChange(of: contact) { _, active in if !active && started { send("cancel"); started = false } }
                 .onDisappear { if started { send("cancel"); started = false } }
-                .accessibilityElement().accessibilityLabel("Navigator")
+                .accessibilityElement().accessibilityLabel(store.catalog["native_copy"]["color"]["navigator"].string)
                 .accessibilityAddTraits(.isImage)
                 .accessibilityValue(store.canvasSubmitted && store.snapshot["canvas_ready"].bool ? "Live preview" : "Preparing preview")
                 .accessibilityHint("Drag the work area to move the canvas")
@@ -122,11 +122,12 @@ struct RendererStatsPanel: View {
 }
 
 private struct RecordingButton: View {
+    @Environment(\.capyNativeCopy) private var nativeCopy
     @ObservedObject var recording: StrokeRecording
     var body: some View {
         Button { recording.activate() } label: {
             Text(recording.label).fontWeight(.bold).frame(maxWidth: .infinity, minHeight: 32).contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle(background: Color.primary.opacity(0.05))).disabled(recording.busy)
-            .help("Record tablet input for up to 10 minutes").accessibilityIdentifier("stroke-recording")
+            .help(nativeCopy["color"]["record_tablet"].string).accessibilityIdentifier("stroke-recording")
     }
 }

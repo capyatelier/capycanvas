@@ -312,6 +312,20 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   // Real text input after focus must append, not replace the first character.
   await call("Input.insertText", { text: "ressure" }); await settle();
   assert.equal(await evaluate("layerApp.app.preferences().query"), "Pressure");
+  assert.deepEqual(await evaluate(`(() => {
+    const dialog=document.createElement("dialog"), input=document.createElement("input");
+    let cancellations=0; dialog.append(input); document.body.append(dialog);
+    dialog.addEventListener("cancel", event => { event.preventDefault(); cancellations++; });
+    dialog.showModal(); input.focus();
+    input.dispatchEvent(new CompositionEvent("compositionstart", {data:"字",bubbles:true}));
+    dialog.dispatchEvent(new Event("cancel", {cancelable:true})); const during=cancellations;
+    input.dispatchEvent(new CompositionEvent("compositionend", {data:"字",bubbles:true}));
+    dialog.dispatchEvent(new Event("cancel", {cancelable:true}));
+    dialog.close(); dialog.remove(); return [during,cancellations];
+  })()`), [0,1], "native dialog cancel preserves tracked composition and resumes afterward");
+  await evaluate(`(() => { const search=document.querySelector("#settings-search"); search.dispatchEvent(new CompositionEvent("compositionstart",{data:"圧",bubbles:true})); search.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",isComposing:false,bubbles:true,cancelable:true})); document.querySelector("#settings").dispatchEvent(new Event("cancel",{cancelable:true})); })()`);
+  assert.equal(await evaluate("document.querySelector('#settings').open && !document.querySelector('#settings-search').hidden"), true, "preedit candidate Escape preserves Settings search");
+  await evaluate(`document.querySelector("#settings-search").dispatchEvent(new CompositionEvent("compositionend",{data:"圧",bubbles:true}))`);
   await key("Escape");
   assert.equal(await evaluate("document.querySelector('#settings-search').hidden"), true);
   await click('.preferences-search-toggle');
@@ -373,6 +387,10 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   for (const id of ["Undo", "Redo", "UndoWorkspace", "RedoWorkspace"]) assert.ok(await visible(`[data-shortcut="command.${id}"]`), `Z finds ${id}`);
   assert.equal(await visible('[data-shortcut="command.ZoomIn"]'), false, "one letter finds keys, not names");
   await type('#shortcuts-search', '');
+  const shortcutKeyBeforePreedit = await prefs('view.shortcut_page.key');
+  await evaluate(`(() => { const node=document.querySelector('#shortcuts-search'); node.focus(); node.dispatchEvent(new CompositionEvent('compositionstart',{data:'字',bubbles:true})); node.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,isComposing:false,bubbles:true,cancelable:true})); })()`);
+  assert.equal(await prefs('view.shortcut_page.key'), shortcutKeyBeforePreedit, 'candidate modifiers do not record a shortcut lookup');
+  await evaluate(`document.querySelector('#shortcuts-search').dispatchEvent(new CompositionEvent('compositionend',{data:'字',bubbles:true}))`);
   await evaluate("(() => { const node=document.querySelector('#shortcuts-search'); node.focus(); node.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true,cancelable:true})); })()"); await settle();
   assert.equal(await prefs("view.shortcut_page.key"), "Ctrl+Z", "pressing a shortcut in search looks it up");
   assert.ok(await visible('[data-shortcut="command.Undo"]'));
@@ -498,6 +516,28 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   assert.deepEqual(saved.shortcuts["tools.paint"].map(c => c.key), ["b", "e"]);
   await reload('ready');
   assert.deepEqual(await evaluate("layerApp.state().settings"), saved);
+  const launchTag = await evaluate("layerApp.app.language_tag()");
+  assert.equal(await evaluate("document.documentElement.lang"), launchTag);
+  const { identifier: languageScript } = await call('Page.addScriptToEvaluateOnNewDocument', {
+    source: 'Object.defineProperty(navigator,"languages",{configurable:true,value:["ja-JP","zh-TW","ko","en"]});',
+  });
+  await action({ type:'open_settings', page:'appearance' });
+  await click('[data-preference=language] summary');
+  await click('[data-preference=language] [data-choice="1"]');
+  await action({ type:'close_settings' });
+  assert.deepEqual(await evaluate("JSON.parse(localStorage.getItem('layer.preferences.v1')).language"), { Explicit:'en' });
+  assert.equal(await evaluate("layerApp.app.language_tag()"), launchTag, 'language preferences leave the active launch context unchanged');
+  await reload('ready');
+  assert.deepEqual(await evaluate("layerApp.state().settings.language"), { Explicit:'en' });
+  assert.equal(await evaluate("document.documentElement.lang"), 'en', 'unshipped browser languages cannot change launch metadata');
+  await evaluate('window.dispatchEvent(new Event("languagechange"))');
+  assert.equal(await evaluate("layerApp.app.language_tag()"), 'en', 'OS language notifications leave the launch context unchanged');
+  await action({ type:'open_settings', page:'appearance' });
+  await click('[data-preference=language] summary');
+  await click('[data-preference=language] [data-choice="0"]');
+  await action({ type:'close_settings' });
+  await call('Page.removeScriptToEvaluateOnNewDocument', { identifier:languageScript });
+
   await evaluate("layerApp.canvas.focus()"); await key("j", { ctrlKey: true });
   assert.equal(await evaluate("document.querySelector('#settings').open"), true, "restored shortcuts execute");
   await preference({ type: "page", page: "shortcuts" });

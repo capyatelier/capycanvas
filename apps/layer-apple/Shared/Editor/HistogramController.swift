@@ -6,9 +6,12 @@ import SwiftUI
     @Published private(set) var isOpen = false
     @Published private(set) var busy = false
     @Published private(set) var result = JSON()
-    @Published private(set) var status = "Preparing inspection…"
+    @Published private(set) var status = ""
+    @Published private(set) var staleStatus = ""
     @Published var automatic = true { didSet { schedule() } }
     private weak var store: EditorStore?
+    var copy: JSON { store?.catalog["native_copy"]["color"] ?? JSON() }
+    var common: JSON { store?.bootstrap["common"] ?? JSON() }
     private var epoch: UInt64 = 0
     private var revision: UInt64 = 0
     private var gpuReady = false
@@ -19,7 +22,7 @@ import SwiftUI
     private var task: NativeProjectTask?
     private var key: String { "\(epoch):\(revision)" }
     var stale: Bool { !result.isNull && (result["epoch"].uint != epoch || result["revision"].uint != revision) }
-    init(store: EditorStore) { self.store = store }
+    init(store: EditorStore) { self.store = store; setStatus(copy["inspection_preparing"].string) }
 
     func receive(_ state: JSON, gpuReady: Bool) {
         let file = state["document_file"]
@@ -28,7 +31,7 @@ import SwiftUI
             if epoch != file["epoch"].uint { result = JSON() }
             epoch = file["epoch"].uint; revision = file["revision"].uint; self.gpuReady = gpuReady
             attempted = nil
-            if isOpen { status = gpuReady ? "Refresh to inspect" : "Canvas unavailable" }
+            if isOpen { setStatus(gpuReady ? copy["inspection_refresh"].string : copy["canvas_unavailable"].string) }
             schedule()
         }
         if let request = state["requests"].array.first(where: { $0["kind"]["type"].string == "histogram" }),
@@ -61,11 +64,11 @@ import SwiftUI
         pending?.cancel(); pending = nil
         generation &+= 1
         let token = generation
-        attempted = key; busy = true; status = "Updating · complete composite at full resolution"
+        attempted = key; busy = true; setStatus(copy["inspection_updating"].string)
         native.projectTask(kind: .histogram, expected: (epoch, revision)) { [weak self] task, error in
             DispatchQueue.main.async {
                 guard let self, self.isOpen, self.generation == token else { task?.cancel(); return }
-                guard let task else { self.finish(token, result: nil, error: error ?? "Could not inspect the drawing"); return }
+                guard let task else { self.finish(token, result: nil, error: error ?? self.copy["inspection_failed"].string); return }
                 self.task = task
                 NativeProjectTask.io.async { [weak self] in
                     do {
@@ -78,13 +81,18 @@ import SwiftUI
             }
         }
     }
+    private func setStatus(_ next: String) {
+        guard status != next else { return }
+        status = next
+        staleStatus = NativeTextContext.caption(["type": "inspection_changed", "status": next])
+    }
     private func finish(_ token: UInt64, result: JSON?, error: String?) {
         guard isOpen, generation == token else { return }
         busy = false; task = nil
         if let result {
             self.result = result
-            status = result["sampled_time"].isNull ? "Current committed drawing"
-                : String(format: "Animated effects · snapshot at %.2f s", result["sampled_time"].number)
-        } else { status = error ?? "Could not inspect the drawing" }
+            setStatus(result["sampled_time"].isNull ? copy["inspection_current"].string
+                : NativeTextContext.caption(["type": "inspection_sample", "seconds": result["sampled_time"].number]))
+        } else { setStatus(error ?? self.copy["inspection_failed"].string) }
     }
 }

@@ -655,7 +655,7 @@ mod localization_tests {
         layer(&mut session, LayerAction::New { group: false, clipped: false });
         session.request_document_close().unwrap();
         let HostRequestKind::Document { request: DocumentRequest::ConfirmClose { title } } = &session.state().requests.last().unwrap().kind else { panic!("close request"); };
-        assert_eq!(title, &format!("「{name}」への変更を保存しますか？"));
+        assert_eq!(title, &format!("「{name}」の変更を保存しますか？"));
         assert_eq!(session.state().document_file.title(), name);
         let snapshot = serde_json::to_value(&session.state().document_file).unwrap();
         assert!(snapshot.get("untitled").is_none());

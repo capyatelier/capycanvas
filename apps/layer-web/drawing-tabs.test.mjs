@@ -49,13 +49,15 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   const tabs=()=>evaluate(`JSON.parse(JSON.stringify(layerApp.app.document_tabs(1000),(_,v)=>typeof v==='bigint'?Number(v):v))`);
   const invoke=command=>evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);
   const ready=()=>wait(`!layerApp.documents.busy()&&layerApp.app.brush_ready()&&!layerApp.state().document_file.busy&&layerApp.app.document_park_ready()`);
-  const select=async id=>{await evaluate(`layerApp.documents.select(BigInt(${id}))`);await ready();await settle();
+  const launchLanguage=await evaluate('layerApp.app.language_tag()');
+  const assertLanguage=async()=>assert.equal(await evaluate('layerApp.app.language_tag()'),launchLanguage,'Document replacement retains the launch context');
+  const select=async id=>{await evaluate(`layerApp.documents.select(BigInt(${id}))`);await ready();await settle();await assertLanguage();
     assert.equal(await evaluate(`document.querySelector('button[data-command="new_document"]')?.disabled??false`),false,'Reactivation republishes enabled native controls');};
   const create=async()=>{
     await ready();const count=(await tabs()).tabs.length;await invoke('new_document');
     await wait(`!![...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create')`);
     await evaluate(`(()=>{const dialog=document.querySelector('dialog[open]');for(const n of dialog.querySelectorAll('input[type=number]'))n.value=96;[...dialog.querySelectorAll('button')].find(b=>b.textContent==='Create').click();})()`);
-    await wait(`layerApp.app.document_tabs(0).tabs.length===${count+1}`);await ready();return (await tabs()).selected;
+    await wait(`layerApp.app.document_tabs(0).tabs.length===${count+1}`);await ready();await assertLanguage();return (await tabs()).selected;
   };
   await ready();const first=(await tabs()).selected;
   assert.equal((await tabs()).tabs.length,1);

@@ -22,8 +22,11 @@ impl WorkspacePreset {
     }
 
     /// Initial tools belong to the editable workspace, never the saved layout.
-    pub fn working_state(self) -> crate::WorkspaceWorkingState {
-        let mut state = crate::WorkspaceWorkingState::default();
+    pub fn working_state_canonical(self) -> crate::WorkspaceWorkingState {
+        self.working_state_localized(&crate::Localizer::shared(crate::UiLanguage::English))
+    }
+    pub fn working_state_localized(self, localization: &crate::Localizer) -> crate::WorkspaceWorkingState {
+        let mut state = crate::WorkspaceWorkingState::new_localized(localization);
         if self != Self::Illustrator {
             state.preset = crate::Tool::Brush.default_preset();
         }
@@ -342,8 +345,8 @@ mod tests {
             assert!(crate::CommandId::Sculpt.available_on(platform));
         }
         assert!(Panel::BrushSets.default_width() < Panel::Tools.default_width());
-        assert_eq!(Panel::BrushSets.label(), "Brushes");
-        assert_eq!(Panel::Tools.label(), "Tools");
+        assert_eq!(Panel::BrushSets.canonical_label().as_ref(), "Brushes");
+        assert_eq!(Panel::Tools.canonical_label().as_ref(), "Tools");
     }
 
     #[test]
@@ -351,7 +354,7 @@ mod tests {
         assert_eq!(WorkspacePreset::Illustrator.name(), "Paint");
         assert_eq!(WorkspacePreset::Painter.name(), "Sketch");
         assert_eq!(WorkspacePreset::Photographer.name(), "Photo");
-        assert_eq!(WorkspacePreset::Photographer.working_state().canvas_tool, crate::LayerCanvasTool::Move);
+        assert_eq!(WorkspacePreset::Photographer.working_state_canonical().canvas_tool, crate::LayerCanvasTool::Move);
         for platform in Platform::ALL {
             for preset in WorkspacePreset::ALL {
                 let layout = preset.layout(platform);
@@ -420,9 +423,9 @@ mod tests {
                 layout.validate().unwrap();
                 crate::WorkspaceCapture {
                     history: crate::LayoutHistory::new(&layout),
-                    working: preset.working_state(),
+                    working: preset.working_state_canonical(),
                 }
-                .validate()
+                .validate_structure()
                 .unwrap();
                 let round_trip: DockLayout =
                     serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();

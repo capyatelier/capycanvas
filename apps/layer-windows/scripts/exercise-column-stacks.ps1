@@ -166,7 +166,7 @@ function Start-Review([string]$Phase){
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Native stack review did not start' 45
     $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));$null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
-    (Control 'Drawing canvas' -Name).SetFocus()
+    (Control 'drawing-canvas').SetFocus()
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 }
 try {
@@ -243,13 +243,13 @@ try {
     Check-Open 12;Capture 'stacked-light'
     # UIA theme selection leaves the pointer over the strip, where Zen reveals chrome.
     $outside=Screen (Model).layout.work_area;[CapyRowPointer]::Hover($outside.x,$outside.y)
-    $canvas=(Control 'Drawing canvas' -Name).GetRuntimeId() -join ':';$generation=(Model).windows_gpu_generation
-    (Control 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key(0x09)
+    $canvas=(Control 'drawing-canvas').GetRuntimeId() -join ':';$generation=(Model).windows_gpu_generation
+    (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key(0x09)
     Wait-Until {(Model).chrome_hidden -and $null -eq (Find 'column-icon-layers')} 'Zen did not hide the stack'
-    (Control 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key(0x09)
+    (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key(0x09)
     Wait-Until {!(Model).chrome_hidden} 'Zen did not restore the workspace'
     Check-Open 12
-    if(((Control 'Drawing canvas' -Name).GetRuntimeId() -join ':') -ne $canvas -or (Model).windows_gpu_generation -ne $generation){throw 'Stack Zen replaced the native canvas or GPU'}
+    if(((Control 'drawing-canvas').GetRuntimeId() -join ':') -ne $canvas -or (Model).windows_gpu_generation -ne $generation){throw 'Stack Zen replaced the native canvas or GPU'}
     $persisted=Layout
     Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Stack settings did not finish saving'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close

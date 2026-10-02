@@ -1250,3 +1250,75 @@ fn failed_worker_open_can_be_retried_after_storage_becomes_available() {
     drop(worker);
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn cold_storage_lists_preserve_known_refusal_identity() {
+    let mut f = Fixture::new();
+    let stored = f.create("Literal 🖌 {name}");
+    let mut browser = BrowserDatabase::default();
+    let batch = CommitBatch::prepare(f.owner.clone(), vec![create(stored.entity.clone())]).unwrap();
+    browser.prepare_delivery(&batch).unwrap();
+    browser.execute(StoreRequest::Commit { batch }, 1_000_000).unwrap();
+    let mut snapshot: serde_json::Value = serde_json::from_str(&browser.encoded().unwrap()).unwrap();
+    snapshot["items"][&stored.entity.id]["entity"]["metadata"]["name"] = serde_json::json!("");
+    let browser = BrowserDatabase::decode(&snapshot.to_string()).unwrap();
+    let mut metadata = stored.entity.metadata.clone();
+    metadata.name.clear();
+    f.store.connection.execute("UPDATE items SET metadata=?1 WHERE id=?2", (serde_json::to_string(&metadata).unwrap(), &stored.entity.id)).unwrap();
+    let StoreResponse::List(browser_items) = browser.clone().execute(StoreRequest::List, 1_000_000).unwrap() else { panic!() };
+    let sqlite_items = f.store.list().unwrap();
+    let english = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    for items in [browser_items, sqlite_items] {
+        let reason = items.into_iter().find(|i| i.id == stored.entity.id).unwrap().error.unwrap();
+        assert_eq!(reason.known, Some(WorkspaceRefusal::EnterANameOf1100CharactersWithoutLeadingOrTrailingSpaces));
+        assert_eq!(reason.localized_message(&english), reason.known.unwrap().message(&english).as_ref());
+        assert_ne!(reason.localized_message(&english), reason.message);
+    }
+}
+
+#[test]
+fn browser_cold_list_retains_toolbar_size_range_payload() {
+    let f = Fixture::new();
+    let entity = Entity::toolbar(ToolbarDefinition { name: "literal toolbar 🖌".into(), tiles: vec![layer_ui::ToolbarTile { id: 1, control: layer_ui::ToolbarControl::Size { pixels: 12 } }], tile_style: Default::default(), hide_tab: false }, 1);
+    let id = entity.id.clone();
+    let mut browser = BrowserDatabase::default();
+    let batch = CommitBatch::prepare(f.owner.clone(), vec![create(entity)]).unwrap();
+    browser.prepare_delivery(&batch).unwrap();
+    browser.execute(StoreRequest::Commit { batch }, 1_000_000).unwrap();
+    let mut snapshot: serde_json::Value = serde_json::from_str(&browser.encoded().unwrap()).unwrap();
+    snapshot["items"][&id]["entity"]["content"]["definition"]["tiles"][0]["control"]["pixels"] = serde_json::json!(0);
+    let mut browser = BrowserDatabase::decode(&snapshot.to_string()).unwrap();
+    let StoreResponse::List(items) = browser.execute(StoreRequest::List, 1_000_000).unwrap() else { panic!() };
+    let reason = items.into_iter().find(|i| i.id == id).unwrap().error.unwrap();
+    let expected = layer_ui::NumericError::Range { label: layer_ui::MessageId::TOOL_SETTING_SIZE.into(), min: 0.5, max: 2048.0 };
+    assert_eq!(reason.numeric, Some(expected.clone()));
+    let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+    assert_eq!(reason.localized_message(&localization), expected.message(&localization));
+}
+
+#[test]
+fn corrupt_browser_summary_marks_missing_titles_without_reclassifying_literal_names() {
+    let f = Fixture::new();
+    let entity = workspace("Unreadable workspace");
+    let id = entity.id.clone();
+    let mut browser = BrowserDatabase::default();
+    let batch = CommitBatch::prepare(f.owner.clone(), vec![create(entity)]).unwrap();
+    browser.prepare_delivery(&batch).unwrap();
+    browser.execute(StoreRequest::Commit { batch }, 1_000_000).unwrap();
+    let mut snapshot: serde_json::Value = serde_json::from_str(&browser.encoded().unwrap()).unwrap();
+    snapshot["items"][&id]["entity"]["metadata"]["builtin"] = serde_json::json!({});
+    for missing_name in [false, true] {
+        let mut source = snapshot.clone();
+        if missing_name { source["items"][&id]["entity"]["metadata"].as_object_mut().unwrap().remove("name"); }
+        let mut browser = BrowserDatabase::decode(&source.to_string()).unwrap();
+        let StoreResponse::List(items) = browser.execute(StoreRequest::List, 1_000_000).unwrap() else { panic!() };
+        let item = items.into_iter().find(|i| i.id == id).unwrap();
+        assert_eq!(item.unavailable_name, missing_name);
+        assert!(item.error.is_some());
+        assert_eq!(item.metadata.name, if missing_name { "" } else { "Unreadable workspace" });
+        let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+        assert_eq!(item.display_name(&localization), if missing_name { "読み取れないワークスペース" } else { "Unreadable workspace" });
+        let restored: ItemSummary = serde_json::from_slice(&serde_json::to_vec(&item).unwrap()).unwrap();
+        assert_eq!(restored, item);
+    }
+}

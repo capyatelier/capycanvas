@@ -69,7 +69,7 @@ impl PreviewDialog {
         );
     }
     /// The value field, rebuilt when its label or range changes.
-    fn number(&self, view: &PreviewValue) -> NumberControl {
+    fn number(&self, view: &PreviewValue, localization: &std::sync::Arc<layer_ui::Localizer>) -> NumberControl {
         use adw::prelude::*;
         if let Some((label, numeric, number)) = self.number.borrow().as_ref()
             && label == view.label
@@ -77,7 +77,7 @@ impl PreviewDialog {
         {
             return number.clone();
         }
-        let number = NumberControl::new(view.numeric.clone(), view.label, "");
+        let number = NumberControl::new(view.numeric.clone(), view.label, "", localization.clone());
         number.set_widget_name(self.field);
         let workspace = self.workspace.borrow().clone();
         let value = self.value;
@@ -94,7 +94,7 @@ impl PreviewDialog {
         use adw::prelude::*;
         if let Some(view) = view {
             self.dialog.set_heading(Some(view.title));
-            self.number(&view).set_value(view.value);
+            self.number(&view, &w.localization).set_value(view.value);
             if !self.shown.replace(true) {
                 w.window.add_css_class(Self::PREVIEW_CLASS);
                 self.dialog.present(Some(&w.window));

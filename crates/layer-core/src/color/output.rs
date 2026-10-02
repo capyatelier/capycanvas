@@ -16,10 +16,12 @@ pub struct OutputEncoding {
     pub dither: OutputDither,
 }
 impl OutputEncoding {
-    pub fn validate(self, depth: SampleDepth) -> Result<(), String> {
+    pub fn validate(self, depth: SampleDepth) -> Result<(), OutputEncodingError> {
         if self.dither != OutputDither::None && depth != SampleDepth::U8 {
-            return Err("Output dithering requires 8-bit delivery".into());
+            return Err(OutputEncodingError::DitherDepth);
         }
         Ok(())
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputEncodingError { DitherDepth }

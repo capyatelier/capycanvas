@@ -1,5 +1,5 @@
 //! Direct tonal selection: visible artwork in, current selection or mask out.
-use crate::localization::{Localizer, MessageId, UiLanguage};
+use crate::localization::{Localizer, MessageId};
 use super::*;
 use layer_core::{
     Affine, Point, Selection, SelectionTarget,
@@ -50,13 +50,11 @@ impl TonalOptions {
             self.custom = [1., MAX_STOP];
         }
     }
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), WorkspaceValidationError> {
         if !Self::CHOICES.iter().any(|(index, ..)| self.tone == *index) {
             return Err("Unknown tone".into());
         }
-        self.softness_control(&Localizer::shared(UiLanguage::English))
-            .numeric
-            .validate(self.softness, "Softness")?;
+        Self::softness_numeric().validate(self.softness, MessageId::TOOL_CONTROL_TONAL_SELECTION_SOFTNESS)?;
         if self
             .custom
             .iter()
@@ -81,19 +79,21 @@ impl TonalOptions {
         band.falloff = [self.softness * 0.5; 2];
         band
     }
-    pub fn softness_control(&self, localizer: &Localizer) -> ToolSetting {
-        ToolSetting {
-            id: "tonal_softness",
-            label: localizer.text(MessageId::TOOL_CONTROL_TONAL_SELECTION_SOFTNESS),
-            group: std::sync::Arc::from(""),
-            value: self.softness,
-            numeric: NumericControl {
+    fn softness_numeric() -> NumericControl { NumericControl {
                 max: 2.,
                 soft_max: 2.,
                 digits: 0,
                 resolution: 0.01,
                 ..NumericControl::percent()
-            },
+            } }
+    pub fn softness_control(&self, localizer: &Localizer) -> ToolSetting {
+        ToolSetting {
+            id: "tonal_softness",
+            label: localizer.text(MessageId::TOOL_CONTROL_TONAL_SELECTION_SOFTNESS),
+            label_id: MessageId::TOOL_CONTROL_TONAL_SELECTION_SOFTNESS,
+            group: std::sync::Arc::from(""),
+            value: self.softness,
+            numeric: Self::softness_numeric(),
         }
     }
     pub fn controls(&self, localizer: &Localizer) -> Vec<ToolSetting> {
@@ -111,6 +111,7 @@ impl TonalOptions {
                 controls.push(ToolSetting {
                     id,
                     label: localizer.text(label),
+                    label_id: label,
                     value,
                     group: std::sync::Arc::from(""),
                     numeric: numeric.clone(),
@@ -128,21 +129,21 @@ impl TonalOptions {
             _ => Err("Unknown tonal setting".into()),
         }
     }
-    pub fn edit(&mut self, id: &str, value: f32) -> Result<(), String> {
+    pub fn edit(&mut self, id: &str, value: f32, localizer: &Localizer) -> Result<(), String> {
         let mut next = self.clone();
+        let control = self.controls(localizer).into_iter().find(|control| control.id == id).ok_or("Unknown tonal setting")?;
+        control.numeric.validate(value, control.label.as_ref()).map_err(|reason| reason.message(localizer))?;
         match id {
             "tonal_softness" => next.softness = value,
             "tonal_lower" if self.tone == 7 => {
-                if !value.is_finite() || !(MIN_STOP..=MAX_STOP).contains(&value) { return Err("Invalid tonal bound".into()); }
                 next.custom[0] = value.min(next.custom[1]);
             }
             "tonal_upper" if self.tone == 7 => {
-                if !value.is_finite() || !(MIN_STOP..=MAX_STOP).contains(&value) { return Err("Invalid tonal bound".into()); }
                 next.custom[1] = value.max(next.custom[0]);
             }
             _ => return Err("Unknown tonal setting".into()),
         }
-        next.validate()?;
+        next.validate().map_err(|reason| reason.message(localizer))?;
         *self = next;
         Ok(())
     }

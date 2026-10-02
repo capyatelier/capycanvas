@@ -416,7 +416,7 @@ pub(super) fn property_value(
             let (PropertyKind::Number { numeric }, EffectValue::Number(value)) = (&control.kind, &control.value) else {
                 return Err(l.text(MessageId::RESOURCES_ERROR_NUMERIC_PROPERTY_REQUIRED).to_string());
             };
-            EffectValue::Number(numeric.resolve(*value as f64, operation.clone())?.value as f32)
+            EffectValue::Number(numeric.resolve(*value as f64, operation.clone()).map_err(|reason| reason.message(l))?.value as f32)
         }
         _ => return Err(l.text(MessageId::RESOURCES_ERROR_PROPERTY_EDIT_REQUIRED).to_string()),
     })

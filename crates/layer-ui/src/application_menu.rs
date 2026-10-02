@@ -8,7 +8,7 @@ pub enum ApplicationLink {
     SourceCode,
 }
 impl ApplicationLink {
-    pub fn label(self) -> std::sync::Arc<str> {
+    pub fn canonical_label(self) -> std::sync::Arc<str> {
         self.localized_label(&Localizer::shared(UiLanguage::English))
     }
     pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
@@ -55,7 +55,7 @@ impl ApplicationMenu {
         Self::Window,
         Self::Help,
     ];
-    pub fn label(self) -> std::sync::Arc<str> {
+    pub fn canonical_label(self) -> std::sync::Arc<str> {
         self.localized_label(&Localizer::shared(UiLanguage::English))
     }
     pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
@@ -132,7 +132,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     M::ALL
                         .into_iter()
                         .map(|id| {
-                            ContextMenuItem::submenu(&id.localized_label(self.localization()), self.application_menu(id).sections)
+                            ContextMenuItem::submenu(&id.localized_label(self.localization()), if id == M::Layer && self.selection_masks.quick() { self.quick_mask_menu().sections } else if id == M::Layer {
+                                self.layer_menu_sections(self.engine.document().active_layer.0, self.engine.document().active_mask).unwrap_or_default()
+                            } else { self.application_menu(id).sections })
                         })
                         .collect(),
                 ],

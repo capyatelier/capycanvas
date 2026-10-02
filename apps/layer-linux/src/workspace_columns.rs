@@ -100,7 +100,7 @@ impl Columns {
                     for icon in &group.icons {
                         let config = layout.panel(icon.panel).unwrap();
                         let button = w.action_button(
-                            config.title(),
+                            &config.title_localized(&w.localization),
                             UiAction::Customize {
                                 action: CustomizationAction::ToggleColumnDrawer {
                                     group: group.group,
@@ -176,7 +176,7 @@ impl Columns {
                 footer.add_css_class("panel-footer");
                 footer.set_height_request(c.grip.height as i32);
                 footer.set_widget_name(&format!("column-grip-{}", c.id));
-                let grip = tiles::grip();
+                let grip = tiles::grip(&w.localization.text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
                 grip.set_halign(gtk::Align::Center);
                 grip.set_valign(gtk::Align::Center);
                 grip.set_hexpand(true);
@@ -220,7 +220,7 @@ impl Columns {
             strip.scroll.set_value(f64::from(offset));
             strip.updating_scroll.set(false);
             for (panel, button) in &strip.buttons {
-                button.set_tooltip_text(Some(layout.panel(*panel).unwrap().title()));
+                button.set_tooltip_text(Some(&layout.panel(*panel).unwrap().title_localized(&w.localization)));
             }
         }
         drop(strips);

@@ -1,3 +1,4 @@
+import { composingKey } from "./text-input.js";
 // DOM focus/IME and modal capture; Rust owns search, selection and execution.
 export function createCommandBar({element, button, icon, dispatch, style, canvas, layoutChanged}) {
   const dialog = element("dialog", "command-bar");
@@ -49,7 +50,7 @@ export function createCommandBar({element, button, icon, dispatch, style, canvas
   dialog.addEventListener("keydown", e => {
     if (!view) return;
     e.stopPropagation();
-    if (e.isComposing) return;
+    if (composingKey(e)) return;
     if (e.key === "Escape") { e.preventDefault(); back(); }
     else if (["ArrowDown", "ArrowUp"].includes(e.key) && !view?.parameter) {
       e.preventDefault(); send({type:"move", delta:e.key === "ArrowDown" ? 1 : -1});

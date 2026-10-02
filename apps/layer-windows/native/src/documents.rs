@@ -253,7 +253,7 @@ fn prepare(
         Source::Create(options) => layer_ui::ImportedDocument { project: options.project(&environment.localization)?, source: layer_ui::ImportSource::Master },
         Source::Recovery(path) => environment.read(layer_core::Cancellable { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancelled: || cancel.load(Ordering::Acquire) },
             layer_ui::ImportIntent::Recovery, "Recovered drawing", cancel)?,
-        Source::Interpret(mut imported, profile) => { imported.interpret(profile.resolve(cancel)?)?; *imported },
+        Source::Interpret(mut imported, profile) => { imported.interpret(profile.resolve(cancel, &environment.localization)?)?; *imported },
         Source::Open(path) => {
             let file = File::open(&path).map_err(|e| io_error("open", e))?;
             environment.read(layer_core::Cancellable { inner: BufReader::new(file), cancelled: || cancel.load(Ordering::Acquire) }, layer_ui::ImportIntent::Open,
@@ -281,6 +281,7 @@ struct Active {
     cancelled: Option<Arc<AtomicBool>>,
 }
 pub(crate) struct DocumentService {
+    profile_copy: serde_json::Value,
     window: layer_host::window::DocumentWindow<tabs::Parked>,
     pub recovery: Option<crate::recovery::Service>,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -315,6 +316,7 @@ impl DocumentService {
             palettes: crate::palette_files::Service::new(wake.clone()),
             wake,
             window: layer_host::window::DocumentWindow::localized(localization),
+            profile_copy: serde_json::to_value(layer_ui::color_feature_copy::ProfileCopy::new(localization)).unwrap(),
             recovery: None,
             activating: false,
             spilling: false,
@@ -336,7 +338,7 @@ impl DocumentService {
         if let Some(task) = &self.workflow { return Some(task.status()); }
         if self.workflow_running { return self.workflow_control.as_ref().map(|(id, _)| serde_json::json!({"type":"workflow_busy","id":id})); }
         self.opening.as_ref().map(|opening| serde_json::json!({
-            "type": "interpret", "id": self.active.as_ref().map(|a| a.id),
+            "type": "interpret", "id": self.active.as_ref().map(|a| a.id), "copy":self.profile_copy,
             "spaces": layer_core::color::RgbSpace::ALL.map(|s| (s, s.name())),
             "profiles": opening.profiles,
             "channels": opening.imported.project.document.layers.iter().find_map(|l| l.source.as_ref()).map(|s| s.interpretation.channels),
@@ -370,7 +372,7 @@ impl DocumentService {
         if host.session.state().document_file.epoch != epoch
             || host.session.engine().document().revision != revision
         {
-            Err("The document changed; review those changes before replacing or closing it".into())
+            Err(layer_ui::DocumentTransportRefusal::SnapshotChanged.message(host.session.localization()).to_string())
         } else {
             Ok(())
         }
@@ -463,11 +465,11 @@ impl DocumentService {
         if let DocumentAction::Tabs { action } = action { return self.tab_action(host, action); }
         if let DocumentAction::Palette { action } = action { return self.palettes.dispatch(host, action); }
         if let DocumentAction::Recovery { action } = action {
-            self.recovery.as_mut().ok_or("Recovery service unavailable")?.dispatch(&mut host.session, action)?;
+            self.recovery.as_mut().ok_or_else(|| layer_ui::DocumentTransportRefusal::RecoveryServiceUnavailable.message(host.session.localization()).to_string())?.dispatch(&mut host.session, action)?;
             host.invalidate_snapshot();
             return Ok(());
         }
-        if self.recovery.as_ref().is_some_and(|r| r.restoring()) { return Err("Wait for recovery to finish".into()); }
+        if self.recovery.as_ref().is_some_and(|r| r.restoring()) { return Err(layer_ui::DocumentTransportRefusal::RecoveryInProgress.message(host.session.localization()).to_string()); }
         if self.spilling {
             if self.deferred_action.is_some() { return Err("A file response is already queued".into()); }
             self.deferred_action = Some(action);

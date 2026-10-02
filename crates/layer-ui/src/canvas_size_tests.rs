@@ -26,7 +26,7 @@ fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() 
     let paint = s.engine.document().layers[0].id;
     invoke(&mut s, CommandId::CanvasSize);
     let view = canvas_view(&s);
-    assert_eq!((view.title, view.values, view.unit, view.relative), ("Canvas Size", [1000.; 2], CanvasSizeUnit::Pixels, false));
+    assert_eq!((view.title.as_ref(), view.values, view.unit, view.relative), ("Canvas Size", [1000.; 2], CanvasSizeUnit::Pixels, false));
     assert_eq!(view.anchor, CanvasAnchor::Center);
     assert_eq!(view.anchors.len(), 9);
     assert!(!view.can_apply);
@@ -211,4 +211,87 @@ fn unselected_paint_operations_stay_inside_the_canvas_window() {
     assert_eq!(id, paint);
     let bounds = operation.bounds(s.engine.document().target_extent(paint));
     assert!(bounds.max.x <= 401. && bounds.max.y <= 401., "{bounds:?}");
+}
+
+#[test]
+fn active_size_dialog_copy_is_retained_across_brush_and_camera_publication() {
+    let localization = Localizer::shared(UiLanguage::Japanese);
+    let mut s = UiSession::new_localized(Recorder::default(),
+        Document::new("写真 {document} 🖌", 1000, 800, layer_core::DocumentNames { paint: "Literal paint".into(), paper: "Literal paper".into() }),
+        [1000, 800], Platform::Gtk, localization.clone()).unwrap();
+    invoke(&mut s, CommandId::CanvasSize);
+    let view = canvas_view(&s);
+    assert_eq!(view.title.as_ref(), "キャンバスサイズ");
+    assert_eq!(view.labels[0].as_ref(), "幅");
+    assert_eq!(view.units.iter().map(|choice| choice.unit).collect::<Vec<_>>(), CanvasSizeUnit::ALL);
+    assert_eq!(view.anchors.iter().map(|choice| choice.anchor).collect::<Vec<_>>(), CanvasAnchor::ALL);
+    assert_eq!(view.message, "現在のサイズ：1000 × 800 px");
+    for size in [8., 17.] {
+        s.dispatch(UiAction::SetBrushSize { value: size }).unwrap();
+        s.dispatch(UiAction::SetZoom { zoom: size / 8. }).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&view.title, &canvas_view(&s).title));
+    }
+    canvas_size(&mut s, CanvasSizeAction::Width { value: 1200. });
+    assert_eq!(canvas_view(&s).message, "新しいサイズ：1200 × 800 px");
+    canvas_size(&mut s, CanvasSizeAction::Cancel);
+    invoke(&mut s, CommandId::ImageSize);
+    let image = image_size_view(&s);
+    s.dispatch(UiAction::SetBrushSize { value: 23. }).unwrap();
+    s.dispatch(UiAction::SetZoom { zoom: 2. }).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&image.labels[0], &image_size_view(&s).labels[0]));
+    assert_eq!(image.labels[0].as_ref(), "幅");
+    assert_eq!(image.resamples.iter().map(|choice| choice.resample).collect::<Vec<_>>(), ImageResample::ALL);
+    assert_eq!(s.engine.document().id.as_ref(), "写真 {document} 🖌");
+}
+
+#[test]
+fn active_layer_menu_keeps_typed_actions_and_literal_mask_names() {
+    let localization = Localizer::shared(UiLanguage::Japanese);
+    let literal = "水彩 {name} 🖌";
+    let mut s = UiSession::new_localized(Recorder::default(),
+        Document::new("Literal document", 64, 64, layer_core::DocumentNames { paint: literal.into(), paper: "Literal paper".into() }),
+        [640, 480], Platform::Gtk, localization.clone()).unwrap();
+    let id = s.engine.document().active_layer.0;
+    let menu = s.layer_menu(id, false).unwrap();
+    assert_eq!(menu.title, format!("レイヤー：{literal}"));
+    let new = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| matches!(item.action, Some(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }))).unwrap();
+    assert_eq!(new.label, CommandId::AddLayer.localized_label(&localization).as_ref());
+    s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id, replace: false } }).unwrap();
+    let menu = s.layer_menu(id, true).unwrap();
+    assert_eq!(menu.title, format!("マスク：{literal}"));
+    assert!(menu.sections.iter().flatten().any(|item| matches!(item.action, Some(UiAction::Invoke { command: CommandId::EditLayerContent }))));
+    let index = ApplicationMenu::ALL.iter().position(|menu| *menu == ApplicationMenu::Layer).unwrap();
+    let primary = s.header_view_with(true).primary_menu.unwrap();
+    let on_open = s.layer_menu(id, s.engine.document().active_mask).unwrap();
+    assert_eq!(serde_json::to_value(&primary.sections[0][index].sections).unwrap(), serde_json::to_value(&on_open.sections).unwrap());
+    s.dispatch(UiAction::Layer { action: LayerAction::Lock { id, value: true } }).unwrap();
+    let primary = s.header_view_with(true).primary_menu.unwrap();
+    let on_open = s.layer_menu(id, s.engine.document().active_mask).unwrap();
+    assert_eq!(serde_json::to_value(&primary.sections[0][index].sections).unwrap(), serde_json::to_value(&on_open.sections).unwrap());
+    let coverage = s.coverage_menu_items(id, true);
+    assert_eq!(coverage.len(), 4);
+    for (item, mode) in coverage.iter().zip([SelectionMode::New, SelectionMode::Add, SelectionMode::Subtract, SelectionMode::Intersect]) {
+        assert!(matches!(item.action, Some(UiAction::Selection { action: SelectionAction::LoadCoverage { id: target, mask: true, mode: actual } }) if target == id && actual == mode));
+    }
+}
+
+#[test]
+fn primary_layer_menu_follows_quick_mask_and_return_to_artwork() {
+    let mut session = canvas_size_session();
+    let index = ApplicationMenu::ALL.iter().position(|menu| *menu == ApplicationMenu::Layer).unwrap();
+    let artwork = session.engine.document().active_layer;
+    invoke(&mut session, CommandId::QuickMask);
+    assert!(session.selection_masks.quick());
+    assert_eq!(session.engine.document().active_layer, artwork);
+    let primary = session.header_view_with(true).primary_menu.unwrap();
+    let direct = session.application_menu(ApplicationMenu::Layer);
+    assert_eq!(serde_json::to_value(&primary.sections[0][index].sections).unwrap(), serde_json::to_value(&direct.sections).unwrap());
+    assert!(primary.sections[0][index].sections.iter().flatten().any(|item| matches!(item.action, Some(UiAction::Invoke { command: CommandId::ReturnToArtwork }))));
+    assert!(primary.sections[0][index].sections.iter().flatten().any(|item| matches!(item.action, Some(UiAction::Invoke { command: CommandId::SaveSelectionLayer }))));
+    invoke(&mut session, CommandId::ReturnToArtwork);
+    assert!(!session.selection_masks.quick());
+    let primary = session.header_view_with(true).primary_menu.unwrap();
+    let direct = session.application_menu(ApplicationMenu::Layer);
+    assert_eq!(serde_json::to_value(&primary.sections[0][index].sections).unwrap(), serde_json::to_value(&direct.sections).unwrap());
+    assert!(!primary.sections[0][index].sections.iter().flatten().any(|item| matches!(item.action, Some(UiAction::Invoke { command: CommandId::ReturnToArtwork }))));
 }

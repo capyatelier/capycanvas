@@ -91,7 +91,7 @@ private struct PlacedCanvasBar: View {
                 rootFocusesSelection: false) {
                 SharedIcon(name: "more", size: 20).frame(width: Self.itemHeight, height: Self.itemHeight)
             }.buttonStyle(EditorControlButtonStyle(selected: false, corner: .half))
-                .accessibilityLabel("More").help("More").accessibilityIdentifier("canvas-bar-more")
+                .accessibilityLabel(store.bootstrap["common"]["more"].string).help(store.bootstrap["common"]["more"].string).accessibilityIdentifier("canvas-bar-more")
             ForEach(Array(completion.enumerated()), id: \.offset) { _, item in field(item, completion: true) }
         }.padding(Self.padding)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)

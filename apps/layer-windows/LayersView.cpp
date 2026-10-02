@@ -41,8 +41,8 @@ void LayersView::init(){
     header.Padding({6,4,6,4});header.Spacing(2);values.ColumnSpacing(6);
     for(int i=0;i<2;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});values.ColumnDefinitions().Append(column);}
     blend.MinWidth(0);blend.MinHeight(24);blend.Height(24);blend.Padding({6,0,6,0});
-    AutomationProperties::SetName(header,L"Layer controls");AutomationProperties::SetName(values,L"Layer blend and opacity");
-    AutomationProperties::SetName(tools,L"Layer flags");AutomationProperties::SetName(footerFrame,L"Layer actions");
+    AutomationProperties::SetName(header,data->caption(L"layers",L"controls"));AutomationProperties::SetName(values,data->caption(L"layers",L"blend_opacity"));
+    AutomationProperties::SetName(tools,data->caption(L"layers",L"flags"));AutomationProperties::SetName(footerFrame,data->caption(L"layers",L"actions"));
     AutomationProperties::SetAutomationId(header,L"layer-controls");
     AutomationProperties::SetAutomationId(values,L"layer-options");
     AutomationProperties::SetAutomationId(tools,L"layer-flags");
@@ -50,7 +50,7 @@ void LayersView::init(){
     blend.FontSize(data->textSize());blend.FontWeight(Windows::UI::Text::FontWeights::Bold());
     blend.Background(data->brush(L"input"));blend.BorderThickness({0,0,0,0});blend.CornerRadius({6,6,6,6});
     blend.HorizontalAlignment(HorizontalAlignment::Stretch);
-    AutomationProperties::SetName(blend,L"Layer blend mode");AutomationProperties::SetAutomationId(blend,L"layer-blend");
+    AutomationProperties::SetName(blend,data->caption(L"layers",L"blend"));AutomationProperties::SetAutomationId(blend,L"layer-blend");
     for(auto value:array(data->catalog,L"layer_blends"))blend.Items().Append(box_value(value.GetString()));
     blend.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating){
         int index=self->blend.SelectedIndex();auto layer=self->editing();
@@ -64,9 +64,9 @@ void LayersView::init(){
     opacityGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     values.Children().Append(blend);Grid::SetColumn(opacityGate,1);values.Children().Append(opacityGate);header.Children().Append(values);
     tools.Orientation(Orientation::Horizontal);tools.Spacing(2);
-    struct Toggle {wchar_t const* icon;wchar_t const* label;wchar_t const* property;wchar_t const* op;wchar_t const* capability;};
-    for(auto spec:{Toggle{L"alpha-lock",L"Alpha lock",L"alpha_locked",L"alpha_lock",L"alpha_lock"},
-        Toggle{L"lock",L"Lock editing",L"locked",L"lock",L"edit_lock"},Toggle{L"clip",L"Clip to layer below",L"clipped",L"clip",L"clip"}}){
+    struct Toggle {wchar_t const* icon;hstring label;wchar_t const* property;wchar_t const* op;wchar_t const* capability;};
+    for(auto spec:{Toggle{L"alpha-lock",data->caption(L"layers",L"alpha_lock"),L"alpha_locked",L"alpha_lock",L"alpha_lock"},
+        Toggle{L"lock",data->caption(L"layers",L"lock_editing"),L"locked",L"lock",L"edit_lock"},Toggle{L"clip",data->caption(L"layers",L"clip"),L"clipped",L"clip",L"clip"}}){
         auto pick=button<Primitives::ToggleButton>(data,spec.label,[weak,spec]{if(auto self=weak.lock()){
             auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(spec.op)},
                 {L"id",layer.GetNamedValue(L"id")},{L"value",B(!flag(layer,spec.property))}}));
@@ -120,7 +120,7 @@ void LayersView::init(){
     });
     auto remove=footerButton(L"delete",L"Delete selected layers",L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
     controls.emplace_back([weak,remove](J,J){if(auto self=weak.lock()){remove.IsEnabled(flag(self->view(),L"can_delete"));remove.Opacity(remove.IsEnabled()?1.:.36);}});
-    auto more=footerButton(L"more",L"Layer actions",L"layer-actions",[weak]{if(auto self=weak.lock()){
+    auto more=footerButton(L"more",data->caption(L"layers",L"actions"),L"layer-actions",[weak]{if(auto self=weak.lock()){
         auto editing=self->editing();
         bool maskRow=flag(self->view(),L"quick_mask")||flag(editing,L"selection_layer");
         self->context(maskRow?num(editing,L"id",-1):-1,false,self->footer);
@@ -158,7 +158,7 @@ void LayersView::refresh(){
     if(opacityKey!=nextKey){
         opacityKey=nextKey;opacityLayer=activeId;opacityBindings.clear();
         auto weak=weak_from_this();auto generation=epoch;
-        opacityGate.Content(number(data,L"Layer opacity",object(data->catalog,L"layer_opacity"),
+        opacityGate.Content(number(data,data->caption(L"layers",L"opacity"),object(data->catalog,L"layer_opacity"),
             [weak]{if(auto self=weak.lock())return num(self->editing(),L"opacity",1);return 1.;},
             [weak,generation,activeId](double value){if(auto self=weak.lock();self&&epochOf(self->data)==generation
                 &&num(self->editing(),L"id",-1)==activeId&&flag(object(self->view(),L"controls"),L"opacity"))
@@ -187,7 +187,7 @@ void LayersView::preview(){
     if(!root.IsLoaded()||!root.XamlRoot()||!root.XamlRoot().IsHostVisible()||list.ActualHeight()<=0)return;
     // Templates can create or replace the scroll provider after Loaded.
     if(auto presenter=list.ScrollPresenter();presenter&&AutomationProperties::GetAutomationId(presenter)!=L"layer-list"){
-        AutomationProperties::SetAutomationId(presenter,L"layer-list");AutomationProperties::SetName(presenter,L"Layers");
+        AutomationProperties::SetAutomationId(presenter,L"layer-list");AutomationProperties::SetName(presenter,data->caption(L"layers",L"title"));
         // The pinned ScrollView template spans content across its auto-width
         // scrollbar column. Reserve that column when it is visible so the
         // native scrollbar cannot cover the row grip.

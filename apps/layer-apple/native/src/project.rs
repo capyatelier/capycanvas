@@ -336,6 +336,7 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
         }
         let file = host_file(fd);
         let stream = layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() };
+        let localization = control_localization()?;
         match payload {
             Payload::Save { snapshot, project } => {
                 if let Some(snapshot) = snapshot.take() {
@@ -347,7 +348,7 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
                     .write(stream)
             }
             Payload::Color(color) => color.write_copy(stream, task.control.is_cancelled()),
-            Payload::Export(export) => export.write(stream, task.control.clone()),
+            Payload::Export(export) => export.write(stream, task.control.clone()).map_err(|reason| reason.message(localization)),
             _ => Err("Not a write task".into()),
         }
     })

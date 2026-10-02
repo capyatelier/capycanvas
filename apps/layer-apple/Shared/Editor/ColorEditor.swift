@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ManagedColorButton: View {
+    @Environment(\.capyNativeCopy) private var nativeCopy
     let label: String
     let identifier: String
     let value: JSON
@@ -16,7 +17,7 @@ struct ManagedColorButton: View {
                 ColorSwatch(rgba: preview["rgba"], shape: .control).frame(width: 48, height: 28)
                     .overlay(SquircleShape.control.stroke(.primary.opacity(0.3), lineWidth: 1))
             }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(identifier + "-color")
-                .help(preview["in_gamut"].bool ? label : "Outside the Display P3 preview gamut. The stored color is preserved.")
+                .help(preview["in_gamut"].bool ? label : nativeCopy["color"]["outside_p3"].string)
                 .sheet(isPresented: $editing) {
                     ColorEditor(value: value, documentSpace: documentSpace, viewing: viewing) { change($0); editing = false }
                 }
@@ -27,6 +28,8 @@ struct ManagedColorButton: View {
 /// The shared form retains the original tagged value across readout changes.
 /// Only Use Color publishes an edit; invalid drafts and cancellation do not.
 struct ColorEditor: View {
+    @Environment(\.capyNativeCopy) private var nativeCopy
+    @Environment(\.capyCommonCopy) private var commonCopy
     @Environment(\.dismiss) private var dismiss
     @State private var form: JSON
     let use: (JSON) -> Void
@@ -42,29 +45,29 @@ struct ColorEditor: View {
     private func update(_ draft: JSON) { form = ColorUI.resolve(["type": "form", "request": draft.raw]) }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Edit Color").font(.headline)
+            Text(nativeCopy["color"]["edit"].string).font(.headline)
             EditorScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(form["description"].string)
                     if !form["preview"].isNull {
                         if !form["draft"]["intensity"].isNull {
                             HStack(spacing: 0) {
-                                VStack(spacing: 4) { Text("Base").font(.caption); HDRColorSwatch(color: form["base"], viewing: viewing) }
-                                VStack(spacing: 4) { Text("Adjusted").font(.caption); HDRColorSwatch(color: form["value"], viewing: viewing) }
+                                VStack(spacing: 4) { Text(nativeCopy["color"]["base"].string).font(.caption); HDRColorSwatch(color: form["base"], viewing: viewing) }
+                                VStack(spacing: 4) { Text(nativeCopy["color"]["adjusted"].string).font(.caption); HDRColorSwatch(color: form["value"], viewing: viewing) }
                             }.frame(height: 68)
                             HStack {
-                                Text("Intensity (EV)")
-                                TextField("Intensity (EV)", text: $intensityText).textFieldStyle(.roundedBorder)
+                                Text(nativeCopy["color"]["intensity_ev"].string)
+                                TextField(nativeCopy["color"]["intensity_ev"].string, text: $intensityText).textFieldStyle(.roundedBorder)
                                     .accessibilityIdentifier("color-input-intensity")
                                     .onChange(of: intensityText) { _, value in update(form["draft"].replacing("change_intensity_text", with: JSON(value))) }
                             }
                         } else { ColorSwatch(rgba: form["preview"]["rgba"]).frame(height: 48).accessibilityHidden(true) }
                         if form["draft"]["intensity"].isNull && !form["preview"]["in_gamut"].bool {
-                            Text("Outside the Display P3 preview gamut. The stored color is preserved.").font(.caption)
+                            Text(nativeCopy["color"]["outside_p3"].string).font(.caption)
                         }
                     }
                     let models = form["models"].array
-                    FormPicker("Color model", selection: Binding(get: { form["draft"]["model"].string }, set: {
+                    FormPicker(nativeCopy["color"]["model"].string, selection: Binding(get: { form["draft"]["model"].string }, set: {
                         update(form["draft"].replacing("change_model", with: JSON($0)))
                     })) {
                         ForEach(models.indices, id: \.self) { i in Text(models[i][1].string).tag(models[i][0].string) }
@@ -91,9 +94,9 @@ struct ColorEditor: View {
                 }
             }
             HStack {
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(commonCopy["cancel"].string) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Use Color") {
+                Button(nativeCopy["color"]["use_color"].string) {
                     if let hdrUse, !form["draft"]["intensity"].isNull { hdrUse(form["value"], form["draft"]["intensity"].number) }
                     else { use(form["value"]) }
                 }.disabled(form["value"].isNull || !form["error"].isNull)

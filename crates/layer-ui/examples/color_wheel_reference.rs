@@ -29,14 +29,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let mut state = ColorState::default();
     state.set_rgba(request.rgba)?;
-    state.apply(ColorAction::Shape { shape })?;
+    state.apply(ColorAction::Shape { shape }).map_err(|reason|format!("{reason:?}"))?;
     let geometry = ColorWheelGeometry::new(1.).unwrap();
     if let Some(value) = request.hue {
         state.apply(ColorAction::PickWheel {
             part: ColorWheelPart::Hue,
             point: state.wheel_hue_marker(&geometry, value),
             size: 1.,
-        })?;
+        }).map_err(|reason|format!("{reason:?}"))?;
     }
     let samples: Vec<_> = request
         .points
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             json!({"part":part,"rgba":sample.rgba()})
         })
         .collect();
-    let mut model = serde_json::to_value(state.view())?;
+    let mut model = serde_json::to_value(state.view_in_localized(RgbSpace::Srgb, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)))?;
     model["wheel_hue_stops"] = serde_json::to_value(state.wheel_hue_stops())?;
     println!("{}", json!({"model":model,"samples":samples}));
     Ok(())

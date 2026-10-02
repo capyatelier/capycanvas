@@ -19,7 +19,8 @@ export function createRasterWorker() {
       const job = pending.get(data.id);
       if (!job) return;
       pending.delete(data.id); clearTimeout(job.timer);
-      if (data.error) job.reject(new Error(data.error)); else job.resolve(data.result);
+      if (data.color_feature_error) job.reject({color_feature_error:data.color_feature_error});
+      else if (data.error) job.reject(new Error(data.error)); else job.resolve(data.result);
       // Wasm heaps cannot shrink. Release an oversized idle file arena after
       // its transferred result is owned by the editor and no OPFS job is live.
       if(kind==="files" && data.retire && !pending.size)idleTimer=setTimeout(()=>{

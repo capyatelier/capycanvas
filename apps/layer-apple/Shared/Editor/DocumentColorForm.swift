@@ -35,6 +35,13 @@ struct DocumentColorForm: View {
                             Text(row[0].string).font(.headline)
                             Text(row[1].string).textSelection(.enabled)
                         }
+                        if !editor.propertiesView["sources"].array.isEmpty {
+                            Text(editor.propertiesView["source_images"].string).font(.headline)
+                            ForEach(Array(editor.propertiesView["sources"].array.enumerated()), id: \.offset) { _, row in
+                                Text(row[0].string).font(.headline)
+                                Text(row[1].string).textSelection(.enabled)
+                            }
+                        }
                     } else if !editor.history {
                         Text(editor.operation == "rasterize_source"
                             ? "Convert the original to the document color space and bit depth at its full size. Paint, position, masks and adjustments stay intact. Undo restores the original profile and precision."
@@ -66,7 +73,7 @@ struct DocumentColorForm: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
-                Button(editor.properties ? "Done" : "Cancel") { editor.cancel() }
+                Button(editor.properties ? editor.propertiesDone : "Cancel") { editor.cancel() }
                     .keyboardShortcut(.cancelAction).disabled(editor.publishing)
                 Spacer()
                 if !editor.properties && !editor.history {

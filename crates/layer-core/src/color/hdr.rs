@@ -31,13 +31,27 @@ pub fn encode_pixel(pixel: [f32; 4]) -> Result<[u16; 4], &'static str> {
 
 /// Validate without quantizing. Signed RGB, subnormals and hidden RGB are valid;
 /// alpha is finite linear coverage in [0, 1]. Storage never silently clamps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HdrPixelError { ExpectedFloat, FiniteCoverage, StorageRange }
+impl HdrPixelError {
+    pub fn diagnostic(self) -> &'static str {
+        match self {
+            Self::ExpectedFloat => "Expected floating-point storage",
+            Self::FiniteCoverage => "HDR requires finite RGB and coverage between zero and one",
+            Self::StorageRange => "HDR RGB exceeds the selected storage range",
+        }
+    }
+}
 pub fn validate_pixel(depth: super::SampleDepth, pixel: [f32; 4]) -> Result<(), &'static str> {
-    if !depth.is_float() { return Err("Expected floating-point storage"); }
+    validate_pixel_typed(depth, pixel).map_err(HdrPixelError::diagnostic)
+}
+pub fn validate_pixel_typed(depth: super::SampleDepth, pixel: [f32; 4]) -> Result<(), HdrPixelError> {
+    if !depth.is_float() { return Err(HdrPixelError::ExpectedFloat); }
     if pixel.iter().any(|v| !v.is_finite()) || !(0. ..=1.).contains(&pixel[3]) {
-        return Err("HDR requires finite RGB and coverage between zero and one");
+        return Err(HdrPixelError::FiniteCoverage);
     }
     if pixel[..3].iter().any(|v| v.abs() > depth.max_linear()) {
-        return Err("HDR RGB exceeds the selected storage range");
+        return Err(HdrPixelError::StorageRange);
     }
     Ok(())
 }

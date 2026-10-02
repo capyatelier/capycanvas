@@ -166,7 +166,7 @@ try{
     (Control 'Light' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Model).state.theme -eq 'light'} 'Theme preference did not update'
     (Control 'Close' -Name -Within $preferences -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {$null -eq (Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Preferences did not release the canvas'
+    Wait-Until {$null -eq (Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'drawing-canvas').Current.IsEnabled} 'Preferences did not release the canvas'
     if(!(Model).state.customization.expanded){$configuration=Configure 'sizes'}
     $null=Control 'panel-configuration-sizes'
     Start-Sleep -Milliseconds 400

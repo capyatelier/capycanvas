@@ -134,7 +134,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         match action {
             FrequencySeparationAction::Radius { radius } => {
                 let draft = self.frequency_separation.as_mut().ok_or("Frequency Separation is not open")?;
-                draft.view.numeric.validate(radius, draft.view.label)?;
+                draft.view.numeric.validate(radius, &*draft.view.label).map_err(|reason| reason.message(&self.state.localization))?;
                 if draft.view.radius != radius {
                     draft.filters = SeparationFilters::new(&self.effect_catalog, radius)?;
                     draft.view.radius = radius;

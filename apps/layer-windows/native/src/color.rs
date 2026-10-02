@@ -1,18 +1,20 @@
 //! Stateless native color presentation. CPU pixels never touch a canvas host.
 use layer_ui::{ColorShape, ColorState, ColorWheelGeometry, ColorWheelPart};
 use std::ffi::{CString, c_char};
+use crate::shared_controls::CapyLocalization;
 
 /// Stateless shared numeric parsing and display projection. No document host is accessed.
 /// # Safety
 /// The input must be a readable, NUL-terminated UTF-8 JSON string for this call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_color_ui(input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn capy_color_ui(context: *const CapyLocalization, input: *const c_char) -> *mut c_char {
     if input.is_null() { return std::ptr::null_mut(); }
-    let result = std::panic::catch_unwind(|| {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let input = unsafe { std::ffi::CStr::from_ptr(input) }.to_str().map_err(|e| e.to_string())?;
         if input.len() > 256 * 1024 { return Err("Color request is too large".into()); }
-        layer_ui::color_ui(serde_json::from_str(input).map_err(|e| e.to_string())?)
-    }).unwrap_or_else(|_| Err("Color request failed".into()));
+        let context = unsafe { context.as_ref() }.ok_or("Missing color localization")?;
+        layer_ui::color_ui_localized(serde_json::from_str(input).map_err(|e| e.to_string())?, &context.localizer)
+    })).unwrap_or_else(|_| Err("Color request failed".into()));
     json(match result { Ok(value) => value, Err(error) => serde_json::json!({"error": error}) })
 }
 
@@ -20,23 +22,24 @@ pub unsafe extern "C" fn capy_color_ui(input: *const c_char) -> *mut c_char {
 /// # Safety
 /// input is a readable NUL-terminated UTF-8 JSON string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_export_draft(input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn capy_export_draft(context: *const CapyLocalization, input: *const c_char) -> *mut c_char {
     if input.is_null() { return std::ptr::null_mut(); }
-    let result = std::panic::catch_unwind(|| -> Result<serde_json::Value, String> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<serde_json::Value, String> {
         #[derive(serde::Deserialize)]
         struct Request { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction, #[serde(default)] validate: bool, extent: Option<[u32;2]>, color: Option<layer_core::color::DocumentColor> }
         let text = unsafe { std::ffi::CStr::from_ptr(input) }.to_str().map_err(|e| e.to_string())?;
+        let context = unsafe { context.as_ref() }.ok_or("Missing export localization")?;
         let request: Request = serde_json::from_str(text).map_err(|e| e.to_string())?;
         let draft = if let Some(color) = request.color {
-            request.recipe.draft_for_color(color, request.action)
-        } else { request.recipe.draft(request.action) };
+            request.recipe.draft_for_color_localized(color, request.action, &context.localizer)
+        } else { request.recipe.draft_localized(request.action, &context.localizer) };
         if request.validate {
-            draft.recipe.validate()?;
-            draft.recipe.output_extent(request.extent.ok_or("Export extent is missing")?)?;
-            draft.recipe.output_resolution(None)?;
+            draft.recipe.validate().map_err(|reason| reason.message(&context.localizer))?;
+            draft.recipe.output_extent(request.extent.ok_or("Export extent is missing")?).map_err(|reason| reason.message(&context.localizer))?;
+            draft.recipe.output_resolution(None).map_err(|reason| reason.message(&context.localizer))?;
         }
         serde_json::to_value(draft).map_err(|e| e.to_string())
-    }).unwrap_or_else(|_| Err("Export form failed".into()));
+    })).unwrap_or_else(|_| Err("Export form failed".into()));
     json(result.unwrap_or_else(|error| serde_json::json!({"error":error})))
 }
 /// Shared picker pixels in the document's RGB coordinates, projected to sRGB.
@@ -84,7 +87,7 @@ fn json(value: impl serde::Serialize) -> *mut c_char {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_color_mapped_field(side: u32, input: *const c_char, output: *mut u8, length: usize) -> bool {
     if input.is_null() || output.is_null() || !(1..=2048).contains(&side) || length != side as usize * side as usize * 4 { return false; }
-    std::panic::catch_unwind(|| {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         #[derive(serde::Deserialize)]
         struct Request { state: ColorState, rendition: layer_core::color::hdr::SdrRendition }
         let text = unsafe { std::ffi::CStr::from_ptr(input) }.to_str().ok()?;
@@ -92,7 +95,7 @@ pub unsafe extern "C" fn capy_color_mapped_field(side: u32, input: *const c_char
         let request: Request=serde_json::from_str(text).ok()?;
         request.rendition.validate().ok()?;
         Some(request.state.render_field_mapped(side, request.rendition, unsafe { std::slice::from_raw_parts_mut(output,length) }))
-    }).ok().flatten().unwrap_or(false)
+    })).ok().flatten().unwrap_or(false)
 }
 
 #[cfg(test)]

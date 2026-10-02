@@ -46,7 +46,7 @@ impl SettingsFile {
         }
         Ok(Self { directory })
     }
-    fn load(&self) -> Result<Option<Settings>, String> {
+    fn load_saved(&self) -> Result<Option<String>, String> {
         let file = match File::open(self.directory.join("settings.json")) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -57,7 +57,7 @@ impl SettingsFile {
             .read_to_end(&mut bytes)
             .map_err(|error| io_error("read saved", error))?;
         let saved = std::str::from_utf8(&bytes).ok().filter(|_| bytes.len() <= MAX_BYTES);
-        Ok(Some(Settings::restore(saved.unwrap_or_default())))
+        Ok(Some(saved.unwrap_or_default().into()))
     }
     fn write(&mut self, bytes: &[u8]) -> Result<(), String> {
         if bytes.len() > MAX_BYTES {
@@ -266,6 +266,14 @@ pub(crate) struct CloseStatus {
     pub attempt: u64,
 }
 
+pub(crate) struct PreparedSettings {
+    hub: Result<Arc<shared::Hub>, String>,
+}
+impl PreparedSettings {
+    pub(crate) fn start(self, native: &mut NativeHost, wake: impl Fn() + Send + 'static) -> SettingsService {
+        SettingsService::from_hub(native, self.hub, wake)
+    }
+}
 pub(crate) struct SettingsService {
     subscription: Option<shared::Subscription>,
     worker: Result<Worker, String>,
@@ -275,19 +283,28 @@ pub(crate) struct SettingsService {
     close: CloseStatus,
 }
 impl SettingsService {
-    /// Called on the render owner before GPU startup or queued user actions.
-    pub(crate) fn open(native: &mut NativeHost, wake: impl Fn() + Send + 'static) -> Self {
-        Self::at(native, SettingsFile::environment(), wake)
+    pub(crate) fn launch(preferred_tags: &[&str]) -> Result<(NativeHost, PreparedSettings), String> {
+        Self::launch_at(SettingsFile::environment(), preferred_tags)
     }
-    fn at(
-        native: &mut NativeHost,
-        file: Result<SettingsFile, String>,
-        wake: impl Fn() + Send + 'static,
-    ) -> Self {
+    fn launch_at(file: Result<SettingsFile, String>, preferred_tags: &[&str]) -> Result<(NativeHost, PreparedSettings), String> {
+        let prepared = file.and_then(|file| shared::Hub::with_launch(file, |saved| {
+            NativeHost::launch(layer_ui::Platform::Windows, saved.unwrap_or_default(), preferred_tags)
+        }));
+        let (native, hub) = match prepared {
+            Ok((native, hub)) => (native, Ok(hub)),
+            Err(error) => (NativeHost::launch(layer_ui::Platform::Windows, "", preferred_tags)?, Err(error)),
+        };
+        Ok((native, PreparedSettings { hub }))
+    }
+    #[cfg(test)]
+    fn at(native: &mut NativeHost, file: Result<SettingsFile, String>, wake: impl Fn() + Send + 'static) -> Self {
+        let hub = file.and_then(|file| shared::Hub::open(file, native.session.state().settings.clone()));
+        Self::from_hub(native, hub, wake)
+    }
+    fn from_hub(native: &mut NativeHost, hub: Result<Arc<shared::Hub>, String>, wake: impl Fn() + Send + 'static) -> Self {
         let mut load_error = None;
         let mut subscription = None;
-        let worker = file.and_then(|file| {
-            let hub = shared::Hub::open(file, native.session.state().settings.clone())?;
+        let worker = hub.and_then(|hub| {
             load_error = hub.load_error();
             let mut client = shared::Subscription::new(hub.clone(), wake);
             if let Some(settings) = client.adopt(&native.session.state().settings) {
@@ -303,14 +320,7 @@ impl SettingsService {
         if native.error.is_none() {
             native.error = load_error.clone();
         }
-        Self {
-            worker,
-            subscription,
-            submitted: None,
-            load_error,
-            save_error: None,
-            close: CloseStatus::default(),
-        }
+        Self { worker, subscription, submitted: None, load_error, save_error: None, close: CloseStatus::default() }
     }
     fn sync(&mut self, native: &mut NativeHost) -> Result<(), String> {
         if let Some(client) = &mut self.subscription

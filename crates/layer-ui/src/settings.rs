@@ -172,13 +172,27 @@ impl EraserEnd {
     }
 }
 impl Settings {
+    pub fn language_preference(saved: &str) -> crate::LanguagePreference {
+        let value = serde_json::from_str::<serde_json::Value>(saved).ok();
+        let preference = value.as_ref().and_then(|value| value.as_object())
+            .and_then(|object| object.get("language"))
+            .and_then(|value| serde_json::from_value::<crate::LanguagePreference>(value.clone()).ok())
+            .unwrap_or_default();
+        match preference {
+            crate::LanguagePreference::Explicit(language) if !crate::localization::SHIPPED_LANGUAGES.contains(&language) => crate::LanguagePreference::System,
+            _ => preference,
+        }
+    }
     /// Read settings saved by any build. Each field this build cannot read or
     /// validate keeps its default; the next save replaces the saved copy.
     pub fn restore(saved: &str) -> Self {
+        Self::restore_localized(saved, &Localizer::shared(UiLanguage::English))
+    }
+    pub fn restore_localized(saved: &str, localization: &Localizer) -> Self {
         let valid = |value: &serde_json::Value| {
             serde_json::from_value::<Self>(value.clone())
                 .ok()
-                .filter(|settings| settings.validate().is_ok())
+                .filter(|settings| settings.validate_localized(localization).is_ok())
         };
         let mut kept = serde_json::Value::Object(Default::default());
         if let Ok(serde_json::Value::Object(saved)) = serde_json::from_str(saved) {
@@ -195,7 +209,8 @@ impl Settings {
         }
         valid(&kept).unwrap_or_default()
     }
-    pub fn validate(&self) -> Result<(), String> {
+    #[cfg(test)]
+    pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_localized(&Localizer::shared(UiLanguage::English))
     }
     pub fn validate_localized(&self, localization: &Localizer) -> Result<(), String> {
@@ -208,21 +223,15 @@ impl Settings {
             return Err("The eraser end can't use this tool".into());
         }
         for marks in self.slider_bookmarks.values() {
-            marks.validate()?;
+            marks.validate().map_err(|reason| reason.message(localization))?;
         }
         self.new_document.validate().map_err(|error| error.message(localization))?;
         if self.version != 1 {
             return Err("Unsupported settings version".into());
         }
-        for row in self
-            .pages(Platform::Gtk)
-            .into_iter()
-            .flat_map(|p| p.groups)
-            .flat_map(|g| g.rows)
-        {
-            if let PreferenceKind::Number { control, value } = row.kind {
-                control.validate(value, &row.title)?;
-            }
+        for id in [PreferenceId::Pressure, PreferenceId::PanSpeed, PreferenceId::ZoomSpeed, PreferenceId::PredictionHorizon] {
+            let (control, value, label) = self.numeric_field(id).unwrap();
+            control.validate(value, label).map_err(|reason| reason.message(localization))?;
         }
         self.feedback_config().validate().map_err(|e| e.to_string())?;
         self.validate_shortcuts()
@@ -860,34 +869,21 @@ fn swatch_row(
         },
     )
 }
-fn number(
-    id: PreferenceId,
-    title: &str,
-    description: &str,
-    value: f32,
-    min: f64,
-    max: f64,
-    step: f64,
-) -> PreferenceRow {
-    row(
-        id,
-        title,
-        description,
-        PreferenceKind::Number {
-            value,
-            control: match id {
-                PreferenceId::PredictionHorizon => NumericControl {
-                    kind: NumericKind::Slider,
-                    ..NumericControl::number(min, max, step, 0).unit("ms")
-                },
-                _ => {
-                    NumericControl::number(min, max, step, if step < 1.0 { 2 } else { 0 }).unit("×")
-                }
-            },
-        },
-    )
+fn number(id: PreferenceId, title: &str, description: &str, settings: &Settings) -> PreferenceRow {
+    let (control, value, _) = settings.numeric_field(id).unwrap();
+    row(id, title, description, PreferenceKind::Number { value, control })
 }
 impl Settings {
+    fn numeric_field(&self, id: PreferenceId) -> Option<(NumericControl, f32, MessageId)> {
+        use PreferenceId::*;
+        Some(match id {
+            Pressure => (NumericControl::pressure(), self.pressure_gamma, MessageId::SETTINGS_PRESSURE_RESPONSE),
+            PanSpeed => (NumericControl::number(0.25, 4., 0.05, 2).unit("×"), self.pan_speed, MessageId::SETTINGS_SCROLL_PAN_SPEED),
+            ZoomSpeed => (NumericControl::number(0.25, 4., 0.05, 2).unit("×"), self.zoom_speed, MessageId::SETTINGS_SCROLL_ZOOM_SPEED),
+            PredictionHorizon => (NumericControl { kind: NumericKind::Slider, ..NumericControl::number(0., 64., 1., 0).unit("ms") }, self.prediction_ms, MessageId::SETTINGS_PREDICTION_AMOUNT),
+            _ => return None,
+        })
+    }
     pub(crate) fn pages(&self, platform: Platform) -> Vec<PreferencePage> {
         self.localized_pages(platform, &Localizer::shared(UiLanguage::English))
     }
@@ -947,7 +943,7 @@ impl Settings {
                 &localizer.text(MessageId::SETTINGS_PRESSURE_RESPONSE),
                 &localizer.text(MessageId::SETTINGS_LOWER_VALUES_MAKE_LIGHT_PEN_PRESSURE_STRONGER),
                 PreferenceKind::Number {
-                    control: NumericControl::pressure(),
+                    control: self.numeric_field(Pressure).unwrap().0,
                     value: self.pressure_gamma,
                 },
             ),
@@ -978,10 +974,7 @@ impl Settings {
                 PredictionHorizon,
                 &localizer.text(MessageId::SETTINGS_PREDICTION_AMOUNT),
                 "",
-                self.prediction_ms,
-                0.0,
-                64.0,
-                1.0,
+                self,
             ),
         ];
         for r in &mut input {
@@ -1056,19 +1049,13 @@ impl Settings {
                             PanSpeed,
                             &localizer.text(MessageId::SETTINGS_SCROLL_PAN_SPEED),
                             "",
-                            self.pan_speed,
-                            0.25,
-                            4.0,
-                            0.05,
+                            self,
                         ),
                         number(
                             ZoomSpeed,
                             &localizer.text(MessageId::SETTINGS_SCROLL_ZOOM_SPEED),
                             "",
-                            self.zoom_speed,
-                            0.25,
-                            4.0,
-                            0.05,
+                            self,
                         ),
                     ],
                 },
@@ -1339,19 +1326,14 @@ impl Settings {
             {
                 self.default_value(id, platform)?
             }
+            (PreferenceKind::Number { .. }, PreferenceValue::Text(text)) => PreferenceValue::Number(crate::numeric::parse_numeric_text(&text).map_err(|reason| reason.message(localizer))?),
             (_, value) => value,
         };
         use PreferenceId::*;
         match (&field.kind, &value) {
             (PreferenceKind::Number { control, .. }, _) => {
-                control.validate(value.number().ok_or_else(|| localizer.text(MessageId::SETTINGS_EXPECTED_A_NUMBER).to_string())?, &field.title)
-                    .map_err(|_| {
-                        let mut args = crate::localization::FluentArgs::new();
-                        args.set("setting", field.title.as_str());
-                        args.set("min", control.min);
-                        args.set("max", control.max);
-                        localizer.format(MessageId::SETTINGS_NUMBER_RANGE, &args)
-                    })?
+                control.validate(value.number().ok_or_else(|| localizer.text(MessageId::SETTINGS_EXPECTED_A_NUMBER).to_string())?, self.numeric_field(id).unwrap().2)
+                    .map_err(|reason| reason.message(localizer))?
             }
             (PreferenceKind::Choice { options, .. }, _)
                 if value.choice().is_some_and(|v| (v as usize) < options.len()) => {}
@@ -1598,7 +1580,7 @@ impl PreferencesState {
                 description: CommandId::ALL
                     .into_iter()
                     .find(|c| c.shortcut_id() == *id)
-                    .map(|command| crate::customization::tool_choice(crate::ToolbarControl::Command { command }).description)
+                    .map(|command| crate::customization::tool_choice_localized(crate::ToolbarControl::Command { command }, localizer).description)
                     .or_else(|| (!row.subgroup.is_empty()).then(|| { let mut args = crate::localization::FluentArgs::new(); args.set("tool", row.subgroup.as_str()); localizer.format(MessageId::SETTINGS_BRUSH_FOR_TOOL, &args) }))
                     .or_else(|| (!row.detail.is_empty()).then(|| row.detail.clone()))
                     .unwrap_or_else(|| row.group.clone()),
@@ -1915,7 +1897,7 @@ impl PreferencesState {
             }
             PreferenceAction::SelectKeymap { id } => crate::keymaps::select(settings, &id)?,
             PreferenceAction::ImportKeymap { text } => {
-                self.keymap_import = Some(crate::keymaps::import(settings, &text, platform)?);
+                self.keymap_import = Some(crate::keymaps::import(settings, &text, platform, localizer)?);
             }
             PreferenceAction::ConfirmKeymapImport => {
                 *settings = self.keymap_import.take().ok_or(localizer.text(MessageId::SETTINGS_CHOOSE_A_KEYMAP_FILE_FIRST).to_string())?.settings;
@@ -2575,6 +2557,20 @@ mod restore_tests {
     use super::*;
 
     #[test]
+    fn localized_restore_preserves_fieldwise_salvage_and_launch_context() {
+        let localization = Localizer::shared(UiLanguage::Japanese);
+        let saved = r#"{"language":{"Explicit":"en"},"theme":"dark","pan_speed":-1,"new_document":null,"version":37}"#;
+        let settings = Settings::restore_localized(saved, &localization);
+        assert_eq!(settings.language, LanguagePreference::Explicit(UiLanguage::English));
+        assert_eq!(settings.theme, Some(crate::Theme::Dark));
+        assert_eq!(settings.pan_speed, Settings::default().pan_speed);
+        assert_eq!(settings.new_document, Settings::default().new_document);
+        assert_eq!(settings.version, Settings::default().version);
+        assert_eq!(localization.language(), UiLanguage::Japanese);
+        assert_eq!(settings, Settings::restore(saved));
+    }
+
+    #[test]
     fn saved_settings_keep_every_field_this_build_reads() {
         let chosen = Settings {
             theme: Some(Theme::Dark),
@@ -2663,7 +2659,7 @@ mod localization_tests {
             let trigger = view.shortcut_page.triggers.iter().find(|trigger| trigger.id == "touch.tap.2").unwrap();
             assert!(view.search_results.iter().any(|result| result.title == trigger.label && result.action == PreferenceAction::Page { page: SettingsPage::Input }));
         }
-        for query in ["Sample color", "色を採取"] {
+        for query in ["Sample color", "色を取得"] {
             let state = PreferencesState { query: query.into(), ..Default::default() };
             let view = state.view(&settings, Platform::Gtk, true, None, &localizer);
             let trigger = view.shortcut_page.triggers.iter().find(|trigger| trigger.id == "pen.button.primary").unwrap();
@@ -2677,5 +2673,44 @@ mod localization_tests {
         let state = PreferencesState { query: "ＣＯＬＯＲ ＴＨＥＭＥ".into(), ..Default::default() };
         let view = state.view(&Settings::default(), Platform::Gtk, true, None, &localizer);
         assert!(view.search_results.iter().any(|result| result.title == "Color theme"));
+    }
+}
+
+#[cfg(test)]
+mod launch_language_tests {
+    use super::Settings;
+    use crate::{LanguagePreference, UiLanguage};
+    #[test]
+    fn saved_launch_preference_is_data_only_and_matches_fieldwise_salvage() {
+        for saved in ["", "broken", "[]", "{}", r#"{"language":"broken"}"#, r#"{"language":{"Explicit":"unknown"}}"#] {
+            assert_eq!(Settings::language_preference(saved), LanguagePreference::System);
+        }
+        for saved in [r#"{"language":{"Explicit":"en"},"pressure_gamma":"broken"}"#, r#"{"language":{"Explicit":"en"},"pressure_gamma":-5,"version":999}"#] {
+            assert_eq!(Settings::language_preference(saved), LanguagePreference::Explicit(UiLanguage::English));
+        }
+        for language in UiLanguage::ALL {
+            let saved = serde_json::json!({"language": LanguagePreference::Explicit(language)}).to_string();
+            let expected = if crate::localization::SHIPPED_LANGUAGES.contains(&language) { LanguagePreference::Explicit(language) } else { LanguagePreference::System };
+            assert_eq!(Settings::language_preference(&saved), expected);
+        }
+    }
+}
+
+#[cfg(test)]
+mod numeric_input_tests {
+    use super::*;
+
+    #[test]
+    fn settings_compatibility_numeric_text_is_refused_without_mutation() {
+        let localization = Localizer::shared(UiLanguage::English);
+        let mut settings = Settings::default();
+        let before = settings.clone();
+        for text in ["１．５", "２３", "１２３", "５", "１＋１", "１，５", "２ ×", "ＮａＮ", "ｉｎｆ", "ﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺ"] {
+            assert!(settings.localized_edit(PreferenceId::Pressure, PreferenceValue::Text(text.into()), Platform::Gtk, &localization).is_err(), "{text}");
+            assert_eq!(settings, before);
+        }
+        settings.localized_edit(PreferenceId::Pressure, PreferenceValue::Text("1.5".into()), Platform::Gtk, &localization).unwrap();
+        assert_eq!(settings.pressure_gamma, 1.5);
+        settings.validate_localized(&localization).unwrap();
     }
 }

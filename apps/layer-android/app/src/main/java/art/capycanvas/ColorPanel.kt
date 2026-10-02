@@ -134,19 +134,19 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                 }
                 view.array("other_shapes").values().forEachIndexed { index, value ->
                     val shape = value as String
-                    val model = when (shape) { "circle" -> "Okhsv"; "square" -> "HSV"; else -> "HLS" }
-                    ColorButton("Use $model $shape", Modifier.place(layout.array("shapes").getJSONArray(index))
+                    val caption = remember(shape) { JSONObject(Native.nativeCaption(obj("type" to "color_shape", "shape" to shape).toString())).getString("text") }
+                    ColorButton(caption, Modifier.place(layout.array("shapes").getJSONArray(index))
                         .testTag("color-shape-$shape"), onClick = { color(obj("op" to "shape", "shape" to shape)) }) { focused, hovered ->
                         SharedIcon("color-$shape", null, Modifier.size(16.dp).rotate(layout.array("shape_rotations").getDouble(index).toFloat()),
                             tint = if (focused || hovered) colors.accent else colors.text)
                     }
                 }
-                ColorButton("Swap foreground and background", Modifier.place(layout.array("swap")).testTag("color-swap"),
+                ColorButton(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("swap"), Modifier.place(layout.array("swap")).testTag("color-swap"),
                     onClick = { color(obj("op" to "swap")) }) { _, hovered ->
                     Canvas(Modifier.matchParentSize()) { if (hovered) drawCircle(colors.text.copy(alpha = .12f)) }
                     SharedIcon("color-swap", null, Modifier.size(16.dp))
                 }
-                ColorButton("Edit Color",Modifier.place(layout.array("edit")).testTag("color-edit-button"),onClick={if(host.snapshot?.objectOrNull("state")?.displayColors()?.optString("slot")!="transparent")edit=true}) {_,_->SharedIcon("pencil",null,Modifier.size(16.dp))}
+                ColorButton(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit"),Modifier.place(layout.array("edit")).testTag("color-edit-button"),onClick={if(host.snapshot?.objectOrNull("state")?.displayColors()?.optString("slot")!="transparent")edit=true}) {_,_->SharedIcon("pencil",null,Modifier.size(16.dp))}
                 val readoutClip = remember(layout) { ReadoutCorner(layout.array("wheel").getDouble(2).toFloat() * view.getJSONObject("geometry").number("outer") + 2f) }
                 ColorButton(view.getString("readout_description"), Modifier.place(layout.array("readout")).testTag("color-readout"),
                     shape = readoutClip, showFocusRing = false, onClick = { color(obj("op" to "toggle_readout")) }) { focused, _ ->
@@ -279,10 +279,10 @@ private class ReadoutCorner(private val radius: Float) : Shape {
             }
         }
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("Edit Color…") }, onClick = { menu = false;color(obj("op" to "select","slot" to slot)); edit = true })
-            DropdownMenuItem(text = { Text("Palettes…") }, modifier = Modifier.testTag("color-library-menu"),
+            DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit_menu")) }, onClick = { menu = false;color(obj("op" to "select","slot" to slot)); edit = true })
+            DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("palettes")) }, modifier = Modifier.testTag("color-library-menu"),
                 onClick = { menu = false; if (slot != "transparent") color(obj("op" to "select", "slot" to slot)); host.revealPanel("palettes") })
-            DropdownMenuItem(text = { Text("Swap foreground and background") }, leadingIcon = { SharedIcon("color-swap", null) },
+            DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("swap")) }, leadingIcon = { SharedIcon("color-swap", null) },
                 modifier = Modifier.testTag("color-swap-menu"), onClick = { menu = false; color(obj("op" to "swap")) })
         }
     }
@@ -332,7 +332,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
         }
         LaunchedEffect(request) { requests.send(request) }
         DisposableEffect(requests) { onDispose { requests.close() } }
-        Canvas(Modifier.fillMaxSize().testTag("color-wheel").semantics { contentDescription = "Color wheel" }
+        Canvas(Modifier.fillMaxSize().testTag("color-wheel").semantics { contentDescription = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("wheel") }
             .pointerInput(shape, focused) {
                 if (!focused) return@pointerInput
                 awaitEachGesture {
@@ -480,9 +480,10 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
 }
 
 @Composable private fun ColorIntensityArc(view:JSONObject,layout:JSONObject,modifier:Modifier,color:(JSONObject)->Unit) {
+    val host=LocalCanvasHost.current
     val action by rememberUpdatedState(color)
     val density=LocalDensity.current.density
-    Canvas(modifier.testTag("color-hdr-intensity").semantics {contentDescription="Color intensity";stateDescription="${view.number("intensity")} EV";progressBarRangeInfo=ProgressBarRangeInfo(view.number("intensity").coerceIn(-2f,6f),-2f..6f);setProgress{action(obj("op" to "hdr_intensity","stops" to it.coerceIn(-2f,6f)));true}}) {
+    Canvas(modifier.testTag("color-hdr-intensity").semantics {contentDescription=host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("intensity");stateDescription="${view.number("intensity")} EV";progressBarRangeInfo=ProgressBarRangeInfo(view.number("intensity").coerceIn(-2f,6f),-2f..6f);setProgress{action(obj("op" to "hdr_intensity","stops" to it.coerceIn(-2f,6f)));true}}) {
         // The surrounding layout uses dp. Query and paint in that same space;
         // shared geometry has fixed-size margins and cannot be queried in pixels.
         val side=size.width/density

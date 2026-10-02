@@ -9,7 +9,7 @@ struct ProofFormView {
     CheckBox bpc;
     A profiles,intents,simulations;
     hstring profileId;
-    J draft;
+    J draft,copy;
 
     J current() {
         auto result=J::Parse(draft.Stringify());
@@ -23,16 +23,16 @@ struct ProofFormView {
     }
     void init(J const& details,J const& saved,hstring const& savedId) {
         draft=J::Parse((saved.Size()?saved:object(details,L"settings")).Stringify());
-        auto form=object(details,L"form");auto original=object(draft,L"profile");
+        auto form=object(details,L"form");copy=object(form,L"copy");auto original=object(draft,L"profile");
         auto document=object(form,L"document_profile");
         auto append=[&](J const& entry,hstring const& label){profiles.Append(entry);profile.Items().Append(box_value(label));};
-        if(document.Size())append(document,L"Document Profile · "+str(document,L"name"));
+        if(document.Size())append(document,str(document,L"name"));
         for(auto item:array(form,L"profiles"))append(item.GetObject(),str(item.GetObject(),L"name"));
         for(auto item:array(details,L"profiles")){
             auto entry=item.GetObject();if(entry.HasKey(L"issue"))continue;
             A bytes;auto value=O({{L"name",S(str(entry,L"name"))},{L"channels",S(str(entry,L"channels"))},
                 {L"profile",O({{L"Icc",bytes}})},{L"library",S(str(entry,L"id"))}});
-            append(value,L"Saved · "+str(entry,L"name"));
+            append(value,str(entry,L"name"));
         }
         int selected=-1;
         for(uint32_t i=0;i<profiles.Size();++i){
@@ -51,8 +51,8 @@ struct ProofFormView {
             box.Header(box_value(label));box.HorizontalAlignment(HorizontalAlignment::Stretch);
             AutomationProperties::SetAutomationId(box,id);AutomationProperties::SetName(box,label);root.Children().Append(box);
         };
-        add(profile,L"Proof profile",L"proof-profile");add(simulation,L"Simulate",L"proof-simulation");add(intent,L"Rendering intent",L"proof-intent");
-        bpc.Content(box_value(L"Black point compensation"));bpc.IsChecked(flag(draft,L"bpc"));AutomationProperties::SetAutomationId(bpc,L"proof-bpc");
+        add(profile,str(copy,L"profile"),L"proof-profile");add(simulation,str(copy,L"simulation"),L"proof-simulation");add(intent,str(copy,L"intent"),L"proof-intent");
+        bpc.Content(box_value(str(copy,L"black_point_compensation")));bpc.IsChecked(flag(draft,L"bpc"));AutomationProperties::SetAutomationId(bpc,L"proof-bpc");
         bpc.IsEnabled(flag(intents.GetObjectAt(intent.SelectedIndex()),L"bpc_available"));root.Children().Append(bpc);
         intent.SelectionChanged([box=intent,choices=intents,check=bpc](auto&&,auto&&){
             if(box.SelectedIndex()>=0)check.IsEnabled(flag(choices.GetObjectAt(box.SelectedIndex()),L"bpc_available"));

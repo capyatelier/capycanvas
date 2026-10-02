@@ -40,6 +40,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -82,6 +84,27 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
 }
 
 @Composable fun CapyApp(host: CanvasHost) {
+    val launch = host.bootstrap
+    if (launch == null) {
+        Box(Modifier.fillMaxSize().background(colorResource(R.color.canvas_launch_background)))
+        return
+    }
+    val source = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val activeTag = launch.getString("active_tag")
+    val localized = remember(configuration, activeTag) {
+        android.content.res.Configuration(configuration).apply {
+            setLocales(android.os.LocaleList.forLanguageTags(activeTag))
+        }
+    }
+    val context = remember(source, localized) {
+        android.view.ContextThemeWrapper(source, source.theme).apply { applyOverrideConfiguration(localized) }
+    }
+    CompositionLocalProvider(LocalContext provides context, LocalConfiguration provides localized) {
+        CapyWorkspace(host, launch)
+    }
+}
+@Composable private fun CapyWorkspace(host: CanvasHost, launch: JSONObject) {
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val snapshot = host.snapshot
@@ -118,7 +141,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         }
     }
     val textSize = (host.catalog.optDouble("text_size_pt", 11.0) * 4 / 3).sp
-    val textStyle = remember(textSize) { TextStyle(fontSize = textSize, lineHeight = 18.sp, letterSpacing = 0.sp) }
+    val textStyle = remember(textSize, launch.getString("active_tag")) { TextStyle(fontSize = textSize, lineHeight = 18.sp, letterSpacing = 0.sp,
+        localeList = androidx.compose.ui.text.intl.LocaleList(launch.getString("active_tag"))) }
     val typography = remember(textStyle) { Typography().copy(bodyLarge = textStyle, bodyMedium = textStyle,
         bodySmall = textStyle, labelLarge = textStyle.copy(fontWeight = FontWeight.Bold),
         labelMedium = textStyle, labelSmall = textStyle,
@@ -170,10 +194,10 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         snapshot?.objectOrNull("preferences") == null && it.isNotEmpty() && it != "null"
                     }?.let { control ->
                         AlertDialog(onDismissRequest = { host.customize(obj("type" to "close_control")) },
-                            title = { Text(if (control == "brush_color") "Color" else "Opacity") },
+                            title = { Text(if (control == "brush_color") host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("color") else host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("opacity")) },
                             text = { Column {
                                 if (control == "brush_color") ColorControls(host)
-                                else NumericSetting("Opacity", state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
+                                else NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("opacity"), state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
                                     host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
                                 }
                             } }, confirmButton = { TextButton({ host.customize(obj("type" to "close_control")) }) { Text("Done") } })
@@ -253,6 +277,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         } }, modifier = Modifier.fillMaxSize(), update = { view ->
             // AndroidView resolves its own icon outside Compose's descendant
             // override. Keep the active workspace cursor over bare canvas too.
+            view.contentDescription = host.bootstrap?.getString("drawing_canvas")
             view.pointerIcon = AndroidPointerIcon.getSystemIcon(view.context, dock.dragCursor ?: AndroidPointerIcon.TYPE_NULL)
         })
         // SurfaceView punches through the window background. Cover its empty
@@ -263,15 +288,15 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         }
         if (snapshot != null && !snapshot.optBoolean("brush_ready") && host.failure == null) {
             Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp), shape = SurfaceShape, tonalElevation = 3.dp) {
-                Text(if (snapshot.optBoolean("canvas_ready")) "Preparing brush…" else "Preparing canvas…", Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                Text(host.bootstrap!!.getString(if (snapshot.optBoolean("canvas_ready")) "preparing_brush" else "preparing_canvas"), Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
         }
         host.failure?.let { message ->
             Surface(Modifier.align(Alignment.Center).widthIn(max = 440.dp).padding(24.dp), shape = RoundedCornerShape(16.dp), shadowElevation = 8.dp) {
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Could not initialize canvas", style = MaterialTheme.typography.titleLarge)
+                    Text(host.bootstrap!!.getString("canvas_init_failed"), style = MaterialTheme.typography.titleLarge)
                     Text(message)
-                    TextButton({ host.restartCanvas() }) { Text("Restart Canvas") }
+                    TextButton({ host.restartCanvas() }) { Text(host.bootstrap!!.getString("restart_canvas")) }
                 }
             }
         }

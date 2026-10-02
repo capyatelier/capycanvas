@@ -148,3 +148,8 @@ controls, keyboard editing, the 640×480 minimum window, spacing in both themes,
 hold menus, caption cancellation, drawer dismissal, slide-to-remove (run at 1×
 and 2×), overflow drags, the empty center target and window actions. Inspect
 their screenshots as well as their assertions.
+
+Shared header and menu projections use the session’s launch language. Hosts use
+the retained header-item label and toolbar tile choice for presented captions;
+component and zone identities stay independent of their translated labels.
+Custom toolbar names remain literal.

@@ -1,3 +1,4 @@
+import {composingKey} from "./text-input.js";
 import {strokeRecordingControl} from './stroke-recording.js';
 import {colorButton, colorCss} from './color-controls.js';
 import {filterPreviewView} from './filter-previews.js';
@@ -10,7 +11,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   const searchButton=button("",()=>{pickerAction({op:"toggle_search"});if(!search.hidden)search.focus();});searchButton.append(icon("search"));
   category.onchange=()=>pickerAction({op:"category",category:category.value||null});
   search.type="search";search.maxLength=120;search.oninput=()=>pickerAction({op:"search",query:search.value});
-  search.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
+  search.onkeydown=e=>{if(composingKey(e))return;e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
   const categoryIcon=element("span","filter-category-icon");
   pickerHeader.append(categoryIcon,category,search,searchButton);adjustments.append(pickerHeader,list);
   const types=element("div","filter-types");types.dataset.control="filter_types";

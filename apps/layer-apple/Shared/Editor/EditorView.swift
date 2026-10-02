@@ -22,6 +22,12 @@ struct EditorView<Canvas: View>: View {
             if !store.canvasSubmitted {
                 palette["bg"].ignoresSafeArea().allowsHitTesting(false)
             }
+            if !store.canvasSubmitted && store.failure == nil && store.snapshot["error"].isNull && !store.bootstrap.isNull {
+                ProgressView(store.bootstrap[store.restartingCanvas ? "restarting_canvas" :
+                    store.snapshot["brush_ready"].bool ? "preparing_canvas" : "preparing_brush"].string)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("canvas-startup")
+            }
             // Controls need both the live values and their shared specifications.
             if !store.state.isNull && !store.catalog.isNull {
                 if !store.snapshot["chrome_hidden"].bool { EditorHeader(store: store) }
@@ -55,18 +61,18 @@ struct EditorView<Canvas: View>: View {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(12).placed(store.snapshot["layout"]["work_area"])
-            if let failure = store.failure ?? (store.snapshot["error"].isNull ? nil : store.snapshot["error"].string) {
+            if store.failure != nil || !store.snapshot["error"].isNull {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Canvas error").font(.headline)
-                    Text(failure).textSelection(.enabled)
+                    Text(store.bootstrap[store.snapshot["gpu_ready"].bool ? "action_failed" : "canvas_init_failed"].string)
+                        .font(.headline).accessibilityIdentifier("Canvas error")
                     if !store.snapshot["gpu_ready"].bool {
                         HStack {
-                            Button("Restart Canvas") { store.restartCanvas() }.disabled(store.restartingCanvas)
-                            Button("Save As…") { store.invoke("save_document_as") }
+                            Button(store.bootstrap["restart_canvas"].string) { store.restartCanvas() }.disabled(store.restartingCanvas).accessibilityIdentifier("Restart Canvas")
+                            Button(store.command("save_document_as")["label"].string) { store.invoke("save_document_as") }
                                 .disabled(!store.command("save_document_as")["enabled"].bool)
                         }
                     } else {
-                        Button("Dismiss") { store.failure = nil }
+                        Button(store.bootstrap["ok"].string) { store.failure = nil }
                     }
                 }.padding(24).frame(maxWidth: 500).background(palette["panel"], in: RoundedRectangle(cornerRadius: 12))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -128,6 +134,10 @@ struct EditorView<Canvas: View>: View {
                 .modifier(EditorPresentationAppearance())
         }
         .environment(\.editorPopupStore, store)
+        .environment(\.capyInterfaceLanguage, store.interfaceLanguage)
+        .environment(\.capyNativeCopy, store.catalog["native_copy"])
+        .environment(\.capyCommonCopy, store.bootstrap["common"])
+        .environment(\.locale, store.interfaceLanguage.isEmpty ? Locale.current : Locale(identifier: store.interfaceLanguage))
         .environment(\.editorPalette, palette)
         .environment(\.glassRegistry, store.glass)
         .environment(\.colorScheme, store.state.isNull ? colorScheme : store.state["theme"].string == "dark" ? .dark : .light)

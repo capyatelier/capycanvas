@@ -233,7 +233,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             input
         );
         let pq_recipe = layer_ui::ExportRecipe::web_share()
-            .draft(layer_ui::ExportDraftAction::Format(
+            .draft_canonical(layer_ui::ExportDraftAction::Format(
                 layer_ui::ExportFormat::PngHdr,
             ))
             .recipe;
@@ -260,11 +260,11 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             layer_ui::ExportFormat::AvifHdrMapped,
         ] {
             let mut recipe = layer_ui::ExportRecipe::web_share()
-                .draft_for_color(color, layer_ui::ExportDraftAction::Format(format))
+                .draft_for_color_canonical(color, layer_ui::ExportDraftAction::Format(format))
                 .recipe;
             if format.gainmap() == Some(layer_color::photo::GainMapFormat::Jpeg) {
                 recipe = recipe
-                    .draft_for_color(
+                    .draft_for_color_canonical(
                         color,
                         layer_ui::ExportDraftAction::Background(layer_ui::ExportBackground::White),
                     )

@@ -12,7 +12,7 @@ $checks=[ordered]@{}
 function Visible([string]$Id){$item=Find $Id;if($item -and !$item.Current.IsOffscreen){$item}}
 function Size {((Model).state.tool_settings|Where-Object id -eq 'size').value}
 function Canvas-Point([double]$FractionX,[double]$FractionY){
- $canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+ $canvas=(Find 'drawing-canvas').Current.BoundingRectangle
  @([int]($canvas.X+$canvas.Width*$FractionX),[int]($canvas.Y+$canvas.Height*$FractionY))
 }
 function Open-Search {
@@ -40,11 +40,12 @@ try {
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Command search review did not start'
  [CapyRowPointer]::Initialize([uint32]$review.Id)
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
- Wait-Until {Find 'Drawing canvas' -Name} 'Drawing canvas did not appear' 10
- (Find 'Drawing canvas' -Name).SetFocus()
+ Wait-Until {Find 'drawing-canvas'} 'Drawing canvas did not appear' 10
+ if((Find 'drawing-canvas').Current.Name -ne 'Drawing canvas' -or (Find 'drawing-canvas').Current.HelpText -ne 'Drawing canvas. Draw with a mouse or pen; use two fingers to pan, rotate and zoom.'){throw 'Canvas accessibility label or help differs from the English launch fixture'}
+ (Find 'drawing-canvas').SetFocus()
 
  Open-Search
- $frame=(Find 'command-bar').Current.BoundingRectangle;$canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+ $frame=(Find 'command-bar').Current.BoundingRectangle;$canvas=(Find 'drawing-canvas').Current.BoundingRectangle
  $window=$root.Current.BoundingRectangle;$scale=$canvas.Width/(Model).layout.viewport[0]
  $expectedWidth=[Math]::Min(560,[Math]::Max(240,$window.Width/$scale-48))
  if([Math]::Abs($frame.Width/$scale-$expectedWidth) -gt 8){throw "Command bar width $($frame.Width/$scale) differs from $expectedWidth"}
@@ -70,7 +71,7 @@ try {
  Key 0x0D
  Closed
  Wait-Until {(Size) -eq 30} 'Parameter entry did not set the brush size' 5
- if([System.Windows.Automation.AutomationElement]::FocusedElement.Current.Name -ne 'Drawing canvas'){throw 'Closing did not restore canvas focus'}
+ if([System.Windows.Automation.AutomationElement]::FocusedElement.Current.AutomationId -ne 'drawing-canvas'){throw 'Closing did not restore canvas focus'}
  $checks.parameter_entry_and_back='passed'
 
  Open-Search
@@ -130,7 +131,7 @@ try {
  Key 0x1B
  Closed
  Wait-Until {[System.Windows.Automation.AutomationElement]::FocusedElement.Current.AutomationId -eq $swatch.item.Current.AutomationId} 'Closing did not restore palette focus' 5
- (Find 'Drawing canvas' -Name).SetFocus()
+ (Find 'drawing-canvas').SetFocus()
  Open-Search
  Query 'undo'
  Wait-Until {(Row 0) -and (Row 0).Current.Name -eq 'Undo'} 'Canvas focus did not restore artwork Undo' 5

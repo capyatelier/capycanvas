@@ -6,6 +6,8 @@ mod display;
 mod android;
 #[cfg(target_os = "android")]
 mod app;
+#[cfg(any(target_os = "android", test))]
+mod launch;
 #[cfg(target_os = "android")]
 mod workspaces;
 
@@ -34,3 +36,6 @@ mod proof;
 
 #[cfg(target_os = "android")]
 mod hdr;
+
+#[cfg(test)]
+mod launch_tests;

@@ -35,7 +35,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     bool renaming=false,committing=false;
     winrt::event_token renameFocus{};
     void focusRename();
-    hstring imageKey,iconKey;
+    hstring imageKey,iconKey,captionTitle;
     J model()const;
     bool current()const;
     bool clickAllowed()const;

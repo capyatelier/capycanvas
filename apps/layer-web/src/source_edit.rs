@@ -75,6 +75,7 @@ impl WebApp {
         let control = control.inner.clone();
         let background = s.engine().view().background_rgba_linear;
         let time = s.engine().animation_time();
+        let localization = s.localization().clone();
         Ok(future_to_promise(async move {
             output::cancelled(&control)?;
             let (converted, clipped, name) = if workflow.rasterize() {
@@ -107,8 +108,8 @@ impl WebApp {
                     .as_f64()
                     .unwrap_or(0.) as u64;
                 let name = js_sys::Reflect::get(&result, &js("source_profile"))?
-                    .as_string()
-                    .unwrap_or_default();
+                    .as_string();
+                let name = layer_ui::profile_library::profile_description_name(name, &localization);
                 let converted = raster_project::unpack(&metadata, buffers, true)
                     .await?
                     .document
@@ -133,8 +134,8 @@ impl WebApp {
                 )?)
                 .map_err(js)?;
                 let name = js_sys::Reflect::get(&result, &js("source_profile"))?
-                    .as_string()
-                    .unwrap_or_default();
+                    .as_string();
+                let name = layer_ui::profile_library::profile_description_name(name, &localization);
                 source.validate().map_err(js)?;
                 (Arc::new(source), 0, name)
             };
@@ -189,7 +190,7 @@ pub fn raster_worker_source_profile(metadata: &str) -> Result<JsValue, JsValue> 
         profile: ColorProfile,
     }
     let mut request: Request = serde_json::from_str(metadata).map_err(js)?;
-    let name = layer_color::profile_description(&request.interpretation.profile).map_err(js)?;
+    let name = layer_color::profile_description_optional(&request.interpretation.profile).map_err(js)?;
     request.interpretation = layer_color::repair_source_interpretation(request.interpretation, request.color.space, request.profile).map_err(js)?;
     serialize(&serde_json::json!({"interpretation":request.interpretation,"source_profile":name}))
 }
@@ -203,7 +204,7 @@ pub async fn raster_worker_source_rasterize(
         .source
         .as_ref()
         .ok_or_else(|| js("No source"))?;
-    let name = layer_color::profile_description(&source.interpretation.profile).map_err(js)?;
+    let name = layer_color::profile_description_optional(&source.interpretation.profile).map_err(js)?;
     let (converted, statistics) =
         layer_color::rasterize_source(source, project.document.color, raster_project::photo_memory_budget().encode_bytes, || false)
             .map_err(js)?;
@@ -214,6 +215,6 @@ pub async fn raster_worker_source_rasterize(
         &js("clipped"),
         &JsValue::from_f64(statistics.clipped_channels as f64),
     )?;
-    js_sys::Reflect::set(&wire, &js("source_profile"), &js(name))?;
+    js_sys::Reflect::set(&wire, &js("source_profile"), &serialize(&name)?)?;
     Ok(wire)
 }

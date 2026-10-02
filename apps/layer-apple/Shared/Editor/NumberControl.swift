@@ -11,10 +11,12 @@ struct NumberControl: View {
     var inline = false
     var entryWidth: CGFloat = 48
     var toolbar: Toolbar? = nil
+    var registerAdmission: ((String, ((Bool) -> Bool)?) -> Void)? = nil
     var gestureChange: ((String, Double, @escaping @MainActor (String?) -> Void) -> Void)? = nil
     let change: (Double, @escaping @MainActor (String?) -> Void) -> Void
     @State private var field = NumericEditState()
     @State private var formatted = JSON()
+    @State private var numericLabels = JSON()
     @State private var showsEntry = false
     @State private var horizontalDrag: Bool?
     @GestureState private var contact = false
@@ -81,11 +83,13 @@ struct NumberControl: View {
             }
         }
         .modifier(NumberControlMeasurement(id: key + ":root"))
-        .onAppear { field.receive(value); format(); measureInlineRange() }
-        .onChange(of: value) { _, next in field.receive(next); format() }
+        .onAppear { field.receive(value); format(); measureInlineRange(); registerAdmission?(key, admit) }
+        .onChange(of: label, initial: true) { _, next in numericLabels = NativeTextContext.numericLabels(next) }
+        .onChange(of: value) { _, next in field.receive(next); format(); registerAdmission?(key, admit) }
+        .onChange(of: control.stableKey) { _, _ in registerAdmission?(key, admit) }
         .onChange(of: contact) { _, active in if !active { cancelDrag() } }
         .onChange(of: enabled) { _, active in if !active { cancelDrag() } }
-        .onDisappear(perform: cancelDrag)
+        .onDisappear { registerAdmission?(key, nil); cancelDrag() }
         .onChange(of: editing) { _, focused in
             if focused {
                 if !field.dirty { field.text = formatted["edit"].string }
@@ -146,7 +150,7 @@ struct NumberControl: View {
             }.accessibilityIdentifier("number-track-" + key)
     }
     private var numericEntry: some View {
-        NumericTextField(label: label,
+        NumericTextField(label: numericLabels["edit"].string,
             text: Binding(get: { field.text }, set: { field.text = $0; field.dirty = true }),
             focused: $editing, fontSize: max(1, store.catalog["text_size_pt"].number * 4 / 3),
             color: palette["text"], identifier: "number-entry-" + key,
@@ -184,7 +188,7 @@ struct NumberControl: View {
         }.buttonStyle(EditorControlButtonStyle()).opacity(active ? 1 : 0.36)
             .modifier(NumberControlMeasurement(id: key + (direction < 0 ? ":minus" : ":plus")))
             .disabled(!active)
-            .accessibilityLabel((direction < 0 ? "Decrease " : "Increase ") + label)
+            .accessibilityLabel(numericLabels[direction < 0 ? "decrease" : "increase"].string)
             .accessibilityIdentifier("number-\(direction < 0 ? "decrease" : "increase")-" + key)
     }
     private func format() {
@@ -208,7 +212,12 @@ struct NumberControl: View {
         if !result["error"].isNull { throw HostFailure(message: result["error"].string) }
         return result
     }
+    private func admit(_ discard: Bool) -> Bool {
+        if discard { cancel(); return true }
+        return commit()
+    }
     @discardableResult private func commit() -> Bool {
+        guard !NativeTextContext.composing else { return false }
         guard field.dirty else { return true }
         return resolve(["type": "expression", "text": field.text])
     }

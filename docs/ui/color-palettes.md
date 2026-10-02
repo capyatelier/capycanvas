@@ -265,3 +265,5 @@ Android runs `art.capycanvas.AndroidPaletteTest`; `-e paletteBenchmark true`
 records frames during a steady stylus drag and `-e paletteDirectory <device dir>`
 imports every pushed sample file. Mac runs `EditorLaunchTests/testPalettes`.
 Injected tablet input does not qualify physical stylus popups or holds.
+
+Generated palette and color names use the active interface language when they are created. Saved names, imported names and names you edit stay as written. Starter palettes replace only the untouched fresh palette; restoring a workspace preserves every saved palette, even one named “My colors”.

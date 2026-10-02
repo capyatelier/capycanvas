@@ -580,6 +580,7 @@ import UIKit
 
 struct ProjectFilesModifier: ViewModifier {
     @ObservedObject var files: ProjectFiles
+    @Environment(\.capyCommonCopy) private var common
     func body(content: Content) -> some View {
         content.allowsHitTesting(!files.blocksEditor)
             .overlay(alignment: .bottom) {
@@ -587,7 +588,7 @@ struct ProjectFilesModifier: ViewModifier {
                     HStack {
                         ProgressView().controlSize(.small)
                         Text(files.cancelling ? "Cancelling…" : "Working with document…")
-                        Button("Cancel") { files.cancel() }.disabled(files.cancelling)
+                        Button(common["cancel"].string) { files.cancel() }.disabled(files.cancelling)
                     }.padding(10).modifier(EditorPopupSurface(shape: Capsule())).padding(12)
                 }
             }
@@ -595,9 +596,9 @@ struct ProjectFilesModifier: ViewModifier {
                 isPresented: Binding(get: { files.confirming || files.error != nil }, set: { if !$0 { files.dismissAlert() } })) {
                 if files.error != nil { Button("OK", role: .cancel) { files.error = nil } }
                 else {
-                    Button("Save") { files.choose("save") }
+                    Button(common["save"].string) { files.choose("save") }
                     Button("Discard Changes", role: .destructive) { files.choose("discard") }
-                    Button("Cancel", role: .cancel) { files.choose("cancel") }
+                    Button(common["cancel"].string, role: .cancel) { files.choose("cancel") }
                 }
             } message: { if let error = files.error { Text(error) } }
             .sheet(isPresented: $files.creating, onDismiss: { files.created(nil) }) {

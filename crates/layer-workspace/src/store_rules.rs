@@ -6,52 +6,34 @@ type Result<T> = std::result::Result<T, StoreError>;
 pub(crate) fn advance(value: u64) -> Result<u64> {
     value
         .checked_add(1)
-        .ok_or_else(|| StoreError::invalid("Workspace generation exhausted."))
+        .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::WorkspaceGenerationExhausted))
 }
 pub(crate) fn parse_counter(text: &str) -> Result<u64> {
     text.parse()
-        .map_err(|_| StoreError::invalid("Invalid workspace generation."))
+        .map_err(|_| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InvalidWorkspaceGeneration))
 }
 pub(crate) fn not_found() -> StoreError {
-    StoreError::new(
-        ErrorKind::NotFound,
-        "This workspace item is no longer available.",
-    )
+    StoreError::known(ErrorKind::NotFound, WorkspaceRefusal::ThisWorkspaceItemIsNoLongerAvailable)
 }
 pub(crate) fn missing_resource() -> StoreError {
-    StoreError::invalid("A referenced workspace resource is missing.")
+    StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::AReferencedWorkspaceResourceIsMissing)
 }
 pub(crate) fn recovered_elsewhere() -> StoreError {
-    StoreError::new(
-        ErrorKind::Conflict,
-        "These interrupted changes were already recovered into an independent item.",
-    )
+    StoreError::known(ErrorKind::Conflict, WorkspaceRefusal::TheseInterruptedChangesWereAlreadyRecoveredIntoAnIndependentItem)
 }
 pub(crate) fn already_saved() -> StoreError {
-    StoreError::new(
-        ErrorKind::Conflict,
-        "The interrupted changes already finished saving. Refresh the manager to view them.",
-    )
+    StoreError::known(ErrorKind::Conflict, WorkspaceRefusal::TheInterruptedChangesAlreadyFinishedSaving)
 }
 /// Only a reset replaces a store, and never a newer one: a window still running
 /// an older build must not discard the newer build's workspaces.
 pub(crate) fn newer_schema() -> StoreError {
-    StoreError::new(
-        ErrorKind::UnsupportedSchema,
-        "A newer version of Capy Canvas updated workspace storage. Reload or update Capy Canvas to continue.",
-    )
+    StoreError::known(ErrorKind::UnsupportedSchema, WorkspaceRefusal::ANewerVersionOfCapyCanvasUpdatedWorkspaceStorage)
 }
 pub(crate) fn other_schema() -> StoreError {
-    StoreError::new(
-        ErrorKind::UnsupportedSchema,
-        "Workspace storage was written by an earlier version of Capy Canvas.",
-    )
+    StoreError::known(ErrorKind::UnsupportedSchema, WorkspaceRefusal::WorkspaceStorageWasWrittenByAnEarlierVersionOfCapyCanvas)
 }
 pub(crate) fn owned_elsewhere() -> StoreError {
-    StoreError::new(
-        ErrorKind::OwnedElsewhere,
-        "This workspace is open in another window. Switch to that window or duplicate it.",
-    )
+    StoreError::known(ErrorKind::OwnedElsewhere, WorkspaceRefusal::ThisWorkspaceIsOpenInAnotherWindow)
 }
 pub(crate) fn claim_fence(
     claim: Option<&Claim>,
@@ -87,16 +69,11 @@ pub(crate) fn update_preference(
         return Ok(false);
     }
     if current != expected.as_ref() {
-        return Err(StoreError::new(
-            ErrorKind::Conflict,
-            "Workspace preferences changed in another window. Try again.",
-        ));
+        return Err(StoreError::known(ErrorKind::Conflict, WorkspaceRefusal::WorkspacePreferencesChangedInAnotherWindow));
     }
     for id in ids {
         if !is_workspace(id)? {
-            return Err(StoreError::invalid(
-                "This workspace is no longer available.",
-            ));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisWorkspaceIsNoLongerAvailable));
         }
     }
     Ok(true)
@@ -107,20 +84,18 @@ pub(crate) fn validate_payload(
 ) -> Result<()> {
     for (id, json) in &batch.components {
         if content_id(json.as_bytes()) != *id {
-            return Err(StoreError::invalid("Invalid workspace component."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InvalidWorkspaceComponent));
         }
     }
     let mut ids = std::collections::BTreeSet::new();
     for write in &batch.writes {
         if !ids.insert(&write.id) {
-            return Err(StoreError::invalid(
-                "An item may only be written once in one operation.",
-            ));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::AnItemMayOnlyBeWrittenOnceInOneOperation));
         }
         if let Some(metadata) = &write.metadata {
             metadata.validate()?;
             if write.metadata_json.as_deref() != Some(&serde_json::to_string(metadata)?) {
-                return Err(StoreError::invalid("Inconsistent metadata payload."));
+                return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InconsistentMetadataPayload));
             }
         }
         if let Some(content) = &write.content_json {
@@ -142,9 +117,7 @@ pub(crate) fn check_update(
             return Err(StoreError::conflict());
         }
         if stored.builtin {
-            return Err(StoreError::invalid(
-                "Included workspaces cannot be deleted.",
-            ));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::IncludedWorkspacesCannotBeDeleted));
         }
         return Ok(());
     }
@@ -156,18 +129,14 @@ pub(crate) fn check_update(
     }
     if let Some(metadata) = &write.metadata {
         if metadata.kind != stored.kind || metadata.builtin != stored.builtin {
-            return Err(StoreError::invalid("Item type cannot change."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ItemTypeCannotChange));
         }
         if stored.builtin && metadata.name != stored.name {
-            return Err(StoreError::invalid(
-                "Included workspaces cannot be renamed.",
-            ));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::IncludedWorkspacesCannotBeRenamed));
         }
     }
     if write.working_json.is_some() && stored.kind != ItemKind::Workspace {
-        return Err(StoreError::invalid(
-            "Reusable items cannot store working values.",
-        ));
+        return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ReusableItemsCannotStoreWorkingValues));
     }
     Ok(())
 }
@@ -180,10 +149,7 @@ pub(crate) fn apply_name_policy(
         NamePolicy::Unique => metadata.name = available_name(&metadata.name, exists)?,
         NamePolicy::Exact => {
             if exists(&name_key(&metadata.name))? {
-                return Err(StoreError::new(
-                    ErrorKind::NameCollision,
-                    "An item with this name already exists.",
-                ));
+                return Err(StoreError::known(ErrorKind::NameCollision, WorkspaceRefusal::AnItemWithThisNameAlreadyExists));
             }
         }
     }
@@ -196,9 +162,7 @@ pub(crate) fn check_binding(
     now: u64,
 ) -> Result<()> {
     if !workspace {
-        return Err(StoreError::invalid(
-            "The replacement workspace is unavailable.",
-        ));
+        return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::TheReplacementWorkspaceIsUnavailable));
     }
     let fence = claim.ok_or_else(StoreError::conflict)?.fence;
     check_claim(claim, owner, fence, now)
@@ -206,17 +170,18 @@ pub(crate) fn check_binding(
 pub(crate) fn summary_fallback(
     id: String,
     kind: Option<&str>,
-    name: &str,
+    name: Option<&str>,
     builtin: bool,
     generations: Generations,
     claim: Option<Claim>,
-    error: String,
+    error: StoreError,
 ) -> ItemSummary {
     let kind = match kind {
         Some("toolbar") => ItemKind::Toolbar,
         _ => ItemKind::Workspace,
     };
-    let mut metadata = Metadata::new(kind, name, 0);
+    let mut metadata = Metadata::new(kind, name.unwrap_or_default(), 0);
+    metadata.name = name.unwrap_or_default().into();
     metadata.builtin = builtin;
     ItemSummary {
         id,
@@ -224,5 +189,6 @@ pub(crate) fn summary_fallback(
         generations,
         claim,
         error: Some(error),
+        unavailable_name: name.is_none(),
     }
 }

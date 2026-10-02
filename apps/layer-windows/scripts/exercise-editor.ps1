@@ -49,7 +49,7 @@ function Set-Viewport {
     # canvas delta instead of assuming a fixed frame thickness.
     for($attempt=0;$attempt -lt 3;$attempt++){
         $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
-        $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+        $canvas=(Control 'drawing-canvas').Current.BoundingRectangle
         $dx=[Math]::Round(986*$scale-$canvas.Width);$dy=[Math]::Round(658*$scale-$canvas.Height)
         if([Math]::Abs($dx) -lt 1 -and [Math]::Abs($dy) -lt 1){return}
         $window=[CapyEditorWindow+Rect]::new()
@@ -62,7 +62,7 @@ function Set-Viewport {
 function Capture([string]$Name){
     & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
     $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
-    $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+    $canvas=(Control 'drawing-canvas').Current.BoundingRectangle
     $origin=[CapyRowPointer+Point]::new()
     if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Cannot locate client origin'}
     $bitmap=[Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')))
@@ -78,7 +78,7 @@ function Command([string]$Id){(Model).state.commands|Where-Object id -eq $Id}
 function Set-Zen {
     $button=Find (Command 'zen_mode').label -Name -Type ([System.Windows.Automation.ControlType]::Button)
     if($button){$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
-    else{(Control 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)}
+    else{(Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)}
 }
 function Check-Rect($Control,$Box,[double]$X=0,[double]$Y=0){
     $origin=[CapyRowPointer+Point]::new()
@@ -144,7 +144,7 @@ function Preferences {
 }
 function Close-Preferences($Dialog){
     (Control 'Close' -Name -Within $Dialog -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {$null -eq (Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Preferences did not release canvas'
+    Wait-Until {$null -eq (Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'drawing-canvas').Current.IsEnabled} 'Preferences did not release canvas'
 }
 try{
     Enter-CapyEnvironment
@@ -180,7 +180,7 @@ try{
         }
         $true
     } 'Initial layer thumbnails did not reach the native controls' 20
-    (Control 'Drawing canvas' -Name).SetFocus()
+    (Control 'drawing-canvas').SetFocus()
     Start-Sleep -Milliseconds 350
     Capture 'editor-dark'
     [IO.File]::WriteAllText((Join-Path $run 'editor-model.json'),($model|ConvertTo-Json -Depth 100))
@@ -189,7 +189,7 @@ try{
     if(((Model).panel_measurements|ConvertTo-Json -Compress) -ne $measured){throw 'Native measurements did not settle'}
     & (Join-Path $PSScriptRoot 'exercise-tools.ps1') -ProcessId $review.Id -StateFile (State-File)
     $normal=(Model).layout|ConvertTo-Json -Compress -Depth 70
-    $retained=(Control 'Drawing canvas' -Name).GetRuntimeId() -join ':'
+    $retained=(Control 'drawing-canvas').GetRuntimeId() -join ':'
     $generation=(Model).windows_gpu_generation
     Set-Zen
     Wait-Until {(Model).chrome_hidden} 'Full Zen did not hide workspace chrome'
@@ -198,7 +198,7 @@ try{
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 900 -Height 720
     Start-Sleep -Milliseconds 400
     Check-Zen
-    if(((Control 'Drawing canvas' -Name).GetRuntimeId() -join ':') -ne $retained -or (Model).windows_gpu_generation -ne $generation){throw 'Zen resize replaced the native canvas or its device'}
+    if(((Control 'drawing-canvas').GetRuntimeId() -join ':') -ne $retained -or (Model).windows_gpu_generation -ne $generation){throw 'Zen resize replaced the native canvas or its device'}
     Capture 'zen-narrow'
     Set-Viewport
     Set-Zen

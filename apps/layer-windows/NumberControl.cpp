@@ -12,16 +12,21 @@ struct NumberState {
 };
 }
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
-    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits,bool valueOnly,hstring const& identifier,bool inlineTrack,NumberPresentation const& presentation){
+    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits,bool valueOnly,hstring const& identifier,bool inlineTrack,NumberPresentation const& presentation,NumericAdmissions* admissions){
+    auto labelRequest=to_string(O({{L"label",S(title)}}).Stringify());
+    std::unique_ptr<char,decltype(&capy_string_free)> rawLabels(capy_numeric_labels(data->localization.get(),labelRequest.c_str()),capy_string_free);
+    if(!rawLabels)throw hresult_error(E_OUTOFMEMORY);
+    auto numericLabels=J::Parse(to_hstring(rawLabels.get()));
+    if(numericLabels.HasKey(L"error"))throw hresult_invalid_argument(str(numericLabels,L"error"));
     auto local=std::make_shared<NumberState>();local->value=get();
     if(presentation.identity)local->identity=presentation.identity();
-    local->resolve=presentation.resolve?presentation.resolve:decltype(local->resolve)(numeric);
+    local->resolve=presentation.resolve?presentation.resolve:decltype(local->resolve)([localization=data->localization](J const& spec,double value,J const& operation){return numeric(localization.get(),spec,value,operation);});
     bool ranged=str(spec,L"kind")==L"slider",preference=presentation.preference;
     double valueHeight=preference?34.:(ranged?24.:32.),stepSize=ranged&&!preference?24.:32.;
     StackPanel root;root.Spacing(0);
     auto numberId=identifier.empty()?title:identifier;
     AutomationProperties::SetAutomationId(root,L"number-root-"+numberId);
-    AutomationProperties::SetName(root,title+L" numeric control");
+    AutomationProperties::SetName(root,title);
     Grid header;header.UseLayoutRounding(false);header.ColumnSpacing(6);header.MinHeight(valueHeight);ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
     ColumnDefinition right;right.Width({1,GridUnitType::Auto});header.ColumnDefinitions().Append(right);
     auto text=label(data,title);text.Margin(Thickness{preference?0.:6.,0,0,0});text.VerticalAlignment(VerticalAlignment::Center);
@@ -36,7 +41,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     header.Children().Append(labels);
     TextBox entry;entry.UseLayoutRounding(false);entry.Width(ranged?72:60);entry.MinWidth(0);entry.MinHeight(0);entry.Height(valueHeight);entry.Padding(Thickness{preference?9.:6.,(valueHeight-20)/2,preference?9.:6.,(valueHeight-20)/2});
     entry.VerticalAlignment(VerticalAlignment::Center);entry.VerticalContentAlignment(VerticalAlignment::Center);
-    entry.FontSize(data->textSize());entry.FontFamily(FontFamily(L"Segoe UI"));entry.Foreground(data->brush(L"text"));
+    inheritLanguage(entry,data);entry.FontSize(data->textSize());entry.FontFamily(FontFamily(L"Segoe UI"));entry.Foreground(data->brush(L"text"));
     entry.Background(data->brush(L"input"));entry.BorderThickness(Thickness{0});entry.CornerRadius({6,6,6,6});
     entry.Resources().Insert(box_value(L"TextControlBackgroundDisabled"),clear());
     auto disabledText=clear(),hiddenText=clear();
@@ -64,7 +69,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             if(auto view=readout.get())view.Opacity(sender.as<TextBox>().IsEnabled()?1.:.36);
         });
     }else header.Children().Append(entry);
-    AutomationProperties::SetName(entry,title);if(!identifier.empty())AutomationProperties::SetAutomationId(entry,identifier);
+    AutomationProperties::SetName(entry,str(numericLabels,L"edit"));if(!identifier.empty())AutomationProperties::SetAutomationId(entry,identifier);
     auto measureText=[data,local](hstring const& value){
         // Routine model updates retain the measured extent of unchanged text.
         if(local->measuredWidth>=0&&local->measuredText==value)return local->measuredWidth;
@@ -128,7 +133,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     for(auto key:{L"SliderTrackFill",L"SliderTrackFillPointerOver",L"SliderTrackFillPressed",L"SliderTrackFillDisabled"})
         slider.Resources().Insert(box_value(key),data->brush(L"input"));
     auto commit=[data,local,spec,get,set,setText,identity=presentation.identity,weak=make_weak(entry)](bool cancel){
-        auto entry=weak.get();if(!entry||!local->editing)return;
+        auto entry=weak.get();if(!cancel&&entry&&textComposing(entry))return false;
+        if(!entry||!local->editing)return true;
         if(identity && local->identity!=identity()){
             local->identity=identity();local->value=get();cancel=true;
         }
@@ -140,12 +146,15 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             setText(str(next,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));entry.BorderThickness(Thickness{0});
             ToolTipService::SetToolTip(entry,nullptr);
             if(!cancel&&changed)set(local->value);
+            return true;
         }catch(hresult_error const& error){
             entry.BorderThickness(Thickness{1,1,1,1});entry.BorderBrush(fill({255,221,85,85}));
             tooltip(entry,error.message());
+            return false;
         }
     };
     if(commits)commits->emplace_back([commit]{commit(false);});
+    if(admissions)admissions->emplace_back(commit);
     entry.GotFocus([data,local,spec,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
         auto entry=sender.as<TextBox>();entry.Background(data->brush(L"input"));
         if(!local->editing){setText(str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),L"edit"));}
@@ -158,14 +167,16 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         if(!local->editing)setText(str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),L"text"));
     });
     entry.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){
+        if(composingKey(e))return;
         if(e.Key()==Windows::System::VirtualKey::Enter){commit(false);e.Handled(true);}
         else if(e.Key()==Windows::System::VirtualKey::Escape){commit(true);e.Handled(true);}
     });
     // TextBox consumes some arrow keys before the bubbling KeyDown event.
     // Numeric spin steps must take precedence over its caret navigation.
     if(!ranged)entry.PreviewKeyDown([commit,local,spec,set](auto&&,KeyRoutedEventArgs const& e){
+        if(composingKey(e))return;
         if(e.Key()!=Windows::System::VirtualKey::Up&&e.Key()!=Windows::System::VirtualKey::Down)return;
-        e.Handled(true);commit(false);if(local->editing)return;
+        e.Handled(true);if(!commit(false))return;
         auto next=local->resolve(spec,local->value,O({{L"type",S(L"step")},{L"steps",N(e.Key()==Windows::System::VirtualKey::Up?1:-1)}}));
         local->value=num(next,L"value");set(local->value);
     });
@@ -227,8 +238,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     Grid trackRow;trackRow.ColumnSpacing(6);
     for(int i=0;i<3;i++){ColumnDefinition column;column.Width({i==1?1.:stepSize,i==1?GridUnitType::Star:GridUnitType::Pixel});trackRow.ColumnDefinitions().Append(column);}
     for(int direction:{-1,1}){
-        auto step=button(data,(direction<0?L"Decrease ":L"Increase ")+title,[local,spec,set,commit,direction]{
-            commit(false);if(local->editing)return;
+        auto step=button(data,str(numericLabels,direction<0?L"decrease":L"increase"),[local,spec,set,commit,direction]{
+            if(!commit(false))return;
             auto next=local->resolve(spec,local->value,O({{L"type",S(L"step")},{L"steps",N(direction)}}));
             local->value=num(next,L"value");set(local->value);
         });

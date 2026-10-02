@@ -18,11 +18,12 @@ impl TileWidget {
         config: &PanelConfig,
         tile: &ToolbarTile,
         style: TileStyle,
+        choice: &ToolChoice,
     ) -> Self {
         if tile.control.is_component() {
-            return Self::Component(Component::new(w, config.id, tile));
+            return Self::Component(Component::new(w, config.id, tile, choice));
         }
-        let button = customization::tile_button(w, config, tile, style);
+        let button = customization::tile_button(w, config, tile, style, choice);
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         button.add_css_class("tile-button");
         button.set_hexpand(true);
@@ -69,7 +70,16 @@ impl TileWidget {
             Self::Button { button, .. } => {
                 selected(button, tile.choice.selected);
                 button.set_sensitive(tile.enabled);
-                button.set_tooltip_text(Some(&tile.tooltip));
+                if let Some(label) = button.child().and_downcast::<gtk::Box>().and_then(|row| row.last_child()).and_downcast::<gtk::Label>()
+                    && label.text().as_str() != tile.choice.label
+                {
+                    label.set_text(&tile.choice.label);
+                }
+                if matches!(tile.choice.control, ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) {
+                    button.set_tooltip_text(Some(&w.gpu.borrow().as_ref().unwrap().session.color_picker_button_label(tile.choice.control)));
+                } else {
+                    button.set_tooltip_text(Some(&tile.tooltip));
+                }
                 if let Some(image) = button
                     .child()
                     .and_then(|child| {
@@ -509,6 +519,7 @@ pub(super) struct Component {
     pub root: ComponentBody,
     pub button: gtk::Button,
     pub control: ToolbarControl,
+    localization: std::sync::Arc<layer_ui::Localizer>,
     context: Cell<Option<ToolbarContext>>,
     contact_context: Cell<Option<ToolbarContext>>,
     updating: Cell<bool>,
@@ -521,14 +532,14 @@ pub(super) struct Component {
     fields: RefCell<Vec<Field>>,
 }
 impl Component {
-    pub fn new(w: &Rc<Workspace>, panel: Panel, tile: &ToolbarTile) -> Rc<Self> {
+    pub fn new(w: &Rc<Workspace>, panel: Panel, tile: &ToolbarTile, choice: &ToolChoice) -> Rc<Self> {
         let root: ComponentBody = glib::Object::new();
         root.set_overflow(gtk::Overflow::Hidden);
         root.add_css_class("toolbar-component");
         root.add_css_class("small-component");
         root.add_css_class("customizable-target");
         root.update_property(&[gtk::accessible::Property::Label(
-            &tool_choice(tile.control).label,
+            &choice.label,
         )]);
         let binding = tile.control.slider();
         let button = gtk::Button::new();
@@ -536,7 +547,7 @@ impl Component {
         button.set_vexpand(true);
         button.add_css_class("flat");
         button.set_widget_name(&format!("tile-{}", tile.id));
-        button.set_tooltip_text(Some(&tool_choice(tile.control).label));
+        button.set_tooltip_text(Some(&choice.label));
         let cap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         cap.append(&button);
         let target = ContextTarget::Tile {
@@ -559,7 +570,7 @@ impl Component {
             scale.set_hexpand(true);
             scale.set_widget_name(&format!("component-slider-{}", tile.id));
             scale.update_property(&[gtk::accessible::Property::Label(
-                &tool_choice(tile.control).label,
+                &choice.label,
             )]);
             root.append(&scale);
             root.imp().slider.set(true);
@@ -574,8 +585,8 @@ impl Component {
                 .options
                 .set(tile.control.options_style().unwrap());
             button.set_child(Some(&crate::icons::image("layer-more-symbolic")));
-            button.set_tooltip_text(Some("More tool options"));
-            button.update_property(&[gtk::accessible::Property::Label("More tool options")]);
+            button.set_tooltip_text(Some(&w.localization.text(layer_ui::MessageId::WORKSPACE_TOOLBAR_MORE_OPTIONS)));
+            button.update_property(&[gtk::accessible::Property::Label(&w.localization.text(layer_ui::MessageId::WORKSPACE_TOOLBAR_MORE_OPTIONS))]);
             w.install_context(&root, target);
             None
         };
@@ -583,6 +594,7 @@ impl Component {
             root,
             button,
             control: tile.control,
+            localization: w.localization.clone(),
             context: Cell::new(None),
             contact_context: Cell::new(None),
             updating: Cell::new(false),
@@ -688,7 +700,7 @@ impl Component {
                     .set(gpu.session.state().palette.panel.0);
             }
             self.root.queue_draw();
-            self.update_preview();
+            self.update_preview(&w.localization);
             let value = field
                 .numeric
                 .resolve(field.value as f64, NumericOperation::Format)
@@ -915,7 +927,7 @@ impl Component {
                 selected: Cell::new(None),
             }));
         }
-        self.update_preview();
+        self.update_preview(&w.localization);
         if let Some(preview) = self.preview.borrow().as_ref() {
             preview.popover.popup();
             preview.popover.present();
@@ -928,9 +940,9 @@ impl Component {
             self.value.get(),
             self.root.width().max(self.root.height()) as f32,
             extent,
-        )
+         &self.localization)
     }
-    fn update_preview(&self) {
+    fn update_preview(&self, localization: &layer_ui::Localizer) {
         let preview = self.preview.borrow();
         let Some(preview) = preview.as_ref() else {
             return;
@@ -959,11 +971,11 @@ impl Component {
                 } else {
                     "layer-plus-symbolic"
                 })));
-            preview.bookmark.set_tooltip_text(Some(if selected {
-                "Remove bookmark"
+            preview.bookmark.set_tooltip_text(Some(&localization.text(if selected {
+                layer_ui::MessageId::WORKSPACE_TOOLBAR_REMOVE_BOOKMARK
             } else {
-                "Bookmark this value"
-            }));
+                layer_ui::MessageId::WORKSPACE_TOOLBAR_BOOKMARK_VALUE
+            })));
         }
         if let Some(icon) = preview.bookmark.child().and_downcast::<gtk::Image>() {
             icon.set_pixel_size(layout.icon as i32);
@@ -1131,7 +1143,7 @@ impl Component {
         } else {
             Vec::new()
         };
-        if let Ok(value) = slider_bookmark_value(self.control, &values, position, length) {
+        if let Ok(value) = slider_bookmark_value(self.control, &values, position, length, &self.localization) {
             let number = self
                 .control
                 .slider()
@@ -1170,7 +1182,7 @@ impl Component {
                 let send = send.clone();
                 let range = RangeControl::new(&format!("toolbar-{id}"), label, bounds.each_ref(), move |index, value| {
                     send(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 })
-                });
+                }, w.localization.clone());
                 row.add_css_class("option-range");
                 let sliders = self.root.imp().options.get().sliders;
                 range.set_slider_visible(sliders);
@@ -1193,7 +1205,7 @@ impl Component {
                 icon.add_css_class("option-icon");
                 icon.set_visible(false);
                 row.append(&icon);
-                let number = NumberControl::compact(f.numeric.clone(), &f.label);
+                let number = NumberControl::compact(f.numeric.clone(), &f.label, w.localization.clone());
                 number.set_icon(tool_setting_icon(f.id));
                 number.add_css_class("toolbar-number");
                 number.set_widget_name(&format!("toolbar-setting-{}", f.id));

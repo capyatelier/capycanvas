@@ -182,7 +182,7 @@ impl ProofPanel {
             let embedded = recipe.profile.clone();
             let result = gio::spawn_blocking(move || profile::describe(embedded))
                 .await
-                .map_err(|_| "Profile reader failed".to_string())
+                .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()))
                 .and_then(|r| r);
             let (Some(p), Some(w)) = (weak.upgrade(), workspace.upgrade()) else {
                 return;
@@ -195,12 +195,12 @@ impl ProofPanel {
             }
             match result {
                 Ok(mut value) => {
-                    if value.name == profile::UNNAMED_PROFILE {
+                    if value.name.is_empty() {
                         value.name = recipe.name;
                     }
                     p.model.print.borrow_mut().profile = Some(value);
                 }
-                Err(e) => *p.model.error.borrow_mut() = e,
+                Err(reason) => *p.model.error.borrow_mut() = reason.profile_message(&w.localization),
             }
             p.update_all(&w);
         });
@@ -356,12 +356,12 @@ impl ProofPanel {
                 })
             })
             .await
-            .map_err(|_| "Proof preparation worker failed".to_string())
+            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Proof preparation worker failed".into()).profile_message(&w.localization))
             .and_then(|r| r);
             let result=async{
                 if cancelled.load(Ordering::Acquire)||panel.model.identity.get()!=Some(identity){return Ok(None)}
                 let lut=Arc::new(result?);
-                profile::preserve_replaced_proof(previous.as_ref(),&recipe).await?;
+                profile::preserve_replaced_proof(previous.as_ref(),&recipe,&w.localization).await?;
                 if cancelled.load(Ordering::Acquire)||panel.model.identity.get()!=Some(identity){return Ok(None)}
                 let change={let mut gpu=w.gpu.borrow_mut();let s=&mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
                     if (s.state().document_file.epoch,s.engine().document().color)!=identity{return Ok(None)}
@@ -468,14 +468,11 @@ impl ProofPanel {
 }
 impl Form {
     fn new(panel: &Rc<ProofPanel>, w: &Rc<Workspace>, space: RgbSpace, hdr: bool) -> Rc<Self> {
-        let mode = panel_controls::segmented(
-            "proof-mode",
-            if hdr {
-                &[("off", "Off"), ("sdr", "SDR"), ("print", "Print")]
-            } else {
-                &[("off", "Off"), ("print", "Print")]
-            },
-        );
+        let copy = layer_ui::color_feature_copy::ProofCopy::new(&w.localization);
+        let mut modes = vec![("off", copy.mode_off.as_ref())];
+        if hdr { modes.push(("sdr", "SDR")); }
+        modes.push(("print", copy.mode_print.as_ref()));
+        let mode = panel_controls::segmented("proof-mode", &modes);
         panel.root.append(&mode);
         let stack = gtk::Stack::builder()
             .vhomogeneous(false)
@@ -485,7 +482,7 @@ impl Form {
             .build();
         stack.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("off"));
         panel.root.append(&stack);
-        let dial = crate::proof_dial::ProofDial::new();
+        let dial = crate::proof_dial::ProofDial::new(&w.localization);
         stack.add_named(&dial.root, Some("sdr"));
         let print = panel_controls::column();
         print.set_widget_name("soft-proof-setup");
@@ -495,28 +492,28 @@ impl Form {
             space,
             profile::ProfilePurpose::Proof,
         );
-        let simulation = panel_controls::dropdown(&ProofSimulation::CHOICES.map(|c| c.label));
+        let simulation = panel_controls::dropdown(&layer_ui::proof_panel::proof_simulations(&w.localization).iter().map(|c| c.label.as_ref()).collect::<Vec<_>>());
         simulation.set_widget_name("proof-simulation");
-        let intent = panel_controls::dropdown(&PROOF_INTENTS.map(|c| c.label));
+        let intent = panel_controls::dropdown(&layer_ui::proof_panel::proof_intents(&w.localization).iter().map(|c| c.label.as_ref()).collect::<Vec<_>>());
         intent.set_widget_name("proof-intent");
-        let bpc = panel_controls::check(PrintProofControl::BlackPointCompensation.label());
+        let bpc = panel_controls::check(&PrintProofControl::BlackPointCompensation.localized_label(&w.localization));
         bpc.set_widget_name("proof-bpc");
-        let warning = panel_controls::check(PrintProofControl::GamutWarning.label());
+        let warning = panel_controls::check(&PrintProofControl::GamutWarning.localized_label(&w.localization));
         warning.set_widget_name("proof-gamut-warning");
         // Shared order and labels; only native widget construction lives here.
         for field in PrintProofControl::ALL {
             match field {
                 PrintProofControl::Profile => {
-                    let row = panel_controls::row(field.label(), &chooser.button);
+                    let row = panel_controls::row(&field.localized_label(&w.localization), &chooser.button);
                     row.set_widget_name("proof-profile");
                     print.append(&row);
                     print.append(&chooser.error);
                 }
                 PrintProofControl::Simulation => {
-                    print.append(&panel_controls::row(field.label(), &simulation))
+                    print.append(&panel_controls::row(&field.localized_label(&w.localization), &simulation))
                 }
                 PrintProofControl::Intent => {
-                    print.append(&panel_controls::row(field.label(), &intent))
+                    print.append(&panel_controls::row(&field.localized_label(&w.localization), &intent))
                 }
                 PrintProofControl::BlackPointCompensation => print.append(&bpc),
                 PrintProofControl::GamutWarning => print.append(&warning),
@@ -524,7 +521,7 @@ impl Form {
         }
         stack.add_named(&crate::workspace::scroll(&print), Some("print"));
         let progress = gtk::Spinner::new();
-        progress.update_property(&[gtk::accessible::Property::Label("Preparing print proof")]);
+        progress.update_property(&[gtk::accessible::Property::Label(&copy.preparing_print)]);
         progress.set_widget_name("proof-preparing");
         panel.root.append(&progress);
         let error = gtk::Label::new(None);

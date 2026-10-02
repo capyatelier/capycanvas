@@ -130,7 +130,7 @@ private fun String.routeDepth() = when (substringBefore(':')) {
 private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor")?.getString("label")
     ?: objectOrNull("modifier_editor")?.getString("label")
     ?: objectOrNull("pen_button_editor")?.getString("label")
-    ?: shortcutCategory()
+    ?: objectOrNull("shortcut_page")?.array("categories")?.objects()?.firstOrNull { it.getString("id") == shortcutCategory() }?.getString("label")
 
 @Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject, open: Boolean) {
     var profilesOpen by remember { mutableStateOf(false) }
@@ -182,7 +182,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                             fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
                         if (detail != null || !wide) {
                             IconButton(::back, Modifier.align(Alignment.CenterStart).size(48.dp)) {
-                                SharedIcon("back", "Back", Modifier.size(20.dp))
+                                SharedIcon("back", host.bootstrap!!.getJSONObject("common").getString("back"), Modifier.size(20.dp))
                             }
                         }
                         SettingsDone(::close, Modifier.align(Alignment.CenterEnd))
@@ -216,11 +216,11 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                                             obj("type" to "reset_modifier_key", "key" to key),
                                             { obj("type" to "modifier_key_per_tool", "key" to key, "per_tool" to it) },
                                             { obj("type" to "open_modifier_picker", "key" to key, "category" to it) },
-                                            "Remove Modifier Key" to obj("type" to "remove_modifier_key", "key" to key))
+                                            host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("remove_modifier") to obj("type" to "remove_modifier_key", "key" to key))
                                     }
                                     penButton != null -> {
                                         val trigger = penButton.getString("trigger")
-                                        PerToolPage(host, "pen-button", "Tools, brushes and modes last while the button is held. Other actions run once.", penButton,
+                                        PerToolPage(host, "pen-button", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("pen_action_help"), penButton,
                                             obj("type" to "reset_trigger", "trigger" to trigger),
                                             { obj("type" to "pen_button_per_tool", "trigger" to trigger, "per_tool" to it) },
                                             { obj("type" to "open_pen_button_picker", "trigger" to trigger, "category" to it) }, null)
@@ -270,10 +270,11 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
 }
 
 @Composable private fun SettingsDone(close: () -> Unit, modifier: Modifier = Modifier) {
+    val host=LocalCanvasHost.current
     Box(modifier.height(48.dp), contentAlignment = Alignment.Center) {
         Button(close, Modifier.widthIn(min = 80.dp).height(40.dp).testTag("settings-done"),
             shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
-            Text("Done", fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text(host.bootstrap!!.getJSONObject("common").getString("done"), fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -287,7 +288,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             CoreTextField(view.optString("query"), { host.preference(obj("type" to "search", "query" to it)) },
-                Modifier.weight(1f).testTag("settings-search"), height = 48.dp, placeholder = { Text("Search settings") },
+                Modifier.weight(1f).testTag("settings-search"), height = 48.dp, placeholder = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("search_settings")) },
                 focusRequest = view.optLong("search_focus"),
                 leadingIcon = { Box(Modifier.width(36.dp), contentAlignment = Alignment.Center) {
                     SharedIcon("search", null, Modifier.size(20.dp).testTag("settings-search-icon"))
@@ -309,7 +310,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                         Text(result.getString("description"), color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
                     }
                 }
-                if (view.optBoolean("empty")) Text("No matching settings", Modifier.padding(12.dp), color = colors.settingsSecondary)
+                if (view.optBoolean("empty")) Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("no_matching_settings"), Modifier.padding(12.dp), color = colors.settingsSecondary)
             } else view.array("pages").objects().forEach { page ->
                 val selected = view.getString("page") == page.getString("id")
                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
@@ -615,7 +616,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                     }
                 }
                 Row(Modifier.align(Alignment.End)) {
-                    TextButton({ host.customize(obj("type" to "cancel_tools")) }, Modifier.testTag("tool-picker-cancel")) { Text("Cancel") }
+                    TextButton({ host.customize(obj("type" to "cancel_tools")) }, Modifier.testTag("tool-picker-cancel")) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
                     Button({ host.customize(obj("type" to "confirm_tools")) }, Modifier.testTag("tool-picker-confirm"), enabled = picker.getBoolean("can_confirm")) { Text(picker.getString("confirm_label")) }
                 }
             }

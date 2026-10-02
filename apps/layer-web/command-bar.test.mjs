@@ -57,10 +57,25 @@ export async function checkCommandBar({call, evaluate, settle}) {
   assert.equal(await evaluate('layerApp.state().command_search.parameter.id'),'tool_setting.size');
   assert.equal(await detail(),await evaluate('layerApp.state().command_search.parameter.description'));
   assert.equal(await evaluate('document.querySelector(".command-unit").textContent'),'px');
-  await query('24'); await key('Enter','Enter',13);
+  await query('24');
+  await evaluate(`(() => { const input=document.querySelector('#command-search');
+    input.dispatchEvent(new CompositionEvent('compositionstart',{data:'24',bubbles:true}));
+    input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',isComposing:false,bubbles:true,cancelable:true})); })()`);
+  assert.equal(await evaluate('document.querySelector("#command-bar").open'),true,'native preedit capture guards parameter commit even without the event flag');
+  await evaluate(`document.querySelector('#command-search').dispatchEvent(new CompositionEvent('compositionend',{data:'24',bubbles:true}))`);
+  await key('Enter','Enter',13);
   assert.equal(await evaluate('layerApp.state().brush.diameter'),24);
+
   await evaluate(`layerApp.dispatch({type:'set_theme',theme:'dark'}); null`);
   await open(); await query('select');
+  const selectionBeforePreedit = await evaluate('Number(layerApp.state().command_search.selected)');
+  await evaluate(`(() => { const input=document.querySelector('#command-search');
+    input.dispatchEvent(new CompositionEvent('compositionstart',{data:'選択',bubbles:true}));
+    for(const key of ['ArrowDown','Escape','Enter']) input.dispatchEvent(new KeyboardEvent('keydown',{key,isComposing:false,bubbles:true,cancelable:true})); })()`);
+  assert.equal(await evaluate('document.querySelector("#command-bar").open'),true,'candidate keys leave command search open');
+  assert.equal(await evaluate('Number(layerApp.state().command_search.selected)'),selectionBeforePreedit,'candidate arrows leave command selection unchanged');
+  await evaluate(`document.querySelector('#command-search').dispatchEvent(new CompositionEvent('compositionend',{data:'選択',bubbles:true}))`);
+
   await key('ArrowDown','ArrowDown',40);
   assert.equal(await evaluate('Number(layerApp.state().command_search.selected)'),1);
   assert.equal(await evaluate('document.querySelector("#command-search").getAttribute("aria-activedescendant")'),'command-result-1');

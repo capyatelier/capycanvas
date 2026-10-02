@@ -30,6 +30,7 @@ fn read(path: &std::path::Path) -> Result<ExportPresets, String> {
 }
 pub(super) async fn load(
     document: layer_core::color::DocumentColor,
+    localization: &layer_ui::Localizer,
 ) -> Result<ExportPresets, String> {
     gio::spawn_blocking(move || {
         let library = read(&path())?;
@@ -41,27 +42,24 @@ pub(super) async fn load(
             }
             let actual = layer_color::profile_channels(&recipe.profile.profile)?;
             if actual != recipe.profile.channels {
-                return Err("Saved export profile channels do not match its ICC data".into());
+                return Err(layer_ui::ColorFeatureError::ProfileChannels);
             }
             ProfilePurpose::Output.validate(&recipe.profile, document.space)?;
             checked.push(recipe.profile);
         }
-        Ok(library)
+        Ok::<_,layer_ui::ColorFeatureError>(library)
     })
     .await
-    .map_err(|_| "Export preset reader failed".to_string())?
+    .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Export preset reader failed".into()).preset_message(localization))?.map_err(|reason|reason.preset_message(localization))
 }
 fn write(
     path: &std::path::Path,
     expected: &ExportPresets,
     next: &ExportPresets,
-) -> Result<(), String> {
+) -> Result<(), layer_ui::ColorFeatureError> {
     let _lock = LOCK.lock().map_err(|e| e.to_string())?;
     if read(path)? != *expected {
-        return Err(
-            "Export presets changed in another window. Reopen Export to use the latest choices."
-                .into(),
-        );
+        return Err(layer_ui::ColorFeatureError::PresetChanged);
     }
     let bytes = next.encode()?;
     if let Some(parent) = path.parent() {
@@ -69,18 +67,19 @@ fn write(
     }
     layer_core::atomic_write(path, |file| {
         file.write_all(&bytes).map_err(|e| e.to_string())
-    })
+    }).map_err(layer_ui::ColorFeatureError::from)
 }
-pub(super) async fn save(expected: ExportPresets, next: ExportPresets) -> Result<(), String> {
+pub(super) async fn save(expected: ExportPresets, next: ExportPresets, localization: &layer_ui::Localizer) -> Result<(), String> {
     gio::spawn_blocking(move || write(&path(), &expected, &next))
         .await
-        .map_err(|_| "Export preset writer failed".to_string())?
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Export preset writer failed".into()).preset_message(localization))?.map_err(|reason|reason.preset_message(localization))
 }
 
 /// Editing a destination changes temporary controls; saving a named preset is an
 /// explicit application preference action and does not depend on exporting a file.
 pub(super) fn install(
     parent: &adw::ApplicationWindow,
+    localization: &std::sync::Arc<layer_ui::Localizer>,
     hdr_document: bool,
     group: &gtk::Box,
     preset: &adw::ComboRow,
@@ -89,6 +88,8 @@ pub(super) fn install(
     updating: Rc<std::cell::Cell<bool>>,
     read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, String>>,
 ) {
+    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::ExportCopy::new(localization));
+    let localization = localization.clone();
     let buttons = adw::PreferencesGroup::new();
     group.append(&buttons);
     let status = adw::ActionRow::builder()
@@ -97,7 +98,7 @@ pub(super) fn install(
         .build();
     status.set_widget_name("export-presets-status");
     buttons.add(&status);
-    let refresh: Rc<dyn Fn(usize)> = Rc::new(glib::clone!(
+    let refresh: Rc<dyn Fn(usize)> = Rc::new(glib::clone!( #[strong] localization,
         #[weak]
         preset,
         #[strong]
@@ -106,12 +107,9 @@ pub(super) fn install(
         updating,
         move |selected| {
             let library = library.borrow();
-            let names: Vec<_> = ExportPresets::DESTINATIONS
-                .iter()
-                .copied()
-                .map(|name| if hdr_document && name == "Further editing" { "Further editing (SDR)" } else { name })
-                .chain(library.names())
-                .collect();
+            let color = layer_core::color::DocumentColor { depth: if hdr_document {layer_core::color::SampleDepth::F16} else {layer_core::color::SampleDepth::U8}, ..Default::default() };
+            let names = library.localized_names(color, &localization);
+            let names: Vec<_> = names.iter().map(String::as_str).collect();
             updating.set(true);
             preset.set_model(Some(&gtk::StringList::new(&names)));
             preset.set_selected(selected as u32);
@@ -119,7 +117,7 @@ pub(super) fn install(
         }
     ));
     refresh(0);
-    for (operation, label) in [(0, "Save as new preset…"), (1, "Update saved preset"), (2, "Remove saved preset"), (3, "Restore original settings")] {
+    for (operation, label) in [(0, copy.save_new_preset.as_ref()), (1, copy.update_saved_preset.as_ref()), (2, copy.remove_saved_preset.as_ref()), (3, copy.restore_original.as_ref())] {
         let button = adw::ButtonRow::builder().title(label).use_markup(false).build();
         button.set_widget_name(
             [
@@ -131,15 +129,15 @@ pub(super) fn install(
         );
         button.set_tooltip_text(Some(
             [
-                "Save these choices as a new named preset",
-                "Replace the selected saved preset with these choices",
-                "Remove the selected saved preset",
-                "Restore this destination's original choices",
+                copy.save_preset_help.as_ref(),
+                copy.update_preset_help.as_ref(),
+                copy.remove_preset_help.as_ref(),
+                copy.reset_preset_help.as_ref(),
             ][operation],
         ));
         if operation == 2 { button.add_css_class("destructive-action"); }
         buttons.add(&button);
-        let refresh_button = glib::clone!(
+        let refresh_button = glib::clone!( #[strong] copy, #[strong] localization,
             #[weak]
             button,
             #[strong]
@@ -148,10 +146,10 @@ pub(super) fn install(
                 if let Some(value) = preset.model().and_then(|model| model.item(destination.get() as u32)).and_downcast::<gtk::StringObject>() {
                     let name = value.string();
                     button.set_title(&match operation {
-                        1 => format!("Update “{name}”"),
-                        2 => format!("Remove “{name}”"),
-                        3 => format!("Reset “{name}”"),
-                        _ => "Save as new preset…".into(),
+                        1 => layer_ui::color_feature_copy::named(&localization, layer_ui::MessageId::COLOR_FEATURES_EXPORT_UPDATE_NAMED, &name),
+                        2 => layer_ui::color_feature_copy::named(&localization, layer_ui::MessageId::COLOR_FEATURES_EXPORT_REMOVE_NAMED, &name),
+                        3 => layer_ui::color_feature_copy::named(&localization, layer_ui::MessageId::COLOR_FEATURES_EXPORT_RESET_NAMED, &name),
+                        _ => copy.save_new_preset.to_string(),
                     });
                 }
                 button.set_visible(match operation {
@@ -163,7 +161,7 @@ pub(super) fn install(
         );
         refresh_button(preset);
         preset.connect_selected_notify(refresh_button);
-        button.connect_activated(glib::clone!(
+        button.connect_activated(glib::clone!( #[strong] copy,
             #[weak]
             parent,
             #[weak]
@@ -180,11 +178,13 @@ pub(super) fn install(
             read_recipe,
             #[strong]
             refresh,
+            #[strong]
+            localization,
             move |_| {
                 buttons.set_sensitive(false);
                 let index = destination.get();
                 let recipe = read_recipe();
-                glib::MainContext::default().spawn_local(glib::clone!(
+                glib::MainContext::default().spawn_local(glib::clone!( #[strong] copy,
                     #[weak]
                     parent,
                     #[weak]
@@ -197,21 +197,23 @@ pub(super) fn install(
                     library,
                     #[strong]
                     refresh,
+                    #[strong]
+                    localization,
                     async move {
                         let result: Result<Option<(ExportPresets, usize)>, String> = async {
                             let name = if operation == 0 {
                                 // Validate first; an unavailable ICC is never saved as a fallback.
                                 recipe.as_ref().map_err(Clone::clone)?;
-                                let entry = adw::EntryRow::builder().title("Preset name").build();
+                                let entry = adw::EntryRow::builder().title(copy.preset_name.as_ref()).build();
                                 entry.set_widget_name("export-preset-name");
                                 let group = adw::PreferencesGroup::new();
                                 group.add(&entry);
                                 let dialog = adw::AlertDialog::builder()
-                                    .heading("Save export preset")
+                                    .heading(copy.save_preset_title.as_ref())
                                     .extra_child(&group)
                                     .build();
                                 dialog.set_widget_name("export-preset-name-dialog");
-                                dialog.add_responses(&[("cancel", "Cancel"), ("save", "Save")]);
+                                dialog.add_responses(&[("cancel", copy.common.cancel.as_ref()), ("save", copy.common.save.as_ref())]);
                                 dialog.set_close_response("cancel");
                                 dialog.set_default_response(Some("save"));
                                 dialog.set_response_appearance(
@@ -237,21 +239,21 @@ pub(super) fn install(
                             let expected = library.borrow().clone();
                             let mut next = expected.clone();
                             let selected = match operation {
-                                0 => next.save(name.as_deref().unwrap(), recipe?)?,
+                                0 => next.save(name.as_deref().unwrap(), recipe?).map_err(|reason|reason.preset_message(&localization))?,
                                 1 => {
-                                    next.update(index, recipe?)?;
+                                    next.update(index, recipe?).map_err(|reason|reason.preset_message(&localization))?;
                                     index
                                 }
                                 2 => {
-                                    next.remove(index)?;
+                                    next.remove(index).map_err(|reason|reason.preset_message(&localization))?;
                                     3
                                 }
                                 _ => {
-                                    next.reset_destination(index)?;
+                                    next.reset_destination(index).map_err(|reason|reason.preset_message(&localization))?;
                                     index
                                 }
                             };
-                            save(expected, next.clone()).await?;
+                            save(expected, next.clone(), &localization).await?;
                             Ok(Some((next, selected)))
                         }
                         .await;
@@ -261,9 +263,9 @@ pub(super) fn install(
                                 refresh(selected);
                                 preset.notify("selected");
                                 status.set_title(match operation {
-                                    2 => "Preset removed",
-                                    3 => "Original choices restored",
-                                    _ => "Preset saved",
+                                    2 => copy.preset_removed.as_ref(),
+                                    3 => copy.preset_reset.as_ref(),
+                                    _ => copy.preset_saved.as_ref(),
                                 });
                                 status.set_visible(true);
                                 status.remove_css_class("error");
@@ -302,11 +304,7 @@ mod tests {
         write(&path, &empty, &next).unwrap();
         let readback = read(&path).unwrap();
         assert_eq!(readback.recipe(4, Default::default()).unwrap(), recipe);
-        assert!(
-            write(&path, &empty, &empty)
-                .unwrap_err()
-                .contains("another window")
-        );
+        assert_eq!(write(&path, &empty, &empty).unwrap_err(), layer_ui::ColorFeatureError::PresetChanged);
         assert_eq!(read(&path).unwrap(), next);
         std::fs::write(&path, b"broken").unwrap();
         assert_eq!(read(&path).unwrap(), empty);

@@ -12,12 +12,16 @@ pub enum HeaderSize {
 }
 impl HeaderSize {
     pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Small => "Small",
-            Self::Medium => "Medium",
-            Self::Large => "Large",
-        }
+    pub fn id(self) -> &'static str {
+        match self { Self::Small => "small", Self::Medium => "medium", Self::Large => "large" }
+    }
+    pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        localization.text(match self { Self::Small => MessageId::WORKSPACE_SIZE_SMALL, Self::Medium => MessageId::WORKSPACE_SIZE_MEDIUM, Self::Large => MessageId::WORKSPACE_SIZE_LARGE })
+    }
+    pub fn canonical_label(self) -> std::sync::Arc<str> { self.localized_label(&Localizer::shared(UiLanguage::English)) }
+    pub fn tooltip(self, localization: &Localizer) -> String {
+        let mut args = FluentArgs::new(); args.set("size", self.localized_label(localization).to_string());
+        localization.format(MessageId::WORKSPACE_HEADER_SIZE_TOOLTIP, &args)
     }
     pub fn tile(self) -> f32 {
         match self {
@@ -61,13 +65,18 @@ impl HeaderZone {
             Self::Right => 2,
         }
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Left => "Left",
-            Self::Center => "Center",
-            Self::Right => "Right",
-        }
+    pub fn id(self) -> &'static str {
+        match self { Self::Left => "left", Self::Center => "center", Self::Right => "right" }
     }
+    pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        localization.text(match self { Self::Left => MessageId::WORKSPACE_HEADER_ZONE_LEFT, Self::Center => MessageId::WORKSPACE_HEADER_ZONE_CENTER, Self::Right => MessageId::WORKSPACE_HEADER_ZONE_RIGHT })
+    }
+    pub fn canonical_label(self) -> std::sync::Arc<str> { self.localized_label(&Localizer::shared(UiLanguage::English)) }
+
+    pub fn overflow_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        localization.text(match self { Self::Left => MessageId::WORKSPACE_HEADER_MORE_LEFT, Self::Center => MessageId::WORKSPACE_HEADER_MORE_CENTER, Self::Right => MessageId::WORKSPACE_HEADER_MORE_RIGHT })
+    }
+
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,21 +116,34 @@ impl HeaderItem {
         Self::Battery,
         Self::Space,
     ];
-    pub fn label(self) -> String {
+    pub fn localized_label(self, localization: &Localizer) -> String {
+    use crate::HeaderItem as H;
+    localization.text(match self {
+        H::Capy => MessageId::WORKSPACE_HEADER_CAPY, H::Menu => MessageId::WORKSPACE_HEADER_MENU,
+        H::MenuLabels => MessageId::WORKSPACE_HEADER_MENU_LABELS, H::Settings => MessageId::WORKSPACE_HEADER_SETTINGS,
+        H::Fullscreen => MessageId::WORKSPACE_HEADER_FULLSCREEN, H::Workspaces => MessageId::WORKSPACE_HEADER_WORKSPACES,
+        H::DocumentTitle => MessageId::WORKSPACE_HEADER_DOCUMENT_TITLE, H::Clock => MessageId::WORKSPACE_HEADER_CLOCK,
+        H::Battery => MessageId::WORKSPACE_HEADER_BATTERY, H::Space => MessageId::WORKSPACE_HEADER_SPACE,
+        H::Tool { control } => return crate::tool_choice_localized(control, localization).label,
+    }).to_string()
+}
+    pub fn canonical_label(self) -> String { self.localized_label(&Localizer::shared(UiLanguage::English)) }
+    pub fn id(self) -> &'static str {
         match self {
-            Self::Capy => "Capy (Zen Mode)",
-            Self::Menu => "Main Menu",
-            Self::MenuLabels => "Menu Labels",
-            Self::Settings => "Settings",
-            Self::Fullscreen => "Full Screen",
-            Self::Workspaces => "Workspace Switcher",
-            Self::DocumentTitle => "Document Title",
-            Self::Clock => "Clock",
-            Self::Battery => "Battery",
-            Self::Space => "Space",
-            Self::Tool { control } => return tool_choice(control).label,
+            Self::Capy => "capy-(zen-mode)", Self::Menu => "main-menu", Self::MenuLabels => "menu-labels",
+            Self::Settings => "settings", Self::Fullscreen => "full-screen", Self::Workspaces => "workspace-switcher",
+            Self::DocumentTitle => "document-title", Self::Clock => "clock", Self::Battery => "battery", Self::Space => "space", Self::Tool { .. } => "tool",
         }
-        .into()
+    }
+    pub fn palette_label(self, localization: &Localizer) -> String {
+        match self {
+            Self::Capy => localization.text(MessageId::WORKSPACE_HEADER_COMPONENT_CAPY).to_string(),
+            Self::Workspaces => localization.text(MessageId::WORKSPACE_WORKSPACES).to_string(),
+            _ => self.localized_label(localization),
+        }
+    }
+    pub fn drag_label(self, localization: &Localizer) -> String {
+        header_drag_label(&self.palette_label(localization), localization)
     }
     pub fn singleton(self) -> bool {
         !matches!(self, Self::Tool { .. } | Self::Space)
@@ -206,26 +228,29 @@ impl HeaderLayout {
         self.projected_for(platform)
     }
 
-    pub fn context_menu(&self, id: Option<u32>, editing: bool) -> Result<ContextMenu, String> {
+    pub fn canonical_context_menu(&self, id: Option<u32>, editing: bool) -> Result<ContextMenu, String> {
+        self.context_menu_localized(id, editing, &Localizer::shared(UiLanguage::English))
+    }
+    pub fn context_menu_localized(&self, id: Option<u32>, editing: bool, localization: &Localizer) -> Result<ContextMenu, String> {
         let entry =
             |label: &str, action: HeaderAction| ContextMenuItem::command(label, action.action());
         let mut sections = if editing {
             Vec::new()
         } else {
             vec![vec![ContextMenuItem::command(
-                "Customize Title Bar…",
+                localization.text(MessageId::WORKSPACE_HEADER_CUSTOMIZE_MENU).as_ref(),
                 UiAction::Invoke {
                     command: CommandId::CustomizeWorkspaceUi,
                 },
             )]]
         };
-        let mut title = "Title Bar".to_string();
+        let mut title = localization.text(MessageId::WORKSPACE_HEADER_TITLE).to_string();
         if let Some(id) = id {
             let item = self.entry(id)?;
-            title = item.item.label();
+            title = item.item.localized_label(localization);
             if item.item == HeaderItem::Capy && !editing {
                 sections.push(vec![ContextMenuItem::command(
-                    "Change icon…",
+                    localization.text(MessageId::WORKSPACE_HEADER_CHANGE_ICON_MENU).as_ref(),
                     UiAction::Preferences {
                         action: PreferenceAction::Reveal {
                             id: PreferenceId::ZenIcon,
@@ -242,7 +267,7 @@ impl HeaderLayout {
                     .into_iter()
                     .map(|destination| {
                         let mut item = entry(
-                            &format!("Move to {}", destination.label()),
+                            &header_move_label(destination, localization),
                             HeaderAction::Move {
                                 id,
                                 zone: destination,
@@ -256,7 +281,7 @@ impl HeaderLayout {
             );
             let items = &self.zones[zone.index()];
             let mut earlier = entry(
-                "Move Earlier",
+                &localization.text(MessageId::WORKSPACE_HEADER_MOVE_EARLIER),
                 HeaderAction::Move {
                     id,
                     zone,
@@ -265,7 +290,7 @@ impl HeaderLayout {
             );
             earlier.enabled = index > 0;
             let mut later = entry(
-                "Move Later",
+                &localization.text(MessageId::WORKSPACE_HEADER_MOVE_LATER),
                 HeaderAction::Move {
                     id,
                     zone,
@@ -276,13 +301,13 @@ impl HeaderLayout {
             sections.push(vec![
                 earlier,
                 later,
-                entry("Remove from Title Bar", HeaderAction::Remove { id }),
+                entry(&localization.text(MessageId::WORKSPACE_HEADER_REMOVE), HeaderAction::Remove { id }),
             ]);
         }
         if editing {
             sections.push(vec![
-                entry("Done", HeaderAction::Edit { editing: false }),
-                entry("Cancel Changes", HeaderAction::Cancel),
+                entry(&localization.text(MessageId::COMMON_DONE), HeaderAction::Edit { editing: false }),
+                entry(&localization.text(MessageId::WORKSPACE_HEADER_CANCEL_CHANGES), HeaderAction::Cancel),
             ]);
         }
         Ok(ContextMenu { title, sections })
@@ -571,7 +596,7 @@ pub struct HeaderItemView {
 #[derive(Serialize)]
 pub struct HeaderSizeView {
     pub id: HeaderSize,
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub tile: f32,
     pub icon: i32,
     pub height: f32,
@@ -584,6 +609,9 @@ pub struct HeaderComponentView {
     pub singleton: bool,
 }
 impl<R: layer_render::CanvasRenderer> UiSession<R> {
+    pub fn header_item_label(&self, item: HeaderItem) -> String {
+        match item { HeaderItem::Tool { control } => self.header_tool_label(control), item => item.localized_label(self.localization()) }
+    }
     pub fn header_view(&self) -> HeaderView {
         self.header_view_with(true)
     }
@@ -605,7 +633,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                 };
                 HeaderItemView {
                     id: entry.id,
-                    label: match entry.item { HeaderItem::Tool { control } => self.header_tool_label(control), item => item.label() },
+                    label: self.header_item_label(entry.item),
                     enabled,
                     selected,
                     icon,
@@ -620,7 +648,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                 .into_iter()
                 .map(|id| HeaderSizeView {
                     id,
-                    label: id.label(),
+                    label: id.localized_label(self.localization()),
                     tile: id.tile(),
                     icon: id.icon(),
                     height: id.height(),
@@ -632,7 +660,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                 .filter(|item| item.available_on(state.platform))
                 .map(|item| HeaderComponentView {
                     item,
-                    label: item.label(),
+                    label: item.localized_label(self.localization()),
                     singleton: item.singleton(),
                 })
                 .collect(),
@@ -975,6 +1003,25 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
 mod tests {
     use super::*;
     #[test]
+    fn active_header_copy_preserves_canonical_aliases_and_typed_context_actions() {
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        assert_eq!(HeaderItem::Settings.localized_label(&japanese), "設定");
+        assert_eq!(HeaderItem::Settings.canonical_label(), "Settings");
+        assert_eq!(HeaderSize::Small.localized_label(&japanese).as_ref(), "小");
+        assert_eq!(HeaderSize::Small.canonical_label().as_ref(), "Small");
+        assert_eq!(HeaderZone::Center.id(), "center");
+        assert_eq!(HeaderZone::Center.canonical_label().as_ref(), "Center");
+        assert!(std::sync::Arc::ptr_eq(&HeaderSize::Small.localized_label(&japanese), &HeaderSize::Small.localized_label(&japanese)));
+        let layout = HeaderLayout::painter();
+        let id = layout.zones[0][0].id;
+        let menu = layout.context_menu_localized(Some(id), true, &japanese).unwrap();
+        let move_center = menu.sections.iter().flatten().find(|item| matches!(&item.action,
+            Some(UiAction::Customize { action: CustomizationAction::Header { action: HeaderAction::Move { zone: HeaderZone::Center, .. } } }))).unwrap();
+        assert_eq!(move_center.label, "中央に移動");
+        assert_eq!(layout.canonical_context_menu(Some(id), true).unwrap().sections[0][1].label, "Move to Center");
+    }
+
+    #[test]
     fn native_measurement_limits_keep_geometry_finite_and_zero_width_hidden() {
         let layout = HeaderLayout::painter();
         let id = layout.zones[0][0].id;
@@ -1063,7 +1110,7 @@ mod tests {
     fn context_actions_match_editing_state_and_actual_region() {
         let h = HeaderLayout::painter();
         let capy = h.zones[0][0].id;
-        let normal = h.context_menu(Some(capy), false).unwrap();
+        let normal = h.canonical_context_menu(Some(capy), false).unwrap();
         let labels = normal
             .sections
             .iter()
@@ -1072,7 +1119,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(labels, ["Customize Title Bar…", "Change icon…"]);
         for id in [None, Some(capy), Some(h.zones[2][0].id)] {
-            let menu = h.context_menu(id, true).unwrap();
+            let menu = h.canonical_context_menu(id, true).unwrap();
             let items = menu.sections.iter().flatten().collect::<Vec<_>>();
             assert!(items.iter().any(|i| i.label == "Done"));
             assert!(items.iter().any(|i| i.label == "Cancel Changes"));
@@ -1086,7 +1133,7 @@ mod tests {
                 for destination in HeaderZone::ALL {
                     let item = items
                         .iter()
-                        .find(|i| i.label == format!("Move to {}", destination.label()))
+                        .find(|i| i.label == format!("Move to {}", destination.canonical_label()))
                         .unwrap();
                     assert_eq!(item.enabled, destination != zone);
                 }
@@ -1106,7 +1153,7 @@ mod tests {
                 );
             }
         }
-        assert!(h.context_menu(Some(u32::MAX), true).is_err());
+        assert!(h.canonical_context_menu(Some(u32::MAX), true).is_err());
     }
     #[test]
     fn edits_are_atomic_and_ids_are_not_reused() {
@@ -1384,4 +1431,15 @@ mod tests {
                 .contains("header_presentation")
         );
     }
+}
+
+fn header_move_label(zone: HeaderZone, localization: &Localizer) -> String {
+    let mut args = FluentArgs::new();
+    args.set("zone", zone.localized_label(localization).to_string());
+    localization.format(MessageId::WORKSPACE_HEADER_MOVE_TO, &args)
+}
+
+pub fn header_drag_label(item: &str, localization: &Localizer) -> String {
+    let mut args = FluentArgs::new(); args.set("item", item);
+    localization.format(MessageId::WORKSPACE_HEADER_DRAG_COMPONENT, &args)
 }

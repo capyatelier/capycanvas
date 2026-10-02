@@ -345,7 +345,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
         enlarge: false,
     };
     library.save("Lab RGB", custom.clone()).unwrap();
-    library.remember(0, ExportRecipe::web_share().draft(layer_ui::ExportDraftAction::Format(layer_ui::ExportFormat::JpegHdr)).recipe).unwrap();
+    library.remember(0, ExportRecipe::web_share().draft_canonical(layer_ui::ExportDraftAction::Format(layer_ui::ExportFormat::JpegHdr)).recipe).unwrap();
     std::fs::write(&path, library.encode().unwrap()).unwrap();
     let w = Workspace::with_project(&app, Some((new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();

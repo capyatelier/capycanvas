@@ -250,9 +250,10 @@ fn apple_display_previews_keep_p3_chroma_without_changing_paint_definitions() {
         assert_eq!(app.state()["colors"], state["colors"]);
         assert_eq!(state["colors"]["foreground"], definition);
         let colors = &unsafe { &*app.0 }.host.session.state().colors;
-        let validation = |display| layer_ui::color_validation(colors.definition(), colors.rgb_space(), display, false).unwrap();
-        assert!(validation(DISPLAY_SPACE).ends_with("Outside document gamut"));
-        assert!(validation(layer_core::color::RgbSpace::Srgb).contains("Outside sRGB preview gamut"), "An sRGB fallback still reports the actual lost gamut");
-        assert_ne!(colors.view().marker_color, colors.view_in(DISPLAY_SPACE).marker_color);
+        let validation = |display| layer_ui::color_validation_localized(colors.definition(), colors.rgb_space(), display, false, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        assert!(validation(DISPLAY_SPACE).ends_with("Outside the document gamut."));
+        assert!(validation(layer_core::color::RgbSpace::Srgb).ends_with("Outside the sRGB preview gamut."), "An sRGB fallback still reports the actual lost gamut");
+        let localizer = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        assert_ne!(colors.view_in_localized(layer_core::color::RgbSpace::Srgb, &localizer).marker_color, colors.view_in_localized(DISPLAY_SPACE, &localizer).marker_color);
     }
 }

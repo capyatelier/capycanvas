@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <!-- Color-managed artwork and native themes must not be recolored. -->
@@ -7,7 +7,7 @@
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#333333" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Capy Canvas — drawing workspace</title>
+    <title>Capy Canvas</title>
     <link rel="icon" href="data:," />
     <script type="module" async src="workspace-preload.js"></script>
     <script>for (const href of ["icons.svg", "pkg/layer_web_bg.wasm"]) document.head.append(Object.assign(document.createElement("link"), {rel: "preload", as: "fetch", crossOrigin: "anonymous", href}));</script>
@@ -15,27 +15,26 @@
     <!-- Packager inserts install metadata here; development never registers a worker. -->
   </head>
   <body data-theme="dark" data-gpu="starting">
-    <main id="workspace" aria-label="Drawing workspace">
+    <main id="workspace">
       <div id="center">
         <canvas
           id="canvas"
           tabindex="0"
-          aria-label="Drawing canvas. Draw with a mouse or pen; use two fingers to pan, rotate and zoom."
         ></canvas>
       </div>
-      <section id="gpu-notice" aria-label="Canvas availability" aria-live="polite">
-        <div class="gpu-help"><h1>Starting the canvas…</h1></div>
+      <section id="gpu-notice" aria-live="polite">
+        <div class="gpu-help"></div>
       </section>
       <header id="header" class="chrome">
-        <nav id="header-start" aria-label="Application menus"></nav>
+        <nav id="header-start"></nav>
         <span id="document-title">Capy Canvas</span>
-        <nav id="header-end" aria-label="Workspace controls"></nav>
+        <nav id="header-end"></nav>
       </header>
-      <div id="canvas-status" class="chrome" aria-label="Canvas status">
+      <div id="canvas-status" class="chrome">
         <button id="view-info" type="button"></button>
       </div>
     </main>
-    <output id="status" role="status">Starting WebGPU…</output>
+    <output id="status" role="status"></output>
     <dialog id="settings" aria-labelledby="settings-title"></dialog>
     <script type="module" src="app.js"></script>
   </body>

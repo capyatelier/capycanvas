@@ -673,7 +673,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         id: Option<u64>,
         opacity: f32,
     ) -> Result<(), String> {
-        NumericControl::percent().validate(opacity, "Opacity")?;
+        NumericControl::percent().validate(opacity, MessageId::TOOL_SETTING_OPACITY).map_err(|reason| reason.message(self.localization()))?;
         if id.is_none() && self.selection_masks.quick() {
             return Err("Return to artwork before changing layer opacity".into());
         }
@@ -1339,14 +1339,23 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// The grouped menu that the layer header's blend control opens.
     pub fn layer_blend_menu(&self, id: u64) -> Result<ContextMenu, String> {
         let layer = self.engine.document().layer(LayerId(id)).ok_or("Unknown layer")?;
-        Ok(ContextMenu { title: "Blend Mode".into(), sections: self.blend_sections(layer) })
+        Ok(ContextMenu { title: self.localization().text(MessageId::RESOURCES_LAYER_MENU_BLEND_MODE).to_string(), sections: self.blend_sections(layer) })
     }
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<ContextMenu, String> {
-        use LayerAction as A;
         if id == 0 && self.selection_masks.quick() { return Ok(self.quick_mask_menu()); }
+        let layer = self.engine.document().layer(LayerId(id)).ok_or("Unknown layer")?;
+        if layer.kind == LayerKind::Selection { return self.selection_layer_menu(layer.id); }
+        let mut args = FluentArgs::new(); args.set("name", layer.name.as_ref());
+        let title = self.localization().format(if mask { MessageId::RESOURCES_LAYER_MENU_MASK_TITLE } else if layer.kind == LayerKind::Group { MessageId::RESOURCES_LAYER_MENU_GROUP_TITLE } else { MessageId::RESOURCES_LAYER_MENU_LAYER_TITLE }, &args);
+        Ok(ContextMenu { title, sections: self.layer_menu_sections(id, mask)? }
+            .with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization()))
+    }
+    pub(super) fn layer_menu_sections(&self, id: u64, mask: bool) -> Result<Vec<Vec<ContextMenuItem>>, String> {
+        use LayerAction as A;
+        if id == 0 && self.selection_masks.quick() { return Ok(self.quick_mask_menu().sections); }
         let doc = self.engine.document();
         let l = doc.layer(LayerId(id)).ok_or("Unknown layer")?;
-        if l.kind == LayerKind::Selection { return self.selection_layer_menu(l.id); }
+        if l.kind == LayerKind::Selection { return self.selection_layer_menu(l.id).map(|menu| menu.sections); }
         let locked = doc.is_locked(l.id);
         let paint = l.kind == LayerKind::Paint;
         let editable = l.kind != LayerKind::Background;
@@ -1429,19 +1438,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mask_selection = || {
             vec![
                 item(
-                    if l.mask.is_some() {
-                        "Replace mask: reveal selection"
-                    } else {
-                        "Mask: reveal selection"
-                    },
+                    self.localization().text(if l.mask.is_some() { MessageId::RESOURCES_LAYER_MENU_REPLACE_MASK_REVEAL_SELECTION } else { MessageId::RESOURCES_LAYER_MENU_MASK_REVEAL_SELECTION }).as_ref(),
                     A::MaskSelection { id, hide: false },
                 ),
                 item(
-                    if l.mask.is_some() {
-                        "Replace mask: hide selection"
-                    } else {
-                        "Mask: hide selection"
-                    },
+                    self.localization().text(if l.mask.is_some() { MessageId::RESOURCES_LAYER_MENU_REPLACE_MASK_HIDE_SELECTION } else { MessageId::RESOURCES_LAYER_MENU_MASK_HIDE_SELECTION }).as_ref(),
                     A::MaskSelection { id, hide: true },
                 ),
             ]
@@ -1450,14 +1451,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             vec![
                 vec![
                     item(
-                        "New layer",
+                        self.localization().text(MessageId::COMMAND_ADD_LAYER).as_ref(),
                         A::New {
                             group: false,
                             clipped: false,
                         },
                     ),
                     item(
-                        "New group",
+                        self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW_GROUP).as_ref(),
                         A::New {
                             group: true,
                             clipped: false,
@@ -1467,16 +1468,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.merge_menu_items(l),
                 vec![
                     check(
-                        "Show paper",
+                        self.localization().text(MessageId::RESOURCES_LAYER_MENU_SHOW_PAPER).as_ref(),
                         A::Visibility {
                             id,
                             value: !l.visible,
                         },
                         l.visible,
                     ),
-                    item("Show all layers", A::ShowAll),
+                    item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SHOW_ALL_LAYERS).as_ref(), A::ShowAll),
                     item(
-                        "Lasso selection",
+                        self.localization().text(MessageId::COMMAND_LASSO).as_ref(),
                         A::Tool {
                             tool: LayerCanvasTool::Select,
                         },
@@ -1487,9 +1488,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             let m = l.mask.as_ref().ok_or("No mask")?;
             vec![
                 vec![
-                    routed("Edit layer content", CommandId::EditLayerContent, A::Select { id, mask: false }),
+                    routed(self.localization().text(MessageId::RESOURCES_LAYER_MENU_EDIT_LAYER_CONTENT).as_ref(), CommandId::EditLayerContent, A::Select { id, mask: false }),
                     check(
-                        "Show mask area",
+                        self.localization().text(MessageId::RESOURCES_LAYER_MENU_SHOW_MASK_AREA).as_ref(),
                         A::ShowMask {
                             id,
                             value: !m.show_area,
@@ -1499,7 +1500,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     ContextMenuItem {
                         selected: Some(m.enabled),
                         ..routed(
-                            "Enable mask",
+                            self.localization().text(MessageId::RESOURCES_LAYER_MENU_ENABLE_MASK).as_ref(),
                             CommandId::LayerMaskEnabled,
                             A::EnableMask {
                                 id,
@@ -1508,7 +1509,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         )
                     },
                     check(
-                        "Link mask to layer",
+                        self.localization().text(MessageId::RESOURCES_LAYER_MENU_LINK_MASK_TO_LAYER).as_ref(),
                         A::LinkMask {
                             id,
                             value: !m.linked,
@@ -1518,87 +1519,79 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ],
                 mask_selection(),
                 vec![
-                    item("Copy mask", A::CopyMask { id }),
-                    item("Replace with copied mask", A::PasteMask { id }),
-                    routed("Invert mask", CommandId::InvertLayerMask, A::InvertMask { id }),
-                    item("Reveal all", A::ClearMask { id, reveal: true }),
-                    item("Hide all", A::ClearMask { id, reveal: false }),
+                    item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_COPY_MASK).as_ref(), A::CopyMask { id }),
+                    item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_REPLACE_WITH_COPIED_MASK).as_ref(), A::PasteMask { id }),
+                    routed(self.localization().text(MessageId::RESOURCES_LAYER_MENU_INVERT_MASK).as_ref(), CommandId::InvertLayerMask, A::InvertMask { id }),
+                    item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_REVEAL_ALL).as_ref(), A::ClearMask { id, reveal: true }),
+                    item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_HIDE_ALL).as_ref(), A::ClearMask { id, reveal: false }),
                 ],
                 vec![
-                    routed("Apply mask to layer", CommandId::ApplyLayerMask, A::ApplyMask { id }),
-                    item("Delete mask", A::DeleteMask { id }),
+                    routed(self.localization().text(MessageId::RESOURCES_LAYER_MENU_APPLY_MASK_TO_LAYER).as_ref(), CommandId::ApplyLayerMask, A::ApplyMask { id }),
+                    item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_DELETE_MASK).as_ref(), A::DeleteMask { id }),
                 ],
             ]
         } else {
             let mut organization = vec![
                 item(
-                    if l.kind == LayerKind::Group {
-                        "Rename group…"
-                    } else {
-                        "Rename layer…"
-                    },
+                    self.localization().text(if l.kind == LayerKind::Group { MessageId::RESOURCES_LAYER_MENU_RENAME_GROUP } else { MessageId::RESOURCES_LAYER_MENU_RENAME_LAYER }).as_ref(),
                     A::BeginRename { id },
                 ),
                 item(
-                    if multiple {
-                        "Duplicate selected layers"
-                    } else {
-                        "Duplicate"
-                    },
+                    self.localization().text(if multiple { MessageId::RESOURCES_LAYER_MENU_DUPLICATE_SELECTED_LAYERS } else { MessageId::RESOURCES_LAYER_MENU_DUPLICATE }).as_ref(),
                     if multiple {
                         A::DuplicateSelected
                     } else {
                         A::Duplicate { id }
                     },
                 ),
-                item("Group selected layers", A::GroupSelected),
+                item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_GROUP_SELECTED_LAYERS).as_ref(), A::GroupSelected),
             ];
             if l.kind == LayerKind::Group {
-                organization.push(item("Ungroup", A::Ungroup { id }));
+                organization.push(item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_UNGROUP).as_ref(), A::Ungroup { id }));
             }
             let mask_menu = if l.mask.is_some() {
-                let mut sections = self.layer_menu(id, true)?.sections;
-                sections[0][0] = routed("Edit mask", CommandId::EditLayerMask, A::Select { id, mask: true });
+                let mut sections = self.layer_menu_sections(id, true)?;
+                sections[0][0] = routed(self.localization().text(MessageId::RESOURCES_LAYER_MENU_EDIT_MASK).as_ref(), CommandId::EditLayerMask, A::Select { id, mask: true });
                 sections
             } else {
                 vec![
-                    vec![item("Add mask", A::AddMask { id, replace: false })],
+                    vec![item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_ADD_MASK).as_ref(), A::AddMask { id, replace: false })],
                     mask_selection(),
-                    vec![item("Paste mask", A::PasteMask { id })],
+                    vec![item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_PASTE_MASK).as_ref(), A::PasteMask { id })],
                 ]
             };
             let rows = vec![vec![
-                item("Select All Layer Rows", A::SelectAllLayers { selected: true }),
-                item("Clear Layer Row Selection", A::SelectAllLayers { selected: false }),
+                item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SELECT_ALL_LAYER_ROWS).as_ref(), A::SelectAllLayers { selected: true }),
+                item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_CLEAR_LAYER_ROW_SELECTION).as_ref(), A::SelectAllLayers { selected: false }),
             ]];
             let mut selection = vec![vec![
-                item("Fill Selection", A::FillSelection),
-                item("Invert Selection", A::InvertSelection), item("Deselect Pixels", A::Deselect),
+                item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_FILL_SELECTION).as_ref(), A::FillSelection),
+                item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_INVERT_SELECTION).as_ref(), A::InvertSelection), item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_DESELECT_PIXELS).as_ref(), A::Deselect),
             ]];
             if l.kind == LayerKind::Paint {
                 selection.insert(0,self.coverage_menu_items(id,false));
             }
             let visibility = vec![vec![
                 check(
-                    "Show layer",
+                    self.localization().text(MessageId::RESOURCES_LAYER_MENU_SHOW_LAYER).as_ref(),
                     A::Visibility {
                         id,
                         value: !l.visible,
                     },
                     l.visible,
                 ),
-                item("Show layer and parent groups", A::ShowParents { id }),
+                item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SHOW_LAYER_AND_PARENT_GROUPS).as_ref(), A::ShowParents { id }),
                 check(
-                    "Isolate selected layers",
+                    self.localization().text(MessageId::RESOURCES_LAYER_MENU_ISOLATE_SELECTED_LAYERS).as_ref(),
                     A::SoloSelected,
                     self.layer_interaction.solo.is_some(),
                 ),
-                item("Show all layers", A::ShowAll),
+                item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SHOW_ALL_LAYERS).as_ref(), A::ShowAll),
             ]];
             let mut protection = Vec::new();
             if paint {
                 protection.push(check(
-                    "Alpha lock",
+                    self.localization().text(MessageId::RESOURCES_LAYER_MENU_ALPHA_LOCK).as_ref(),
                     A::AlphaLock {
                         id,
                         value: !l.properties.alpha_locked,
@@ -1608,7 +1601,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             protection.extend([
                 check(
-                    "Lock editing",
+                    self.localization().text(MessageId::RESOURCES_LAYER_MENU_LOCK_EDITING).as_ref(),
                     A::Lock {
                         id,
                         value: !l.properties.locked,
@@ -1616,7 +1609,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     l.properties.locked,
                 ),
                 check(
-                    "Clip to layer below",
+                    self.localization().text(MessageId::RESOURCES_LAYER_MENU_CLIP_TO_LAYER_BELOW).as_ref(),
                     A::Clip {
                         id,
                         value: !l.properties.clipped,
@@ -1624,10 +1617,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     l.properties.clipped,
                 ),
                 if multiple {
-                    item("Use selected layers as references", A::ReferenceSelection)
+                    item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_USE_SELECTED_LAYERS_AS_REFERENCES).as_ref(), A::ReferenceSelection)
                 } else {
                     check(
-                        "Use as reference",
+                        self.localization().text(MessageId::RESOURCES_LAYER_MENU_USE_AS_REFERENCE).as_ref(),
                         A::Reference { id },
                         doc.reference_layers.contains(&l.id),
                     )
@@ -1644,8 +1637,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 protection.push(below);
             }
             if l.source.as_ref().is_some_and(|s| s.is_original()) {
-                protection.push(item("Repair Source Profile…", A::RepairSourceProfile { id }));
-                protection.push(item("Rasterize Source…", A::RasterizeSource { id }));
+                protection.push(item(self.localization().text(MessageId::COMMAND_REPAIR_SOURCE_PROFILE).as_ref(), A::RepairSourceProfile { id }));
+                protection.push(item(self.localization().text(MessageId::COMMAND_RASTERIZE_SOURCE).as_ref(), A::RasterizeSource { id }));
                 if l.id == doc.active_layer {
                     let state = self.command(CommandId::RevertToOriginal);
                     let mut revert = ContextMenuItem::command(state.label.as_ref(), UiAction::Invoke { command: state.id });
@@ -1658,13 +1651,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 destructive.push(item(CommandId::ClearLayer.localized_label(self.localization()).as_ref(), A::Clear { id }));
             }
             destructive.push(item(
-                if multiple {
-                    "Delete selected layers"
-                } else if l.kind == LayerKind::Group {
-                    "Delete group and contents"
-                } else {
-                    "Delete layer"
-                },
+                self.localization().text(if multiple { MessageId::RESOURCES_LAYER_MENU_DELETE_SELECTED_LAYERS } else if l.kind == LayerKind::Group { MessageId::RESOURCES_LAYER_MENU_DELETE_GROUP_AND_CONTENTS } else { MessageId::COMMAND_DELETE_LAYER }).as_ref(),
                 if multiple {
                     A::DeleteSelected
                 } else {
@@ -1673,21 +1660,21 @@ impl<R: CanvasRenderer> UiSession<R> {
             ));
             let mut new = vec![vec![
                 item(
-                    "New layer",
+                    self.localization().text(MessageId::COMMAND_ADD_LAYER).as_ref(),
                     A::New {
                         group: false,
                         clipped: false,
                     },
                 ),
                 item(
-                    "New clipping layer",
+                    self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW_CLIPPING_LAYER).as_ref(),
                     A::New {
                         group: false,
                         clipped: true,
                     },
                 ),
                 item(
-                    "New group",
+                    self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW_GROUP).as_ref(),
                     A::New {
                         group: true,
                         clipped: false,
@@ -1708,19 +1695,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 );
             }
             vec![
-                vec![ContextMenuItem::submenu("New", new)],
+                vec![ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW).as_ref(), new)],
                 vec![
-                    ContextMenuItem::submenu("Organize", vec![organization]),
-                    ContextMenuItem::submenu("Blend Mode", self.blend_sections(l)),
-                    ContextMenuItem::submenu("Layer Settings", vec![protection]),
+                    ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_ORGANIZE).as_ref(), vec![organization]),
+                    ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_BLEND_MODE).as_ref(), self.blend_sections(l)),
+                    ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_LAYER_SETTINGS).as_ref(), vec![protection]),
                 ],
                 vec![
-                    ContextMenuItem::submenu("Mask", mask_menu),
-                    ContextMenuItem::submenu("Pixel Selection", selection),
-                    ContextMenuItem::submenu("Layer Row Selection", rows),
-                    ContextMenuItem::submenu("Visibility", visibility),
+                    ContextMenuItem::submenu(self.localization().text(MessageId::TOOLBAR_MASK).as_ref(), mask_menu),
+                    ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_PIXEL_SELECTION).as_ref(), selection),
+                    ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_LAYER_ROW_SELECTION).as_ref(), rows),
+                    ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_VISIBILITY).as_ref(), visibility),
                     item(
-                        "Move layer / mask",
+                        self.localization().text(MessageId::RESOURCES_LAYER_MENU_MOVE_LAYER_MASK).as_ref(),
                         A::Tool {
                             tool: LayerCanvasTool::Move,
                         },
@@ -1733,28 +1720,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         if !editable && l.id == doc.active_layer {
             sections[0].extend(self.fill_layer_items());
         }
-        if mask { sections.push(vec![ContextMenuItem::submenu("Pixel Selection",vec![self.coverage_menu_items(id,true)])]); }
+        if mask { sections.push(vec![ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_PIXEL_SELECTION).as_ref(),vec![self.coverage_menu_items(id,true)])]); }
         if l.kind == LayerKind::Group {
             sections.insert(0, vec![
-                ContextMenuItem::command("New Selection Layer in Group…", UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: false } }),
-                ContextMenuItem::command("Save Current Selection in Group…", UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: true } }),
+                ContextMenuItem::command(self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW_SELECTION_LAYER_IN_GROUP).as_ref(), UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: false } }),
+                ContextMenuItem::command(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SAVE_CURRENT_SELECTION_IN_GROUP).as_ref(), UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: true } }),
             ]);
         }
-        Ok(ContextMenu {
-            title: format!(
-                "{} {}",
-                l.name,
-                if mask {
-                    "mask"
-                } else if l.kind == LayerKind::Group {
-                    "group"
-                } else {
-                    "layer"
-                }
-            ),
-            sections,
-        }
-        .with_shortcuts(&self.state.settings, self.state.platform))
+        Ok(sections)
     }
     pub(super) fn layer_pen(&mut self, event: PenEvent) -> Result<(), String> {
         let p = self

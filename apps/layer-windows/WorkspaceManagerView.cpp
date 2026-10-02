@@ -9,6 +9,15 @@
 using namespace CapyUi;
 struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     Dispatch send;
+    J catalog;
+    std::shared_ptr<CapyLocalization> localization;
+    hstring copy(wchar_t const* group,wchar_t const* key)const{return str(object(object(catalog,L"native_copy"),group),key);}
+    hstring caption(J const& request)const{
+        auto source=to_string(request.Stringify());std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_native_caption(localization.get(),source.c_str()),capy_string_free);
+        if(!raw)throw hresult_error(E_OUTOFMEMORY);return str(J::Parse(to_hstring(raw.get())),L"text");
+    }
+    hstring recovery(wchar_t const* key) const {return str(object(object(catalog,L"bootstrap"),L"recovery"),key);}
+    hstring common(wchar_t const* key) const {return str(object(object(catalog,L"bootstrap"),L"common"),key);}
     std::function<void()> changed;
     XamlRoot root{nullptr};
     ContentDialog dialog{nullptr};
@@ -31,7 +40,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         Image pinned,current;
         Button more,grip;
         MenuFlyout menu;
-        hstring theme;
+        hstring theme,captionTitle;
         ToggleMenuFlyoutItem show;
         MenuFlyoutItem up,down,rename,remove;
         MenuFlyoutSeparator separator;
@@ -69,7 +78,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         }
     }
     void fail() {
-        send(to_string(O({{L"operation",S(L"failure")},{L"error",S(L"Windows could not show the workspace manager. Try again.")}}).Stringify()));
+        send(to_string(O({{L"operation",S(L"failure")},{L"error",S(recovery(L"workspace_manager_failed"))}}).Stringify()));
     }
     static void sync(TextBox const& text,hstring value,std::optional<hstring>& draft) {
         if(draft&&*draft==value)draft.reset();
@@ -102,13 +111,13 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     void init() {
         body.Spacing(12);listing.Spacing(10);promptBody.Spacing(12);
         toolbarTabs.Orientation(Orientation::Horizontal);toolbarTabs.Spacing(8);
-        thisWorkspace.Content(box_value(L"This Workspace"));savedToolbars.Content(box_value(L"Saved Toolbars"));
+        thisWorkspace.Content(box_value(copy(L"header",L"this_workspace")));savedToolbars.Content(box_value(copy(L"header",L"saved_toolbars")));
         AutomationProperties::SetAutomationId(thisWorkspace,L"workspace-toolbar-current");
         AutomationProperties::SetAutomationId(savedToolbars,L"workspace-toolbar-library");
         toolbarTabs.Children().Append(thisWorkspace);toolbarTabs.Children().Append(savedToolbars);
         thisWorkspace.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->dispatch(O({{L"type",S(L"open")},{L"page",S(L"this_workspace")}}));});
         savedToolbars.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->dispatch(O({{L"type",S(L"open")},{L"page",S(L"toolbar_library")}}));});
-        toolbarActions.Content(box_value(L"Toolbar actions"));toolbarActions.HorizontalAlignment(HorizontalAlignment::Left);
+        toolbarActions.Content(box_value(copy(L"header",L"toolbar_actions")));toolbarActions.HorizontalAlignment(HorizontalAlignment::Left);
         AutomationProperties::SetAutomationId(toolbarActions,L"workspace-toolbar-actions");toolbarActions.Flyout(toolbarMenu);
         heading.ColumnDefinitions().Append(ColumnDefinition());
         ColumnDefinition end;end.Width({1,GridUnitType::Auto});heading.ColumnDefinitions().Append(end);
@@ -118,16 +127,16 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(create,L"workspace-manager-create");
         intro.TextWrapping(TextWrapping::Wrap);promptMessage.TextWrapping(TextWrapping::Wrap);
         error.TextWrapping(TextWrapping::Wrap);
-        progress.Text(L"Loading…");progress.Visibility(Visibility::Collapsed);
-        search.PlaceholderText(L"Search");AutomationProperties::SetAutomationId(search,L"workspace-manager-search");
+        progress.Text(recovery(L"loading"));progress.Visibility(Visibility::Collapsed);
+        search.PlaceholderText(copy(L"header",L"search"));AutomationProperties::SetAutomationId(search,L"workspace-manager-search");
         list.SelectionMode(ListViewSelectionMode::Single);list.IsItemClickEnabled(true);
         ScrollViewer::SetHorizontalScrollBarVisibility(list,ScrollBarVisibility::Disabled);
         AutomationProperties::SetAutomationId(list,L"workspace-manager-items");
-        name.Header(box_value(L"Name"));name.MaxLength(100);
+        name.Header(box_value(str(object(object(catalog,L"bootstrap"),L"common"),L"name")));name.MaxLength(100);
         AutomationProperties::SetAutomationId(name,L"workspace-manager-name");
         choices.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetAutomationId(choices,L"workspace-manager-choice");
-        retry.Content(box_value(L"Retry"));retry.HorizontalAlignment(HorizontalAlignment::Left);
+        retry.Content(box_value(copy(L"header",L"retry")));retry.HorizontalAlignment(HorizontalAlignment::Left);
         AutomationProperties::SetAutomationId(retry,L"workspace-manager-retry");
         listSurface.Children().Append(list);
         rowDrag=std::make_unique<WorkspaceRowDrag>(list,listSurface,
@@ -195,12 +204,12 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         row.more.Content(box_value(L"⋮"));row.more.Width(32);row.more.Height(32);row.more.Padding({0,0,0,0});
         row.more.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(row.more,4);
         AutomationProperties::SetAutomationId(row.more,L"workspace-manager-options-"+id);
-        auto options=row.menu;row.rename.Text(L"Rename…");row.remove.Text(L"Delete…");
+        auto options=row.menu;row.rename.Text(recovery(L"rename"));row.remove.Text(common(L"delete"));
         AutomationProperties::SetAutomationId(row.rename,L"workspace-manager-rename");
         AutomationProperties::SetAutomationId(row.remove,L"workspace-manager-delete");
         row.rename.Click([weak=weak_from_this(),id](auto&&,auto&&){if(auto self=weak.lock();self&&self->showing)self->dispatch(form(L"rename",S(id)));});
         row.remove.Click([weak=weak_from_this(),id](auto&&,auto&&){if(auto self=weak.lock();self&&self->showing)self->dispatch(form(L"delete",S(id)));});
-        row.show.Text(L"Show in top bar");row.up.Text(L"Move Up");row.down.Text(L"Move Down");
+        row.show.Text(copy(L"header",L"show_top"));row.up.Text(copy(L"header",L"move_up"));row.down.Text(copy(L"header",L"move_down"));
         AutomationProperties::SetAutomationId(row.show,L"workspace-manager-show");
         AutomationProperties::SetAutomationId(row.up,L"workspace-manager-move-up");
         AutomationProperties::SetAutomationId(row.down,L"workspace-manager-move-down");
@@ -217,17 +226,17 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         row.pinned.Margin({0,0,8,0});row.pinned.VerticalAlignment(VerticalAlignment::Center);
         Grid::SetColumn(row.pinned,3);content.Children().Append(row.pinned);
         AutomationProperties::SetAutomationId(row.pinned,L"workspace-manager-pinned-"+id);
-        AutomationProperties::SetName(row.pinned,L"Shown in top bar");
-        row.pinned.IsHitTestVisible(true);tooltip(row.pinned,L"Shown in top bar");
+        AutomationProperties::SetName(row.pinned,copy(L"header",L"shown_top"));
+        row.pinned.IsHitTestVisible(true);tooltip(row.pinned,copy(L"header",L"shown_top"));
         row.current.Width(14);row.current.Height(14);row.current.Margin({0,0,8,0});
         row.current.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(row.current,2);content.Children().Append(row.current);
         AutomationProperties::SetAutomationId(row.current,L"workspace-manager-current-"+id);
-        AutomationProperties::SetName(row.current,L"Current workspace");tooltip(row.current,L"Current workspace");
+        AutomationProperties::SetName(row.current,copy(L"header",L"current_workspace"));tooltip(row.current,copy(L"header",L"current_workspace"));
         row.grip.Width(20);row.grip.Height(32);row.grip.Margin({0,0,8,0});row.grip.Padding({0,0,0,0});
         row.grip.Background(clear());row.grip.BorderThickness({0,0,0,0});
         row.grip.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(row.grip,0);
         AutomationProperties::SetAutomationId(row.grip,L"workspace-manager-grip-"+id);
-        AutomationProperties::SetHelpText(row.grip,L"Drag to reorder, or open for Move Up and Move Down.");
+        AutomationProperties::SetHelpText(row.grip,copy(L"header",L"drag_to_reorder"));
         content.Children().Append(row.more);content.Children().Append(row.grip);row.item.Content(content);
         rowDrag->Attach(row.item,row.grip,row.more,row.menu,id);return row;
     }
@@ -248,7 +257,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             auto theme=str(object(snapshot,L"state"),L"theme",L"dark");
             if(theme!=row.theme){row.theme=theme;row.pinned.Source(icon(L"pin",theme,14).Source());row.current.Source(icon(L"check",theme,14).Source());row.grip.Content(panelGrip(theme));}
             row.grip.Visibility(configurable?Visibility::Visible:Visibility::Collapsed);row.grip.IsEnabled(canReorder());
-            AutomationProperties::SetName(row.grip,L"Reorder "+label);
+            if(row.captionTitle!=label){row.captionTitle=label;AutomationProperties::SetName(row.grip,caption(O({{L"type",S(L"reorder")},{L"title",S(label)}})));AutomationProperties::SetName(row.more,caption(O({{L"type",S(L"options_for")},{L"title",S(label)}})));}
             row.show.IsChecked(pinned);row.show.IsEnabled(!saving);row.up.IsEnabled(!saving&&position>0&&position<saved.Size());
             row.down.IsEnabled(!saving&&position+1<saved.Size());
             for(auto item:{row.show.as<UIElement>(),row.up.as<UIElement>(),row.down.as<UIElement>()})
@@ -260,7 +269,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
             row.rename.IsEnabled(!saving&&rename);row.remove.IsEnabled(!saving&&remove);
             row.more.Visibility(configurable?Visibility::Visible:Visibility::Collapsed);
             AutomationProperties::SetName(row.item,label+(detail.empty()?L"":L" · "+detail));
-            AutomationProperties::SetName(row.more,L"Options for "+label);
+
         }
         if(next!=order){
             auto items=list.Items();
@@ -312,7 +321,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         heading.Width(body.Width());
         intro.Text(str(model,L"intro"));intro.Visibility(naming||intro.Text().empty()?Visibility::Collapsed:Visibility::Visible);
         create.Visibility(!naming&&(page==L"workspaces"||page==L"this_workspace")?Visibility::Visible:Visibility::Collapsed);
-        create.IsEnabled(!busy&&!flag(model,L"loading"));AutomationProperties::SetName(create,page==L"this_workspace"?L"New Toolbar":L"New Workspace");
+        create.IsEnabled(!busy&&!flag(model,L"loading"));AutomationProperties::SetName(create,page==L"this_workspace"?copy(L"header",L"new_toolbar"):copy(L"header",L"new_workspace"));
         listing.Visibility(naming||page==L"prompt"?Visibility::Collapsed:Visibility::Visible);
         promptBody.Visibility(naming?Visibility::Visible:Visibility::Collapsed);
         list.IsEnabled(!busy);search.IsEnabled(!busy);
@@ -338,11 +347,11 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         }
         auto message=str(model,L"error");if(message.empty())message=str(model,L"switcher_error");error.Text(message);error.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
         error.Foreground(fill(color(theme==L"dark"?L"#ffb4ab":L"#b3261e")));
-        progress.Text(busy?L"Saving…":L"Loading…");progress.Visibility(busy||flag(model,L"loading")?Visibility::Visible:Visibility::Collapsed);
+        progress.Text(busy?recovery(L"saving"):recovery(L"loading"));progress.Visibility(busy||flag(model,L"loading")?Visibility::Visible:Visibility::Collapsed);
         retry.Visibility(flag(model,L"retry")?Visibility::Visible:Visibility::Collapsed);retry.IsEnabled(!busy);
         dialog.PrimaryButtonText(naming?str(details,L"confirm"):str(model,L"primary"));
         dialog.IsPrimaryButtonEnabled(!busy&&!flag(model,L"loading")&&(naming||flag(model,L"enabled")));
-        dialog.CloseButtonText(L"Cancel");
+        dialog.CloseButtonText(common(L"cancel"));
         dialog.DefaultButton(naming?ContentDialogButton::Primary:ContentDialogButton::None);
         cancelPending=false;
     }
@@ -352,6 +361,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         showing=true;changed();
         try{
             dialog=ContentDialog();dialog.XamlRoot(root);dialog.Title(heading);dialog.Content(body);
+            auto tag=str(object(catalog,L"bootstrap"),L"active_tag");if(!tag.empty())dialog.Language(tag);
             AutomationProperties::SetAutomationId(dialog,L"workspace-manager");
             dialog.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
                 if(e.Key()==Windows::System::VirtualKey::Escape)if(auto self=weak.lock();self&&self->rowDrag->Escape())e.Handled(true);
@@ -381,16 +391,16 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         toolbarActionsKey=L"";toolbarPage=L"";toolbarMenu.Items().Clear();
         showing=false;programmatic=false;changed();
     }
-    static hstring focusOwner(hstring const& owner) {
+    hstring focusOwner(hstring const& owner) {
         struct Target {std::wstring property;HWND window=nullptr;} target{L"CapyCanvas.WorkspaceOwner."+std::wstring(owner)};
         EnumWindows([](HWND window,LPARAM context)->BOOL{
             auto& target=*reinterpret_cast<Target*>(context);
             if(GetPropW(window,target.property.c_str())&&IsWindowVisible(window)){target.window=window;return FALSE;}
             return TRUE;
         },reinterpret_cast<LPARAM>(&target));
-        if(!target.window)return L"This workspace is open in another window that is no longer available. Close it there or retry after its ownership expires.";
+        if(!target.window)return recovery(L"workspace_missing");
         if(IsIconic(target.window))ShowWindowAsync(target.window,SW_RESTORE);
-        if(!SetForegroundWindow(target.window)&&GetForegroundWindow()!=target.window)return L"Windows could not activate the other window. Select it from the taskbar.";
+        if(!SetForegroundWindow(target.window)&&GetForegroundWindow()!=target.window)return recovery(L"workspace_activation_failed");
         return L"";
     }
     void apply(J const& value,bool unavailable) {
@@ -415,8 +425,8 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         }else if(open()&&!blocked)show();
     }
 };
-WorkspaceManagerView::WorkspaceManagerView(Dispatch send,XamlRoot root,std::function<void()> changed):impl(std::make_shared<Impl>()){
-    impl->send=std::move(send);impl->root=root;impl->changed=std::move(changed);impl->init();
+WorkspaceManagerView::WorkspaceManagerView(Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,XamlRoot root,std::function<void()> changed):impl(std::make_shared<Impl>()){
+    impl->send=std::move(send);impl->catalog=catalog;impl->localization=std::move(localization);impl->root=root;impl->changed=std::move(changed);impl->init();
 }
 WorkspaceManagerView::~WorkspaceManagerView()=default;
 void WorkspaceManagerView::Apply(Json const& snapshot,bool blocked){impl->apply(snapshot,blocked);}

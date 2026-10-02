@@ -18,7 +18,7 @@ impl ProfilePurpose {
         &self,
         profile: &ExportProfile,
         working: RgbSpace,
-    ) -> Result<(), String> {
+    ) -> Result<(), layer_ui::ColorFeatureError> {
         match self {
             Self::Proof => {
                 let recipe = layer_core::color::ProofRecipe::new(
@@ -49,22 +49,7 @@ impl ProfilePurpose {
                 )?;
             }
             Self::Source(source) => {
-                use layer_core::color::source::SourceChannels;
-                let (expected, label) = match source.channels {
-                    SourceChannels::Rgb | SourceChannels::Rgba => (ProfileChannels::Rgb, "RGB"),
-                    SourceChannels::Gray | SourceChannels::GrayAlpha => {
-                        (ProfileChannels::Gray, "grayscale")
-                    }
-                    SourceChannels::Cmyk => (ProfileChannels::Cmyk, "CMYK"),
-                };
-                if profile.channels != expected {
-                    return Err(format!(
-                        "This image is {label}. Choose a matching {label} source profile."
-                    ));
-                }
-                let mut source = source.clone();
-                source.profile = profile.profile.clone();
-                layer_color::WorkingDecoder::new(&source, working, Default::default())?;
+                layer_ui::profile_library::validate_source_profile(profile,source,working)?;
             }
         }
         Ok(())
@@ -73,12 +58,12 @@ impl ProfilePurpose {
 
 mod picker;
 pub(super) use picker::{ProfileChooser, ProfilePicker};
-pub(super) const UNNAMED_PROFILE: &str = "Embedded ICC profile";
 
 // Keep a replaced proof locally; the project continues to embed only its active proof.
 pub(super) async fn preserve_replaced_proof(
     previous: Option<&layer_core::color::ProofRecipe>,
     next: &layer_core::color::ProofRecipe,
+    localizer: &layer_ui::Localizer,
 ) -> Result<(), String> {
     let Some(previous) = previous.filter(|p| p.profile != next.profile) else {
         return Ok(());
@@ -90,15 +75,13 @@ pub(super) async fn preserve_replaced_proof(
     let name = previous.name.clone();
     gio::spawn_blocking(move || library::store(&library::directory(), &bytes, &name).map(|_| ()))
         .await
-        .map_err(|_| "Profile library worker failed".to_string())?
-        .map_err(|error| {
-            format!("Could not save the previous proof profile to Saved Profiles: {error}")
-        })
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile library worker failed".into()).profile_message(localizer))?
+        .map_err(|reason| reason.profile_message(localizer))
 }
 
-pub(super) fn describe(profile: ColorProfile) -> Result<ExportProfile, String> {
+pub(super) fn describe(profile: ColorProfile) -> Result<ExportProfile, layer_ui::ColorFeatureError> {
     let channels = layer_color::profile_channels(&profile)?;
-    let name = layer_color::profile_description(&profile)?;
+    let name = layer_color::profile_description_optional(&profile)?.unwrap_or_default();
     Ok(ExportProfile {
         profile,
         channels,
@@ -110,7 +93,7 @@ pub(super) fn read(
     path: &std::path::Path,
     working: RgbSpace,
     purpose: &ProfilePurpose,
-) -> Result<ExportProfile, String> {
+) -> Result<ExportProfile, layer_ui::ColorFeatureError> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .map_err(|e| e.to_string())?
@@ -118,7 +101,7 @@ pub(super) fn read(
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() > layer_color::MAX_ICC_BYTES {
-        return Err("ICC profile exceeds the size limit".into());
+        return Err(layer_ui::ColorFeatureError::ProfileReadLimit);
     }
     let profile = ColorProfile::Icc(bytes.into());
     let channels = layer_color::profile_channels(&profile)?;
@@ -129,10 +112,7 @@ pub(super) fn read(
         .chars()
         .take(128)
         .collect();
-    let name = layer_color::profile_description(&profile)
-        .ok()
-        .filter(|name| !name.trim().is_empty() && name != UNNAMED_PROFILE)
-        .unwrap_or(fallback);
+    let name = layer_color::profile_description_optional(&profile)?.unwrap_or(fallback);
     let result = ExportProfile {
         profile,
         channels,
@@ -179,11 +159,7 @@ mod tests {
             .unwrap()
             .set_len(layer_color::MAX_ICC_BYTES as u64 + 1)
             .unwrap();
-        assert!(
-            read(&path, RgbSpace::Srgb, &ProfilePurpose::Output)
-                .unwrap_err()
-                .contains("size limit")
-        );
+        assert_eq!(read(&path, RgbSpace::Srgb, &ProfilePurpose::Output).unwrap_err(), layer_ui::ColorFeatureError::ProfileReadLimit);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

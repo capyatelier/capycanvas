@@ -3,7 +3,7 @@
 use crate::app::App;
 use jni::{
     JNIEnv,
-    objects::{JClass, JDoubleArray, JObject, JString},
+    objects::{JClass, JDoubleArray, JObject, JObjectArray, JString},
     sys::{jboolean, jfloat, jint, jintArray, jlong, jstring},
 };
 use layer_host::scene::SceneDisplay;
@@ -746,9 +746,16 @@ pub extern "system" fn Java_art_capycanvas_Native_frameCost(
 pub extern "system" fn Java_art_capycanvas_Native_create(
     mut env: JNIEnv,
     _: JClass,
+    saved: JString,
+    locales: JObjectArray,
     profiling: jboolean,
 ) -> jlong {
-    match App::new() {
+    let result = (|| {
+        let saved = read(&mut env, &saved)?;
+        let locales = locale_tags(&mut env, &locales)?;
+        App::new(&saved, &locales.iter().map(String::as_str).collect::<Vec<_>>())
+    })();
+    match result {
         Ok(mut app) => {
             app.profiling = profiling != 0;
             Box::into_raw(Box::new(app)) as jlong
@@ -758,6 +765,25 @@ pub extern "system" fn Java_art_capycanvas_Native_create(
             0
         }
     }
+}
+fn locale_tags(env: &mut JNIEnv, locales: &JObjectArray) -> Result<Vec<String>, String> {
+    (0..env.get_array_length(locales).map_err(error)?).map(|index| {
+        let value = env.get_object_array_element(locales, index).map_err(error)?;
+        read(env, &JString::from(value))
+    }).collect()
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_bootstrap(
+    mut env: JNIEnv, _: JClass, saved: JString, locales: JObjectArray,
+) -> jstring {
+    let result = (|| {
+        let saved = read(&mut env, &saved)?;
+        let locales = locale_tags(&mut env, &locales)?;
+        let tags = locales.iter().map(String::as_str).collect::<Vec<_>>();
+        let localization = crate::launch::localization(&saved, &tags);
+        serde_json::to_string(&layer_ui::bootstrap_view(&localization)).map_err(error)
+    })();
+    string(&mut env, result)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_destroy(_: JNIEnv, _: JClass, handle: jlong) {
@@ -1195,8 +1221,22 @@ pub extern "system" fn Java_art_capycanvas_Native_number(
 ) -> jstring {
     let result = read(&mut env, &request)
         .and_then(|s| serde_json::from_str::<layer_ui::NumericRequest>(&s).map_err(error))
-        .and_then(|request| request.resolve())
+        .and_then(|request| { let localization = crate::launch::active_localization().map_err(error)?; request.resolve().map_err(|reason| reason.message(localization)) })
         .and_then(|value| serde_json::to_string(&value).map_err(error));
+    string(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_numericLabels(
+    mut env: JNIEnv,
+    _: JClass,
+    label: JString,
+) -> jstring {
+    let result = read(&mut env, &label)
+        .and_then(|label| {
+            let localization = crate::launch::active_localization().map_err(error)?;
+            serde_json::to_string(&layer_ui::NumericLabels::new(&label, localization)).map_err(error)
+        });
     string(&mut env, result)
 }
 
@@ -1208,7 +1248,7 @@ pub extern "system" fn Java_art_capycanvas_Native_toolbarUi(
 ) -> jstring {
     let result = read(&mut env, &request)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(layer_ui::toolbar_ui)
+        .and_then(|request| { let localization = crate::launch::active_localization().map_err(error)?; layer_ui::toolbar_ui(request, localization) })
         .and_then(|value| serde_json::to_string(&value).map_err(error));
     string(&mut env, result)
 }
@@ -1273,8 +1313,31 @@ pub extern "system" fn Java_art_capycanvas_Native_colorUi(
 ) -> jstring {
     let result = read(&mut env, &request)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(layer_ui::color_ui)
+        .and_then(|request| layer_ui::color_ui_localized(request, crate::launch::active_localization()?))
         .and_then(|value| serde_json::to_string(&value).map_err(error));
+    string(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_nativeCaption(
+    mut env: JNIEnv, _: JClass, request: JString,
+) -> jstring {
+    let result = read(&mut env, &request).and_then(|source| {
+        let request: layer_ui::NativeCaption = serde_json::from_str(&source).map_err(error)?;
+        let text = request.message(crate::launch::active_localization()?);
+        Ok(serde_json::json!({"text": text}).to_string())
+    });
+    string(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_documentAppearance(
+    mut env: JNIEnv, _: JClass, options: JString,
+) -> jstring {
+    let result = read(&mut env, &options).and_then(|source| {
+        let options: layer_ui::NewDocumentOptions = serde_json::from_str(&source).map_err(error)?;
+        serde_json::to_string(&options.appearance(crate::launch::active_localization()?)).map_err(error)
+    });
     string(&mut env, result)
 }
 
@@ -1288,7 +1351,8 @@ pub extern "system" fn Java_art_capycanvas_Native_colorHueStops(
     let result = color_shape(&mut env, &shape).and_then(|shape| {
         let mut state = layer_ui::ColorState::default();
         state.set_rgb_space(serde_json::from_value(serde_json::Value::String(read(&mut env, &space)?)).map_err(error)?)?;
-        state.apply(layer_ui::ColorAction::Shape { shape })?;
+        let localization = crate::launch::active_localization()?;
+        state.apply(layer_ui::ColorAction::Shape { shape }).map_err(|reason| reason.message(layer_ui::ColorInputModel::DocumentRgb, localization))?;
         serde_json::to_string(state.wheel_hue_stops()).map_err(error)
     });
     string(&mut env, result)

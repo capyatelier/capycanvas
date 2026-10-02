@@ -166,15 +166,15 @@ private const val TabCloseSize=24f
 @Composable internal fun DrawingSelector(host:CanvasHost) {
     val controller=host.drawingTabs
     if(!controller.selector)return
-    AlertDialog(onDismissRequest={controller.selector=false},title={Text("Drawings")},
+    AlertDialog(onDismissRequest={controller.selector=false},title={Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("drawings"))},
         text={Column(Modifier.fillMaxWidth().testTag("drawing-selector")) {
             DrawingRows(host,true,Modifier.fillMaxWidth().heightIn(max=420.dp))
             controller.view.optString("storage_error").takeUnless{it.isEmpty()||it=="null"}?.let{Text(it)}
             Row {
-                TextButton({controller.order(obj("op" to "history","redo" to false))},enabled=controller.view.optBoolean("can_undo"),modifier=Modifier.testTag("drawing-order-undo")){Text("Undo reorder")}
-                TextButton({controller.order(obj("op" to "history","redo" to true))},enabled=controller.view.optBoolean("can_redo"),modifier=Modifier.testTag("drawing-order-redo")){Text("Redo")}
+                TextButton({controller.order(obj("op" to "history","redo" to false))},enabled=controller.view.optBoolean("can_undo"),modifier=Modifier.testTag("drawing-order-undo")){Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("undo_order"))}
+                TextButton({controller.order(obj("op" to "history","redo" to true))},enabled=controller.view.optBoolean("can_redo"),modifier=Modifier.testTag("drawing-order-redo")){Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("redo_order"))}
             }
-        }},confirmButton={TextButton({controller.selector=false}){Text("Done")}})
+        }},confirmButton={TextButton({controller.selector=false}){Text(host.bootstrap!!.getJSONObject("common").getString("done"))}})
 }
 @Composable private fun DrawingRows(host:CanvasHost,vertical:Boolean,modifier:Modifier,tile:Float=0f,gap:Float=0f) {
     val controller=host.drawingTabs;val rows=controller.rows;val colors=LocalPalette.current
@@ -210,14 +210,15 @@ private const val TabCloseSize=24f
                 .drawingKeys(controller,id){if(vertical)drag.menu=id else controller.selector=true}
                 .onFocusChanged{if(it.isFocused)controller.focused=id else if(controller.focused==id)controller.focused=null}
                 .selectable(selected,enabled=!controller.blocked,role=Role.Tab){controller.select(id)}
-                .semantics{contentDescription="${item.getString("title")}${if(item.getBoolean("modified"))", modified"else ""}, ${item.getString("location")}"},verticalAlignment=Alignment.CenterVertically) {
-                if(vertical)Box(Modifier.width(32.dp).fillMaxHeight().drawingBounds(drag.handles,id).testTag("drawing-handle-$id"),contentAlignment=Alignment.Center){PanelGrip("Move drawing")}
+                .semantics{contentDescription=item.getString("title");stateDescription=listOfNotNull(item.getString("location"),host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("modified").takeIf{item.getBoolean("modified")}).filter{it.isNotEmpty()}.joinToString(" · ")},verticalAlignment=Alignment.CenterVertically) {
+                if(vertical)Box(Modifier.width(32.dp).fillMaxHeight().drawingBounds(drag.handles,id).testTag("drawing-handle-$id"),contentAlignment=Alignment.Center){PanelGrip(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("move_drawing"))}
                 else Spacer(Modifier.width((TabCloseSize+closeInset).dp))
                 Column(Modifier.weight(1f).padding(horizontal=6.dp),horizontalAlignment=if(vertical)Alignment.Start else Alignment.CenterHorizontally) {
                     Text(item.getString("title")+if(item.getBoolean("modified"))" •"else "",maxLines=1,overflow=TextOverflow.Ellipsis)
                     if(vertical)Text(item.getString("location"),style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=TextOverflow.Ellipsis)
                 }
-                val close="Close ${item.getString("title")}"
+                val title=item.getString("title")
+                val close=remember(title) { JSONObject(Native.nativeCaption(obj("type" to "close_drawing", "title" to title).toString())).getString("text") }
                 if(vertical)IconButton({controller.select(id,true)},Modifier.size(48.dp).drawingBounds(drag.closes,id).testTag("drawing-close-$id"),enabled=!controller.blocked){SharedIcon("close",close,Modifier.size(16.dp))}
                 else TabClose(close,closeInset,!controller.blocked,Modifier.drawingBounds(drag.closes,id).testTag("drawing-close-$id")){controller.select(id,true)}
             }
@@ -230,10 +231,10 @@ private const val TabCloseSize=24f
                 Box(Modifier.offset{if(vertical)IntOffset(0,at.roundToInt())else IntOffset(at.roundToInt(),0)}.then(if(vertical)Modifier.fillMaxWidth().height(2.dp)else Modifier.width(2.dp).fillMaxHeight()).background(colors.accent).testTag("drawing-drop-indicator"))}
         }
         drag.menu?.let{id->Surface(Modifier.align(Alignment.BottomCenter).testTag("drawing-row-menu"),shadowElevation=6.dp){Row {
-            TextButton({drag.menu=null;controller.select(id)}){Text("Select")}
-            TextButton({drag.menu=null;controller.order(obj("op" to "step","id" to id,"forward" to false))}){Text("Move earlier")}
-            TextButton({drag.menu=null;controller.order(obj("op" to "step","id" to id,"forward" to true))}){Text("Move later")}
-            TextButton({drag.menu=null;controller.select(id,true)}){Text("Close")}
+            TextButton({drag.menu=null;controller.select(id)}){Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("choose_drawing"))}
+            TextButton({drag.menu=null;controller.order(obj("op" to "step","id" to id,"forward" to false))}){Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("move_earlier"))}
+            TextButton({drag.menu=null;controller.order(obj("op" to "step","id" to id,"forward" to true))}){Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("move_later"))}
+            TextButton({drag.menu=null;controller.select(id,true)}){Text(host.bootstrap!!.getJSONObject("common").getString("close"))}
         }}}
     }
 }

@@ -109,18 +109,18 @@ fn size_control() -> NumericControl {
     NumericControl::number(1., 131072., 1., 0).unit("px")
 }
 impl SelectionOptions {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), WorkspaceValidationError> {
         self.tonal.validate()?;
         self.brush.validate()?;
         self.display.validate()?;
-        feather_control().validate(self.feather, "Feather radius")?;
-        for value in self.ratio {
-            ratio_control().validate(value, "Aspect ratio")?;
+        feather_control().validate(self.feather, MessageId::TOOL_CONTROL_SELECTION_TOOLS_FEATHER_RADIUS)?;
+        for (value, label) in self.ratio.into_iter().zip([MessageId::TOOL_CONTROL_SELECTION_RATIO_WIDTH, MessageId::TOOL_CONTROL_SELECTION_RATIO_HEIGHT]) {
+            ratio_control().validate(value, label)?;
         }
-        for value in self.size {
-            size_control().validate(value, "Selection size")?;
+        for (value, label) in self.size.into_iter().zip([MessageId::TOOL_CONTROL_SELECTION_WIDTH, MessageId::TOOL_CONTROL_SELECTION_HEIGHT]) {
+            size_control().validate(value, label)?;
             if value.fract() != 0. {
-                return Err("Selection size needs whole pixels".into());
+                return Err(NumericError::WholePixels { label: label.into() }.into());
             }
         }
         Ok(())
@@ -129,6 +129,7 @@ impl SelectionOptions {
         vec![ToolSetting {
             id: "selection_feather",
             label: localizer.text(MessageId::TOOL_CONTROL_SELECTION_TOOLS_FEATHER_RADIUS),
+            label_id: MessageId::TOOL_CONTROL_SELECTION_TOOLS_FEATHER_RADIUS,
             group: localizer.text(MessageId::TOOL_CONTROL_GROUP_EDGES),
             value: self.feather,
             numeric: feather_control(),
@@ -154,13 +155,14 @@ impl SelectionOptions {
             .map(|i| ToolSetting {
                 id: ids[i],
                 label: localizer.text(labels[i]),
+                label_id: labels[i],
                 group: std::sync::Arc::from(""),
                 value: values[i],
                 numeric: numeric.clone(),
             })
             .collect()
     }
-    pub fn edit(&mut self, id: &str, value: f32) -> Result<(), String> {
+    pub fn edit(&mut self, id: &str, value: f32, localizer: &Localizer) -> Result<(), String> {
         let mut next = self.clone();
         match id {
             "selection_ratio_width" => next.ratio[0] = value,
@@ -170,7 +172,7 @@ impl SelectionOptions {
             "selection_height" => next.size[1] = value,
             _ => return Err("Unknown selection setting".into()),
         }
-        next.validate()?;
+        next.validate().map_err(|reason| reason.message(localizer))?;
         *self = next;
         Ok(())
     }

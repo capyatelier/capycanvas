@@ -395,7 +395,6 @@ fn native_workspace_ownership_input() {
             .color
             .depth;
     adopted.colors.set_document_depth(depth).unwrap();
-    adopted.colors.library.ensure_starters();
     assert_eq!(manager.current().unwrap().working, Some(adopted));
 
     // Context menus created while an item was occupied use SwitchToWindow.
@@ -1919,7 +1918,7 @@ fn native_header_editor_controls_input() {
                 .layout
                 .header
                 .entries()
-                .any(|e| e.item.label() == label)
+                .any(|e| e.item.canonical_label() == label)
         );
     }
     assert!(
@@ -1969,7 +1968,7 @@ fn native_header_editor_controls_input() {
         .enumerate()
     {
         let zone = HeaderZone::ALL[i % 3];
-        let name = item.label().to_lowercase().replace(' ', "-");
+        let name = item.id();
         d.drop_component(&name, zone);
         let model = state(&d.w).workspace.layout.header;
         let id = model.entries().find(|e| e.item == item).unwrap().id;
@@ -2394,7 +2393,7 @@ fn native_header_overflow_input() {
                     assert!(
                         row.is_mapped(),
                         "hidden item {} must be reachable at {size:?}",
-                        entry.item.label()
+                        entry.item.canonical_label()
                     );
                     if row.is_sensitive() {
                         d.click(&row);
@@ -2998,4 +2997,65 @@ fn layer_swipes(devices: &[&str]) {
         }
     }
     d.w.window.close();
+}
+
+#[test]
+#[ignore = "private Wayland display; gtk-raster.sh"]
+fn native_caption_toolbar_constructor_before_realize() {
+    let app = native_test_app("art.capycanvas.CaptionConstructor");
+    let w = Workspace::new_localized(&app, Localizer::shared(UiLanguage::Japanese));
+    assert!(w.gpu.borrow().is_none());
+    let layout = DockLayout::default();
+    let resolved = w.resolved();
+    for _ in 0..2 {
+        assert!(!w.customization.reconcile_toolbars(&w, &layout, &resolved));
+        assert!(w.toolbar.first_child().is_none());
+    }
+    w.window.present();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while w.gpu.borrow().is_none() {
+        assert!(Instant::now() < deadline, "canvas startup");
+        pump(10);
+    }
+    wait_workspaces(&w);
+    if let Ok(theme) = std::env::var("CAPY_NATIVE_TEST_THEME") {
+        w.dispatch(UiAction::SetTheme { theme: Some(match theme.as_str() { "light" => Theme::Light, "dark" => Theme::Dark, _ => panic!("unknown theme") }) });
+    }
+    let state = ui_session(&w).state().clone();
+    assert!(w.customization.reconcile_toolbars(&w, &state.workspace.layout, &w.resolved()));
+    let view = ui_session(&w).panel_view(Panel::Toolbar).unwrap();
+    assert!(!view.tiles.is_empty());
+    for tile in &view.tiles {
+        let button = find_named(w.toolbar.upcast_ref(), &format!("tile-{}", tile.id)).unwrap().downcast::<gtk::Button>().unwrap();
+        let tooltip = if matches!(tile.choice.control, ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) {
+            ui_session(&w).color_picker_button_label(tile.choice.control).to_string()
+        } else { tile.tooltip.clone() };
+        assert_eq!(button.tooltip_text().as_deref(), Some(tooltip.as_str()));
+    }
+    let control = ToolbarControl::Command { command: CommandId::MergeDown };
+    for action in [
+        CustomizationAction::InsertTools { panel: Panel::Toolbar, before: None },
+        CustomizationAction::PickerSelect { control, selected: true },
+        CustomizationAction::ConfirmTools,
+        CustomizationAction::SetTileStyle { panel: Panel::Toolbar, style: TileStyle::Labeled },
+    ] { w.dispatch(UiAction::Customize { action }); }
+    let view = ui_session(&w).panel_view(Panel::Toolbar).unwrap();
+    let tile = view.tiles.iter().find(|tile| tile.choice.control == control).unwrap();
+    let name = format!("tile-{}", tile.id);
+    let button = find_named(w.toolbar.upcast_ref(), &name).unwrap().downcast::<gtk::Button>().unwrap();
+    let caption = button.child().and_downcast::<gtk::Box>().unwrap().last_child().and_downcast::<gtk::Label>().unwrap();
+    let before = caption.text();
+    w.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "exposure".into() } });
+    let expected = ui_session(&w).command(CommandId::MergeDown).label;
+    assert_ne!(before.as_str(), expected.as_ref());
+    assert_eq!(caption.text().as_str(), expected.as_ref());
+    assert_eq!(find_named(w.toolbar.upcast_ref(), &name).unwrap(), button.clone().upcast::<gtk::Widget>());
+    for size in [8., 17.] {
+        w.dispatch(UiAction::SetBrushSize { value: size });
+        w.dispatch(UiAction::SetZoom { zoom: size / 8. });
+        assert_eq!(caption.text().as_str(), expected.as_ref());
+        assert_eq!(find_named(w.toolbar.upcast_ref(), &name).unwrap(), button.clone().upcast::<gtk::Widget>());
+    }
+    w.window.destroy();
+    pump(20);
 }

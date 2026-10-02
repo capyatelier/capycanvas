@@ -51,7 +51,7 @@ try{
     WindowCommand 'new_toolbar'
     $null=Control 'workspace-manager'
     Wait-Until {$null -ne (Model).windows_workspace.prompt -and !(Model).windows_workspace.loading} 'New Toolbar form did not open'
-    Wait-Until {!(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Toolbar form did not block painting'
+    Wait-Until {!(Control 'drawing-canvas').Current.IsEnabled} 'Toolbar form did not block painting'
     Edit 'workspace-manager-name' ' '
     InvokeDialog 'workspace-manager' 'Add to Workspace'
     Wait-Until {(Model).windows_workspace.error} 'Invalid toolbar name was not rejected'
@@ -87,7 +87,7 @@ try{
     Capture 'picker'
     InvokeDialog 'tool-picker' ((Model).picker.confirm_label)
     Wait-Until {$null -eq (Model).picker -and @((Toolbar $toolbarId).tiles).Count -eq 1} 'Picker did not add exactly one tool'
-    Wait-Until {$null -eq (Find 'tool-picker') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Picker did not release its modal slot'
+    Wait-Until {$null -eq (Find 'tool-picker') -and (Control 'drawing-canvas').Current.IsEnabled} 'Picker did not release its modal slot'
     if((Toolbar $toolbarId).tiles[0].control.command -ne 'pen'){throw 'Created toolbar contains the wrong control'}
     ToolbarContext $gripId;Invoke 'Rename Windows tools review toolbar…' -Name
     $null=Control 'toolbar-prompt'
@@ -155,7 +155,7 @@ try{
     WindowCommand 'new_toolbar'
     $null=Control 'workspace-manager'
     InvokeDialog 'workspace-manager' 'Cancel'
-    Wait-Until {$null -eq (Model).windows_workspace.page -and $null -eq (Model).windows_workspace.prompt -and $null -eq (Find 'workspace-manager') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Cancel did not close New Toolbar and release painting'
+    Wait-Until {$null -eq (Model).windows_workspace.page -and $null -eq (Model).windows_workspace.prompt -and $null -eq (Find 'workspace-manager') -and (Control 'drawing-canvas').Current.IsEnabled} 'Cancel did not close New Toolbar and release painting'
     Invoke 'Test stroke' -Name
     Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the review'
     WindowCommand 'new_toolbar'

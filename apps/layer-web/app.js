@@ -18,6 +18,7 @@ import { createDocuments } from "./documents.js";
 import { createSystemStatus } from "./system-status.js";
 import { createHeader } from "./header.js";
 import { createNumberField } from "./numeric.js";
+import { captureTextComposition, composingKey } from "./text-input.js";
 import { createSelectionUi } from "./selection-masks.js";
 import { createPreviewPanel } from "./preview-panel.js";
 import { createCanvasSizeUi } from "./canvas-size.js";
@@ -40,6 +41,7 @@ const $ = (id) =>
   [...panels.values()]
     .map((panel) => panel.querySelector(`#${id}`))
     .find(Boolean);
+captureTextComposition(document);
 const workspace = $("workspace"),
   canvas = $("canvas"),
   center = $("center");
@@ -49,6 +51,8 @@ let workspaceViewport = [workspace.clientWidth, workspace.clientHeight];
 const commands = new Map(), sizeButtons = new Map();
 let app,
   catalog,
+  bootstrap,
+  delivery,
   panelNames,
   state,
   scheduled = false,
@@ -119,7 +123,7 @@ function button(text, action, className = "") {
   return node;
 }
 function numberField(control, label, onChange, inline = false) {
-  return createNumberField({ control, label, onChange, inline, icon, resolve: request => app.number_input(request) });
+  return createNumberField({ control, label, labels:app.numeric_labels(label), onChange, inline, icon, resolve: request => app.number_input(request) });
 }
 // Overlay scrollbars do not take width away from previews or tiles. Scrolling
 // itself stays in the browser; this one thumb also supports pointer dragging.
@@ -221,11 +225,16 @@ function draggable(node, item, pickup = item.kind === "tile" ? "hold" : "immedia
 }
 function grip(item) {
   const node = button("", () => {}, "panel-grip");
-  node.title = "Drag to move panel";
-  node.setAttribute(
-    "aria-label",
-    item.kind === "column" ? "Move column" : item.kind === "group" ? "Move all tabs" : "Move " + (customization?.view(item.panel)?.title || panelNames[item.panel] || "toolbar"),
-  );
+  node.title = delivery.drag_panel;
+  if (item.kind === "panel") {
+    let retainedTitle;
+    node.updatePanelTitle = title => {
+      if (retainedTitle === title) return;
+      retainedTitle = title;
+      node.setAttribute("aria-label", app.document_delivery_message({type:"move_panel",name:title}));
+    };
+    node.updatePanelTitle(customization.view(item.panel).title);
+  } else node.setAttribute("aria-label", item.kind === "column" ? delivery.move_column : delivery.move_group);
   node.append(icon("grip"));
   return draggable(node, item);
 }
@@ -400,7 +409,7 @@ function refreshStartup() {
     workspace.append(startupNotice);
   }
   const hidden = !stages.canvas || app.brush_ready();
-  const text = documentReady ? "Preparing brush…" : "Preparing canvas…";
+  const text = documentReady ? bootstrap.preparing_brush : bootstrap.preparing_canvas;
   if (startupNotice.hidden !== hidden) startupNotice.hidden = hidden;
   if (startupNotice.textContent !== text) startupNotice.textContent = text;
 }
@@ -530,7 +539,7 @@ function arrange(nextLayout, layoutOnly = false) {
       const tabs = element("nav", "dock-tabs");
       draggable(tabs, { kind: "group", group: group.id });
       customization.target(tabs, { kind: "group", group: group.id });
-      tabs.setAttribute("aria-label", "Panel tabs");
+      tabs.setAttribute("aria-label", delivery.panel_tabs);
       if (group.tabs_visible) {
         const labels = element("div", "tab-list");
         group.panels.forEach((panel, index) => {
@@ -602,7 +611,7 @@ function arrange(nextLayout, layoutOnly = false) {
       node = element("div");
       node.tabIndex = 0;
       node.setAttribute("role", "separator");
-      node.setAttribute("aria-label", "Resize dock");
+      node.setAttribute("aria-label", delivery.resize_dock);
       node.addEventListener("keydown", (e) => {
         if (node.dragAction.type === "drag_divider") keyInput(e, true, node.dragAction.id);
       });
@@ -766,7 +775,7 @@ function buildPanels() {
     panels.get(panel).append(editor.control(control));
   const controls = element("div", "size-controls");
   controls.dataset.control = "brush_size";
-  const size = numberField(catalog.brush_size, "Brush size", value => dispatch({ type: "set_brush_size", value }));
+  const size = numberField(catalog.brush_size, catalog.native_copy.color.brush_size, value => dispatch({ type: "set_brush_size", value }));
   size.id = "size-number"; controls.append(size);
   const grid = element("div", "size-grid");
   grid.dataset.control = "size_presets";
@@ -910,7 +919,7 @@ function update(regions) {
               input.addEventListener("change", async () => {
                 const file = input.files?.[0];
                 if (!file) return;
-                if (file.size > 1 << 20) { message("The keymap file is too large"); return; }
+                if (file.size > 1 << 20) { message(delivery.keymap_too_large); return; }
                 dispatch({ type: "preferences", action: { type: "import_keymap", text: await file.text() } });
               });
               input.click();
@@ -919,7 +928,7 @@ function update(regions) {
             else if (request.kind.type !== "save_settings") { documents.handle(request); continue; }
             else
             localStorage.setItem(settingsKey, JSON.stringify(request.kind.settings));
-          } catch (e) { error = `Cannot save preferences: ${e}`; }
+          } catch (e) { console.error(e); error = app.document_delivery_message({type:"save_preferences",detail:String(e)}); }
           dispatch({ type: "complete_request", id: request.id, error });
         }
       } finally { servicingRequests = false; }
@@ -1579,7 +1588,7 @@ canvas.addEventListener(
   { passive: false },
 );
 function keyInput(e, pressed, divider = null) {
-  if (pressed && e.defaultPrevented) return;
+  if (pressed && (e.defaultPrevented || composingKey(e))) return;
   if (pressed && e.target instanceof Element && e.target.closest("dialog[open]:not(#settings, #shortcut-editor, #modifier-key)")) return;
   updateZen();
   const reply = input({
@@ -1593,7 +1602,7 @@ function keyInput(e, pressed, divider = null) {
       alt: e.altKey,
     },
     editing:
-      e.isComposing ||
+      composingKey(e) ||
       (e.target instanceof Element &&
         e.target.matches("input,select,textarea,[contenteditable=true]")),
     divider,
@@ -1604,8 +1613,8 @@ function keyInput(e, pressed, divider = null) {
   }
 }
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && workspaceGesture) { endWorkspaceGesture(null, true); e.preventDefault(); return; }
-  if(documents?.key(e))return;
+  if (!composingKey(e) && e.key === "Escape" && workspaceGesture) { endWorkspaceGesture(null, true); e.preventDefault(); return; }
+  if(!composingKey(e) && documents?.key(e))return;
   keyInput(e, true);
 });
 window.addEventListener("keyup", (e) => keyInput(e, false));
@@ -1717,13 +1726,19 @@ try {
   configure_raster_worker(rasterWorker);
   canvas.width = 800;
   canvas.height = 600;
-  app = WebApp.create(canvas);
+  let savedPreferences, restoreError;
+  try { savedPreferences = localStorage.getItem(settingsKey); }
+  catch (error) { restoreError = error; }
+  const preferredLanguages = Array.from(navigator.languages ?? []);
+  app = WebApp.create(canvas, savedPreferences, preferredLanguages);
+  bootstrap = app.bootstrap_view();
+  delivery = app.document_delivery_copy();
+  document.documentElement.lang = bootstrap.active_tag;
+  for (const [id, label] of [["workspace", bootstrap.drawing_workspace], ["canvas", bootstrap.drawing_canvas], ["gpu-notice", bootstrap.canvas_availability], ["header-start", bootstrap.application_menus], ["header-end", bootstrap.workspace_controls], ["canvas-status", bootstrap.canvas_status]]) $(id).setAttribute("aria-label", label);
+  $("canvas").setAttribute("aria-description", bootstrap.drawing_canvas_help);
+  $("gpu-notice").replaceChildren(element("div", "gpu-help", bootstrap.starting_canvas));
+  $("status").textContent = bootstrap.starting_webgpu;
   app.prediction_availability(typeof globalThis.PointerEvent?.prototype.getPredictedEvents === "function");
-  let restoreError;
-  try {
-    const saved = localStorage.getItem(settingsKey);
-    if (saved) app.dispatch({ type: "restore_saved_settings", saved });
-  } catch (error) { restoreError = `Cannot restore preferences: ${error}`; }
   const themeAction = () => ({
     type: "system_theme_changed",
     theme: systemTheme.matches ? "dark" : "light",
@@ -1732,15 +1747,15 @@ try {
   window.addEventListener("storage", (event) => {
     if (event.key !== settingsKey || !event.newValue) return;
     try { dispatch({ type: "restore_saved_settings", saved: event.newValue }); }
-    catch (error) { message(`Cannot restore preferences: ${error}`); }
+    catch (error) { console.error(error); message(app.document_delivery_message({type:"restore_preferences",detail:String(error)})); }
   });
   systemTheme.addEventListener("change", () => dispatch(themeAction()));
   state = app.state_update();
   catalog = app.catalog();
   performance.mark("capy.startup.model");
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
-  document.title = `${catalog.app_name} — drawing workspace`;
-  refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view: () => app.preferences_cached() });
+  document.title = catalog.app_name;
+  refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });
   commandBar = createCommandBar({element, button, icon, dispatch, style:catalog.command_search_style, canvas, layoutChanged:() => glass?.queue()});
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
@@ -1763,7 +1778,7 @@ try {
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs});
   glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
-  documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged});
+  documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged});
   documents.mountProof(panels.get("proof"));
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
   const capy = iconButton("zen_mode");
@@ -1784,7 +1799,7 @@ try {
   update(255);
   systemStatus.sync();
   $("status").textContent = "";
-  if (restoreError) message(restoreError);
+  if (restoreError) { console.error(restoreError); message(app.document_delivery_message({type:"restore_preferences",detail:String(restoreError)})); }
   new ResizeObserver(() => {
     workspaceViewport = [workspace.clientWidth, workspace.clientHeight];
     arrange();
@@ -1797,7 +1812,7 @@ try {
   // Adopt the saved UI before competing with initial GPU allocation. A storage
   // failure must still allow canvas startup and the workspace recovery UI.
   await Promise.race([workspaceManager.ready, new Promise(resolve => setTimeout(resolve, 1000))]);
-  documents.startRecovery().catch(error => message(`Recovery unavailable: ${error}`));
+  documents.startRecovery().catch(error => message(app.document_recovery_unavailable(String(error))));
   performance.mark("capy.startup.gpu");
   await startGpu();
   if (window.launchQueue?.setConsumer) {
@@ -1808,7 +1823,7 @@ try {
         if(!files.length)return;
         const deadline=performance.now()+240000;
         while(documents.busy()||!app.document_park_ready()||document.querySelector('dialog[open]')) {
-          if(performance.now()>deadline)throw Error('Finish the current operation, then open the files again.');
+          if(performance.now()>deadline)throw Error(delivery.open_drawings_operation);
           await new Promise(resolve=>setTimeout(resolve,50));
         }
         const selected=[];for(const handle of files)selected.push({file:await handle.getFile(),handle});
@@ -1817,8 +1832,7 @@ try {
     });
   }
 } catch (error) {
-  $("gpu-notice").replaceChildren(element("h1", "", "Capy Canvas could not load"),
-    element("p", "", "Reload the page. If the problem continues, check that the complete app package is being served."), element("pre", "", String(error)));
+  $("gpu-notice").replaceChildren(element("h1", "", bootstrap?.application_start_failed??"Capy Canvas"), element("pre", "", String(error)));
   $("status").textContent = "";
   console.error(error);
 }
@@ -1831,12 +1845,12 @@ function stopGpu(error) {
   applyChange(app.suspend_gpu());
   if(startupNotice)startupNotice.hidden=true;
   const notice=$("gpu-notice");notice.hidden=false;
-  notice.replaceChildren(element("p","",String(error)),button("Restart Canvas",()=>restartGpu()));
+  notice.replaceChildren(element("p","",String(error)),button(bootstrap.restart_canvas,()=>restartGpu()));
   document.body.dataset.gpu="unavailable";
 }
 setInterval(()=>{if(gpuReady){const error=app.gpu_failure();if(error)stopGpu(error);}},1000);
 async function restartGpu() {
-  if(gpuReady)stopGpu("Restarting canvas…");
+  if(gpuReady)stopGpu(bootstrap.restarting_canvas);
   compilerFailed=false;firstCanvasRendered=false;
   for(const key of Object.keys(startupTimes))startupTimes[key]=null;
   await startGpu();
@@ -1862,7 +1876,7 @@ async function startGpu() {
   gpuStarting = true;
   document.body.dataset.gpu = "starting";
   const notice = $("gpu-notice");
-  notice.replaceChildren(element("div", "gpu-help", "Starting the canvas…"));
+  notice.replaceChildren(element("div", "gpu-help", bootstrap.starting_canvas));
   try {
     if (!isSecureContext) throw new Error("WebGPU requires HTTPS or localhost.");
     if (!navigator.gpu) throw new Error("navigator.gpu is unavailable.");

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ColorPanel: View {
+    @State private var shapeCaptions: [String: String] = [:]
     @ObservedObject var store: EditorStore
     @StateObject private var resources = ColorPanelLayoutCache()
     @FocusState private var readoutFocused: Bool
@@ -80,7 +81,7 @@ struct ColorPanel: View {
                             .rotationEffect(.degrees(layout["shape_rotations"][index].number))
                             .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Circle())
                     }.buttonStyle(ColorPanelButtonStyle(kind: .shape, palette: palette))
-                        .accessibilityLabel("Use \(shape == "circle" ? "Okhsv" : shape == "triangle" ? "HLS" : "HSV") \(shape)")
+                        .accessibilityLabel(shapeCaptions[shape] ?? "")
                         .accessibilityIdentifier("color-shape-" + shape)
                         .colorPlaced(layout["shapes"][index], id: "shape-\(index)")
                 }
@@ -88,7 +89,7 @@ struct ColorPanel: View {
                     SharedIcon(name: "color-swap")
                         .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Circle())
                 }.buttonStyle(ColorPanelButtonStyle(kind: .swap, palette: palette))
-                    .accessibilityLabel("Swap foreground and background").accessibilityIdentifier("color-swap")
+                    .accessibilityLabel(store.catalog["native_copy"]["color"]["swap"].string).accessibilityIdentifier("color-swap")
                     .colorPlaced(layout["swap"], id: "swap")
                 let readoutHit = ColorReadoutHit(radius: layout["wheel"][2].number * model["geometry"]["outer"].number + 2)
                 Button { color(["op": "toggle_readout"]) } label: {
@@ -105,7 +106,9 @@ struct ColorPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }.aspectRatio(1 / Self.aspect(hdr: hdr), contentMode: .fit).frame(minWidth: 128, minHeight: 128)
             .modifier(ColorPanelMeasurement(id: "panel"))
-            .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls")
+            .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls").onAppear {
+                for shape in ["circle", "triangle", "square"] { shapeCaptions[shape] = NativeTextContext.caption(["type": "color_shape", "shape": shape]) }
+            }
     }
     private func color(_ action: [String: Any]) { store.dispatch(["type": "color", "action": action]) }
     static func aspect(hdr: Bool) -> CGFloat {

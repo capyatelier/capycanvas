@@ -229,12 +229,11 @@ impl BrowserDatabase {
                             metadata
                                 .as_ref()
                                 .err()
-                                .map(ToString::to_string)
+                                .cloned()
                                 .or_else(|| {
                                     s.stored()
                                         .and_then(|s| s.entity.validate())
                                         .err()
-                                        .map(|e| e.to_string())
                                 });
                         match metadata {
                             Ok(metadata) => ItemSummary {
@@ -243,17 +242,16 @@ impl BrowserDatabase {
                                 generations: s.generations,
                                 claim: s.claim.clone(),
                                 error,
+                                unavailable_name: false,
                             },
                             Err(error) => summary_fallback(
                                 id.clone(),
                                 s.entity["metadata"]["kind"].as_str(),
-                                s.entity["metadata"]["name"]
-                                    .as_str()
-                                    .unwrap_or("Unreadable workspace"),
+                                s.entity["metadata"]["name"].as_str(),
                                 s.entity["metadata"]["builtin"].as_bool() == Some(true),
                                 s.generations,
                                 s.claim.clone(),
-                                error.to_string(),
+                                error,
                             ),
                         }
                     })

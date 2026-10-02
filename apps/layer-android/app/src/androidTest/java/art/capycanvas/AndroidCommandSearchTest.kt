@@ -127,6 +127,34 @@ class AndroidCommandSearchTest {
         instrumentation.uiAutomation.setRotation(if (autoRotate) android.app.UiAutomation.ROTATION_UNFREEZE else previousRotation)
         if (::scenario.isInitialized) scenario.close()
     }
+    @Test fun nativeInputConnectionCompositionKeepsCandidateKeysInsideSearch() {
+        open()
+        lateinit var connection: android.view.inputmethod.InputConnection
+        main {
+            connection = tagged("command-search")!!.first.view.onCreateInputConnection(android.view.inputmethod.EditorInfo())!!
+            assertTrue(connection.setComposingText("日本", 1))
+        }
+        waitFor("native preedit") { host.textComposition.active && search()?.optString("query") == "日本" }
+        val selected = search()!!.optInt("selected")
+        val revision = state().getJSONObject("document_file").getLong("revision")
+        for (code in listOf(KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_ENTER)) {
+            for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) main {
+                val now = SystemClock.uptimeMillis()
+                connection.sendKeyEvent(KeyEvent(now, now, phase, code, 0, 0, 0, 0, KeyEvent.FLAG_SOFT_KEYBOARD))
+            }
+        }
+        instrumentation.waitForIdleSync()
+        main {
+            assertNotNull(tagged("command-search"))
+            assertEquals(selected, search()!!.optInt("selected"))
+            assertEquals(revision, state().getJSONObject("document_file").getLong("revision"))
+            assertTrue(connection.commitText("日本語", 1))
+            assertTrue(connection.finishComposingText())
+        }
+        waitFor("native committed text") { !host.textComposition.active && search()?.optString("query") == "日本語" }
+        closeWithEscape("committed composition closes normally")
+    }
+
     @Test fun nativeKeyboardTouchPenAndPerformance() {
         if (mainWindow.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
             assertTrue(instrumentation.uiAutomation.setRotation(if (mainWindow.display.rotation % 2 == 0) android.app.UiAutomation.ROTATION_FREEZE_90 else android.app.UiAutomation.ROTATION_FREEZE_0))

@@ -136,11 +136,13 @@ impl Launcher {
                 .upgrade()
                 .and_then(|v| active(app, &v.borrow())),
         };
+        let localization = target.as_ref().map_or_else(|| crate::launch_localization().clone(), |w| w.localization.clone());
+        let copy = layer_ui::bootstrap_view(&localization);
         let closed = Rc::new(Cell::new(false));
         let placeholder = if target.is_none() {
             let window = adw::ApplicationWindow::builder()
                 .application(app)
-                .title("Open — Capy Canvas")
+                .title(layer_ui::DocumentRequest::Open.title(&localization).as_ref())
                 .default_width(480)
                 .default_height(300)
                 .build();
@@ -149,7 +151,7 @@ impl Launcher {
             view.add_top_bar(&adw::HeaderBar::new());
             view.set_content(Some(
                 &adw::StatusPage::builder()
-                    .title("Opening files")
+                    .title(copy.opening_files.as_ref())
                     .icon_name("image-x-generic-symbolic")
                     .build(),
             ));
@@ -223,6 +225,7 @@ impl Launcher {
                     if !name.is_empty() { names.paint = name.clone().into(); }
                     names
                 }, |w| layer_ui::photo_document_names(&name, &w.localization)),
+                &localization,
             )
             .await;
             if let Some(w) = &target {
@@ -257,12 +260,13 @@ impl Launcher {
                 }
                 Ok(None) => break,
                 Err(error) => {
+                    eprintln!("Cannot open file {name}: {error}");
                     let dialog = adw::AlertDialog::builder()
-                        .heading("Cannot open file")
-                        .body(format!("{name}\n\n{error}"))
+                        .heading(copy.cannot_open_file.as_ref())
+                        .body(layer_ui::file_open_failure(&localization, &name))
                         .build();
                     dialog.set_widget_name("file-launch-error");
-                    dialog.add_response("ok", "OK");
+                    dialog.add_response("ok", &copy.ok);
                     dialog.set_close_response("ok");
                     crate::alert::choose(dialog, parent).await;
                 }

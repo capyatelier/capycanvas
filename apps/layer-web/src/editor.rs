@@ -34,13 +34,14 @@ impl WebApp {
         let state = self.session.state();
         let document = layer_ui::new_document_spec(self.session.localization());
         js_sys::JSON::parse(&serde_json::to_string(&json!({
-            "color_panel": state.preview_colors().view_mapped(self.session.effective_sdr_rendition()),
-            "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.label(), "model":self.session.application_menu(menu)})),
+            "color_panel": state.preview_colors().view_mapped(self.session.effective_sdr_rendition(), self.session.localization()),
+            "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.localized_label(self.session.localization()), "model":self.session.application_menu(menu)})),
             "document_options": json!({
                 "extent": state.settings.new_document.defaults.extent,
                 "creation": state.settings.new_document.form(self.session.localization()),
                 "min_dimension": document.minimum,
                 "max_dimension": document.maximum,
+                "numeric": document.numeric,
                 "width_label": document.labels[0],
                 "height_label": document.labels[1],
                 "new_title": document.title,
@@ -55,7 +56,7 @@ impl WebApp {
         serialize(&options.appearance(self.session.localization()))
     }
     pub fn color_panel(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.state().preview_colors().view_mapped(self.session.effective_sdr_rendition()))
+        serialize(&self.session.state().preview_colors().view_mapped(self.session.effective_sdr_rendition(), self.session.localization()))
     }
     pub fn palette_panel(&self) -> Result<JsValue, JsValue> {
         let state = self.session.state();
@@ -65,6 +66,7 @@ impl WebApp {
             colors,
             &state.colors.library,
             |color| colors.mapped_swatch(color, rendition),
+            self.session.localization(),
         ))
     }
     /// Static for each shape; fetch when switching models, not on every drag.

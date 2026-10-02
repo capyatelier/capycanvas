@@ -438,8 +438,8 @@ fn imports_clip_foreign_names_and_detect_by_content() {
     let long = "x".repeat(100);
     let file = format!("GIMP Palette\nName: {long}\n0 0 0 {long}\n");
     let action = ColorLibrary::import_file(file.as_bytes(), "Fallback").unwrap();
-    let mut library = ColorLibrary::default();
-    library.apply(action).unwrap();
+    let mut library = ColorLibrary::canonical();
+    library.apply_canonical(action).unwrap();
     assert_eq!(library.active_palette().name.chars().count(), 64);
     assert!(PaletteFormat::IMPORT_EXTENSIONS.contains(&"kpl"));
     assert_eq!(

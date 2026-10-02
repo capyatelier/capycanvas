@@ -139,10 +139,6 @@ impl Header {
         let overflow = std::array::from_fn(|i| {
             let b = gtk::MenuButton::builder()
                 .child(&crate::icons::image("layer-menu-symbolic"))
-                .tooltip_text(format!(
-                    "More {} title-bar items",
-                    HeaderZone::ALL[i].label().to_lowercase()
-                ))
                 .build();
             b.set_widget_name(&format!("header-overflow-{i}"));
             b.add_css_class("flat");
@@ -190,6 +186,9 @@ impl Header {
             }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
+        for (i, button) in self.overflow.iter().enumerate() {
+            button.set_tooltip_text(Some(&HeaderZone::ALL[i].overflow_label(&w.localization)));
+        }
         *self.root.imp().owner.borrow_mut() = Rc::downgrade(w);
         w.system_status.battery.connect_visible_notify(glib::clone!(
             #[weak]
@@ -453,7 +452,7 @@ impl Header {
             w.surface.queue_allocate();
         }
         for size in HeaderSize::ALL {
-            let class = format!("header-{}", size.label().to_lowercase());
+            let class = format!("header-{}", size.id());
             if model.size == size {
                 self.root.add_css_class(&class);
             } else {
@@ -481,6 +480,9 @@ impl Header {
                 };
                 button.set_sensitive(enabled || editing);
                 selected(button, active);
+                if let HeaderItem::Tool { control: control @ (ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) } = item.entry.item {
+                    button.set_tooltip_text(Some(&w.gpu.borrow().as_ref().unwrap().session.color_picker_button_label(control)));
+                }
                 if let HeaderItem::Tool { control } = item.entry.item
                     && let Some(image) = button.child().and_downcast::<gtk::Image>()
                 {
@@ -501,11 +503,11 @@ impl Header {
                             "layer-fullscreen-enter-symbolic"
                         }),
                     );
-                    button.set_tooltip_text(Some(if state.fullscreen {
-                        "Leave Full Screen"
+                    button.set_tooltip_text(Some(&w.localization.text(if state.fullscreen {
+                        layer_ui::MessageId::WORKSPACE_HEADER_LEAVE_FULLSCREEN
                     } else {
-                        "Full Screen"
-                    }));
+                        layer_ui::MessageId::WORKSPACE_HEADER_FULLSCREEN
+                    })));
                 }
                 if item.entry.item == HeaderItem::Capy {
                     if let Some(image) = button.child().and_downcast::<gtk::Image>() {
@@ -524,7 +526,7 @@ impl Header {
                 let name = if view.id.is_some() {
                     view.name
                 } else {
-                    "Workspaces".into()
+                    w.localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES).to_string()
                 };
                 compact.set_label(&name);
             }
@@ -568,7 +570,7 @@ impl Header {
         root.set_widget_name(&format!("header-item-{}", entry.id));
         root.add_css_class("header-item");
         root.set_focusable(editing);
-        root.update_property(&[gtk::accessible::Property::Label(&entry.item.label())]);
+        root.update_property(&[gtk::accessible::Property::Label(&w.gpu.borrow().as_ref().unwrap().session.header_item_label(entry.item))]);
         let mut button = None;
         let mut compact = None;
         let content: gtk::Widget = match entry.item {
@@ -579,12 +581,12 @@ impl Header {
                 let b = gtk::Button::new();
                 b.add_css_class("flat");
                 b.add_css_class("header-tool");
-                b.set_tooltip_text(Some(&entry.item.label()));
+                b.set_tooltip_text(Some(&w.gpu.borrow().as_ref().unwrap().session.header_item_label(entry.item)));
                 let icon = match entry.item {
                     HeaderItem::Tool {
                         control: ToolbarControl::Color,
                     } => "colors",
-                    HeaderItem::Tool { control } => tool_choice(control).icon,
+                    HeaderItem::Tool { control } => control.icon(),
                     HeaderItem::Settings => "settings",
                     HeaderItem::Fullscreen => "fullscreen-enter",
                     _ => ZenIcon::LookingUp.icon(),
@@ -673,8 +675,8 @@ impl Header {
                 w.workspaces.switcher.set_halign(gtk::Align::Center);
                 stack.add_named(&w.workspaces.switcher, Some("full"));
                 let menu = gtk::MenuButton::builder()
-                    .label("Workspaces")
-                    .tooltip_text("Switch workspace")
+                    .label(w.localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES).as_ref())
+                    .tooltip_text(w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_SWITCH_WORKSPACE).as_ref())
                     .build();
                 menu.add_css_class("flat");
                 menu.add_css_class("chrome-control");
@@ -714,7 +716,7 @@ impl Header {
             stack.set_hhomogeneous(false);
             stack.set_vhomogeneous(false);
             stack.add_named(&content, Some("value"));
-            let placeholder = gtk::Label::new(Some(&entry.item.label()));
+            let placeholder = gtk::Label::new(Some(&w.gpu.borrow().as_ref().unwrap().session.header_item_label(entry.item)));
             stack.add_named(&placeholder, Some("placeholder"));
             stack.set_visible_child_name(if content.is_visible() {
                 "value"
@@ -763,7 +765,7 @@ impl Header {
             grip.set_valign(gtk::Align::Center);
             grip.set_size_request(20, 28);
             grip.set_widget_name(&format!("header-grip-{}", entry.id));
-            grip.set_tooltip_text(Some("Drag to move this item"));
+            grip.set_tooltip_text(Some(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM)));
             root.append(&grip);
             w.register_drag(&root, DragTarget::Header(HeaderDragSource::Item(entry.id)));
         }
@@ -1136,7 +1138,7 @@ impl Header {
                 let Ok(entry) = model.entry(*id) else {
                     continue;
                 };
-                let button = gtk::Button::with_label(&entry.item.label());
+                let button = gtk::Button::with_label(&w.gpu.borrow().as_ref().unwrap().session.header_item_label(entry.item));
                 button.set_widget_name(&format!("header-overflow-item-{id}"));
                 if let HeaderItem::Tool { control } = entry.item
                     && let Some(state) = w.gpu.borrow().as_ref().map(|g| g.session.state().clone())

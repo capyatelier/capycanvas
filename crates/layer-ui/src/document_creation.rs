@@ -383,7 +383,7 @@ mod tests {
         let original = session.engine().document().layer(paint).unwrap().clone();
         layer(&mut session, LayerAction::Duplicate { id: paint.0 });
         let copy = session.engine().document().active_layer;
-        assert_eq!(session.engine().document().layer(copy).unwrap().name.as_ref(), format!("{literal} のコピー"));
+        assert_eq!(session.engine().document().layer(copy).unwrap().name.as_ref(), format!("{literal}のコピー"));
         assert_eq!(session.engine().document().layer(paint).unwrap(), &original);
         layer(&mut session, LayerAction::GroupSelected);
         let group = session.engine().document().layer(LayerId(5)).unwrap().clone();

@@ -55,13 +55,13 @@ struct Column:std::enable_shared_from_this<Column>{
         J source;for(auto value:data->drawerSources){auto anchor=object(value.GetObject(),L"anchor");
             if(str(anchor,L"kind")==L"column"&&num(anchor,L"column",-1)==id)source=value.GetObject();}
         corners={SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
-        if(source.Size()){auto square=sourceCorners(source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
+        if(source.Size()){auto square=sourceCorners(data,source,bounds);for(int i=0;i<4;++i)if(square[i])corners[i]=0;}
         auto open=object(geometry,L"open");auto openDirection=str(open,L"direction");
         std::set<std::wstring> openSources;
         for(auto value:array(open,L"connections"))openSources.insert(std::wstring(value.GetArray().GetStringAt(0)));
         if(!openDirection.empty())for(auto value:array(geometry,L"groups"))for(auto iconValue:array(value.GetObject(),L"icons")){
             auto tile=iconValue.GetObject();if(!openSources.contains(std::wstring(str(tile,L"panel"))))continue;
-            auto square=sourceCorners(O({{L"bounds",object(tile,L"bounds")},{L"direction",S(openDirection)}}),bounds);
+            auto square=sourceCorners(data,O({{L"bounds",object(tile,L"bounds")},{L"direction",S(openDirection)}}),bounds);
             for(int i=0;i<4;++i)if(square[i])corners[i]=0;
         }
         auto facing=str(source,L"direction"),joined=str(object(source,L"anchor"),L"origin");

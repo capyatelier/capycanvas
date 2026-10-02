@@ -3,10 +3,10 @@
 #include <array>
 
 namespace CapyUi {
-inline V colorUi(J const& request) {
+inline V colorUi(CapyLocalization const* localization,J const& request) {
     auto text=to_string(request.Stringify());
-    std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_color_ui(text.c_str()),capy_string_free);
-    if(!raw)throw hresult_error(E_FAIL,L"Color form is unavailable");
+    std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_color_ui(localization,text.c_str()),capy_string_free);
+    if(!raw)throw hresult_error(E_OUTOFMEMORY);
     return JsonValue::Parse(to_hstring(raw.get()));
 }
 inline Windows::UI::Color displayColor(J const& value){
@@ -16,6 +16,8 @@ inline Windows::UI::Color displayColor(J const& value){
 }
 // Native draft controls; Rust owns coordinates, parsing, conversion and precision.
 struct ColorForm : std::enable_shared_from_this<ColorForm> {
+    std::shared_ptr<WorkspaceData> data;
+    explicit ColorForm(std::shared_ptr<WorkspaceData> context):data(std::move(context)){}
     StackPanel root;
     ComboBox model;
     TextBox intensity;
@@ -27,7 +29,7 @@ struct ColorForm : std::enable_shared_from_this<ColorForm> {
     hstring source;
     std::function<void(J)> commit;
     void refresh(J request){
-        view=colorUi(O({{L"type",S(L"form")},{L"request",request}})).GetObject();
+        view=colorUi(data->localization.get(),O({{L"type",S(L"form")},{L"request",request}})).GetObject();
         if(!view.HasKey(L"draft")){error.Text(str(view,L"error"));apply.IsEnabled(false);return;}
         updating=true;
         auto draft=object(view,L"draft");auto choices=array(view,L"models");model.Items().Clear();
@@ -51,15 +53,15 @@ struct ColorForm : std::enable_shared_from_this<ColorForm> {
     }
     void init(std::function<void(J)> action,hstring const& id){
         commit=std::move(action);root.Spacing(6);auto weak=weak_from_this();
-        model.Header(box_value(L"Color coordinates"));model.HorizontalAlignment(HorizontalAlignment::Stretch);
+        model.Header(box_value(data->caption(L"color",L"model")));model.HorizontalAlignment(HorizontalAlignment::Stretch);
         AutomationProperties::SetAutomationId(model,id+L"-model");root.Children().Append(model);
         model.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->model.SelectedIndex()>=0){
             auto request=self->draft();request.Insert(L"change_model",array(self->view,L"models").GetArrayAt(self->model.SelectedIndex()).GetAt(0));self->refresh(request);
         }});
         for(uint32_t i=0;i<4;++i){auto entry=entries[i];entry.MaxLength(128);AutomationProperties::SetAutomationId(entry,id+L"-"+to_hstring(i));root.Children().Append(entry);}
-        intensity.Header(box_value(L"HDR intensity (EV)"));AutomationProperties::SetAutomationId(intensity,id+L"-intensity");root.Children().Append(intensity);
+        intensity.Header(box_value(data->caption(L"color",L"intensity_ev")));AutomationProperties::SetAutomationId(intensity,id+L"-intensity");root.Children().Append(intensity);
         description.TextWrapping(TextWrapping::Wrap);error.TextWrapping(TextWrapping::Wrap);root.Children().Append(description);root.Children().Append(error);
-        apply.Content(box_value(L"Apply color"));AutomationProperties::SetAutomationId(apply,id+L"-apply");root.Children().Append(apply);
+        apply.Content(box_value(data->common(L"apply")));AutomationProperties::SetAutomationId(apply,id+L"-apply");root.Children().Append(apply);
         apply.Click([weak](auto&&,auto&&){if(auto self=weak.lock()){
             try{self->refresh(self->draft());}catch(hresult_error const& e){self->error.Text(e.message());return;}auto value=self->view.GetNamedValue(L"value",JsonValue::CreateNullValue());
             if(value.ValueType()==JsonValueType::Object&&str(self->view,L"error").empty())self->commit(value.GetObject());

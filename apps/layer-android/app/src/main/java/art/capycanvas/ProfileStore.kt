@@ -39,7 +39,7 @@ internal object ProfileStore {
         inventory(context).objects().map{entry->
             var failure:String?=null
             val bytes=try{if(entry.has("issue"))byteArrayOf() else read(File(root(context),"${entry.getString("id")}.icc"))}catch(e:Exception){failure=e.message?:"Profile is unavailable";byteArrayOf()}
-            JSONObject(call(obj("type" to "inspect","entry" to entry,"error" to failure),bytes)).put("visible",entry.getString("id") !in hidden)
+            JSONObject(call(obj("type" to "inspect","entry" to entry,"error" to failure?.let { obj("Diagnostic" to it) }),bytes)).put("visible",entry.getString("id") !in hidden)
         }.sortedWith(compareBy({it.getString("name")},{it.getString("id")}))
     }}
     suspend fun import(context:Context,bytes:ByteArray):JSONObject=withContext(Dispatchers.IO){synchronized(lock){

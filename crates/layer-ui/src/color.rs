@@ -14,9 +14,9 @@ pub use quick_colors::QuickColorView;
 use hdr_picker::HdrPaint;
 mod hdr_arc;
 pub use hdr_arc::HdrIntensityArc;
-pub use editor::{ColorEditor, ColorInputModel};
+pub use editor::{color_intensity_input, ColorEditor, ColorEditorError, ColorInputModel};
 mod form;
-pub use form::{ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui};
+pub use form::{ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form_localized, color_preview, color_validation_localized, color_ui_localized};
 mod library;
 mod palette_file;
 pub use palette_file::{PaletteExport, PaletteFileRequest, PaletteFormat, palette_file};
@@ -182,27 +182,40 @@ pub struct ColorHueStop {
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorComponentView {
     pub label: &'static str,
-    pub name: &'static str,
+    pub name: std::sync::Arc<str>,
     pub value: f32,
     pub numeric: crate::NumericControl,
 }
-pub(crate) const PAINT_SLOTS: [(ColorSlot, &str); 3] = [
-    (ColorSlot::Foreground, "Foreground color"),
-    (ColorSlot::Background, "Background color"),
-    (ColorSlot::Transparent, "Transparent paint"),
+pub(crate) const PAINT_SLOTS: [(ColorSlot, crate::MessageId); 3] = [
+    (ColorSlot::Foreground, crate::MessageId::COMMANDS_FOREGROUND_COLOR),
+    (ColorSlot::Background, crate::MessageId::COMMANDS_BACKGROUND_COLOR),
+    (ColorSlot::Transparent, crate::MessageId::COMMANDS_TRANSPARENT_PAINT),
 ];
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorSwatchView {
     pub slot: ColorSlot,
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub rgba: [f32; 4],
     pub selected: bool,
 }
 
 impl Default for ColorState {
-    fn default() -> Self {
+    fn default() -> Self { Self::new_localized(&crate::Localizer::shared(crate::UiLanguage::English)) }
+}
+impl ColorState {
+    #[cfg(test)]
+    fn apply_canonical(&mut self, action: ColorAction) -> Result<(), String> {
+        let action = match action {
+            ColorAction::Library { action } => ColorAction::Library {
+                action: self.library.prepare_creation(action, &crate::Localizer::shared(crate::UiLanguage::English))?,
+            },
+            action => action,
+        };
+        self.apply(action).map_err(|reason| reason.message(ColorInputModel::DocumentRgb, &crate::Localizer::shared(crate::UiLanguage::English)))
+    }
+    pub fn new_localized(localizer: &crate::Localizer) -> Self {
         Self {
-            library: ColorLibrary::default(),
+            library: ColorLibrary::fresh(&localizer.text(crate::MessageId::CREATION_PALETTE_MY_COLORS)),
             foreground: RgbColor { linear_rgb: None,
                 space: RgbSpace::Srgb,
                 rgba: [0.075, 0.075, 0.07, 1.],
@@ -268,17 +281,18 @@ impl ColorState {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub fn view(&self) -> ColorPanelView {
-        self.view_in(RgbSpace::Srgb)
+        self.view_in_localized(RgbSpace::Srgb, &crate::Localizer::shared(crate::UiLanguage::English))
     }
     /// Display values only; picker coordinates and portable definitions retain
     /// their document/source spaces.
-    pub fn view_in(&self, display: RgbSpace) -> ColorPanelView {
+    pub fn view_in_localized(&self, display: RgbSpace, localizer: &crate::Localizer) -> ColorPanelView {
         let geometry = ColorWheelGeometry::new(1.).unwrap();
         let components = self.components();
         let names = match self.space() {
-            ColorSpace::Hsv => ["Hue", "Saturation", "Value"],
-            ColorSpace::Hls => ["Hue", "Lightness", "Saturation"],
+            ColorSpace::Hsv => [crate::MessageId::COLOR_FORM_FIELD_HUE, crate::MessageId::COLOR_FORM_FIELD_SATURATION, crate::MessageId::COLOR_FORM_FIELD_VALUE],
+            ColorSpace::Hls => [crate::MessageId::COLOR_FORM_FIELD_HUE, crate::MessageId::COLOR_FORM_FIELD_LIGHTNESS, crate::MessageId::COLOR_FORM_FIELD_SATURATION],
         };
         ColorPanelView {
             hdr: self.hdr_picker.is_some(),
@@ -295,7 +309,7 @@ impl ColorState {
             readout: self.readout,
             readout_label: self.readout_label(),
             readout_layout_text: self.readout_layout_text(),
-            readout_description: self.readout_description(),
+            readout_description: self.readout_description_localized(localizer),
             wheel_marker: self.wheel_marker(&geometry),
             wheel_components: self.wheel_components(),
             wheel_hue_color: self.wheel_hue_color_in(self.wheel_components()[0], display),
@@ -305,11 +319,11 @@ impl ColorState {
             marker_color: self.preview_in(self.definition(), display)[..3].try_into().unwrap(),
             components: std::array::from_fn(|i| ColorComponentView {
                 label: self.labels()[i],
-                name: names[i],
+                name: localizer.text(names[i]),
                 value: components[i],
                 numeric: Self::component_control(i).unwrap(),
             }),
-            quick_colors: self.quick_colors(),
+            quick_colors: self.quick_colors_localized(localizer),
             swatches: {
                 let rgba = [
                     self.preview_in(self.foreground, display),
@@ -320,7 +334,7 @@ impl ColorState {
                     let (slot, label) = PAINT_SLOTS[i];
                     ColorSwatchView {
                         slot,
-                        label,
+                        label: localizer.text(label),
                         rgba: rgba[i],
                         selected: self.slot == slot,
                     }
@@ -572,7 +586,7 @@ impl ColorState {
         if let (Some(paints), Some(paint)) = (&mut self.hdr_picker, paint) { paints[index] = paint; }
         Ok(())
     }
-    fn set_components(&mut self, mut values: [f32; 3]) -> Result<(), String> {
+    fn set_components(&mut self, mut values: [f32; 3]) -> Result<(), ColorEditorError> {
         values[0] = values[0].rem_euclid(360.);
         self.set_picker_rgba(from_components(values, self.space(), self.rgba()[3]))?;
         let index = self.index();
@@ -589,7 +603,7 @@ impl ColorState {
         self.hues[index] = values[0];
         Ok(())
     }
-    fn set_okhsv(&mut self, mut values: [f32; 3]) -> Result<(), String> {
+    fn set_okhsv(&mut self, mut values: [f32; 3]) -> Result<(), ColorEditorError> {
         values[0] = values[0].rem_euclid(360.);
         let [r, g, b] = okhsv::to_rgb_in(self.rgb_space, values);
         self.set_picker_rgba([r, g, b, self.rgba()[3]])?;
@@ -607,7 +621,7 @@ impl ColorState {
         }
         Ok(())
     }
-    pub fn apply(&mut self, action: ColorAction) -> Result<(), String> {
+    pub fn apply(&mut self, action: ColorAction) -> Result<(), ColorEditorError> {
         match action {
             ColorAction::QuickColor { white } => {
                 if matches!(self.slot, ColorSlot::Transparent | ColorSlot::Temporary) {
@@ -622,7 +636,7 @@ impl ColorState {
                 Self::validate_definition(color)?;
                 hdr_picker::validate_intensity(self.hdr_depth, stops)?;
                 let paint = HdrPaint::at_intensity(color, self.rgb_space, stops)?;
-                layer_core::color::hdr::validate_pixel(self.hdr_depth, color.linear_in(self.rgb_space)?).map_err(str::to_string)?;
+                layer_core::color::hdr::validate_pixel_typed(self.hdr_depth, color.linear_in(self.rgb_space)?)?;
                 self.paint_slot = slot;
                 // Accepting an untouched draft retains exact base coordinates too.
                 if self.definition() != color || self.hdr_intensity() != stops {
@@ -683,7 +697,7 @@ impl ColorState {
         }
         Ok(())
     }
-    fn pick_field(&mut self, part: ColorWheelPart, point: [f32; 2], geometry: &ColorWheelGeometry) -> Result<(), String> {
+    fn pick_field(&mut self, part: ColorWheelPart, point: [f32; 2], geometry: &ColorWheelGeometry) -> Result<(), ColorEditorError> {
         let mut values = self.components();
         match part {
             ColorWheelPart::Hue => {
@@ -756,6 +770,22 @@ impl ColorState {
             ColorReadout::Rgb => v.map(|v| v.to_string()),
         }
     }
+    pub fn picker_description_localized(&self, display: RgbSpace, hdr: bool, localizer: &crate::Localizer) -> String {
+        let gamut = color_validation_localized(self.definition(), self.rgb_space(), display, hdr, localizer).unwrap_or_default();
+        format!("{}. {}", gamut, self.readout_description_localized(localizer))
+    }
+    pub fn readout_description_localized(&self, localizer: &crate::Localizer) -> String {
+        use crate::MessageId as M;
+        let names = match (self.readout, self.shape) {
+            (ColorReadout::Shape, ColorShape::Circle) => [M::COLOR_FORM_FIELD_LIGHTNESS, M::COLOR_FORM_FIELD_CHROMA, M::COLOR_FORM_FIELD_HUE],
+            (ColorReadout::Shape, ColorShape::Square) => [M::COLOR_FORM_FIELD_HUE, M::COLOR_FORM_FIELD_SATURATION, M::COLOR_FORM_FIELD_VALUE],
+            (ColorReadout::Shape, ColorShape::Triangle) => [M::COLOR_FORM_FIELD_HUE, M::COLOR_FORM_FIELD_LIGHTNESS, M::COLOR_FORM_FIELD_SATURATION],
+            (ColorReadout::Rgb, _) => [M::SETTINGS_RED, M::SETTINGS_GREEN, M::SETTINGS_BLUE],
+        }.map(|id| localizer.text(id));
+        let v = self.readout_text();
+        format!("{}: {} {}, {} {}, {} {} · {}", self.readout_label(), names[0], v[0], names[1], v[1], names[2], v[2], localizer.text(M::NATIVE_COLOR_SWITCH_READOUT))
+    }
+    #[cfg(test)]
     pub fn readout_description(&self) -> String {
         let v = self.readout_text();
         let shape = self.shape;
@@ -1327,6 +1357,25 @@ fn triangle_weights(triangle: [[f32; 2]; 3], p: [f32; 2]) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn active_color_projection_localizes_labels_without_changing_numeric_geometry() {
+        let en = crate::Localizer::shared(crate::UiLanguage::English);
+        let ja = crate::Localizer::shared(crate::UiLanguage::Japanese);
+        let colors = super::ColorState::new_localized(&ja);
+        let english = colors.view_in_localized(layer_core::color::RgbSpace::Srgb, &en);
+        let japanese = colors.view_in_localized(layer_core::color::RgbSpace::Srgb, &ja);
+        assert_eq!(english.readout_layout_text, japanese.readout_layout_text);
+        assert_eq!(english.readout_label, japanese.readout_label);
+        assert_eq!(english.wheel_marker, japanese.wheel_marker);
+        assert_eq!(english.marker_color, japanese.marker_color);
+        assert_eq!(japanese.components[0].name, ja.text(crate::MessageId::COLOR_FORM_FIELD_HUE));
+        assert_eq!(japanese.swatches[0].label, ja.text(crate::MessageId::COMMANDS_FOREGROUND_COLOR));
+        assert_eq!(japanese.quick_colors[1].label, ja.text(crate::MessageId::NATIVE_COLOR_PAINT_WHITE));
+        assert!(japanese.readout_description.contains(ja.text(crate::MessageId::COLOR_FORM_FIELD_CHROMA).as_ref()));
+        assert!(japanese.readout_description.ends_with(ja.text(crate::MessageId::NATIVE_COLOR_SWITCH_READOUT).as_ref()));
+        assert_ne!(english.readout_description, japanese.readout_description);
+        for value in colors.readout_text() { assert!(japanese.readout_description.contains(&value)); }
+    }
     use super::*;
     fn component(state: &mut ColorState, index: usize, value: f32) {
         let mut values = state.components();

@@ -21,7 +21,7 @@ struct ColorPair {
         auto colors=displayColors(data->state);
         A pair;pair.Append(object(colors,L"foreground"));pair.Append(object(colors,L"background"));
         auto next=pair.Stringify();if(next==key)return;key=next;
-        auto previews=colorUi(O({{L"type",S(L"preview")},{L"colors",pair}}));
+        auto previews=colorUi(data->localization.get(),O({{L"type",S(L"preview")},{L"colors",pair}}));
         if(previews.ValueType()!=JsonValueType::Array||previews.GetArray().Size()!=2)return;
         foreground.Fill(fill(displayColor(previews.GetArray().GetObjectAt(0))));
         background.Fill(fill(displayColor(previews.GetArray().GetObjectAt(1))));

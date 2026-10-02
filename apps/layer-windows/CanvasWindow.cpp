@@ -22,6 +22,23 @@ using namespace Microsoft::UI::Xaml::Input;
 using namespace Microsoft::UI::Xaml::Media;
 using namespace Microsoft::UI::Windowing;
 using namespace Windows::Foundation;
+static std::string PreferredLanguages() {
+    static const auto tags=[] {
+        DWORD count=0,size=0;
+        Windows::Data::Json::JsonArray tags;
+        if(GetUserPreferredUILanguages(MUI_LANGUAGE_NAME,&count,nullptr,&size)&&size){
+            std::vector<wchar_t> languages(size);
+            if(GetUserPreferredUILanguages(MUI_LANGUAGE_NAME,&count,languages.data(),&size)){
+                for(size_t i=0;i<languages.size()&&languages[i];){
+                    auto start=i;while(i<languages.size()&&languages[i])++i;
+                    tags.Append(Windows::Data::Json::JsonValue::CreateStringValue(hstring(std::wstring_view(languages.data()+start,i-start))));++i;
+                }
+            }
+        }
+        return to_string(tags.Stringify());
+    }();
+    return tags;
+}
 static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
     auto json=command.json.c_str();
     switch(command.kind){
@@ -127,16 +144,20 @@ void CanvasWindow::Open() {
     canvasFocus.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     canvasFocus.VerticalContentAlignment(VerticalAlignment::Stretch);
     canvasFocus.IsTabStop(true);
-    Automation::AutomationProperties::SetName(canvasFocus,L"Drawing canvas");
     root.Children().Append(canvasFocus);
+    textFocus=FocusManager::GettingFocus(auto_revoke,[weak=weak_from_this()](auto&&,GettingFocusEventArgs const& e){
+        if(auto self=weak.lock();self&&!self->closed)if(auto entry=e.NewFocusedElement().try_as<TextBox>();entry&&entry.XamlRoot()==self->root.XamlRoot()){
+            entry.Language(self->root.Language());CapyUi::captureTextComposition(entry);
+        }
+    });
     root.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,true))
+        if(auto self=weak.lock())if(!CapyUi::composingKey(e)&&!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,true))
             &&e.Key()!=Windows::System::VirtualKey::Escape)self->Key(e,true);
     });
     // Native editors and captured controls cancel first; only an unhandled
     // Escape reaches the shared drawer and application shortcuts.
     root.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock();self&&!self->dialogOpen.load()&&e.Key()==Windows::System::VirtualKey::Escape)self->Key(e,true);
+        if(auto self=weak.lock();self&&!CapyUi::composingKey(e)&&!self->dialogOpen.load()&&e.Key()==Windows::System::VirtualKey::Escape)self->Key(e,true);
     });
     root.PreviewKeyUp([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
         if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,false)))self->Key(e,false);
@@ -175,7 +196,6 @@ void CanvasWindow::Open() {
         if(GetEnvironmentVariableW(L"CAPY_TEST_HDR",nullptr,0))for(bool hdr:{false,true}){Button test;test.Content(box_value(hdr?L"Test HDR output":L"Test SDR output"));test.Click([weak=weak_from_this(),hdr](auto&&,auto&&){if(auto self=weak.lock())self->Send(hdr?"hdr":"sdr",CanvasCommandKind::TestDisplay);});toolbar.Children().Append(test);}
     }
     root.Children().Append(toolbar);
-    status.Text(L"Preparing canvas…");
     Microsoft::UI::Xaml::Automation::AutomationProperties::SetAutomationId(status,L"canvas-status");
     status.IsHitTestVisible(false);
     status.HorizontalAlignment(HorizontalAlignment::Center);
@@ -307,11 +327,52 @@ void CanvasWindow::PublishGlass(){
     if(json==lastGlass)return;lastGlass=json;Send(json,CanvasCommandKind::Glass);
 }
 void CanvasWindow::Start() {
-    if(host||closing) return;
+    if(renderer.joinable()||closing)return;
+    auto tags=PreferredLanguages();
+    renderer=std::jthread([this,tags=std::move(tags)]{
+        try {
+        struct Apartment {
+            Apartment(){init_apartment(apartment_type::multi_threaded);}
+            ~Apartment(){uninit_apartment();}
+        } apartment;
+        auto prepared=std::shared_ptr<CapyLaunch>(capy_launch(tags.c_str()),capy_launch_free);
+        bool posted=prepared&&dispatcher.TryEnqueue([weak=weak_from_this(),prepared]{
+            if(auto self=weak.lock()){
+                bool initialized=false;
+                try {if(!self->closing)initialized=self->StartPrepared(prepared.get());}
+                catch(hresult_error const& error){OutputDebugStringW(error.message().c_str());self->Fail(to_string(CapyUi::str(self->bootstrap,L"canvas_init_failed")));}
+                catch(std::exception const& error){OutputDebugStringA(error.what());self->Fail(to_string(CapyUi::str(self->bootstrap,L"canvas_init_failed")));}
+                {std::lock_guard lock(self->mutex);self->launchReady=true;self->launchSucceeded=initialized;}
+                self->wake.notify_one();
+            }
+        });
+        if(posted){
+            std::unique_lock lock(mutex);wake.wait(lock,[&]{return launchReady||closing;});
+            if(host&&launchSucceeded&&!closing){lock.unlock();Run();return;}
+        }else Fail(capy_error());
+        prepared.reset();
+        } catch(hresult_error const& error){OutputDebugStringW(error.message().c_str());Fail(to_string(CapyUi::str(bootstrap,L"canvas_init_failed")));}
+          catch(std::exception const& error){OutputDebugStringA(error.what());Fail(to_string(CapyUi::str(bootstrap,L"canvas_init_failed")));}
+        rendererDone.store(true);space.notify_all();
+        dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock();self&&self->closing)self->Finish();});
+    });
+}
+bool CanvasWindow::StartPrepared(CapyLaunch* prepared) {
+    if(host||closing)return false;
+    bootstrap=Windows::Data::Json::JsonObject::Parse(to_hstring(capy_launch_view(prepared)));
+    localization=std::shared_ptr<CapyLocalization>(capy_launch_localization(prepared),capy_localization_free);
+    if(!localization)throw hresult_error(E_ABORT);
+    root.Language(CapyUi::str(bootstrap,L"active_tag"));
+    TraceState("bootstrap",to_string(bootstrap.Stringify()));
+    Automation::AutomationProperties::SetAutomationId(canvasFocus,L"drawing-canvas");
+    Automation::AutomationProperties::SetName(canvasFocus,CapyUi::str(bootstrap,L"drawing_canvas"));
+    Automation::AutomationProperties::SetHelpText(canvasFocus,CapyUi::str(bootstrap,L"drawing_canvas_help"));
+    Automation::AutomationProperties::SetName(root,CapyUi::str(bootstrap,L"drawing_workspace"));
+    status.Text(CapyUi::str(bootstrap,L"preparing_canvas"));
     Resize();
     auto native=panel.as<ISwapChainPanelNative>();
-    host=capy_create(native.get(),desired.width,desired.height,desired.scale);
-    if(!host) {status.Text(to_hstring(capy_error()));return;}
+    host=capy_create(native.get(),desired.width,desired.height,desired.scale,prepared);
+    if(!host) {OutputDebugStringA(capy_error());status.Text(CapyUi::str(bootstrap,L"canvas_init_failed"));return false;}
     capy_set_window(host,Handle());
     SetWindowSubclass(Handle(),AltKeyMenuFilter,1,0);
     auto dark=panel.ActualTheme()==ElementTheme::Dark;
@@ -324,11 +385,13 @@ void CanvasWindow::Start() {
     window.AppWindow().TitleBar().ButtonForegroundColor(dark?
         Windows::UI::Color{255,225,225,229}:Windows::UI::Color{255,32,32,36});
     auto catalog=capy_query(host,R"({"type":"catalog"})");
-    if(!catalog){status.Text(to_hstring(capy_error()));return;}
+    if(!catalog){OutputDebugStringA(capy_error());status.Text(CapyUi::str(bootstrap,L"canvas_init_failed"));return false;}
     std::unique_ptr<char,decltype(&capy_string_free)> ownedCatalog(catalog,capy_string_free);
+    auto catalogView=Windows::Data::Json::JsonObject::Parse(to_hstring(catalog));
+    catalogView.Insert(L"bootstrap",bootstrap);
     workspace=std::make_unique<WorkspaceView>([weak=weak_from_this()](std::string json){
         if(auto self=weak.lock())self->Send(std::move(json));
-    },Windows::Data::Json::JsonObject::Parse(to_hstring(catalog)),[weak=weak_from_this()](std::string json){
+    },catalogView,localization,[weak=weak_from_this()](std::string json){
         if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Overviews);
     },[weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
         if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
@@ -341,8 +404,8 @@ void CanvasWindow::Start() {
     workspace->SetGlassChanged([weak=weak_from_this()]{if(auto self=weak.lock())self->PublishGlass();});
     root.Children().InsertAt(1,workspace->Root());
     auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
-    auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(catalog));
-    header=std::make_unique<HeaderView>(send,model,
+    auto model=catalogView;
+    header=std::make_unique<HeaderView>(send,model,localization,
         [weak=weak_from_this()](bool open){if(auto self=weak.lock())self->Popup(open);},
         [weak=weak_from_this()]{if(auto self=weak.lock())self->Resize();},
         [weak=weak_from_this()]{if(auto self=weak.lock())self->Fullscreen();},
@@ -356,14 +419,14 @@ void CanvasWindow::Start() {
         },[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);},
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);});
     root.Children().Append(header->Root());
-    settings=std::make_unique<SettingsView>(send,model,root.XamlRoot(),
+    settings=std::make_unique<SettingsView>(send,model,localization,root.XamlRoot(),
         [weak=weak_from_this()](KeyRoutedEventArgs const& e,bool pressed){if(auto self=weak.lock())self->Key(e,pressed);},
-        [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail("Cannot open Preferences: "+error);},
+        [weak=weak_from_this()](std::string error){if(auto self=weak.lock()){OutputDebugStringA(error.c_str());self->Fail(to_string(CapyUi::str(CapyUi::object(self->bootstrap,L"recovery"),L"preferences_failed")));}},
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);});
     documents=std::make_unique<DocumentView>(
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);},
-        model,window,[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
+        model,localization,window,[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
     panel.AllowDrop(true);
@@ -380,9 +443,9 @@ void CanvasWindow::Start() {
         action.Insert(L"screen",CapyUi::O({{L"x",CapyUi::N(point.X*scale)},{L"y",CapyUi::N(point.Y*scale)}}));
         CapyUi::receiveImageDrop(event,action,[weak](std::string json){if(auto self=weak.lock();self&&!self->closing)self->Send(std::move(json),CanvasCommandKind::Document);});
     }});
-    selectionDialog=std::make_unique<SelectionDialog>(send,model,root.XamlRoot(),
+    selectionDialog=std::make_unique<SelectionDialog>(send,model,localization,root.XamlRoot(),
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
-    workspaceDialogs=std::make_unique<WorkspaceDialogs>(send,model,root.XamlRoot(),
+    workspaceDialogs=std::make_unique<WorkspaceDialogs>(send,model,localization,root.XamlRoot(),
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
     workspaceStorage=std::make_unique<WorkspaceStorageView>(
@@ -391,16 +454,16 @@ void CanvasWindow::Start() {
     root.Children().Append(workspaceStorage->Root());
     workspaceManager=std::make_unique<WorkspaceManagerView>(
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Workspace);},
-        root.XamlRoot(),[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
+        catalogView,localization,root.XamlRoot(),[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
     if(auto snapshot=capy_snapshot(host)){
         std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
         ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot)));
     }
     {std::lock_guard lock(mutex);revision=capy_view_revision(host);inputScale=desired.scale;}
-    status.Text(L"Preparing brushes…");
+    status.Text(CapyUi::str(bootstrap,L"preparing_brush"));
     inputController=Microsoft::UI::Dispatching::DispatcherQueueController::CreateOnDedicatedThread();
     inputDispatcher=inputController.DispatcherQueue();
-    renderer=std::jthread([this]{Run();});
+    return true;
 }
 bool CanvasWindow::RequestPreviews(CanvasQueryKind kind,std::string json,PreviewReply reply) {
     {std::lock_guard lock(mutex);
@@ -638,7 +701,7 @@ void CanvasWindow::Wheel(Microsoft::UI::Input::PointerEventArgs const& e) {
     if(SendIndependent(scroll))e.Handled(true);
 }
 void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
-    if(closing||closed)return;
+    if(closing||closed||(pressed&&CapyUi::composingKey(e)))return;
     using VirtualKey=Windows::System::VirtualKey;
     auto key=e.Key();
     if(pressed&&key==VirtualKey::Escape&&workspace&&workspace->CancelGesture()){e.Handled(true);return;}
@@ -759,10 +822,6 @@ int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
 }
 void CanvasWindow::Run() {
     try {
-        struct Apartment {
-            Apartment(){init_apartment(apartment_type::multi_threaded);}
-            ~Apartment(){uninit_apartment();}
-        } apartment;
         // Device/shader preparation must not hold the UI thread. The existing resize
         // handshake performs the first SetSwapChain only after preparation finishes.
         bool prepared=capy_start_services(host,this,[](void* context) noexcept {
@@ -778,7 +837,7 @@ void CanvasWindow::Run() {
             }
             prepared=capy_prepare_gpu(host)>=0;
         }
-        if(!prepared) Fail(capy_error());
+        if(!prepared) {OutputDebugStringA(capy_error());Fail(to_string(CapyUi::str(bootstrap,L"canvas_init_failed")));}
         else {std::lock_guard lock(mutex);resize=true;}
         bool dirty=true;
         bool inputStarted=false;
@@ -975,7 +1034,7 @@ void CanvasWindow::SaveAfterGpuFailure(std::string const& reason) {
         if(result>0)Fail(capy_error());
     }
     OutputDebugStringA(reason.c_str());
-    Fail("Painting is unavailable. The interrupted stroke was canceled.\nUse File > Save or Save As to keep completed edits, then reopen the drawing.");
+    Fail(to_string(CapyUi::str(bootstrap,L"painting_unavailable_save")));
     CapyLifecycle("gpu_recovery_save_available");
     for(;;){
         std::deque<CanvasWork> pending;std::optional<CanvasQuery> query;
@@ -1092,6 +1151,7 @@ void CanvasWindow::Finish() {
     // XAML controls and their retained bindings must be released while this
     // window still owns a live XAML context, not later from App destruction.
     settings.reset();documents.reset();workspaceDialogs.reset();selectionDialog.reset();workspaceStorage.reset();workspaceManager.reset();header.reset();workspace.reset();
+    textFocus.revoke();localization.reset();
     root.Children().Clear();toolbar.Children().Clear();canvasFocus.Content(nullptr);
     window.Content(nullptr);
     canvasFocus=nullptr;panel=nullptr;status=nullptr;toolbar=nullptr;root=nullptr;
@@ -1268,10 +1328,10 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
         auto message=str(model,L"error");
         if(message.empty())message=str(state,L"host_error");
         if(message.empty())message=str(object(model,L"windows_recovery"),L"error");
-        if(message.empty()&&str(object(model,L"windows_document"),L"type")==L"workflow_busy")message=L"Preparing document…";
+        if(message.empty()&&str(object(model,L"windows_document"),L"type")==L"workflow_busy")message=str(bootstrap,L"preparing_document");
         if(message.empty())message=str(object(model,L"windows_filter_load"),L"error");
-        if(message.empty()&&!flag(model,L"brush_ready"))message=L"Preparing brushes…";
-        if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=L"Loading filters…";
+        if(message.empty()&&!flag(model,L"brush_ready"))message=str(bootstrap,L"preparing_brush");
+        if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=str(bootstrap,L"loading_filters");
         if(message.empty())message=str(object(model,L"windows_proof"),L"text");
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }

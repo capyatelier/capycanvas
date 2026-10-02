@@ -165,6 +165,9 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
         Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
             rows.forEachIndexed { index, row -> key(row.getString("id")) {
                 val id = row.getString("id")
+                val title = row.getString("title")
+                val switchCaption=remember(title, workspaces) { if (workspaces) JSONObject(Native.nativeCaption(obj("type" to "switch_workspace", "title" to title).toString())).getString("text") else title }
+                val optionsCaption=remember(title) { JSONObject(Native.nativeCaption(obj("type" to "options_for", "title" to title).toString())).getString("text") }
                 val selected = view.optString("selected") == id
                 DisposableEffect(id) { onDispose { drag.rows.remove(id); drag.grips.remove(id); drag.options.remove(id) } }
                 if (index > 0) HorizontalDivider(color = colors.divider)
@@ -173,7 +176,7 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                     verticalAlignment = Alignment.CenterVertically) {
                     if (workspaces) Box(Modifier.width(24.dp).height(56.dp).rowBounds(drag.grips, id)
                         .testTag("workspace-grip-$id"), contentAlignment = Alignment.Center) {
-                        SharedIcon("grip", "Drag to reorder", Modifier.size(12.dp).alpha(.45f))
+                        SharedIcon("grip", host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("drag_to_reorder"), Modifier.size(12.dp).alpha(.45f))
                     }
                     Column(Modifier.weight(1f).onPreviewKeyEvent { event ->
                         val key = event.nativeKeyEvent
@@ -183,7 +186,7 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                         } else false
                     }.selectable(selected, enabled = enabled, role = Role.RadioButton) {
                         host.workspaceInput(obj("type" to "select", "id" to id))
-                    }.padding(vertical = 12.dp, horizontal = if (workspaces) 4.dp else 12.dp).testTag("workspace-row-$id"),
+                    }.padding(vertical = 12.dp, horizontal = if (workspaces) 4.dp else 12.dp).testTag("workspace-row-$id").semantics { contentDescription = switchCaption },
                         verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(row.getString("title"))
                         row.getString("subtitle").takeIf { it.isNotEmpty() }?.let {
@@ -191,23 +194,23 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                         }
                     }
                     if (workspaces) {
-                        if (id in pinned) SharedIcon("pin", "Shown in top bar", Modifier.size(16.dp).testTag("workspace-pin-$id"))
-                        if (view.optString("id") == id) SharedIcon("check", "Current workspace", Modifier.padding(start = 6.dp).size(16.dp))
+                        if (id in pinned) SharedIcon("pin", host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("show_top"), Modifier.size(16.dp).testTag("workspace-pin-$id"))
+                        if (view.optString("id") == id) SharedIcon("check", host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("current_workspace"), Modifier.padding(start = 6.dp).size(16.dp))
                         Box(Modifier.rowBounds(drag.options, id)) {
                             IconButton({ drag.menu = id }, enabled = enabled,
-                                modifier = Modifier.size(36.dp).testTag("workspace-options-$id").semantics { contentDescription = "Options for ${row.getString("title")}" }) { SharedIcon("more", null) }
+                                modifier = Modifier.size(36.dp).testTag("workspace-options-$id").semantics { contentDescription = optionsCaption }) { SharedIcon("more", null) }
                             DropdownMenu(drag.menu == id, { drag.menu = null }, properties = PopupProperties(focusable = !drag.contact),
                                 modifier = Modifier.testTag("workspace-row-menu")) {
                                 fun closeEdit(value: JSONObject) { drag.menu = null; edit(value) }
-                                DropdownMenuItem(text = { Text("Show in top bar") }, trailingIcon = { if (id in pinned) SharedIcon("check", null) },
+                                DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("show_top")) }, trailingIcon = { if (id in pinned) SharedIcon("check", null) },
                                     enabled = enabled, modifier = Modifier.testTag("workspace-pin").semantics {
                                         toggleableState = if (id in pinned) ToggleableState.On else ToggleableState.Off
                                     },
                                     onClick = { closeEdit(obj("type" to "show", "id" to id, "visible" to (id !in pinned))) })
                                 val position = order.indexOf(id)
-                                DropdownMenuItem(text = { Text("Move Up") }, enabled = enabled && position > 0, modifier = Modifier.testTag("workspace-up"),
+                                DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("move_up")) }, enabled = enabled && position > 0, modifier = Modifier.testTag("workspace-up"),
                                     onClick = { closeEdit(obj("type" to "move", "id" to id, "before" to order.getOrNull(position - 1))) })
-                                DropdownMenuItem(text = { Text("Move Down") }, enabled = enabled && position >= 0 && position < order.lastIndex, modifier = Modifier.testTag("workspace-down"),
+                                DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("move_down")) }, enabled = enabled && position >= 0 && position < order.lastIndex, modifier = Modifier.testTag("workspace-down"),
                                     onClick = { closeEdit(obj("type" to "move", "id" to id, "before" to order.getOrNull(position + 2))) })
                                 val offered = listOf("rename" to "Rename…", "delete" to "Delete…").filter { (kind, _) -> row.offers(kind) }
                                 if (offered.isNotEmpty()) HorizontalDivider()

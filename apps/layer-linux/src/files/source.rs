@@ -4,6 +4,8 @@ use super::*;
 use std::cell::RefCell;
 
 pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
+    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization));
+    let localization = w.localization.clone();
     let (workflow, background, time) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
@@ -16,25 +18,22 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let workflow = Rc::new(RefCell::new(workflow));
     let original_gpu = w.snapshot_gpu()?;
     let current = original.interpretation.profile.clone();
-    let description = gio::spawn_blocking(move || layer_color::profile_description(&current))
+    let description = gio::spawn_blocking(move || layer_color::profile_description_optional(&current))
         .await
-        .map_err(|_| "Profile reader failed")??;
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&localization))?.map_err(|reason| layer_ui::ColorFeatureError::Diagnostic(reason).profile_message(&localization))?;
+    let description = description.unwrap_or_else(|| localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string());
+    let mut args = layer_ui::FluentArgs::new(); args.set("name", description.as_str());
+    args.set("assumed", if original.interpretation.profile_assumed {"yes"} else {"no"});
+    let description = localization.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_SOURCE_NAME, &args);
     let group = adw::PreferencesGroup::new();
     let current = adw::ActionRow::builder()
-        .title("Current source profile")
-        .subtitle(&format!(
-            "{description}{}",
-            if original.interpretation.profile_assumed {
-                " (assumed)"
-            } else {
-                ""
-            }
-        ))
+        .title(copy.current_source.as_ref())
+        .subtitle(&description)
         .subtitle_selectable(true)
         .build();
     current.set_use_markup(false);
     group.add(&current);
-    let chooser = ProfileChooser::new(w, "Correct source profile", "source-profile-space", working,
+    let chooser = ProfileChooser::new(w, copy.correct_profile.as_ref(), "source-profile-space", working,
         ProfilePurpose::Source(original.interpretation.clone()));
     let space = chooser.row.clone();
     group.add(&space);
@@ -44,7 +43,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let hint = gtk::Label::builder().wrap(true).xalign(0.).build();
     hint.set_widget_name("source-profile-hint");
     content.append(&hint);
-    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color());
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color(), &w.localization);
     content.append(&comparison.widget);
     let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -52,21 +51,21 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         .max_content_height(570)
         .child(&content)
         .build());
-    let dialog = adw::AlertDialog::builder().heading("Repair Source Profile")
+    let dialog = adw::AlertDialog::builder().heading(copy.repair_title.as_ref())
         .body(if baked {
-            "This layer has pixel edits. Add a corrected original as a new layer at the same position. The existing layer keeps its edits, masks and adjustments."
+            copy.source_baked_help.as_ref()
         } else {
-            "Change how the original image’s color numbers are interpreted. Original samples and depth stay intact. You can undo the change."
+            copy.source_native_help.as_ref()
         }).prefer_wide_layout(true).content_width(520).extra_child(&scroll).build();
     dialog.set_widget_name("source-profile-dialog");
     dialog.add_responses(&[
-        ("cancel", "Cancel"),
+        ("cancel", copy.common.cancel.as_ref()),
         (
             "apply",
             if baked {
-                "Add Corrected Source"
+                copy.add_source.as_ref()
             } else {
-                "Apply Profile"
+                copy.apply_profile.as_ref()
             },
         ),
     ]);
@@ -81,7 +80,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         }
     )));
     let selected = chooser.selected.clone();
-    space.connect_subtitle_notify(glib::clone!(
+    space.connect_subtitle_notify(glib::clone!( #[strong] copy,
         #[weak]
         w,
         #[weak]
@@ -107,14 +106,14 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
                 Err(message) => {
                     hint.set_label(&message);
                     hint.set_visible(true);
-                    comparison.invalidate("Choose a valid profile to preview the complete canvas.");
+                    comparison.invalidate(copy.choose_valid_profile.as_ref());
                 }
             }
         }
     ));
     let embedded = original.interpretation.profile.clone();
     let profile = gio::spawn_blocking(move || super::profile::describe(embedded)).await
-        .map_err(|_| "Profile reader failed")??;
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&w.localization))?.map_err(|reason| reason.profile_message(&w.localization))?;
     (chooser.restore)(profile);
     let response = crate::alert::choose(dialog, &w.window).await;
     let compared = comparison.ready.get();

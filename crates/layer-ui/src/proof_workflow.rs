@@ -175,6 +175,8 @@ pub struct ProofView {
     generation: u32,
     cache: Option<(RgbSpace, ProofRecipe, Arc<layer_color::ProofLut>)>,
     error: Option<String>,
+    text_key: Option<(u32, bool, bool, u8)>,
+    text: String,
 }
 #[derive(Serialize)]
 pub struct ProofStatus {
@@ -201,31 +203,23 @@ impl ProofView {
             && s.engine().document().proof.is_some();
         let needed =
             visible && self.cache.is_none() && self.error.is_none() && !s.rendering_suspended();
-        let text = if !visible {
-            String::new()
-        } else if self.error.is_some() {
-            "Proof unavailable".into()
-        } else if self.cache.is_none() {
-            "Preparing proof…".into()
-        } else {
-            let name = &s.engine().document().proof.as_ref().unwrap().name;
-            if s.state().soft_proof {
-                format!(
-                    "Proof: {name}{}",
-                    if s.state().gamut_warning {
-                        " · Gamut warning"
-                    } else {
-                        ""
-                    }
-                )
-            } else {
-                format!("Gamut: {name}")
-            }
-        };
+        let stage = if !visible {0} else if self.error.is_some() {1} else if self.cache.is_none() {2} else {3};
+        let text_key = (self.generation, s.state().soft_proof, s.state().gamut_warning, stage);
+        if self.text_key != Some(text_key) {
+            let localizer = s.localization();
+            self.text = match stage {
+                0 => String::new(),
+                1 => localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_UNAVAILABLE).to_string(),
+                2 => localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_PREPARING).to_string(),
+                _ => crate::color_feature_copy::proof_status(localizer, &s.engine().document().proof.as_ref().unwrap().name,
+                    s.state().soft_proof, s.state().gamut_warning),
+            };
+            self.text_key = Some(text_key);
+        }
         ProofStatus {
             generation: self.generation,
             needed,
-            text,
+            text: self.text.clone(),
             error: self.error.clone(),
             bytes: self.cache.as_ref().map_or(0, |c| c.2.byte_len()),
         }
@@ -265,22 +259,23 @@ impl ProofView {
 
 pub fn proof_form<R: CanvasRenderer>(s: &UiSession<R>) -> serde_json::Value {
     let document = s.engine().document();
-    use crate::proof_panel::{PrintProofSettings,PrintProofControl,ProofSimulation,PROOF_INTENTS};
+    use crate::proof_panel::{PrintProofSettings,PrintProofControl};
     let print=document.proof.as_ref().and_then(|p|PrintProofSettings::from_recipe(p).ok()).unwrap_or_default();
     serde_json::json!({
         "identity": [serde_json::json!(s.state().document_file.epoch),serde_json::json!(document.color)],
         "mode": s.proof_panel_mode(),
         "hdr": document.color.depth.is_float(),
         "rendition": s.effective_sdr_rendition(),
-        "numbers": crate::proof_panel::sdr_number_controls(),
-        "pad": crate::proof_panel::sdr_tone_pad(),
+        "copy": crate::color_feature_copy::ProofCopy::new(s.localization()),
+        "numbers": crate::proof_panel::localized_numbers(s.localization()),
+        "pad": crate::proof_panel::localized_pad(s.localization()),
         "pad_values": crate::proof_panel::sdr_pad_values(s.effective_sdr_rendition()),
         "recipe": document.proof.clone().unwrap_or_else(|| ProofRecipe::new(document.color.space.name().into(), ColorProfile::Builtin(document.color.space))),
         "document_profile": document.proof,
         "print_settings": print,
-        "print_controls": PrintProofControl::ALL.map(|control|serde_json::json!({"id":control,"label":control.label()})),
-        "intents": PROOF_INTENTS,
-        "simulations": ProofSimulation::CHOICES,
+        "print_controls": PrintProofControl::ALL.map(|control|serde_json::json!({"id":control,"label":control.localized_label(s.localization())})),
+        "intents": crate::proof_panel::proof_intents(s.localization()),
+        "simulations": crate::proof_panel::proof_simulations(s.localization()),
         "profiles": RgbSpace::ALL.map(crate::ExportProfile::builtin),
     })
 }

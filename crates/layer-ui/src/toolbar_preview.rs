@@ -24,7 +24,7 @@ impl SliderBookmarks {
             ToolbarNumericBinding::BrushOpacity => &self.opacity,
         }
     }
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), WorkspaceValidationError> {
         for binding in [
             ToolbarNumericBinding::BrushSize,
             ToolbarNumericBinding::BrushOpacity,
@@ -34,7 +34,7 @@ impl SliderBookmarks {
                 return Err("Too many slider bookmarks".into());
             }
             for &value in values {
-                binding.numeric().validate(value, "Slider bookmark")?;
+                binding.numeric().validate(value, match binding { ToolbarNumericBinding::BrushSize => MessageId::TOOL_SETTING_SIZE, ToolbarNumericBinding::BrushOpacity => MessageId::TOOL_SETTING_OPACITY })?;
             }
             if values.windows(2).any(|v| v[0] >= v[1]) {
                 return Err("Slider bookmarks must be sorted and unique".into());
@@ -46,6 +46,7 @@ impl SliderBookmarks {
         &mut self,
         binding: &ToolbarNumericBinding,
         value: f32,
+        localizer: &Localizer,
     ) -> Result<(), String> {
         let value = binding
             .numeric()
@@ -54,7 +55,7 @@ impl SliderBookmarks {
                 NumericOperation::Value {
                     value: value as f64,
                 },
-            )?
+            ).map_err(|reason| reason.message(localizer))?
             .value as f32;
         let values = match binding {
             ToolbarNumericBinding::BrushSize => &mut self.size,
@@ -98,10 +99,11 @@ pub fn slider_bookmark_value(
     values: &[f32],
     position: f64,
     travel: f64,
+    localizer: &Localizer,
 ) -> Result<f64, String> {
     let numeric = control.slider().ok_or("Not a slider")?.numeric();
     if !position.is_finite() || !travel.is_finite() || travel <= 0. {
-        return Err("Invalid slider position".into());
+        return Err(NumericError::InvalidPosition.message(localizer));
     }
     let tolerance = (18. / travel).min(0.15);
     let nearest = values
@@ -120,7 +122,7 @@ pub fn slider_bookmark_value(
         value as f64
     } else {
         numeric
-            .resolve(0., NumericOperation::Position { position })?
+            .resolve(0., NumericOperation::Position { position }).map_err(|reason| reason.message(localizer))?
             .value
     })
 }
@@ -145,12 +147,13 @@ pub fn slider_preview_layout(
     value: f32,
     length: f32,
     extent: f32,
+    localizer: &Localizer,
 ) -> Result<SliderPreviewLayout, String> {
     let binding = control.slider().ok_or("Not a slider")?;
     if !extent.is_finite() || extent <= 0. {
         return Err("Invalid stamp extent".into());
     }
-    binding.numeric().validate(value, "Slider value")?;
+    binding.numeric().validate(value, if binding == ToolbarNumericBinding::BrushOpacity { MessageId::TOOL_SETTING_OPACITY } else { MessageId::TOOL_SETTING_SIZE }).map_err(|reason| reason.message(localizer))?;
     let tile = style.size()[1];
     let icon = tile * 4. / 9.;
     let inset = (tile - icon) / 2.;
@@ -215,7 +218,7 @@ pub fn slider_preview_layout(
         opacity: if opacity { value } else { 1. },
         text: format!(
             "{}: {}",
-            if opacity { "Opacity" } else { "Size" },
+            localizer.text(if binding == ToolbarNumericBinding::BrushOpacity { MessageId::TOOL_SETTING_OPACITY } else { MessageId::TOOL_CONTROL_GROUP_SIZE }),
             binding.numeric().compact_text(value as f64)
         ),
     })

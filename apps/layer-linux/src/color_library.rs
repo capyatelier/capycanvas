@@ -186,8 +186,9 @@ impl PalettePanel {
             .xalign(1.)
             .build();
         name.set_child(Some(&name_label));
-        name.set_tooltip_text(Some("Name this color · Enter to save, Escape to cancel"));
+        name.set_tooltip_text(Some(&crate::launch_localization().text(layer_ui::MessageId::NATIVE_PALETTES_NAME)));
         let editor = gtk::Entry::builder().max_length(64).width_chars(8).build();
+        let composition = crate::input::guard_entry_activation(&editor);
         editor.set_widget_name("palette-name-editor");
         editor.add_css_class("palette-entry");
         name_stack.add_named(&name, Some("label"));
@@ -308,8 +309,10 @@ impl PalettePanel {
         ));
         panel.editor.add_controller(focus);
         let keys = gtk::EventControllerKey::new();
-        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.set_propagation_phase(gtk::PropagationPhase::Bubble);
         keys.connect_key_pressed(glib::clone!(
+            #[strong]
+            composition,
             #[weak]
             panel,
             #[upgrade_or]
@@ -317,6 +320,9 @@ impl PalettePanel {
             move |_, key, _, _| {
                 if key != gdk::Key::Escape {
                     return glib::Propagation::Proceed;
+                }
+                if composition.active() {
+                    return glib::Propagation::Stop;
                 }
                 if panel.workspace.borrow().upgrade().is_some_and(|w| {
                     gtk::prelude::GtkWindowExt::focus(&w.window)
@@ -758,6 +764,7 @@ impl PalettePanel {
         if !self.root.is_mapped() {
             return;
         }
+        let Some(workspace) = self.workspace.borrow().upgrade() else { return };
         let colors = state.display_colors();
         let current = colors.definition();
         let library = &state.colors.library;
@@ -803,7 +810,7 @@ impl PalettePanel {
             .selected
             .get()
             .and_then(|id| library.swatch(id))
-            .map_or_else(|| library.color_name(current), |s| s.name.clone());
+            .map_or_else(|| library.color_name(current, &workspace.localization), |s| s.name.clone());
         self.name_label.set_text(&name);
         self.name
             .set_tooltip_text(Some(&format!("{name} · Click to rename")));
@@ -933,7 +940,8 @@ impl PalettePanel {
             return;
         };
         let dialog = adw::AlertDialog::builder().heading(heading).build();
-        dialog.add_responses(&[("cancel", "Cancel"), ("save", "Save")]);
+        let common = layer_ui::CommonCopy::new(&w.localization);
+        dialog.add_responses(&[("cancel", common.cancel.as_ref()), ("save", common.save.as_ref())]);
         dialog.set_close_response("cancel");
         dialog.set_default_response(Some("save"));
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
@@ -942,8 +950,10 @@ impl PalettePanel {
             .max_length(64)
             .activates_default(true)
             .build();
+        crate::input::guard_entry_activation(&entry);
         entry.set_widget_name("palette-library-name");
         let library = self.library.borrow().clone().unwrap();
+        let localization = w.localization.clone();
         entry.connect_changed(glib::clone!(
             #[weak]
             dialog,
@@ -958,7 +968,7 @@ impl PalettePanel {
                         name: entry.text().into(),
                     }
                 };
-                let result = library.check(action);
+                let result = library.check(action, &localization);
                 dialog.set_response_enabled("save", result.is_ok());
                 entry.set_tooltip_text(result.err().as_deref());
             }
@@ -1138,5 +1148,107 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
         .map(|g| g.session.reveal_panel(layer_ui::Panel::Palettes));
     if let Some(result) = result {
         workspace.changed(result);
+    }
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "private display native_palette_entry_composition"]
+    fn native_palette_entry_composition() {
+        adw::init().unwrap();
+        for theme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
+            adw::StyleManager::default().set_color_scheme(theme);
+            let panel = PalettePanel::new();
+            let default_entry = gtk::Entry::builder().activates_default(true).build();
+            crate::input::guard_entry_activation(&default_entry);
+            let default_actions = Rc::new(Cell::new(0));
+            let default_activations = Rc::new(Cell::new(0));
+            let save = gtk::Button::with_label("Save");
+            save.connect_activate(glib::clone!(#[strong] default_activations, move |_| default_activations.set(default_activations.get() + 1)));
+            save.connect_clicked(glib::clone!(#[strong] default_actions, move |_| default_actions.set(default_actions.get() + 1)));
+            let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            body.append(&default_entry);
+            body.append(&save);
+            let window = gtk::Window::builder().child(&body).build();
+            window.set_default_widget(Some(&save));
+            window.present();
+            default_entry.grab_focus();
+            while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
+            for entry in [&panel.editor, &default_entry] {
+                let activated = Rc::new(Cell::new(0));
+                entry.connect_activate(glib::clone!(#[strong] activated, move |_| activated.set(activated.get() + 1)));
+                let text = entry.delegate().and_downcast::<gtk::Text>().unwrap();
+                let controllers = entry.observe_controllers();
+                let keys = (0..controllers.n_items()).find_map(|index| controllers.item(index)
+                    .and_downcast::<gtk::EventControllerKey>()
+                    .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)).unwrap();
+                let bubble = (0..controllers.n_items()).find_map(|index| controllers.item(index)
+                    .and_downcast::<gtk::EventControllerKey>()
+                    .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Bubble)).unwrap();
+                for preedit in ["にほんご", "简体", "繁體", "한국어"] {
+                    let before = activated.get();
+                    let default_before = default_actions.get();
+                    let activation_before = default_activations.get();
+                    text.emit_preedit_changed(preedit);
+                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                    text.emit_preedit_changed("");
+                    text.emit_by_name::<()>("activate", &[]);
+                    assert_eq!(activated.get(), before);
+                    assert_eq!(default_actions.get(), default_before);
+                    assert_eq!(default_activations.get(), activation_before);
+                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                    text.emit_by_name::<()>("activate", &[]);
+                    assert_eq!(activated.get(), before);
+                    assert_eq!(default_actions.get(), default_before);
+                    assert_eq!(default_activations.get(), activation_before);
+                    keys.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
+                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]));
+                    text.emit_by_name::<()>("activate", &[]);
+                    assert_eq!(activated.get(), before + 1);
+                    assert_eq!(default_activations.get(), activation_before + u32::from(entry == &default_entry));
+                    if entry == &default_entry {
+                        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                        while default_actions.get() == default_before && std::time::Instant::now() < deadline {
+                            glib::MainContext::default().iteration(false);
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
+                    }
+                    assert_eq!(default_actions.get(), default_before + u32::from(entry == &default_entry));
+                    keys.emit_by_name::<()>("key-released", &[&gdk::Key::Return, &36u32, &gdk::ModifierType::empty()]);
+                    text.emit_preedit_changed(preedit);
+                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                    assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                    text.emit_preedit_changed("");
+                    assert!(bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                    keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+                    assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                    assert!(!bubble.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+                    keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+                }
+            }
+            let text = panel.editor.delegate().and_downcast::<gtk::Text>().unwrap();
+            let controllers = panel.editor.observe_controllers();
+            let keys = (0..controllers.n_items()).find_map(|index| controllers.item(index)
+                .and_downcast::<gtk::EventControllerKey>()
+                .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Capture)).unwrap();
+            let controllers = panel.root.observe_controllers();
+            let escape = (0..controllers.n_items()).find_map(|index| controllers.item(index)
+                .and_downcast::<gtk::EventControllerKey>()
+                .filter(|keys| keys.propagation_phase() == gtk::PropagationPhase::Bubble)).unwrap();
+            panel.editing.set(true);
+            text.emit_preedit_changed("한국어");
+            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+            text.emit_preedit_changed("");
+            assert!(escape.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+            assert!(panel.editing.get());
+            keys.emit_by_name::<()>("key-released", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]);
+            assert!(!keys.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+            assert!(escape.emit_by_name::<bool>("key-pressed", &[&gdk::Key::Escape, &9u32, &gdk::ModifierType::empty()]));
+            assert!(!panel.editing.get());
+            window.close();
+        }
     }
 }

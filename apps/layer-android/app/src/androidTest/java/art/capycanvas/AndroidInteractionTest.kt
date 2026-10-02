@@ -168,7 +168,7 @@ class AndroidInteractionTest {
             surface = it.window.decorView.descendant<CanvasSurfaceView>()!!
             density = it.resources.displayMetrics.density
         }
-        val defaults = Native.create(false)
+        val defaults = createEnglishHostForTest()
         try { fixture = JSONObject(Native.snapshot(defaults)!!).getJSONObject("state").getJSONObject("workspace") }
         finally { Native.destroy(defaults) }
         fixture.getJSONObject("layout").apply {

@@ -170,7 +170,7 @@ function Add-Tools {
     $before=HeaderJson;$firstId=(Header).next_id
     Drop-Component -Kind tools -Picker
     Picker-Button 'Cancel'
-    Wait-Until {!((Model).picker) -and (Model).header.editing -and !(Find 'tool-picker') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Picker cancellation left the titlebar editor'
+    Wait-Until {!((Model).picker) -and (Model).header.editing -and !(Find 'tool-picker') -and (Control 'drawing-canvas').Current.IsEnabled} 'Picker cancellation left the titlebar editor'
     if((HeaderJson) -ne $before){throw 'Picker Cancel changed the header'}
     Drop-Component -Kind tools -Picker
     foreach($tool in @(@('choose current paint color','picker-choice-color-0'),@('Brush','picker-choice-command-brush'))){
@@ -182,7 +182,7 @@ function Add-Tools {
     Picker-Search ''
     Wait-Until {(Model).picker.can_confirm} 'Search lost tool selection'
     Picker-Button 'Add Tools'
-    Wait-Until {!((Model).picker) -and (Header).next_id -eq $firstId+2 -and !(Find 'tool-picker') -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Picker did not add exactly two tools'
+    Wait-Until {!((Model).picker) -and (Header).next_id -eq $firstId+2 -and !(Find 'tool-picker') -and (Control 'drawing-canvas').Current.IsEnabled} 'Picker did not add exactly two tools'
     $added=@(Entries|Where-Object id -ge $firstId)
     if($added[0].item.control.kind -ne 'color' -or $added[1].item.control.command -ne 'brush'){throw 'Tool insertion order changed across search'}
     Check-Geometry

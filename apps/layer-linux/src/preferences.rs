@@ -75,6 +75,7 @@ pub struct Preferences {
     stack: adw::ViewStack,
     split: adw::NavigationSplitView,
     content_page: adw::NavigationPage,
+    sidebar_page: adw::NavigationPage,
     content_view: adw::ToolbarView,
     sidebar: adw::ViewSwitcherSidebar,
     search_toggle: gtk::ToggleButton,
@@ -349,8 +350,11 @@ fn text_row(title: &str, subtitle: &str) -> adw::ActionRow {
 }
 impl Preferences {
     pub fn new() -> Self {
+        let localization = crate::launch_localization();
+        let copy = NativeCopy::new(localization);
+        let title = localization.text(MessageId::SETTINGS_TITLE);
         let dialog = adw::Dialog::builder()
-            .title("Preferences")
+            .title(title.as_ref())
             .content_width(1000)
             .content_height(744)
             .width_request(360)
@@ -365,7 +369,7 @@ impl Preferences {
         sidebar_header.set_show_end_title_buttons(false);
         let search_toggle = gtk::ToggleButton::builder()
             .icon_name("edit-find-symbolic")
-            .tooltip_text("Search preferences")
+            .tooltip_text(copy.shortcuts.search_preferences.as_ref())
             .build();
         search_toggle.set_widget_name("preferences-search-toggle");
         sidebar_header.pack_start(&search_toggle);
@@ -378,7 +382,7 @@ impl Preferences {
         header.pack_start(&shortcut_page.back);
         content_view.add_top_bar(&header);
         let search = gtk::SearchEntry::builder()
-            .placeholder_text("Search preferences")
+            .placeholder_text(copy.shortcuts.search_preferences.as_ref())
             .build();
         search.set_widget_name("settings-search");
         margins(&search, 6);
@@ -392,7 +396,7 @@ impl Preferences {
         let sidebar_body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         sidebar_body.append(&sidebar);
         sidebar_body.append(&search_results);
-        let empty = gtk::Label::new(Some("No matching preferences"));
+        let empty = gtk::Label::new(Some(copy.shortcuts.no_matching_preferences.as_ref()));
         empty.add_css_class("dim-label");
         empty.set_visible(false);
         sidebar_body.append(&empty);
@@ -403,9 +407,10 @@ impl Preferences {
             .build());
         sidebar_view.set_content(Some(&scroll));
         content_view.set_content(Some(&stack));
-        let content_page = adw::NavigationPage::new(&content_view, "Appearance");
+        let content_page = adw::NavigationPage::new(&content_view, localization.text(MessageId::SETTINGS_PAGE_APPEARANCE).as_ref());
+        let sidebar_page = adw::NavigationPage::new(&sidebar_view, title.as_ref());
         let split = adw::NavigationSplitView::builder()
-            .sidebar(&adw::NavigationPage::new(&sidebar_view, "Preferences"))
+            .sidebar(&sidebar_page)
             .content(&content_page)
             .min_sidebar_width(190.0)
             .max_sidebar_width(210.0)
@@ -425,7 +430,7 @@ impl Preferences {
         let error = gtk::Label::builder().wrap(true).xalign(0.0).build();
         error.add_css_class("error");
         let shortcut_search = gtk::SearchEntry::builder()
-            .placeholder_text("Search shortcuts")
+            .placeholder_text(copy.shortcuts.search_shortcuts.as_ref())
             .build();
         shortcut_search.set_widget_name("shortcuts-search");
         let context = gtk::PopoverMenu::from_model(None::<&gtk::gio::Menu>);
@@ -438,6 +443,7 @@ impl Preferences {
             stack,
             split,
             content_page,
+            sidebar_page,
             content_view,
             sidebar,
             search_toggle,
@@ -646,6 +652,7 @@ impl Preferences {
                                     )
                                 ),
                             );
+                            crate::input::guard_entry_activation(&selector.entry);
                             let weak = Rc::downgrade(&selector);
                             selector.entry.connect_activate(glib::clone!(
                                 #[weak]
@@ -797,7 +804,7 @@ impl Preferences {
                                 control.clone(),
                                 &row.title,
                                 &row.description,
-                            );
+                             w.localization.clone());
                             number.set_widget_name(&format!("setting-{}", id.key()));
                             number.connect_value_changed(glib::clone!(
                                 #[weak]
@@ -874,8 +881,10 @@ impl Preferences {
             };
             if page.id == SettingsPage::Color {
                 let group = adw::PreferencesGroup::new();
-                let row = text_row("Drawing defaults and presets", "Choose dimensions, use a saved preset, or manage your drawing presets.");
-                let button = gtk::Button::with_label("Configure…");
+                let copy = CommonCopy::new(&w.localization);
+                let title = w.localization.text(MessageId::DOCUMENTS_DEFAULTS_TITLE);
+                let row = text_row(title.as_ref(), "");
+                let button = gtk::Button::with_label(copy.more.as_ref());
                 button.set_widget_name("color-drawing-defaults");
                 button.set_valign(gtk::Align::Center);
                 button.connect_clicked(glib::clone!(#[weak] w, move |_| {
@@ -886,8 +895,9 @@ impl Preferences {
                 row.add_suffix(&button);
                 row.set_activatable_widget(Some(&button));
                 group.add(&row);
-                let row = text_row("Color profiles", "Choose which profiles appear in profile menus.");
-                let button = gtk::Button::with_label("Manage…");
+                let copy = layer_ui::color_feature_copy::ProfileCopy::new(&w.localization);
+                let row = text_row(copy.library_title.as_ref(), copy.menu_help.as_ref());
+                let button = gtk::Button::with_label(copy.manage.as_ref());
                 button.set_widget_name("color-profile-library");
                 button.set_valign(gtk::Align::Center);
                 button.connect_clicked(glib::clone!(#[weak] w, move |_| {
@@ -941,7 +951,11 @@ impl Preferences {
             if self.fields.borrow().is_empty() {
                 self.build(w, &view);
             }
-            self.content_page.set_title(view.page.title());
+            if self.dialog.title().as_str() != view.title { self.dialog.set_title(&view.title); }
+            if self.sidebar_page.title().as_str() != view.title { self.sidebar_page.set_title(&view.title); }
+            if let Some(page) = view.pages.iter().find(|page| page.id == view.page) {
+                if self.content_page.title().as_str() != page.title { self.content_page.set_title(&page.title); }
+            }
             self.empty.set_visible(view.empty);
             self.stack.set_visible_child_name(view.page.key());
             self.search_toggle.set_active(view.searching);
@@ -1037,41 +1051,48 @@ impl Preferences {
 }
 
 pub(crate) async fn export_keymap(w: &Rc<Workspace>, name: String, text: String) -> Result<(), String> {
-    let dialog = gtk::FileDialog::builder().title("Export Keymap").initial_name(name.as_str()).build();
+    let copy = NativeCopy::new(&w.localization);
+    let dialog = gtk::FileDialog::builder().title(copy.shortcuts.export_menu.as_ref()).initial_name(name.as_str()).build();
     let file = match dialog.save_future(Some(&w.window)).await {
         Ok(file) => file,
         Err(e) if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) => return Ok(()),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(format!("{}\n{e}", w.localization.text(MessageId::COMMON_ACTION_FAILED))),
     };
-    let path = file.path().ok_or("Choose a local file")?;
+    let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization))?;
     gtk::gio::spawn_blocking(move || std::fs::write(path, text).map_err(|e| e.to_string()))
         .await
-        .map_err(|_| "Could not save the keymap".to_string())?
+        .map_err(|_| "Could not save the keymap".to_string())
+        .and_then(|result| result)
+        .map_err(|detail| format!("{}\n{detail}", w.localization.text(MessageId::COMMON_ACTION_FAILED)))
 }
 
 pub(crate) async fn import_keymap(w: &Rc<Workspace>) -> Result<(), String> {
+    let copy = NativeCopy::new(&w.localization);
     let filter = gtk::FileFilter::new();
-    filter.set_name(Some("Keymaps"));
+    filter.set_name(Some(copy.shortcuts.keymap.as_ref()));
     filter.add_suffix("capykeys");
     let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);
-    let dialog = gtk::FileDialog::builder().title("Import Keymap").filters(&filters).build();
+    let dialog = gtk::FileDialog::builder().title(copy.shortcuts.import_menu.as_ref()).filters(&filters).build();
     let file = match dialog.open_future(Some(&w.window)).await {
         Ok(file) => file,
         Err(e) if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) => return Ok(()),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(format!("{}\n{e}", w.localization.text(MessageId::COMMON_ACTION_FAILED))),
     };
-    let path = file.path().ok_or("Choose a local keymap file")?;
+    let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization))?;
     let text = gtk::gio::spawn_blocking(move || {
         use std::io::Read;
         let mut bytes = Vec::new();
         std::fs::File::open(&path)
             .and_then(|f| f.take(1 << 20).read_to_end(&mut bytes))
             .map_err(|e| e.to_string())?;
-        String::from_utf8(bytes).map_err(|_| "The keymap is not UTF-8 text".to_string())
+        Ok::<_, String>(String::from_utf8(bytes))
     })
     .await
-    .map_err(|_| "Could not read the keymap".to_string())??;
+    .map_err(|_| "Could not read the keymap".to_string())
+    .and_then(|result| result)
+    .map_err(|detail| format!("{}\n{detail}", w.localization.text(MessageId::COMMON_ACTION_FAILED)))?
+    .map_err(|_| w.localization.text(MessageId::SETTINGS_KEYMAP_INVALID).to_string())?;
     send(w, PreferenceAction::ImportKeymap { text });
     Ok(())
 }
@@ -1104,6 +1125,7 @@ pub(crate) async fn persist(w: &Workspace, settings: Box<Settings>) -> Result<()
     })
     .await
     .unwrap_or_else(|_| Err("Settings writer failed".into()))
+    .map_err(|detail| format!("{}\n{detail}", w.localization.text(MessageId::COMMON_ACTION_FAILED)))
 }
 
 fn path() -> Option<std::path::PathBuf> {
@@ -1111,7 +1133,13 @@ fn path() -> Option<std::path::PathBuf> {
         .map(Into::into)
         .or_else(|| (!cfg!(test)).then(|| glib::user_config_dir().join("layer/settings.json")))
 }
+pub fn load_language_preference() -> Result<layer_ui::LanguagePreference, String> {
+    Ok(load_saved()?.as_deref().map(Settings::language_preference).unwrap_or_default())
+}
 pub fn load() -> Result<Option<Settings>, String> {
+    Ok(load_saved()?.as_deref().map(Settings::restore))
+}
+fn load_saved() -> Result<Option<String>, String> {
     let Some(path) = path() else {
         return Ok(None);
     };
@@ -1128,7 +1156,7 @@ pub fn load() -> Result<Option<Settings>, String> {
         .read_to_string(&mut saved)
         .is_ok()
         && saved.len() <= LIMIT;
-    Ok(Some(Settings::restore(if readable { &saved } else { "" })))
+    Ok(Some(if readable { saved } else { String::new() }))
 }
 fn save(settings: &Settings) -> Result<(), String> {
     let Some(path) = path() else {

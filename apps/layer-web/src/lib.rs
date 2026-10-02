@@ -22,7 +22,7 @@ use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::CanvasRenderer;
 use layer_render_wgpu::{AttachedRenderer, GpuRasterError, SdrSurfaceColor, StartupProgress, ViewportPresenter, WgpuRasterizer};
-use layer_ui::{UiAction, UiSession, ui_catalog};
+use layer_ui::{UiAction, UiSession, ui_catalog_localized};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -170,7 +170,7 @@ impl WebApp {
         let state = self.session.state();
         Ok(state
             .settings
-            .action_tooltip(label, &action, state.platform))
+            .action_tooltip_localized(label, &action, state.platform, self.session.localization()))
     }
     pub fn selection_menu(&self, kind: JsValue) -> Result<JsValue, JsValue> {
         serialize(&self.session.selection_menu(serde_wasm_bindgen::from_value(kind).map_err(js)?))
@@ -231,7 +231,7 @@ impl WebApp {
     pub fn palette_action_error(&self, action: JsValue) -> Result<Option<String>, JsValue> {
         let action: layer_ui::ColorLibraryAction =
             serde_wasm_bindgen::from_value(action).map_err(js)?;
-        Ok(self.session.state().colors.library.check(action).err())
+        Ok(self.session.state().colors.library.check(action, self.session.localization()).err())
     }
     pub fn group_tab_style(&self, group: u32) -> Result<JsValue, JsValue> {
         serialize(
@@ -298,14 +298,20 @@ impl WebApp {
         });
         self.session.cursor_input(event);
     }
-    pub fn create(canvas: web_sys::HtmlCanvasElement) -> Result<WebApp, JsValue> {
+    pub fn create(canvas: web_sys::HtmlCanvasElement, saved: Option<String>, preferred_tags: JsValue) -> Result<WebApp, JsValue> {
         console_error_panic_hook::set_once();
-        let mut session = UiSession::blank(
+        let tags: Vec<String> = serde_wasm_bindgen::from_value(preferred_tags).map_err(js)?;
+        let localization = layer_ui::launch_localization(saved.as_deref().unwrap_or(""), &tags.iter().map(String::as_str).collect::<Vec<_>>());
+        let mut session = UiSession::blank_localized(
             AttachedRenderer::default(),
             [canvas.width().max(1), canvas.height().max(1)],
             layer_ui::Platform::Web,
+            localization,
         )
         .map_err(js)?;
+        if let Some(saved) = saved {
+            session.dispatch(UiAction::RestoreSavedSettings { saved }).map_err(js)?;
+        }
         session.set_document_replacement(false);
         session
             .dispatch(UiAction::RestoreWorkspace {
@@ -663,7 +669,7 @@ impl WebApp {
     }
     pub fn color_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = serde_wasm_bindgen::from_value(request).map_err(js)?;
-        serialize(&layer_ui::color_ui(request).map_err(js)?)
+        serialize(&layer_ui::color_ui_localized(request, self.session.localization()).map_err(js)?)
     }
     /// Retain UI models by model_revision; ordinary workspace motion only
     /// publishes absolute native geometry, tab presentation and drop feedback.
@@ -680,17 +686,42 @@ impl WebApp {
     pub fn camera(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().camera)
     }
+    pub fn language_tag(&self) -> String {
+        self.session.localization().language().tag().into()
+    }
+    pub fn bootstrap_view(&self) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::bootstrap_view(self.session.localization()))
+    }
+    pub fn document_delivery_copy(&self) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::DocumentDeliveryCopy::new(self.session.localization()))
+    }
+    pub fn document_delivery_message(&self, request: JsValue) -> Result<String, JsValue> {
+        let request: layer_ui::DocumentDeliveryMessage = serde_wasm_bindgen::from_value(request).map_err(js)?;
+        Ok(request.message(self.session.localization()))
+    }
+    pub fn document_storage_retained(&self, detail: &str) -> String {
+        layer_ui::document_storage_retained(self.session.localization(), detail)
+    }
+    pub fn document_recovery_unavailable(&self, detail: &str) -> String {
+        layer_ui::document_recovery_unavailable(self.session.localization(), detail)
+    }
+    pub fn file_open_failure(&self, name: &str) -> String {
+        layer_ui::file_open_failure(self.session.localization(), name)
+    }
     pub fn catalog(&self) -> Result<JsValue, JsValue> {
-        serialize(&ui_catalog())
+        serialize(&ui_catalog_localized(self.session.localization()))
+    }
+    pub fn numeric_labels(&self, label: &str) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::NumericLabels::new(label, self.session.localization()))
     }
     pub fn number_input(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request: layer_ui::NumericRequest =
             serde_wasm_bindgen::from_value(request).map_err(js)?;
-        serialize(&request.resolve().map_err(js)?)
+        serialize(&request.resolve().map_err(|reason| js(reason.message(self.session.localization())))?)
     }
     pub fn toolbar_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = serde_wasm_bindgen::from_value(request).map_err(js)?;
-        let result = layer_ui::toolbar_ui(request).map_err(js)?;
+        let result = layer_ui::toolbar_ui(request, self.session.localization()).map_err(js)?;
         // These JSON queries contain bounded UI numbers, not document IDs.
         // Preserve numbers when a returned numeric spec is sent back to Rust.
         js_sys::JSON::parse(&serde_json::to_string(&result).map_err(js)?)

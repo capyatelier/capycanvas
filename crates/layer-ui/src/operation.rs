@@ -630,6 +630,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             |(id, label, group, numeric, value)| tool_settings::ToolSetting {
                 id,
                 label: localizer.text(label),
+                label_id: label,
                 group: localizer.text(group),
                 numeric,
                 value,
@@ -644,7 +645,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .into_iter()
             .find(|c| c.id == id)
             .ok_or("No transform setting")?;
-        control.numeric.validate(value, &control.label)?;
+        control.numeric.validate(value, control.label.as_ref()).map_err(|reason| reason.message(self.localization()))?;
         let t = self.operation.current.as_mut().ok_or("No transform")?;
         let mut pose = t.geometry.pose;
         match id {

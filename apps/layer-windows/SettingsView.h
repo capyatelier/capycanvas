@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "native/include/capy_windows.h"
 #include <functional>
 #include <memory>
 
@@ -8,7 +9,7 @@ public:
     using Json=winrt::Windows::Data::Json::JsonObject;
     using Dispatch=std::function<void(std::string)>;
     using Key=std::function<void(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&,bool)>;
-    SettingsView(Dispatch send,Json catalog,winrt::Microsoft::UI::Xaml::XamlRoot root,Key key,Dispatch report,std::function<void()> changed,Dispatch document);
+    SettingsView(Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,winrt::Microsoft::UI::Xaml::XamlRoot root,Key key,Dispatch report,std::function<void()> changed,Dispatch document);
     ~SettingsView();
     void Apply(Json const& snapshot);
     bool IsOpen()const;

@@ -21,7 +21,7 @@ pub struct ColorPalette {
     pub name: String,
     pub swatches: Vec<SavedColor>,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColorLibrary {
     pub palettes: Vec<ColorPalette>,
@@ -31,8 +31,18 @@ pub struct ColorLibrary {
     pub pending_name: Option<(RgbColor, String)>,
     starters_installed: bool,
     #[serde(skip)]
+    fresh_default: bool,
+    #[serde(skip)]
     reorders: reorder::ReorderHistory,
     next_id: u64,
+}
+impl PartialEq for ColorLibrary {
+    fn eq(&self, other: &Self) -> bool {
+        self.palettes == other.palettes && self.active == other.active
+            && self.history == other.history && self.pending_name == other.pending_name
+            && self.starters_installed == other.starters_installed && self.reorders == other.reorders
+            && self.next_id == other.next_id
+    }
 }
 #[derive(Default)]
 struct UniqueNames {
@@ -40,14 +50,14 @@ struct UniqueNames {
     suffixes: std::collections::BTreeMap<String, u32>,
 }
 impl UniqueNames {
-    fn claim(&mut self, base: String) -> String {
+    fn claim(&mut self, base: String, numbered: impl Fn(&str, u32) -> String) -> String {
         if self.used.insert(base.to_lowercase()) {
             return base;
         }
         let stem = base.chars().take(55).collect::<String>();
         let suffix = self.suffixes.entry(stem.to_lowercase()).or_insert(2);
         loop {
-            let candidate = format!("{stem} {suffix}");
+            let candidate = numbered(&stem, *suffix);
             *suffix += 1;
             if self.used.insert(candidate.to_lowercase()) {
                 return candidate;
@@ -106,16 +116,20 @@ pub enum ColorLibraryAction {
         palette: u64,
     },
 }
-impl Default for ColorLibrary {
-    fn default() -> Self {
+impl ColorLibrary {
+    pub fn canonical() -> Self {
+        Self::fresh(&crate::Localizer::shared(crate::UiLanguage::English).text(crate::MessageId::CREATION_PALETTE_MY_COLORS))
+    }
+    pub(crate) fn fresh(default_name: &str) -> Self {
         Self {
             palettes: vec![ColorPalette {
                 id: 1,
-                name: "My colors".into(),
+                name: default_name.into(),
                 swatches: Vec::new(),
             }],
             next_id: 2,
             starters_installed: false,
+            fresh_default: true,
             reorders: Default::default(),
             active: 1,
             history: Vec::new(),
@@ -123,7 +137,7 @@ impl Default for ColorLibrary {
         }
     }
 }
-fn name(value: &str) -> Result<String, String> {
+fn checked_name(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 64 || value.chars().any(char::is_control) {
         return Err("Choose a name of 1–64 characters without control characters".into());
@@ -131,6 +145,11 @@ fn name(value: &str) -> Result<String, String> {
     Ok(value.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 impl ColorLibrary {
+    #[cfg(test)]
+    pub(crate) fn apply_canonical(&mut self, action: ColorLibraryAction) -> Result<Option<RgbColor>, String> {
+        let action = self.prepare_creation(action, &crate::Localizer::shared(crate::UiLanguage::English))?;
+        self.apply(action)
+    }
     pub const MAX_PALETTES: usize = 64;
     pub const MAX_SWATCHES: usize = 4096;
     pub const MAX_HISTORY: usize = 64;
@@ -145,6 +164,7 @@ impl ColorLibrary {
         if color.rgba[3] == 0. || self.history.first() == Some(&color) {
             return;
         }
+        self.fresh_default = false;
         self.history.retain(|c| *c != color);
         self.history.insert(0, color);
         self.history.truncate(Self::MAX_HISTORY);
@@ -158,64 +178,61 @@ impl ColorLibrary {
             (rgba[2].clamp(0., 1.) * 255.).round() as u8
         )
     }
-    pub fn suggested_name(color: RgbColor) -> String {
+    pub fn suggested_name(color: RgbColor) -> crate::MessageId {
         let p = color.encoded_in(RgbSpace::Srgb).expect("validated color");
         let [r, g, b] = [p[0], p[1], p[2]].map(|v| v.clamp(0., 1.));
         let max = r.max(g).max(b);
         let min = r.min(g).min(b);
         let delta = max - min;
         let label = if max < 0.12 {
-            "Ink"
+            crate::MessageId::CREATION_COLOR_INK
         } else if delta < 0.08 {
             if min > 0.9 {
-                "White"
+                crate::MessageId::CREATION_COLOR_WHITE
             } else if max < 0.4 {
-                "Charcoal"
+                crate::MessageId::CREATION_COLOR_CHARCOAL
             } else {
-                "Gray"
+                crate::MessageId::CREATION_COLOR_GRAY
             }
         } else {
             match components([r, g, b, 1.], ColorSpace::Hsv, 0.)[0] as u32 {
                 0..=19 | 345..=359 => {
                     if max < 0.65 {
-                        "Brick"
+                        crate::MessageId::CREATION_COLOR_BRICK
                     } else {
-                        "Coral"
+                        crate::MessageId::CREATION_COLOR_CORAL
                     }
                 }
                 20..=44 => {
                     if max < 0.65 {
-                        "Umber"
+                        crate::MessageId::CREATION_COLOR_UMBER
                     } else if delta < 0.45 {
-                        "Sand"
+                        crate::MessageId::CREATION_COLOR_SAND
                     } else {
-                        "Amber"
+                        crate::MessageId::CREATION_COLOR_AMBER
                     }
                 }
                 45..=69 => {
                     if delta < 0.4 {
-                        "Linen"
+                        crate::MessageId::CREATION_COLOR_LINEN
                     } else {
-                        "Gold"
+                        crate::MessageId::CREATION_COLOR_GOLD
                     }
                 }
-                70..=159 => "Green",
-                160..=194 => "Teal",
-                195..=254 => "Blue",
-                255..=284 => "Violet",
-                _ => "Rose",
+                70..=159 => crate::MessageId::CREATION_COLOR_GREEN,
+                160..=194 => crate::MessageId::CREATION_COLOR_TEAL,
+                195..=254 => crate::MessageId::CREATION_COLOR_BLUE,
+                255..=284 => crate::MessageId::CREATION_COLOR_VIOLET,
+                _ => crate::MessageId::CREATION_COLOR_ROSE,
             }
         };
-        label.into()
+        label
     }
     pub fn current_name(&self, color: RgbColor) -> Option<&str> {
         self.pending_name
             .as_ref()
             .filter(|(c, _)| *c == color)
             .map(|(_, name)| name.as_str())
-    }
-    fn unique_name(base: String, names: impl Iterator<Item = String>) -> String {
-        UniqueNames { used: names.map(|n| n.to_lowercase()).collect(), ..Default::default() }.claim(base)
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.history.len() > Self::MAX_HISTORY {
@@ -226,7 +243,7 @@ impl ColorLibrary {
         }
         if let Some((color, value)) = &self.pending_name {
             ColorState::validate_definition(*color)?;
-            name(value)?;
+            checked_name(value)?;
         }
         if self.palettes.is_empty()
             || self.palettes.len() > Self::MAX_PALETTES
@@ -242,7 +259,7 @@ impl ColorLibrary {
         let mut ids = std::collections::BTreeSet::new();
         let mut names = std::collections::BTreeSet::new();
         for palette in &self.palettes {
-            if name(&palette.name).is_err() || !names.insert(palette.name.to_lowercase()) {
+            if checked_name(&palette.name).is_err() || !names.insert(palette.name.to_lowercase()) {
                 return Err("Palette names must be unique".into());
             }
             if palette.id == 0 || palette.id >= self.next_id || !ids.insert(palette.id) {
@@ -250,7 +267,7 @@ impl ColorLibrary {
             }
             let mut swatch_names = std::collections::BTreeSet::new();
             for swatch in &palette.swatches {
-                if name(&swatch.name)? != swatch.name
+                if checked_name(&swatch.name)? != swatch.name
                     || !swatch_names.insert(swatch.name.to_lowercase())
                 {
                     return Err("Color names must be unique within a palette".into());
@@ -270,7 +287,7 @@ impl ColorLibrary {
             .find(|s| s.id == id)
     }
     fn palette_name(&self, id: Option<u64>, value: &str) -> Result<String, String> {
-        let value = name(value)?;
+        let value = checked_name(value)?;
         if self
             .palettes
             .iter()
@@ -280,11 +297,59 @@ impl ColorLibrary {
         }
         Ok(value)
     }
+    pub fn prepare_creation(&self, action: ColorLibraryAction, localizer: &crate::Localizer) -> Result<ColorLibraryAction, String> {
+        match &action {
+            ColorLibraryAction::NameCurrent { color, .. } | ColorLibraryAction::Store { color, .. } => ColorState::validate_definition(*color)?,
+            ColorLibraryAction::Import { swatches, .. } => { for (_, color) in swatches { ColorState::validate_definition(*color)?; } }
+            _ => {}
+        }
+        let numbered = |stem: &str, number: u32| numbered_name(localizer, stem, number);
+        let unique = |base: String, names: Vec<String>| {
+            UniqueNames { used: names.into_iter().map(|name| name.to_lowercase()).collect(), ..Default::default() }
+                .claim(base, &numbered)
+        };
+        let swatch_name = |palette: u64, id: Option<u64>, value: String, color: RgbColor| {
+            if !value.trim().is_empty() { return value; }
+            let base = self.current_name(color).map(str::to_owned)
+                .unwrap_or_else(|| localizer.text(Self::suggested_name(color)).to_string());
+            let names = self.palettes.iter().find(|p| p.id == palette).into_iter()
+                .flat_map(|p| &p.swatches).filter(|s| Some(s.id) != id).map(|s| s.name.clone()).collect();
+            unique(base, names)
+        };
+        Ok(match action {
+            ColorLibraryAction::CreatePalette { name } if name.trim().is_empty() => ColorLibraryAction::CreatePalette {
+                name: unique(localizer.text(crate::MessageId::CREATION_PALETTE_NEW).to_string(), self.palettes.iter().map(|p| p.name.clone()).collect()),
+            },
+            ColorLibraryAction::Import { name, swatches } => {
+                let name = if name.trim().is_empty() { localizer.text(crate::MessageId::CREATION_PALETTE_IMPORTED).to_string() } else { name };
+                let name = unique(checked_name(&name).unwrap_or(name), self.palettes.iter().map(|p| p.name.clone()).collect());
+                let mut used = UniqueNames::default();
+                let swatches = swatches.into_iter().map(|(name, color)| {
+                    let name = if name.trim().is_empty() { localizer.text(Self::suggested_name(color)).to_string() } else { name };
+                    let name = used.claim(checked_name(&name).unwrap_or(name), &numbered); (name, color)
+                }).collect();
+                ColorLibraryAction::Import { name, swatches }
+            }
+            ColorLibraryAction::NameCurrent { color, name } => ColorLibraryAction::NameCurrent {
+                color, name: swatch_name(self.active, None, name, color),
+            },
+            ColorLibraryAction::Store { palette, color, name } => ColorLibraryAction::Store {
+                palette, color, name: swatch_name(palette, None, name, color),
+            },
+            ColorLibraryAction::Rename { id, name } => {
+                if let Some((palette, color)) = self.palettes.iter().find_map(|p| p.swatches.iter().find(|s| s.id == id).map(|s| (p.id, s.color))) {
+                    ColorLibraryAction::Rename { id, name: swatch_name(palette, Some(id), name, color) }
+                } else { ColorLibraryAction::Rename { id, name } }
+            }
+            action => action,
+        })
+    }
     pub fn apply(&mut self, action: ColorLibraryAction) -> Result<Option<RgbColor>, String> {
+        let fresh = self.fresh_default.then(|| (self.palettes[0].clone(), self.next_id, self.pending_name.clone()));
         match action {
             ColorLibraryAction::NameCurrent { color, name: value } => {
                 ColorState::validate_definition(color)?;
-                let name = self.swatch_name(self.active_palette().id, None, &value, color)?;
+                let name = self.swatch_name(self.active_palette().id, None, &value)?;
                 self.pending_name = Some((color, name));
             }
             ColorLibraryAction::SelectPalette { id } => {
@@ -292,6 +357,7 @@ impl ColorLibrary {
                     return Err("Palette no longer exists".into());
                 }
                 self.active = id;
+                return Ok(None);
             }
             ColorLibraryAction::Import {
                 name: value,
@@ -312,26 +378,19 @@ impl ColorLibrary {
                     return Err("The library can hold at most 4096 colors".into());
                 }
                 let mut next = self.clone();
-                let base = if value.trim().is_empty() {
-                    "Imported palette".into()
-                } else {
-                    name(&value)?
-                };
-                let value = Self::unique_name(base, next.palettes.iter().map(|p| p.name.clone()));
+                let base = checked_name(&value)?;
+                let value = next.palette_name(None, &base)?;
                 next.apply(ColorLibraryAction::CreatePalette { name: value })?;
                 let end = next
                     .next_id
                     .checked_add(swatches.len() as u64)
                     .ok_or("Swatch IDs exhausted")?;
-                let mut names = UniqueNames::default();
+                let mut names = std::collections::BTreeSet::new();
                 for (value, color) in swatches {
                     ColorState::validate_definition(color)?;
-                    let base = if value.trim().is_empty() {
-                        Self::suggested_name(color)
-                    } else {
-                        name(&value)?
-                    };
-                    let value = names.claim(base);
+                    let base = checked_name(&value)?;
+                    if !names.insert(base.to_lowercase()) { return Err("Another color in this palette already has that name".into()); }
+                    let value = base;
                     next.palettes.last_mut().unwrap().swatches.push(SavedColor {
                         id: next.next_id,
                         name: value,
@@ -343,14 +402,7 @@ impl ColorLibrary {
                 *self = next;
             }
             ColorLibraryAction::CreatePalette { name } => {
-                let name = if name.trim().is_empty() {
-                    Self::unique_name(
-                        "New palette".into(),
-                        self.palettes.iter().map(|p| p.name.clone()),
-                    )
-                } else {
-                    self.palette_name(None, &name)?
-                };
+                let name = self.palette_name(None, &name)?;
                 if self.palettes.len() >= Self::MAX_PALETTES {
                     return Err("The library already has 64 palettes".into());
                 }
@@ -392,7 +444,7 @@ impl ColorLibrary {
                 color,
             } => {
                 ColorState::validate_definition(color)?;
-                let name = self.swatch_name(palette, None, &value, color)?;
+                let name = self.swatch_name(palette, None, &value)?;
                 if self
                     .palettes
                     .iter()
@@ -423,8 +475,7 @@ impl ColorLibrary {
                     .iter()
                     .find(|p| p.swatches.iter().any(|s| s.id == id))
                     .ok_or("Swatch no longer exists")?;
-                let color = self.swatch(id).unwrap().color;
-                let name = self.swatch_name(palette.id, Some(id), &value, color)?;
+                let name = self.swatch_name(palette.id, Some(id), &value)?;
                 self.palettes
                     .iter_mut()
                     .flat_map(|p| &mut p.swatches)
@@ -455,6 +506,10 @@ impl ColorLibrary {
             ColorLibraryAction::UndoReorder { palette } => self.restore_reorder(palette, false)?,
             ColorLibraryAction::RedoReorder { palette } => self.restore_reorder(palette, true)?,
         }
+        if let Some((palette, next_id, pending_name)) = fresh {
+            self.fresh_default &= self.palettes.len() == 1 && self.palettes[0] == palette
+                && self.next_id == next_id && self.pending_name == pending_name;
+        }
         Ok(None)
     }
     fn swatch_name(
@@ -462,7 +517,6 @@ impl ColorLibrary {
         palette: u64,
         id: Option<u64>,
         value: &str,
-        color: RgbColor,
     ) -> Result<String, String> {
         let palette = self
             .palettes
@@ -470,14 +524,7 @@ impl ColorLibrary {
             .find(|p| p.id == palette)
             .ok_or("Palette no longer exists")?;
         let others = || palette.swatches.iter().filter(|s| Some(s.id) != id);
-        if value.trim().is_empty() {
-            let base = self
-                .current_name(color)
-                .map(str::to_owned)
-                .unwrap_or_else(|| Self::suggested_name(color));
-            return Ok(Self::unique_name(base, others().map(|s| s.name.clone())));
-        }
-        let value = name(value)?;
+        let value = checked_name(value)?;
         if others().any(|s| s.name.to_lowercase() == value.to_lowercase()) {
             return Err("Another color in this palette already has that name".into());
         }
@@ -490,10 +537,10 @@ mod tests {
     use super::*;
     #[test]
     fn names_and_imports_keep_ids_and_definitions() {
-        let mut library = ColorLibrary::default();
+        let mut library = ColorLibrary::canonical();
         let color = RgbColor::from_linear(RgbSpace::DisplayP3, [4., 0.1, 0.3, 0.25]).unwrap();
         library
-            .apply(ColorLibraryAction::Store {
+            .apply_canonical(ColorLibraryAction::Store {
                 palette: 1,
                 name: "  Warm   red ".into(),
                 color,
@@ -503,7 +550,7 @@ mod tests {
         let before = library.clone();
         assert!(
             library
-                .apply(ColorLibraryAction::Store {
+                .apply_canonical(ColorLibraryAction::Store {
                     palette: 1,
                     name: "warm red".into(),
                     color
@@ -512,14 +559,14 @@ mod tests {
         );
         assert_eq!(library, before);
         library
-            .apply(ColorLibraryAction::Store {
+            .apply_canonical(ColorLibraryAction::Store {
                 palette: 1,
                 name: String::new(),
                 color,
             })
             .unwrap();
         library
-            .apply(ColorLibraryAction::Store {
+            .apply_canonical(ColorLibraryAction::Store {
                 palette: 1,
                 name: String::new(),
                 color,
@@ -532,7 +579,7 @@ mod tests {
         let file = library.export_palette(1, PaletteFormat::Capycolor).unwrap();
         assert!(file.notice.is_none());
         library
-            .apply(ColorLibrary::import_file(&file.bytes, "Unused").unwrap())
+            .apply_canonical(ColorLibrary::import_file(&file.bytes, "Unused").unwrap())
             .unwrap();
         assert_eq!(library.active_palette().name, "My colors 2");
         assert!(
@@ -546,7 +593,7 @@ mod tests {
         let before = library.clone();
         assert!(
             library
-                .apply(ColorLibraryAction::Import {
+                .apply_canonical(ColorLibraryAction::Import {
                     name: "Bad".into(),
                     swatches: vec![("OK".into(), color), ("bad\nname".into(), color)]
                 })
@@ -556,8 +603,8 @@ mod tests {
     }
     #[test]
     fn gpl_import_validates_channels_and_supplies_unique_missing_names() {
-        let mut library = ColorLibrary::default();
-        library.apply(ColorLibrary::import_file(b"GIMP Palette\nName: Study\nColumns: 6\n# Colors\n255 0 0\n255 0 0 Untitled\n0 0 0 Ink\n255 255 255 ink\n", "Fallback").unwrap()).unwrap();
+        let mut library = ColorLibrary::canonical();
+        library.apply_canonical(ColorLibrary::import_file(b"GIMP Palette\nName: Study\nColumns: 6\n# Colors\n255 0 0\n255 0 0 Untitled\n0 0 0 Ink\n255 255 255 ink\n", "Fallback").unwrap()).unwrap();
         assert_eq!(
             library
                 .active_palette()
@@ -578,7 +625,7 @@ mod tests {
     }
     #[test]
     fn usage_history_is_bounded_deduplicated_and_survives_save() {
-        let mut library = ColorLibrary::default();
+        let mut library = ColorLibrary::canonical();
         for i in 0..100 {
             library
                 .record_use(RgbColor::new(RgbSpace::Srgb, [i as f32 / 100., 0., 0., 1.]).unwrap());
@@ -594,10 +641,10 @@ mod tests {
     }
     #[test]
     fn naming_an_unsaved_color_waits_for_explicit_add() {
-        let mut library = ColorLibrary::default();
+        let mut library = ColorLibrary::canonical();
         let color = RgbColor::BLACK;
         library
-            .apply(ColorLibraryAction::NameCurrent {
+            .apply_canonical(ColorLibraryAction::NameCurrent {
                 color,
                 name: "Outline".into(),
             })
@@ -605,7 +652,7 @@ mod tests {
         assert!(library.active_palette().swatches.is_empty());
         assert_eq!(library.current_name(color), Some("Outline"));
         library
-            .apply(ColorLibraryAction::Store {
+            .apply_canonical(ColorLibraryAction::Store {
                 palette: 1,
                 name: String::new(),
                 color,
@@ -619,7 +666,7 @@ mod tests {
         let mut state = ColorState::default();
         let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0., 123. / 65535.]).unwrap();
         state
-            .apply(ColorAction::Library {
+            .apply_canonical(ColorAction::Library {
                 action: ColorLibraryAction::Store {
                     palette: 1,
                     name: "Wide red".into(),
@@ -631,7 +678,7 @@ mod tests {
         for space in RgbSpace::ALL {
             state.set_rgb_space(space).unwrap();
             state
-                .apply(ColorAction::Library {
+                .apply_canonical(ColorAction::Library {
                     action: ColorLibraryAction::Use { id },
                 })
                 .unwrap();
@@ -643,7 +690,7 @@ mod tests {
         let before = state.clone();
         assert!(
             state
-                .apply(ColorAction::Library {
+                .apply_canonical(ColorAction::Library {
                     action: ColorLibraryAction::CreatePalette {
                         name: "MY COLORS".into()
                     }
@@ -653,14 +700,14 @@ mod tests {
         assert_eq!(state, before);
         assert!(
             state
-                .apply(ColorAction::Library {
+                .apply_canonical(ColorAction::Library {
                     action: ColorLibraryAction::RemovePalette { id: 1 }
                 })
                 .is_err()
         );
         assert_eq!(state, before);
         state
-            .apply(ColorAction::Library {
+            .apply_canonical(ColorAction::Library {
                 action: ColorLibraryAction::Rename {
                     id,
                     name: "P3 red".into(),
@@ -668,11 +715,17 @@ mod tests {
             })
             .unwrap();
         state
-            .apply(ColorAction::Library {
+            .apply_canonical(ColorAction::Library {
                 action: ColorLibraryAction::Remove { id },
             })
             .unwrap();
         assert!(state.library.swatch(id).is_none());
         assert_eq!(state.definition(), color);
     }
+}
+
+fn numbered_name(localizer: &crate::Localizer, stem: &str, number: u32) -> String {
+    let mut args = crate::FluentArgs::new();
+    args.set("name", stem); args.set("number", number);
+    localizer.format(crate::MessageId::CREATION_NUMBERED_NAME, &args)
 }

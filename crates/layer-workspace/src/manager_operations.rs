@@ -1,3 +1,4 @@
+use crate::WorkspaceRefusal;
 use super::*;
 
 impl<S: WorkspaceStore> WorkspaceManager<S> {
@@ -60,7 +61,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let current = self
             .current()
-            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+            .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
         let capture = current.capture()?;
         let mut definition = ToolbarDefinition::capture(
             capture
@@ -84,7 +85,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let stored = self.claim(id).await?;
         let result: Result<()> = async {
             if !matches!(stored.entity.content, ItemContent::Toolbar { .. }) {
-                return Err(StoreError::invalid("Choose a saved toolbar."));
+                return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseASavedToolbar));
             }
             let mut metadata = stored.entity.metadata.clone();
             metadata.modified_at_ms = now;
@@ -113,7 +114,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     ) -> Result<()> {
         let current = self
             .current()
-            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+            .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
         let definition = ToolbarDefinition::capture(
             current
                 .capture()?
@@ -136,7 +137,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             Some(id) => {
                 let stored = self.load(id).await?;
                 let ItemContent::Toolbar { mut definition } = stored.entity.content else {
-                    return Err(StoreError::invalid("Choose a saved toolbar."));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseASavedToolbar));
                 };
                 definition.name = stored.entity.metadata.name;
                 definition
@@ -171,7 +172,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     ) -> Result<StoredEntity> {
         let mut content = stored.entity.content.clone();
         let ItemContent::Workspace { history, .. } = &mut content else {
-            return Err(StoreError::invalid("Choose a workspace."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace));
         };
         history.append(layout, description);
         for revision in history
@@ -201,14 +202,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 history, ..
             } = &stored.entity.content
             else {
-                return Err(StoreError::invalid("Choose a workspace."));
+                return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace));
             };
             let layout = if let Some(revision) = revision {
                 history
                     .revisions
                     .get(revision)
                     .ok_or_else(|| {
-                        StoreError::invalid("This layout version is no longer retained.")
+                        StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisLayoutVersionIsNoLongerRetained)
                     })?
                     .layout
                     .clone()
@@ -246,7 +247,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     claim.owner != self.owner && claim.expires_at_ms > now
                 });
             available.then(|| item.id.clone())
-        }).ok_or_else(|| StoreError::invalid("All default workspaces are open in other windows. Close one of those windows before deleting this workspace."))?;
+        }).ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::AllDefaultWorkspacesAreOpenInOtherWindows))?;
         Ok(Some(replacement))
     }
     pub async fn delete_item(
@@ -261,9 +262,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let mut incoming = None;
         let result: Result<Option<StoredEntity>> = async {
             if deleting.entity.metadata.builtin {
-                return Err(StoreError::invalid(
-                    "Included layouts and workspaces cannot be deleted.",
-                ));
+                return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::IncludedLayoutsAndWorkspacesCannotBeDeleted));
             }
             let mut mutations = vec![Mutation::Delete {
                 id: id.into(),
@@ -278,17 +277,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let replacement = match replacement {
                     Some(id) => id.to_string(),
                     None => self.replacement_for_delete(id, now).await?.ok_or_else(|| {
-                        StoreError::invalid("No replacement workspace is available.")
+                        StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoReplacementWorkspaceIsAvailable)
                     })?,
                 };
                 if replacement == id {
-                    return Err(StoreError::invalid(
-                        "Choose a different replacement workspace.",
-                    ));
+                    return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseADifferentReplacementWorkspace));
                 }
                 let claimed = self.claim(&replacement).await?;
                 incoming = Some(claimed.clone());
-                PreparedWorkspace::new(claimed.entity.capture()?).map_err(StoreError::invalid)?;
+                PreparedWorkspace::new(claimed.entity.capture()?).map_err(StoreError::workspace)?;
                 let mut metadata = claimed.entity.metadata.clone();
                 metadata.last_used_ms = now;
                 mutations.push(update(&claimed, Some(metadata), None, None)?);
@@ -325,7 +322,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 })
                 .await?
             else {
-                return Err(StoreError::invalid("Replacement binding is unavailable."));
+                return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ReplacementBindingIsUnavailable));
             };
             self.load(&id).await.map(Some)
         } else {

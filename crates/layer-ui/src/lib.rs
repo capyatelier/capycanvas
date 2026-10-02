@@ -4,6 +4,10 @@
 //! dispatch typed actions, refresh changed regions, and feed pen records through
 //! the separate input path. No toolkit, executor, callbacks, or pixel copies.
 
+mod numeric_labels;
+pub use numeric_labels::NumericLabels;
+mod document_delivery_copy;
+pub use document_delivery_copy::{DocumentDeliveryCopy, DocumentDeliveryMessage};
 macro_rules! variants {
     ($(#[$attr:meta])* $vis:vis enum $name:ident { $($(#[$variant_attr:meta])* $variant:ident),+ $(,)? }) => {
         $(#[$attr])* $vis enum $name { $($(#[$variant_attr])* $variant),+ }
@@ -16,7 +20,7 @@ pub(crate) use variants;
 
 pub mod localization;
 pub use fluent_bundle::FluentArgs;
-pub use localization::{LanguagePreference, Localizer, MessageId, UiLanguage, resolve_language};
+pub use localization::{LanguagePreference, Localizer, MessageId, UiLanguage, resolve_language, resolve_launch_language, launch_localization, BootstrapView, bootstrap_view, file_open_failure};
 #[cfg(test)]
 mod localization_catalog_tests;
 #[cfg(test)]
@@ -27,7 +31,7 @@ mod camera;
 mod document_tabs;
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
-pub use document_sessions::{DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
+pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
 mod document_creation;
 pub use document_creation::{BlendingChoice, DocumentBackground, NewDocumentAction, NewDocumentBlending, NewDocumentOptions, NewDocumentPreset, NewDocumentPresetId, NewDocumentPresetView, NewDocumentSettings, NewDocumentError, NewDocumentForm, NewDocumentText, NewDocumentAppearance};
 mod document_workflow;
@@ -48,7 +52,7 @@ pub use workspace_update::*;
 mod eyedropper;
 pub use eyedropper::{COLOR_SAMPLE_WIDTHS, ColorPickerAction, ColorPickerState, ColorPickerStyle, PickerPreview};
 mod export;
-pub use export::{ExportDraft, ExportDraftAction, ExportForm, ExportBackground, ExportFormat, ExportMetadataView, ExportProfile, ExportRecipe, ExportResolution, ExportSize, MetadataChoice};
+pub use export::{ExportChoice, ExportChoices, ExportNumericControls, ExportDraft, ExportDraftAction, ExportForm, ExportBackground, ExportFormat, ExportMetadataView, ExportProfile, ExportRecipe, ExportResolution, ExportSize, MetadataChoice};
 pub use layer_color::photo::{ExportMetadata, MetadataKeep};
 mod export_presets;
 pub use export_presets::{ExportPresets, ExportPresetAction, ExportPresetView};
@@ -67,7 +71,7 @@ mod toolbar_preview;
 pub use toolbar_preview::*;
 mod tools;
 pub use color::{
-    ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui,
+    color_intensity_input, ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form_localized, color_preview, color_validation_localized, color_ui_localized,
     ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor,
     PaletteChoiceView, PaletteCommand, PaletteExport, PaletteFileRequest, PaletteFormat, palette_file, PaletteMenuItem, PaletteMenuTarget, PalettePanelView,
     PaletteTileView, selected_swatch,
@@ -77,7 +81,7 @@ pub use color::{
 pub use tool_settings::{ToolActionGroup, ToolSetting, ToolSettingAction};
 pub use tools::{
     Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, WorkspaceToolMemory, brush_catalog,
-    brush_categories, preset,
+    brush_categories, brush_categories_localized, brush_catalog_localized, brush_ids, preset,
 };
 mod cursor;
 mod customization;
@@ -121,11 +125,11 @@ pub use stats::{StatRow, StatsView};
 
 pub use camera::{Camera, MAX_ZOOM, MIN_ZOOM, TouchGesture};
 pub use cursor::{CanvasCursor, CursorMode};
-pub use customization::{
+pub use customization::{ToolbarNameRefusal,
     ContextMenu, ContextMenuItem, ContextTarget, CustomizationAction, CustomizationState,
     PanelConfig, PanelContent, PanelControl, PanelControlView, PanelView, TabPresentation,
     TabStyle, TilePresentation, TileStyle, TileView, ToolChoice, ToolPickerView, ToolbarManagerView, ToolbarTile,
-    tool_choice, tool_choice_localized,
+    canonical_tool_choice, tool_choice_localized,
 };
 pub use interaction::{
     ChromeEvent, ChromeFacts, InputReply, Modifiers, PenButton, PointerButton, PointerKind, StylusAction, TouchPolicy,
@@ -146,7 +150,7 @@ pub use layout::{
     toolbar_tile_layout,
 };
 pub use numeric::{
-    NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
+    NumericControl, NumericError, WorkspaceValidationError, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
 pub use session::{Notice, NoticeAction};
 pub use session::{ScreenChip, ScreenDetails, ScreenState};
@@ -294,6 +298,7 @@ pub struct BrushCategory {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct UiCatalog {
+    pub native_copy: NativeCopy,
     pub command_search_style: CommandSearchStyle,
     pub canvas_bar_reappear_ms: u32,
     pub app_name: &'static str,
@@ -319,6 +324,7 @@ pub fn ui_catalog() -> UiCatalog {
 }
 pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
     UiCatalog {
+        native_copy: NativeCopy::new(localization),
         command_search_style: COMMAND_SEARCH_STYLE,
         canvas_bar_reappear_ms: CANVAS_BAR_REAPPEAR_MS,
         zen_icon_size: ZEN_ICON_SIZE,
@@ -1611,3 +1617,15 @@ mod icon_tests {
 }
 
 pub fn normalize_search(text: &str) -> String { search::normalize(text) }
+
+pub mod color_feature_copy;
+pub mod common_copy;
+pub use common_copy::CommonCopy;
+pub use keymaps::{shortcut_default_caption, modifier_hold_help};
+
+pub mod native_copy;
+pub use native_copy::{NativeCopy, NativeCaption, RecoveryCopy};
+pub mod document_properties;
+pub use document_properties::{DocumentPropertiesView, document_properties};
+pub mod color_feature_error;
+pub use color_feature_error::ColorFeatureError;

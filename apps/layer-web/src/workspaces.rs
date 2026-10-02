@@ -174,7 +174,7 @@ impl WebApp {
         match c.input(&mut self.session, input, js_sys::Date::now() as u64) {
             Ok(change) => serialize(&change),
             Err(error) => {
-                c.view.error = Some(error.to_string());
+                c.view.error = Some(error.localized_message(self.session.localization()));
                 serialize(&layer_ui::UiChange::default())
             }
         }

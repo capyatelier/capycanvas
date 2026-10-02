@@ -202,9 +202,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn set_refine_radius(&mut self, radius: f32) -> Result<(), String> {
         let draft = self.selection_masks.refine.as_mut().filter(|d| !d.applying).ok_or("No selection adjustment is open")?;
-        draft.view.numeric.validate(radius, draft.view.label)?;
+        draft.view.numeric.validate(radius, &*draft.view.label).map_err(|reason| reason.message(&self.state.localization))?;
         if draft.view.kind != RefineKind::Feather && radius.fract() != 0. {
-            return Err("Use whole pixels".into());
+            return Err(NumericError::WholePixels { label: (&*draft.view.label).into() }.message(&self.state.localization));
         }
         if draft.view.radius != radius {
             draft.view.radius = radius;

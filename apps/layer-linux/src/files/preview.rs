@@ -23,7 +23,7 @@ fn thumbnail(
     view: crate::display_color::ViewColor,
     headroom: f32,
     output: Option<ExportRecipe>,
-) -> Result<Image, String> {
+) -> Result<Image, layer_ui::ColorFeatureError> {
     let hdr_document = project.document.color.depth.is_float();
     let mut renderer =
         gpu.capture(project, background, time, control)
@@ -86,6 +86,8 @@ struct Pending {
 /// One worker plus one replaceable request. Cancellation is acknowledged before
 /// starting its successor, so rapid profile changes cannot accumulate GPU jobs.
 pub(super) struct Comparison {
+    copy: layer_ui::color_feature_copy::ComparisonCopy,
+    localization: std::sync::Arc<layer_ui::Localizer>,
     pub widget: gtk::Box,
     gpu: SnapshotGpu,
     view: crate::display_color::ViewColor,
@@ -93,6 +95,7 @@ pub(super) struct Comparison {
     after: gtk::Picture,
     labels: [gtk::Label; 2],
     pub status: gtk::Label,
+    status_copy: RefCell<Option<((u8, bool, layer_core::color::RgbSpace), String)>>,
     original: RefCell<Option<Project>>,
     before_ready: Cell<bool>,
     headroom: Cell<f32>,
@@ -109,23 +112,29 @@ pub(super) struct Comparison {
     pub changed: RefCell<Option<Box<dyn Fn(bool)>>>,
 }
 impl Comparison {
-    pub fn new(gpu: SnapshotGpu, original: Project, view: crate::display_color::ViewColor) -> Rc<Self> {
-        Self::with_labels(gpu, original, view, ["Before", "After"])
+    pub fn new(gpu: SnapshotGpu, original: Project, view: crate::display_color::ViewColor, localization: &std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
+        let copy = layer_ui::color_feature_copy::ComparisonCopy::new(localization);
+        let labels = [copy.before.clone(), copy.after.clone()];
+        Self::with_labels(gpu, original, view, labels, copy, localization.clone())
     }
-    pub fn for_output(gpu: SnapshotGpu, original: Project, view: crate::display_color::ViewColor) -> Rc<Self> {
-        Self::with_labels(gpu, original, view, ["Master", "Output"])
+    pub fn for_output(gpu: SnapshotGpu, original: Project, view: crate::display_color::ViewColor, localization: &std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
+        let copy = layer_ui::color_feature_copy::ComparisonCopy::new(localization);
+        let labels = [copy.master.clone(), copy.output.clone()];
+        Self::with_labels(gpu, original, view, labels, copy, localization.clone())
     }
     fn with_labels(
         gpu: SnapshotGpu,
         original: Project,
         view: crate::display_color::ViewColor,
-        labels: [&str; 2],
+        labels: [std::sync::Arc<str>; 2],
+        copy: layer_ui::color_feature_copy::ComparisonCopy,
+        localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Rc<Self> {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         pictures.set_homogeneous(true);
         pictures.set_halign(gtk::Align::Center);
-        let labels = labels.map(|label| gtk::Label::builder().label(label).wrap(true).build());
+        let labels = labels.map(|label| gtk::Label::builder().label(label.as_ref()).wrap(true).build());
         let make = |label: &gtk::Label, name: &str| {
             let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
             let picture = gtk::Picture::new();
@@ -146,7 +155,7 @@ impl Comparison {
         let before = make(&labels[0], "color-preview-before");
         let after = make(&labels[1], "color-preview-after");
         let status = gtk::Label::builder()
-            .label("Choose a profile to preview the complete canvas.")
+            .label(copy.choose_profile.as_ref())
             .wrap(true)
             .xalign(0.)
             .build();
@@ -154,6 +163,7 @@ impl Comparison {
         widget.append(&pictures);
         widget.append(&status);
         Rc::new(Self {
+            copy, localization,
             gpu,
             view,
             widget,
@@ -161,6 +171,7 @@ impl Comparison {
             after,
             labels,
             status,
+            status_copy: RefCell::new(None),
             original: RefCell::new(Some(original)),
             before_ready: Cell::new(false),
             headroom: Cell::new(1.),
@@ -226,16 +237,16 @@ impl Comparison {
     pub fn show_fallback(&self,show:bool){
         self.show_sdr.set(show);
         if let Some(texture)=&self.textures.borrow()[usize::from(show)]{self.after.set_paintable(Some(texture));}
-        let label=if show{"SDR fallback"}else if self.headroom.get()>1.{"HDR output"}else{"HDR output (SDR display)"};
+        let label=if show{self.copy.sdr_fallback.as_ref()}else if self.headroom.get()>1.{self.copy.hdr_output.as_ref()}else{self.copy.hdr_sdr_display.as_ref()};
         self.labels[1].set_label(label);self.after.set_alternative_text(Some(label));
     }
     pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
         let hdr_document = snapshot.project.document.color.depth.is_float();
         let hdr_view = self.headroom.get() > 1.;
         let labels = [
-            if hdr_document { if hdr_view { "HDR master" } else { "Master (SDR preview)" } } else { "Master" },
-            if recipe.format.is_hdr() { if hdr_view { "HDR output" } else { "Output (SDR preview)" } }
-                else if hdr_document { "SDR output" } else { "Output" },
+            if hdr_document { if hdr_view { self.copy.hdr_master.as_ref() } else { self.copy.master_sdr.as_ref() } } else { self.copy.master.as_ref() },
+            if recipe.format.is_hdr() { if hdr_view { self.copy.hdr_output.as_ref() } else { self.copy.output_sdr.as_ref() } }
+                else if hdr_document { self.copy.sdr_output.as_ref() } else { self.copy.output.as_ref() },
         ];
         for ((label, picture), text) in self.labels.iter().zip([&self.before, &self.after]).zip(labels) {
             label.set_label(text); picture.set_alternative_text(Some(text));
@@ -254,7 +265,7 @@ impl Comparison {
         time: f32,
         output: Option<ExportRecipe>,
     ) {
-        self.invalidate("Rendering the complete canvas…");
+        self.invalidate(self.copy.rendering.as_ref());
         *self.pending.borrow_mut() = Some(Pending {
             project,
             background,
@@ -306,10 +317,10 @@ impl Comparison {
                         headroom,
                         next.output,
                     );
-                    Ok::<_, String>((before, after))
+                    Ok::<_, layer_ui::ColorFeatureError>((before, after))
                 })
                 .await
-                .map_err(|_| "Preview worker failed".to_string())
+                .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Preview worker failed".into()))
                 .and_then(|r| r);
                 this.control.borrow_mut().take();
                 if this.closed.get() || this.serial.get() != serial {
@@ -332,27 +343,32 @@ impl Comparison {
                             this.before.set_paintable(Some(&texture(before)));
                             this.before_ready.set(true);
                         }
-                        let mut after=match after {Ok(after)=>after,Err(error)=>{this.status.set_label(&error);this.status.set_visible(true);this.mark_ready(false);continue;}};
+                        let mut after=match after {Ok(after)=>after,Err(error)=>{this.status.set_label(&error.message(&this.localization));this.status.set_visible(true);this.mark_ready(false);continue;}};
                         let ready = !after.range_blocked;
                         let show_status=after.range_blocked || after.clipped.is_some_and(|count|count>0);
                         this.range_exceeded.set(after.range_blocked);
-                        let description = if after.range_blocked { "Some colors exceed this format’s HDR range. Adjust the artwork or enable clipping below." } else if after.hdr { if after.clipped == Some(0) { "HDR range checked" } else { "HDR range checked · out-of-range colors will be clipped" } } else { match after.clipped {
-                            Some(0) => "Output preview",
-                            Some(_) => "Output preview · some colors exceed the output gamut",
-                            None => "Complete canvas",
-                        } };
-                        let viewing = if after.display_hdr { "HDR view".to_string() } else { format!("{} view", view.space().name()) };
+                        let kind = if after.range_blocked {0} else if after.hdr {if after.clipped == Some(0) {1} else {2}} else {match after.clipped {Some(0)=>3,Some(_)=>4,None=>5}};
+                        let key = (kind, after.display_hdr, view.space());
+                        if this.status_copy.borrow().as_ref().is_none_or(|(previous,_)| *previous != key) {
+                            let description = [this.copy.outside_hdr.as_ref(), this.copy.hdr_checked.as_ref(), this.copy.hdr_clipped.as_ref(), this.copy.output_preview.as_ref(), this.copy.output_gamut.as_ref(), this.copy.complete_canvas.as_ref()][kind as usize];
+                            let viewing = if after.display_hdr {this.copy.hdr_view.as_ref().to_string()} else {
+                                let mut args = layer_ui::FluentArgs::new(); args.set("space", view.space().name());
+                                this.localization.format(layer_ui::MessageId::COLOR_FEATURES_COMPARISON_VIEW, &args)
+                            };
+                            let mut args = layer_ui::FluentArgs::new(); args.set("description", description); args.set("view", viewing.as_str());
+                            *this.status_copy.borrow_mut() = Some((key, this.localization.format(layer_ui::MessageId::COLOR_FEATURES_COMPARISON_STATUS, &args)));
+                        }
                         let fallback=after.fallback.take().map(|i|texture(*i));
                         let hdr=texture(after);
                         this.after.set_paintable(Some(if this.show_sdr.get(){fallback.as_ref().unwrap_or(&hdr)}else{&hdr}));
                         *this.textures.borrow_mut()=[Some(hdr),fallback];
-                        if this.show_sdr.get(){this.labels[1].set_label("SDR fallback");this.after.set_alternative_text(Some("SDR fallback"));}
-                        this.status.set_label(&format!("{description} · {viewing}"));
+                        if this.show_sdr.get(){this.labels[1].set_label(this.copy.sdr_fallback.as_ref());this.after.set_alternative_text(Some(this.copy.sdr_fallback.as_ref()));}
+                        this.status.set_label(&this.status_copy.borrow().as_ref().unwrap().1);
                         this.status.set_visible(show_status);
                         this.mark_ready(ready);
                     }
                     Err(error) => {
-                        this.status.set_label(&error);
+                        this.status.set_label(&error.message(&this.localization));
                         this.status.set_visible(true);
                         this.mark_ready(false);
                     }

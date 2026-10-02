@@ -58,7 +58,8 @@ impl SwipeRow {
     pub fn new(content: &impl IsA<gtk::Widget>, remove: impl Fn() + 'static, toggle_alpha_lock: impl Fn() + 'static, opening: impl Fn(&Self) + 'static) -> Self {
         let row: Self = glib::Object::new();
         row.set_overflow(gtk::Overflow::Hidden);
-        let delete = gtk::Button::with_label("Delete");
+        let copy = layer_ui::CommonCopy::new(crate::launch_localization());
+        let delete = gtk::Button::with_label(copy.delete.as_ref());
         delete.add_css_class("destructive-action");
         delete.add_css_class("layer-swipe-delete");
         delete.set_widget_name("layer-swipe-delete");

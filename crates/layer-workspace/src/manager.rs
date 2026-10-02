@@ -79,6 +79,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn active_id(&self) -> Option<String> {
         self.state.borrow().latest.as_ref().map(|e| e.id.clone())
     }
+    pub fn summary_display_name(&self, summary: &ItemSummary) -> String {
+        summary.display_name(&self.localization)
+    }
     pub fn display_name(&self, id: &str, metadata: &Metadata) -> String {
         workspace_display_name(id, metadata, &self.localization)
     }
@@ -114,7 +117,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             choices: items
                 .into_iter()
                 .map(|i| layer_ui::WorkspaceChoice {
-                    name: self.display_name(&i.id, &i.metadata),
+                    name: self.summary_display_name(&i),
                     id: i.id,
                 })
                 .collect(),
@@ -222,7 +225,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             }
         };
         let StoreResponse::Committed(receipt) = response else {
-            return Err(StoreError::invalid("Unexpected workspace commit reply."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceCommitReply));
         };
         // A lost acknowledgement leaves delivery bookkeeping for later cleanup;
         // it does not turn a successfully committed operation into a failed save.
@@ -289,7 +292,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     pub async fn refresh(&self) -> Result<()> {
         let StoreResponse::List(items) = self.execute(StoreRequest::List).await? else {
-            return Err(StoreError::invalid("Unexpected workspace list reply."));
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceListReply));
         };
         self.state.borrow_mut().items = items;
         Ok(())
@@ -297,7 +300,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn load(&self, id: &str) -> Result<StoredEntity> {
         match self.execute(StoreRequest::Load { id: id.into() }).await? {
             StoreResponse::Entity(entity) => Ok(*entity),
-            _ => Err(StoreError::invalid("Unexpected workspace load reply.")),
+            _ => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceLoadReply)),
         }
     }
     pub(crate) async fn claim(&self, id: &str) -> Result<StoredEntity> {
@@ -309,7 +312,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .await?
         {
             StoreResponse::Entity(entity) => Ok(*entity),
-            _ => Err(StoreError::invalid("Unexpected workspace claim reply.")),
+            _ => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceClaimReply)),
         }
     }
     pub async fn release(&self, entity: &StoredEntity) {
@@ -419,7 +422,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         // editable copy so its autosaves cannot overwrite another window's work.
         let source = candidates
             .first()
-            .ok_or_else(|| StoreError::invalid("No workspaces are available."))?;
+            .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspacesAreAvailable))?;
         let source = self.load(&source.id).await?.entity;
         let name = message(&self.localization, layer_ui::MessageId::WORKSPACE_COPY_NAME, &[("name", self.display_name(&source.id, &source.metadata))]);
         self.create_from_snapshot(source, &name, true, now).await
@@ -428,7 +431,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     async fn ensure_defaults(&self, now: u64) -> Result<()> {
         for (workspace_id, _) in DEFAULT_WORKSPACES {
             self.ensure_default(
-                Entity::included_workspace(workspace_id, self.platform, now).unwrap(),
+                Entity::included_workspace(workspace_id, self.platform, now, &self.localization).unwrap(),
             )
             .await?;
         }
@@ -465,7 +468,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn bind_resume_key(&self, key: &str) -> Result<()> {
         let id = self
             .active_id()
-            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+            .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
         let mut batch = CommitBatch::prepare(self.owner.clone(), Vec::new())?;
         batch.bindings.push((key.into(), Some(id)));
         self.publish(batch).await.map(|_| ())
@@ -498,7 +501,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let mut incoming = self.claim(id).await?;
         let outcome = async {
-            PreparedWorkspace::new(incoming.entity.capture()?).map_err(StoreError::invalid)?;
+            PreparedWorkspace::new(incoming.entity.capture()?).map_err(StoreError::workspace)?;
             if resume {
                 return Ok(incoming.clone());
             }
@@ -524,10 +527,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     /// remain in `latest` and are compared against the acknowledged snapshot.
     pub async fn save_once(&self) -> Result<()> {
         if self.saving.replace(true) {
-            return Err(StoreError::new(
-                ErrorKind::Conflict,
-                "Workspace save is already in progress.",
-            ));
+            return Err(StoreError::known(ErrorKind::Conflict, WorkspaceRefusal::WorkspaceSaveIsAlreadyInProgress));
         }
         struct Clear<'a>(&'a Cell<bool>);
         impl Drop for Clear<'_> {
@@ -619,7 +619,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         saved.claim = Some(claim);
                     }
                 }
-                Ok(_) => return Err(StoreError::invalid("Unexpected ownership reply.")),
+                Ok(_) => return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedOwnershipReply)),
                 Err(error) => {
                     if self.active_id().as_deref() == Some(&id) {
                         self.set_error(error.clone());
@@ -670,10 +670,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             {
                 StoreResponse::Receipt(Some(_)) => self.save_once().await?,
                 _ => {
-                    return Err(StoreError::new(
-                        ErrorKind::Conflict,
-                        "Ownership expired while a save was awaiting confirmation. Your changes remain in memory. Use Save as New Workspace to keep them.",
-                    ));
+                    return Err(StoreError::known(ErrorKind::Conflict, WorkspaceRefusal::OwnershipExpiredWhileASaveWasAwaitingConfirmation));
                 }
             }
         }
@@ -682,14 +679,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .borrow()
             .saved
             .clone()
-            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+            .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
         let incoming = self.claim(&saved.entity.id).await?;
         if incoming.generations != saved.generations {
             self.release(&incoming).await;
-            return Err(StoreError::new(
-                ErrorKind::Conflict,
-                "This workspace changed while the window was suspended. Your changes remain in memory. Use Save as New Workspace to keep them.",
-            ));
+            return Err(StoreError::known(ErrorKind::Conflict, WorkspaceRefusal::ThisWorkspaceChangedWhileTheWindowWasSuspended));
         }
         if self.active_id().as_deref() != Some(&saved.entity.id) {
             self.release(&incoming).await;
@@ -711,7 +705,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         validate_name(name.trim())?;
         let current = self
             .current()
-            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+            .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
         self.create_from_snapshot(current, name, false, now).await
     }
     pub async fn rename(&self, id: &str, name: &str, description: &str, now: u64) -> Result<()> {

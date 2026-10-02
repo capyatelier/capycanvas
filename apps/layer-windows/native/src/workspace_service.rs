@@ -33,9 +33,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     pub(crate) fn new(
         store: S,
         directory: std::path::PathBuf,
+        localization: Arc<layer_ui::Localizer>,
         wake: impl Fn() + Clone + Send + Sync + 'static,
     ) -> Self {
-        let mut controller = WorkspaceController::new(store, Platform::Windows, now_ms());
+        let mut controller = WorkspaceController::new_localized(store, Platform::Windows, now_ms(), localization);
         controller.set_wake(Arc::new(wake.clone()));
         Self {
             controller,
@@ -75,7 +76,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         result
     }
     pub(crate) fn report_error(&mut self, native: &mut NativeHost, error: StoreError) {
-        self.controller.view.error = Some(error.to_string());
+        self.controller.view.error = Some(error.localized_message(native.session.localization()));
         self.publish(native);
     }
     fn publish(&mut self, native: &mut NativeHost) {
@@ -172,10 +173,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             .current()
             .ok_or_else(|| StoreError::invalid("No workspace is open."))?;
         let database = self.directory.join("workspaces.sqlite3");
+        let localization = native.session.localization().clone();
         let job = crate::workspace_async::BlockingTask::start(move || {
             layer_workspace::validate_database_export_destination(&database, Path::new(&path))
                 .map_err(|e| e.to_string())?;
-            let bytes = layer_workspace::export_package(&entity).map_err(|e| e.to_string())?;
+            let bytes = layer_workspace::export_package(&entity).map_err(|e| e.localized_message(&localization))?;
             crate::document_io::atomic_write(Path::new(&path), &AtomicBool::new(false), |file| {
                 file.write_all(&bytes)
                     .map_err(|_| "Could not write the workspace backup.".into())
@@ -195,6 +197,7 @@ impl WorkspaceService<layer_workspace::StoreWorker> {
         self.require_idle()?;
         crate::document_io::location(&path).map_err(StoreError::invalid)?;
         let manager = self.controller.manager.clone();
+        let localization = native.session.localization().clone();
         self.notice = None;
         let _ = self.export.start(async move {
             manager
@@ -202,7 +205,7 @@ impl WorkspaceService<layer_workspace::StoreWorker> {
                 .backup_database(std::path::Path::new(&path))
                 .await
                 .map(|_| ())
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.localized_message(&localization))
         });
         self.publish(native);
         Ok(())

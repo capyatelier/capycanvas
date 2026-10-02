@@ -12,6 +12,7 @@ struct ShortcutKeyCapture: NSViewRepresentable {
         coordinator.captured = captured
         coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak view, weak coordinator] event in
             guard let view, event.window === view.window, view.window?.isKeyWindow == true else { return event }
+            guard (view.window?.firstResponder as? NSTextInputClient)?.hasMarkedText() != true else { return event }
             if event.type == .flagsChanged {
                 let flags = event.modifierFlags, previous = coordinator?.flags ?? []
                 coordinator?.flags = flags

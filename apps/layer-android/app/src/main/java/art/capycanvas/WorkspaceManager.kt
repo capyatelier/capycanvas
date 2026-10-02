@@ -56,7 +56,7 @@ import org.json.JSONArray
                     Text(view.getString("title"), Modifier.weight(1f), fontWeight = FontWeight.Bold)
                     if (page != "history") FilledTonalIconButton({ host.workspaceInput(obj("type" to "form", "action" to obj("type" to "new"))) },
                         enabled = !busy, modifier = Modifier.size(32.dp).testTag("new-workspace").semantics { contentDescription = "New Workspace" }, shape = RoundedCornerShape(6.dp)) { SharedIcon("plus", null) }
-                    IconButton(cancel, Modifier.size(32.dp).semantics { contentDescription = "Close" }) { SharedIcon("close", null) }
+                    IconButton(cancel, Modifier.size(32.dp).semantics { contentDescription = host.bootstrap!!.getJSONObject("common").getString("close") }) { SharedIcon("close", null) }
                 }
                 view.getString("intro").takeIf { it.isNotEmpty() }?.let { Text(it, color = colors.settingsSecondary) }
                 WorkspaceRows(host, view, rowInteraction, Modifier.weight(1f, fill = false).height(315.dp).fillMaxWidth())
@@ -65,7 +65,7 @@ import org.json.JSONArray
                 }
                 if (error != null && form == null) Text(error, color = MaterialTheme.colorScheme.error)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(cancel, Modifier.weight(1f).testTag("workspace-cancel")) { Text("Cancel") }
+                    OutlinedButton(cancel, Modifier.weight(1f).testTag("workspace-cancel")) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
                     if (view.optBoolean("retry")) TextButton({ send("retry") }, enabled = !busy) { Text("Retry") }
                     Button({ send("confirm") }, Modifier.weight(1f).testTag("workspace-confirm"), enabled = view.optBoolean("enabled") && !busy) { Text(view.getString("primary")) }
                 }
@@ -80,10 +80,10 @@ import org.json.JSONArray
         AlertDialog(onDismissRequest = cancel, modifier = Modifier.testTag("workspace-form"), title = { Text(title) }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 form.getString("message").takeIf { it.isNotEmpty() }?.let { Text(it) }
-                if (named) CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("workspace-name"), label = { Text("Name") })
+                if (named) CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("workspace-name"), label = { Text(host.bootstrap!!.getJSONObject("common").getString("name")) })
                 if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
             }
-        }, dismissButton = { TextButton(cancel) { Text("Cancel") } }, confirmButton = {
+        }, dismissButton = { TextButton(cancel) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } }, confirmButton = {
             TextButton({ host.workspaceInput(obj("type" to "submit", "name" to name)) }, enabled = !busy,
                 modifier = Modifier.testTag("workspace-submit")) { Text(if (view.optBoolean("retry") && action.getString("type") != "save_as_new") "Retry" else form.getString("confirm"),
                 color = if (form.optBoolean("destructive")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
@@ -93,7 +93,7 @@ import org.json.JSONArray
     if (error == null) dismissedError = null
     if (error != null && page == null && form == null && error != dismissedError) AlertDialog(
         onDismissRequest = { dismissedError = error; send("resume") }, title = { Text("Workspace could not be saved") }, text = { Text(error) },
-        dismissButton = { TextButton({ dismissedError = error; send("resume") }) { Text("Keep Open") } }, confirmButton = {
+        dismissButton = { TextButton({ dismissedError = error; send("resume") }) { Text(host.bootstrap!!.getJSONObject("common").getString("keep_open")) } }, confirmButton = {
             Column {
                 TextButton({ send("retry") }) { Text("Retry") }
                 TextButton({ host.workspaceInput(obj("type" to "form", "action" to obj("type" to "save_as_new"))) }) { Text("Save as New Workspace…") }

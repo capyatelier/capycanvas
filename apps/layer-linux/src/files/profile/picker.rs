@@ -23,6 +23,8 @@ pub(crate) struct ProfilePicker {
 }
 
 struct State {
+    copy: layer_ui::color_feature_copy::ProfileCopy,
+    localization: std::sync::Arc<layer_ui::Localizer>,
     w: std::rc::Weak<Workspace>,
     window: glib::WeakRef<adw::ApplicationWindow>,
     changed: RefCell<Vec<Rc<dyn Fn(&str)>>>,
@@ -42,12 +44,12 @@ struct State {
 impl State {
     fn notify(&self) {
         let subtitle = if self.busy.get() {
-            "Reading profile…".into()
+            self.copy.reading.as_ref().into()
         } else {
             self.value
                 .borrow()
                 .as_ref()
-                .map_or_else(|| "Choose a profile…".into(), |p| p.name.clone())
+                .map_or_else(|| self.copy.choose.as_ref().into(), |p| p.name.clone())
         };
         if let Some(error) = self.error.upgrade() {
             error.set_label(self.failure.borrow().as_deref().unwrap_or(""));
@@ -61,7 +63,8 @@ impl State {
             changed(&subtitle);
         }
     }
-    fn set(&self, value: ExportProfile) {
+    fn set(&self, mut value: ExportProfile) {
+        if value.name.is_empty() { value.name = self.copy.embedded.to_string(); }
         self.generation.set(self.generation.get().wrapping_add(1));
         *self.value.borrow_mut() = Some(value);
         self.failure.borrow_mut().take();
@@ -134,30 +137,30 @@ impl State {
             return gio::spawn_blocking(move || {
                 value.channels = layer_color::profile_channels(&value.profile)?;
                 purpose.validate(&value, working)?;
-                Ok(Some(value))
+                Ok::<_,layer_ui::ColorFeatureError>(Some(value))
             })
             .await
-            .map_err(|_| "Profile reader failed")?;
+            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&self.localization))?.map_err(|reason|reason.profile_message(&self.localization));
         }
         if let Some(path) = path {
             return gio::spawn_blocking(move || {
                 library::read_entry(&path, working, &purpose).map(Some)
             })
             .await
-            .map_err(|_| "Profile reader failed")?;
+            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&self.localization))?.map_err(|reason|reason.profile_message(&self.localization));
         }
         let Some(window) = self.window.upgrade() else {
             return Ok(None);
         };
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("ICC color profiles"));
+        filter.set_name(Some(self.copy.filter.as_ref()));
         filter.add_suffix("icc");
         filter.add_suffix("icm");
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title("Add Profile")
-            .accept_label("Add")
+            .title(self.copy.add_profile.as_ref())
+            .accept_label(self.copy.add.as_ref())
             .modal(true)
             .filters(&filters)
             .default_filter(&filter)
@@ -178,17 +181,17 @@ impl State {
             }
             Err(e) => return Err(e.to_string()),
         };
-        let path = file.path().ok_or("Choose a local ICC profile file")?;
+        let path = file.path().ok_or_else(||self.copy.choose.to_string())?;
         gio::spawn_blocking(move || {
             let value = super::read(&path, working, &purpose)?;
             let ColorProfile::Icc(bytes) = &value.profile else {
                 unreachable!();
             };
             library::store(&library::directory(), bytes, &value.name)?;
-            Ok(Some(value))
+            Ok::<_,layer_ui::ColorFeatureError>(Some(value))
         })
         .await
-        .map_err(|_| "Profile import worker failed")?
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile import worker failed".into()).profile_message(&self.localization))?.map_err(|reason|reason.profile_message(&self.localization))
     }
 }
 
@@ -248,7 +251,7 @@ impl ProfilePicker {
     ) -> Self {
         let picker = Self::build(&w.window, Some(w), working, purpose);
         picker.button.set_widget_name(name);
-        crate::panel_controls::menu_choice(&picker.button, "Choose…");
+        crate::panel_controls::menu_choice(&picker.button, &picker.state.copy.choose_short);
         picker.state.changed.borrow_mut().push(Rc::new(glib::clone!(
             #[weak(rename_to = button)]
             picker.button,
@@ -294,7 +297,7 @@ impl ProfileChooser {
         let picker = ProfilePicker::build(window, workspace, working, purpose);
         let row = adw::ActionRow::builder()
             .title(title)
-            .subtitle("Choose a profile…")
+            .subtitle(picker.state.copy.choose.as_ref())
             .use_markup(false)
             .build();
         row.set_widget_name(name);
@@ -321,6 +324,8 @@ impl ProfilePicker {
         working: RgbSpace,
         purpose: ProfilePurpose,
     ) -> Self {
+        let localization = workspace.map(|w| w.localization.clone()).unwrap_or_else(|| crate::launch_localization().clone());
+        let copy = layer_ui::color_feature_copy::ProfileCopy::new(&localization);
         let prefix = match purpose {
             ProfilePurpose::Proof => "proof",
             ProfilePurpose::Output => "export",
@@ -331,7 +336,7 @@ impl ProfilePicker {
             .valign(gtk::Align::Center)
             .build();
         menu.set_widget_name(&format!("{prefix}-profile-choose"));
-        menu.set_tooltip_text(Some("Choose or add a profile"));
+        menu.set_tooltip_text(Some(copy.choose_add.as_ref()));
         let error = gtk::Label::builder()
             .wrap(true)
             .xalign(0.)
@@ -340,6 +345,7 @@ impl ProfilePicker {
         error.add_css_class("error");
         error.set_widget_name(&format!("{prefix}-profile-error"));
         let state = Rc::new(State {
+            copy: copy.clone(), localization,
             w: workspace.map_or_else(std::rc::Weak::new, Rc::downgrade),
             window: window.downgrade(),
             changed: RefCell::default(),
@@ -364,7 +370,7 @@ impl ProfilePicker {
         item(
             &footer,
             &actions,
-            "Add Profile…",
+            copy.add_profile_dialog.as_ref(),
             "add",
             glib::clone!(
                 #[strong]
@@ -375,7 +381,7 @@ impl ProfilePicker {
         item(
             &footer,
             &actions,
-            "Manage Profiles…",
+            copy.manage.as_ref(),
             "manage",
             glib::clone!(
                 #[strong]
@@ -423,7 +429,7 @@ impl ProfilePicker {
                         actions.remove_action(&name);
                     }
                 }
-                choices.append(Some("Loading profiles…"), None);
+                choices.append(Some(state.copy.loading.as_ref()), None);
                 glib::MainContext::default().spawn_local(glib::clone!(
                     #[strong]
                     state,
@@ -474,8 +480,8 @@ impl ProfilePicker {
                         state.listing.set(false);
                         choices.remove_all();
                         for (profile, label, action) in [
-                            (document, "Document Profile", "document"),
-                            (current, "Current Profile", "current"),
+                            (document, state.copy.document.as_ref(), "document"),
+                            (current, state.copy.current.as_ref(), "current"),
                         ] {
                             let Some(profile) = profile else { continue };
                             let section = gio::Menu::new();
@@ -508,7 +514,7 @@ impl ProfilePicker {
                                     item(
                                         &saved,
                                         &actions,
-                                        &entry.name,
+                                        &entry.display_name(&state.localization),
                                         &format!("saved-{index}"),
                                         glib::clone!(
                                             #[strong]
@@ -518,10 +524,10 @@ impl ProfilePicker {
                                     );
                                 }
                                 if saved.n_items() > 0 {
-                                    choices.append_section(Some("Saved Profiles"), &saved);
+                                    choices.append_section(Some(state.copy.saved.as_ref()), &saved);
                                 }
                             }
-                            Err(error) => choices.append(Some(&error), None),
+                            Err(reason) => choices.append(Some(&reason.profile_message(&state.localization)), None),
                         }
                         if state.compatible(ProfileChannels::Rgb) {
                             let standard = gio::Menu::new();
@@ -540,7 +546,7 @@ impl ProfilePicker {
                                     ),
                                 );
                             }
-                            choices.append_section(Some("Standard Color Spaces"), &standard);
+                            choices.append_section(Some(state.copy.standard.as_ref()), &standard);
                         }
                     }
                 ));
@@ -550,7 +556,7 @@ impl ProfilePicker {
             let state = state.clone();
             move || {
                 if state.busy.get() {
-                    return Err("Reading profile…".into());
+                    return Err(state.copy.reading.to_string());
                 }
                 if let Some(error) = state.failure.borrow().clone() {
                     return Err(error);

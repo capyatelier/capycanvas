@@ -144,7 +144,7 @@ final class ColorPreferencesStore: @unchecked Sendable {
                 catch { failure = error.localizedDescription }
             }
             return try library(JSON(["type": "inspect", "entry": entry.raw,
-                "error": failure.map { $0 as Any } ?? NSNull()]), bytes: data)
+                "error": failure.map { ["Diagnostic": $0] as Any } ?? NSNull()]), bytes: data)
                 .replacing("visible", with: JSON(!hidden.contains(entry["id"].string)))
         }.sorted { $0["name"].string.localizedStandardCompare($1["name"].string) == .orderedAscending }
     }

@@ -15,8 +15,8 @@ namespace NativeInput=Microsoft::UI::Input;
 using winrt::Windows::Foundation::Point;
 
 namespace {
-V toolbarUi(J const& request){
-    std::unique_ptr<char,decltype(&capy_string_free)> result(capy_toolbar_ui(to_string(request.Stringify()).c_str()),capy_string_free);
+V toolbarUi(CapyLocalization const* localization,J const& request){
+    std::unique_ptr<char,decltype(&capy_string_free)> result(capy_toolbar_ui(localization,to_string(request.Stringify()).c_str()),capy_string_free);
     if(!result)throw hresult_invalid_argument(L"Toolbar request failed");
     auto value=JsonValue::Parse(to_hstring(result.get()));
     if(value.ValueType()==JsonValueType::Object&&value.GetObject().HasKey(L"error"))
@@ -109,7 +109,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         iconSize=num(presentation,L"tile_icon_size",16);tileRadius=num(presentation,L"tile_corner_radius",SurfaceRadius);tileLabel=str(tile,L"label");
         control=object(tile,L"control");standalone=str(control,L"kind")!=L"tool_options";
         auto preferences=object(control,L"style");text=flag(preferences,L"text",true);sliders=flag(preferences,L"sliders",true);
-        style=toolbarUi(O({{L"type",S(L"style")},{L"style",S(tileStyle)}})).GetObject();
+        style=toolbarUi(data->localization.get(),O({{L"type",S(L"style")},{L"style",S(tileStyle)}})).GetObject();
         item=O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(tileId)}});
         root.Background(clear());
         AutomationProperties::SetAutomationId(root,L"toolbar-component-"+to_hstring(uint32_t(tileId)));
@@ -233,7 +233,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             else{auto extent=f.natural();pair.Append(N(extent.Width));pair.Append(N(extent.Height));}
             sizes.Append(pair);
         }
-        auto geometry=toolbarUi(O({{L"type",S(L"options_layout")},{L"width",N(width)},{L"height",N(height)},
+        auto geometry=toolbarUi(data->localization.get(),O({{L"type",S(L"options_layout")},{L"width",N(width)},{L"height",N(height)},
             {L"axis",S(vertical?L"vertical":L"horizontal")},{L"sizes",sizes},{L"button",size},{L"gap",N(vertical?num(style,L"gap",2):10)}})).GetObject();
         place(more,object(geometry,L"more"));
         auto placed=array(geometry,L"fields");
@@ -255,7 +255,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         field=object(model,L"numeric");
         opacity=str(control,L"kind")==L"brush_opacity_slider";
         if(!field.Size())field=O({{L"id",S(opacity?L"opacity":L"size")},{L"label",S(str(tile,L"label"))},
-            {L"numeric",toolbarUi(O({{L"type",S(L"slider_spec")},{L"control",control}})).GetObject()},{L"value",N(.5)}});
+            {L"numeric",toolbarUi(data->localization.get(),O({{L"type",S(L"slider_spec")},{L"control",control}})).GetObject()},{L"value",N(.5)}});
         spec=object(field,L"numeric");current=num(field,L"value");
         Field result;
         sliderRow=Canvas();sliderRow.Background(clear());result.row=sliderRow;
@@ -279,7 +279,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         AutomationProperties::SetAutomationId(access,L"component-slider-"+to_hstring(uint32_t(tileId)));
         access.ValueChanged([weak](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
             if(auto self=weak.lock();self&&!self->settingAccess&&!self->data->updating&&self->enabled)
-                self->change(num(numeric(self->spec,self->current,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}})),L"value"));
+                self->change(num(numeric(self->data->localization.get(),self->spec,self->current,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}})),L"value"));
         });
         track.Children().Append(access);
         track.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())self->pressed(e);});
@@ -304,9 +304,9 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         double at=position(e);
         if(snap){
             A values;for(auto mark:array(model,L"bookmarks"))values.Append(N(num(mark.GetObject(),L"value")));
-            change(toolbarUi(O({{L"type",S(L"slider_bookmark_value")},{L"control",control},{L"values",values},
+            change(toolbarUi(data->localization.get(),O({{L"type",S(L"slider_bookmark_value")},{L"control",control},{L"values",values},
                 {L"position",N(at)},{L"travel",N(travel())}})).GetNumber());
-        }else change(num(numeric(spec,current,O({{L"type",S(L"position")},{L"position",N(at)}})),L"value"));
+        }else change(num(numeric(data->localization.get(),spec,current,O({{L"type",S(L"position")},{L"position",N(at)}})),L"value"));
     }
     void pressed(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(track);
@@ -332,14 +332,14 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     void updateSlider(){
         auto next=object(model,L"numeric");enabled=next.Size()!=0;
         if(enabled)current=num(next,L"value");
-        auto shown=numeric(spec,current,O({{L"type",S(L"format")}}));level=num(shown,L"fill");
+        auto shown=numeric(data->localization.get(),spec,current,O({{L"type",S(L"format")}}));level=num(shown,L"fill");
         settingAccess=true;access.Value(level);settingAccess=false;
         access.IsEnabled(enabled);AutomationProperties::SetItemStatus(access,str(shown,L"text"));
         sliderRow.Opacity(enabled?1:.4);
         paintSlider();paintPreview();
     }
     void layoutSlider(){
-        auto geometry=toolbarUi(O({{L"type",S(L"slider_layout")},{L"width",N(width)},{L"height",N(height)},
+        auto geometry=toolbarUi(data->localization.get(),O({{L"type",S(L"slider_layout")},{L"width",N(width)},{L"height",N(height)},
             {L"axis",S(vertical?L"vertical":L"horizontal")}})).GetArray();
         sliderRow.Width(width);sliderRow.Height(height);
         place(cap,geometry.GetObjectAt(0));auto bounds=geometry.GetObjectAt(1);
@@ -435,7 +435,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
     void paintPreview(){
         if(!preview||!stamp.Size())return;
-        auto geometry=toolbarUi(O({{L"type",S(L"slider_preview")},{L"control",control},{L"style",S(tileStyle)},{L"value",N(current)},
+        auto geometry=toolbarUi(data->localization.get(),O({{L"type",S(L"slider_preview")},{L"control",control},{L"style",S(tileStyle)},{L"value",N(current)},
             {L"length",N(std::max(width,height))},{L"extent",N(num(stamp,L"extent"))}})).GetObject();
         double side=num(geometry,L"side");
         previewFrame.Width(side);previewFrame.Height(side);
@@ -474,15 +474,15 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     Field numericField(J const& option){
         auto weak=weak_from_this();
         auto id=str(option,L"id");auto settingSpec=object(option,L"numeric");
-        auto info=toolbarUi(O({{L"type",S(L"numeric_info")},{L"id",S(id)},{L"control",settingSpec},{L"compact",B(true)},{L"units",B(true)}})).GetObject();
+        auto info=toolbarUi(data->localization.get(),O({{L"type",S(L"numeric_info")},{L"id",S(id)},{L"control",settingSpec},{L"compact",B(true)},{L"units",B(true)}})).GetObject();
         struct State {double value=0;bool units=true,scrubbed=false;std::optional<Contact> contact;double startFill=0;};
         auto state=std::make_shared<State>();state->value=num(option,L"value");
         auto set=[weak,id](double value){if(auto self=weak.lock())self->send(O({{L"type",S(L"set_tool_setting")},{L"id",S(id)},{L"value",N(value)}}));};
         auto reset=[weak,id]{if(auto self=weak.lock())self->send(O({{L"type",S(L"reset_tool_setting")},{L"id",S(id)}}));};
         NumberPresentation presentation;
         for(auto sample:array(info,L"samples"))presentation.widthSamples.push_back(sample.GetString());
-        presentation.resolve=[state](J const& control,double value,J const& operation){
-            return toolbarUi(O({{L"type",S(L"number")},{L"request",O({{L"control",control},{L"value",N(value)},{L"operation",operation}})},
+        presentation.resolve=[state,localization=data->localization](J const& control,double value,J const& operation){
+            return toolbarUi(localization.get(),O({{L"type",S(L"number")},{L"request",O({{L"control",control},{L"value",N(value)},{L"operation",operation}})},
                 {L"compact",B(true)},{L"units",B(state->units)}})).GetObject();
         };
         auto title=str(option,L"label");
@@ -516,7 +516,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         auto labeled=flag(style,L"labeled");
         auto updateFace=[weak,state,settingSpec,faceValue,labeled]{
             auto self=weak.lock();if(!self)return;
-            auto format=[&](bool units){return str(toolbarUi(O({{L"type",S(L"number")},{L"request",O({{L"control",settingSpec},{L"value",N(state->value)},
+            auto format=[&](bool units){return str(toolbarUi(self->data->localization.get(),O({{L"type",S(L"number")},{L"request",O({{L"control",settingSpec},{L"value",N(state->value)},
                 {L"operation",O({{L"type",S(L"format")}})}})},{L"compact",B(true)},{L"units",B(units)}})).GetObject(),L"text");};
             auto text=format(self->tileStyle!=L"small");
             double available=std::min(array(self->style,L"size").GetNumberAt(0),self->width>0?self->width:1e9)-(labeled?38:4);
@@ -534,18 +534,18 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             self->editor=Flyout();self->editor.Content(content);TrackPopup(self->editor,self->data);
             self->editor.ShowAt(sender.as<FrameworkElement>());
         });
-        face.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([state,settingSpec](winrt::Windows::Foundation::IInspectable const& sender,PointerRoutedEventArgs const& e){
+        face.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([state,settingSpec,localization=data->localization](winrt::Windows::Foundation::IInspectable const& sender,PointerRoutedEventArgs const& e){
             auto p=e.GetCurrentPoint(sender.as<UIElement>());
             if(p.PointerDeviceType()==NativeInput::PointerDeviceType::Mouse)return;
             state->scrubbed=false;state->contact=Contact{p.PointerId(),p.Position()};
-            state->startFill=num(numeric(settingSpec,state->value,O({{L"type",S(L"format")}})),L"fill");
+            state->startFill=num(numeric(localization.get(),settingSpec,state->value,O({{L"type",S(L"format")}})),L"fill");
         })),true);
-        face.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([state,settingSpec,set](winrt::Windows::Foundation::IInspectable const& sender,PointerRoutedEventArgs const& e){
+        face.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([state,settingSpec,set,localization=data->localization](winrt::Windows::Foundation::IInspectable const& sender,PointerRoutedEventArgs const& e){
             if(!state->contact||state->contact->id!=e.Pointer().PointerId())return;
             auto p=e.GetCurrentPoint(sender.as<UIElement>()).Position();
             if(!state->contact->moved&&std::abs(p.Y-state->contact->start.Y)<8)return;
             state->contact->moved=true;
-            auto next=numeric(settingSpec,state->value,O({{L"type",S(L"position")},{L"position",N(state->startFill+(state->contact->start.Y-p.Y)/200)}}));
+            auto next=numeric(localization.get(),settingSpec,state->value,O({{L"type",S(L"position")},{L"position",N(state->startFill+(state->contact->start.Y-p.Y)/200)}}));
             if(num(next,L"value")!=state->value)set(num(next,L"value"));
         })),true);
         auto finish=[state](winrt::Windows::Foundation::IInspectable const&,PointerRoutedEventArgs const& e){
@@ -554,10 +554,10 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         face.AddHandler(UIElement::PointerReleasedEvent(),box_value(PointerEventHandler(finish)),true);
         face.AddHandler(UIElement::PointerCanceledEvent(),box_value(PointerEventHandler(finish)),true);
         face.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler(finish)),true);
-        face.PointerWheelChanged([state,settingSpec,set](auto&&,PointerRoutedEventArgs const& e){
+        face.PointerWheelChanged([state,settingSpec,set,localization=data->localization](auto&&,PointerRoutedEventArgs const& e){
             auto delta=e.GetCurrentPoint(nullptr).Properties().MouseWheelDelta();if(!delta)return;
             e.Handled(true);
-            auto next=numeric(settingSpec,state->value,O({{L"type",S(L"step")},{L"steps",N(delta>0?1:-1)}}));
+            auto next=numeric(localization.get(),settingSpec,state->value,O({{L"type",S(L"step")},{L"steps",N(delta>0?1:-1)}}));
             if(num(next,L"value")!=state->value)set(num(next,L"value"));
         });
         Field result;result.row=cell;

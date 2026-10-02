@@ -10,6 +10,7 @@ use std::{
 };
 
 pub struct CommandBar {
+    copy: layer_ui::native_copy::SearchCopy,
     popup: gtk::Popover,
     entry: gtk::SearchEntry,
     unit: gtk::Label,
@@ -19,6 +20,8 @@ pub struct CommandBar {
     view: RefCell<Option<CommandSearchView>>,
     signature: RefCell<String>,
     updating: Cell<bool>,
+    composing: Cell<bool>,
+    composition_keys: crate::input::CompositionKeys,
     previous_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
 }
 
@@ -27,8 +30,13 @@ impl CommandBar {
         self.view.borrow().is_some()
     }
     pub fn new() -> Self {
+        Self::with_copy(NativeCopy::new(crate::launch_localization()).search)
+    }
+
+    fn with_copy(copy: layer_ui::native_copy::SearchCopy) -> Self {
         let popup = gtk::Popover::new();
         popup.set_widget_name("command-bar");
+        popup.update_property(&[gtk::accessible::Property::Label(copy.title.as_ref())]);
         popup.set_has_arrow(false);
         popup.set_position(gtk::PositionType::Bottom);
         popup.add_css_class("command-bar");
@@ -36,15 +44,16 @@ impl CommandBar {
         let header = gtk::Box::new(gtk::Orientation::Horizontal, COMMAND_SEARCH_STYLE.gap);
         let entry = gtk::SearchEntry::new();
         entry.set_widget_name("command-search");
-        entry.set_placeholder_text(Some("Search commands"));
+        entry.set_placeholder_text(Some(copy.search_commands.as_ref()));
         entry.set_hexpand(true);
-        entry.update_property(&[gtk::accessible::Property::Label("Search commands")]);
+        entry.update_property(&[gtk::accessible::Property::Label(copy.search_commands.as_ref())]);
         let unit = gtk::Label::new(None);
         unit.add_css_class("dim-label");
         unit.set_visible(false);
         let close = gtk::Button::from_icon_name("window-close-symbolic");
         close.set_widget_name("command-search-close");
-        close.set_tooltip_text(Some("Close command search"));
+        close.set_tooltip_text(Some(copy.close_search.as_ref()));
+        close.update_property(&[gtk::accessible::Property::Label(copy.close_search.as_ref())]);
         close.add_css_class("flat");
         close.connect_clicked(glib::clone!(
             #[weak]
@@ -57,11 +66,12 @@ impl CommandBar {
         body.append(&header);
         let list = gtk::ListBox::new();
         list.set_widget_name("command-results");
+        list.update_property(&[gtk::accessible::Property::Label(copy.commands.as_ref())]);
         list.set_selection_mode(gtk::SelectionMode::Single);
         list.set_activate_on_single_click(true);
         list.add_css_class("navigation-sidebar");
         body.append(&list);
-        let empty = gtk::Label::new(Some("No matching commands"));
+        let empty = gtk::Label::new(Some(copy.no_matches.as_ref()));
         empty.add_css_class("dim-label");
         empty.set_margin_top(12);
         empty.set_margin_bottom(12);
@@ -78,6 +88,7 @@ impl CommandBar {
         body.append(&detail);
         popup.set_child(Some(&body));
         Self {
+            copy,
             popup,
             entry,
             unit,
@@ -87,8 +98,15 @@ impl CommandBar {
             view: Default::default(),
             signature: Default::default(),
             updating: Cell::new(false),
+            composing: Cell::new(false),
+            composition_keys: Default::default(),
             previous_focus: Default::default(),
         }
+    }
+
+    fn update_entry_copy(&self, parameter: Option<&str>) {
+        self.entry.update_property(&[gtk::accessible::Property::Label(parameter.unwrap_or(self.copy.search_commands.as_ref()))]);
+        self.entry.set_placeholder_text(Some(if parameter.is_some() { self.copy.enter_value.as_ref() } else { self.copy.search_commands.as_ref() }));
     }
 
     pub fn glass(&self, w: &Workspace) -> Option<BackdropRegion> {
@@ -128,8 +146,15 @@ impl CommandBar {
         self.popup.connect_unmap(glib::clone!(
             #[weak]
             w,
-            move |_| w.wake()
+            move |_| { w.command_bar.composition_keys.clear(); w.wake(); }
         ));
+        if let Some(text) = self.entry.delegate().and_downcast::<gtk::Text>() {
+            text.connect_preedit_changed(glib::clone!(
+                #[weak]
+                w,
+                move |_, preedit| w.command_bar.composing.set(!preedit.is_empty())
+            ));
+        }
         self.entry.connect_changed(glib::clone!(
             #[weak]
             w,
@@ -152,7 +177,9 @@ impl CommandBar {
         self.entry.connect_activate(glib::clone!(
             #[weak]
             w,
-            move |_| w.command_bar.execute(&w, None)
+            move |_| {
+                if !w.command_bar.composing.get() && !w.command_bar.composition_keys.active() { w.command_bar.execute(&w, None); }
+            }
         ));
         self.list.connect_row_activated(glib::clone!(
             #[weak]
@@ -160,13 +187,15 @@ impl CommandBar {
             move |_, row| w.command_bar.execute(&w, Some(row.index() as usize))
         ));
         let keys = gtk::EventControllerKey::new();
+        keys.set_name(Some("command-search-navigation"));
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         keys.connect_key_pressed(glib::clone!(
             #[weak]
             w,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, key, _, _| {
+            move |_, key, keycode, _| {
+                if w.command_bar.composition_keys.capture(keycode, w.command_bar.composing.get()) { return glib::Propagation::Proceed; }
                 let action = match key {
                     gdk::Key::Up => Some(CommandSearchAction::Move { delta: -1 }),
                     gdk::Key::Down => Some(CommandSearchAction::Move { delta: 1 }),
@@ -196,15 +225,29 @@ impl CommandBar {
         keys.connect_key_released(glib::clone!(
             #[weak]
             w,
-            move |_, key, _, modifiers| {
+            move |_, key, keycode, modifiers| {
+                let preedit = w.command_bar.composition_keys.release(keycode);
+                if preedit || w.command_bar.composing.get() { return; }
                 w.interact(crate::input::key_input(key, false, modifiers, true, None));
             }
         ));
         self.popup.add_controller(keys);
+        let composed = gtk::EventControllerKey::new();
+        composed.set_name(Some("command-search-composed-key"));
+        composed.set_propagation_phase(gtk::PropagationPhase::Bubble);
+        composed.connect_key_pressed(glib::clone!(#[weak] w, #[upgrade_or] glib::Propagation::Proceed, move |_, _, _, _| {
+            if w.command_bar.composition_keys.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
+        }));
+        self.popup.add_controller(composed);
+        let focus = gtk::EventControllerFocus::new();
+        focus.connect_leave(glib::clone!(#[weak] w, move |_| w.command_bar.composition_keys.clear()));
+        self.popup.add_controller(focus);
         self.popup.connect_closed(glib::clone!(
             #[weak]
             w,
             move |_| {
+                w.command_bar.composing.set(false);
+                w.command_bar.composition_keys.clear();
                 let canceled = w.command_bar.view.borrow().is_some();
                 if canceled {
                     w.dispatch(UiAction::CommandSearch {
@@ -282,12 +325,7 @@ impl CommandBar {
             .unwrap_or("");
         self.unit.set_text(unit);
         self.unit.set_visible(!unit.is_empty());
-        self.entry
-            .update_property(&[gtk::accessible::Property::Label(
-                parameter
-                    .map(|p| p.label.as_str())
-                    .unwrap_or("Search commands"),
-            )]);
+        self.update_entry_copy(parameter.map(|p| p.label.as_str()));
         if !was_open || parameter.map(|p| &p.id) != old_parameter.as_ref() {
             self.entry.set_text(
                 parameter
@@ -299,12 +337,6 @@ impl CommandBar {
                 self.entry.select_region(0, -1);
             }
         }
-        self.entry
-            .set_placeholder_text(Some(if parameter.is_some() {
-                "Enter a value"
-            } else {
-                "Search commands"
-            }));
         let signature = serde_json::to_string(&view.results).unwrap();
         if *self.signature.borrow() != signature {
             *self.signature.borrow_mut() = signature;
@@ -407,5 +439,41 @@ impl CommandBar {
 impl Drop for CommandBar {
     fn drop(&mut self) {
         self.popup.unparent();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "private display native_command_search_copy"]
+    fn native_command_search_copy() {
+        adw::init().unwrap();
+        for theme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
+            adw::StyleManager::default().set_color_scheme(theme);
+            for language in UiLanguage::ALL {
+                let context = Localizer::shared(language);
+                let expected = NativeCopy::new(&context).search;
+                let bar = CommandBar::with_copy(expected.clone());
+                let parent = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                bar.popup.set_parent(&parent);
+                assert_eq!(bar.entry.placeholder_text().as_deref(), Some(expected.search_commands.as_ref()));
+                assert_eq!(bar.empty.text().as_str(), expected.no_matches.as_ref());
+                bar.update_entry_copy(Some("literal parameter & name"));
+                assert_eq!(bar.entry.placeholder_text().as_deref(), Some(expected.enter_value.as_ref()));
+                bar.update_entry_copy(None);
+                assert_eq!(bar.entry.placeholder_text().as_deref(), Some(expected.search_commands.as_ref()));
+                assert!(std::sync::Arc::ptr_eq(&bar.copy.search_commands, &expected.search_commands));
+            }
+        }
+        let removed = Rc::new(Cell::new(false));
+        let signal = removed.clone();
+        let content = gtk::Label::new(Some("literal layer"));
+        let row = crate::swipe_row::SwipeRow::new(&content, move || signal.set(true), || {}, |_| {});
+        assert_eq!(row.delete_button().label().as_deref(), Some(CommonCopy::new(crate::launch_localization()).delete.as_ref()));
+        row.set_actions(true, false);
+        row.delete_button().emit_clicked();
+        assert!(removed.get());
     }
 }

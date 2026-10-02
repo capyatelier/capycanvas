@@ -29,11 +29,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     let mut color = ColorState::default();
                     color.set_rgba([0.24, 0.56, 0.87, 0.65])?;
-                    color.apply(ColorAction::Shape { shape })?;
+                    color.apply(ColorAction::Shape { shape }).map_err(|reason|format!("{reason:?}"))?;
                     if rgb {
-                        color.apply(ColorAction::ToggleReadout)?;
+                        color.apply(ColorAction::ToggleReadout).map_err(|reason|format!("{reason:?}"))?;
                     }
-                    let model = color.view();
+                    let model = color.view_in_localized(RgbSpace::Srgb, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
                     let field_side = (layout.wheel[2]
                         * if shape == ColorShape::Circle {
                             1.

@@ -1,5 +1,5 @@
 use crate::*;
-use layer_ui::{Platform, UiAction};
+use layer_ui::{Localizer, Platform, UiAction, UiLanguage};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -102,7 +102,7 @@ impl Fixture {
         )
         .unwrap();
         pollster::block_on(Store(backend.clone()).execute(StoreRequest::Commit { batch })).unwrap();
-        let controller = WorkspaceController::new(Store(backend.clone()), Platform::Web, 1000);
+        let controller = WorkspaceController::new_localized(Store(backend.clone()), Platform::Web, 1000, Localizer::shared(UiLanguage::English));
         let mut f = Self {
             backend,
             controller,
@@ -154,7 +154,7 @@ fn restoring_a_bound_window_claims_without_republishing_its_selection() {
     let deliveries = f.backend.deliveries.borrow().len();
     f.backend.now.set(2000);
     f.controller =
-        WorkspaceController::new_owned(Store(f.backend.clone()), Platform::Web, owner.clone(), 2000);
+        WorkspaceController::new_owned_localized(Store(f.backend.clone()), Platform::Web, owner.clone(), 2000, Localizer::shared(UiLanguage::English));
     f.pump();
     assert!(f.controller.view.ready, "{:?}", f.controller.view.error);
     assert_eq!(f.controller.view.id.as_deref(), Some(id.as_str()));
@@ -186,7 +186,7 @@ fn startup_with_an_occupied_window_binding_reuses_an_available_default() {
     let claimed = pollster::block_on(other.prepare_switch(&original, 1_000)).unwrap();
     other.activate(claimed);
     f.controller =
-        WorkspaceController::new_owned(Store(f.backend.clone()), Platform::Web, owner, 1_000);
+        WorkspaceController::new_owned_localized(Store(f.backend.clone()), Platform::Web, owner, 1_000, Localizer::shared(UiLanguage::English));
     f.pump();
     assert!(f.controller.view.ready, "{:?}", f.controller.view.error);
     assert_eq!(
@@ -266,7 +266,6 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
                 .unwrap();
             let mut displayed = saved.clone();
             displayed.working.colors.set_document_depth(f.host.session.engine().document().color.depth).unwrap();
-            displayed.working.colors.library.ensure_starters();
             assert_eq!(f.host.session.capture_workspace().unwrap(), displayed);
             if occupied == 0 {
                 assert_eq!(saved.working, capture.working);
@@ -635,7 +634,7 @@ fn new_workspaces_are_pinned_without_repinning_hidden_workspaces() {
 fn closing_before_adoption_drains_claims() {
     let mut f = Fixture::new();
     f.input(serde_json::json!({"type":"suspend"}));
-    let mut closing = WorkspaceController::new(Store(f.backend.clone()), Platform::Web, 1000);
+    let mut closing = WorkspaceController::new_localized(Store(f.backend.clone()), Platform::Web, 1000, Localizer::shared(UiLanguage::English));
     closing
         .input(&mut f.host.session, WorkspaceInput::Close, 1000)
         .unwrap();
@@ -797,7 +796,6 @@ fn unpinned_current_workspace_is_temporary_and_previews_do_not_replace_it() {
     let mut displayed = original.clone();
     let colors = &mut displayed.entity.working.as_mut().unwrap().colors;
     colors.set_document_depth(f.host.session.engine().document().color.depth).unwrap();
-    colors.library.ensure_starters();
     assert_eq!(f.controller.manager.current_record().unwrap(), displayed);
 
     // Pinning returns it to the saved order without duplicating it.
@@ -913,7 +911,7 @@ fn toolbar_names(f: &Fixture) -> Vec<String> {
         .panels
         .iter()
         .filter(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
-        .map(|p| p.title().to_string())
+        .map(|p| p.canonical_title().to_string())
         .collect()
 }
 
@@ -1013,7 +1011,7 @@ fn saved_toolbar_save_add_rename_delete_are_independent_copies() {
             .layout()
             .panels
             .iter()
-            .any(|p| p.title() == "Saved Ink")
+            .any(|p| p.canonical_title() == "Saved Ink")
     );
 }
 
@@ -1182,7 +1180,7 @@ fn resume_key_restores_the_scene_workspace_before_last_used() {
         }
     };
     let start = |f: &Fixture| {
-        WorkspaceController::new(Store(f.backend.clone()), Platform::Web, now)
+        WorkspaceController::new_localized(Store(f.backend.clone()), Platform::Web, now, Localizer::shared(UiLanguage::English))
             .with_resume_key(key.clone(), now)
     };
     let mut scene = start(&f);
@@ -1291,7 +1289,7 @@ fn start<S: WorkspaceStore + 'static>(
     platform: Platform,
 ) -> (WorkspaceController<S>, layer_host::NativeHost) {
     let mut host = layer_host::NativeHost::new(platform).unwrap();
-    let mut controller = WorkspaceController::new(store, platform, 1000);
+    let mut controller = WorkspaceController::new_localized(store, platform, 1000, Localizer::shared(UiLanguage::English));
     for _ in 0..20 {
         if controller.view.ready {
             break;
@@ -1337,7 +1335,7 @@ fn startup_on_every_platform_adopts_from_empty_or_unusable_storage() {
         assert_eq!(
             notice(&host).as_deref(),
             Some(
-                "Workspace changes in this window won't be saved: invalid type: map, expected a boolean"
+                "Workspace changes in this window won't be saved: This workspace cannot be opened. Choose another workspace or reset this one."
             )
         );
     }
@@ -1365,7 +1363,7 @@ fn startup_survives_a_failure_at_every_storage_request() {
             let expected = if reset_heals {
                 "Saved workspaces couldn't be opened, so they were reset."
             } else {
-                "Workspace changes in this window won't be saved: invalid type: map, expected a boolean"
+                "Workspace changes in this window won't be saved: This workspace cannot be opened. Choose another workspace or reset this one."
             };
             assert_eq!(notice(&host).as_deref(), Some(expected), "{context}");
             let before = host.session.capture_workspace().unwrap();
@@ -1404,7 +1402,7 @@ fn start_native(
 ) -> (WorkspaceController<StoreWorker>, layer_host::NativeHost) {
     let mut host = layer_host::NativeHost::new(Platform::Gtk).unwrap();
     let mut controller =
-        WorkspaceController::new(StoreWorker::shared(directory).unwrap(), Platform::Gtk, 1000);
+        WorkspaceController::new_localized(StoreWorker::shared(directory).unwrap(), Platform::Gtk, 1000, Localizer::shared(UiLanguage::English));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while !controller.view.ready && std::time::Instant::now() < deadline {
         controller.tick(&mut host.session, 1000);

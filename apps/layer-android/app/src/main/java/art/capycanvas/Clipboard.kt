@@ -108,12 +108,13 @@ internal class ClipboardController(private val host: CanvasHost, private val app
 }
 
 @Composable internal fun ClipboardProgress(clipboard: ClipboardController) {
+    val host = LocalCanvasHost.current
     val label = clipboard.progress ?: return
     androidx.compose.ui.window.Popup(alignment = Alignment.BottomCenter) {
         Surface(Modifier.padding(12.dp).testTag("clipboard-progress"), shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (clipboard.cancelling) "Cancelling…" else label)
-                TextButton(clipboard::cancel, enabled = !clipboard.cancelling) { Text("Cancel") }
+                TextButton(clipboard::cancel, enabled = !clipboard.cancelling) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
             }
         }
     }

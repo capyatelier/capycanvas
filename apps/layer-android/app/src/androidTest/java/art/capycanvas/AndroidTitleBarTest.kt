@@ -824,7 +824,7 @@ class AndroidTitleBarTest {
     }
 
     private fun showSwipeLayers() {
-        val defaults=Native.create(false)
+        val defaults=createEnglishHostForTest()
         val workspace=try { JSONObject(Native.snapshot(defaults)!!).getJSONObject("state").getJSONObject("workspace") }
             finally { Native.destroy(defaults) }
         action(obj("type" to "restore_workspace","workspace" to workspace))

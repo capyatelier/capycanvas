@@ -38,8 +38,10 @@ final class MacCanvasView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityIdentifier("canvas")
-        setAccessibilityLabel("Canvas")
-        setAccessibilityValue("Initializing")
+        setAccessibilityLabel(store.bootstrap["drawing_canvas"].string)
+        setAccessibilityValue(store.bootstrap["starting_canvas"].string)
+        store.bootstrapChanged = { [weak self] in self?.updateAccessibility() }
+        updateAccessibility()
         store.wake = { [weak self] in self?.wake() }
         store.observeDisplayHeadroom = { [weak self] in self?.updateHeadroom() }
         store.interruptInput = { [weak self] in self?.input.interrupt() }
@@ -48,7 +50,7 @@ final class MacCanvasView: NSView {
             self.window?.makeFirstResponder(self)
         }
         frames.setPaused = { [weak self] paused in self?.displayLink?.isPaused = paused }
-        frames.submittedViewport = { [weak self] in self?.setAccessibilityValue("Metal ready") }
+        frames.submittedViewport = { [weak self] in self?.setAccessibilityValue(self?.store.bootstrap["canvas_ready"].string) }
     }
     required init?(coder: NSCoder) { fatalError("Use init(store:)") }
     override func viewDidMoveToWindow() {
@@ -141,6 +143,11 @@ final class MacCanvasView: NSView {
         wake()
     }
     func wake() { frames.wake() }
+    private func updateAccessibility() {
+        setAccessibilityLabel(store.bootstrap["drawing_canvas"].string)
+        setAccessibilityHelp(store.bootstrap["drawing_canvas_help"].string)
+        setAccessibilityValue(store.bootstrap[store.restartingCanvas ? "restarting_canvas" : store.canvasSubmitted ? "canvas_ready" : "starting_canvas"].string)
+    }
     func stop() {
         documentDelegate.attach(nil)
         frames.deactivate(); store.input(["type": "blur"])

@@ -107,6 +107,17 @@ pub struct ProofChoice<T> {
     pub label: &'static str,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct LocalizedProofChoice<T> { pub value: T, pub label: std::sync::Arc<str> }
+pub fn proof_intents(localizer: &crate::Localizer) -> [LocalizedProofChoice<RenderingIntent>; 4] {
+    let labels = [localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_RELATIVE), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_PERCEPTUAL), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_SATURATION), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_ABSOLUTE)];
+    std::array::from_fn(|index| LocalizedProofChoice { value: PROOF_INTENTS[index].value, label: labels[index].clone() })
+}
+pub fn proof_simulations(localizer: &crate::Localizer) -> [LocalizedProofChoice<ProofSimulation>; 3] {
+    let labels = [localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_COLORS), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_BLACK_INK), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_PAPER_INK)];
+    std::array::from_fn(|index| LocalizedProofChoice { value: ProofSimulation::CHOICES[index].value, label: labels[index].clone() })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrintProofControl {
@@ -124,6 +135,13 @@ impl PrintProofControl {
         Self::BlackPointCompensation,
         Self::GamutWarning,
     ];
+    pub fn localized_label(self, localizer: &crate::Localizer) -> std::sync::Arc<str> {
+        use crate::MessageId as M;
+        localizer.text(match self { Self::Profile => M::COLOR_FEATURES_PROOF_PROFILE,
+            Self::Simulation => M::COLOR_FEATURES_PROOF_SIMULATION, Self::Intent => M::COLOR_FEATURES_PROOF_INTENT,
+            Self::BlackPointCompensation => M::COLOR_FEATURES_PROOF_BLACK_POINT_COMPENSATION,
+            Self::GamutWarning => M::COLOR_FEATURES_PROOF_GAMUT_WARNING })
+    }
     pub const fn label(self) -> &'static str {
         match self {
             Self::Profile => "Profile",
@@ -683,4 +701,15 @@ mod tests {
             }
         }
     }
+}
+
+pub fn localized_numbers(localizer: &crate::Localizer) -> serde_json::Value {
+    let mut controls = sdr_number_controls();
+    controls[1].numeric.endpoint_labels = Some([localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_WHITE).to_string(), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_COLOR).to_string()]);
+    serde_json::Value::Array(controls.into_iter().zip([localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_BRIGHTNESS), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_HIGHLIGHT_COLOR)]).map(|(control, label)|
+        serde_json::json!({"key":control.key,"label":label,"numeric":control.numeric})).collect())
+}
+pub fn localized_pad(localizer: &crate::Localizer) -> serde_json::Value {
+    serde_json::json!({"axes":sdr_tone_pad().axes.into_iter().zip([localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_BALANCE),localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_CONTRAST)]).map(|(axis,label)|
+        serde_json::json!({"key":axis.key,"label":label,"numeric":axis.numeric,"default":axis.default})).collect::<Vec<_>>()})
 }

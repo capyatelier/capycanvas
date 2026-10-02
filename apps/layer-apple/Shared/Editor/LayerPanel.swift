@@ -69,16 +69,16 @@ struct LayerPanel: View {
     private var header: some View {
         VStack(spacing: 2) {
             HStack(spacing: 6) {
-                EditorChoice(label: "Layer blend mode", options: store.catalog["layer_blends"].array.map(\.string),
+                EditorChoice(label: store.catalog["native_copy"]["layers"]["blend"].string, options: store.catalog["layer_blends"].array.map(\.string),
                     selected: Int(current["blend"].uint), identifier: "layer-blend", background: palette["input"], compact: true) {
                     store.layer(["op": "blend", "id": current["id"].raw, "value": $0])
                 }.disabled(!view["controls"]["blend"].bool).frame(maxWidth: .infinity)
                 LayerOpacityField(store: store).disabled(!view["controls"]["opacity"].bool).frame(maxWidth: .infinity)
             }
             HStack(spacing: 2) {
-                flag("alpha-lock", "Alpha lock", "alpha_locked", "alpha_lock", "alpha_lock")
-                flag("lock", "Lock editing", "locked", "lock", "edit_lock")
-                flag("clip", "Clip to layer below", "clipped", "clip", "clip")
+                flag("alpha-lock", store.catalog["native_copy"]["layers"]["alpha_lock"].string, "alpha_locked", "alpha_lock", "alpha_lock")
+                flag("lock", store.catalog["native_copy"]["layers"]["lock_editing"].string, "locked", "lock", "edit_lock")
+                flag("clip", store.catalog["native_copy"]["layers"]["clip"].string, "clipped", "clip", "clip")
                 LayerButton(icon: "reference", label: view["reference_action_label"].string,
                     enabled: view["can_reference"].bool, selected: view["references_selected"].bool) {
                     store.layer(["op": "reference_selection"])
@@ -94,20 +94,20 @@ struct LayerPanel: View {
     }
     private var footer: some View {
         HStack(spacing: 2) {
-            LayerButton(icon: "add-layer", label: "New layer") { store.layer(["op": "new", "group": false, "clipped": false]) }
-            LayerButton(icon: "folder", label: "New group") { store.layer(["op": "new", "group": true, "clipped": false]) }
-            LayerButton(icon: "selection-brush", label: "New Selection Layer", enabled: store.command("new_selection_layer")["enabled"].bool) {
+            LayerButton(icon: "add-layer", label: store.catalog["native_copy"]["layers"]["new_layer"].string) { store.layer(["op": "new", "group": false, "clipped": false]) }
+            LayerButton(icon: "folder", label: store.catalog["native_copy"]["layers"]["new_group"].string) { store.layer(["op": "new", "group": true, "clipped": false]) }
+            LayerButton(icon: "selection-brush", label: store.catalog["native_copy"]["layers"]["new_selection_layer"].string, enabled: store.command("new_selection_layer")["enabled"].bool) {
                 store.invoke("new_selection_layer")
             }
-            LayerButton(icon: "mask", label: "Add layer mask", enabled: view["controls"]["mask"].bool) {
+            LayerButton(icon: "mask", label: store.catalog["native_copy"]["layers"]["add_mask"].string, enabled: view["controls"]["mask"].bool) {
                 store.layer(["op": "add_mask", "id": current["id"].raw, "replace": false])
             }
-            LayerButton(icon: "image", label: "Import image as layer", enabled: store.command("import_image")["enabled"].bool) {
+            LayerButton(icon: "image", label: store.catalog["native_copy"]["layers"]["import_image"].string, enabled: store.command("import_image")["enabled"].bool) {
                 store.invoke("import_image")
             }
-            LayerButton(icon: "delete", label: "Delete selected layers", enabled: view["can_delete"].bool) { store.layer(["op": "delete_selected"]) }
+            LayerButton(icon: "delete", label: store.catalog["native_copy"]["layers"]["delete_selected"].string, enabled: view["can_delete"].bool) { store.layer(["op": "delete_selected"]) }
             Spacer(minLength: 0)
-            LayerButton(icon: "more", label: "Layer actions", enabled: !current.isNull) {
+            LayerButton(icon: "more", label: store.catalog["native_copy"]["layers"]["actions"].string, enabled: !current.isNull) {
                 openMenu(current, mask: current["mask_selected"].bool, source: .footer)
             }.editorPopover(isPresented: menuPresented(at: .footer), placement: .inward) { menuContent }
         }.padding(.horizontal, 6).padding(.vertical, 4)
@@ -155,7 +155,7 @@ private struct LayerSwipeRow<Content: View>: View {
                     Button {
                         swipe.close(); store.layer(["op": "delete", "id": layer["id"].raw])
                     } label: {
-                        Text("Delete").foregroundStyle(.white).frame(width: offset)
+                        Text(store.bootstrap["common"]["delete"].string).foregroundStyle(.white).frame(width: offset)
                             .frame(maxHeight: .infinity).background(Color(red: 0.78, green: 0.16, blue: 0.16))
                             .contentShape(Rectangle())
                     }.buttonStyle(.plain).disabled(!layer["can_delete"].bool)
@@ -198,6 +198,7 @@ private struct LayerButton: View {
 }
 
 private struct LayerRow: View {
+    @State private var rowCaption = ""
     @Environment(\.editorPalette) private var surface
     @ObservedObject var store: EditorStore
     let layer: JSON
@@ -211,7 +212,7 @@ private struct LayerRow: View {
             LayerButton(icon: layer["visible"].bool ? "eye" : "eye-hidden", label: visibilityLabel, height: 36) {
                 perform { store.dispatch(["type": "set_layer_visibility", "id": id, "visible": !layer["visible"].bool]) }
             }
-            LayerButton(icon: layer["selection_icon"].string, label: "Select layer without changing drawing target", height: 36) {
+            LayerButton(icon: layer["selection_icon"].string, label: store.catalog["native_copy"]["layers"]["select_row_help"].string, height: 36) {
                 perform { store.layer(["op": "toggle_selection", "id": id]) }
             }.accessibilityAddTraits(layer["selected"].bool ? .isSelected : [])
             HStack(spacing: 2) {
@@ -224,7 +225,7 @@ private struct LayerRow: View {
                     }.frame(width: 30, height: 30).accessibilityIdentifier("selection-load-\(id)")
                 }
                 if layer["has_mask"].bool {
-                    LayerButton(icon: "link", label: layer["mask_linked"].bool ? "Unlink mask from layer" : "Link mask to layer", size: 12) {
+                    LayerButton(icon: "link", label: layer["mask_linked"].bool ? store.catalog["native_copy"]["layers"]["unlink_mask"].string : store.catalog["native_copy"]["layers"]["link_mask_to_layer"].string, size: 12) {
                         perform { store.layer(["op": "link_mask", "id": id, "value": !layer["mask_linked"].bool]) }
                     }.foregroundStyle(palette["text"].opacity(layer["mask_linked"].bool ? 1 : 0.35))
                     thumbnail(mask: true)
@@ -246,7 +247,7 @@ private struct LayerRow: View {
                 SharedIcon(name: "grip", size: 12).opacity(0.6).frame(width: 12, height: 36)
                     .contentShape(Rectangle())
                     .modifier(LayerRowMeasurement(id: id, part: \.grip, enabled: !preview))
-                    .accessibilityLabel("Move layer").accessibilityIdentifier("layer-grip-\(id)")
+                    .accessibilityLabel(store.catalog["native_copy"]["layers"]["move_layer"].string).accessibilityIdentifier("layer-grip-\(id)")
             }
         }.padding(.horizontal, 6).padding(.vertical, 2).frame(minHeight: 40)
             .background((layer["selected"].bool ? surface.active : Color.clear)
@@ -254,14 +255,18 @@ private struct LayerRow: View {
                     perform { store.layer(["op": "select", "id": id, "mask": false]) }
                 })
             .accessibilityElement(children: .contain)
-            .accessibilityValue(layer["mask_selected"].bool ? "Editing mask"
-                : layer["drawing"].bool ? (layer["selection_layer"].bool ? "Editing selection" : "Drawing target")
-                : layer["selected"].bool ? "Selected" : "")
+            .accessibilityLabel(rowCaption)
+            .onAppear { refreshCaption() }
+            .onChange(of: layer["label"].string) { _, _ in refreshCaption() }
+            .accessibilityValue(layer["mask_selected"].bool ? store.catalog["native_copy"]["layers"]["editing_mask"].string
+                : layer["drawing"].bool ? (layer["selection_layer"].bool ? store.catalog["native_copy"]["layers"]["editing_selection"].string : store.catalog["native_copy"]["layers"]["drawing_target"].string)
+                : layer["selected"].bool ? store.catalog["native_copy"]["layers"]["selected"].string : "")
             .accessibilityIdentifier("layer-row-\(id)")
     }
+    private func refreshCaption() { rowCaption = NativeTextContext.caption(["type": "layer_row", "title": layer["label"].string]) }
     private var visibilityLabel: String {
-        layer["selection_layer"].bool ? (layer["visible"].bool ? "Hide selection overlay" : "Show selection overlay")
-            : (layer["visible"].bool ? "Hide layer" : "Show layer")
+        layer["selection_layer"].bool ? (layer["visible"].bool ? store.catalog["native_copy"]["layers"]["hide_selection"].string : store.catalog["native_copy"]["layers"]["show_selection"].string)
+            : (layer["visible"].bool ? store.catalog["native_copy"]["layers"]["hide"].string : store.catalog["native_copy"]["layers"]["show"].string)
     }
     private func thumbnail(mask: Bool) -> some View {
         Button {
@@ -296,8 +301,8 @@ private struct LayerRow: View {
                 // Bound the hit region as well as the drawing. Without this,
                 // iPad thumbnail hits can consume the adjacent checkbox tap.
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel(mask ? "Edit layer mask" : layer["group"].bool ? "Collapse or expand group"
-            : layer["selection_layer"].bool ? "Edit selection layer" : "Edit layer content")
+        }.buttonStyle(.plain).accessibilityLabel(mask ? store.catalog["native_copy"]["layers"]["edit_mask"].string : layer["group"].bool ? store.catalog["native_copy"]["layers"][layer["collapsed"].bool ? "expand" : "collapse"].string
+            : layer["selection_layer"].bool ? store.catalog["native_copy"]["layers"]["edit_selection"].string : store.catalog["native_copy"]["layers"]["edit_content"].string)
             .accessibilityIdentifier("layer-thumbnail-\(id)-\(mask ? "mask" : "content")")
             .accessibilityValue(thumbnailCaptureStatus(mask: mask))
             .accessibilityAddTraits((mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool) ? .isSelected : [])
@@ -340,8 +345,8 @@ private struct LayerName: View {
     var body: some View {
         Group {
             if renaming {
-                TextField("Layer name", text: $name).textFieldStyle(.plain).focused($focused)
-                    .onSubmit { finish() }.onKeyPress(.escape) { finish(cancel: true); return .handled }
+                TextField(store.catalog["native_copy"]["layers"]["name"].string, text: $name).textFieldStyle(.plain).focused($focused)
+                    .onSubmit { if !NativeTextContext.composing { finish() } }.onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; finish(cancel: true); return .handled }
             } else {
                 Text(layer["label"].string).lineLimit(1).help(layer["label"].string)
                     .onTapGesture(count: 2) {
@@ -369,7 +374,7 @@ struct LayerOpacityField: View {
             store.effect(layer["id"].uint, epoch: epoch, key: "opacity",
                 action: ["op": "set", "value": ["kind": "number", "value": value]], phase: phase, completion: completion)
         }
-        NumberControl(store: store, label: "Layer opacity", value: layer["opacity"].number,
+        NumberControl(store: store, label: store.catalog["native_copy"]["layers"]["opacity"].string, value: layer["opacity"].number,
             control: store.catalog[inline ? "layer_opacity" : "opacity"], identifier: "layer-opacity", inline: inline,
             gestureChange: { change($1, $0, $2) }) { value, completion in
             change(value, nil, completion)

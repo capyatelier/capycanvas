@@ -45,6 +45,15 @@ the shared session and schedules frames against Wayland presentation timing,
 subsurface beneath the GTK controls ([design record](../history/wayland-subsurface-feasibility.md)),
 and `files.rs` supplies native dialogs and project/photo transport.
 
+## Native text input
+
+Editable submission paths use `input::guard_entry_activation` before attaching
+activate callbacks or enabling a default dialog action. It preserves native IME
+delivery and retains the physical key through commit, activation and release.
+Candidate confirmation or cancellation must not also submit or dismiss the app
+view. Existing Escape handlers consult the same ownership state; focus loss and
+unmapping retire it.
+
 ## Tests
 
 Model tests run with `cargo test --locked -p layer-linux`. Native tests are
@@ -55,6 +64,10 @@ private-compositor runner:
 ```bash
 bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_modes
 ```
+
+`native_palette_entry_composition` checks editable submission, the real GTK
+default-button action and candidate-key retirement in both themes. Genuine
+engine composition is a separate acceptance check in a private display.
 
 Numeric widget changes use `native_number_controls`, `native_slider_feedback`
 and the toolbar component mouse/touch, pen and value-control journeys. They cover

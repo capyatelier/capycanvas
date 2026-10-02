@@ -79,7 +79,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
                 if (search != null) CoreTextField(search, { send(obj("op" to "search", "query" to it)) },
                     Modifier.fillMaxWidth().focusRequester(focus).testTag("filter-search"), height = 34.dp, maxLength = 120, shape = ControlShape,
                     placeholder = { Text(picker.getString("search_label"), maxLines = 1) })
-                else PropertyChoice("Category", categories.map { it.getString("label") },
+                else PropertyChoice(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("category"), categories.map { it.getString("label") },
                     categories.indexOfFirst { it.optString("id") == picker.optString("category") }.coerceAtLeast(0)) {
                     send(obj("op" to "category", "category" to categories[it].get("id")))
                 }
@@ -174,7 +174,7 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
     Column(Modifier.fillMaxWidth().testTag("layer-properties").alpha(if(enabled) 1f else .4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(view.getString("title"), fontWeight = FontWeight.Bold)
         if(curves.isNotEmpty()) {
-            PropertyChoice("Channel", curves.map { it.getString("label") }, selectedCurve, enabled) { selectedCurve = it }
+            PropertyChoice(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("channel"), curves.map { it.getString("label") }, selectedCurve, enabled) { selectedCurve = it }
             CurveControl(host, layer, curves[selectedCurve.coerceIn(curves.indices)], enabled, if(view.isNull("curve_max"))null else view.number("curve_max"), if(view.isNull("curve_white"))null else view.number("curve_white"))
         }
         controls.forEachIndexed { index, control ->
@@ -202,7 +202,7 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
                 }
                 "color" -> ManagedColorButton(host,label,value as JSONObject,enabled,trailing = {
                     if(!control.isNull("color_action")) Box(Modifier.size(40.dp,36.dp).testTag("${key.replace('_','-')}-bucket")
-                        .clickable(enabled=enabled){host.dispatch(control.getJSONObject("color_action"))},contentAlignment=Alignment.Center) { SharedIcon("fill","Use selected color") }
+                        .clickable(enabled=enabled){host.dispatch(control.getJSONObject("color_action"))},contentAlignment=Alignment.Center) { SharedIcon("fill",host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("use_selected")) }
                 }) { change(it) }
                 "gradient" -> GradientControl(host,layer,control,enabled)
             }
@@ -235,11 +235,11 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
         drawRect(Brush.horizontalGradient(*ramp,startX=margin,endX=size.width-margin),Offset(margin,0f),androidx.compose.ui.geometry.Size(width,32.dp.toPx()))
         stops.forEachIndexed { i,s ->drawCircle(colors.text,(if(index==i)4f else 2.5f).dp.toPx(),Offset(margin+s.number("position")*width,39.dp.toPx())) }
     }
-    NumericSetting("Position",stops[index].number("position"),host.catalog.getJSONObject("opacity"),enabled=enabled && index>0 && index<stops.lastIndex) {change(index,it)}
-    ManagedColorButton(host,"Color",stops[index].getJSONObject("color"),enabled) {change(index,stops[index].number("position"),it)}
+    NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("position"),stops[index].number("position"),host.catalog.getJSONObject("opacity"),enabled=enabled && index>0 && index<stops.lastIndex) {change(index,it)}
+    ManagedColorButton(host,host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("color"),stops[index].getJSONObject("color"),enabled) {change(index,stops[index].number("position"),it)}
     Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-        TextButton(enabled=enabled && index>0 && index<stops.lastIndex,onClick={selected=(index-1).coerceAtLeast(0);change(index,0f,remove=true)}) {Text("Remove stop")}
-        TextButton(enabled=enabled,onClick={host.effect(obj("op" to "reset","layer" to layer,"key" to key))}) {Text("Reset")}
+        TextButton(enabled=enabled && index>0 && index<stops.lastIndex,onClick={selected=(index-1).coerceAtLeast(0);change(index,0f,remove=true)}) {Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("remove_stop"))}
+        TextButton(enabled=enabled,onClick={host.effect(obj("op" to "reset","layer" to layer,"key" to key))}) {Text(host.bootstrap!!.getJSONObject("common").getString("reset"))}
     }
 }
 
@@ -304,7 +304,7 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
         }
         if(control.optBoolean("modified")) Box(Modifier.align(Alignment.BottomEnd).padding(2.dp).size(32.dp).testTag("curve-reset")
             .clickable(enabled = enabled) { selected = null; lastTap = null; host.effect(obj("op" to "reset", "layer" to layer, "key" to key)) },
-            contentAlignment = Alignment.Center) { SharedIcon("reset", "Reset curve", tint = colors.text.copy(alpha = .7f)) }
+            contentAlignment = Alignment.Center) { SharedIcon("reset", host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("reset_curve"), tint = colors.text.copy(alpha = .7f)) }
     }
     curveMax?.let{Text("SDR white · 0 EV; range 0–${it.toInt()} (+${kotlin.math.log2(it).toInt()} EV)",style=MaterialTheme.typography.labelSmall)}
 }

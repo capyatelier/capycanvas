@@ -85,12 +85,12 @@ pub fn selected_swatch(
 }
 
 impl ColorLibrary {
-    pub fn check(&self, action: ColorLibraryAction) -> Result<(), String> {
-        self.clone().apply(action).map(|_| ())
+    pub fn check(&self, action: ColorLibraryAction, localizer: &crate::Localizer) -> Result<(), String> {
+        self.clone().apply(self.prepare_creation(action, localizer)?).map(|_| ())
     }
-    pub fn color_name(&self, current: RgbColor) -> String {
+    pub fn color_name(&self, current: RgbColor, localizer: &crate::Localizer) -> String {
         self.current_name(current)
-            .map_or_else(|| Self::suggested_name(current), str::to_owned)
+            .map_or_else(|| localizer.text(Self::suggested_name(current)).to_string(), str::to_owned)
     }
     pub fn color_detail(colors: &ColorState) -> String {
         let mut detail = Self::hex_preview(colors.picker_base());
@@ -196,6 +196,7 @@ impl PalettePanelView {
         colors: &ColorState,
         library: &ColorLibrary,
         preview: impl Fn(RgbColor) -> [f32; 4],
+        localizer: &crate::Localizer,
     ) -> Self {
         let current = colors.definition();
         let palette = library.active_palette();
@@ -230,7 +231,7 @@ impl PalettePanelView {
                     active: p.id == palette.id,
                 })
                 .collect(),
-            color_name: library.color_name(current),
+            color_name: library.color_name(current, localizer),
             color_detail: ColorLibrary::color_detail(colors),
             can_name: !colors.transparent(),
             can_undo: library.can_undo_reorder(palette.id, false),
@@ -244,11 +245,11 @@ mod tests {
     use super::*;
     #[test]
     fn menus_and_views_follow_library_state() {
-        let mut library = ColorLibrary::default();
+        let mut library = ColorLibrary::canonical();
         let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0.2, 0.1, 1.]).unwrap();
         for name in ["Red", "Also red"] {
             library
-                .apply(ColorLibraryAction::Store {
+                .apply_canonical(ColorLibraryAction::Store {
                     palette: 1,
                     name: name.into(),
                     color,
@@ -277,7 +278,7 @@ mod tests {
             .unwrap();
         assert!(!colors[1][0].enabled && !colors[1][1].enabled);
         library
-            .apply(ColorLibraryAction::Reorder {
+            .apply_canonical(ColorLibraryAction::Reorder {
                 palette: 1,
                 id: second,
                 before: Some(first),
@@ -297,7 +298,7 @@ mod tests {
 
         let mut state = ColorState::default();
         state.set_color(color).unwrap();
-        let view = PalettePanelView::new(&state, &library, |c| state.preview(c));
+        let view = PalettePanelView::new(&state, &library, |c| state.preview(c), &crate::Localizer::shared(crate::UiLanguage::English));
         assert_eq!(view.swatches.iter().filter(|t| t.current).count(), 2);
         assert!(view.can_undo && !view.can_redo);
         assert_eq!(view.palettes[0].preview.len(), 2);

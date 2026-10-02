@@ -153,7 +153,7 @@ fn native_tooltip_input() {
         );
         pump(620);
         let current = state(&w);
-        let expected = current.settings.action_tooltip(
+        let expected = current.settings.action_tooltip_localized(
             "New layer",
             &UiAction::Layer {
                 action: layer_ui::LayerAction::New {
@@ -162,6 +162,7 @@ fn native_tooltip_input() {
                 },
             },
             current.platform,
+            &w.localization,
         );
         assert_eq!(
             popup()

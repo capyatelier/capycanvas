@@ -1,12 +1,13 @@
+import { composingKey } from "./text-input.js";
 // Native text/range controls around Rust's numeric policy. No expression,
 // range-mapping, unit-formatting or rounding rules are duplicated here.
-export function createNumberField({ control, label, resolve, onChange, icon, inline = false, widthSamples, valueOnly = false }) {
+export function createNumberField({ control, label, labels: captions, resolve, onChange, icon, inline = false, widthSamples, valueOnly = false }) {
   const node = (tag, cls) => { const el = document.createElement(tag); el.className = cls; return el; };
   const root = node("div", `number-control number-${control.kind}`);
   const header = node("div", "number-header"), labels = node("div", "number-labels");
   const title = node("span", "number-title"); title.textContent = label; title.title = label; labels.append(title);
   const valueButton = node("button", "number-value"); valueButton.type = "button";
-  valueButton.setAttribute("aria-label", `Edit ${label}`);
+  valueButton.setAttribute("aria-label", captions.edit);
   const entry = node("input", "number-entry"); entry.type = "text"; entry.inputMode = "decimal";
   entry.spellcheck = false; entry.autocomplete = "off"; entry.setAttribute("aria-label", label);
   const valueBox = node("div", "number-value-box"); valueBox.append(valueButton, entry);
@@ -14,13 +15,13 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
   const track = node("div", "number-track");
   const slider = node("input", "number-slider"); slider.type = "range"; slider.min = 0; slider.max = 1; slider.step = "any";
   slider.setAttribute("aria-label", label);
-  const step = (steps, name, verb) => {
+  const step = (steps, name, caption) => {
     const button = node("button", "number-step"); button.type = "button"; button.append(icon(name));
-    button.setAttribute("aria-label", `${verb} ${label}`);
+    button.setAttribute("aria-label", caption);
     button.addEventListener("click", () => { if (finish()) apply({ type: "step", steps }); });
     return button;
   };
-  const minus = step(-1, "minus", "Decrease"), plus = step(1, "plus", "Increase");
+  const minus = step(-1, "minus", captions.decrease), plus = step(1, "plus", captions.increase);
   const ranged = control.kind === "slider";
   const buttonValue = ranged || valueOnly;
   if (ranged) { track.append(minus, slider, plus); root.append(track); }
@@ -60,7 +61,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
   }
   function finish(cancel = false) {
     if (!editing) return true;
-    if (!cancel && !apply({ type: "expression", text: entry.value })) return false;
+    if (!cancel && (composingKey({target:entry}) || !apply({ type: "expression", text: entry.value }))) return false;
     editing = false; root.classList.remove("error"); entry.removeAttribute("aria-invalid"); entry.title = "";
     entry.value = ranged ? display.edit : display.text;
     if (buttonValue) { entry.hidden = true; valueButton.hidden = false; }
@@ -71,7 +72,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
   entry.addEventListener("input", () => { editing = true; });
   entry.addEventListener("blur", () => finish());
   entry.addEventListener("keydown", e => {
-    if (e.isComposing) return;
+    if (composingKey(e)) return;
     if (e.key === "Enter" || e.key === "Escape") {
       e.preventDefault(); e.stopPropagation();
       if (finish(e.key === "Escape")) { entry.blur(); if (buttonValue) valueButton.focus(); }
@@ -80,7 +81,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
       e.preventDefault(); if (finish()) apply({ type: "step", steps: e.key === "ArrowUp" ? 1 : -1 });
     }
   });
-  slider.addEventListener("input", () => { finish(true); apply({ type: "position", position: Number(slider.value) }); });
+  slider.addEventListener("input", () => { if (finish()) apply({ type: "position", position: Number(slider.value) }); else show(display); });
   root.update = next => { if(!display || next !== value) show(resolve({ control, value: next, operation: { type: "format" } })); };
   root.setDisabled = next => { if (disabled === next) return; disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; show(display); };
   root.setDescription = text => {
@@ -108,12 +109,15 @@ export function captureSliderContacts(number) {
   let contact = null;
   const pick = e => {
     const b = slider.getBoundingClientRect(), thumb = parseFloat(getComputedStyle(slider).getPropertyValue("--thumb-size")) || 0;
-    number.cancelEditing(); number.apply({ type: "position", position: (e.clientX - b.x - thumb / 2) / Math.max(1, b.width - thumb) });
+    if (!number.commit()) return false;
+    number.apply({ type: "position", position: (e.clientX - b.x - thumb / 2) / Math.max(1, b.width - thumb) });
+    return true;
   };
   slider.addEventListener("pointerdown", e => {
     if (e.button || slider.disabled) return;
-    e.preventDefault(); e.stopPropagation(); contact = e.pointerId;
-    slider.setPointerCapture(e.pointerId); pick(e);
+    e.preventDefault(); e.stopPropagation();
+    if (!pick(e)) return;
+    contact = e.pointerId; slider.setPointerCapture(e.pointerId);
   });
   slider.addEventListener("pointermove", e => { if (contact === e.pointerId) { e.preventDefault(); pick(e); } });
   for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) slider.addEventListener(type, () => { contact = null; });

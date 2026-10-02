@@ -3,6 +3,7 @@
 use layer_core::color::{ColorProfile, ProfileChannels};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use crate::ColorFeatureError;
 
 pub const PROFILE_LIBRARY_ENTRIES: usize = 128;
 pub const PROFILE_LIBRARY_BYTES: u64 = 64 * 1024 * 1024;
@@ -13,9 +14,9 @@ pub struct ProfileRecord {
     pub id: String,
     pub bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issue: Option<String>,
+    pub issue: Option<ColorFeatureError>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProfileEntry {
     pub id: String,
     pub bytes: u64,
@@ -25,7 +26,46 @@ pub struct ProfileEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<ColorProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub issue: Option<String>,
+    pub issue: Option<ColorFeatureError>,
+}
+impl ProfileEntry {
+    pub fn localized_view(&self, localizer: &crate::Localizer) -> serde_json::Value {
+        let mut value = serde_json::json!(self);
+        value["name"] = self.display_name(localizer).into();
+        value["details"] = self.details(localizer).into();
+        if let Some(reason) = &self.issue { value["issue"] = reason.profile_message(localizer).into(); }
+        value
+    }
+    pub fn display_name(&self, localizer: &crate::Localizer) -> String {
+        if self.channels.is_some() {
+            return if self.name.is_empty() { localizer.text(crate::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string() } else { self.name.clone() };
+        }
+        let id = self.id.chars().take(12).collect::<String>();
+        let mut args = crate::FluentArgs::new(); args.set("id", id.as_str());
+        localizer.format(crate::MessageId::COLOR_FEATURES_PROFILE_UNAVAILABLE, &args)
+    }
+    pub fn details(&self, localizer: &crate::Localizer) -> String {
+        let mut args = crate::FluentArgs::new();
+        let gray = localizer.text(crate::MessageId::COLOR_FEATURES_PROFILE_GRAYSCALE);
+        let channels = match self.channels { Some(ProfileChannels::Rgb) => "RGB", Some(ProfileChannels::Cmyk) => "CMYK", Some(ProfileChannels::Gray) => gray.as_ref(), None => "" };
+        let bytes = self.bytes.to_string(); let id = self.id.chars().take(12).collect::<String>();
+        args.set("channels", channels); args.set("bytes", bytes.as_str()); args.set("id", id.as_str());
+        localizer.format(crate::MessageId::COLOR_FEATURES_PROFILE_DETAILS, &args)
+    }
+}
+pub fn profile_description_name(description: Option<String>, localizer: &crate::Localizer) -> String {
+    description.unwrap_or_else(|| localizer.text(crate::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string())
+}
+pub fn profile_display_name(profile: &ColorProfile, localizer: &crate::Localizer) -> Result<String, String> {
+    Ok(profile_description_name(layer_color::profile_description_optional(profile)?, localizer))
+}
+pub fn validate_source_profile(profile: &crate::ExportProfile, source: &layer_core::color::source::SourceInterpretation, working: layer_core::color::RgbSpace) -> Result<(), ColorFeatureError> {
+    use layer_core::color::source::SourceChannels;
+    let expected = match source.channels { SourceChannels::Rgb | SourceChannels::Rgba => ProfileChannels::Rgb, SourceChannels::Gray | SourceChannels::GrayAlpha => ProfileChannels::Gray, SourceChannels::Cmyk => ProfileChannels::Cmyk };
+    if profile.channels != expected { return Err(ColorFeatureError::SourceChannels(expected)); }
+    let mut source = source.clone(); source.profile = profile.profile.clone();
+    layer_color::WorkingDecoder::new(&source, working, Default::default())?;
+    Ok(())
 }
 pub fn valid_profile_id(id: &str) -> bool {
     id.len() == 64
@@ -47,12 +87,9 @@ pub fn profile_inventory(mut records: Vec<ProfileRecord>) -> Vec<ProfileRecord> 
     for (index, record) in records.iter_mut().enumerate() {
         total = total.saturating_add(record.bytes);
         record.issue = if index >= PROFILE_LIBRARY_ENTRIES || total > PROFILE_LIBRARY_BYTES {
-            Some(
-                "The profile library limit is 128 profiles and 64 MiB; remove unused profiles"
-                    .into(),
-            )
+            Some(ColorFeatureError::ProfileLibraryLimit)
         } else if record.bytes > PROFILE_READ_LIMIT as u64 {
-            Some("ICC profile exceeds 16 MiB".into())
+            Some(ColorFeatureError::ProfileReadLimit)
         } else {
             None
         };
@@ -65,27 +102,27 @@ pub fn read_library_profile(
     id: &str,
     bytes: &[u8],
     include_bytes: bool,
-) -> Result<ProfileEntry, String> {
+) -> Result<ProfileEntry, ColorFeatureError> {
     if !valid_profile_id(id) {
-        return Err("Select an imported profile".into());
+        return Err(ColorFeatureError::SelectImportedProfile);
     }
     if bytes.len() > PROFILE_READ_LIMIT {
-        return Err("ICC profile exceeds 16 MiB".into());
+        return Err(ColorFeatureError::ProfileReadLimit);
     }
     if profile_identity(bytes) != id {
-        return Err("Profile changed in storage; remove or reimport it".into());
+        return Err(ColorFeatureError::ProfileChanged);
     }
     let profile = ColorProfile::Icc(bytes.to_vec().into());
     Ok(ProfileEntry {
         id: id.into(),
         bytes: bytes.len() as u64,
-        name: layer_color::profile_description(&profile)?,
+        name: layer_color::profile_description_optional(&profile)?.unwrap_or_default(),
         channels: Some(layer_color::profile_channels(&profile)?),
         profile: include_bytes.then_some(profile),
         issue: None,
     })
 }
-pub fn inspect_library_entry(record: &ProfileRecord, bytes: Result<&[u8], String>) -> ProfileEntry {
+pub fn inspect_library_entry(record: &ProfileRecord, bytes: Result<&[u8], ColorFeatureError>) -> ProfileEntry {
     let result = record.issue.clone().map_or_else(
         || bytes.and_then(|b| read_library_profile(&record.id, b, false)),
         Err,
@@ -93,10 +130,7 @@ pub fn inspect_library_entry(record: &ProfileRecord, bytes: Result<&[u8], String
     result.unwrap_or_else(|issue| ProfileEntry {
         id: record.id.clone(),
         bytes: record.bytes,
-        name: format!(
-            "Unavailable profile {}",
-            record.id.chars().take(12).collect::<String>()
-        ),
+        name: String::new(),
         channels: None,
         profile: None,
         issue: Some(issue),
@@ -105,9 +139,9 @@ pub fn inspect_library_entry(record: &ProfileRecord, bytes: Result<&[u8], String
 pub fn prepare_profile_import(
     records: Vec<ProfileRecord>,
     bytes: &[u8],
-) -> Result<ProfileEntry, String> {
+) -> Result<ProfileEntry, ColorFeatureError> {
     if bytes.len() > PROFILE_READ_LIMIT {
-        return Err("ICC profile exceeds 16 MiB".into());
+        return Err(ColorFeatureError::ProfileReadLimit);
     }
     let id = profile_identity(bytes);
     let entry = read_library_profile(&id, bytes, true)?;
@@ -119,7 +153,7 @@ pub fn prepare_profile_import(
             .fold(bytes.len() as u64, |total, r| total.saturating_add(r.bytes))
             > PROFILE_LIBRARY_BYTES
     {
-        return Err("The profile library limit is 128 profiles and 64 MiB".into());
+        return Err(ColorFeatureError::ProfileLibraryLimit);
     }
     Ok(entry)
 }
@@ -157,37 +191,44 @@ pub enum ProfileLibraryAction {
     },
     Inspect {
         entry: ProfileRecord,
-        error: Option<String>,
+        error: Option<ColorFeatureError>,
     },
     Remove {
         id: String,
     },
 }
 impl ProfileLibraryAction {
-    pub fn execute(self, bytes: &[u8]) -> Result<serde_json::Value, String> {
+    pub fn execute_localized(self, bytes: &[u8], localizer: &crate::Localizer) -> Result<serde_json::Value, ColorFeatureError> {
+        self.execute_impl(bytes, Some(localizer))
+    }
+    pub fn execute(self, bytes: &[u8]) -> Result<serde_json::Value, ColorFeatureError> {
+        self.execute_impl(bytes, None)
+    }
+    fn execute_impl(self, bytes: &[u8], localizer: Option<&crate::Localizer>) -> Result<serde_json::Value, ColorFeatureError> {
         use serde_json::json;
+        let view = |entry: ProfileEntry| localizer.map_or_else(||json!(&entry), |localizer|entry.localized_view(localizer));
         Ok(match self {
             Self::Limits => json!({"read_bytes": PROFILE_READ_LIMIT}),
             Self::Visibility { mut hidden, id, visible } => {
                 hidden.retain(|id| valid_profile_id(id));
                 hidden.sort(); hidden.dedup();
                 if let Some(id) = id {
-                    if !valid_profile_id(&id) { return Err("Select an imported profile".into()); }
+                    if !valid_profile_id(&id) { return Err(ColorFeatureError::SelectImportedProfile); }
                     hidden.retain(|key| key != &id);
                     if visible == Some(false) { hidden.push(id); }
                 }
-                if hidden.len() > PROFILE_LIBRARY_ENTRIES { return Err("Too many hidden profiles; show or remove unused entries".into()); }
+                if hidden.len() > PROFILE_LIBRARY_ENTRIES { return Err(ColorFeatureError::ProfileHiddenLimit); }
                 json!(hidden)
             }
             Self::Inventory { entries } => json!(profile_inventory(entries)),
-            Self::Import { entries } => json!(prepare_profile_import(entries, bytes)?),
-            Self::Get { id } => json!(read_library_profile(&id, bytes, true)?),
+            Self::Import { entries } => view(prepare_profile_import(entries, bytes)?),
+            Self::Get { id } => view(read_library_profile(&id, bytes, true)?),
             Self::Inspect { entry, error } => {
-                json!(inspect_library_entry(&entry, error.map_or(Ok(bytes), Err)))
+                view(inspect_library_entry(&entry, error.map_or(Ok(bytes), Err)))
             }
             Self::Remove { id } => {
                 if !valid_profile_id(&id) {
-                    return Err("Select an imported profile".into());
+                    return Err(ColorFeatureError::SelectImportedProfile);
                 }
                 json!({"id":id})
             }
@@ -198,6 +239,18 @@ impl ProfileLibraryAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn artist_entry_projection_keeps_literal_names_and_localizes_absence() {
+        let localizer = crate::Localizer::shared(crate::UiLanguage::English);
+        let entry = ProfileEntry { id: "a".repeat(64), name: "Embedded ICC profile 私の色".into(), bytes: 128, channels: Some(ProfileChannels::Gray), profile: None, issue: None };
+        let view = entry.localized_view(&localizer);
+        assert_eq!(view["name"], entry.name);
+        assert_eq!(view["details"], entry.details(&localizer));
+        let missing = ProfileEntry { channels: None, name: String::new(), issue: Some(ColorFeatureError::ProfileMissing), ..entry };
+        let view = missing.localized_view(&localizer);
+        assert_eq!(view["name"], missing.display_name(&localizer));
+        assert_eq!(view["issue"], ColorFeatureError::ProfileMissing.profile_message(&localizer));
+    }
     #[test]
     fn import_deduplicates_accounts_all_entries_and_preserves_exact_owned_bytes() {
         let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(
@@ -272,6 +325,29 @@ mod tests {
             )
             .unwrap();
             assert_eq!(action.execute(&[]).unwrap(), expected);
+        }
+    }
+}
+
+#[cfg(test)]
+mod localized_label_tests {
+    use super::*;
+    #[test]
+    fn absent_profile_name_uses_only_explicit_absence() {
+        let context = crate::Localizer::shared(crate::UiLanguage::Japanese);
+        assert_eq!(profile_description_name(None, &context), context.text(crate::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).as_ref());
+        for name in ["Embedded ICC profile", "埋め込みICCプロファイル", "내 프로파일", ""] {
+            assert_eq!(profile_description_name(Some(name.into()), &context), name);
+        }
+    }
+    #[test]
+    fn imported_profile_descriptions_remain_literal() {
+        let context = crate::Localizer::shared(crate::UiLanguage::Japanese);
+        for name in ["Embedded ICC profile", "Unavailable profile", "埋め込みICCプロファイル", "내 프로파일"] {
+            let entry = ProfileEntry { id: "literal-profile-id".into(), name: name.into(), channels: Some(ProfileChannels::Gray), bytes: 256, profile: None, issue: None };
+            assert_eq!(entry.display_name(&context), name);
+            assert!(entry.details(&context).contains("256"));
+            assert_eq!(entry.id, "literal-profile-id");
         }
     }
 }

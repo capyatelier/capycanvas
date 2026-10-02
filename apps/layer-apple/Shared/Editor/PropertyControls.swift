@@ -13,7 +13,7 @@ struct LayerPropertiesPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(view["title"].string).fontWeight(.bold).help(view["description"].string)
             if let curve = curves.first(where: { $0["key"].string == selectedCurve }) ?? curves.first {
-                EditorChoice(label: "Channel", options: curves.map { $0["label"].string },
+                EditorChoice(label: store.catalog["native_copy"]["color"]["channel"].string, options: curves.map { $0["label"].string },
                     selected: curves.firstIndex { $0["key"].string == curve["key"].string } ?? 0, identifier: "property-channel",
                     background: EditorPalette(source: store.state["palette"])["input"]) {
                     selectedCurve = curves[$0]["key"].string
@@ -41,6 +41,8 @@ struct LayerPropertiesPanel: View {
 }
 
 private struct PropertyField: View {
+    @Environment(\.capyNativeCopy) private var nativeCopy
+    @Environment(\.capyCommonCopy) private var commonCopy
     @ObservedObject var store: EditorStore
     @State private var revision: UInt64 = 0
     let layer: UInt64
@@ -67,7 +69,7 @@ private struct PropertyField: View {
         store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"])
     }
     var body: some View {
-        field(revision: revision).id(revision).contextMenu { Button("Reset", action: reset) }
+        field(revision: revision).id(revision).contextMenu { Button(commonCopy["reset"].string, action: reset) }
     }
     @ViewBuilder private func field(revision: UInt64) -> some View {
         switch kind {
@@ -92,7 +94,7 @@ private struct PropertyField: View {
                 ManagedColorButton(label: label, identifier: "property-" + key, value: value,
                     documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing) { change($0.raw, revision: revision) }
                 if !control["color_action"].isNull {
-                    IconTile(icon: "fill", label: "Use selected color") { store.dispatch(control["color_action"]) }
+                    IconTile(icon: "fill", label: nativeCopy["color"]["use_selected"].string) { store.dispatch(control["color_action"]) }
                         .frame(width: 40, height: 36).accessibilityIdentifier(key == "paper_color" ? "paper-color-bucket" : "property-\(key)-bucket")
                 }
             }
@@ -106,6 +108,7 @@ private struct PropertyField: View {
 }
 
 private struct CurveProperty: View {
+    @Environment(\.capyNativeCopy) private var nativeCopy
     @ObservedObject var store: EditorStore
     let layer: UInt64
     let epoch: UInt64
@@ -152,8 +155,8 @@ private struct CurveProperty: View {
                         context.draw(Text(String(format: "%.0f · %+.0f EV", maximum, log2(maximum))).font(.system(size: 11)).foregroundColor(ink),
                             at: CGPoint(x: size.width - (modified ? 33 : 5), y: size.height - 5), anchor: .bottomTrailing)
                     } else {
-                        context.draw(Text("Output").font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: 5, y: 5), anchor: .topLeading)
-                        context.draw(Text("Input").font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: size.width - (modified ? 33 : 5), y: size.height - 5), anchor: .bottomTrailing)
+                        context.draw(Text(nativeCopy["color"]["output"].string).font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: 5, y: 5), anchor: .topLeading)
+                        context.draw(Text(nativeCopy["color"]["input"].string).font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: size.width - (modified ? 33 : 5), y: size.height - 5), anchor: .bottomTrailing)
                     }
                     var curve = Path()
                     for (index, p) in control["plot"].array.enumerated() {
@@ -213,7 +216,7 @@ private struct CurveProperty: View {
                     .allowsHitTesting(enabled)
                     .onChange(of: contact) { _, active in if !active { cancelDrag() } }
                     .onDisappear(perform: cancelDrag)
-                    .help("Click to add a point and drag to shape the curve. Double-click a point or drag it off the graph to remove it.")
+                    .help(nativeCopy["color"]["curve_help"].string)
                     .accessibilityLabel("\(control["label"].string), \(points.count) points")
                     .accessibilityIdentifier("effect-curve")
             }.frame(height: 200)
@@ -222,7 +225,7 @@ private struct CurveProperty: View {
                         Button { selected = nil; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) } label: {
                             SharedIcon(name: "reset").frame(width: 28, height: 28).contentShape(Rectangle())
                         }.buttonStyle(.plain).foregroundColor(palette["text"].opacity(0.7)).padding(2)
-                            .help("Reset curve").accessibilityLabel("Reset curve").accessibilityIdentifier("curve-reset")
+                            .help(nativeCopy["color"]["reset_curve"].string).accessibilityLabel(nativeCopy["color"]["reset_curve"].string).accessibilityIdentifier("curve-reset")
                     }
                 }
         }
@@ -242,6 +245,7 @@ private struct CurvePlotHitShape: Shape {
 }
 
 private struct GradientProperty: View {
+    @Environment(\.capyNativeCopy) private var nativeCopy
     @ObservedObject var store: EditorStore
     let control: JSON
     let effect: ([String: Any], String?, (@MainActor (String?) -> Void)?) -> Void
@@ -274,7 +278,7 @@ private struct GradientProperty: View {
     private func opacity(_ value: Double, index: Int, revision: UInt64, phase: String? = nil,
         completion: @escaping @MainActor (String?) -> Void) {
         var color = stops[index]["color"]["rgba"].array.map(\.number)
-        guard color.count == 4 else { completion("Invalid color"); return }
+        guard color.count == 4 else { completion(nativeCopy["color"]["invalid"].string); return }
         color[3] = value
         change(stops[index]["position"].number, index: index, color: stops[index]["color"].replacing("rgba", with: JSON(color)).raw, revision: revision, phase: phase, completion: completion)
     }
@@ -336,16 +340,16 @@ private struct GradientProperty: View {
             }.frame(height: 52)
             if !stops.isEmpty {
                 Group {
-                    NumberControl(store: store, label: "Position", value: stops[index]["position"].number,
+                    NumberControl(store: store, label: nativeCopy["color"]["position"].string, value: stops[index]["position"].number,
                         control: store.catalog["opacity"], identifier: "gradient-position",
                         gestureChange: { change($1, index: index, revision: revision, phase: $0, completion: $2) }) {
                         change($0, index: index, revision: revision, completion: $1)
                     }.disabled(!removable)
-                    ManagedColorButton(label: "Color", identifier: "gradient-stop", value: stops[index]["color"],
+                    ManagedColorButton(label: nativeCopy["color"]["color"].string, identifier: "gradient-stop", value: stops[index]["color"],
                         documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing) {
                         change(stops[index]["position"].number, index: index, color: $0.raw, revision: revision)
                     }
-                    NumberControl(store: store, label: "Opacity", value: stops[index]["color"]["rgba"][3].number,
+                    NumberControl(store: store, label: nativeCopy["color"]["opacity"].string, value: stops[index]["color"]["rgba"][3].number,
                         control: store.catalog["opacity"], identifier: "gradient-opacity",
                         gestureChange: { opacity($1, index: index, revision: revision, phase: $0, completion: $2) }) {
                         opacity($0, index: index, revision: revision, completion: $1)
@@ -353,10 +357,10 @@ private struct GradientProperty: View {
                 }.id("\(index):\(revision)")
             }
             HStack {
-                Button("Remove stop") { change(0, index: index, remove: true); selected = max(0, index - 1) }
+                Button(nativeCopy["color"]["remove_stop"].string) { change(0, index: index, remove: true); selected = max(0, index - 1) }
                     .disabled(!removable).accessibilityIdentifier("gradient-remove")
                 Spacer(minLength: 0)
-                Button("Reset", action: reset)
+                Button(nativeCopy["color"]["reset_gradient"].string, action: reset)
                     .accessibilityIdentifier("gradient-reset")
             }.buttonStyle(.plain)
         }.task(id: JSON([stops.map(\.raw), store.state["colors"]["rgb_space"].raw]).stableKey) {

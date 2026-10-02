@@ -10,7 +10,7 @@ extern "C" {
 typedef struct CapyApple CapyApple;
 /* All session calls run on one serial engine/render owner. UIKit/AppKit owns
    the retained CAMetalLayer and must keep it alive until detach completes. */
-CapyApple *capy_apple_create(uint32_t platform); /* 0 iPadOS, 1 macOS */
+CapyApple *capy_apple_launch(uint32_t platform, const char *json, char **bootstrap);
 void capy_apple_destroy(CapyApple *app);
 const char *capy_apple_error(const CapyApple *app); /* borrowed until next call */
 void capy_apple_string_free(char *text);
@@ -76,6 +76,9 @@ void capy_project_free(CapyProjectTask *task);
 /* Stateless numeric policy; safe on the UI thread. Owned JSON result contains
    either the shared numeric response or {"error": ...}. */
 char *capy_apple_numeric(const char *json);
+char *capy_apple_native_caption(const char *json);
+char *capy_apple_numeric_labels(const char *json);
+char *capy_apple_document_appearance(const char *json);
 /* Stateless shared tagged-color forms, previews in the requested display space and gradient
    samples. Owned JSON result; same error and lifetime rules as numeric. */
 char *capy_apple_color_ui(const char *json);

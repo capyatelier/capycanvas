@@ -35,18 +35,17 @@ import org.json.JSONObject
                 Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).clip(ControlShape).background(colors.input)
                     .focusProperties { canFocus = false }.testTag("image-size-resample")
                     .opensWindowlessMenu(resampleMenu, view.getString("resample_label")) { open ->
-                        actions.endTyping()
-                        open(obj("sections" to JSONArray().put(JSONArray(resamples.map { choice ->
+                        if (actions.endTyping()) open(obj("sections" to JSONArray().put(JSONArray(resamples.map { choice ->
                             val resample = choice.getString("resample")
                             obj("label" to choice.getString("label"), "selected" to (resample == chosen),
-                                "action" to obj("type" to "image_size", "action" to obj("op" to "resample", "resample" to resample)))
+                                "command" to obj("op" to "resample", "resample" to resample))
                         }))))
                     }.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(resamples.first { it.getString("resample") == chosen }.getString("label"), Modifier.weight(1f),
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     SharedIcon("chevron-down", null, Modifier.size(12.dp))
                 }
-                WindowlessMenuHost(host, resampleMenu)
+                WindowlessMenuHost(host, resampleMenu, actions::choose)
             }
         }
     }

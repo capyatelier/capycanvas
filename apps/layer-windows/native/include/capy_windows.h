@@ -7,6 +7,8 @@
 extern "C" {
 #endif
 typedef struct CapyHost CapyHost;
+typedef struct CapyLaunch CapyLaunch;
+typedef struct CapyLocalization CapyLocalization;
 typedef struct CapyPreview CapyPreview;
 /* Render-owner-only request/poll, nonblocking GPU readback. CPU-only packet
    transfers to a worker and is freed once; buffers live until that free. */
@@ -28,9 +30,15 @@ typedef struct CapyPointer {
     uint32_t flags; /* shared predicted/primary/barrel/inverted bits; 0x40 indirect pen */
 } CapyPointer;
 
-/* Create on XAML thread with Microsoft ISwapChainPanelNative interface pointer.
-   Then transfer exclusive ownership to the canvas thread. */
-__declspec(dllimport) CapyHost* capy_create(void* panel, uint32_t width, uint32_t height, float scale);
+/* Prepare on the startup worker; view borrows launch storage until launch_free.
+   Create on XAML with ISwapChainPanelNative, then transfer exclusive canvas
+   ownership to the render worker. A launch is adopted at most once. */
+__declspec(dllimport) CapyLaunch* capy_launch(const char* tags);
+__declspec(dllimport) const char* capy_launch_view(const CapyLaunch*);
+__declspec(dllimport) void capy_launch_free(CapyLaunch*);
+__declspec(dllimport) CapyLocalization* capy_launch_localization(const CapyLaunch*);
+__declspec(dllimport) void capy_localization_free(CapyLocalization*);
+__declspec(dllimport) CapyHost* capy_create(void* panel, uint32_t width, uint32_t height, float scale, CapyLaunch*);
 /* Prepare on the render worker, then park it for the first UI-thread capy_resize.
    Every subsequent resize also requires exclusive ownership on the UI thread. */
 __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost*);
@@ -66,9 +74,12 @@ __declspec(dllimport) float capy_navigator_aspect(uint32_t document_width, uint3
    Field output is exactly side*side*4 writable RGBA8 bytes, side in 1..=2048. */
 __declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint32_t projection);
 __declspec(dllimport) CapyPreview* capy_document_preview(CapyHost* host, char const* json);
-__declspec(dllimport) char* capy_export_draft(char const* json);
+__declspec(dllimport) char* capy_export_draft(CapyLocalization const* localization, char const* json);
 __declspec(dllimport) bool capy_color_raster(uint32_t side, float hue, uint32_t projection, uint32_t space, bool guide, uint8_t* output, size_t length);
-__declspec(dllimport) char* capy_color_ui(char const* json);
+__declspec(dllimport) char* capy_native_caption(CapyLocalization const* localization, char const* json);
+__declspec(dllimport) char* capy_numeric_labels(CapyLocalization const* localization, char const* json);
+__declspec(dllimport) char* capy_document_appearance(CapyLocalization const* localization, char const* json);
+__declspec(dllimport) char* capy_color_ui(CapyLocalization const* localization, char const* json);
 __declspec(dllimport) bool capy_color_mapped_field(uint32_t side, char const* input, uint8_t* output, size_t length);
 /* Flush/join on the render owner before destroying the callback context.
    Cleanup is required even after a renderer failure. */
@@ -107,8 +118,8 @@ __declspec(dllimport) bool capy_document_tabs_compact(float width, size_t count)
 __declspec(dllimport) char* capy_document_tab_slide(const char* json);
 __declspec(dllimport) char* capy_proof_dial(const char* json);
 __declspec(dllimport) bool capy_proof_texture(uint32_t edge, uint8_t* output, size_t length);
-__declspec(dllimport) char* capy_number(const char* json);
-__declspec(dllimport) char* capy_toolbar_ui(const char* json);
+__declspec(dllimport) char* capy_number(const CapyLocalization*, const char* json);
+__declspec(dllimport) char* capy_toolbar_ui(const CapyLocalization*, const char* json);
 __declspec(dllimport) void capy_string_free(char*);
 #ifdef __cplusplus
 }

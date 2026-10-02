@@ -43,6 +43,7 @@ import org.json.JSONObject
 /** Native focus, IME and modal capture; Rust owns results, applicability and execution. */
 @Composable internal fun CommandSearch(host: CanvasHost) {
     val view = host.commandSearch ?: return
+    val copy = host.catalog?.getJSONObject("native_copy")?.getJSONObject("search") ?: return
     val colors = LocalPalette.current.onGlass
     val style = host.catalog?.objectOrNull("command_search_style")
     fun metric(name: String, default: Int) = (style?.optInt(name, default) ?: default).dp
@@ -66,8 +67,10 @@ import org.json.JSONObject
     fun send(action: JSONObject) = host.dispatch(obj("type" to "command_search", "action" to action))
     fun close() = send(obj("type" to "close"))
     fun back() = send(obj("type" to "back"))
-    fun commit() = send(obj("type" to "commit", "text" to text.text))
+    fun commit() { if (text.composition == null) send(obj("type" to "commit", "text" to text.text)) }
+    DisposableEffect(focus) { onDispose { host.textComposition.clear(focus) } }
     LaunchedEffect(parameterId) {
+        host.textComposition.clear(focus)
         val value = parameter?.getJSONObject("parameter")?.getString("text") ?: view.optString("query")
         text = TextFieldValue(value, if (parameter != null) TextRange(0, value.length) else TextRange(value.length))
     }
@@ -77,7 +80,7 @@ import org.json.JSONObject
         if (configuration.keyboard == Configuration.KEYBOARD_NOKEYS) keyboard?.show()
     }
     LaunchedEffect(selected, parameterId) { if (parameter == null && selected in results.indices) list.scrollToItem(selected) }
-    Dialog(onDismissRequest = { back() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    Dialog(onDismissRequest = { if (text.composition == null) back() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val root = LocalView.current
         val window = (root.parent as DialogWindowProvider).window
         DisposableEffect(window) {
@@ -97,7 +100,8 @@ import org.json.JSONObject
                     .panelShadow(12.dp, shape).glass(shape) { root.screenOffset(editor) }
                     .onPreviewKeyEvent { event ->
                         val native = event.nativeKeyEvent
-                        if (native.action == KeyEvent.ACTION_UP) {
+                        if (host.textComposition.owns(native)) false
+                        else if (native.action == KeyEvent.ACTION_UP) {
                             host.key(native)
                             // Dialog also treats Escape-up as dismissal. Consume
                             // our navigation release so Back happens exactly once.
@@ -106,7 +110,6 @@ import org.json.JSONObject
                                 (parameter == null && native.keyCode in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN))
                         }
                         else if (native.keyCode == KeyEvent.KEYCODE_ESCAPE) { back(); true }
-                        else if (text.composition != null) false
                         else when (native.keyCode) {
                             KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> if (entryFocused) { commit(); true } else false
                             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> if (parameter == null) {
@@ -122,26 +125,27 @@ import org.json.JSONObject
                             SharedIcon("search", null)
                             BasicTextField(text, onValueChange = {
                                 text = it
+                                host.textComposition.update(focus, text, entryFocused)
                                 if (parameter == null) send(obj("type" to "query", "text" to it.text))
                             }, singleLine = true, textStyle = LocalTextStyle.current.copy(color = colors.text), cursorBrush = SolidColor(colors.accent),
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, autoCorrectEnabled = false), keyboardActions = KeyboardActions(onSearch = { commit() }),
-                                modifier = Modifier.weight(1f).focusRequester(focus).onFocusChanged { entryFocused = it.isFocused }.testTag("command-search").semantics { contentDescription = parameter?.getString("label") ?: "Search commands" },
-                                decorationBox = { inner -> Box { if (text.text.isEmpty()) Text(if (parameter == null) "Search commands" else "Enter a value", color = colors.secondary); inner() } })
+                                modifier = Modifier.weight(1f).focusRequester(focus).onFocusChanged { entryFocused = it.isFocused; host.textComposition.update(focus, text, entryFocused) }.testTag("command-search").semantics { contentDescription = parameter?.getString("label") ?: copy.getString("search_commands") },
+                                decorationBox = { inner -> Box { if (text.text.isEmpty()) Text(if (parameter == null) copy.getString("search_commands") else copy.getString("enter_value"), color = colors.secondary); inner() } })
                             parameter?.getJSONObject("parameter")?.getJSONObject("numeric")?.optString("unit")?.takeIf { it.isNotEmpty() }?.let { Text(it, color = colors.secondary) }
                         }
-                        IconButton({ close() }, Modifier.size(rowHeight).testTag("command-close").semantics { contentDescription = "Close command search" }) { SharedIcon("close", null) }
+                        IconButton({ close() }, Modifier.size(rowHeight).testTag("command-close").semantics { contentDescription = copy.getString("close_search") }) { SharedIcon("close", null) }
                     }
                     if (parameter == null) {
-                        if (results.isEmpty()) Text("No matching commands", Modifier.padding(inset), color = colors.secondary)
+                        if (results.isEmpty()) Text(copy.getString("no_matches"), Modifier.padding(inset), color = colors.secondary)
                         else LazyColumn(Modifier.weight(1f, fill = false).fillMaxWidth(), state = list) {
                             itemsIndexed(results, key = { _, command -> command.getString("id") }) { index, command ->
                                 val enabled = command.optBoolean("enabled")
                                 Row(Modifier.fillMaxWidth().heightIn(min = rowHeight).background(if (index == selected) colors.active else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(6.dp))
-                                    .testTag("command-result-$index").semantics { this.selected = index == selected; if (!enabled) stateDescription = "Unavailable" }
+                                    .testTag("command-result-$index").semantics { this.selected = index == selected; if (!enabled) stateDescription = command.getString("disabled_reason") }
                                     .clickable { send(obj("type" to "execute", "id" to command.getString("id"))) }.padding(horizontal = inset),
                                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(gap)) {
                                     Text(command.getString("label"), Modifier.weight(1f), color = if (enabled) colors.text else colors.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    if (command.optBoolean("selected")) SharedIcon("check", "On")
+                                    if (command.optBoolean("selected")) SharedIcon("check", copy.getString("selected"))
                                     command.optString("shortcut").takeUnless { it.isEmpty() || it == "null" }?.let { Text(it, color = colors.secondary, maxLines = 1) }
                                 }
                             }

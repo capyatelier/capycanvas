@@ -116,7 +116,7 @@ function Dismiss {
 }
 function WindowCommand([string]$Id) {
     # Keep mouse hover away from the compact flyout while UIA opens its submenu.
-    $bounds=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+    $bounds=(Control 'drawing-canvas').Current.BoundingRectangle
     [CapyRowPointer]::Hover([int]($bounds.Right-16),[int]($bounds.Bottom-16))
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     Invoke $Id
@@ -125,7 +125,7 @@ function Toggle-Zen {
     $command=@((Model).state.commands|Where-Object id -eq 'zen_mode')[0]
     $button=Find $command.label -Name -Type ([System.Windows.Automation.ControlType]::Button)
     if($button){$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
-    else{(Control 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key(0x09)}
+    else{(Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key(0x09)}
 }
 function Undo-Redo([string]$Before,[string]$After) {
     WindowCommand 'undo_workspace'
@@ -248,7 +248,7 @@ try {
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     $null=Settled-Layout
     $script:case='canvas-native-cursor'
-    $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+    $canvas=(Control 'drawing-canvas').Current.BoundingRectangle
     $model=Model;$area=$model.layout.work_area;$density=$canvas.Width/$model.layout.viewport[0]
     $canvasX=[int]($canvas.X+($area.x+$area.width*.5)*$density)
     $canvasY=[int]($canvas.Y+($area.y+$area.height*.5)*$density)
@@ -284,7 +284,7 @@ try {
     $script:case='immediate-grip'
     $before=Settled-Layout
     $at=Point 'ribbon-grip-toolbar'
-    $gripDestination=Point 'Drawing canvas' -Name
+    $gripDestination=Point 'drawing-canvas'
     [CapyRowPointer]::Down($Device,$at.x,$at.y)
     Start-Sleep -Milliseconds 35
     Move-To $gripDestination
@@ -328,7 +328,7 @@ try {
     Tap 'column-icon-sizes'
     Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Short icon tap did not close its drawer'
     $at=Point 'column-icon-sizes'
-    $destination=Point 'Drawing canvas' -Name
+    $destination=Point 'drawing-canvas'
     $script:case='column-early';Early-Motion 'column-icon-sizes' $destination
     $script:case='column-release';Held-Release 'column-icon-sizes'
     $script:case='column-drag';Held-Drag 'column-icon-sizes' $destination

@@ -94,7 +94,7 @@ impl DocumentService {
     fn activate(&mut self, host: &mut NativeHost, activation: Activation) {
         if self.window.gpu.is_none() {
             host.error =
-                Some("Painting is unavailable. This drawing can still be saved or closed.".into());
+                Some(layer_ui::DocumentTransportRefusal::PaintingUnavailable.message(host.session.localization()).to_string());
             return;
         }
         self.activating = true;
@@ -119,7 +119,7 @@ impl DocumentService {
     }
     fn select(&mut self, host: &mut NativeHost, id: u64) -> Result<(), String> {
         if id != self.window.documents.selected() && !self.idle() {
-            return Err("Finish the current operation before switching drawings".into());
+            return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(host.session.localization()).to_string());
         }
         self.switch(host, id, false)
     }
@@ -187,7 +187,7 @@ impl DocumentService {
         } = restored;
         let checked = (|| {
             if self.active.is_some() || self.activating || !host.session.can_park_document() {
-                return Err("Finish the current operation before restoring this drawing".into());
+                return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());
             }
             Self::matches(host, identity.0, identity.1)?;
             if host
@@ -199,12 +199,12 @@ impl DocumentService {
                 .map(|g| g.device())
                 != candidate.engine().backend().0.as_ref().map(|g| g.device())
             {
-                return Err("The GPU changed during recovery; try again".into());
+                return Err(layer_ui::DocumentTransportRefusal::RecoveryGpuChanged.message(host.session.localization()).to_string());
             }
             self.window.documents.admit(
                 &host.session.retained_document_tiles(),
                 &candidate.capture_project_recovery()?,
-            )?;
+            ).map_err(|reason| reason.message(host.session.localization()))?;
             candidate.mark_recovered();
             candidate.inherit_window_state(&host.session)?;
             candidate.inherit_initial_drawing_tools(&host.session)?;
@@ -250,8 +250,7 @@ impl DocumentService {
                         #[cfg(target_os = "windows")]
                         if crate::device::removed(gpu.device()) {
                             host.error = Some(
-                                "The GPU changed while switching drawings; restart the canvas"
-                                    .into(),
+                                layer_ui::DocumentTransportRefusal::SwitchGpuChanged.message(host.session.localization()).to_string(),
                             );
                             host.invalidate_snapshot();
                             return Ok(());
@@ -281,7 +280,7 @@ impl DocumentService {
         action: Action,
     ) -> Result<(), String> {
         if !self.idle() || self.close_window || host.session.state().document_file.close_ready {
-            return Err("Finish the current operation before changing drawings".into());
+            return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()).to_string());
         }
         match action {
             Action::Select { id } => self.select(host, id)?,

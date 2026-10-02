@@ -134,7 +134,7 @@ impl ColorLibrary {
 
 #[test]
 fn reorders_are_atomic_reversible_and_preserve_color_identity() {
-    let mut library = ColorLibrary::default();
+    let mut library = ColorLibrary::canonical();
     for name in ["One", "Two", "Three", "Four"] {
         library
             .apply(ColorLibraryAction::Store {
@@ -201,7 +201,7 @@ fn reorders_are_atomic_reversible_and_preserve_color_identity() {
 
 #[test]
 fn previews_match_committed_order_in_both_directions() {
-    let mut library = ColorLibrary::default();
+    let mut library = ColorLibrary::canonical();
     for name in ["A", "B", "C", "D", "E"] {
         library
             .apply(ColorLibraryAction::Store {

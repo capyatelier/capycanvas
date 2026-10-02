@@ -96,7 +96,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                 if session.state().document_file.epoch != epoch as u64
                     || session.engine().document().revision != revision as u64
                 {
-                    return Err("The document changed; review those changes before opening".into());
+                    return Err(layer_ui::DocumentTransportRefusal::OpenSnapshotChanged.message(session.localization()).to_string());
                 }
                 Payload::Open {
                     environment: Some(Environment::new(
@@ -291,8 +291,9 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
             out.get_ref().sync_all().map_err(error)
         }
         Payload::Export { export, control } => {
+            let localization = crate::launch::active_localization()?;
             let out = input.ok_or("Missing export output")?;
-            export.write(&out, control.clone())?;
+            export.write(&out, control.clone()).map_err(|reason| reason.message(localization))?;
             out.sync_all().map_err(error)
         }
         Payload::Open { .. } => {
@@ -453,12 +454,13 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportOptions(
     value: JString,
 ) {
     let result = (|| {
+        let localization = crate::launch::active_localization()?;
         let selected: layer_ui::ExportRecipe =
             serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
         let Payload::Export { export, .. } = &mut unsafe { crate::inspection::borrow::<Task>(handle) }.payload else {
             return Err("Export task is no longer configurable".into());
         };
-        export.configure(selected)
+        export.configure(selected).map_err(|reason| reason.message(localization))
     })();
     fail(&mut env, result);
 }

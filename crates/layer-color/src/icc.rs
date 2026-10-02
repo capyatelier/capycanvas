@@ -20,7 +20,7 @@ use profiles::*;
 mod description;
 mod output;
 mod working;
-pub use description::{profile_description, suggested_working_space};
+pub use description::{profile_description, profile_description_optional, suggested_working_space};
 pub use output::{OutputStatistics, WorkingEncoder};
 pub use profiles::{gray_profile, profile_bytes, profile_channels};
 pub use working::WorkingDecoder;

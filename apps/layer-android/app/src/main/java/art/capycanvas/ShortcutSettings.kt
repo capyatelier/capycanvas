@@ -57,14 +57,8 @@ internal fun searchChord(event: android.view.KeyEvent): JSONObject? {
 
 private fun JSONObject.nullableString(key: String) = if (isNull(key)) null else optString(key)
 
-private fun subtitle(row: JSONObject): String {
-    val scope = when (val value = row.optString("scope")) {
-        "" -> ""
-        "Canvas" -> "On the canvas"
-        else -> "With ${value.lowercase()} tools"
-    }
-    return listOf(row.optString("detail"), scope).filter { it.isNotEmpty() }.joinToString(" · ")
-}
+private fun subtitle(row: JSONObject): String =
+    listOf(row.optString("detail"), row.optString("scope_caption")).filter { it.isNotEmpty() }.joinToString(" · ")
 
 @Composable private fun GroupTitle(title: String, modifier: Modifier = Modifier) {
     Text(title, modifier.padding(horizontal = 4.dp), fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
@@ -111,7 +105,8 @@ private fun subtitle(row: JSONObject): String {
 }
 
 @Composable private fun ResetButton(tag: String, onClick: () -> Unit) {
-    IconButton(onClick, Modifier.testTag(tag)) { SharedIcon("reset", "Reset to default", Modifier.size(20.dp)) }
+    val host = LocalCanvasHost.current
+    IconButton(onClick, Modifier.testTag(tag)) { SharedIcon("reset", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("reset_default"), Modifier.size(20.dp)) }
 }
 
 @Composable private fun Dropdown(tag: String, label: String, options: List<String>, selected: Int, choose: (Int) -> Unit) {
@@ -137,12 +132,12 @@ private fun subtitle(row: JSONObject): String {
     val page = view.getJSONObject("shortcut_page")
     Keymap(host, view.getJSONObject("keymap"))
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        GroupTitle("Shortcuts")
+        GroupTitle(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("title"))
         ShortcutFilters(host, view, page)
         if (!page.getBoolean("filtering")) Card(Modifier.testTag("shortcut-categories"), page.array("categories").objects().map { category ->
             @Composable {
                 val id = category.getString("id")
-                SettingRow(id, "shortcut-category-$id", onClick = { host.preference(obj("type" to "shortcut_category", "id" to id)) }) {
+                SettingRow(category.getString("label"), "shortcut-category-$id", onClick = { host.preference(obj("type" to "shortcut_category", "id" to id)) }) {
                     Value(category.getInt("count").toString())
                     Chevron()
                 }
@@ -153,7 +148,7 @@ private fun subtitle(row: JSONObject): String {
     if (page.getBoolean("filtering")) {
         val modifiers = page.array("modifiers").objects().filter { it.getBoolean("visible") }
         if (modifiers.isNotEmpty()) Column(Modifier.testTag("modifier-results"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            GroupTitle(MODIFIER_SECTION)
+            GroupTitle(page.array("categories").objects().first { it.getString("id") == MODIFIER_SECTION }.getString("label"))
             Card(rows = modifiers.map { @Composable { ModifierRow(host, it) } })
         }
         ShortcutResults(host, view, grouped = false)
@@ -167,11 +162,12 @@ private fun subtitle(row: JSONObject): String {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         CoreTextField(view.optString("shortcut_query"), { host.preference(obj("type" to "search_shortcuts", "query" to it)) },
             modifier = Modifier.weight(1f).testTag("shortcuts-search").onPreviewKeyEvent { event ->
+                if (host.textComposition.owns(event.nativeKeyEvent)) return@onPreviewKeyEvent false
                 val chord = searchChord(event.nativeKeyEvent) ?: return@onPreviewKeyEvent false
                 host.preference(obj("type" to "search_shortcut_key", "chord" to chord))
                 true
             }, height = 48.dp, focusRequest = keySearch,
-            placeholder = { Text("Search or press a shortcut") }, leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) })
+            placeholder = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("search_or_press")) }, leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) })
         val contexts = page.array("contexts").objects()
         val context = page.nullableString("context")
         val selected = contexts.indexOfFirst { it.nullableString("category") == context }.coerceAtLeast(0)
@@ -231,10 +227,10 @@ private fun subtitle(row: JSONObject): String {
     val page = view.getJSONObject("shortcut_page")
     if (category == MODIFIER_SECTION) {
         Column(Modifier.testTag("modifier-keys"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Description("Hold a key to use a tool or mode until you let go.")
+            Description(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("hold_key_help"))
             Card(rows = page.array("modifiers").objects().filter { it.getBoolean("visible") }.map { @Composable { ModifierRow(host, it) } } +
                 listOf(@Composable {
-                    SettingRow("Add Modifier Key", "add-modifier-key", onClick = { host.preference(obj("type" to "add_modifier_key")) }) {
+                    SettingRow(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("add_modifier"), "add-modifier-key", onClick = { host.preference(obj("type" to "add_modifier_key")) }) {
                         SharedIcon("plus", null, Modifier.size(20.dp))
                     }
                 }))
@@ -255,7 +251,7 @@ private fun subtitle(row: JSONObject): String {
         Card(rows = listOf<@Composable () -> Unit>({
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).toggleable(!perTool, role = Role.Switch) { host.preference(same(!it)) }
                 .testTag("$prefix-same").padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Same for every tool", Modifier.weight(1f))
+                Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("same_all_tools"), Modifier.weight(1f))
                 Switch(!perTool, onCheckedChange = null)
             }
         }) + editor.array("actions").objects().map { action ->
@@ -288,10 +284,10 @@ private fun subtitle(row: JSONObject): String {
             Text(capture.optString("shortcut"), Modifier.testTag("shortcut-recording"))
             if (notice.isNotEmpty()) Text(notice, color = colors.settingsSecondary, fontSize = 13.sp, lineHeight = 18.sp)
         }
-        TextButton({ host.preference(obj("type" to "cancel_shortcut")) }, Modifier.testTag("cancel-shortcut")) { Text("Cancel") }
+        TextButton({ host.preference(obj("type" to "cancel_shortcut")) }, Modifier.testTag("cancel-shortcut")) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
         Button({ host.preference(obj("type" to "confirm_shortcut", "replace" to conflict)) }, Modifier.testTag("confirm-shortcut"),
             enabled = capture.objectOrNull("chord") != null && capture.isNull("error")) {
-            Text(when { existing -> "Open"; conflict -> "Reassign"; else -> "Add" })
+            Text(when { existing -> host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("open"); conflict -> host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("reassign"); else -> host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("add") })
         }
     }
 }
@@ -304,7 +300,7 @@ private fun subtitle(row: JSONObject): String {
     val visible = LocalPreferencesOpen.current
     LaunchedEffect(visible, capture != null) { if (visible && capture != null) focus.requestFocus() }
     Column(Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
-        if (capture != null && event.key != Key.Back) { host.key(event.nativeKeyEvent); true } else false
+        if (capture != null && event.key != Key.Back && !host.textComposition.owns(event.nativeKeyEvent)) { host.key(event.nativeKeyEvent); true } else false
     }.focusRequester(focus).focusable(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         editor.optString("description").takeIf { it.isNotEmpty() }?.let {
             Description(it, Modifier.testTag("shortcut-editor-description"), TextAlign.Center)
@@ -322,7 +318,7 @@ private fun subtitle(row: JSONObject): String {
                 @Composable {
                     SettingRow(binding.toString(), "shortcut-binding-row-$index") {
                         IconButton({ host.preference(obj("type" to "remove_shortcut", "id" to id, "index" to index)) }, Modifier.testTag("remove-shortcut-$index")) {
-                            SharedIcon("delete", "Remove shortcut", Modifier.size(20.dp))
+                            SharedIcon("delete", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("remove_shortcut"), Modifier.size(20.dp))
                         }
                     }
                 }
@@ -330,7 +326,7 @@ private fun subtitle(row: JSONObject): String {
             val last: List<@Composable () -> Unit> = when {
                 capture != null -> listOf({ RecordingRow(host, capture) })
                 editor.getBoolean("can_add") -> listOf({
-                    SettingRow("Add Shortcut", "add-shortcut", onClick = { host.preference(obj("type" to "begin_shortcut", "id" to id)) }) {
+                    SettingRow(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("add_shortcut"), "add-shortcut", onClick = { host.preference(obj("type" to "begin_shortcut", "id" to id)) }) {
                         SharedIcon("plus", null, Modifier.size(20.dp))
                     }
                 })
@@ -340,8 +336,8 @@ private fun subtitle(row: JSONObject): String {
         }
         val gestures = editor.array("gestures").values()
         if (gestures.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            GroupTitle("Pen and Touch")
-            Description("Change these on the Pen & Input page.")
+            GroupTitle(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("pen_touch"))
+            Description(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("pen_page_help"))
             Card(rows = gestures.map { gesture -> @Composable { SettingRow(gesture.toString(), "shortcut-gesture-$gesture") } })
         }
     }
@@ -368,16 +364,17 @@ private fun subtitle(row: JSONObject): String {
 
 @Composable private fun SheetFrame(title: String, tag: String, close: () -> Unit, keys: (androidx.compose.ui.input.key.KeyEvent) -> Boolean,
     content: @Composable ColumnScope.() -> Unit) {
-    Dialog(close) {
+    val host = LocalCanvasHost.current
+    Dialog({ if (!host.textComposition.active) close() }) {
         val focus = remember { FocusRequester() }
         LaunchedEffect(Unit) { focus.requestFocus() }
         Surface(shape = RoundedCornerShape(16.dp), color = LocalPalette.current.settingsBackground) {
-            Column(Modifier.widthIn(max = 520.dp).heightIn(max = 680.dp).testTag(tag).onPreviewKeyEvent(keys)
+            Column(Modifier.widthIn(max = 520.dp).heightIn(max = 680.dp).testTag(tag).onPreviewKeyEvent { if (host.textComposition.owns(it.nativeKeyEvent)) false else keys(it) }
                 .focusRequester(focus).focusable().padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Box(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp)) {
                     Text(title, Modifier.align(Alignment.Center).padding(horizontal = 56.dp).testTag("$tag-title"),
                         fontSize = 18.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    IconButton(close, Modifier.align(Alignment.CenterEnd)) { SharedIcon("close", "Close", Modifier.size(20.dp)) }
+                    IconButton(close, Modifier.align(Alignment.CenterEnd)) { SharedIcon("close", host.bootstrap!!.getJSONObject("common").getString("close"), Modifier.size(20.dp)) }
                 }
                 content()
             }
@@ -388,10 +385,10 @@ private fun subtitle(row: JSONObject): String {
 @Composable internal fun ShortcutDialogs(host: CanvasHost, view: JSONObject) {
     val capture = view.objectOrNull("capture")
     if (capture?.getString("id") == MODIFIER_CAPTURE) {
-        SheetFrame("New Modifier Key", "modifier-key", { host.preference(obj("type" to "cancel_shortcut")) }, { event ->
+        SheetFrame(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("new_modifier"), "modifier-key", { host.preference(obj("type" to "cancel_shortcut")) }, { event ->
             if (event.key == Key.Back) false else { host.key(event.nativeKeyEvent); true }
         }) {
-            Description("Press the key or button to hold.", Modifier.padding(horizontal = 16.dp), TextAlign.Center)
+            Description(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("press_hold_key"), Modifier.padding(horizontal = 16.dp), TextAlign.Center)
             Box(Modifier.padding(horizontal = 16.dp)) { Card(rows = listOf { RecordingRow(host, capture) }) }
         }
     }
@@ -403,10 +400,10 @@ private fun subtitle(row: JSONObject): String {
         Description(picker.getString("description"), Modifier.padding(horizontal = 16.dp).testTag("action-picker-description"), TextAlign.Center)
         Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CoreTextField(picker.optString("query"), { host.preference(obj("type" to "search_action_picker", "query" to it)) },
-                Modifier.weight(1f).testTag("action-picker-search"), height = 48.dp, placeholder = { Text("Search actions") },
+                Modifier.weight(1f).testTag("action-picker-search"), height = 48.dp, placeholder = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("search_actions")) },
                 leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) })
             if (picker.getBoolean("modified")) TextButton({ host.preference(obj("type" to "reset_trigger", "trigger" to picker.getString("trigger"))) },
-                Modifier.testTag("action-picker-reset")) { Text("Reset") }
+                Modifier.testTag("action-picker-reset")) { Text(host.bootstrap!!.getJSONObject("common").getString("reset")) }
         }
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -415,16 +412,15 @@ private fun subtitle(row: JSONObject): String {
                     Box(Modifier.size(20.dp)) { if (selected) SharedIcon("check", null, Modifier.fillMaxSize()) }
                 }
             }
-            val query = picker.optString("query").trim().lowercase()
             val sections = picker.array("sections").objects()
-            if ("nothing".contains(query)) Card(rows = listOf(choice("", "Nothing", "", picker.getBoolean("nothing"))))
+            if (picker.getBoolean("nothing_visible")) Card(rows = listOf(choice("", picker.getString("nothing_label"), "", picker.getBoolean("nothing"))))
             for (section in sections) Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 GroupTitle(section.getString("title"))
                 Card(rows = section.array("actions").objects().map {
                     choice(it.getString("id"), it.getString("label"), it.optString("detail"), it.getBoolean("selected"))
                 })
             }
-            if (sections.isEmpty() && !"nothing".contains(query)) EmptyStatus(obj("title" to "No Results Found", "description" to "Try a different search."))
+            if (sections.isEmpty() && !picker.getBoolean("nothing_visible")) EmptyStatus(obj("title" to host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("no_results"), "description" to host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("search_help")))
         }
     }
 }
@@ -464,20 +460,20 @@ private fun subtitle(row: JSONObject): String {
     val presets = keymap.array("presets").objects()
     val selected = presets.firstOrNull { it.getString("id") == keymap.getString("selected") }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        GroupTitle("Keymap")
+        GroupTitle(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("keymap"))
         Card(rows = listOf {
             Box {
-                SettingRow("Preset", "keymap-preset", if (keymap.optBoolean("outdated")) "Updated since you chose it" else "", onClick = { choosing = true }) {
+                SettingRow(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("preset"), "keymap-preset", if (keymap.optBoolean("outdated")) host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("updated") else "", onClick = { choosing = true }) {
                     Value(selected?.getString("title") ?: "")
                     SharedIcon("chevron-down", null, Modifier.size(16.dp), tint = colors.settingsSecondary)
                     Box {
-                        IconButton({ menu = true }, Modifier.testTag("keymap-menu")) { SharedIcon("more", "Keymap options", Modifier.size(20.dp)) }
+                        IconButton({ menu = true }, Modifier.testTag("keymap-menu")) { SharedIcon("more", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("keymap_options"), Modifier.size(20.dp)) }
                         DropdownMenu(menu && LocalPreferencesOpen.current, { menu = false }, containerColor = colors.settingsCard) {
                             for ((label, tag, action) in listOf(
-                                Triple("Import…", "keymap-import", obj("type" to "choose_keymap_file")),
-                                Triple("Export…", "keymap-export", obj("type" to "export_keymap")),
-                                Triple("Differences…", "keymap-differences", obj("type" to "keymap_details", "open" to true)),
-                                Triple("Reset All Shortcuts", "keymap-reset-all", obj("type" to "reset_all_shortcuts")))) {
+                                Triple(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("import_menu"), "keymap-import", obj("type" to "choose_keymap_file")),
+                                Triple(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("export_menu"), "keymap-export", obj("type" to "export_keymap")),
+                                Triple(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("differences"), "keymap-differences", obj("type" to "keymap_details", "open" to true)),
+                                Triple(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("reset_all"), "keymap-reset-all", obj("type" to "reset_all_shortcuts")))) {
                                 DropdownMenuItem({ Text(label) }, { menu = false; host.preference(action) }, Modifier.testTag(tag))
                             }
                         }
@@ -502,27 +498,27 @@ private fun subtitle(row: JSONObject): String {
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Description(keymap.getString("source"))
                 val differences = keymap.array("differences").objects()
-                Card(rows = if (differences.isEmpty()) listOf { SettingRow("No differences", "keymap-no-differences", "This keymap uses the CapyCanvas defaults.") }
+                Card(rows = if (differences.isEmpty()) listOf { SettingRow(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("no_differences"), "keymap-no-differences", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("defaults_help")) }
                     else differences.mapIndexed { index, item -> @Composable { SettingRow(item.getString("trigger"), "keymap-difference-$index", item.getString("note")) } })
             }
         }
     }
     keymap.objectOrNull("import")?.let { preview ->
         AlertDialog({ host.preference(obj("type" to "cancel_keymap_import")) },
-            confirmButton = { TextButton({ host.preference(obj("type" to "confirm_keymap_import")) }, Modifier.testTag("keymap-confirm-import")) { Text("Import") } },
-            dismissButton = { TextButton({ host.preference(obj("type" to "cancel_keymap_import")) }) { Text("Cancel") } },
+            confirmButton = { TextButton({ host.preference(obj("type" to "confirm_keymap_import")) }, Modifier.testTag("keymap-confirm-import")) { Text(host.bootstrap!!.getJSONObject("common").getString("import")) } },
+            dismissButton = { TextButton({ host.preference(obj("type" to "cancel_keymap_import")) }) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } },
             title = { Text("Import " + preview.getString("title") + "?") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()).testTag("keymap-import-preview")) {
                     var any = false
-                    for ((title, key) in listOf("Added" to "added", "Changed" to "changed", "Removed" to "removed", "Not available" to "unavailable")) {
+                    for ((title, key) in listOf(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("added") to "added", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("changed") to "changed", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("removed") to "removed", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("not_available") to "unavailable")) {
                         val lines = preview.array(key).values()
                         if (lines.isEmpty()) continue
                         any = true
                         Text("$title (${lines.size})", fontWeight = FontWeight.SemiBold)
                         lines.forEach { Text(it.toString(), fontSize = 13.sp) }
                     }
-                    if (!any) Text("No shortcuts change.")
+                    if (!any) Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("no_changes"))
                 }
             })
     }

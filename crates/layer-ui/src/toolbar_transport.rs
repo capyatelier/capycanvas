@@ -60,7 +60,7 @@ pub enum ToolbarUiRequest {
     },
 }
 
-pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String> {
+pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<serde_json::Value, String> {
     use serde_json::json;
     Ok(match request {
         ToolbarUiRequest::SliderPreview {
@@ -70,7 +70,7 @@ pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String
             length,
             extent,
         } => json!(slider_preview_layout(
-            control, style, value, length, extent
+            control, style, value, length, extent, localizer
         )?),
         ToolbarUiRequest::SliderBookmarkValue {
             control,
@@ -78,7 +78,7 @@ pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String
             position,
             travel,
         } => json!(slider_bookmark_value(
-            control, &values, position, travel
+            control, &values, position, travel, localizer
         )?),
         ToolbarUiRequest::OptionsLayout {
             width,
@@ -119,7 +119,7 @@ pub fn toolbar_ui(request: ToolbarUiRequest) -> Result<serde_json::Value, String
             units,
         } => {
             let control = &request.control;
-            let mut result = control.resolve(request.value, request.operation)?;
+            let mut result = control.resolve(request.value, request.operation).map_err(|reason| reason.message(localizer))?;
             if compact {
                 result.text = if units {
                     control.compact_text(result.value)
@@ -151,7 +151,7 @@ fn drawer_source_corners_are_a_stateless_toolbar_query() {
             "container": {"x": 0., "y": 4., "width": 60., "height": 42.},
         }))
         .unwrap(),
-    )
+     &Localizer::shared(UiLanguage::English))
     .unwrap();
     assert_eq!(corners, serde_json::json!([false, false, true, true]));
 }
@@ -166,7 +166,7 @@ fn automatic_tab_names_are_a_stateless_toolbar_query() {
                 "widths": [[120., 36.], [90., 36.], [140., 36.]],
             }))
             .unwrap(),
-        )
+         &Localizer::shared(UiLanguage::English))
         .unwrap()
     };
     assert_eq!(request(108.), serde_json::json!([false, false, false]));

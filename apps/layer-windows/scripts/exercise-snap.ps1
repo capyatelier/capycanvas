@@ -46,7 +46,7 @@ function Ready {
     Wait-Until {
         $model=Model;$client=[CapySnapWindow+Rect]::new()
         if(!$model -or [CapySnapWindow]::IsIconic($handle) -or ![CapySnapWindow]::GetClientRect($handle,[ref]$client)){return $false}
-        $canvas=Find 'Drawing canvas' -Name;$origin=[CapyRowPointer+Point]::new()
+        $canvas=Find 'drawing-canvas';$origin=[CapyRowPointer+Point]::new()
         if(!$canvas -or ![CapyRowPointer]::ClientToScreen($handle,[ref]$origin)){return $false}
         $bounds=$canvas.Current.BoundingRectangle
         $model.canvas_ready -and $model.brush_ready -and
@@ -95,7 +95,7 @@ function Check-Paint([string]$Name) {
     $script:sample=[Drawing.Rectangle]::new([int]($area[0]+($area[2]-$width)/2),[int]($area[1]+($area[3]-$height)/2),$width,$height)
     $origin=[CapyRowPointer+Point]::new()
     if(![CapyRowPointer]::ClientToScreen($handle,[ref]$origin)){throw 'Cannot locate canvas'}
-    $bounds=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+    $bounds=(Find 'drawing-canvas').Current.BoundingRectangle
     $script:sample.Offset([int]($bounds.Left-$origin.x),[int]($bounds.Top-$origin.y))
     $parkX=[int]($bounds.Left+$area[0]+$area[2]/2);$parkY=[int]($bounds.Top+$area[1])+20
     [CapyRowPointer]::SetForegroundWindow($handle)|Out-Null

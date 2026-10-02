@@ -77,7 +77,6 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         defaultFocusHighlightEnabled = false
         isLongClickable = false
         pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
-        contentDescription = "Drawing canvas"
     }
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()

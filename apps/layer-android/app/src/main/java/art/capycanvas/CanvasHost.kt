@@ -48,6 +48,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         internal val preferencesName get() = workspaceDirectoryForTest?.let { "capy-test-${it.hashCode()}" } ?: "capy-canvas"
     }
     internal val strokeRecording = StrokeRecording(this)
+    internal var bootstrap by mutableStateOf<JSONObject?>(null)
+        private set
+    private var bootstrapForOwner: JSONObject? = null
     var snapshot by mutableStateOf<JSONObject?>(null)
         private set
     internal var workspaceManager by mutableStateOf<JSONObject?>(null)
@@ -198,6 +201,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     val actionError: String? get() = dialogError ?: notice?.takeIf { it.id == null }?.text
     // Native focus, not application state; prevents typing from invoking tools.
     var editingText = false
+    internal val textComposition = TextComposition()
     internal var toolbarEditorBounds: androidx.compose.ui.geometry.Rect? = null
     internal var headerKeyHandler: ((android.view.KeyEvent) -> Boolean)? = null
     private var platformPredictionAvailable: Boolean? = null
@@ -274,11 +278,17 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     init {
         worker.post {
             attempt {
-                handle = Native.create(BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK)
-                choreographer = Choreographer.getInstance()
-                attempt(canvas = false) {
-                    saved.getString("settings", null)?.let { Native.dispatch(handle, obj("type" to "restore_saved_settings", "saved" to it).toString()) }
+                val savedSettings = runCatching { saved.getString("settings", null).orEmpty() }.getOrElse {
+                    Log.e("CapyCanvas", "Could not read saved settings", it); ""
                 }
+                val locales = application.resources.configuration.locales.let { languages ->
+                    Array(languages.size()) { languages[it].toLanguageTag() }
+                }
+                val launch = JSONObject(Native.bootstrap(savedSettings, locales))
+                bootstrapForOwner = launch
+                main.post { bootstrap = launch }
+                handle = Native.create(savedSettings, locales, BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK)
+                choreographer = Choreographer.getInstance()
                 attempt(canvas = false) {
                     val directory = workspaceDirectoryForTest ?: java.io.File(application.filesDir, "workspaces").absolutePath
                     updateWorkspaceManager(obj("type" to "start", "directory" to directory))
@@ -294,8 +304,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         try { block() } catch (e: Exception) {
             Log.e("CapyCanvas", "Native canvas operation failed", e)
             main.post {
-                if (canvas) failure = e.message ?: "Could not initialize canvas"
-                else notice = CanvasNotice(null, e.message ?: "Could not complete this action", null)
+                if (canvas) failure = bootstrapForOwner?.getString("canvas_init_failed")
+                else notice = CanvasNotice(null, bootstrapForOwner?.getString("action_failed").orEmpty(), null)
             }
         }
     }
@@ -312,9 +322,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     internal suspend fun <T> withNative(block: (Long) -> T): T = kotlin.coroutines.suspendCoroutine { continuation ->
         if (!worker.post {
-            val result = runCatching { check(!disposed && handle != 0L) { "The editor has closed" }; block(handle) }
+            val result = runCatching { check(!disposed && handle != 0L) { bootstrapForOwner?.getString("editor_closed").orEmpty() }; block(handle) }
             main.post { continuation.resumeWith(result) }
-        }) continuation.resumeWith(Result.failure(IllegalStateException("The editor has closed")))
+        }) continuation.resumeWith(Result.failure(IllegalStateException(bootstrapForOwner?.getString("editor_closed"))))
     }
     internal fun documentChanged(complete: () -> Unit = {}) = post {
         refreshChrome(); publish(true); wake(); main.post { drawingTabs.refresh(); complete() }

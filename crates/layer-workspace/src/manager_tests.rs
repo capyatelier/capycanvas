@@ -161,7 +161,7 @@ fn startup_reuses_existing_workspaces_before_creating_an_independent_copy() {
         let working = source.working.as_mut().unwrap();
         working
             .tools
-            .set_override(working.preset, "size", 73.)
+            .set_override(working.preset, "size", 73., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
             .unwrap();
         let custom = m
             .create_from_snapshot(source, "My Workspace", true, 5_000)
@@ -290,7 +290,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
         capture
             .working
             .tools
-            .set_override(capture.working.preset, "size", 73.)
+            .set_override(capture.working.preset, "size", 73., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
             .unwrap();
         m.observe(capture.clone(), 4_000);
         m.flush().await.unwrap();
@@ -651,7 +651,7 @@ fn manager_recovery_library_and_backup_round_trip() {
         capture
             .working
             .tools
-            .set_override(capture.working.preset, "size", 87.)
+            .set_override(capture.working.preset, "size", 87., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
             .unwrap();
         m.observe(capture.clone(), 4_000);
         let details = m.details(&m.current_record().unwrap(), true, 6_000);
@@ -805,7 +805,7 @@ fn duplication_switching_and_original_baselines_are_independent() {
         capture
             .working
             .tools
-            .set_override(capture.working.preset, "size", 91.)
+            .set_override(capture.working.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
             .unwrap();
         m.observe(capture.clone(), 2_000);
         let duplicate = m
@@ -891,7 +891,7 @@ fn late_save_completion_keeps_newer_dirty_values_and_unrelated_errors() {
     }
     working
         .tools
-        .set_override(working.preset, "size", 137.)
+        .set_override(working.preset, "size", 137., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
         .unwrap();
     m.observe_working(working.clone());
     let newer_error = StoreError::new(ErrorKind::Conflict, "Ownership needs revalidation");

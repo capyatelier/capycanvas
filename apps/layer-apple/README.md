@@ -52,6 +52,14 @@ Setup, build, run and test commands are in the
   there. The UI thread captures input samples and the displayed camera revision
   and submits owned buffers; packed input and GPU work never go through JSON.
   Errors and Rust unwinds are contained at each ABI call.
+- **Interface language.** The persistence I/O queue reads saved settings before
+  the serial owner creates its native session or starts GPU work. Rust resolves
+  the first launch from those bytes and Foundation's ordered preferred languages;
+  later windows, documents and workspaces retain that process context. A saved
+  Language edit applies after restarting the app. The launch bridge returns only
+  the shared bootstrap view, including failure copy when session creation fails.
+  Bundle language metadata follows the shared shipping inventory. System date
+  formats, keyboard selection and artist-entered text keep their native behavior.
 - **Snapshot publication.** Request 7 returns `NativeHost::take_layout_update_bytes`
   serialized straight to UTF-8, with `display_status` and `document_tabs`
   appended by `layer_host::extend_update`. A full snapshot sets

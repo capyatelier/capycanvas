@@ -44,6 +44,14 @@ whole client area, including behind the custom title bar.
   policy are shared Rust. WinUI presents shared snapshots, measures native
   controls and captures input. Snapshots are JSON read by field name and actions
   are sent as strings, so a renamed shared field fails silently.
+- **Startup.** The render owner reads saved preferences before shared Rust
+  creates the launch context and first UI view. It parks while the XAML thread
+  adopts the prepared host and attaches the surface. The profile settings hub
+  retains that context for later windows; language edits apply at the next
+  process launch. Native controls receive its language tag and preserve IME
+  composition before forwarding candidate keys. Stateless numeric and toolbar
+  calls borrow an immutable context retained by their native view owners,
+  independently of the render-owned session.
 - **Three threads.** The XAML UI thread owns controls and the window. An
   independent input source collects mouse, pen and touch with full history and
   `PointerPredictor` predictions on its own thread, so a presentation wait never

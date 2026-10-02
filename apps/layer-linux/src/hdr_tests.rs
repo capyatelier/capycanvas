@@ -631,7 +631,7 @@ fn native_proof_dial_hit_regions() {
     let _app = native_test_app("art.capycanvas.ProofDialHits");
     let mut shared_pattern = None;
     for size in [128, 160, 226, 320, 400] {
-        let dial = crate::proof_dial::ProofDial::new();
+        let dial = crate::proof_dial::ProofDial::new(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
         assert!(!dial.field.has_tooltip() && !dial.reset.has_tooltip() && dial.arcs.iter().all(|arc| !arc.has_tooltip()));
         let window = gtk::Window::builder().default_width(size).default_height(size).child(&dial.root).build();
         window.present(); pump(150);

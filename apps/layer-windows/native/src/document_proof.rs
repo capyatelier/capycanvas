@@ -3,7 +3,7 @@ use layer_host::{NativeHost, Renderer};
 use layer_render_wgpu::snapshot::CaptureControl;
 use layer_ui::{
     UiSession,
-    proof_panel::{PROOF_INTENTS, PrintProofSettings, ProofSimulation},
+    proof_panel::PrintProofSettings,
     proof_workflow::{ProofPreparation, ProofView, proof_form},
 };
 use serde_json::{Value, json};
@@ -11,6 +11,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 
 pub(super) struct Task {
     job: ProofPreparation,
+    localization: Arc<layer_ui::Localizer>,
     form: Value,
     settings: PrintProofSettings,
     lut: Option<Arc<layer_color::ProofLut>>,
@@ -34,6 +35,7 @@ impl Task {
         let recipe = serde_json::from_value(form["recipe"].clone()).map_err(|e| e.to_string())?;
         let settings = PrintProofSettings::from_recipe(&recipe)?;
         Ok(Self {
+            localization: session.localization().clone(),
             job: ProofPreparation::begin(session, Some(id), Some(recipe))?,
             form,
             settings,
@@ -46,12 +48,12 @@ impl Task {
     pub fn details(&self, cancel: &AtomicBool) -> Result<Value, String> {
         Ok(json!({
             "form": self.form, "settings": self.settings,
-            "profiles": crate::color_storage::list(cancel)?,
-            "intents": PROOF_INTENTS.map(|choice| json!({
+            "profiles": crate::color_storage::list_view(cancel, &self.localization)?,
+            "intents": layer_ui::proof_panel::proof_intents(&self.localization).map(|choice| json!({
                 "value": choice.value, "label": choice.label,
                 "bpc_available": PrintProofSettings { intent: choice.value, ..Default::default() }.bpc_available()
             })),
-            "simulations": ProofSimulation::CHOICES,
+            "simulations": layer_ui::proof_panel::proof_simulations(&self.localization),
         }))
     }
     pub fn work(
@@ -64,7 +66,7 @@ impl Task {
         self.preserved = false;
         self.lut = None;
         if let Some(id) = profile_id {
-            settings.profile = Some(crate::color_storage::export_profile(&id, control.cancellation_flag())?);
+            settings.profile = Some(crate::color_storage::export_profile(&id, control.cancellation_flag(), &self.localization)?);
         }
         self.job.recipe = settings.recipe()?;
         self.settings = settings;
@@ -83,7 +85,7 @@ impl Task {
         }
         crate::document_io::check_cancelled(control.cancellation_flag())?;
         if let Some(bytes) = self.job.preservation() {
-            crate::color_storage::preserve(bytes, control.cancellation_flag())?;
+            crate::color_storage::preserve(bytes, control.cancellation_flag(), &self.localization)?;
         }
         self.preserved = true;
         Ok(())

@@ -31,6 +31,7 @@ struct WorkspaceManagerPresentation: ViewModifier {
 }
 
 struct WorkspaceManagerView: View {
+    @Environment(\.capyNativeCopy) private var nativeCopy
     @ObservedObject var workspaces: WorkspaceController
     @State private var query = ""
     private var view: JSON { workspaces.view }
@@ -95,7 +96,7 @@ struct WorkspaceManagerView: View {
                 WorkspaceSwitcherRows(workspaces: workspaces)
             } else { EditorScrollView {
                 LazyVStack(spacing: 8) {
-                    if view["rows"].array.isEmpty { Text("No items found.").foregroundStyle(.secondary).padding(20) }
+                    if view["rows"].array.isEmpty { Text(nativeCopy["header"]["no_items"].string).foregroundStyle(.secondary).padding(20) }
                     ForEach(view["rows"].array, id: \.managerID) { row in
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: 14) { selectableRow(row); rowActions(row) }
@@ -195,13 +196,14 @@ private struct WorkspaceManagerButtonStyle: ButtonStyle {
 }
 
 private struct WorkspaceManagerForm: View {
+    @Environment(\.capyCommonCopy) private var common
     @ObservedObject var workspaces: WorkspaceController
     let spec: JSON
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(spec["message"].string).fixedSize(horizontal: false, vertical: true)
             if !spec["name"].isNull {
-                TextField("Name", text: $workspaces.formName).textFieldStyle(.roundedBorder)
+                TextField(common["name"].string, text: $workspaces.formName).textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("workspace-form-name")
             }
             if !spec["description"].isNull {

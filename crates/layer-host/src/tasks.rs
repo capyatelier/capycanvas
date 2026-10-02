@@ -351,7 +351,7 @@ impl SourceTask {
         &self.previews
     }
 
-    pub fn details(&self) -> Result<Value, String> {
+    pub fn details_localized(&self, localizer: &layer_ui::Localizer) -> Result<Value, String> {
         let original = &self.workflow.original;
         let builtin = match original.interpretation.profile {
             ColorProfile::Builtin(space) => Some(space),
@@ -362,7 +362,7 @@ impl SourceTask {
             "profile_builtin": builtin,
             "channels": original.interpretation.channels,
             "depth": original.interpretation.depth,
-            "source_profile": layer_color::profile_description(&original.interpretation.profile)?,
+            "source_profile": layer_ui::profile_library::profile_display_name(&original.interpretation.profile, localizer)?,
             "adds_layer": self.workflow.adds_layer(),
             "clipped_channels": self.clipped,
         }))
@@ -491,7 +491,7 @@ mod tests {
         task.compare(Default::default()).unwrap();
         assert_eq!(task.previews().len(), 2);
         assert_ne!(task.previews()[0].pixels, task.previews()[1].pixels);
-        assert_eq!(task.details().unwrap()["adds_layer"], false);
+        assert_eq!(task.details_localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap()["adds_layer"], false);
         task.adopt(&mut host, false, || true).unwrap();
         let repaired = host.session.engine().document().layer(layer).unwrap();
         assert_eq!(

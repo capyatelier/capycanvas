@@ -73,7 +73,7 @@ try{
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Close'),
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
     $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {$null -eq (Model).preferences -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'About did not close'
+    Wait-Until {$null -eq (Model).preferences -and (Control 'drawing-canvas').Current.IsEnabled} 'About did not close'
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     $stats=Panel-Menu 'stats'
     # The current default keeps Diagnostics in an inactive Navigator tab.

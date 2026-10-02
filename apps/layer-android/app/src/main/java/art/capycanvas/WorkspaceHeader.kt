@@ -108,7 +108,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         // The canvas extends behind the title bar. Empty chrome owns input,
         // but must not paint an opaque strip over the drawing.
         Box(Modifier.fillMaxWidth().height(height.dp).testTag("title-bar").chromeRegion(input.dock)
-            .headerSource(input, obj("kind" to "background"), "Title Bar", -1).headerChrome())
+            .headerSource(input, obj("kind" to "background"), host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("title_bar"), -1).headerChrome())
         val width = maxWidth.value
         val geometryKey = "$width:$modelKey:$editing:$metrics:${host.drawingTabs.rows.size}"
         SideEffect { input.width = width; input.metrics = metrics }
@@ -159,8 +159,8 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
             val single = hidden.singleOrNull()
             Box(Modifier.placed(bounds, density).testTag("header-overflow-$zone")
                 .then(if (editing && single != null) Modifier.headerSource(input, obj("kind" to "item", "value" to single, "overflow_zone" to zone), specs.getValue(single).getString("label"), 1) else Modifier)) {
-                HeaderButton("More title bar items", false, true, false, Modifier.fillMaxSize(),
-                    inBar = bars.any { it.optInt("overflow", -1) == zone }, onClick = { input.overflow = if (input.overflow == zone) null else zone }) { SharedIcon("menu", "More title bar items", Modifier.size(size.number("icon").dp)) }
+                HeaderButton(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("more_items"), false, true, false, Modifier.fillMaxSize(),
+                    inBar = bars.any { it.optInt("overflow", -1) == zone }, onClick = { input.overflow = if (input.overflow == zone) null else zone }) { SharedIcon("menu", host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("more_items"), Modifier.size(size.number("icon").dp)) }
             }
         }
         // Overflow rows remain inside the stable capture owner. A native popup
@@ -186,7 +186,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
                                     else -> activateHeader(host, entry)
                                 }
                             }.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            if (editing) Box(Modifier.width(20.dp).fillMaxHeight()) { PanelGrip("Move ${spec.getString("label")}") }
+                            if (editing) Box(Modifier.width(20.dp).fillMaxHeight()) { HeaderGrip(spec.getString("label")) }
                             Text(spec.getString("label"), maxLines = 1)
                         }
                     }
@@ -198,7 +198,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         if (heldId == null) input.held?.let { source -> input.preview?.objectOrNull("held")?.let { bounds ->
             Row(Modifier.placed(bounds, density).zIndex(40f).alpha(.9f).background(colors.panel, TileShape)
                 .border(1.dp, colors.accent, TileShape).testTag("header-drag-ghost"), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.width(20.dp)) { PanelGrip("Move ${source.label}") }
+                Box(Modifier.width(20.dp)) { HeaderGrip(source.label) }
                 Text(source.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         } }
@@ -249,7 +249,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
         .then(if (editing) Modifier.border(1.dp, if (input.selected == id) colors.accent else colors.divider, TileShape)
             .focusRequester(focus).onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
-        if (editing) Box(Modifier.width(20.dp).fillMaxHeight().testTag("header-grip-$id"), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
+        if (editing) Box(Modifier.width(20.dp).fillMaxHeight().testTag("header-grip-$id"), contentAlignment = Alignment.Center) { HeaderGrip(label) }
         Box(Modifier.weight(1f).then(if (kind == "clock") Modifier.height(36.dp) else Modifier.fillMaxHeight()).clipToBounds()
             .then(if (kind in listOf("document_title", "clock", "battery"))
                 Modifier.glass(TileShape, colors.headerSurface) else Modifier).then(if(kind=="document_title")Modifier.drawingDropTarget(host,!editing)else Modifier), contentAlignment = Alignment.Center) {
@@ -325,7 +325,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 @Composable private fun HeaderBank(host: CanvasHost, view: JSONObject, state: JSONObject, input: HeaderInteraction, modifier: Modifier) {
     val colors = LocalPalette.current
     val entries = view.getJSONObject("model").headerEntries()
-    val components = listOf(obj("item" to obj("kind" to "tools"), "label" to "Add Tools…")) + view.array("components").objects()
+    val components = listOf(obj("item" to obj("kind" to "tools"), "label" to host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("add_tools"))) + view.array("components").objects()
     Layout(modifier = modifier.heightIn(max = 230.dp).zIndex(20f).shadow(6.dp, SurfaceShape)
         .background(colors.panel, SurfaceShape).chromeRegion(input.dock).verticalScroll(rememberScrollState())
         .padding(6.dp).testTag("header-editor"), content = {
@@ -338,7 +338,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     Row(Modifier.height(36.dp).background(colors.button, ControlShape)
                         .headerSource(input, source, label, 1).testTag("header-component-$kind").semantics { contentDescription = label }
                         .padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
+                        Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) { HeaderGrip(label) }
                         Text(label, maxLines = 1)
                     }
                 }
@@ -354,10 +354,10 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
             }
             val footer = state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")
             Row(Modifier.height(36.dp).testTag("header-show-footer").clickable { host.headerEdit(obj("type" to "canvas_info", "visible" to !footer)) }, verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(footer, null, Modifier.size(32.dp)); Text("Show footer")
+                Checkbox(footer, null, Modifier.size(32.dp)); Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("show_footer"))
             }
-            TextButton({ host.headerEdit(obj("type" to "cancel")) }, Modifier.height(36.dp).testTag("header-edit-cancel")) { Text("Cancel") }
-            Button({ host.headerEdit(obj("type" to "edit", "editing" to false)) }, Modifier.height(36.dp).testTag("header-edit-done")) { Text("Done") }
+            TextButton({ host.headerEdit(obj("type" to "cancel")) }, Modifier.height(36.dp).testTag("header-edit-cancel")) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
+            Button({ host.headerEdit(obj("type" to "edit", "editing" to false)) }, Modifier.height(36.dp).testTag("header-edit-done")) { Text(host.bootstrap!!.getJSONObject("common").getString("done")) }
         }
     }) { children, constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
@@ -374,4 +374,9 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
             actions.placeRelative(constraints.maxWidth - actions.width, actionsY)
         }
     }
+}
+
+@Composable private fun HeaderGrip(title: String) {
+    val caption = remember(title) { JSONObject(Native.nativeCaption(obj("type" to "move_panel", "title" to title).toString())).getString("text") }
+    PanelGrip(caption)
 }

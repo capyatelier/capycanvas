@@ -96,7 +96,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
             auto layer=editing(data);double id=num(layer,L"id",-1);auto generation=epoch(data),key=generation+L":"+to_hstring(id);
             if(key!=state->key){
                 state->key=key;state->values.clear();
-                gate.Content(number(data,L"Layer opacity",object(data->catalog,L"layer_opacity"),
+                gate.Content(number(data,data->caption(L"layers",L"opacity"),object(data->catalog,L"layer_opacity"),
                     [data]{return num(editing(data),L"opacity",1);},
                     [data,generation,id](double value){if(epoch(data)==generation&&num(editing(data),L"id",-1)==id)
                         data->dispatchDocument(O({{L"type",S(L"set_layer_opacity")},{L"opacity",N(value)}}),generation);
@@ -141,7 +141,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
                 auto colors=displayColors(data->state);
                 A paint;paint.Append(object(colors,str(colors,L"slot")==L"background"?L"background":L"foreground"));
                 if(auto next=paint.Stringify();next!=*key){
-                    *key=next;auto previews=colorUi(O({{L"type",S(L"preview")},{L"colors",paint}}));
+                    *key=next;auto previews=colorUi(data->localization.get(),O({{L"type",S(L"preview")},{L"colors",paint}}));
                     if(previews.ValueType()==JsonValueType::Array&&previews.GetArray().Size()==1)
                         swatch.Background(fill(displayColor(previews.GetArray().GetObjectAt(0))));
                 }
@@ -214,7 +214,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
                 bindings.emplace_back([weak,index,pick,glyph,text]{if(auto self=weak.lock();self&&index<self->menuModels.size()){
                     auto spec=self->menuModels[index];text.Text(str(spec,L"label"));AutomationProperties::SetName(pick,str(spec,L"label"));
                     pick.IsEnabled(flag(spec,L"enabled",true));glyph.Visibility(array(spec,L"sections").Size()||checked(spec)?Visibility::Visible:Visibility::Collapsed);
-                    AutomationProperties::SetItemStatus(pick,checked(spec)?L"Selected":L"");
+                    AutomationProperties::SetItemStatus(pick,checked(spec)?self->data->caption(L"search",L"selected"):L"");
                 }});
                 AutomationProperties::SetAutomationId(pick,L"configure-option-"+to_hstring(index));section.Children().Append(pick);
             }

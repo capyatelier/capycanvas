@@ -612,7 +612,7 @@ impl EffectPanels {
                     ));
                     let field = match &control.kind {
                         PropertyKind::Number { numeric } => {
-                            let input = NumberControl::new(numeric.clone(), &control.label, "");
+                            let input = NumberControl::new(numeric.clone(), &control.label, "", w.localization.clone());
                             input.set_widget_name(&format!("property-{}", control.key));
                             input.connect_value_changed(move |i| {
                                 dispatch(EffectValue::Number(i.value() as f32))
@@ -868,7 +868,7 @@ impl GradientEditor {
         let updating = Rc::new(Cell::new(false));
         let color = crate::color_editor::ColorButton::new();
         color.widget.set_widget_name("effect-gradient-color");
-        let position = NumberControl::new(layer_ui::NumericControl::percent(), "Position", "");
+        let position = NumberControl::new(layer_ui::NumericControl::percent(), "Position", "", w.localization.clone());
         let remove = crate::icons::button("layer-minus-symbolic");
         remove.set_tooltip_text(Some("Remove color stop"));
         let reset = crate::icons::button("layer-reset-symbolic");

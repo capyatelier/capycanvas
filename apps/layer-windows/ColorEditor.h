@@ -13,7 +13,7 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
         form->load(object(panel(),L"definition"),str(panel(),L"rgb_space",L"Srgb"),panel(),true);
     }
     void init(){
-        root.Spacing(8);root.Width(300);auto weak=weak_from_this();form=std::make_shared<ColorForm>();
+        root.Spacing(8);root.Width(300);auto weak=weak_from_this();form=std::make_shared<ColorForm>(data);
         form->init([weak](J color){if(auto self=weak.lock()){
             self->data->dispatch(O({{L"type",S(L"color")},{L"action",O({{L"op",S(L"set_slot")},{L"slot",S(self->paintContext)},{L"color",color}})}}));
         }},L"precise-color");

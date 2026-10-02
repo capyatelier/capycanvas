@@ -96,12 +96,12 @@ pub struct RangeControl {
     contact: RefCell<Option<Contact>>,
 }
 impl RangeControl {
-    pub fn new(id: &str, tooltip: &str, fields: [&ToolSetting; 2], changed: impl Fn(usize, f64) + 'static) -> Rc<Self> {
+    pub fn new(id: &str, tooltip: &str, fields: [&ToolSetting; 2], changed: impl Fn(usize, f64) + 'static, localization: std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         root.set_widget_name(&format!("tool-range-{id}"));
         root.set_tooltip_text(Some(tooltip));
         let inputs = fields.map(|f| {
-            let number = NumberControl::value_only(f.numeric.clone(), &f.tooltip());
+            let number = NumberControl::value_only(f.numeric.clone(), &f.tooltip(), localization.clone());
             number.set_hexpand(false);
             number.set_widget_name(&format!("tool-setting-{}", f.id));
             number

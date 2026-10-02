@@ -20,7 +20,7 @@ impl GpuCanvas {
         let parent = area
             .native()
             .and_then(|native| native.surface())
-            .ok_or("GTK surface unavailable")?;
+            .ok_or_else(|| layer_ui::bootstrap_view(self.session.localization()).canvas_init_failed.to_string())?;
         let renderer = RenderWorker::new(
             Parent::new(&parent)?,
             area.downgrade().into(),
@@ -54,7 +54,7 @@ impl GpuCanvas {
         let parent = area
             .native()
             .and_then(|native| native.surface())
-            .ok_or("GTK surface unavailable")?;
+            .ok_or_else(|| layer_ui::bootstrap_view(&localization).canvas_init_failed.to_string())?;
         // Load once before allocating document resources so a new window uses
         // the same explicit creation defaults as File → New.
         let settings = match crate::preferences::load() {

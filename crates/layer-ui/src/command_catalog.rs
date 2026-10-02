@@ -515,6 +515,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn catalog_entries(&self) -> Vec<Entry> {
         let l = self.localization();
+        let english = Localizer::shared(UiLanguage::English);
         let settings = &self.state.settings;
         let platform = self.state.platform;
         let document = self.engine.document();
@@ -670,6 +671,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let item = parameter_entry(
                 format!("tool_setting.{}", setting.id),
                 &setting.label,
+                english.text(setting.label_id).as_ref(),
                 l.text(MessageId::COMMANDS_TOOL_SETTINGS).to_string(),
                 &setting.label,
                 &setting.numeric,
@@ -690,6 +692,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && !self.selection_masks.quick()
             && document.layer(document.active_layer).is_some_and(|l| l.kind != LayerKind::Selection)
         {
+            let canonical_properties = effects::properties(document, self.state.settings.selection_painting, &english);
             let set = |key: &str, value| UiAction::Effect {
                 action: EffectAction::Set { layer: active, key: key.into(), value },
             };
@@ -705,6 +708,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                         entries.push(parameter_entry(
                             format!("layer_property.{}", control.key),
                             &label,
+                            &if control.key == "opacity" {
+                                english.text(MessageId::COMMANDS_LAYER_OPACITY_LABEL).to_string()
+                            } else {
+                                let canonical = canonical_properties.controls.iter().find(|item| item.key == control.key).expect("same property schema");
+                                command_text(&english, MessageId::COMMANDS_PROPERTY_LABEL, &[("context", canonical_properties.title.to_string()), ("label", canonical.label.to_string())])
+                            },
                             l.text(MessageId::COMMANDS_LAYER_PROPERTIES).to_string(),
                             &context,
                             numeric,
@@ -870,6 +879,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
         for entry in &mut entries {
+            if let Some(UiAction::Effect { action: EffectAction::Insert { effect } }) = &entry.action
+                && let Some(filter) = self.effect_catalog.get(effect)
+            {
+                entry.canonical_search = crate::search::normalize(&effects::resource_label(filter.label(), &english));
+                entry.search.push(' ');
+                entry.search.push_str(&entry.canonical_search);
+            }
             if let Some(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel, .. } }) = &entry.action {
                 entry.descriptor.label = match self.state.workspace.layout.panel(*panel) {
                     Ok(config) if matches!(&config.content, PanelContent::Toolbar { .. }) =>
@@ -1444,7 +1460,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .resolve(
                     parameter.value as f64,
                     NumericOperation::Expression { text },
-                )?
+                ).map_err(|reason| reason.message(l))?
                 .value as f32;
             match &mut action {
                 UiAction::SetToolSetting { value, .. } => *value = number,
@@ -1578,6 +1594,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 fn parameter_entry(
     id: String,
     label: impl AsRef<str>,
+    canonical_label: &str,
     category: impl AsRef<str>,
     context: impl AsRef<str>,
     numeric: &NumericControl,
@@ -1592,6 +1609,9 @@ fn parameter_entry(
     let category = category.as_ref();
     let context = context.as_ref();
     let mut item = entry(&command_text(l, MessageId::COMMANDS_PARAMETER_LABEL, &[("label", label.to_owned())]), category, action, enabled, None, settings, platform, l);
+    item.canonical_search = crate::search::normalize(canonical_label);
+    item.search.push(' ');
+    item.search.push_str(&item.canonical_search);
     item.search.push_str(" set adjust");
     item.descriptor.id = id;
     // Compact toolbar readouts round to tenths, which would misstate

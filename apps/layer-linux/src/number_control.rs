@@ -8,8 +8,13 @@ mod imp {
     #[derive(Default)]
     pub struct NumberControl {
         pub spec: OnceCell<NumericControl>,
+        pub localization: OnceCell<std::sync::Arc<layer_ui::Localizer>>,
         pub value: Cell<f64>,
         pub updating: Cell<bool>,
+        pub composing: Cell<bool>,
+        pub(super) composition_keys: crate::input::CompositionKeys,
+        pub input_valid: Cell<bool>,
+        pub editing: Cell<bool>,
         pub entry: OnceCell<gtk::Entry>,
         pub display: OnceCell<gtk::Button>,
         pub stack: OnceCell<gtk::Stack>,
@@ -51,6 +56,7 @@ mod imp {
             SIGNALS.get_or_init(|| {
                 vec![
                     glib::subclass::Signal::builder("value-changed").build(),
+                    glib::subclass::Signal::builder("input-changed").build(),
                 ]
             })
         }
@@ -64,12 +70,12 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Orientable;
 }
 impl NumberControl {
-    pub fn new(spec: NumericControl, title: &str, description: &str) -> Self {
-        Self::build(spec, title, description, false, false)
+    pub fn new(spec: NumericControl, title: &str, description: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
+        Self::build(spec, title, description, false, false, localization)
     }
     /// One-line slider with only an editable value. Numeric policy is unchanged.
-    pub fn inline(spec: NumericControl, title: &str) -> Self {
-        Self::build(spec, title, "", true, false)
+    pub fn inline(spec: NumericControl, title: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
+        Self::build(spec, title, "", true, false, localization)
     }
     /// Panel row with its label, slider and editable value on one line.
     pub fn labeled_inline(
@@ -78,8 +84,9 @@ impl NumberControl {
         tooltip: &str,
         labels: &gtk::SizeGroup,
         values: &gtk::SizeGroup,
+        localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Self {
-        let control = Self::inline(spec, title);
+        let control = Self::inline(spec, title, localization);
         control.set_tooltip_text(Some(tooltip));
         let label = gtk::Label::new(Some(title));
         label.set_xalign(0.);
@@ -94,8 +101,8 @@ impl NumberControl {
         control
     }
     /// Fit a grouped value to its current readout; the editor shares that width.
-    pub fn value_only(spec: NumericControl, title: &str) -> Self {
-        let control = Self::inline(spec, title);
+    pub fn value_only(spec: NumericControl, title: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
+        let control = Self::inline(spec, title, localization);
         control.set_halign(gtk::Align::Center);
         let imp = control.imp();
         if let Some(reserve) = imp.width_reserve.get() { reserve.set_visible(false); }
@@ -113,8 +120,8 @@ impl NumberControl {
         control
     }
     /// Compact toolbar presentation using the same editor as panel controls.
-    pub fn compact(spec: NumericControl, title: &str) -> Self {
-        Self::build(spec, title, "", true, true)
+    pub fn compact(spec: NumericControl, title: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
+        Self::build(spec, title, "", true, true, localization)
     }
     /// GtkBox's layout manager owns allocation. The tile owner supplies its
     /// final width before allocating the row, so native minimum sizes cannot
@@ -246,9 +253,12 @@ impl NumberControl {
         description: &str,
         inline: bool,
         compact: bool,
+        localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Self {
         let control: Self = glib::Object::new();
         control.imp().spec.set(spec.clone()).unwrap();
+        control.imp().input_valid.set(true);
+        control.imp().localization.set(localization).unwrap_or_else(|_| unreachable!());
         control.imp().editor_title.set(title.to_string()).unwrap();
         control.imp().compact.set(compact);
         if compact {
@@ -298,25 +308,27 @@ impl NumberControl {
             spin.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
             spin.set_width_chars(4);
             spin.set_valign(gtk::Align::Center);
-            let input_spec = spec.clone();
-            spin.connect_input(move |spin| {
-                Some(
-                    input_spec
-                        .resolve(
-                            0.0,
-                            NumericOperation::Expression {
-                                text: spin.text().into(),
-                            },
-                        )
-                        .map(|v| v.value * input_spec.scale)
-                        .map_err(|_| ()),
-                )
-            });
+            spin.connect_input(glib::clone!(#[weak] control, #[upgrade_or] Some(Err(())), move |spin| {
+                Some(control.text_input(&spin.text()).map(|value| value.value * control.spec().scale))
+            }));
+            spin.connect_output(glib::clone!(#[weak] control, #[upgrade_or] glib::Propagation::Proceed, move |_| {
+                if control.input_valid() { glib::Propagation::Proceed } else { glib::Propagation::Stop }
+            }));
+            spin.connect_changed(glib::clone!(#[weak] control, move |spin| {
+                if !control.imp().updating.get() && !control.imp().composing.get() {
+                    let _ = control.text_input(&spin.text());
+                }
+            }));
+            control.track_preedit(&spin);
+            spin.connect_change_value(glib::clone!(#[weak] control, move |spin, _| {
+                if !control.commit_text() { spin.stop_signal_emission_by_name("change-value"); }
+            }));
+            control.track_keys(&spin);
             spin.connect_value_changed(glib::clone!(
                 #[weak]
                 control,
                 move |spin| {
-                    if !control.imp().updating.get() {
+                    if !control.imp().updating.get() && control.input_valid() {
                         control.apply(NumericOperation::Value {
                             value: spin.value() / control.spec().scale,
                         });
@@ -371,7 +383,8 @@ impl NumberControl {
             control.imp().value_label.set(value_label.clone()).unwrap();
             display.add_css_class("number-value");
             display.add_css_class("flat");
-            display.set_tooltip_text(Some(&format!("Edit {title}")));
+            let captions = layer_ui::NumericLabels::new(title, control.imp().localization.get().unwrap());
+            display.set_tooltip_text(Some(&captions.edit));
             let entry = gtk::Entry::builder()
                 .has_frame(false)
                 .width_chars(3)
@@ -398,6 +411,9 @@ impl NumberControl {
             stack.set_vhomogeneous(compact);
             stack.set_halign(gtk::Align::End);
             stack.set_valign(gtk::Align::Center);
+            stack.connect_visible_child_name_notify(glib::clone!(#[weak] control, move |stack| {
+                control.imp().editing.set(stack.visible_child_name().as_deref() == Some("entry"));
+            }));
             stack.add_named(&display, Some("value"));
             stack.add_named(&entry, Some("entry"));
             if inline {
@@ -447,11 +463,17 @@ impl NumberControl {
                     entry.select_region(0, -1);
                 }
             ));
+            control.track_preedit(&entry);
+            entry.connect_changed(glib::clone!(#[weak] control, move |entry| {
+                if !control.imp().updating.get() && !control.imp().composing.get() {
+                    let _ = control.text_input(&entry.text());
+                }
+            }));
             entry.connect_activate(glib::clone!(
                 #[weak]
                 control,
                 move |_| {
-                    control.finish(false);
+                    if !control.imp().composing.get() && !control.imp().composition_keys.active() { control.finish(false); }
                 }
             ));
             let focus = gtk::EventControllerFocus::new();
@@ -459,26 +481,16 @@ impl NumberControl {
                 #[weak]
                 control,
                 move |_| {
-                    control.finish(false);
+                    if control.imp().composing.replace(false) {
+                        control.imp().entry.get().unwrap().reset_im_context();
+                    } else { control.finish(false); }
+                    control.imp().composition_keys.clear();
+                    control.validate_input();
+                    control.emit_by_name::<()>("input-changed", &[]);
                 }
             ));
             entry.add_controller(focus);
-            let keys = gtk::EventControllerKey::new();
-            keys.connect_key_pressed(glib::clone!(
-                #[weak]
-                control,
-                #[upgrade_or]
-                glib::Propagation::Proceed,
-                move |_, key, _, _| {
-                    if key == gtk::gdk::Key::Escape {
-                        control.finish(true);
-                        glib::Propagation::Stop
-                    } else {
-                        glib::Propagation::Proceed
-                    }
-                }
-            ));
-            entry.add_controller(keys);
+            control.track_keys(&entry);
             control.imp().entry.set(entry).unwrap();
             control.install_value_gestures(&display);
             control.imp().display.set(display).unwrap();
@@ -487,16 +499,15 @@ impl NumberControl {
             track.add_css_class("number-track");
             let minus = crate::icons::button("layer-minus-symbolic");
             let plus = crate::icons::button("layer-plus-symbolic");
-            for (button, steps, verb) in [(&minus, -1.0, "Decrease"), (&plus, 1.0, "Increase")] {
+            for (button, steps, caption) in [(&minus, -1.0, &captions.decrease), (&plus, 1.0, &captions.increase)] {
                 button.add_css_class("flat");
                 button.add_css_class("number-step");
-                button.set_tooltip_text(Some(&format!("{verb} {title}")));
+                button.set_tooltip_text(Some(caption));
                 button.connect_clicked(glib::clone!(
                     #[weak]
                     control,
                     move |_| {
-                        control.finish(false);
-                        control.apply(NumericOperation::Step { steps });
+                        if control.commit_text() { control.apply(NumericOperation::Step { steps }); }
                     }
                 ));
             }
@@ -508,9 +519,10 @@ impl NumberControl {
                 control,
                 move |slider| {
                     if !control.imp().updating.get() {
-                        control.apply(NumericOperation::Position {
-                            position: slider.value(),
-                        });
+                        let position = slider.value();
+                        if control.commit_text() {
+                            control.apply(NumericOperation::Position { position });
+                        } else { control.set_value(control.value()); }
                     }
                 }
             ));
@@ -545,7 +557,7 @@ impl NumberControl {
         let imp = self.imp();
         let popover = imp.popover.get_or_init(|| {
             let editor =
-                NumberControl::new(self.spec().clone(), imp.editor_title.get().unwrap(), "");
+                NumberControl::new(self.spec().clone(), imp.editor_title.get().unwrap(), "", imp.localization.get().unwrap().clone());
             editor.set_size_request(240, -1);
             editor.set_margin_start(12);
             editor.set_margin_end(12);
@@ -593,6 +605,10 @@ impl NumberControl {
                     g.set_state(gtk::EventSequenceState::Denied);
                     return;
                 }
+                if !control.commit_text() {
+                    g.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                }
                 if let Ok(value) = control
                     .spec()
                     .resolve(control.value(), NumericOperation::Format)
@@ -607,7 +623,7 @@ impl NumberControl {
             #[strong]
             origin,
             move |g, dx, dy| {
-                if !control.drag_check_threshold(0, 0, dx as i32, dy as i32) {
+                if !control.input_valid() || !control.drag_check_threshold(0, 0, dx as i32, dy as i32) {
                     return;
                 }
                 g.set_state(gtk::EventSequenceState::Claimed);
@@ -628,7 +644,7 @@ impl NumberControl {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_, _, dy| {
-                control.apply(NumericOperation::Step { steps: -dy });
+                if control.commit_text() { control.apply(NumericOperation::Step { steps: -dy }); }
                 glib::Propagation::Stop
             }
         ));
@@ -686,9 +702,96 @@ impl NumberControl {
         );
     }
     /// Accept text typed into the field that it has not committed yet.
-    pub fn commit_text(&self) {
+    pub fn commit_text(&self) -> bool {
+        if let Some(editor) = self.imp().popover_control.get().filter(|_| self.imp().popover.get().is_some_and(|popover| popover.is_visible())) {
+            if !editor.commit_text() { return false; }
+        }
+        if !self.input_valid() { return false; }
         if let Some(spin) = self.imp().spin.get() {
+            if self.text_input(&spin.text()).is_err() { return false; }
             spin.update();
+            self.input_valid()
+        } else if self.imp().editing.get() { self.finish(false) } else { true }
+    }
+    pub fn input_valid(&self) -> bool {
+        self.imp().input_valid.get() && !self.imp().composing.get() && !self.imp().composition_keys.active()
+            && self.imp().popover_control.get().filter(|_| self.imp().popover.get().is_some_and(|popover| popover.is_visible())).is_none_or(|editor| editor.input_valid())
+    }
+    pub fn connect_input_changed(&self, f: impl Fn(&Self) + 'static) {
+        self.connect_closure("input-changed", false, glib::closure_local!(move |s: Self| f(&s)));
+    }
+    fn track_keys(&self, widget: &impl IsA<gtk::Widget>) {
+        let capture = gtk::EventControllerKey::new();
+        capture.set_name(Some("numeric-composition-capture"));
+        capture.set_propagation_phase(gtk::PropagationPhase::Capture);
+        capture.connect_key_pressed(glib::clone!(#[weak(rename_to=control)] self, #[upgrade_or] glib::Propagation::Proceed, move |_, _, keycode, _| {
+            let was_owned = control.imp().composition_keys.active();
+            if control.imp().composition_keys.capture(keycode, control.imp().composing.get()) != was_owned {
+                control.emit_by_name::<()>("input-changed", &[]);
+            }
+            glib::Propagation::Proceed
+        }));
+        capture.connect_key_released(glib::clone!(#[weak(rename_to=control)] self, move |_, _, keycode, _| {
+            if control.imp().composition_keys.release(keycode) {
+                control.validate_input();
+                control.emit_by_name::<()>("input-changed", &[]);
+            }
+        }));
+        widget.add_controller(capture);
+        let keys = gtk::EventControllerKey::new();
+        keys.set_name(Some("numeric-editor-cancel"));
+        keys.connect_key_pressed(glib::clone!(#[weak(rename_to=control)] self, #[upgrade_or] glib::Propagation::Proceed, move |_, key, _, _| {
+            if control.imp().composition_keys.active() { return glib::Propagation::Stop; }
+            if !control.imp().composing.get() && key == gtk::gdk::Key::Escape {
+                control.cancel_edit();
+                glib::Propagation::Stop
+            } else { glib::Propagation::Proceed }
+        }));
+        widget.add_controller(keys);
+        widget.connect_unmap(glib::clone!(#[weak(rename_to=control)] self, move |_| {
+            control.imp().composition_keys.clear();
+            control.validate_input();
+        }));
+        if widget.is::<gtk::SpinButton>() {
+            let focus = gtk::EventControllerFocus::new();
+            focus.connect_leave(glib::clone!(#[weak(rename_to=control)] self, move |_| {
+                control.imp().composition_keys.clear();
+                control.validate_input();
+                control.emit_by_name::<()>("input-changed", &[]);
+            }));
+            widget.add_controller(focus);
+        }
+    }
+    fn validate_input(&self) {
+        if let Some(spin) = self.imp().spin.get() { let _ = self.text_input(&spin.text()); }
+        else if self.imp().editing.get() {
+            if let Some(entry) = self.imp().entry.get() { let _ = self.text_input(&entry.text()); }
+        }
+    }
+    fn track_preedit(&self, editable: &impl IsA<gtk::Editable>) {
+        if let Some(text) = editable.delegate().and_downcast::<gtk::Text>() {
+            text.connect_preedit_changed(glib::clone!(#[weak(rename_to=control)] self, move |_, preedit| {
+                control.imp().composing.set(!preedit.is_empty());
+                control.emit_by_name::<()>("input-changed", &[]);
+            }));
+        }
+    }
+    fn feedback(&self, error: Option<layer_ui::NumericError>) {
+        let valid = error.is_none();
+        if let Some(error) = error {
+            self.add_css_class("error");
+            self.set_tooltip_text(Some(&error.message(self.imp().localization.get().unwrap())));
+        } else {
+            self.remove_css_class("error");
+            self.set_tooltip_text(None);
+        }
+        if self.imp().input_valid.replace(valid) != valid { self.emit_by_name::<()>("input-changed", &[]); }
+    }
+    fn text_input(&self, text: &str) -> Result<layer_ui::NumericValue, ()> {
+        if self.imp().composing.get() || self.imp().composition_keys.active() { return Err(()); }
+        match self.spec().resolve(0., NumericOperation::Expression { text: text.into() }) {
+            Ok(value) => { self.feedback(None); Ok(value) }
+            Err(error) => { self.feedback(Some(error)); Err(()) }
         }
     }
     pub fn cancel_edit(&self) {
@@ -696,6 +799,12 @@ impl NumberControl {
             popover.popdown();
         }
         self.finish(true);
+        self.imp().composition_keys.clear();
+        if let Some(spin) = self.imp().spin.get() {
+            self.imp().composing.set(false);
+            self.feedback(None);
+            spin.set_value(self.value() * self.spec().scale);
+        }
     }
     /// A click away accepts valid text and retires invalid unfinished input.
     /// It does not claim the contact from the next control or the canvas.
@@ -710,8 +819,7 @@ impl NumberControl {
     fn apply(&self, op: NumericOperation) -> bool {
         match self.spec().resolve(self.value(), op) {
             Ok(v) => {
-                self.remove_css_class("error");
-                self.set_tooltip_text(None);
+                self.feedback(None);
                 // GtkRange can re-emit after the synchronous updating guard has
                 // ended. Compare at the core's resolution: an f32 model echo is
                 // not a new edit of the f64 widget's rounded value.
@@ -732,18 +840,19 @@ impl NumberControl {
                 true
             }
             Err(e) => {
-                self.add_css_class("error");
-                self.set_tooltip_text(Some(&e));
+                self.feedback(Some(e));
                 false
             }
         }
     }
-    fn finish(&self, cancel: bool) {
+    fn finish(&self, cancel: bool) -> bool {
+        if !cancel && (self.imp().composing.get() || self.imp().composition_keys.active()) { return false; }
+        if !self.imp().editing.get() { return true; }
         let Some(stack) = self.imp().stack.get() else {
-            return;
+            return true;
         };
         if stack.visible_child_name().as_deref() != Some("entry") {
-            return;
+            return true;
         }
         if cancel
             || self.apply(NumericOperation::Expression {
@@ -752,8 +861,10 @@ impl NumberControl {
         {
             // Switch first so focus-leave cannot commit twice.
             stack.set_visible_child_name("value");
-            self.remove_css_class("error");
-            self.set_tooltip_text(None);
-        }
+            self.imp().composing.set(false);
+            self.imp().entry.get().unwrap().reset_im_context();
+            self.feedback(None);
+            true
+        } else { false }
     }
 }

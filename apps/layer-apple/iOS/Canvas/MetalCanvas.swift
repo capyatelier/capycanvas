@@ -43,8 +43,8 @@ final class CanvasView: UIView {
         backgroundColor = .clear
         accessibilityIdentifier = "canvas"
         isAccessibilityElement = true
-        accessibilityLabel = "Canvas"
-        accessibilityValue = "Initializing"
+        accessibilityLabel = store.bootstrap["drawing_canvas"].string
+        accessibilityValue = store.bootstrap["starting_canvas"].string
         let metal = layer as! CAMetalLayer
         metal.isOpaque = true
         metal.framebufferOnly = true
@@ -61,6 +61,8 @@ final class CanvasView: UIView {
         addInteraction(UIPencilInteraction(delegate: self))
         store.cursorChanged = { [weak pointer] in pointer?.invalidate() }
         installIndirectGestures()
+        store.bootstrapChanged = { [weak self] in self?.updateAccessibility() }
+        updateAccessibility()
         store.wake = { [weak self] in self?.wake() }
         store.observeDisplayHeadroom = { [weak self] in self?.updateHeadroom() }
         store.focusCanvas = { [weak self] in
@@ -70,7 +72,7 @@ final class CanvasView: UIView {
         }
         store.interruptInput = { [weak self] in self?.interruptContacts() }
         frames.setPaused = { [weak self] paused in self?.displayLink?.isPaused = paused }
-        frames.submittedViewport = { [weak self] in self?.accessibilityValue = "Metal ready" }
+        frames.submittedViewport = { [weak self] in self?.accessibilityValue = self?.store.bootstrap["canvas_ready"].string }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanged(_:)),
             name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
     }
@@ -202,6 +204,12 @@ final class CanvasView: UIView {
         contacts.removeAll(); ignoredContacts.removeAll()
     }
     func wake() { frames.wake() }
+    private func updateAccessibility() {
+        accessibilityLabel = store.bootstrap["drawing_canvas"].string
+        accessibilityHint = store.bootstrap["drawing_canvas_help"].string
+        accessibilityLanguage = store.interfaceLanguage.isEmpty ? nil : store.interfaceLanguage
+        accessibilityValue = store.bootstrap[store.restartingCanvas ? "restarting_canvas" : store.canvasSubmitted ? "canvas_ready" : "starting_canvas"].string
+    }
     private func updateHeadroom() {
         let value = Double(window?.screen.currentEDRHeadroom ?? 1).clampedHeadroom
         if store.displayHeadroom != value {

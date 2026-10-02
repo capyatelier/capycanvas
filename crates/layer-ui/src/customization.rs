@@ -214,27 +214,8 @@ pub enum PanelControl {
     Navigator,
 }
 impl PanelControl {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Brushes => "Tool Set",
-            Self::BrushSets => Panel::BrushSets.label(),
-            Self::FilterTypes => Panel::FilterTypes.label(),
-            Self::SculptSets => Panel::SculptSets.label(),
-            Self::Tools => Panel::Tools.label(),
-            Self::ToolSettings => Panel::ToolSettings.label(),
-            Self::ColorWheel => "Color wheel",
-            Self::BrushSize => "Brush size",
-            Self::SizePresets => "Size presets",
-            Self::BrushOpacity => "Brush opacity",
-            Self::BrushColor => "Brush color",
-            Self::Layers => "Layers",
-            Self::LayerActions => "Layer actions",
-            Self::LayerOpacity => "Layer opacity",
-            Self::Adjustments => "Filters",
-            Self::Properties => "Properties",
-            Self::Stats => "Diagnostics",
-            Self::Navigator => "Navigator",
-        }
+    pub fn canonical_label(self) -> std::sync::Arc<str> {
+        self.localized_label(&Localizer::shared(UiLanguage::English))
     }
     pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
         match self {
@@ -367,7 +348,7 @@ impl PanelConfig {
     pub fn custom_name(&self) -> Option<&str> {
         match &self.content { PanelContent::Toolbar { name, .. } => name.as_deref(), _ => None }
     }
-    pub fn title(&self) -> &str { self.custom_name().unwrap_or_else(|| self.id.label()) }
+    pub fn canonical_title(&self) -> String { self.title_localized(&Localizer::shared(UiLanguage::English)) }
     pub fn title_localized(&self, localization: &Localizer) -> String {
         self.custom_name().map(str::to_owned).unwrap_or_else(|| self.id.localized_label(localization).to_string())
     }
@@ -419,6 +400,9 @@ impl PanelConfig {
             .collect()
     }
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_admission().map_err(crate::WorkspaceValidationError::diagnostic)
+    }
+    pub fn validate_admission(&self) -> Result<(), crate::WorkspaceValidationError> {
         match &self.content {
             PanelContent::Controls { visible } if self.id.kind() == PanelKind::Content => {
                 for (index, control) in visible.iter().enumerate() {
@@ -430,9 +414,9 @@ impl PanelConfig {
                 }
             }
             PanelContent::Toolbar { name, tiles } if self.id.kind() == PanelKind::Tiles => {
-                if let Some(name) = name { validate_toolbar_name(name)?; }
+                if let Some(name) = name { toolbar_name_refusal(name).map_err(crate::WorkspaceValidationError::ToolbarName)?; }
                 for tile in tiles {
-                    tile.control.validate()?;
+                    tile.control.validate_admission()?;
                 }
             }
             _ => return Err("Panel configuration does not match its type".into()),
@@ -441,18 +425,28 @@ impl PanelConfig {
     }
 }
 
-pub(crate) fn validate_toolbar_name(name: &str) -> Result<(), String> {
-    if name.trim().is_empty() {
-        return Err("Enter a toolbar name".into());
-    }
-    if name != name.trim() || name.chars().count() > 64 || name.chars().any(char::is_control) {
-        return Err("Use a name of 1–64 characters without extra spaces".into());
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolbarNameRefusal { Missing, Invalid, Collision }
+impl ToolbarNameRefusal {
+    fn message_id(self) -> MessageId { match self {
+        Self::Missing => MessageId::WORKSPACE_REFUSAL_TOOLBAR_NAME_MISSING,
+        Self::Invalid => MessageId::WORKSPACE_REFUSAL_TOOLBAR_NAME_INVALID,
+        Self::Collision => MessageId::WORKSPACE_REFUSAL_TOOLBAR_NAME_COLLISION,
+    } }
+    pub fn message(self, localization: &Localizer) -> std::sync::Arc<str> { localization.text(self.message_id()) }
+    pub(crate) fn diagnostic(self) -> String { self.message_id().key().to_owned() }
+}
+fn toolbar_name_refusal(name: &str) -> Result<(), ToolbarNameRefusal> {
+    if name.trim().is_empty() { return Err(ToolbarNameRefusal::Missing); }
+    if name != name.trim() || name.chars().count() > 64 || name.chars().any(char::is_control) { return Err(ToolbarNameRefusal::Invalid); }
     Ok(())
+}
+pub(crate) fn validate_toolbar_name(name: &str) -> Result<(), String> {
+    toolbar_name_refusal(name).map_err(ToolbarNameRefusal::diagnostic)
 }
 
 impl ToolbarControl {
-    pub(crate) fn icon(self) -> &'static str {
+    pub fn icon(self) -> &'static str {
         match self {
             Self::Command { command } => command.icon().unwrap_or(match command {
                 CommandId::ToggleTheme => "appearance", CommandId::KeyboardShortcuts => "keyboard", CommandId::About => "info", _ => "menu",
@@ -477,12 +471,15 @@ impl ToolbarControl {
         })
     }
     pub fn validate(self) -> Result<(), String> {
+        self.validate_admission().map_err(crate::WorkspaceValidationError::diagnostic)
+    }
+    pub fn validate_admission(self) -> Result<(), crate::WorkspaceValidationError> {
         match self {
             Self::Brush { id } => {
                 preset(id)?;
             }
             Self::Size { pixels } => {
-                NumericControl::brush_size().validate(pixels as f32, "Brush size")?;
+                NumericControl::brush_size().validate(pixels as f32, MessageId::TOOL_SETTING_SIZE)?;
             }
             Self::Panel { panel } if panel.kind() != PanelKind::Content => {
                 return Err("Choose a built-in panel".into());
@@ -696,6 +693,7 @@ impl ContextMenu {
     }
 }
 impl DockLayout {
+    #[cfg(test)]
     pub(crate) fn context_menu_on(
         &self,
         target: ContextTarget,
@@ -707,7 +705,7 @@ impl DockLayout {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
             ContextTarget::Header { id } => {
-                return self.header.projected_for(platform).context_menu(id, false);
+                return self.header.projected_for(platform).context_menu_localized(id, false, localization);
             }
             ContextTarget::Column { column } => {
                 if !self.is_collapsed(column) {
@@ -1008,21 +1006,14 @@ impl DockLayout {
         item.selected = Some(!hidden);
         Ok(vec![item])
     }
-    pub fn validate_toolbar_name(&self, name: &str) -> Result<(), String> {
-        self.check_toolbar_name(name, None)
+    pub fn validate_toolbar_name(&self, name: &str) -> Result<(), String> { self.check_toolbar_name(name, None) }
+    pub(crate) fn check_toolbar_name(&self, name: &str, except: Option<Panel>) -> Result<(), String> {
+        self.toolbar_name_refusal(name, except).map_err(ToolbarNameRefusal::diagnostic)
     }
-    pub(crate) fn check_toolbar_name(
-        &self,
-        name: &str,
-        except: Option<Panel>,
-    ) -> Result<(), String> {
-        validate_toolbar_name(name.trim())?;
-        if self
-            .panels
-            .iter()
-            .any(|p| Some(p.id) != except && p.custom_name().is_some_and(|title| title.to_lowercase() == name.trim().to_lowercase()))
-        {
-            return Err("A panel already uses this name".into());
+    pub fn toolbar_name_refusal(&self, name: &str, except: Option<Panel>) -> Result<(), ToolbarNameRefusal> {
+        toolbar_name_refusal(name.trim())?;
+        if self.panels.iter().any(|panel| Some(panel.id) != except && panel.custom_name().is_some_and(|title| title.to_lowercase() == name.trim().to_lowercase())) {
+            return Err(ToolbarNameRefusal::Collision);
         }
         Ok(())
     }
@@ -1048,7 +1039,7 @@ pub struct ToolChoice {
     pub icon: &'static str,
     pub selected: bool,
 }
-pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
+pub fn canonical_tool_choice(control: ToolbarControl) -> ToolChoice {
     tool_choice_localized(control, &Localizer::shared(UiLanguage::English))
 }
 pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) -> ToolChoice {
@@ -1332,6 +1323,7 @@ fn tool_available(control: ToolbarControl, platform: Platform) -> bool {
         _ => true,
     }
 }
+#[cfg(test)]
 pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
     tool_catalog_localized(platform, &Localizer::shared(UiLanguage::English))
 }
@@ -1536,35 +1528,35 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
     })
 }
 impl ToolPicker {
-    pub(crate) fn validate(&self, layout: &DockLayout) -> Result<(), String> {
+    pub(crate) fn validate(&self, layout: &DockLayout, localization: &Localizer) -> Result<(), String> {
         match &self.destination {
             ToolDestination::NewToolbar { group, name } => {
                 if let Some(group) = group {
                     layout.group_panels(*group)?;
                 }
-                layout.validate_toolbar_name(name)?;
+                layout.toolbar_name_refusal(name, None).map_err(|reason| reason.message(localization).to_string())?;
             }
             ToolDestination::Insert { panel, before } => {
                 let p = layout.panel(*panel)?;
                 if panel.kind() != PanelKind::Tiles {
-                    return Err("Choose a toolbar".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR).to_string());
                 }
                 if before.is_some_and(|id| !p.tiles().iter().any(|t| t.id == id)) {
-                    return Err("The target tool no longer exists".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TARGET_TOOL_NO_LONGER_EXISTS).to_string());
                 }
             }
             ToolDestination::Header { zone, before } => {
                 if self.selected.iter().any(|c| c.is_component()) {
-                    return Err("Place this component in a toolbar".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_PLACE_THIS_COMPONENT_IN_A_TOOLBAR).to_string());
                 }
                 layout.header.insertion(*zone, *before)?;
                 if layout.header.entries().count() + self.selected.len() > 128 {
-                    return Err("Too many title-bar items".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_TOO_MANY_TITLE_BAR_ITEMS).to_string());
                 }
             }
         }
         if self.selected.is_empty() {
-            return Err("Select at least one tool".into());
+            return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_SELECT_AT_LEAST_ONE_TOOL).to_string());
         }
         Ok(())
     }
@@ -1582,7 +1574,7 @@ impl ToolPicker {
             .filter(|c| !matches!(self.destination, ToolDestination::Header { .. }) || !c.control.is_component())
             .filter_map(|mut choice| {
                 choice.selected = self.selected.contains(&choice.control);
-                let english = tool_choice(choice.control);
+                let english = canonical_tool_choice(choice.control);
                 let text = crate::search::normalize(&format!("{} {} {} {}", choice.label, choice.description, english.label, english.description));
                 words
                     .split_whitespace()
@@ -1609,12 +1601,12 @@ impl ToolPicker {
             query: self.query.clone(),
             choices,
             selected_count: self.selected.len(),
-            can_confirm: self.validate(layout).is_ok(),
+            can_confirm: self.validate(layout, localization).is_ok(),
             error: self.error.clone().or_else(|| match &self.destination {
                 ToolDestination::NewToolbar { name, .. } => {
-                    layout.validate_toolbar_name(name).err()
+                    layout.toolbar_name_refusal(name, None).err().map(|reason| reason.message(localization).to_string())
                 }
-                _ if !self.selected.is_empty() => self.validate(layout).err(),
+                _ if !self.selected.is_empty() => self.validate(layout, localization).err(),
                 _ => None,
             }),
         }
@@ -1649,14 +1641,14 @@ pub struct ToolbarPromptView {
     pub error: Option<String>,
 }
 impl ToolbarPrompt {
-    fn validate(&self, layout: &DockLayout) -> Result<(), String> {
+    fn validate(&self, layout: &DockLayout, localization: &Localizer) -> Result<(), String> {
         layout.panel(self.panel)?;
         if self.panel.kind() != PanelKind::Tiles {
-            return Err("Choose a toolbar".into());
+            return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR).to_string());
         }
         match self.operation {
-            ToolbarOperation::Rename => layout.check_toolbar_name(&self.name, Some(self.panel)),
-            ToolbarOperation::Duplicate => layout.validate_toolbar_name(&self.name),
+            ToolbarOperation::Rename => layout.toolbar_name_refusal(&self.name, Some(self.panel)).map_err(|reason| reason.message(localization).to_string()),
+            ToolbarOperation::Duplicate => layout.toolbar_name_refusal(&self.name, None).map_err(|reason| reason.message(localization).to_string()),
             ToolbarOperation::Delete => Ok(()),
         }
     }
@@ -1683,8 +1675,8 @@ impl ToolbarPrompt {
                 String::new()
             },
             name: (!destructive).then(|| self.name.clone()),
-            can_confirm: self.validate(layout).is_ok(),
-            error: self.error.clone().or_else(|| self.validate(layout).err()),
+            can_confirm: self.validate(layout, localization).is_ok(),
+            error: self.error.clone().or_else(|| self.validate(layout, localization).err()),
         }
     }
 }
@@ -1813,6 +1805,7 @@ impl CustomizationState {
             || self.toolbar_prompt.is_some()
             || self.toolbar_manager.is_some()
     }
+    #[cfg(test)]
     pub(crate) fn edit(
         &mut self,
         layout: &mut DockLayout,
@@ -1868,7 +1861,7 @@ impl CustomizationState {
                     }
                     H::InsertTools { zone, before } => {
                         if !self.header_editing {
-                            return Err("Open title-bar customization first".into());
+                            return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_OPEN_TITLE_BAR_CUSTOMIZATION_FIRST).to_string());
                         }
                         layout.header.insertion(zone, before)?;
                         self.picker = Some(ToolPicker {
@@ -1885,7 +1878,7 @@ impl CustomizationState {
                                 if let HeaderItem::Tool { control } = item
                                     && !tool_available(control, platform)
                                 {
-                                    return Err("This tool is not available".into());
+                                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THIS_TOOL_IS_NOT_AVAILABLE).to_string());
                                 }
                                 layout.header.add(zone, before, &[item])?;
                             }
@@ -1912,12 +1905,12 @@ impl CustomizationState {
                 if let Some(panel) = panel {
                     layout.panel(panel)?;
                     if panel.kind() != PanelKind::Tiles {
-                        return Err("Choose a toolbar".into());
+                        return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR).to_string());
                     }
                 }
                 self.toolbar_manager
                     .as_mut()
-                    .ok_or("The toolbar manager is closed")?
+                    .ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOLBAR_MANAGER_IS_CLOSED).to_string())?
                     .selected = panel;
             }
             CloseToolbarManager => {
@@ -1938,9 +1931,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetToolOptionsStyle { panel, tile, style } => {
-                let config = layout.panels.iter_mut().find(|p| p.id == panel).ok_or("Choose a toolbar")?;
+                let config = layout.panels.iter_mut().find(|p| p.id == panel).ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR).to_string())?;
                 let tile = config.tiles_mut()?.iter_mut()
-                    .find(|t| t.id == tile && t.control.options_style().is_some()).ok_or("Choose tool options")?;
+                    .find(|t| t.id == tile && t.control.options_style().is_some()).ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_TOOL_OPTIONS).to_string())?;
                 tile.control = ToolbarControl::ToolOptions { style };
                 changed |= regions::LAYOUT;
             }
@@ -1950,7 +1943,7 @@ impl CustomizationState {
             }
             RenameToolbar { panel } | DuplicateToolbar { panel } | DeleteToolbar { panel } => {
                 if panel.kind() != PanelKind::Tiles {
-                    return Err("Choose a toolbar".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR).to_string());
                 }
                 let operation = match action {
                     RenameToolbar { .. } => ToolbarOperation::Rename,
@@ -1980,9 +1973,9 @@ impl CustomizationState {
                 let draft = self
                     .toolbar_prompt
                     .as_mut()
-                    .ok_or("The toolbar dialog is closed")?;
+                    .ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOLBAR_DIALOG_IS_CLOSED).to_string())?;
                 if matches!(draft.operation, ToolbarOperation::Delete) {
-                    return Err("This dialog does not edit a name".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THIS_DIALOG_DOES_NOT_EDIT_A_NAME).to_string());
                 }
                 draft.name = name;
                 draft.error = None;
@@ -1991,8 +1984,8 @@ impl CustomizationState {
                 let draft = self
                     .toolbar_prompt
                     .as_mut()
-                    .ok_or("The toolbar dialog is closed")?;
-                let result = draft.validate(layout).and_then(|_| match draft.operation {
+                    .ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOLBAR_DIALOG_IS_CLOSED).to_string())?;
+                let result = draft.validate(layout, localization).and_then(|_| match draft.operation {
                     ToolbarOperation::Rename => layout.rename_toolbar(draft.panel, &draft.name),
                     ToolbarOperation::Duplicate => layout
                         .duplicate_toolbar(draft.panel, &draft.name)
@@ -2018,16 +2011,16 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetTabHidden { panel, hidden } => {
-                let group = layout.panel_group(panel).ok_or("Panel is not docked")?;
+                let group = layout.panel_group(panel).ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_PANEL_IS_NOT_DOCKED).to_string())?;
                 if panel.kind() != PanelKind::Content || layout.group_panels(group)?.len() != 1 {
-                    return Err("Only a lone built-in panel can hide its tab".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_ONLY_A_LONE_BUILT_IN_PANEL_CAN_HIDE_ITS_TAB).to_string());
                 }
                 layout.panel_mut(panel)?.hide_tab = hidden;
                 changed |= regions::LAYOUT;
             }
             ShowAllControls { panel } => {
                 layout.panel(panel)?;
-                let group = layout.panel_group(panel).ok_or("Panel is not docked")?;
+                let group = layout.panel_group(panel).ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_PANEL_IS_NOT_DOCKED).to_string())?;
                 // Configuration extends an ordinary panel, not the compact
                 // column's content drawer. Reveal its normal source first.
                 if let Some(column) = layout.collapsed_column_for_group(group) {
@@ -2055,7 +2048,7 @@ impl CustomizationState {
                     .drawer_placement(&drawer, layout, viewport, &vec![0.0; drawer.columns.len()])
                     .is_none()
                 {
-                    return Err("The originating tile is not visible".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_ORIGINATING_TILE_IS_NOT_VISIBLE).to_string());
                 }
                 let close = self
                     .drawer
@@ -2075,7 +2068,7 @@ impl CustomizationState {
             ToggleColumnDrawer { group, panel } => {
                 let column = layout
                     .collapsed_column_for_group(group)
-                    .ok_or("The column is not collapsed")?;
+                    .ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_COLUMN_IS_NOT_COLLAPSED).to_string())?;
                 let settings = layout.column_stack(column);
                 if !settings.drawers {
                     let close = settings.open_column == Some(column) && layout.active_panel(panel) == Some(panel);
@@ -2115,9 +2108,9 @@ impl CustomizationState {
             }
             SetColumnDrawers { column, drawers } => {
                 if !layout.is_top_level_column(layout.column_stack(column).column) {
-                    return Err("Column settings require a top-level column".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_COLUMN_SETTINGS_REQUIRE_A_TOP_LEVEL_COLUMN).to_string());
                 }
-                if layout.node(column).is_none() { return Err("Unknown column".into()); }
+                if layout.node(column).is_none() { return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_UNKNOWN_COLUMN).to_string()); }
                 let root = layout.column_stack(column).column;
                 let s = layout.column_stack_mut(column);
                 s.drawers = drawers;
@@ -2128,19 +2121,19 @@ impl CustomizationState {
             }
             SetColumnAutoHide { column, auto_hide } => {
                 if !layout.is_top_level_column(layout.column_stack(column).column) {
-                    return Err("Column settings require a top-level column".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_COLUMN_SETTINGS_REQUIRE_A_TOP_LEVEL_COLUMN).to_string());
                 }
                 if layout.node(column).is_none() {
-                    return Err("Unknown column".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_UNKNOWN_COLUMN).to_string());
                 }
                 layout.column_stack_mut(column).auto_hide = auto_hide;
                 changed |= regions::LAYOUT;
             }
             ApplyColumnStack { column } => {
                 if !layout.is_top_level_column(layout.column_stack(column).column) {
-                    return Err("Column settings require a top-level column".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_COLUMN_SETTINGS_REQUIRE_A_TOP_LEVEL_COLUMN).to_string());
                 }
-                if layout.node(column).is_none() { return Err("Unknown column".into()); }
+                if layout.node(column).is_none() { return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_UNKNOWN_COLUMN).to_string()); }
                 let source = layout.column_stack(column);
                 for root in layout.column_roots() {
                     let s = layout.column_stack_mut(root);
@@ -2169,11 +2162,11 @@ impl CustomizationState {
                 visible: show,
             } => {
                 if !PanelControl::available(panel).contains(&control) {
-                    return Err("Control does not belong to this panel".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CONTROL_DOES_NOT_BELONG_TO_THIS_PANEL).to_string());
                 }
                 let PanelContent::Controls { visible } = &mut layout.panel_mut(panel)?.content
                 else {
-                    return Err("Choose a built-in panel".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_BUILT_IN_PANEL).to_string());
                 };
                 visible.retain(|c| *c != control);
                 if show {
@@ -2185,7 +2178,7 @@ impl CustomizationState {
             }
             OpenControl { control } => {
                 if control != PanelControl::BrushColor {
-                    return Err("Unsupported tool popup".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_UNSUPPORTED_TOOL_POPUP).to_string());
                 }
                 self.control = Some(control);
             }
@@ -2201,7 +2194,7 @@ impl CustomizationState {
                     if layout.validate_toolbar_name(&name).is_ok() {
                         break name;
                     }
-                    suffix = suffix.checked_add(1).ok_or("Toolbar names exhausted")?;
+                    suffix = suffix.checked_add(1).ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_TOOLBAR_NAMES_EXHAUSTED).to_string())?;
                 };
                 self.expanded = None;
                 self.control = None;
@@ -2216,10 +2209,10 @@ impl CustomizationState {
             InsertTools { panel, before } => {
                 let p = layout.panel(panel)?;
                 if panel.kind() != PanelKind::Tiles {
-                    return Err("Choose a toolbar".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR).to_string());
                 }
                 if before.is_some_and(|id| !p.tiles().iter().any(|t| t.id == id)) {
-                    return Err("The target tool no longer exists".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TARGET_TOOL_NO_LONGER_EXISTS).to_string());
                 }
                 self.expanded = None;
                 self.control = None;
@@ -2236,9 +2229,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             PickerName { name } => {
-                let p = self.picker.as_mut().ok_or("The tool picker is closed")?;
+                let p = self.picker.as_mut().ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOL_PICKER_IS_CLOSED).to_string())?;
                 let ToolDestination::NewToolbar { name: value, .. } = &mut p.destination else {
-                    return Err("This picker does not create a toolbar".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THIS_PICKER_DOES_NOT_CREATE_A_TOOLBAR).to_string());
                 };
                 *value = name;
                 p.error = None;
@@ -2246,14 +2239,14 @@ impl CustomizationState {
             PickerSearch { query } => {
                 self.picker
                     .as_mut()
-                    .ok_or("The tool picker is closed")?
+                    .ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOL_PICKER_IS_CLOSED).to_string())?
                     .query = query;
             }
             PickerSelect { control, selected } => {
                 if !tool_available(control, platform) {
-                    return Err("This tool is not available".into());
+                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THIS_TOOL_IS_NOT_AVAILABLE).to_string());
                 }
-                let p = self.picker.as_mut().ok_or("The tool picker is closed")?;
+                let p = self.picker.as_mut().ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOL_PICKER_IS_CLOSED).to_string())?;
                 if selected && !p.selected.contains(&control) {
                     p.selected.push(control);
                 }
@@ -2263,9 +2256,9 @@ impl CustomizationState {
                 p.error = None;
             }
             ConfirmTools => {
-                let picker = self.picker.as_mut().ok_or("The tool picker is closed")?;
+                let picker = self.picker.as_mut().ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOL_PICKER_IS_CLOSED).to_string())?;
                 let result = picker
-                    .validate(layout)
+                    .validate(layout, localization)
                     .and_then(|_| match &picker.destination {
                         ToolDestination::NewToolbar { group, name } => layout
                             .add_toolbar(*group, name, &picker.selected)
@@ -2488,6 +2481,21 @@ mod tests {
             .add_toolbar(Some(group), "Second", &[PEN])
             .unwrap();
         state.validate().unwrap();
+    }
+
+    #[test]
+    fn toolbar_admission_preserves_numeric_size_reason_and_cold_diagnostic() {
+        let panel = PanelConfig { id: Panel::Toolbar, hide_tab: false, tile_style: Default::default(), content: PanelContent::Toolbar { name: Some("literal {name} 🖌".into()), tiles: vec![ToolbarTile { id: 1, control: ToolbarControl::Size { pixels: 0 } }] } };
+        let expected = crate::NumericError::Range { label: MessageId::TOOL_SETTING_SIZE.into(), min: 0.5, max: 2048.0 };
+        assert_eq!(panel.validate_admission(), Err(crate::WorkspaceValidationError::Numeric(expected.clone())));
+        assert_eq!(panel.validate().unwrap_err(), expected.code());
+        assert_eq!(ToolbarControl::Size { pixels: 0 }.validate_admission(), Err(crate::WorkspaceValidationError::Numeric(expected)));
+        assert!(ToolbarControl::Size { pixels: 12 }.validate_admission().is_ok());
+        assert_eq!(panel.custom_name(), Some("literal {name} 🖌"));
+        let mut named = panel.clone();
+        named.content = PanelContent::Toolbar { name: Some("a".repeat(65)), tiles: vec![] };
+        assert_eq!(named.validate_admission(), Err(crate::WorkspaceValidationError::ToolbarName(ToolbarNameRefusal::Invalid)));
+        assert_eq!(named.validate().unwrap_err(), ToolbarNameRefusal::Invalid.diagnostic());
     }
 
     #[test]
