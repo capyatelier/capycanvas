@@ -390,8 +390,6 @@ impl Surface {
 
         let device = &present.device;
 
-        device.check_is_valid()?;
-
         let texture = present
             .acquired_texture
             .take()
@@ -403,6 +401,8 @@ impl Surface {
             .snatch(&mut exclusive_snatch_guard)
             .maybe_valid();
         drop(exclusive_snatch_guard);
+
+        device.check_is_valid()?;
 
         match inner {
             None => return Err(SurfaceError::TextureDestroyed),

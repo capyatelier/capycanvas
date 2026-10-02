@@ -7,6 +7,7 @@ import {checkToolbarComponents} from "./toolbar-components.test.mjs";
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkFilterPreviews} from "./filter-previews.test.mjs";
+import {checkSpatialFilterWindows} from "./effects.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
 import {checkStrokeRecording} from './stroke-recording.test.mjs';
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
@@ -104,7 +105,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -148,7 +149,7 @@ async function canvasPixels() {
   // Inspect the presented framebuffer. Reading a WebGPU canvas backbuffer in a
   // later task can return its newly cleared buffer instead of the visible frame.
   return evaluate(
-    `(async () => { const image = new Image(); image.src = ${JSON.stringify("data:image/png;base64,")} + ${JSON.stringify(shot.data)}; await image.decode(); const canvas = document.createElement('canvas'); canvas.width=image.width; canvas.height=image.height; const ctx=canvas.getContext('2d',{willReadFrequently:true}); ctx.drawImage(image,0,0); const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data; let white=0; for(let i=0;i<rgba.length;i+=4) if(rgba[i]>245 && rgba[i+1]>245 && rgba[i+2]>245) white++; return {white,total:rgba.length/4}; })()`,
+    `(async () => { const image = new Image(); image.src = ${JSON.stringify("data:image/png;base64,")} + ${JSON.stringify(shot.data)}; await image.decode(); const canvas = document.createElement('canvas'); canvas.width=image.width; canvas.height=image.height; const ctx=canvas.getContext('2d',{willReadFrequently:true}); ctx.drawImage(image,0,0); const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data; let white=0,colored=0; for(let i=0;i<rgba.length;i+=4) { if(rgba[i]>245 && rgba[i+1]>245 && rgba[i+2]>245) white++; if(Math.max(rgba[i],rgba[i+1],rgba[i+2])-Math.min(rgba[i],rgba[i+1],rgba[i+2])>30) colored++; } return {white,colored,total:rgba.length/4}; })()`,
   );
 }
 async function click(selector) {
@@ -273,6 +274,7 @@ try {
     [process.argv.includes("--color-panel"), () => checkColorPanel({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--filter-drawer"), () => checkFilterDrawer({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--filter-previews"), () => checkFilterPreviews({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--spatial-filter-windows"), () => checkSpatialFilterWindows({call,evaluate,settle,canvasPixels}), checkErrors],
     [process.argv.includes("--tonal-selection"), () => checkTonalSelections({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--toolbar-components"), () => checkToolbarComponents({call,evaluate,settle})],
     [process.argv.includes("--selection-tools"), () => checkSelectionTools({call,evaluate,settle}), checkErrors],

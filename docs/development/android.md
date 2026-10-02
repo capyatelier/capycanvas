@@ -148,7 +148,8 @@ behavior and high-refresh presentation need a real tablet.
 - `AndroidRasterTest`: document, file and GPU lifecycle.
   - `#navigationBuffersAndPenReturnsToFrontBuffer` and
     `#frontBufferSurfaceLifecycle` cover the switch between buffered navigation
-    and front-buffer ink, rotation, surface recreation and GPU recovery.
+    and front-buffer ink, rotation, surface recreation and GPU recovery,
+    including capture, detach and device loss with an unpresented FIFO image.
   - `#hdrDisplayNegotiation` takes `-e hdrFile <device path of a PQ PNG>`;
     `-e requireHdr true` fails instead of passing on an SDR-only display.
   - `#portablePhotoGainmapDelivery` takes
@@ -243,8 +244,12 @@ APK calls, so test-APK benchmarks use the unminified build.
   `effects` scrubs Exposure alone and after Levels/Vibrance; `spatial-effects`
   scrubs Gaussian Blur at small and large radii. Both prime the actual slider,
   wait for shader readiness and verify changing parameter values during motion.
+  `-e effectZoom 0.5` sets the filter camera after Fit; omit it for the Fit control.
   `-e captureFilters true` captures the resulting filter canvas in both themes
   after timing finishes.
+  `AndroidRasterTest#spatialFilterWindowsKeepPaintAndHistory` with
+  `-e spatialPhoto /data/local/tmp/capy-tier-24mp.jpg` exercises Gaussian Blur
+  at 50% zoom, touch navigation, stylus painting and exact undo/redo in both themes.
   `refine` drags the Refine panel's Feather slider with the stylus on a
   2048 × 1536 document and at `width` × `height`, and logs the values sent and
   previews drawn. `-e refine grow` (or `shrink`, `border`) picks another

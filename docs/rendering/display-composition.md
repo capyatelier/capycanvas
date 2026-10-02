@@ -113,7 +113,11 @@ levels share the scene's validity and memory allowance. Other stacks materialize
 their result and derive an adjacent output mip for trilinear presentation.
 
 The expression graph fills a padded, page-aligned viewport window at the selected
-resolution. Retained root and branch images have viewport bounds; pointwise
+resolution. Retained root images have viewport bounds; finite-radius filters
+expand their input and branch bounds by the sum of their scaled pass supports.
+Source preparation, scratch allocation and admission use those same padded
+bounds. Dense filter scratch reserves the expression graph's peak live images,
+including held masks and intermediate passes. Pointwise
 temporary results reuse 256-texel working tiles at every resolution. Every value and output carries its own grid,
 so a tile can compose directly into a viewport image without changing document
 coordinates. Aligned native sources borrow paint or decoded tiles directly.
@@ -134,8 +138,14 @@ overview serves pixels outside the window. Covered overview
 regions derive from completed detail; uncovered regions use reduced composition,
 avoiding duplicate exact-source work.
 The overview remains coarser than the window, including at reduced zoom.
-Image-boundary effects currently retain whole-document dependency coverage at
-reduced resolution.
+Document-wide effects retain whole-document dependency coverage at reduced
+resolution. Finite-radius filters preserve document-edge sampling while evaluating
+the requested output window and its complete input support. Native queries and
+idle refinement still use exact document pixels.
+Effect render passes cover at most 512 × 512 texels, with the complete input grid
+and unchanged sampling coordinates. Shorter passes let native controls share the
+GPU during expensive filters; their load/store cost remains part of the preview
+budget.
 Retained windows are admitted again when their source requirements change.
 Presentation regeneration advances display damage independently of the artwork
 revision used by document previews; camera motion does not publish an artwork edit.

@@ -498,3 +498,59 @@ fn native_photo_thumbnail_finishes_after_idle_and_restores_on_undo() {
     w.window.destroy();
     pump(100);
 }
+
+#[test]
+#[ignore = "private Wayland display; reduced spatial filter navigation"]
+fn native_spatial_filter_windows() {
+    let app = native_test_app("art.capycanvas.SpatialFilterWindows");
+    let mut project = photo([6000, 4000]);
+    project.document.layers.retain(|layer| layer.source.is_some());
+    for sigma in [9., 21., 13.] {
+        let mut layer = layer_core::Layer::paint(project.document.allocate_layer_id(), "Gaussian Blur");
+        layer.kind = layer_core::LayerKind::Effect;
+        let mut effect = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
+        effect.set("sigma", layer_core::EffectValue::Number(sigma)).unwrap();
+        layer.effect = Some(Arc::new(effect));
+        project.document.layers.insert(0, layer);
+    }
+    let filter = project.document.layers[0].id;
+    let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.set_default_size(1200, 900);
+    w.window.present();
+    let wait = || {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            pump(10);
+            let ready = w.gpu.borrow().as_ref().is_some_and(|g| {
+                assert!(!g.session.rendering_suspended());
+                g.session.engine().backend().startup.complete && !g.session.engine().has_pending_document_edits()
+            });
+            if ready && w.frame_timer.borrow().is_none() { break; }
+            assert!(Instant::now() < deadline, "spatial filter canvas must finish a frame");
+        }
+    };
+    wait();
+    w.dispatch(UiAction::SelectLayer { id: filter.0 });
+    let dir = artifact_dir("../../artifacts/ui/spatial-filter-windows-gtk");
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::SetZoom { zoom: 0.5 });
+        wait();
+        assert!((state(&w).camera.zoom - 0.5).abs() < 1e-6);
+        for (step, (center, sigma)) in [([2400., 1600.], 13.), ([3300., 2100.], 21.), ([2400., 1600.], 0.), ([2400., 1600.], 7.)].into_iter().enumerate() {
+            w.dispatch(UiAction::Effect { action: layer_ui::EffectAction::Set {
+                layer: filter.0, key: "sigma".into(), value: layer_core::EffectValue::Number(sigma),
+            } });
+            let camera = state(&w).camera;
+            let m = camera.document_to_surface();
+            let from = [m[0] * center[0] + m[2] * center[1] + m[4], m[1] * center[0] + m[3] * center[1] + m[5]];
+            let change = ui_session_mut(&w).gesture(from, camera.viewport.map(|v| v as f32 * 0.5), 1., 0.);
+            w.changed(change);
+            wait();
+            assert_eq!(ui_session(&w).engine().document().layers[0].effect.as_ref().unwrap().value("sigma"), Some(&layer_core::EffectValue::Number(sigma)));
+            crate::capture(&w, &format!("{dir}/{theme:?}-{step}.png"));
+        }
+    }
+    w.window.destroy();
+    pump(100);
+}

@@ -108,7 +108,7 @@ fn complete_compute_composition_replaces_the_clear_but_partial_writes_preserve_i
 #[test]
 fn effect_grids_preserve_document_coordinates_and_partial_edge_centers() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let extent = [547, 319];
+    let extent = [1091, 613];
     let mut scene = Scene::new(&r);
     let mut program = (*crate::tests::fixture("exposure").program()).clone();
     program.kind = layer_core::EffectKind::Generator;

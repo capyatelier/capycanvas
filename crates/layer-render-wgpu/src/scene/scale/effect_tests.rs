@@ -12,6 +12,185 @@ fn exact_pixels(r: &mut WgpuRasterizer) -> Vec<u8> {
     r.readback_srgb_rgba8().unwrap()
 }
 
+fn blur_chain(doc: &mut layer_core::Document) {
+    for (id, sigma) in [(80, 9.), (81, 21.), (82, 13.)] {
+        let mut blur = effect(id, "gaussian_blur");
+        Arc::make_mut(blur.effect.as_mut().unwrap()).set("sigma", EffectValue::Number(sigma)).unwrap();
+        doc.layers.insert(0, blur);
+    }
+}
+
+fn assert_window_matches_full(window: &WgpuRasterizer, full: &WgpuRasterizer) {
+    let plan = window.scale_display.as_ref().unwrap().plan;
+    let full_plan = full.scale_display.as_ref().unwrap().plan;
+    assert_eq!(plan.level, full_plan.level);
+    assert_eq!(full_plan.bounds, PixelRect::full(full_plan.extent));
+    let actual = display_pixels(window);
+    let expected = display_pixels(full);
+    let origin = [plan.bounds.min_x() >> plan.level, plan.bounds.min_y() >> plan.level];
+    for (i, pixel) in actual.iter().enumerate() {
+        let x = origin[0] + i as u32 % plan.size[0];
+        let y = origin[1] + i as u32 / plan.size[0];
+        let reference = expected[(y * full_plan.size[0] + x) as usize];
+        assert!(pixel.iter().zip(reference).all(|(a, b)| (a - b).abs() < 2e-5),
+            "level={} at [{x}, {y}]: {pixel:?} != {reference:?}", plan.level);
+    }
+}
+
+fn assert_spatial_storage_reserved(r: &WgpuRasterizer, frame: FramePacket<'_>) {
+    let cache = r.scale_display.as_ref().unwrap();
+    let input = input_plan(cache.plan, frame.layers);
+    let images = graph::scratch_images(frame, cache.plan.level, r.device.working_space()).unwrap();
+    let reserved = input.level_bytes(input.level) * (images - 1);
+    let actual = cache.output.iter().map(|image| texture_bytes(&image.texture)).sum::<u64>();
+    assert!(actual <= reserved, "spatial scratch storage={actual}, reservation={reserved}, images={images}");
+    let resident = resident_bytes_with_pool(cache, r.scene.as_ref().unwrap());
+    assert!(resident <= CACHE_BYTES, "spatial resident storage={resident}");
+}
+
+#[test]
+fn finite_radius_default_tablet_view_admits_reduced_composition_with_reserved_scratch() {
+    let mut doc = document_at([6000, 4000]);
+    doc.layers.insert(0, Layer::paint(LayerId(90), "empty ink"));
+    let mut blur = effect(80, "gaussian_blur");
+    Arc::make_mut(blur.effect.as_mut().unwrap()).set("sigma", EffectValue::Number(3.)).unwrap();
+    doc.layers.insert(0, blur);
+    assert_eq!(doc.layers.len(), 4);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.view.width_px = 2200;
+    frame.view.height_px = 1440;
+    frame.view.document_to_surface = [0.5, 0., 0., 0.5, -341., -207.];
+    let request = request(&r, frame).unwrap();
+    assert!(request.evaluation == Evaluation::Display);
+    assert_eq!(request.plan.level, 1);
+    r.submit(frame).unwrap();
+    assert!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Display);
+    assert_spatial_storage_reserved(&r, frame);
+}
+
+#[test]
+fn finite_radius_effects_admit_large_reduced_windows_and_global_effects_keep_full_bounds() {
+    let mut doc = document_at([65, 33]);
+    blur_chain(&mut doc);
+    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    for extent in [[6000, 4000], [9504, 6336]] {
+        doc.width = extent[0];
+        doc.height = extent[1];
+        let mut frame = packet(&doc.layers, extent);
+        frame.view.width_px = 960;
+        frame.view.height_px = 640;
+        frame.view.document_to_surface = [0.5, 0., 0., 0.5, -1200., -800.];
+        let plan = view_plan(frame, 1, Evaluation::Display).unwrap();
+        assert!(plan.bounds.area() < PixelRect::full(extent).area() / 2);
+        let request = request(&r, frame).unwrap();
+        assert_eq!(request.plan.level, 1);
+        assert!(request.evaluation == Evaluation::Display, "{extent:?} finite-radius windows stay reduced");
+        assert!(allocation(&r, plan, frame, None).into_iter().sum::<u64>() <= CACHE_BYTES);
+        r.submit(frame).unwrap();
+        let cache = r.scale_display.as_ref().unwrap();
+        assert!(cache.evaluation == Evaluation::Display);
+        let bytes = resident_bytes_with_pool(cache, r.scene.as_ref().unwrap());
+        assert!(bytes <= CACHE_BYTES, "{extent:?} resident storage={bytes}");
+        assert_spatial_storage_reserved(&r, frame);
+    }
+    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    frame.view.width_px = 512;
+    frame.view.height_px = 384;
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, -1200., -800.];
+    let plan = view_plan(frame, 2, Evaluation::Display).unwrap();
+    assert!(plan.bounds.area() < PixelRect::full(plan.extent).area() / 8);
+    let request = request(&r, frame).unwrap();
+    assert_eq!(request.plan.level, 2);
+    assert!(request.evaluation == Evaluation::Display);
+    assert!(allocation(&r, plan, frame, None).into_iter().sum::<u64>() <= CACHE_BYTES);
+    let view = frame.view;
+
+    let program = Arc::make_mut(&mut Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).program);
+    program.passes = vec![layer_core::EffectPass {
+        entry: program.entry.clone(), sampling: layer_core::EffectSampling::Document,
+    }].into();
+    let frame = FramePacket { view, ..packet(&doc.layers, [doc.width, doc.height]) };
+    assert_eq!(view_plan(frame, 2, Evaluation::Display).unwrap().bounds, PixelRect::full(plan.extent));
+    doc.layers[0].visible = false;
+    let frame = FramePacket { view, ..packet(&doc.layers, [doc.width, doc.height]) };
+    assert!(view_plan(frame, 2, Evaluation::Display).unwrap().bounds.area() < PixelRect::full(plan.extent).area() / 8);
+}
+
+#[test]
+fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support_changes() {
+    for space in layer_core::BlendSpace::ALL {
+        let mut doc = document_at([2053, 1541]);
+        let extent = [doc.width, doc.height];
+        let paint = doc.layers[0].id;
+        blur_chain(&mut doc);
+        let mut mask = layer_core::LayerMask::reveal_all(LayerId(83), layer_core::Point { x: 17., y: -9. });
+        mask.initial = Some(layer_core::Selection::polygon(vec![
+            layer_core::Point { x: 270., y: 170. }, layer_core::Point { x: 1700., y: 270. },
+            layer_core::Point { x: 1600., y: 1290. }, layer_core::Point { x: 310., y: 1250. },
+        ]).unwrap());
+        doc.layers[1].mask = Some(mask);
+        doc.layers[1].opacity = 0.7;
+        doc.layers[1].properties.clipped = true;
+        let mut window = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut full = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        for (step, (level, origin, sigma)) in [
+            (1, [610., 610.], 13.), (1, [1110., 790.], 13.), (1, [610., 610.], 13.),
+            (2, [610., 610.], 21.), (2, [810., 690.], 0.), (2, [610., 610.], 7.),
+        ].into_iter().enumerate() {
+            Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("sigma", EffectValue::Number(sigma)).unwrap();
+            let scale = 1. / (1 << level) as f32;
+            let mut frame = packet(&doc.layers, extent);
+            frame.blend_space = space;
+            frame.composite_all = false;
+            frame.view.width_px = 192;
+            frame.view.height_px = 128;
+            frame.view.document_to_surface = [scale, 0., 0., scale, -origin[0] * scale, -origin[1] * scale];
+            let whole = FramePacket { view: layer_render::ViewState { width_px: extent[0], height_px: extent[1],
+                document_to_surface: [scale, 0., 0., scale, 0., 0.], ..frame.view }, ..frame };
+            window.submit(frame).unwrap();
+            full.submit(whole).unwrap();
+            let plan = window.scale_display.as_ref().unwrap().plan;
+            assert_eq!(plan.level, level);
+            assert!(plan.bounds.min_x() > 0 && plan.bounds.min_y() > 0);
+            assert!(plan.bounds.area() < PixelRect::full(extent).area());
+            assert_window_matches_full(&window, &full);
+            assert_spatial_storage_reserved(&window, frame);
+            if step == 0 || step == 3 {
+                for center in [[plan.bounds.min_x() as f32 - 7., origin[1] + 70.],
+                    [768., 512.], [plan.bounds.max_x() as f32 + 7., origin[1] + 70.]] {
+                    let mut dab = crate::tests::test_dab(center, [0.9, 0.1, 0.2, 1.], 1.);
+                    dab.radii = [11.; 2];
+                    let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+                    window.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+                    full.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..whole }).unwrap();
+                    assert_window_matches_full(&window, &full);
+                    assert_spatial_storage_reserved(&window, frame);
+                }
+            }
+            assert_presentation_mip(&window);
+        }
+        assert_eq!(exact_pixels(&mut window), exact_pixels(&mut full));
+        full.test.reference = true;
+        full.submit(FramePacket { blend_space: space, ..packet(&doc.layers, extent) }).unwrap();
+        let reference = pixels(&full, crate::test_support::document_texture(&full));
+        let mut frame = packet(&doc.layers, extent);
+        frame.blend_space = space;
+        frame.view.width_px = 192;
+        frame.view.height_px = 128;
+        frame.view.document_to_surface = [0.25, 0., 0., 0.25, -152.5, -152.5];
+        window.submit(frame).unwrap();
+        assert!(window.has_pending_work());
+        let mut scene = window.scene.take().unwrap();
+        let mut encoder = crate::submission::CommandEncoder::new(&window.device, &Default::default());
+        scene.refine_display(&mut window, frame, &mut encoder).unwrap();
+        drop(encoder);
+        window.scene = Some(scene);
+        window.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+        assert_settled(&mut window, frame, &reference);
+    }
+}
+
 #[test]
 fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries() {
     for space in layer_core::BlendSpace::ALL {

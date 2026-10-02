@@ -66,6 +66,8 @@ warm textures and theme loops remain in their callers.
 Docking and ink checks retain pressure editing, native wrapping and GPU pixels.
 Drop rules and tile/grip bounds belong to `native_layout_drop_input`,
 `native_toolbar_sizing` and `native_ribbon_allocation`.
+`native_spatial_filter_windows` checks a 24 MP photo with chained Gaussian blurs
+at 50% zoom, panning and radius changes in both themes.
 
 [`workspace-motion.sh`](../../tools/performance/workspace-motion.sh) builds the
 release tests, starts a private D-Bus session, headless Mutter and PipeWire, and

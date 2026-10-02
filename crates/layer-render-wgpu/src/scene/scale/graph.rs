@@ -49,7 +49,7 @@ impl Expression {
                     let (work, scratch) = mask.cost();
                     (w + work, s.max(scratch), n + 1)
                 });
-                (work + 1 + mask_work, scratch.max(mask_scratch + count + 2))
+                (work + 1 + mask_work, scratch.max(mask_scratch + count + 3))
             }
         }
     }
@@ -66,7 +66,8 @@ impl Expression {
             Self::Opacity { input, .. } => input.damage(sources, plan),
             Self::Combine { front, back, .. } => front.damage(sources, plan).union(back.damage(sources, plan)),
             Self::Effect { input, masks, radius, .. } => masks.iter().flatten().fold(
-                crate::effects::dependency(input.damage(sources, plan), *radius, plan), |r, n| r.union(n.damage(sources, plan))),
+                crate::effects::dependency(input.damage(sources, plan), *radius, display_mips::Plan::at(plan.extent, plan.level)),
+                |r, n| r.union(n.damage(sources, plan))),
         }
     }
     pub(super) fn required(&self, region: PixelRect, plan: display_mips::Plan) -> PixelRect {
@@ -142,14 +143,7 @@ impl Graph {
                 self.effects.insert(layer.id, (metadata, self.revision));
             }
         }
-        let mut builder = Builder { packet, sources, effects: &self.effects, level: plan.level, space: r.device.working_space() };
-        let output = stack::compose(&mut builder, packet.layers, None, None)?;
-        let mut root = Expression::over(&output);
-        for layer in packet.layers {
-            if layer.mask.as_ref().is_some_and(|m| m.enabled && m.show_area) {
-                root = Expression::combine(builder.source(layer, true), root, layer_core::LayerBlend::Normal, 64);
-            }
-        }
+        let root = compose(packet, Some(sources), Some(&self.effects), plan.level, r.device.working_space())?;
         let mut all = HashSet::new();
         Expression::visit(&root, &mut all);
         let mut eligible: Vec<_> = all.into_iter().filter(|n| !Arc::ptr_eq(n, &root)
@@ -161,6 +155,7 @@ impl Graph {
         for node in wanted {
             let dirty = node.damage(sources, plan);
             let branch = self.branches.entry(node).or_insert_with(|| Branch { image: None, valid: BTreeSet::new() });
+            if branch.image.as_ref().is_some_and(|image| image.plan != plan) { branch.image = None; branch.valid.clear(); }
             branch.valid.retain(|c| page_rect(*c).intersect(dirty).is_empty());
         }
         self.root = Some(root);
@@ -172,17 +167,36 @@ impl Graph {
     }
 }
 
+pub(super) fn scratch_images(packet: FramePacket<'_>, level: u32, space: layer_core::color::RgbSpace) -> Result<u64, GpuRasterError> {
+    Ok(u64::from(compose(packet, None, None, level, space)?.cost().1) + 1)
+}
+
+fn compose(
+    packet: FramePacket<'_>, sources: Option<&Sources>, effects: Option<&HashMap<LayerId, (metadata::Metadata, u64)>>,
+    level: u32, space: layer_core::color::RgbSpace,
+) -> Result<Node, GpuRasterError> {
+    let mut builder = Builder { packet, sources, effects, level, space };
+    let output = stack::compose(&mut builder, packet.layers, None, None)?;
+    let mut root = Expression::over(&output);
+    for layer in packet.layers {
+        if layer.mask.as_ref().is_some_and(|m| m.enabled && m.show_area) {
+            root = Expression::combine(builder.source(layer, true), root, layer_core::LayerBlend::Normal, 64);
+        }
+    }
+    Ok(root)
+}
+
 struct Builder<'a> {
     packet: FramePacket<'a>,
-    sources: &'a Sources,
-    effects: &'a HashMap<LayerId, (metadata::Metadata, u64)>,
+    sources: Option<&'a Sources>,
+    effects: Option<&'a HashMap<LayerId, (metadata::Metadata, u64)>>,
     level: u32,
     space: layer_core::color::RgbSpace,
 }
 impl Builder<'_> {
     fn source(&self, layer: &Layer, mask: bool) -> Node {
         let id = if mask { layer.mask.as_ref().unwrap().id } else { layer.id };
-        if !self.sources.entries.contains_key(&id) { return Expression::color([0.; 4]); }
+        if self.sources.is_some_and(|sources| !sources.entries.contains_key(&id)) { return Expression::color([0.; 4]); }
         let outside = layer.mask.as_ref().filter(|_| mask).map_or(0., |m| if m.inverted { 1. - m.default_coverage } else { m.default_coverage });
         Arc::new(Expression::Source { id, placement: layer_core::target_transform(self.packet.layers, id).0.map(f32::to_bits),
             extent: layer.local_extent(self.packet.document_extent), outside: outside.to_bits() })
@@ -235,7 +249,7 @@ impl stack::Compositor for Builder<'_> {
         let chain = indices.iter().map(|i| {
             let layer = &self.packet.layers[*i];
             let effect = layer.effect.as_ref().unwrap();
-            (layer.id, self.effects[&layer.id].1, if effect.animated() { self.packet.time_seconds.to_bits() } else { 0 })
+            (layer.id, self.effects.map_or(0, |effects| effects[&layer.id].1), if effect.animated() { self.packet.time_seconds.to_bits() } else { 0 })
         }).collect();
         let masks = indices.iter().map(|i| {
             let layer = &self.packet.layers[*i];
@@ -269,10 +283,11 @@ impl Evaluator<'_> {
         if let Some(branch) = self.cache.graph.branches.get(node)
             && page_coordinates(region).all(|c| branch.valid.contains(&c))
             && let Some(image) = &branch.image {
-                return Ok(Value::Image { view: image.view.clone(), slot: None, opacity: 1., plan: self.cache.plan, preview: None, encode: false });
+                return Ok(Value::Image { view: image.view.clone(), slot: None, opacity: 1., plan: image.plan, preview: None, encode: false });
         }
         let output = if let Some(branch) = self.cache.graph.branches.get_mut(node) {
-            Some(Target { view: branch.image.get_or_insert_with(|| Image::new(self.r, self.cache.plan, "composition branch")).view.clone(), slot: None, plan: self.cache.plan })
+            let image = branch.image.get_or_insert_with(|| Image::new(self.r, self.input, "composition branch"));
+            Some(Target { view: image.view.clone(), slot: None, plan: image.plan })
         } else { output };
         let result = match node.as_ref() {
             Expression::Color(c) => Value::Color(c.map(f32::from_bits)),
@@ -291,7 +306,8 @@ impl Evaluator<'_> {
             Expression::Effect { input, chain, masks, .. } => self.effect(input, chain, masks, output)?,
         };
         if let Some(branch) = self.cache.graph.branches.get_mut(node) {
-            branch.valid.extend(page_coordinates(region).filter(|c| page_rect(*c).intersect(self.cache.plan.bounds).intersect(region) == page_rect(*c).intersect(self.cache.plan.bounds)));
+            let bounds = branch.image.as_ref().unwrap().plan.bounds;
+            branch.valid.extend(page_coordinates(region).filter(|c| page_rect(*c).intersect(bounds).intersect(region) == page_rect(*c).intersect(bounds)));
         }
         Ok(result)
     }

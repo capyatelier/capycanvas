@@ -206,6 +206,13 @@ class AndroidRasterTest {
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
+    private fun sourceIdentity(manifest: JSONObject): String {
+        val sources = JSONObject(manifest.getJSONObject("tiled_sources").toString())
+        for (image in sources.getJSONArray("images").objects()) for (tile in image.getJSONArray("tiles").objects()) {
+            val blob=JSONObject(manifest.getJSONArray("blobs").getJSONObject(tile.getInt("blob")).toString());blob.remove("offset");tile.put("blob",blob)
+        }
+        return sources.getJSONArray("images").toString()
+    }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
     @Test fun webpExportThroughTheDialogDecodes() {
@@ -1556,13 +1563,6 @@ class AndroidRasterTest {
             }
         }
         fun count() = native { state(it).array("layers").length() }
-        fun sourceIdentity(manifest: JSONObject): String {
-            val sources = JSONObject(manifest.getJSONObject("tiled_sources").toString())
-            for (image in sources.getJSONArray("images").objects()) for (tile in image.getJSONArray("tiles").objects()) {
-                val blob=JSONObject(manifest.getJSONArray("blobs").getJSONObject(tile.getInt("blob")).toString());blob.remove("offset");tile.put("blob",blob)
-            }
-            return sources.getJSONArray("images").toString()
-        }
         fun batch(inputs: List<File>, afterRead: ((Long,Int,Long)->Unit)? = null) {
             val control = Native.captureControl()
             val (task,id) = native { h ->
@@ -1846,6 +1846,55 @@ class AndroidRasterTest {
             invoke("select_all"); copy("24 MP photo after a stroke, Select All")
             assertNull(host.failure)
         } finally { photo.delete() }
+    }
+
+    @Test fun spatialFilterWindowsKeepPaintAndHistory() {
+        val source = InstrumentationRegistry.getArguments().getString("spatialPhoto")
+            ?: throw AssumptionViolatedException("Supply -e spatialPhoto with the 24 MP reference photo")
+        val photo = File(files, "spatial-window.jpg").apply {
+            writeBytes(ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("cat $source")).use { it.readBytes() })
+        }
+        action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)))
+        open(photo); refresh()
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+        assertEquals(24_000_000L, histogram().getLong("pixels"))
+        action(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false)))
+        val paint = native { state(it).getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id") }
+        action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "gaussian_blur")))
+        val filter = native { state(it).getJSONObject("layer_properties").getLong("layer") }
+        val output = File(activity.getExternalFilesDir(null), "spatial-filter-windows").apply { mkdirs() }
+        for (theme in listOf("dark", "light")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "set_zoom", "zoom" to .5))
+            for (sigma in listOf(0.0, 21.0, 7.0)) {
+                action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to filter, "key" to "sigma", "value" to obj("kind" to "number", "value" to sigma))))
+                action(obj("type" to "select_layer", "id" to paint))
+                action(obj("type" to "invoke", "command" to "hand"))
+                motion(android.view.MotionEvent.TOOL_TYPE_FINGER, 30, 3000.0 to 2000.0)
+                action(obj("type" to "invoke", "command" to "fit_canvas"))
+                action(obj("type" to "set_zoom", "zoom" to .5))
+            }
+            val before = manifest(save("spatial-before.capy"))
+            action(obj("type" to "invoke", "command" to "brush")); action(obj("type" to "select_brush", "id" to 1))
+            action(obj("type" to "set_brush_size", "value" to 120))
+            action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(1.0, .1, .3, 1.0))))
+            motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30, 3000.0 to 2000.0)
+            compose.waitUntil(60_000) { !tick() }
+            val painted = manifest(save("spatial-painted.capy"))
+            assertNotEquals(before.get("rasters").toString(), painted.get("rasters").toString())
+            assertEquals(sourceIdentity(before), sourceIdentity(painted))
+            invoke("undo")
+            assertEquals(before.get("rasters").toString(), manifest(save("spatial-undo.capy")).get("rasters").toString())
+            invoke("redo")
+            assertEquals(painted.get("rasters").toString(), manifest(save("spatial-redo.capy")).get("rasters").toString())
+            assertNull(host.failure); assertNull(host.actionError)
+            instrumentation.uiAutomation.takeScreenshot()?.let { shot ->
+                try { File(output, "$theme.png").outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                finally { shot.recycle() }
+            }
+            invoke("undo")
+        }
+        photo.delete()
     }
 
     @Test fun largePhotoFilterPreviews() {
@@ -2497,12 +2546,29 @@ class AndroidRasterTest {
             assertTrue(display.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))
             assertEquals(display.getString("present_mode") == "SharedDemandRefresh", display.getBoolean("retained_target"))
         }
+        fun pendingBufferedFrame(transition: (Long) -> Unit) = native { handle ->
+            val submitted=JSONObject(Native.displayStatus(handle)).getLong("submitted_frames")
+            val zoom=state(handle).getJSONObject("camera").getDouble("zoom")
+            Native.dispatch(handle,obj("type" to "set_zoom","zoom" to zoom*1.1).toString())
+            val now=System.nanoTime()
+            assertTrue("A submitted buffered frame requests its presentation retry",Native.frame(handle,now,now+16_666_667))
+            val display=JSONObject(Native.displayStatus(handle))
+            assertEquals("Fifo",display.getString("present_mode"))
+            assertEquals(submitted+1,display.getLong("submitted_frames"))
+            transition(handle)
+        }
         stroke(0.0)
         val painted=hash(png("front-painted.png"))
+        pendingBufferedFrame { handle ->
+            val bytes=Native.surfacePixelsForTest(handle)
+            assertTrue("Pending buffered capture contains artwork",(bytes.indices step 97).map {bytes[it]}.toSet().size>8)
+        }
+        ready()
         scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
         scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         ready()
         assertEquals(painted,hash(png("front-resumed.png")))
+        pendingBufferedFrame { Native.detach(it) }
         scenario.recreate()
         scenario.onActivity { activity=it }
         ready()
@@ -2534,7 +2600,7 @@ class AndroidRasterTest {
         val submitted=native {JSONObject(Native.displayStatus(it)).getLong("submitted_frames")}
         SystemClock.sleep(300)
         assertEquals("An idle front buffer stops submitting",submitted,native {JSONObject(Native.displayStatus(it)).getLong("submitted_frames")})
-        native { Native.destroyGpuForTest(it) }
+        pendingBufferedFrame { Native.destroyGpuForTest(it); Native.detach(it) }
         compose.runOnUiThread { host.documentChanged() }
         compose.waitUntil(10_000) { host.failure!=null }
         compose.runOnUiThread { host.restartCanvas() }

@@ -33,6 +33,7 @@ impl Drop for Window {
     }
 }
 pub(crate) struct Surface {
+    pending_target: Option<wgpu::SurfaceTexture>,
     // Drop the swapchain before releasing its native-window reference.
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -181,7 +182,7 @@ pub extern "system" fn Java_art_capycanvas_Native_renderingPending(
     (engine.has_pending_document_edits()
         || layer_render::CanvasRenderer::has_pending_work(engine.backend())
         || a.surface.as_ref().is_some_and(|surface|
-            surface.completed_frames.load(Ordering::Acquire) < surface.submitted_frames)) as jboolean
+            surface.pending_target.is_some() || surface.completed_frames.load(Ordering::Acquire) < surface.submitted_frames)) as jboolean
 }
 
 #[unsafe(no_mangle)]
@@ -452,6 +453,7 @@ impl App {
         let presenter = ViewportPresenter::for_surface(gpu, config.format, color).map_err(error)?;
         let navigation_latency = navigation_frame_latency(&surface, gpu.adapter());
         let mut surface = Surface {
+            pending_target: None,
             surface,
             config,
             sdr_format,
@@ -527,11 +529,17 @@ impl App {
         self.check_gpu()?;
         if self.host.session.engine().backend().0.is_none() { return Ok(false); }
         self.frame_cost.fill(0);
+        if let Some(surface) = &mut self.surface {
+            if surface.pending_target.is_some() && surface.completed_frames.load(Ordering::Acquire) < surface.submitted_frames { return Ok(true); }
+            if let Some(target) = surface.pending_target.take() {
+                let clock = self.profiling.then(std::time::Instant::now);
+                self.host.session.engine().backend().0.as_ref().unwrap().queue().present(target);
+                self.frame_cost[3] = clock.map_or(0, |clock| clock.elapsed().as_nanos() as i64);
+            }
+        }
         if (!self.host.dirty && self.host.startup.complete) || self.surface.is_none() {
             return Ok(false);
         }
-        // Bound pending updates while allowing CPU encoding to overlap the
-        // preceding GPU update on the same ordered queue.
         if self.surface.as_ref().is_some_and(|s| s.submitted_frames.saturating_sub(s.completed_frames.load(Ordering::Acquire)) >= 2) { return Ok(true); }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
@@ -642,7 +650,8 @@ impl App {
             .map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         let submitted_ns = surface.completion_observer.as_ref().map_or(0, |_| monotonic_ns());
-        gpu.queue().present(target);
+        if surface.config.present_mode == wgpu::PresentMode::Fifo { surface.pending_target = Some(target); }
+        else { gpu.queue().present(target); }
         surface.last_view = Some(view);
         surface.last_paint_start = paint_start;
         surface.submitted_frames += 1;
@@ -674,12 +683,13 @@ impl App {
         surface.presented_tone_publications = presented_tone;
         self.blank_presented = true;
         self.screen_presented = std::time::Instant::now();
-        self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
+        self.frame_cost[3] += elapsed() - self.frame_cost[..3].iter().sum::<i64>();
         // Poll once before resource use, not again after submission. The next
         // frame/readback worker services completion; initial surface readiness
         // has its own poll while its first finished buffer is awaited.
+        let pending = surface.pending_target.is_some();
         self.check_gpu()?;
-        Ok(self.host.dirty)
+        Ok(self.host.dirty || pending)
     }
 }
 

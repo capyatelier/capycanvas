@@ -1,0 +1,8 @@
+--- a/wgpu-core/src/present.rs
++++ b/wgpu-core/src/present.rs
+@@ -393,2 +392,0 @@
+-        device.check_is_valid()?;
+-
+@@ -405,0 +404,2 @@
++
++        device.check_is_valid()?;

@@ -218,10 +218,19 @@ adapter, and is recreated with each device.
 `wgpu-core` 30.0.1 is pinned to upstream revision
 `40f4a34ebaf56f9a046231f54125ad046239d3f3`, registry archive SHA-256
 `14c018fce9b6270aa203c2fdd56f3cce996713534bd757e4ea58c8560b121f14`.
-Its licenses and registry provenance are retained. The sole functional core change lets
-HAL surface acquisitions explicitly report initialized retained contents;
+Its licenses and registry provenance are retained. HAL surface acquisitions
+explicitly report initialized retained contents;
 ordinary acquired images still require initialization. One upstream comment
 trailing space is also removed.
+
+`wgpu-surface-discard-lost-device.patch` removes the acquired texture before
+checking device validity. A lost-device return releases its metadata
+without retaining swapchain semaphore references through surface teardown.
+The texture inner is removed under the existing resource lock, including when
+other handles still reference the texture. The lock is released before the
+device check and backend discard. `AndroidRasterTest#frontBufferSurfaceLifecycle`
+submits a buffered frame, destroys its device and detaches its surface in one
+native worker call before checking GPU recovery and exact artwork.
 
 The Vulkan HAL adds `SharedDemandRefresh`, advertised only by Android surfaces
 with shared-image color-attachment support and present fences. It acquires one

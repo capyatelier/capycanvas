@@ -20,7 +20,7 @@ canvas is 6000 × 4000.
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
-| Pan: Hand tool, one or two fingers | 90 | Every 60 Hz vsync, 4096 px document; GPU p50 6.8 ms Linear, 7.5 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
+| Pan: Hand tool, one or two fingers | 90 | Renderer 60.1 completed canvas updates/s; completion gap p99 18.8–19.3 ms, 24 MP photo | Spatial composition comparison below; 90 Hz not met |
 | Pinch zoom | 90 | Every 60 Hz vsync, 4096 px document; GPU p50 7.8 ms Linear, 8.5 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
 | Two-finger rotate | 90 | | |
 | Navigator drag | 90 | | |
@@ -35,7 +35,7 @@ canvas is 6000 × 4000.
 | Selection Brush or Quick Mask, 1536 px | 90 | | |
 | Grow, Shrink or Feather drag, full canvas | 90, soft | | |
 | Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 90, soft | | |
-| Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 90, soft | | |
+| Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 90, soft | Gaussian at 50%: 7.2/s small, 4.6/s large fresh completed canvas updates; UI 58.7–59.3/s and 40.3–41.8/s. Fit: 38.9/s and 26.1/s fresh canvas updates | Spatial composition comparison below; target not met; other filters unmeasured |
 | Animated or warping filter: Domain Warp, Ripple | 90, soft | | |
 | Fill layer or gradient-fill edit | 90, soft | | |
 | Navigation with proof or tone guide shown | 90 | | |
@@ -66,6 +66,73 @@ Chrome 137, injected pen input through DevTools and Chrome's
 Raw frame data, Chrome traces and fixture details are in
 `artifacts/swipe-alpha-lock/`; Android's repeatable entry point is
 `AndroidTitleBarTest#layerSwipeFrameTiming` ([layer gesture checks](../ui/drag-and-reorder.md#required-validation-when-implementing)).
+
+## Spatial composition comparison
+
+Measured on 2026-10-02 UTC on the Wacom MovinkPad 11, Mali-G57 MC2, with
+release Rust in the benchmark APK. The baseline is `f820bb89c`; the optimized
+build is based on `864629ed8`. Its APK SHA-256 is
+`bbce2e5cb432c2155cfec07eb85c21ea190696dfd7813b6f9a48897e9e7ffd5f`.
+The 6000 × 4000 reference photo has an empty paint layer above it; Navigator
+and the filter properties are open, Stats is closed, and panel glass uses its
+default. Gaussian slider gestures have one priming drag and three warmed
+five-second moving drags per range and camera. Thermal status is zero before
+and after every run. The measured sigma ranges are 2.6–4.9 document pixels
+(small) and 14.2–16.6 (large). The physical surface is 2200 × 1440, with a
+1150 × 1272 work area. The 50% camera is translated by (-341, -207); Fit is 17.25%.
+
+| Gaussian workload | Before fresh canvas updates/s, median (range) | After fresh canvas updates/s, median (range) | GPU composition p50 before → after |
+| --- | ---: | ---: | ---: |
+| 50%, small radius | 0.40 (0.40–0.40) | 7.17 (7.17–7.18) | 1796.89 → 116.20 ms; 15.46× |
+| 50%, large radius | 0.20 (0.20–0.20) | 4.56 (4.56–4.59) | 4209.94 → 195.17 ms; 21.57× |
+| Fit, small radius | 37.34 (29.31–38.27) | 38.89 (38.50–43.64) | Not traced |
+| Fit, large radius | 25.08 (24.52–25.31) | 26.12 (25.32–26.12) | Not traced |
+
+Canvas rates count changed raster frames queued and GPU-completed within the
+motion window. They are not presentation rates. UI rates come from
+`FrameMetrics`, which also include controls moving while the canvas waits.
+The two 50% ranges show 58.7–59.3/s and 40.3–41.8/s UI frames after optimization;
+the baseline shows 57.1–57.7/s and 42.2–42.8/s. The display holds 60 Hz, and
+neither range meets the 90 fps target. These results do not establish a soft
+target waiver. A separate traced drag supplies the GPU medians; observations
+are matched to raster frame IDs queued during motion, including timing counters
+published after release. Baseline GPU samples are sparse (two small, one large)
+because its full-image fallback takes seconds per update.
+
+At 50%, the output window is 2560 × 1792 texels. The input window includes the
+sum of the chain's declared sampling radii; global effects retain whole-image
+dependencies. A successful standalone calibration measured both Gaussian
+passes at sigma 3, 8 and 21 on a 2048² RGBA32Float image, with 512² scissor
+passes, four warmups and 30 retained samples per direction and radius.
+Interpolating those per-pixel costs at half the native radius, adding three
+copy-equivalent composition operations and 10–20 ms for overview/mip work,
+predicts 103–113 ms for the small range and 206–216 ms for the large range.
+Measured composition is within about 12% of the corresponding predicted
+speedups. The coefficients were measured independently of the slider journey.
+This is an approximate cost model, not a bound on GPU scheduling contention.
+
+The retained-photo controls use three warmed five-second native-input gestures:
+
+| Control | Before | After |
+| --- | ---: | ---: |
+| Pan, completed canvas updates/s, median | 59.94 | 60.05 |
+| Pan, completion gap p99, range | 17.46–17.58 ms | 18.79–19.28 ms |
+| G-Pen 1536 px, fresh/input updates/s, median | 55.28 | 54.78 |
+| G-Pen 1536 px, input completion gap p99, range | 29.84–32.07 ms | 30.98–34.40 ms |
+
+The G-Pen path is a contained 310 × 150 px ellipse at 15.99% Fit, with 200 Hz
+stylus input and 16 ms prediction. These controls show no material throughput
+regression; the brush remains below its 90 updates/s guarantee. Pan records GPU
+completion rather than scanout, so it does not qualify the display-paced target.
+The final Fit medians are slightly higher. No separate ROI speedup is expected
+when the whole photo is visible.
+
+Raw runs, traces, calibration, cost model and validation logs are retained in
+`artifacts/bounded-spatial-effects-results/`. The shared pixel oracle verifies
+chained filters, masks, clipping, offscreen damage, both blend spaces and exact
+refinement. The actual tablet viewport admits the 24 MP single-filter window
+under the 608 MiB composition-cache limit; total renderer storage includes
+additional source and paint allocations and is not bounded by that cache limit.
 
 ## Brushes
 
@@ -126,7 +193,7 @@ the rest of the simple class remains unqualified there.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1536 px | 55.6 fresh updates/s (54.86–56.06); completion gap p99 31.87–33.45 ms | **Not met** |
+| G-Pen (1) | Simple | 1536 px | 54.8 fresh/input updates/s (54.43–54.87); input completion gap p99 30.98–34.40 ms | **Not met** |
 | Rough G-Pen (28) | Simple | 2048 px | 12.2 updates/s (12.0–12.2); gap p99 152.2 ms | 1536 px unmeasured |
 | Calligraphy Pen (29) | Simple | 2048 px | 35.2 updates/s (35.1–35.3); gap p99 73.2 ms | 1536 px unmeasured |
 | Antique Pen (30) | Simple | 2048 px | 16.2 updates/s (16.0–16.3); gap p99 171.2 ms | 1536 px unmeasured |

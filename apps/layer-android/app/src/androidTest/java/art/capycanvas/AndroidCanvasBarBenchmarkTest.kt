@@ -39,6 +39,7 @@ class AndroidCanvasBarBenchmarkTest {
         val height = args.getString("height", "4000")!!.toInt()
         val photoPath = args.getString("photo")
         val zoomOut = args.getString("zoomOut", "true") == "true"
+        val effectZoom = args.getString("effectZoom")?.toDouble()
         val transparency = listOf("off", "low", "medium", "high").indexOf(args.getString("transparency", "low"))
         val only = args.getString("scenarios")?.split(',')
         val refine = args.getString("refine", "feather")!!
@@ -383,6 +384,7 @@ class AndroidCanvasBarBenchmarkTest {
                     waitFor("panel configuration closed") { state().getJSONObject("customization").isNull("expanded") }
                     waitFor("${scrub.title} control") { findTag("number-slider-${scrub.title}") != null }
                     invoke("fit_canvas")
+                    effectZoom?.let { action(obj("type" to "set_zoom", "zoom" to it)) }
                     var track = android.graphics.RectF()
                     instrumentation.runOnMainSync {
                         val (root, node) = findTag("number-slider-${scrub.title}")!!

@@ -87,6 +87,10 @@ Android draws pen strokes into one retained Vulkan shared-demand image
 display can read while the app writes, so ink can tear; the trade is lower pen
 latency. Camera changes switch to FIFO presentation and stay buffered until the
 next paint contact, which switches back before any brush GPU work is submitted.
+Buffered frames retain their acquired image until the existing completion
+callback is polled, then present it on the next canvas tick. The canvas owner can
+receive input and actions while the GPU works. Surface retirement discards any
+held image before releasing the swapchain.
 Each switch resets damage history, so its first frame is a full redraw. There is
 no buffered fallback: a driver without shared presentation fails to initialize.
 The swapchain is pre-rotated to the display's native orientation, and the

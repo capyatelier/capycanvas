@@ -1,6 +1,59 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 
+export async function checkSpatialFilterWindows({call,evaluate,settle,canvasPixels}) {
+  const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/ui/spatial-filter-windows-web';
+  await mkdir(directory,{recursive:true});
+  const wait=expression=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function check(){if(${expression})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else setTimeout(check,50);}check();})`);
+  const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
+  const histogram=()=>evaluate(`(async()=>{const control=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(control)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v));}finally{control.free();}})()`);
+  await wait('layerApp.startupTimes.complete!==null && !layerApp.documents.busy()');
+  await send({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}});
+  await evaluate(`(async()=>{
+    window.spatialPicker=window.showOpenFilePicker;
+    const canvas=new OffscreenCanvas(6000,4000),context=canvas.getContext('2d',{willReadFrequently:true});
+    const gradient=context.createLinearGradient(0,0,6000,4000);gradient.addColorStop(0,'rgb(220,40,70)');gradient.addColorStop(1,'rgb(30,160,230)');
+    context.fillStyle=gradient;context.fillRect(0,0,6000,4000);context.fillStyle='white';
+    for(let x=0;x<6000;x+=256)context.fillRect(x,0,12,4000);
+    const blob=await canvas.convertToBlob({type:'image/png'});
+    window.showOpenFilePicker=async()=>[{name:'spatial-window.png',getFile:async()=>new File([blob],'spatial-window.png',{type:'image/png'})}];
+    layerApp.dispatch({type:'invoke',command:'open_document'});
+  })()`);
+  try {
+    await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Discard Changes')?.click()`);
+    await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy && layerApp.state().tabs.some(t=>t.width===6000&&t.height===4000) && layerApp.app.brush_ready()');
+    const source=await histogram();
+    assert.equal(source.pixels,24000000);
+    assert.equal(source.transparent,0,'The imported photo has rendered opaque GPU pixels');
+    for(const sigma of [9,21,13]) {
+      await send({type:'effect',action:{op:'insert',effect:'gaussian_blur'}});
+      const layer=await evaluate('Number(layerApp.state().layer_properties.layer)');
+      await send({type:'effect',action:{op:'set',layer,key:'sigma',value:{kind:'number',value:sigma}}});
+    }
+    const layer=await evaluate('Number(layerApp.state().layer_properties.layer)');
+    for(const theme of ['dark','light']) {
+      await send({type:'set_theme',theme});await send({type:'set_zoom',zoom:.5});
+      assert.equal(await evaluate('layerApp.state().camera.zoom'),.5);
+      for(const [step,[center,sigma]] of [[[2400,1600],13],[[3300,2100],21],[[2400,1600],0],[[2400,1600],7]].entries()) {
+        await send({type:'effect',action:{op:'set',layer,key:'sigma',value:{kind:'number',value:sigma}}});
+        await evaluate(`(()=>{const c=layerApp.app.camera(),p=${JSON.stringify(center)},m=c.document_to_surface??[c.zoom,0,0,c.zoom,...c.translation];
+          layerApp.app.gesture(m[0]*p[0]+m[2]*p[1]+m[4],m[1]*p[0]+m[3]*p[1]+m[5],c.viewport[0]/2,c.viewport[1]/2,1,0);layerApp.wake();})()`);
+        await settle();await evaluate('layerApp.app.wait_for_canvas()');
+        await wait('layerApp.app.brush_ready()');
+        assert.equal(await evaluate('layerApp.state().host_error??null'),null);
+        assert.equal(await evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="sigma").value.value'),sigma);
+        const presented=await canvasPixels();
+        assert.ok(presented.colored>presented.total*.2,'The presented canvas contains the filtered photo');
+        const shot=await call('Page.captureScreenshot',{format:'png'});
+        await writeFile(`${directory}/${theme}-${step}.png`,Buffer.from(shot.data,'base64'));
+      }
+    }
+    console.log('PASS: 24 MP chained spatial filters at 50% zoom, pan round trips, support changes, light and dark themes');
+  } finally {
+    await evaluate('window.showOpenFilePicker=spatialPicker;delete window.spatialPicker');
+  }
+}
+
 export async function checkCurveEndpoint({call,evaluate,settle}) {
   const count=()=>evaluate("document.querySelector('.curve-field:not([hidden]) .curve-editor').querySelectorAll('circle').length");
   const before=await count();assert.equal(before,2);

@@ -1613,76 +1613,81 @@ impl Scene {
                         let attachments = [Some(attachment(target,wgpu::LoadOp::Clear(color)))];
                         let _pass = encoder.begin_render_pass(&descriptor(&attachments));
                     }
-                    let attachments = [Some(attachment(source.as_ref().unwrap_or(target), if portable { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { load }))];
-                    let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
-                    if self.jobs[i..end]
-                        .iter()
-                        .any(|j| matches!(j, Job::Effect { .. }))
-                    {
-                        self.effect_passes += 1;
-                    }
-                    for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
-                        if let Job::Watercolor { layer, binding, record, coordinate, .. } = job {
-                            pass.set_pipeline(&r.pipelines.watercolor_composite);
-                            pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
-                            pass.set_bind_group(1, &r.target_bind_group, &[r.layer_target_offset(*layer, *coordinate)]);
-                            pass.set_bind_group(2, binding, &[]);
-                            pass.set_scissor_rect(0, 0, PAGE_SIZE, PAGE_SIZE);
+                    let effect = self.jobs[i..end].iter().any(|j| matches!(j, Job::Effect { .. }));
+                    let extent = [target.texture().width(), target.texture().height()];
+                    let span = if effect { PAGE_SIZE * 2 } else { extent[0].max(extent[1]) };
+                    let windows = (0..extent[1]).step_by(span as usize).flat_map(|y|
+                        (0..extent[0]).step_by(span as usize).map(move |x|
+                            PixelRect::new(x, y, (x + span).min(extent[0]), (y + span).min(extent[1]))));
+                    for window in windows {
+                        let load = if portable { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) }
+                            else if window.min_x() == 0 && window.min_y() == 0 { load } else { wgpu::LoadOp::Load };
+                        let attachments = [Some(attachment(source.as_ref().unwrap_or(target), load))];
+                        let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
+                        if effect { self.effect_passes += 1; }
+                        for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
+                            if let Job::Watercolor { layer, binding, record, coordinate, .. } = job {
+                                pass.set_pipeline(&r.pipelines.watercolor_composite);
+                                pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
+                                pass.set_bind_group(1, &r.target_bind_group, &[r.layer_target_offset(*layer, *coordinate)]);
+                                pass.set_bind_group(2, binding, &[]);
+                                pass.set_scissor_rect(0, 0, PAGE_SIZE, PAGE_SIZE);
+                                pass.draw(0..3, 0..1);
+                                continue;
+                            }
+                            let sources = match job {
+                                Job::Draw { sources, .. } | Job::Effect { sources, .. } => sources,
+                                _ => unreachable!(),
+                            };
+                            let binding = source_bindings.get(sources, || source_binding(r, &self.layout, sources));
+                            if let Job::Effect {
+                                prepared, masks, ..
+                            } = job
+                            {
+                                pass.set_pipeline(&prepared.pipeline);
+                                pass.set_bind_group(2, &prepared.binding, &[]);
+                                let masks = mask_bindings.entry(masks.as_ref().clone()).or_insert_with(|| {
+                                    r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                        label: Some("effect tile masks"),
+                                        layout: &self.effects.masks,
+                                        entries: &std::array::from_fn::<_, { effects::MASK_SLOTS }, _>(|i| wgpu::BindGroupEntry {
+                                                binding: i as u32,
+                                                resource: wgpu::BindingResource::TextureView(&masks[i]),
+                                            }),
+                                    })
+                                });
+                                pass.set_bind_group(3, &*masks, &[]);
+                            } else if let Job::Draw { over, .. } = job {
+                                pass.set_pipeline(&self.pipeline[usize::from(*over)]);
+                            }
+                            pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
+                            pass.set_bind_group(1, binding, &[]);
+                            let (data, clip) = match job {
+                                Job::Draw { data, clip, .. } => (data, *clip),
+                                // A fullscreen triangle extends beyond its rectangle.
+                                // A final effect can write directly into one region
+                                // of a larger composite: clip it to that region or
+                                // it overwrites adjacent tiles with out-of-range reads.
+                                Job::Effect { data, .. } => (data, Some(PixelRect::new(
+                                    data[0].max(0.).floor() as u32,
+                                    data[1].max(0.).floor() as u32,
+                                    (data[0] + data[2]).min(data[4]).max(0.).ceil() as u32,
+                                    (data[1] + data[3]).min(data[5]).max(0.).ceil() as u32,
+                                ))),
+                                _ => unreachable!(),
+                            };
+                            let clip = clip.unwrap_or(PixelRect::full([data[4] as u32, data[5] as u32])).intersect(window);
+                            if clip.is_empty() { continue; }
+                            pass.set_scissor_rect(
+                                clip.min_x(),
+                                clip.min_y(),
+                                clip.width(),
+                                clip.height(),
+                            );
                             pass.draw(0..3, 0..1);
-                            continue;
                         }
-                        let sources = match job {
-                            Job::Draw { sources, .. } | Job::Effect { sources, .. } => sources,
-                            _ => unreachable!(),
-                        };
-                        let binding = source_bindings.get(sources, || source_binding(r, &self.layout, sources));
-                        if let Job::Effect {
-                            prepared, masks, ..
-                        } = job
-                        {
-                            pass.set_pipeline(&prepared.pipeline);
-                            pass.set_bind_group(2, &prepared.binding, &[]);
-                            let masks = mask_bindings.entry(masks.as_ref().clone()).or_insert_with(|| {
-                                r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                    label: Some("effect tile masks"),
-                                    layout: &self.effects.masks,
-                                    entries: &std::array::from_fn::<_, { effects::MASK_SLOTS }, _>(|i| wgpu::BindGroupEntry {
-                                            binding: i as u32,
-                                            resource: wgpu::BindingResource::TextureView(&masks[i]),
-                                        }),
-                                })
-                            });
-                            pass.set_bind_group(3, &*masks, &[]);
-                        } else if let Job::Draw { over, .. } = job {
-                            pass.set_pipeline(&self.pipeline[usize::from(*over)]);
-                        }
-                        pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
-                        pass.set_bind_group(1, binding, &[]);
-                        let (data, clip) = match job {
-                            Job::Draw { data, clip, .. } => (data, *clip),
-                            // A fullscreen triangle extends beyond its rectangle.
-                            // A final effect can write directly into one region
-                            // of a larger composite: clip it to that region or
-                            // it overwrites adjacent tiles with out-of-range reads.
-                            Job::Effect { data, .. } => (data, Some(PixelRect::new(
-                                data[0].max(0.).floor() as u32,
-                                data[1].max(0.).floor() as u32,
-                                (data[0] + data[2]).min(data[4]).max(0.).ceil() as u32,
-                                (data[1] + data[3]).min(data[5]).max(0.).ceil() as u32,
-                            ))),
-                            _ => unreachable!(),
-                        };
-                        let clip =
-                            clip.unwrap_or(PixelRect::full([data[4] as u32, data[5] as u32]));
-                        pass.set_scissor_rect(
-                            clip.min_x(),
-                            clip.min_y(),
-                            clip.width(),
-                            clip.height(),
-                        );
-                        pass.draw(0..3, 0..1);
+                        drop(pass);
                     }
-                    drop(pass);
                     if let Some(source) = source {
                         r.portable_blend.apply(&r.device,encoder,&source,target,PixelRect::full([target.texture().width(),target.texture().height()]),0);
                     }
