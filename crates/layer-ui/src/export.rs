@@ -600,7 +600,7 @@ mod tests {
         assert_eq!(fitted.output_extent([32768, 16384]).unwrap(), [4096, 2048]);
         let enlarged = ExportRecipe { size: ExportSize::Fit { bounds: [20000, 20000], enlarge: true }, ..webp.clone() };
         assert!(enlarged.output_extent([100, 50]).is_err());
-        let mut document = layer_core::Document::new("Panorama", 16385, 2);
+        let mut document = layer_core::Document::new("Panorama", 16385, 2, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         assert!(webp.validate_for_document(&document).is_err());
         assert!(fitted.validate_for_document(&document).is_ok());
         document.resolution = Some(layer_core::ImageResolution::ppi(300));
@@ -801,7 +801,7 @@ mod tests {
             .for_color(DocumentColor::default());
         assert_eq!(sdr.metadata, rights.recipe.metadata, "an SDR fallback keeps the choice");
 
-        let mut document = layer_core::Document::new("Photo", 40, 30);
+        let mut document = layer_core::Document::new("Photo", 40, 30, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         assert!(!ExportForm::new(&document).metadata, "a new drawing has no photo metadata");
         document.metadata.exif = Some(vec![1, 2, 3].into());
         document.resolution = Some(layer_core::ImageResolution::ppi(300));
@@ -813,7 +813,7 @@ mod tests {
     }
     #[test]
     fn exr_validates_for_any_document_primaries() {
-        let mut document=layer_core::Document::new("P3",8,8);
+        let mut document=layer_core::Document::new("P3",8,8, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color=DocumentColor{space:RgbSpace::DisplayP3,depth:SampleDepth::F32};
         let recipe=ExportRecipe::web_share().draft(ExportDraftAction::Format(ExportFormat::Exr)).recipe;
         assert_eq!(recipe.profile,ExportProfile::builtin(RgbSpace::Srgb));

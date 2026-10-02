@@ -93,7 +93,7 @@ mod tests {
     }
 
     fn photo_host(selection: Option<Selection>) -> NativeHost {
-        let mut document = layer_core::Document::new("Clip", 64, 48);
+        let mut document = layer_core::Document::new("Clip", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         for paper in document.layers.iter_mut().filter(|l| l.kind == layer_core::LayerKind::Background) {
             paper.visible = false;
         }
@@ -175,7 +175,7 @@ mod tests {
     }
 
     fn host_with_color(color: layer_core::color::DocumentColor) -> NativeHost {
-        let mut document = layer_core::Document::new("Other", 64, 48);
+        let mut document = layer_core::Document::new("Other", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color = color;
         host(document)
     }

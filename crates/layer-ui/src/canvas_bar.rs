@@ -59,14 +59,14 @@ impl CanvasBarMenu {
             Self::Copy => "copy",
         }
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::CopyToLayer => "Copy to Layer",
-            Self::Clear => "Clear",
-            Self::Refine => "Refine",
-            Self::Adjust => "Adjust",
-            Self::Copy => "Copy",
-        }
+    pub fn label(self, localizer: &Localizer) -> std::sync::Arc<str> {
+        localizer.text(match self {
+            Self::CopyToLayer => MessageId::TOOLBAR_COPY_TO_LAYER,
+            Self::Clear => MessageId::TOOLBAR_CLEAR,
+            Self::Refine => MessageId::TOOLBAR_REFINE,
+            Self::Adjust => MessageId::TOOLBAR_ADJUST,
+            Self::Copy => MessageId::TOOLBAR_COPY,
+        })
     }
     pub fn icon(self) -> &'static str {
         match self {
@@ -111,7 +111,7 @@ pub struct CanvasBarItem {
     /// by the menu id.
     pub option: ToolOption,
     /// Short text shown beside the icon where space allows.
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     /// The step that finishes the edit, drawn in the accent color.
     pub accent: bool,
     pub menu: Option<CanvasBarMenu>,
@@ -146,63 +146,87 @@ impl CanvasBarView {
 }
 
 /// Short labels for commands that appear on the bar; empty shows the icon alone.
-pub(crate) fn short_label(command: CommandId) -> &'static str {
-    match command {
-        CommandId::ApplyTransform => "Apply",
-        CommandId::CancelTransform | CommandId::CancelSelection => "Cancel",
-        CommandId::PlacementOriginalSize => "Original Size",
-        CommandId::TransformFree => "Free",
-        CommandId::TransformUniform => "Uniform",
-        CommandId::TransformNearest => "Nearest",
-        CommandId::WarpGridThree => "3 × 3",
-        CommandId::WarpGridFour => "4 × 4",
-        CommandId::WarpGridFive => "5 × 5",
+pub(crate) fn short_label(command: CommandId, localizer: &Localizer) -> std::sync::Arc<str> {
+    localizer.text(match command {
+        CommandId::ApplyTransform => MessageId::TOOLBAR_APPLY,
+        CommandId::CancelTransform | CommandId::CancelSelection => MessageId::TOOLBAR_CANCEL,
+        CommandId::PlacementOriginalSize => MessageId::TOOLBAR_ORIGINAL_SIZE,
+        CommandId::TransformFree => MessageId::TOOLBAR_FREE,
+        CommandId::TransformUniform => MessageId::TOOLBAR_UNIFORM,
+        CommandId::TransformNearest => MessageId::TOOLBAR_NEAREST,
+        CommandId::WarpGridThree => MessageId::TOOLBAR_3_3,
+        CommandId::WarpGridFour => MessageId::TOOLBAR_4_4,
+        CommandId::WarpGridFive => MessageId::TOOLBAR_5_5,
         CommandId::TransformFlipHorizontal
         | CommandId::TransformFlipVertical
         | CommandId::TransformRotateLeft
-        | CommandId::TransformRotateRight => "",
-        CommandId::ResetTransform => "Reset",
-        CommandId::RemoveSelectionPoint => "Remove Point",
-        CommandId::Deselect => "Deselect",
-        CommandId::InvertSelection => "Invert",
-        CommandId::MaskSelection => "Mask",
-        CommandId::FillSelection => "Fill",
-        CommandId::SaveSelectionLayer => "Save",
-        CommandId::CompleteSelection => "Finish",
-        CommandId::FillSelectionMask => "Fill",
-        CommandId::ClearSelectionMask => "Clear",
-        CommandId::LoadSelectionLayer => "Load",
-        CommandId::InvertSelectionLayer | CommandId::InvertLayerMask => "Invert",
-        CommandId::ApplyLayerMask => "Apply Mask",
-        CommandId::DeleteRuler => "Delete",
-        CommandId::SnapRulers => "Snap",
-        CommandId::ShowRulers => "Guides",
-        CommandId::CropCanvasToSelection => "Crop",
-        CommandId::GrowSelection => "Grow…",
-        CommandId::ShrinkSelection => "Shrink…",
-        CommandId::FeatherSelection => "Feather…",
-        CommandId::BorderSelection => "Border…",
-        CommandId::SmoothSelection => "Smooth…",
-        CommandId::TransformSelectionOutline => "Transform Outline",
-        CommandId::CropRatioFree => "Free",
-        CommandId::CropRatioOriginal => "Original",
-        CommandId::CropRatioSquare => "1:1",
-        CommandId::CropRatioFourFive => "4:5",
-        CommandId::CropRatioTwoThree => "2:3",
-        CommandId::CropRatioFiveSeven => "5:7",
-        CommandId::CropRatioSixteenNine => "16:9",
-        CommandId::CropSwapOrientation => "",
-        CommandId::CropOverlayThirds => "Thirds",
-        CommandId::CropOverlayGrid => "Grid",
-        CommandId::CropOverlayDiagonal => "Diagonal",
-        CommandId::CropOverlayGolden => "Golden Ratio",
-        CommandId::CropDeleteCroppedPixels => "Delete Cropped",
-        CommandId::CropFitContent => "Fit Content",
-        CommandId::StraightenToGuide => "Straighten",
-        CommandId::CloneAligned => "Aligned",
-        CommandId::CloneFlipHorizontal | CommandId::CloneFlipVertical => "",
-        CommandId::CloneResetOffset => "Reset Offset",
-        _ => command.label(),
+        | CommandId::TransformRotateRight => return "".into(),
+        CommandId::ResetTransform => MessageId::TOOLBAR_RESET,
+        CommandId::RemoveSelectionPoint => MessageId::TOOLBAR_REMOVE_POINT,
+        CommandId::Deselect => MessageId::TOOLBAR_DESELECT,
+        CommandId::InvertSelection => MessageId::TOOLBAR_INVERT,
+        CommandId::MaskSelection => MessageId::TOOLBAR_MASK,
+        CommandId::FillSelection => MessageId::TOOLBAR_FILL,
+        CommandId::SaveSelectionLayer => MessageId::TOOLBAR_SAVE,
+        CommandId::CompleteSelection => MessageId::TOOLBAR_FINISH,
+        CommandId::FillSelectionMask => MessageId::TOOLBAR_FILL,
+        CommandId::ClearSelectionMask => MessageId::TOOLBAR_CLEAR,
+        CommandId::LoadSelectionLayer => MessageId::TOOLBAR_LOAD,
+        CommandId::InvertSelectionLayer | CommandId::InvertLayerMask => MessageId::TOOLBAR_INVERT,
+        CommandId::ApplyLayerMask => MessageId::TOOLBAR_APPLY_MASK,
+        CommandId::DeleteRuler => MessageId::TOOLBAR_DELETE,
+        CommandId::SnapRulers => MessageId::TOOLBAR_SNAP,
+        CommandId::ShowRulers => MessageId::TOOLBAR_GUIDES,
+        CommandId::CropCanvasToSelection => MessageId::TOOLBAR_CROP,
+        CommandId::GrowSelection => MessageId::TOOLBAR_GROW,
+        CommandId::ShrinkSelection => MessageId::TOOLBAR_SHRINK,
+        CommandId::FeatherSelection => MessageId::TOOLBAR_FEATHER,
+        CommandId::BorderSelection => MessageId::TOOLBAR_BORDER,
+        CommandId::SmoothSelection => MessageId::TOOLBAR_SMOOTH,
+        CommandId::TransformSelectionOutline => MessageId::TOOLBAR_TRANSFORM_OUTLINE,
+        CommandId::CropRatioFree => MessageId::TOOLBAR_FREE,
+        CommandId::CropRatioOriginal => MessageId::TOOLBAR_ORIGINAL,
+        CommandId::CropRatioSquare => MessageId::TOOLBAR_1_1,
+        CommandId::CropRatioFourFive => MessageId::TOOLBAR_4_5,
+        CommandId::CropRatioTwoThree => MessageId::TOOLBAR_2_3,
+        CommandId::CropRatioFiveSeven => MessageId::TOOLBAR_5_7,
+        CommandId::CropRatioSixteenNine => MessageId::TOOLBAR_16_9,
+        CommandId::CropSwapOrientation => return "".into(),
+        CommandId::CropOverlayThirds => MessageId::TOOLBAR_THIRDS,
+        CommandId::CropOverlayGrid => MessageId::TOOLBAR_GRID,
+        CommandId::CropOverlayDiagonal => MessageId::TOOLBAR_DIAGONAL,
+        CommandId::CropOverlayGolden => MessageId::TOOLBAR_GOLDEN_RATIO,
+        CommandId::CropDeleteCroppedPixels => MessageId::TOOLBAR_DELETE_CROPPED,
+        CommandId::CropFitContent => MessageId::TOOLBAR_FIT_CONTENT,
+        CommandId::StraightenToGuide => MessageId::TOOLBAR_STRAIGHTEN,
+        CommandId::CloneAligned => MessageId::TOOLBAR_ALIGNED,
+        CommandId::CloneFlipHorizontal | CommandId::CloneFlipVertical => return "".into(),
+        CommandId::CloneResetOffset => MessageId::TOOLBAR_RESET_OFFSET,
+        _ => return command.localized_label(localizer),
+    })
+}
+
+#[derive(Clone, PartialEq)]
+enum CanvasBarCaption {
+    Message(MessageId),
+    Editing { message: MessageId, name: std::sync::Arc<str> },
+    Images(usize),
+}
+impl CanvasBarCaption {
+    fn resolve(&self, localizer: &Localizer) -> String {
+        let mut args = crate::localization::FluentArgs::new();
+        let message = match self {
+            Self::Message(message) => return localizer.text(*message).to_string(),
+            Self::Editing { message, name } => {
+                args.set("name", name.as_ref());
+                *message
+            }
+            Self::Images(count) => {
+                args.set("count", *count as i64);
+                MessageId::TOOLBAR_IMAGE_COUNT
+            }
+        };
+        localizer.format(message, &args)
     }
 }
 
@@ -213,9 +237,9 @@ pub(super) struct CanvasBarKey {
     toolbar: ToolbarContext,
     transaction: u64,
     guide: Option<u64>,
-    label: Option<String>,
+    label: Option<CanvasBarCaption>,
     anchor: Option<[f32; 4]>,
-    flags: Vec<(CommandId, bool, bool, Option<std::borrow::Cow<'static, str>>)>,
+    flags: Vec<(CommandId, bool, bool, Option<std::sync::Arc<str>>)>,
 }
 
 #[derive(Default)]
@@ -248,7 +272,7 @@ enum PlanItem {
     Command(CommandId),
     Menu(CanvasBarMenu),
     /// A command shown as a plain button with its own label.
-    Button(CommandId, &'static str),
+    Button(CommandId, MessageId),
 }
 impl PlanItem {
     /// The command whose published state the item shows.
@@ -262,7 +286,7 @@ impl PlanItem {
 
 struct Plan {
     kind: CanvasBarKind,
-    label: Option<String>,
+    label: Option<CanvasBarCaption>,
     items: Vec<PlanItem>,
     completion: Vec<PlanItem>,
     placement: Option<CanvasBarPlacement>,
@@ -339,7 +363,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (kind, label, items, exit) = match self.selection_masks.target() {
             Some(layer_core::SelectionTarget::Current) => (
                 CanvasBarKind::QuickMask,
-                "Quick Mask".to_string(),
+                CanvasBarCaption::Message(MessageId::TOOLBAR_QUICK_MASK),
                 vec![
                     command(CommandId::InvertSelection),
                     command(CommandId::FillSelectionMask),
@@ -347,26 +371,26 @@ impl<R: CanvasRenderer> UiSession<R> {
                     PlanItem::Menu(CanvasBarMenu::Refine),
                     command(CommandId::SaveSelectionLayer),
                 ],
-                PlanItem::Button(CommandId::ReturnToArtwork, "Exit"),
+                PlanItem::Button(CommandId::ReturnToArtwork, MessageId::TOOLBAR_EXIT),
             ),
             Some(layer_core::SelectionTarget::Saved(id)) => (
                 CanvasBarKind::SelectionLayer,
-                format!("Editing {}", doc.layer(id)?.name),
+                CanvasBarCaption::Editing { message: MessageId::TOOLBAR_EDITING_LAYER, name: doc.layer(id)?.name.clone() },
                 vec![command(CommandId::LoadSelectionLayer), command(CommandId::InvertSelectionLayer)],
-                PlanItem::Button(CommandId::ReturnToArtwork, "Return to Artwork"),
+                PlanItem::Button(CommandId::ReturnToArtwork, MessageId::TOOLBAR_RETURN_TO_ARTWORK),
             ),
             None if doc.active_mask => {
                 let layer = doc.layer(doc.active_layer)?;
                 let enabled = layer.mask.as_ref()?.enabled;
                 (
                     CanvasBarKind::LayerMask,
-                    format!("Editing {} mask", layer.name),
+                    CanvasBarCaption::Editing { message: MessageId::TOOLBAR_EDITING_MASK, name: layer.name.clone() },
                     vec![
                         command(CommandId::InvertLayerMask),
-                        PlanItem::Button(CommandId::LayerMaskEnabled, if enabled { "Disable" } else { "Enable" }),
+                        PlanItem::Button(CommandId::LayerMaskEnabled, if enabled { MessageId::TOOLBAR_DISABLE } else { MessageId::TOOLBAR_ENABLE }),
                         command(CommandId::ApplyLayerMask),
                     ],
-                    PlanItem::Button(CommandId::EditLayerContent, "Edit Content"),
+                    PlanItem::Button(CommandId::EditLayerContent, MessageId::TOOLBAR_EDIT_CONTENT),
                 )
             }
             None => return None,
@@ -451,9 +475,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let count = self.operation.placement_count();
         let label = if self.operation.outline() {
-            Some(short_label(CommandId::TransformSelectionOutline).into())
+            Some(CanvasBarCaption::Message(MessageId::TOOLBAR_TRANSFORM_OUTLINE))
         } else {
-            (count > 1).then(|| format!("{count} images"))
+            (count > 1).then_some(CanvasBarCaption::Images(count))
         };
         Some(Plan {
             kind: if self.operation.placing() { CanvasBarKind::Placement } else { CanvasBarKind::Transform },
@@ -558,16 +582,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             let group = ToolSettingAction { command: id, checkable: state.checkable }.group();
             match (group, items.last_mut().map(|item| &mut item.option)) {
                 (Some(group), Some(ToolOption::Choice { id: choice, items, .. })) if *choice == group.id() => {
-                    items.push(state.choice_item(short_label(id)));
+                    items.push(state.choice_item(short_label(id, self.localization())));
                 }
                 (Some(group), _) => items.push(CanvasBarItem {
                     option: ToolOption::Choice {
                         id: group.id(),
-                        label: group.label(),
+                        label: group.localized_label(self.localization()),
                         segmented: group.segmented(),
-                        items: vec![state.choice_item(short_label(id))],
+                        items: vec![state.choice_item(short_label(id, self.localization()))],
                     },
-                    label: group.label(),
+                    label: group.localized_label(self.localization()),
                     accent: false,
                     menu: None,
                     icon: None,
@@ -580,7 +604,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 generation: self.canvas_bar.generation,
                 kind: plan.kind,
             },
-            label: plan.label,
+            label: plan.label.as_ref().map(|caption| caption.resolve(self.localization())),
             items,
             completion: plan.completion.iter().map(|&item| self.canvas_bar_item(item)).collect(),
             placement: plan.placement.unwrap_or(if visible {
@@ -596,8 +620,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn canvas_bar_item(&self, item: PlanItem) -> CanvasBarItem {
         let (id, label) = match item {
             PlanItem::Menu(menu) => return self.canvas_bar_menu_item(menu),
-            PlanItem::Command(id) => (id, short_label(id)),
-            PlanItem::Button(id, label) => (id, label),
+            PlanItem::Command(id) => (id, short_label(id, self.localization())),
+            PlanItem::Button(id, label) => (id, self.localization().text(label)),
         };
         let state = self.published(id);
         CanvasBarItem {
@@ -621,12 +645,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Some(id) => self.canvas_bar_item(PlanItem::Command(id)).option,
                 None => ToolOption::Choice {
                     id: menu.id(),
-                    label: menu.label(),
+                    label: menu.label(self.localization()),
                     segmented: false,
                     items: Vec::new(),
                 },
             },
-            label: menu.label(),
+            label: menu.label(self.localization()),
             accent: false,
             menu: Some(menu),
             icon: Some(menu.icon()),
@@ -662,7 +686,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }))
         });
         if !allowed {
-            return Err("This action belongs to a previous canvas selection or transform".into());
+            return Err(self.localization().text(MessageId::TOOLBAR_STALE_ACTION).to_string());
         }
         self.dispatch(action)
     }
@@ -671,7 +695,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn canvas_bar_menu_sections(&self, menu: CanvasBarMenu) -> Vec<Vec<ContextMenuItem>> {
         let command = |id: CommandId| {
             let state = self.command(id);
-            ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label, UiAction::Invoke { command: id }) }
+            ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label.as_ref(), UiAction::Invoke { command: id }) }
         };
         let sections = match menu {
             CanvasBarMenu::CopyToLayer | CanvasBarMenu::Clear | CanvasBarMenu::Copy => {
@@ -680,13 +704,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             CanvasBarMenu::Refine => vec![
                 self.refine_items(None),
                 vec![ContextMenuItem {
-                    label: short_label(CommandId::TransformSelectionOutline).into(),
+                    label: short_label(CommandId::TransformSelectionOutline, self.localization()).to_string(),
                     ..command(CommandId::TransformSelectionOutline)
                 }],
             ],
             CanvasBarMenu::Adjust => vec![self.filter_category_items()],
         };
-        ContextMenu { title: menu.label().into(), sections }
+        ContextMenu { title: menu.label(self.localization()).to_string(), sections }
             .with_shortcuts(&self.state.settings, self.state.platform)
             .sections
     }
@@ -879,13 +903,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let wrap = |action: UiAction| UiAction::CanvasBarEdit { context, action: Box::new(action) };
         if let Some(menu) = bar.items.iter().filter_map(|item| item.menu).find(|menu| menu.id() == id) {
             return Some(ContextMenu {
-                title: menu.label().into(),
+                title: menu.label(self.localization()).to_string(),
                 sections: wrap_sections(self.canvas_bar_menu_sections(menu), &wrap),
             });
         }
         bar.items.iter().find_map(|item| match &item.option {
             ToolOption::Choice { id: choice, label, items, .. } if *choice == id => Some(ContextMenu {
-                title: (*label).into(),
+                title: label.to_string(),
                 sections: vec![choice_items(items, &wrap)],
             }),
             _ => None,
@@ -898,23 +922,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         let wrap = |action: UiAction| UiAction::CanvasBarEdit { context, action: Box::new(action) };
         let overflow = bar.items.iter().skip(shown).flat_map(|item| match (&item.option, item.menu) {
             (_, Some(menu)) => vec![ContextMenuItem::submenu(
-                menu.label(),
+                menu.label(self.localization()).as_ref(),
                 wrap_sections(self.canvas_bar_menu_sections(menu), &wrap),
             )],
             (ToolOption::Action { state, checkable }, None) => vec![ContextMenuItem {
                 selected: checkable.then_some(state.selected),
                 enabled: state.enabled,
-                ..ContextMenuItem::command(state.label, wrap(UiAction::Invoke { command: state.id }))
+                ..ContextMenuItem::command(state.label.as_ref(), wrap(UiAction::Invoke { command: state.id }))
             }],
             (ToolOption::Choice { label, items, .. }, None) => {
-                vec![ContextMenuItem::submenu(label, vec![choice_items(items, &wrap)])]
+                vec![ContextMenuItem::submenu(label.as_ref(), vec![choice_items(items, &wrap)])]
             }
             (ToolOption::Numeric(_) | ToolOption::Range { .. }, None) => Vec::new(),
         });
         let toggle = ContextMenuItem {
             selected: Some(self.state.workspace.layout.canvas_bar),
             ..ContextMenuItem::command(
-                CommandId::ShowCanvasActionBar.label(),
+                CommandId::ShowCanvasActionBar.localized_label(self.localization()).as_ref(),
                 UiAction::Invoke { command: CommandId::ShowCanvasActionBar },
             )
         };
@@ -934,7 +958,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         sections.push(vec![toggle]);
         Some(
             ContextMenu {
-                title: "More".into(),
+                title: self.localization().text(MessageId::TOOLBAR_MORE).to_string(),
                 sections,
             }
             .with_shortcuts(&self.state.settings, self.state.platform),
@@ -967,7 +991,7 @@ fn choice_items(items: &[ToolSetItem], wrap: &impl Fn(UiAction) -> UiAction) -> 
         .iter()
         .map(|i| ContextMenuItem {
             selected: Some(i.selected),
-            ..ContextMenuItem::command(i.label, wrap(i.action.clone()))
+            ..ContextMenuItem::command(i.label.as_ref(), wrap(i.action.clone()))
         })
         .collect()
 }

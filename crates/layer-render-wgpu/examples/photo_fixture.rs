@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         source.push_row(&row)?;
     }
     let mut project = layer_color::photo_project(source.finish()?, Default::default(),
-        "Synthetic 61 MP source", SampleDepth::U8)?;
+        layer_core::DocumentNames { paint: "Synthetic 61 MP source".into(), paper: "Paper".into() }, SampleDepth::U8)?;
     let ink = project.document.allocate_layer_id();
     project.document.layers.insert(0, Layer::paint(ink, "Benchmark ink"));
     if !std::env::args().any(|arg| arg == "--source-layer") {

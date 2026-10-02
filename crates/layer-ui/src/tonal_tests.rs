@@ -301,7 +301,7 @@ mod tonal_checks {
         use layer_core::color::{RgbSpace, SampleDepth};
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
             for space in [RgbSpace::Srgb, RgbSpace::ProPhoto] {
-                let mut document = Document::new("tones", 64, 64);
+                let mut document = Document::new("tones", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
                 document.color.depth = depth;
                 document.color.space = space;
                 let mut s = UiSession::new(Recorder { color: document.color, ..Default::default() }, document, [64; 2], Platform::Gtk).unwrap();

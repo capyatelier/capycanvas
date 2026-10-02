@@ -135,7 +135,7 @@ impl WorkspacePreset {
             config.hide_tab = true;
             config.tile_style = TileStyle::Medium;
             config.content = PanelContent::Toolbar {
-                name: panel.label().into(),
+                name: None,
                 tiles,
             };
         }

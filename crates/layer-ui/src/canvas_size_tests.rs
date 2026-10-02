@@ -145,7 +145,7 @@ fn crop_canvas_to_selection_uses_the_coverage_bounds_and_refuses_inverted_select
     invoke(&mut s, CommandId::RectangleSelect);
     let bar = s.state.canvas_bar.clone().unwrap();
     let item = bar.items.iter().find(|i| matches!(&i.option, ToolOption::Action { state, .. } if state.id == crop)).unwrap();
-    assert_eq!(item.label, "Crop");
+    assert_eq!(item.label.as_ref(), "Crop");
     let before = s.engine.document().clone();
     let screen = on_screen(&s, [150., 100.]);
     s.dispatch(UiAction::CanvasBarEdit { context: bar.context, action: Box::new(UiAction::Invoke { command: crop }) }).unwrap();

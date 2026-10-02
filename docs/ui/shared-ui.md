@@ -475,9 +475,10 @@ Escape cancels recording; Tab can be reassigned like other shortcuts, but retain
 native focus navigation inside settings and text editors. Platform-global
 shortcuts are not inhibited. Browser-reserved bindings are rejected by the core.
 
-Shortcut presentation also belongs to Rust. `Settings::action_shortcut` resolves
+Shortcut presentation also belongs to Rust. `Settings::action_shortcut_localized` resolves
 typed action identity (including registered parameterized actions), never a
-translated label. `action_tooltip` returns `Label (Shortcut)` or just the label
+translated label. `action_tooltip_localized` formats the label and shortcut as a complete Fluent
+message, or returns the label
 when unbound. Command and toolbar views carry their complete tooltip; other
 action buttons request it on hover, so remapping does not leave stale hints.
 GTK/Web/Android display these strings without joining keys themselves.
@@ -600,6 +601,8 @@ its GPU worker; web and Android use the same renderer interface.
 
 `UiSession` and `WorkspaceController` receive an immutable, shared
 `Arc<Localizer>` for the application launch. Prepared and replacement drawings
-retain that context. Embedded Fluent catalogs and cached parameterless labels
+retain that context. The session stores its sole context privately in
+`UiState`; clones share the same allocation and serialized views omit it.
+Saved language edits apply on the next launch. Embedded Fluent catalogs and cached parameterless labels
 live in `layer-ui`; see [localization](localization.md) for the message and
 argument contract. Hosts receive resolved text through feature views.

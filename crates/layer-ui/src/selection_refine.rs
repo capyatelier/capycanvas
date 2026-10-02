@@ -148,12 +148,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             SelectionTarget::Saved(id) => Some(id.0),
         }
     }
-    pub(super) fn refine_refusal(&self) -> Option<&'static str> {
+    pub(super) fn refine_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         let doc = self.engine.document();
         match self.selection_masks.target() {
-            Some(SelectionTarget::Saved(id)) if doc.is_locked(id) => Some("This selection layer is locked"),
+            Some(SelectionTarget::Saved(id)) if doc.is_locked(id) => Some(l.text(MessageId::COMMANDS_THIS_SELECTION_LAYER_IS_LOCKED)),
             Some(_) => None,
-            None => doc.selection.is_none().then_some("Make a selection first"),
+            None => doc.selection.is_none().then_some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST)),
         }
     }
     pub(super) fn begin_refine(&mut self, kind: RefineKind, layer: Option<u64>) -> Result<(), String> {

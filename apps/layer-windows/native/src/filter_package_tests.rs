@@ -59,6 +59,45 @@ fn file_transport_resolves_shared_render_and_preparation_modules() {
     );
 }
 #[test]
+fn property_wire_keeps_section_identity_and_choice_indices_with_equal_labels() {
+    let mut definition = layer_core::bundled_effect_catalog().get("curves").unwrap().clone();
+    let program = Arc::make_mut(&mut definition.program);
+    let parameters = Arc::make_mut(&mut program.parameters);
+    parameters[0].section = Some(layer_core::ResourceLabel::Message { message: "common-cancel".into() });
+    parameters[1].section = Some("Cancel".into());
+    let domain = parameters.iter_mut().find(|parameter| parameter.key.as_ref() == "domain").unwrap();
+    let layer_core::EffectParameterKind::Choice { options } = &mut domain.kind else { panic!() };
+    for option in Arc::make_mut(options) {
+        *option = layer_core::EffectOption::Labeled { value: option.value().into(), label: "Same".into() };
+    }
+    let mut effect = definition.preview().unwrap();
+    effect.set("domain", layer_core::EffectValue::Choice(1)).unwrap();
+    assert_eq!(effect.choice("domain"), Some("Log HDR"));
+    let mut project = layer_ui::new_drawing(64, 48,
+        &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let mut layer = layer_core::Layer::paint(layer_core::LayerId(3), "Literal filter name");
+    layer.effect = Some(effect.into());
+    project.document.layers.insert(0, layer);
+    project.document.active_layer = layer_core::LayerId(3);
+    let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    native.session = layer_ui::UiSession::from_project(layer_host::Renderer(None), project,
+        None, [64, 48], layer_ui::Platform::Windows).unwrap();
+    let wire = serde_json::to_value(&native.session.state().layer_properties).unwrap();
+    let controls = wire["controls"].as_array().unwrap();
+    let first = controls.iter().find(|control| control["key"] == "curve_0").unwrap();
+    let second = controls.iter().find(|control| control["key"] == "curve_1").unwrap();
+    assert_eq!(first["section"], second["section"]);
+    assert_ne!(first["section_id"], second["section_id"]);
+    assert_eq!(first["section_id"], serde_json::json!({"message":"common-cancel"}));
+    assert_eq!(second["section_id"], "Cancel");
+    let domain = controls.iter().find(|control| control["key"] == "domain").unwrap();
+    assert_eq!(domain["value"]["value"], 1);
+    assert!(domain["kind"]["options"].as_array().unwrap().iter().all(|label| label == "Same"));
+    let round_trip: serde_json::Value = serde_json::from_str(&wire.to_string()).unwrap();
+    assert_eq!(wire, round_trip);
+}
+
+#[test]
 fn manifest_paths_are_rejected_before_any_module_read() {
     let directory = TempDir::new();
     copy_example(&directory);
@@ -196,7 +235,7 @@ fn delayed_explicit_import_cannot_migrate_a_replacement_document() {
         finish_read(&mut service, &mut native);
         let mut replacement = layer_ui::UiSession::from_project(
             layer_host::Renderer(None),
-            layer_ui::new_drawing(32, 24).unwrap(),
+            layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
             None,
             [32, 24],
             layer_ui::Platform::Windows,
@@ -265,7 +304,7 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
     let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     native.session = layer_ui::UiSession::from_project(
         layer_host::Renderer(Some(gpu.into())),
-        layer_ui::new_drawing(64, 48).unwrap(),
+        layer_ui::new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
         None,
         [64, 48],
         layer_ui::Platform::Windows,

@@ -74,6 +74,7 @@ impl WebApp {
             context: request.context,
             lost: request.lost.clone(),
         };
+        let localization = self.session.localization().clone();
         let photo_policy = self.session.state().settings.photo_open;
         let working_space = self.session.engine().document().color.space;
         let control = control.inner.clone();
@@ -107,7 +108,7 @@ impl WebApp {
                     raster_project::OpenOptions {
                         dimension: layer_core::ProjectLimits::default().dimension,
                         photo_policy,
-                        name,
+                        names: layer_ui::photo_document_names(&name, &localization),
                         intent: layer_ui::ImportIntent::Place,
                         source_bytes: Some(images.limits().source_bytes),
                     },

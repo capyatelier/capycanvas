@@ -39,8 +39,8 @@ impl ExtraField {
             button.set_size_request(24, 36);
             button.set_hexpand(true);
             button.set_widget_name(&format!("tool-choice-{id}-{index}"));
-            button.set_tooltip_text(Some(item.label));
-            button.update_property(&[gtk::accessible::Property::Label(item.label)]);
+            button.set_tooltip_text(Some(&item.label));
+            button.update_property(&[gtk::accessible::Property::Label(&item.label)]);
             if let Some(first) = buttons.first() {
                 button.set_group(Some(first));
             }

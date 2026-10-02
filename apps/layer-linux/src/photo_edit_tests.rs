@@ -126,7 +126,7 @@ fn native_liquify_pinch_stroke_on_a_pattern() {
     pump(300);
     let selected = state(&w);
     assert_eq!(selected.brush.preset, layer_core::DefaultBrushPreset::LiquifyPinch as u32);
-    assert!(layer_ui::brush_catalog().any(|b| b.id == selected.brush.preset && b.label == "Liquify Pinch"));
+    assert!(layer_ui::brush_catalog().any(|b| b.id == selected.brush.preset && b.label.as_ref() == "Liquify Pinch"));
     let far = [width * 0.95, height * 0.08];
     let untouched = shown(&w, far);
     let from = window_point(&w, [width * 0.3, height * 0.45]);

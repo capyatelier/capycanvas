@@ -110,7 +110,7 @@ fn procreate_keymap_changes_gesture_defaults_and_resets_to_them() {
     let trigger = |s: &UiSession<Recorder>| {
         s.preferences().unwrap().shortcut_page.triggers.into_iter().find(|t| t.id == "touch.tap.4").unwrap()
     };
-    assert_eq!(trigger(&s).action, CommandId::ZenMode.label());
+    assert_eq!(trigger(&s).action, CommandId::ZenMode.label().as_ref());
     assert!(!trigger(&s).modified);
     preference(&mut s, PreferenceAction::OpenActionPicker { trigger: "touch.tap.4".into() });
     preference(&mut s, PreferenceAction::ChooseAction { id: String::new() });
@@ -216,7 +216,7 @@ fn shortcut_page_categories_filters_and_key_search() {
     assert!(!page.filtering && page.category.is_none() && page.empty.is_none());
     let ids: Vec<_> = page.categories.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids[0], "Modifier keys", "modifier keys come first");
-    assert_eq!(ids[1..], crate::shortcuts::SHORTCUT_SECTIONS);
+    assert_eq!(ids[1..], crate::shortcuts::SHORTCUT_SECTIONS.map(|section| section.id()));
     assert_eq!(page.categories.iter().find(|c| c.id == "Brush presets").unwrap().count, tools::brush_catalog().count());
     assert!(view.shortcuts.iter().all(|r| !r.visible), "the category list shows no rows until one is opened");
     let row = |view: &PreferencesView, id: &str| view.shortcuts.iter().find(|r| r.id == id).unwrap().clone();

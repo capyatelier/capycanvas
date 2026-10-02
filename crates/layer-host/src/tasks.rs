@@ -400,7 +400,7 @@ mod tests {
     use layer_ui::{CommandId, UiAction};
 
     fn host() -> NativeHost {
-        let document = layer_core::Document::new("Tasks", 64, 48);
+        let document = layer_core::Document::new("Tasks", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session = UiSession::new(Renderer(Some(gpu.into())), document, [64, 48], layer_ui::Platform::Mac).unwrap();

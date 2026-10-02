@@ -10,7 +10,7 @@ use layer_core::{Project, raster_storage::RetainedTiles};
 use layer_ui::{DocumentLocation, DocumentTabs, DocumentSessions, DocumentTabLabel as Label};
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, VecDeque},
+    collections::VecDeque,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -351,7 +351,7 @@ impl Documents {
             move |_| w.documents.cancel_drag()
         ));
     }
-    pub fn new() -> Self {
+    pub fn new_localized(localization: &layer_ui::Localizer) -> Self {
         let root = gtk::Stack::new();
         root.set_widget_name("document-tabs");
         root.set_hhomogeneous(false);
@@ -390,7 +390,7 @@ impl Documents {
             title,
             selector,
             selector_label,
-            model: RefCell::new(DocumentSessions::default()),
+            model: RefCell::new(DocumentSessions::localized(localization)),
             labels: Default::default(),
             pending: Default::default(),
             draining: Cell::new(false),
@@ -477,40 +477,26 @@ impl Documents {
             "tabs"
         });
     }
-    fn label(id: u64, canvas: &GpuCanvas) -> Label {
-        Label::new(id, &canvas.session.state().document_file)
-    }
     pub fn refresh(&self, w: &Rc<Workspace>) {
-        let Some(current) = w.gpu.borrow().as_ref().map(|g| {
-            let state = g.session.state();
-            if let Some(tab) = state.tabs.first() {
-                self.title.set_label(&format!(
-                    "{}{} · {} × {}",
-                    if state.document_file.modified {
-                        "• "
-                    } else {
-                        ""
-                    },
-                    tab.title,
-                    tab.width,
-                    tab.height
-                ));
-            }
-            Self::label(self.selected(), g)
-        }) else {
-            return;
-        };
-        let mut labels = BTreeMap::from([(current.id, current.clone())]);
-        for (&id, tab) in self.model.borrow().parked() {
-            labels.insert(id, Self::label(id, &tab.owner.canvas));
+        let gpu = w.gpu.borrow();
+        let Some(g) = gpu.as_ref() else { return; };
+        let state = g.session.state();
+        if let Some(tab) = state.tabs.first() {
+            self.title.set_label(&format!(
+                "{}{} · {} × {}",
+                if state.document_file.modified { "• " } else { "" },
+                tab.title,
+                tab.width,
+                tab.height
+            ));
         }
-        let labels: Vec<_> = self
-            .model
-            .borrow()
-            .order()
-            .iter()
-            .filter_map(|id| labels.remove(id))
-            .collect();
+        let labels = self.model.borrow().labels(
+            &state.document_file,
+            |parked| &parked.canvas.session.state().document_file,
+            &w.localization,
+        );
+        let Some(current) = labels.iter().find(|label| label.id == self.selected()).cloned() else { return; };
+        drop(gpu);
         self.selector_label.set_label(&format!(
             "{}{}",
             if current.modified { "• " } else { "" },
@@ -968,7 +954,7 @@ impl Documents {
             self.finish_switch(w, error);
             return Err("Opening was cancelled because the window is closing".into());
         }
-        let candidate = GpuCanvas::with_project_localized(&w.area, Some((project, location)), previous.session.localization().clone());
+        let candidate = GpuCanvas::with_project_localized(&w.area, Some((project, location)), w.localization.clone());
         let mut next = match candidate {
             Ok(next) => next,
             Err(error) => {
@@ -989,7 +975,7 @@ impl Documents {
             eprintln!("Recovery ownership: {e}");
         }
         let tiles = previous.session.retained_document_tiles();
-        self.model.borrow_mut().append(Parked { canvas: previous, recovery: w.recovery() }, tiles);
+        self.model.borrow_mut().append(Parked { canvas: previous, recovery: w.recovery() }, tiles, &w.localization);
         *w.gpu.borrow_mut() = Some(next);
         *w.recovery.borrow_mut() = recovery;
         self.trim().await;

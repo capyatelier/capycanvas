@@ -165,7 +165,7 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16] {
             let color = DocumentColor { space, depth };
-            let mut document = layer_core::Document::new("editable photo", 256, 256);
+            let mut document = layer_core::Document::new("editable photo", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             document.color = color;
             let mut builder = SourceBuilder::new(
                 [256; 2],

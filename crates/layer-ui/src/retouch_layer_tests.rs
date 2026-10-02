@@ -190,4 +190,25 @@ mod retouch_layer_checks {
         assert_eq!(s.state.notice.as_ref().unwrap().text, "The drawing changed, so Frequency Separation was closed");
         assert!(previewed(&mut s, 4).is_none());
     }
+    #[test]
+    fn retouch_names_are_generated_at_creation_and_reopening_preserves_literal_renames() {
+        let l = Localizer::shared(UiLanguage::Japanese);
+        let mut s = UiSession::new_localized(Recorder::default(), Document::new("retouch", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            [640, 480], Platform::Gtk, l.clone()).unwrap();
+        invoke(&mut s, CommandId::NewDodgeBurnLayer);
+        s.frame(1, 1).unwrap();
+        let id = s.engine.document().active_layer;
+        assert_eq!(s.engine.document().layer(id).unwrap().name, l.text(MessageId::RESOURCES_LAYER_DODGE_BURN));
+        let name = "私の補正 { $name } \u{2068}لوحة\u{2069} 한글 🎨";
+        s.dispatch(UiAction::Layer { action: LayerAction::Rename { id: id.0, name: name.into() } }).unwrap();
+        let document = s.engine.document().clone();
+        let reopened = UiSession::new_localized(Recorder::default(), document, [640, 480], Platform::Gtk,
+            Localizer::shared(UiLanguage::English)).unwrap();
+        assert_eq!(reopened.engine.document().layer(id).unwrap().name.as_ref(), name);
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().layer(id).unwrap().name, l.text(MessageId::RESOURCES_LAYER_DODGE_BURN));
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().layer(id).is_none());
+    }
+
 }

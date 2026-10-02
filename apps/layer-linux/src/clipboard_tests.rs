@@ -159,7 +159,7 @@ fn native_clipboard_copy_paste_round_trips() {
         until(|| document(&w).layers.len() == layers && document(&w).selection.is_some(), "Paste Into undoes in one step");
     }
 
-    let mut other = new_drawing(640, 480).unwrap();
+    let mut other = new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     other.document.color = layer_core::color::DocumentColor {
         space: layer_core::color::RgbSpace::DisplayP3,
         depth: layer_core::color::SampleDepth::U16,
@@ -218,7 +218,7 @@ fn native_clipboard_copy_paste_round_trips() {
 #[ignore = "isolated compositor, GPU and native keyboard delivery; prints copy latency"]
 fn native_clipboard_copy_latency_24mp() {
     let [width, height] = [6000u32, 4000];
-    let mut project = new_drawing(width, height).unwrap();
+    let mut project = new_drawing(width, height, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let interpretation = layer_core::color::source::SourceInterpretation {
         channels: layer_core::color::source::SourceChannels::Rgb,
         depth: layer_core::color::SampleDepth::U8,

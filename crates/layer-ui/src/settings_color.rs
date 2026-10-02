@@ -27,7 +27,7 @@ impl PhotoOpenPolicy {
 }
 
 impl Settings {
-    pub(super) fn color_groups(&self) -> Vec<PreferenceGroup> {
+    pub(super) fn color_groups(&self, localizer: &Localizer) -> Vec<PreferenceGroup> {
         use PreferenceId::*;
         let choice = |id, title: &str, description: &str, options: &[&str], selected| {
             row(
@@ -45,12 +45,12 @@ impl Settings {
         let defaults = self.new_document.defaults;
         vec![
             PreferenceGroup {
-                title: "New drawings".into(),
+                title: localizer.text(MessageId::SETTINGS_NEW_DRAWINGS).to_string(),
                 rows: vec![
                     choice(
                         NewColorSpace,
-                        "Color space",
-                        "Defaults apply to future drawings.",
+                        &localizer.text(MessageId::SETTINGS_COLOR_SPACE),
+                        &localizer.text(MessageId::SETTINGS_DEFAULTS_APPLY_TO_FUTURE_DRAWINGS),
                         &RgbSpace::ALL.map(|s| s.name()),
                         RgbSpace::ALL
                             .iter()
@@ -59,35 +59,35 @@ impl Settings {
                     ),
                     choice(
                         NewBitDepth,
-                        "Bit depth",
-                        "16-bit improves precision for subsequent edits.",
-                        &["8-bit SDR", "16-bit SDR", "16-bit float HDR", "32-bit float HDR"],
+                        &localizer.text(MessageId::SETTINGS_BIT_DEPTH),
+                        &localizer.text(MessageId::SETTINGS_16_BIT_IMPROVES_PRECISION_FOR_SUBSEQUENT_EDITS),
+                        &[&localizer.text(MessageId::SETTINGS_8_BIT_SDR), &localizer.text(MessageId::SETTINGS_16_BIT_SDR), &localizer.text(MessageId::SETTINGS_16_BIT_FLOAT_HDR), &localizer.text(MessageId::SETTINGS_32_BIT_FLOAT_HDR)],
                         match defaults.color.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2, SampleDepth::F32 => 3 },
                     ),
                     choice(
                         NewBackground,
-                        "Background",
+                        &localizer.text(MessageId::SETTINGS_BACKGROUND),
                         "",
-                        &["White", "Transparent"],
+                        &[&localizer.text(MessageId::SETTINGS_WHITE), &localizer.text(MessageId::SETTINGS_TRANSPARENT)],
                         u32::from(defaults.background == DocumentBackground::Transparent),
                     ),
                 ],
             },
             PreferenceGroup {
-                title: "Opening photos".into(),
+                title: localizer.text(MessageId::SETTINGS_OPENING_PHOTOS).to_string(),
                 rows: vec![
                     choice(
                         PhotoDepth,
-                        "Editing precision",
-                        "Retain original samples and embedded profiles.",
-                        &["Source depth", "16-bit"],
+                        &localizer.text(MessageId::SETTINGS_EDITING_PRECISION),
+                        &localizer.text(MessageId::SETTINGS_RETAIN_ORIGINAL_SAMPLES_AND_EMBEDDED_PROFILES),
+                        &[&localizer.text(MessageId::SETTINGS_SOURCE_DEPTH), &localizer.text(MessageId::SETTINGS_16_BIT)],
                         u32::from(self.photo_open.promote_to_16),
                     ),
                     choice(
                         MissingProfile,
-                        "Untagged RGB and grayscale",
-                        "Tagged photos keep their profiles without a prompt.",
-                        &["Assume sRGB", "Ask"],
+                        &localizer.text(MessageId::SETTINGS_UNTAGGED_RGB_AND_GRAYSCALE),
+                        &localizer.text(MessageId::SETTINGS_TAGGED_PHOTOS_KEEP_THEIR_PROFILES_WITHOUT_A_PROMPT),
+                        &[&localizer.text(MessageId::SETTINGS_ASSUME_SRGB), &localizer.text(MessageId::SETTINGS_ASK)],
                         u32::from(self.photo_open.missing_profile == MissingProfilePolicy::Ask),
                     ),
                 ],
@@ -128,7 +128,7 @@ mod tests {
     fn future_document_policies_validate_and_round_trip_independently() {
         for platform in Platform::ALL {
             let mut settings = Settings::default();
-            let existing = settings.new_document.defaults.project().unwrap();
+            let existing = settings.new_document.defaults.project(&Localizer::shared(UiLanguage::English)).unwrap();
             for (id, value) in [
                 (PreferenceId::NewColorSpace, 3),
                 (PreferenceId::NewBitDepth, 1),
@@ -144,7 +144,7 @@ mod tests {
             assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
             settings.validate().unwrap();
             assert_eq!(existing.document.color, Default::default());
-            let new = settings.new_document.defaults.project().unwrap();
+            let new = settings.new_document.defaults.project(&Localizer::shared(UiLanguage::English)).unwrap();
             assert_eq!(new.document.color.space, RgbSpace::ProPhoto);
             assert_eq!(new.document.color.depth, SampleDepth::U16);
             assert!(!new.document.layers[1].visible);

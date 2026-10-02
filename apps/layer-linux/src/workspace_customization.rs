@@ -236,12 +236,12 @@ impl ToolbarManagerUi {
             }
             return;
         };
-        self.dialog.set_title(model.title);
-        self.description.set_label(model.description);
-        self.empty.set_label(model.empty_label);
+        self.dialog.set_title(&model.title);
+        self.description.set_label(&model.description);
+        self.empty.set_label(&model.empty_label);
         self.empty.set_visible(model.toolbars.is_empty());
         self.list.set_visible(!model.toolbars.is_empty());
-        self.delete.set_label(model.delete_label);
+        self.delete.set_label(&model.delete_label);
         self.delete.set_sensitive(model.delete_action.is_some());
         let key = serde_json::to_string(&model.toolbars).expect("serializable toolbars");
         if *self.rows_key.borrow() != key {
@@ -666,14 +666,14 @@ impl Customization {
                 title.set_xalign(0.0);
                 body.append(&title);
                 *self.configuration_title.borrow_mut() = Some(title);
-                let label = gtk::Label::new(Some(view.configuration_hint));
+                let label = gtk::Label::new(Some(&view.configuration_hint));
                 label.set_wrap(true);
                 label.set_xalign(0.0);
                 label.add_css_class("dim-label");
                 body.append(&label);
                 for control in &view.controls {
                     let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
-                    let check = gtk::CheckButton::with_label(control.label);
+                    let check = gtk::CheckButton::with_label(&control.label);
                     check.set_widget_name(&format!("panel-visible-{:?}", control.control));
                     check.set_active(control.visible_in_panel);
                     let panel = view.id;
@@ -1029,10 +1029,10 @@ impl Customization {
             }
         }
         if let Some(view) = picker {
-            self.picker.set_title(view.title);
-            self.confirm.set_label(view.confirm_label);
+            self.picker.set_title(&view.title);
+            self.confirm.set_label(&view.confirm_label);
             self.confirm.set_sensitive(view.can_confirm);
-            self.name.set_title(view.name_label);
+            self.name.set_title(&view.name_label);
             self.name.parent().unwrap().set_visible(view.name.is_some());
             if let Some(name) = &view.name
                 && self.name.text() != *name
@@ -1041,7 +1041,7 @@ impl Customization {
             }
             self.catalog
                 .search
-                .set_placeholder_text(Some(view.search_hint));
+                .set_placeholder_text(Some(&view.search_hint));
             if self.catalog.search.text() != view.query {
                 self.catalog.search.set_text(&view.query);
             }
@@ -1088,16 +1088,16 @@ impl Customization {
         }
         self.manager.refresh(w, manager);
         if let Some(view) = prompt {
-            self.toolbar_dialog.set_heading(Some(view.title));
+            self.toolbar_dialog.set_heading(Some(&view.title));
             self.toolbar_dialog.set_body(&view.message);
             self.toolbar_dialog
                 .extra_child()
                 .unwrap()
                 .set_visible(view.name.is_some() || view.error.is_some());
             self.toolbar_dialog
-                .set_response_label("cancel", view.cancel_label);
+                .set_response_label("cancel", &view.cancel_label);
             self.toolbar_dialog
-                .set_response_label("confirm", view.confirm_label);
+                .set_response_label("confirm", &view.confirm_label);
             self.toolbar_dialog
                 .set_response_enabled("confirm", view.can_confirm);
             self.toolbar_dialog.set_response_appearance(
@@ -1108,7 +1108,7 @@ impl Customization {
                     adw::ResponseAppearance::Suggested
                 },
             );
-            self.toolbar_name.set_title(view.name_label);
+            self.toolbar_name.set_title(&view.name_label);
             self.toolbar_name.set_visible(view.name.is_some());
             if let Some(name) = view.name
                 && self.toolbar_name.text() != name
@@ -1249,7 +1249,7 @@ impl Workspace {
             }
             PanelControl::Brushes => {
                 let brushes: Vec<_> = brush_categories().flat_map(|c| c.brushes).collect();
-                let labels: Vec<_> = brushes.iter().map(|b| b.label).collect();
+                let labels: Vec<_> = brushes.iter().map(|b| b.label.as_ref()).collect();
                 let input = gtk::DropDown::from_strings(&labels);
                 input.connect_selected_notify(glib::clone!(
                     #[weak(rename_to = w)]
@@ -1325,7 +1325,7 @@ impl Workspace {
                     let mut buttons = Vec::new();
                     for command in CommandId::LAYERS {
                         let button =
-                            self.action_button(command.label(), UiAction::Invoke { command });
+                            self.action_button(&command.label(), UiAction::Invoke { command });
                         grid.insert(&button, -1);
                         buttons.push((command, button));
                     }
@@ -1577,17 +1577,6 @@ impl Workspace {
             "item",
             &actions,
         );
-        if menu.title == ApplicationMenu::Primary.label() || menu.title == ApplicationMenu::Window.label() {
-            let action = gtk::gio::SimpleAction::new("drawings", None);
-            action.connect_activate(glib::clone!(#[weak(rename_to=w)] self, #[weak] popover, move |_, _| {
-                popover.popdown(); w.documents.show_selector(&w);
-            }));
-            actions.add_action(&action);
-            let section = gtk::gio::Menu::new();
-            let item = gtk::gio::MenuItem::new(Some("Drawings…"), Some("context.drawings"));
-            item.set_attribute_value("accel", Some(&"<Control><Shift>a".to_variant()));
-            section.append_item(&item); root.append_section(None, &section);
-        }
         popover.insert_action_group("context", Some(&actions));
         root
     }

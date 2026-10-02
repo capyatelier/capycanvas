@@ -296,7 +296,7 @@ fn tonal_61mp_performance() {
         held.push(result.pixels.clone());
         assert!(r.selection_clip.storage_bytes() <= 128 * 1024 * 1024);
         if i == 6 {
-            let mut doc = layer_core::Document::new("61 MP recovery", extent[0], extent[1]);
+            let mut doc = layer_core::Document::new("61 MP recovery", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             doc.layers = vec![layer.clone()];
             doc.active_layer = layer.id;
             doc.selection = Some(Selection::pixels(result.pixels));

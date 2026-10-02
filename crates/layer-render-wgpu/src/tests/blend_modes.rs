@@ -230,7 +230,7 @@ struct Case {
     blended: usize,
 }
 fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
-    let mut document = Document::new("Blend oracle", EXTENT[0], EXTENT[1]);
+    let mut document = Document::new("Blend oracle", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = DocumentColor { space: RgbSpace::Srgb, depth };
     document.blend_space = space;
     let paper = document.layers.pop().unwrap();

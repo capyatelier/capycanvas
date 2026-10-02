@@ -162,6 +162,8 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
     }
 }
 
+internal fun propertySectionId(control: JSONObject): String = JSONArray().put(control.opt("section_id") ?: JSONObject.NULL).toString()
+
 @Composable internal fun LayerPropertiesPanel(host: CanvasHost, state: JSONObject) {
     val view = state.getJSONObject("layer_properties")
     val controls = view.array("controls").objects()
@@ -177,8 +179,9 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
         }
         controls.forEachIndexed { index, control ->
             val section = control.takeUnless { it.isNull("section") }?.getString("section")
-            val previousSection = controls.getOrNull(index - 1)?.takeUnless { it.isNull("section") }?.getString("section")
-            if(section != previousSection) {
+            val sectionId = propertySectionId(control)
+            val previousSectionId = controls.getOrNull(index - 1)?.let(::propertySectionId) ?: "[null]"
+            if(sectionId != previousSectionId) {
                 if(index > 0) HorizontalDivider(Modifier.padding(vertical = 3.dp), color = LocalPalette.current.text.copy(alpha = .15f))
                 if(section != null) Text(section, Modifier.padding(start = 6.dp), fontWeight = FontWeight.Bold)
             }

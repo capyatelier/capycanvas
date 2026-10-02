@@ -5,7 +5,7 @@ use crate::DockLayout;
 use serde::{Deserialize, Serialize};
 #[path = "workspace_description.rs"]
 pub(crate) mod description;
-pub use description::layout_change_description;
+pub use description::{layout_change_description, LayoutChange, LayoutPanelName, LayoutPanelAction};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,7 +18,7 @@ pub struct WorkspaceState {
 impl Default for WorkspaceState {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             layout: DockLayout::default(),
             zen_mode: false,
         }
@@ -36,7 +36,7 @@ impl WorkspaceState {
     /// Validate before replacing live state. Storage/transport belongs to the
     /// host; accepted topology and versioning never do.
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 1 {
+        if self.version != 2 {
             return Err("Unsupported workspace version".into());
         }
         self.layout.validate()
@@ -76,7 +76,7 @@ pub struct LayoutRevision {
     /// Scoped to this workspace's history; packages remap references on import.
     pub id: String,
     pub layout: DockLayout,
-    pub description: String,
+    pub description: LayoutChange,
     #[serde(with = "counter")]
     pub timestamp_ms: u64,
 }
@@ -97,11 +97,11 @@ impl LayoutHistory {
         let revision = LayoutRevision {
             id: "r0".into(),
             layout: durable_layout(layout),
-            description: "Starting layout".into(),
+            description: LayoutChange::Starting,
             timestamp_ms: 0,
         };
         Self {
-            version: 1,
+            version: 2,
             generation: 0,
             current: revision.id.clone(),
             undo: Vec::new(),
@@ -113,7 +113,7 @@ impl LayoutHistory {
         &self.revisions[&self.current].layout
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 1 {
+        if self.version != 2 {
             return Err("Unsupported layout history version".into());
         }
         if self.generation == u64::MAX
@@ -135,7 +135,6 @@ impl LayoutHistory {
             if id.is_empty()
                 || id.len() > 128
                 || id != &revision.id
-                || revision.description.len() > 1024
                 || !revision.layout.measurements.is_empty()
                 || !revision.layout.column_scroll.is_empty()
                 || revision.layout.titlebar_insets != [0.0; 3]
@@ -144,6 +143,7 @@ impl LayoutHistory {
             {
                 return Err("Invalid layout history revision".into());
             }
+            revision.description.validate()?;
             revision.layout.validate()?;
         }
         Ok(())
@@ -154,15 +154,15 @@ impl LayoutHistory {
             .checked_add(1)
             .expect("workspace generation exhausted");
     }
-    pub fn append(&mut self, layout: &DockLayout, description: &str) {
+    pub fn append(&mut self, layout: &DockLayout, description: LayoutChange) {
         let layout = durable_layout(layout);
         if self.layout() == &layout {
             return;
         }
-        let description = if description == "Arrange panels and toolbars" {
+        let description = if description == LayoutChange::Automatic {
             layout_change_description(self.layout(), &layout)
         } else {
-            description.into()
+            description
         };
         self.advance();
         let mut id = format!("r{}", self.generation);
@@ -209,7 +209,7 @@ impl LayoutHistory {
 pub(crate) struct WorkspaceHistory {
     durable: Option<LayoutHistory>,
     gesture: Option<WorkspaceState>,
-    gesture_description: Option<String>,
+    gesture_description: Option<LayoutChange>,
 }
 impl WorkspaceHistory {
     pub fn generation(&self) -> Option<u64> {
@@ -230,7 +230,7 @@ impl WorkspaceHistory {
         let history = self
             .durable
             .get_or_insert_with(|| LayoutHistory::new(&state.layout));
-        history.append(&state.layout, "Arrange panels and toolbars");
+        history.append(&state.layout, LayoutChange::Automatic);
         history.clone()
     }
     pub fn restore(history: LayoutHistory) -> Self {
@@ -250,13 +250,13 @@ impl WorkspaceHistory {
         self.gesture.is_none() && self.durable.as_ref().is_some_and(|h| !h.redo.is_empty())
     }
     pub fn record(&mut self, before: WorkspaceState, after: &WorkspaceState) {
-        self.record_named(before, after, "Arrange panels and toolbars");
+        self.record_named(before, after, LayoutChange::Automatic);
     }
     pub fn record_named(
         &mut self,
         before: WorkspaceState,
         after: &WorkspaceState,
-        description: &str,
+        description: LayoutChange,
     ) {
         if self.gesture.is_some() || durable_layout(&before.layout) == durable_layout(&after.layout)
         {
@@ -265,13 +265,13 @@ impl WorkspaceHistory {
         let history = self
             .durable
             .get_or_insert_with(|| LayoutHistory::new(&before.layout));
-        history.append(&before.layout, "Arrange panels and toolbars");
+        history.append(&before.layout, LayoutChange::Automatic);
         history.append(&after.layout, description);
     }
     pub fn begin(&mut self, state: &WorkspaceState) {
         self.gesture.get_or_insert_with(|| state.clone());
     }
-    pub fn begin_named(&mut self, state: &WorkspaceState, description: String) {
+    pub fn begin_named(&mut self, state: &WorkspaceState, description: LayoutChange) {
         if self.gesture.is_none() {
             self.gesture_description = Some(description);
         }
@@ -283,7 +283,7 @@ impl WorkspaceHistory {
                 .gesture_description
                 .take()
                 .unwrap_or_else(|| layout_change_description(&before.layout, &state.layout));
-            self.record_named(before, state, &description);
+            self.record_named(before, state, description);
         }
     }
     pub fn finish_move(&mut self, state: &mut WorkspaceState) {
@@ -341,4 +341,77 @@ pub struct WorkspaceWorkingState {
 pub struct WorkspaceCapture {
     pub history: LayoutHistory,
     pub working: WorkspaceWorkingState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Panel, Localizer, UiLanguage};
+
+    #[test]
+    fn semantic_history_keeps_custom_names_after_rename_and_deletion() {
+        let mut layout = DockLayout::default();
+        let panel = layout.add_toolbar(None, "Tools", &[]).unwrap();
+        let mut history = LayoutHistory::new(&layout);
+        layout.rename_toolbar(panel, "日本語 한글 {quoted} 🎨").unwrap();
+        history.append(&layout, LayoutChange::Automatic);
+        let renamed = history.revisions[&history.current].description.clone();
+        assert!(matches!(&renamed, LayoutChange::Renamed { before, after } if before.custom_name.as_deref() == Some("Tools") && after.custom_name.as_deref() == Some("日本語 한글 {quoted} 🎨")));
+        layout.delete_toolbar(panel).unwrap();
+        history.append(&layout, LayoutChange::Automatic);
+        let deleted = &history.revisions[&history.current].description;
+        assert!(matches!(deleted, LayoutChange::Panels { action: LayoutPanelAction::Deleted, panels } if panels[0].custom_name.as_deref() == Some("日本語 한글 {quoted} 🎨")));
+        let json = serde_json::to_string(&history).unwrap();
+        for language in UiLanguage::ALL {
+            let localization = Localizer::shared(language);
+            assert!(renamed.display(&localization).contains("日本語 한글 {quoted} 🎨"));
+            assert!(deleted.display(&localization).contains("日本語 한글 {quoted} 🎨"));
+        }
+        assert_eq!(serde_json::to_string(&history).unwrap(), json);
+        assert_eq!(serde_json::from_str::<LayoutHistory>(&json).unwrap(), history);
+        history.validate().unwrap();
+    }
+
+    #[test]
+    fn default_looking_custom_title_remains_explicit_history_data() {
+        let before = DockLayout::default();
+        assert!(before.panel(Panel::Toolbar).unwrap().custom_name().is_none());
+        let mut after = before.clone();
+        after.rename_toolbar(Panel::Toolbar, "Tools").unwrap();
+        assert!(matches!(layout_change_description(&before, &after), LayoutChange::Renamed { before, after } if before.custom_name.is_none() && after.custom_name.as_deref() == Some("Tools")));
+    }
+
+    #[test]
+    fn one_gesture_records_once_and_cancel_discards_semantic_arguments() {
+        let mut state = WorkspaceState::default();
+        let mut history = WorkspaceHistory::default();
+        let initial = history.capture(&state);
+        let action = LayoutChange::panels(LayoutPanelAction::Resized, vec![description::panel_name(&state.layout, Panel::Toolbar)]);
+        history.begin_named(&state, action.clone());
+        state.layout.canvas_bar = !state.layout.canvas_bar;
+        history.cancel(&mut state);
+        assert_eq!(history.capture(&state), initial);
+        history.begin_named(&state, action.clone());
+        state.layout.canvas_bar = !state.layout.canvas_bar;
+        history.finish(&state);
+        history.finish(&state);
+        let captured = history.capture(&state);
+        assert_eq!(captured.generation, 1);
+        assert_eq!(captured.undo.len(), 1);
+        assert_eq!(captured.revisions[&captured.current].description, action);
+        history.undo(&mut state);
+        assert_eq!(state.layout, initial.layout().clone());
+    }
+
+    #[test]
+    fn loaded_history_rejects_unresolved_or_unbounded_semantics() {
+        let mut history = LayoutHistory::new(&DockLayout::default());
+        let revision = history.revisions.get_mut(&history.current).unwrap();
+        revision.description = LayoutChange::Automatic;
+        assert!(history.validate().is_err());
+        history.revisions.get_mut(&history.current).unwrap().description = LayoutChange::panels(LayoutPanelAction::Moved, vec![LayoutPanelName { panel: Panel::Toolbar, custom_name: Some("x".repeat(65)) }]);
+        assert!(history.validate().is_err());
+        history.revisions.get_mut(&history.current).unwrap().description = LayoutChange::panels(LayoutPanelAction::Moved, vec![LayoutPanelName { panel: Panel::Toolbar, custom_name: None }; 4097]);
+        assert!(history.validate().is_err());
+    }
 }

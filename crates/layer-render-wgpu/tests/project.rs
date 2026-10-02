@@ -54,7 +54,7 @@ fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
         builder.push_row(&row).unwrap();
     }
     let source = Arc::new(builder.finish().unwrap());
-    let mut document = Document::new("retained16 source in sRGB8 working document", SIZE[0], SIZE[1]);
+    let mut document = Document::new("retained16 source in sRGB8 working document", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.layers[0].source = Some(source.clone());
     let project = Project { document };
     let (mut live, mut input) = engine_at_scale(&project, 0.125);
@@ -113,7 +113,7 @@ fn draw(
 }
 
 fn fixture() -> Project {
-    let mut doc = Document::new("editable-project-test", SIZE[0], SIZE[1]);
+    let mut doc = Document::new("editable-project-test", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.layers[1].visible = false;
     doc.layers[0].source = Some(color::source::rgba8_source(SIZE, |x, y| {
         [

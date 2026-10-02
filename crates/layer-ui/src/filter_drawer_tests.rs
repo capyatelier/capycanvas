@@ -45,6 +45,28 @@ fn filter_drawer_replaces_the_selected_layer_after_reopening_and_cancel_is_undoa
 }
 
 #[test]
+fn filter_replacement_and_undo_preserve_literal_renamed_layer_names() {
+    let (mut s, _) = filters();
+    insert_effect(&mut s, "brightness_contrast");
+    let id = s.engine.document().active_layer;
+    let name = "私の曲線 한글 🎨 { $name } \u{2068}لوحة\u{2069}";
+    s.dispatch(UiAction::Layer { action: LayerAction::Rename {
+        id: id.0, name: name.into(),
+    } }).unwrap();
+    assert!(s.filter_drawer_open());
+    insert_effect(&mut s, "curves");
+    let layer = s.engine.document().layer(id).unwrap();
+    assert_eq!(layer.name.as_ref(), name);
+    assert_eq!(layer.effect.as_ref().unwrap().program.id.as_ref(), "curves");
+    invoke(&mut s, CommandId::Undo);
+    let layer = s.engine.document().layer(id).unwrap();
+    assert_eq!(layer.name.as_ref(), name);
+    assert_eq!(layer.effect.as_ref().unwrap().program.id.as_ref(), "brightness_contrast");
+    invoke(&mut s, CommandId::Redo);
+    assert_eq!(s.engine.document().layer(id).unwrap().name.as_ref(), name);
+}
+
+#[test]
 fn the_filter_drawer_masks_a_new_effect_but_never_the_one_it_replaces() {
     let (mut s, _) = filters();
     let selection = layer_core::Selection::polygon(vec![
@@ -303,7 +325,7 @@ fn the_filter_menu_leaves_fill_generators_to_layer_new() {
     let s = session(Platform::Gtk);
     let generators: Vec<_> = s.effect_catalog.filters().iter()
         .filter(|f| f.program.kind == layer_core::EffectKind::Generator)
-        .map(|f| f.label().to_string())
+        .map(|f| effects::resource_label(f.label(), &s.state.localization).to_string())
         .collect();
     assert_eq!(generators, ["Solid Color", "Gradient Fill"]);
     let menu = s.application_menu(ApplicationMenu::Filter);

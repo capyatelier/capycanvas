@@ -22,7 +22,7 @@ mod tests {
     #[test]
     fn photo_selection_roundtrips_shared_binary_coverage() {
         let extent = [9504, 6336];
-        let mut document = Document::new("61 MP selection", extent[0], extent[1]);
+        let mut document = Document::new("61 MP selection", extent[0], extent[1], crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let pixels = Arc::new(
             SelectionPixels::bytes(
                 extent,

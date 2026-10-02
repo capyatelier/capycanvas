@@ -304,7 +304,7 @@ impl ManagerUi {
         clear(&self.tabs);
         if toolbar {
             for tab in [ManagerPage::ThisWorkspace, ManagerPage::ToolbarLibrary] {
-                let button = gtk::ToggleButton::with_label(tab.label());
+                let button = gtk::ToggleButton::with_label(&tab.label(&w.localization));
                 button.set_active(tab == page);
                 button.connect_clicked(glib::clone!(
                     #[weak]
@@ -317,7 +317,7 @@ impl ManagerUi {
         self.tabs.set_visible(toolbar);
         clear(&self.actions);
         if page == ManagerPage::ThisWorkspace {
-            let button = gtk::Button::with_label(ManagerAction::NewToolbar(None).label());
+            let button = gtk::Button::with_label(&ManagerAction::NewToolbar(None).label(&w.localization));
             button.connect_clicked(glib::clone!(
                 #[weak]
                 w,

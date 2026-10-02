@@ -275,7 +275,7 @@ mod tests {
     }
     #[test]
     fn ruler_history_is_validated_atomic_and_does_not_change_paint() {
-        let mut editor = Editor::new(Document::new("rulers", 128, 128));
+        let mut editor = Editor::new(Document::new("rulers", 128, 128, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         let paint = editor.document().layers.clone();
         let ruler = Ruler {
             id: 1,

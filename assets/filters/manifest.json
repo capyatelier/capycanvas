@@ -1,13 +1,13 @@
 {
   "categories": [
-    {"id":"tone","label":"Tone"},
-    {"id":"color","label":"Color"},
-    {"id":"detail","label":"Detail"},
-    {"id":"blur","label":"Blur"},
-    {"id":"artistic","label":"Artistic"},
-    {"id":"distort","label":"Distort"},
-    {"id":"texture","label":"Texture"},
-    {"id":"fill","label":"Fill"}
+    {"id":"tone","label": {"message":"resources-category-tone"}},
+    {"id":"color","label": {"message":"resources-category-color"}},
+    {"id":"detail","label": {"message":"resources-category-detail"}},
+    {"id":"blur","label": {"message":"resources-category-blur"}},
+    {"id":"artistic","label": {"message":"resources-category-artistic"}},
+    {"id":"distort","label": {"message":"resources-category-distort"}},
+    {"id":"texture","label": {"message":"resources-category-texture"}},
+    {"id":"fill","label": {"message":"resources-category-fill"}}
   ],
   "filters": [
     {
@@ -20,43 +20,43 @@
         "id": "curves",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Curves",
+        "label": {"message":"resources-filter-curves"},
         "parameters": [
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
             "key": "curve_0",
             "kind": {"kind":"curve"},
-            "label": "RGB"
+            "label": {"message":"resources-parameter-curves-curve-0"}
           },
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
             "key": "curve_1",
             "kind": {"kind":"curve"},
-            "label": "Red"
+            "label": {"message":"resources-parameter-curves-curve-1"}
           },
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
             "key": "curve_2",
             "kind": {"kind":"curve"},
-            "label": "Green"
+            "label": {"message":"resources-parameter-curves-curve-2"}
           },
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
             "key": "curve_3",
             "kind": {"kind":"curve"},
-            "label": "Blue"
+            "label": {"message":"resources-parameter-curves-curve-3"}
           },
           {
             "default": {"kind":"choice","value":0},
             "key": "domain",
-            "kind": {"kind":"choice","options":["Encoded RGB","Log HDR"]},
-            "label": "Curve space"
+            "kind": {"kind":"choice","options": [{"value":"Encoded RGB","label":{"message":"resources-choice-curves-domain-encoded-rgb"}},{"value":"Log HDR","label":{"message":"resources-choice-curves-domain-log-hdr"}}]},
+            "label": {"message":"resources-parameter-curves-domain"}
           },
           {
             "default": {"kind":"number","value":4},
             "key": "hdr_stops",
             "kind": {"kind":"number","min":0,"max":15,"step":1,"decimals":0,"unit":"EV"},
-            "label": "HDR range"
+            "label": {"message":"resources-parameter-curves-hdr-stops"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -73,56 +73,56 @@
         "id": "levels",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Levels",
+        "label": {"message":"resources-filter-levels"},
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "black",
             "kind": {"decimals":3,"kind":"number","max":0.999,"min":0,"step":0.01,"unit":""},
-            "label": "Black",
-            "section": "Input"
+            "label": {"message":"resources-parameter-levels-black"},
+            "section": {"message":"resources-section-levels-input"}
           },
           {
             "default": {"kind":"number","value":1},
             "key": "white",
             "kind": {"decimals":3,"kind":"number","max":1,"min":0.001,"step":0.01,"unit":""},
-            "label": "White",
-            "section": "Input"
+            "label": {"message":"resources-parameter-levels-white"},
+            "section": {"message":"resources-section-levels-input"}
           },
           {
             "default": {"kind":"number","value":1},
             "key": "gamma",
             "kind": {"decimals":2,"kind":"number","max":10,"min":0.1,"step":0.05,"unit":""},
-            "label": "Midtones",
-            "section": "Input"
+            "label": {"message":"resources-parameter-levels-gamma"},
+            "section": {"message":"resources-section-levels-input"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "output_black",
             "kind": {"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},
-            "label": "Black",
-            "section": "Output"
+            "label": {"message":"resources-parameter-levels-output-black"},
+            "section": {"message":"resources-section-levels-output"}
           },
           {
             "default": {"kind":"number","value":1},
             "key": "output_white",
             "kind": {"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},
-            "label": "White",
-            "section": "Output"
+            "label": {"message":"resources-parameter-levels-output-white"},
+            "section": {"message":"resources-section-levels-output"}
           },
           {
             "default": {"kind":"toggle","value":false},
             "key": "clamp_input",
             "kind": {"kind":"toggle"},
-            "label": "Clamp input",
-            "section": "Clipping"
+            "label": {"message":"resources-parameter-levels-clamp-input"},
+            "section": {"message":"resources-section-levels-clipping"}
           },
           {
             "default": {"kind":"toggle","value":false},
             "key": "clamp_output",
             "kind": {"kind":"toggle"},
-            "label": "Clamp output",
-            "section": "Clipping"
+            "label": {"message":"resources-parameter-levels-clamp-output"},
+            "section": {"message":"resources-section-levels-clipping"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -138,19 +138,19 @@
         "id": "brightness_contrast",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Brightness / Contrast",
+        "label": {"message":"resources-filter-brightness-contrast"},
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "brightness",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Brightness"
+            "label": {"message":"resources-parameter-brightness-contrast-brightness"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "contrast",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Contrast"
+            "label": {"message":"resources-parameter-brightness-contrast-contrast"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -166,25 +166,25 @@
         "id": "hue_saturation",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Hue / Saturation",
+        "label": {"message":"resources-filter-hue-saturation"},
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "hue",
             "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
-            "label": "Hue"
+            "label": {"message":"resources-parameter-hue-saturation-hue"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "saturation",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
-            "label": "Saturation"
+            "label": {"message":"resources-parameter-hue-saturation-saturation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "lightness",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
-            "label": "Lightness"
+            "label": {"message":"resources-parameter-hue-saturation-lightness"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -200,76 +200,76 @@
         "id": "color_balance",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Color Balance",
+        "label": {"message":"resources-filter-color-balance"},
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "shadows_red",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Cyan — Red",
-            "section": "Shadows"
+            "label": {"message":"resources-parameter-color-balance-shadows-red"},
+            "section": {"message":"resources-section-color-balance-shadows"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "shadows_green",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Magenta — Green",
-            "section": "Shadows"
+            "label": {"message":"resources-parameter-color-balance-shadows-green"},
+            "section": {"message":"resources-section-color-balance-shadows"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "shadows_blue",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Yellow — Blue",
-            "section": "Shadows"
+            "label": {"message":"resources-parameter-color-balance-shadows-blue"},
+            "section": {"message":"resources-section-color-balance-shadows"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "midtones_red",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Cyan — Red",
-            "section": "Midtones"
+            "label": {"message":"resources-parameter-color-balance-midtones-red"},
+            "section": {"message":"resources-section-color-balance-midtones"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "midtones_green",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Magenta — Green",
-            "section": "Midtones"
+            "label": {"message":"resources-parameter-color-balance-midtones-green"},
+            "section": {"message":"resources-section-color-balance-midtones"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "midtones_blue",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Yellow — Blue",
-            "section": "Midtones"
+            "label": {"message":"resources-parameter-color-balance-midtones-blue"},
+            "section": {"message":"resources-section-color-balance-midtones"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "highlights_red",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Cyan — Red",
-            "section": "Highlights"
+            "label": {"message":"resources-parameter-color-balance-highlights-red"},
+            "section": {"message":"resources-section-color-balance-highlights"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "highlights_green",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Magenta — Green",
-            "section": "Highlights"
+            "label": {"message":"resources-parameter-color-balance-highlights-green"},
+            "section": {"message":"resources-section-color-balance-highlights"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "highlights_blue",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Yellow — Blue",
-            "section": "Highlights"
+            "label": {"message":"resources-parameter-color-balance-highlights-blue"},
+            "section": {"message":"resources-section-color-balance-highlights"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "preserve_luminance",
             "kind": {"kind":"toggle"},
-            "label": "Preserve luminosity"
+            "label": {"message":"resources-parameter-color-balance-preserve-luminance"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -285,25 +285,25 @@
         "id": "exposure",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Exposure",
+        "label": {"message":"resources-filter-exposure"},
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "exposure",
             "kind": {"decimals":2,"kind":"number","max":10,"min":-10,"step":0.1,"unit":"EV"},
-            "label": "Exposure"
+            "label": {"message":"resources-parameter-exposure-exposure"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "offset",
             "kind": {"decimals":3,"kind":"number","max":0.5,"min":-0.5,"step":0.01,"unit":""},
-            "label": "Offset"
+            "label": {"message":"resources-parameter-exposure-offset"}
           },
           {
             "default": {"kind":"number","value":1},
             "key": "gamma",
             "kind": {"decimals":2,"kind":"number","max":10,"min":0.1,"step":0.05,"unit":""},
-            "label": "Gamma"
+            "label": {"message":"resources-parameter-exposure-gamma"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -319,25 +319,25 @@
         "id": "vibrance",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Vibrance",
+        "label": {"message":"resources-filter-vibrance"},
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "vibrance",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
-            "label": "Vibrance"
+            "label": {"message":"resources-parameter-vibrance-vibrance"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "saturation",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
-            "label": "Saturation"
+            "label": {"message":"resources-parameter-vibrance-saturation"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "protect_skin",
             "kind": {"kind":"toggle"},
-            "label": "Protect skin tones"
+            "label": {"message":"resources-parameter-vibrance-protect-skin"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -352,55 +352,55 @@
         "id": "black_white",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Black & White",
+        "label": {"message":"resources-filter-black-white"},
         "parameters": [
           {
             "default": {"kind":"number","value":40},
             "key": "reds",
             "kind": {"decimals":0,"kind":"number","max":200,"min":-100,"step":1,"unit":"%"},
-            "label": "Reds"
+            "label": {"message":"resources-parameter-black-white-reds"}
           },
           {
             "default": {"kind":"number","value":60},
             "key": "yellows",
             "kind": {"decimals":0,"kind":"number","max":200,"min":-100,"step":1,"unit":"%"},
-            "label": "Yellows"
+            "label": {"message":"resources-parameter-black-white-yellows"}
           },
           {
             "default": {"kind":"number","value":40},
             "key": "greens",
             "kind": {"decimals":0,"kind":"number","max":200,"min":-100,"step":1,"unit":"%"},
-            "label": "Greens"
+            "label": {"message":"resources-parameter-black-white-greens"}
           },
           {
             "default": {"kind":"number","value":60},
             "key": "cyans",
             "kind": {"decimals":0,"kind":"number","max":200,"min":-100,"step":1,"unit":"%"},
-            "label": "Cyans"
+            "label": {"message":"resources-parameter-black-white-cyans"}
           },
           {
             "default": {"kind":"number","value":20},
             "key": "blues",
             "kind": {"decimals":0,"kind":"number","max":200,"min":-100,"step":1,"unit":"%"},
-            "label": "Blues"
+            "label": {"message":"resources-parameter-black-white-blues"}
           },
           {
             "default": {"kind":"number","value":80},
             "key": "magentas",
             "kind": {"decimals":0,"kind":"number","max":200,"min":-100,"step":1,"unit":"%"},
-            "label": "Magentas"
+            "label": {"message":"resources-parameter-black-white-magentas"}
           },
           {
             "default": {"kind":"toggle","value":false},
             "key": "tint",
             "kind": {"kind":"toggle"},
-            "label": "Tint"
+            "label": {"message":"resources-parameter-black-white-tint"}
           },
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.75,0.53,0.3,1]}},
             "key": "tint_color",
             "kind": {"kind":"color"},
-            "label": "Tint color"
+            "label": {"message":"resources-parameter-black-white-tint-color"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -415,7 +415,7 @@
         "id": "gradient_map",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Gradient Map",
+        "label": {"message":"resources-filter-gradient-map"},
         "parameters": [
           {
             "default": {
@@ -424,19 +424,19 @@
             },
             "key": "gradient",
             "kind": {"kind":"gradient"},
-            "label": "Gradient"
+            "label": {"message":"resources-parameter-gradient-map-gradient"}
           },
           {
             "default": {"kind":"toggle","value":false},
             "key": "reverse",
             "kind": {"kind":"toggle"},
-            "label": "Reverse"
+            "label": {"message":"resources-parameter-gradient-map-reverse"}
           },
           {
             "default": {"kind":"number","value":100},
             "key": "amount",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Amount"
+            "label": {"message":"resources-parameter-gradient-map-amount"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -451,13 +451,13 @@
         "id": "posterize",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Posterize",
+        "label": {"message":"resources-filter-posterize"},
         "parameters": [
           {
             "default": {"kind":"number","value":6},
             "key": "levels",
             "kind": {"decimals":0,"kind":"number","max":256,"min":2,"step":1,"unit":""},
-            "label": "Levels"
+            "label": {"message":"resources-parameter-posterize-levels"}
           }
         ],
         "wgsl": ["effects.wgsl"]
@@ -473,7 +473,7 @@
         "id": "gaussian_blur",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Gaussian Blur",
+        "label": {"message":"resources-filter-gaussian-blur"},
         "lookups": [
           {
             "dependencies": ["sigma"],
@@ -489,7 +489,7 @@
             "default": {"kind":"number","value":3},
             "key": "sigma",
             "kind": {"decimals":1,"kind":"number","max":21,"min":0,"step":0.1,"unit":"px"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-gaussian-blur-sigma"}
           }
         ],
         "passes": [
@@ -514,7 +514,7 @@
         "entry": "capy_unsharp_mask",
         "id": "unsharp_mask",
         "kind": "adjustment",
-        "label": "Unsharp Mask",
+        "label": {"message":"resources-filter-unsharp-mask"},
         "lookups": [
           {
             "dependencies": ["sigma"],
@@ -530,19 +530,19 @@
             "default": {"kind":"number","value":1.5},
             "key": "sigma",
             "kind": {"decimals":1,"kind":"number","max":21,"min":0,"step":0.1,"unit":"px"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-unsharp-mask-sigma"}
           },
           {
             "default": {"kind":"number","value":100},
             "key": "amount",
             "kind": {"decimals":0,"kind":"number","max":300,"min":0,"step":1,"unit":"%"},
-            "label": "Amount"
+            "label": {"message":"resources-parameter-unsharp-mask-amount"}
           },
           {
             "default": {"kind":"number","value":2},
             "key": "threshold",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Threshold"
+            "label": {"message":"resources-parameter-unsharp-mask-threshold"}
           }
         ],
         "passes": [
@@ -567,7 +567,7 @@
         "entry": "capy_high_pass",
         "id": "high_pass",
         "kind": "adjustment",
-        "label": "High Pass",
+        "label": {"message":"resources-filter-high-pass"},
         "lookups": [
           {
             "dependencies": ["sigma"],
@@ -583,13 +583,13 @@
             "default": {"kind":"number","value":4},
             "key": "sigma",
             "kind": {"decimals":1,"kind":"number","max":21,"min":0,"step":0.1,"unit":"px"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-high-pass-sigma"}
           },
           {
             "default": {"kind":"number","value":100},
             "key": "amount",
             "kind": {"decimals":0,"kind":"number","max":300,"min":0,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-high-pass-amount"}
           }
         ],
         "passes": [
@@ -615,19 +615,19 @@
         "entry": "capy_motion_blur",
         "id": "motion_blur",
         "kind": "adjustment",
-        "label": "Motion Blur",
+        "label": {"message":"resources-filter-motion-blur"},
         "parameters": [
           {
             "default": {"kind":"number","value":12},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":64,"min":0,"step":0.1,"unit":"px"},
-            "label": "Distance"
+            "label": {"message":"resources-parameter-motion-blur-distance"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "angle",
             "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
-            "label": "Angle"
+            "label": {"message":"resources-parameter-motion-blur-angle"}
           }
         ],
         "passes": [
@@ -648,19 +648,19 @@
         "entry": "capy_denoise",
         "id": "denoise",
         "kind": "adjustment",
-        "label": "Edge-Preserving Smooth",
+        "label": {"message":"resources-filter-denoise"},
         "parameters": [
           {
             "default": {"kind":"number","value":2},
             "key": "radius",
             "kind": {"decimals":0,"kind":"number","max":3,"min":1,"step":1,"unit":"px"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-denoise-radius"}
           },
           {
             "default": {"kind":"number","value":25},
             "key": "strength",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-denoise-strength"}
           }
         ],
         "passes": [
@@ -681,25 +681,25 @@
         "entry": "capy_edge_detect",
         "id": "edge_detect",
         "kind": "adjustment",
-        "label": "Edge Detect",
+        "label": {"message":"resources-filter-edge-detect"},
         "parameters": [
           {
             "default": {"kind":"number","value":1},
             "key": "radius",
             "kind": {"decimals":1,"kind":"number","max":8,"min":0.5,"step":0.1,"unit":"px"},
-            "label": "Width"
+            "label": {"message":"resources-parameter-edge-detect-radius"}
           },
           {
             "default": {"kind":"number","value":100},
             "key": "strength",
             "kind": {"decimals":0,"kind":"number","max":400,"min":0,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-edge-detect-strength"}
           },
           {
             "default": {"kind":"toggle","value":false},
             "key": "invert",
             "kind": {"kind":"toggle"},
-            "label": "Invert"
+            "label": {"message":"resources-parameter-edge-detect-invert"}
           }
         ],
         "passes": [
@@ -720,26 +720,26 @@
         "entry": "capy_white_balance",
         "id": "white_balance",
         "kind": "adjustment",
-        "label": "White Balance",
+        "label": {"message":"resources-filter-white-balance"},
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "temperature",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Temperature",
-            "section": "White balance"
+            "label": {"message":"resources-parameter-white-balance-temperature"},
+            "section": {"message":"resources-section-white-balance-white-balance"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "tint",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Tint"
+            "label": {"message":"resources-parameter-white-balance-tint"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "preserve_luminance",
             "kind": {"kind":"toggle"},
-            "label": "Preserve luminosity"
+            "label": {"message":"resources-parameter-white-balance-preserve-luminance"}
           }
         ],
         "wgsl": ["effects.wgsl","filter_library.wgsl"]
@@ -753,31 +753,31 @@
         "entry": "capy_split_tone",
         "id": "split_tone",
         "kind": "adjustment",
-        "label": "Split Tone",
+        "label": {"message":"resources-filter-split-tone"},
         "parameters": [
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.16,0.33,0.58,1]}},
             "key": "shadows",
             "kind": {"kind":"color"},
-            "label": "Shadows"
+            "label": {"message":"resources-parameter-split-tone-shadows"}
           },
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.96,0.68,0.34,1]}},
             "key": "highlights",
             "kind": {"kind":"color"},
-            "label": "Highlights"
+            "label": {"message":"resources-parameter-split-tone-highlights"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "balance",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": "Balance"
+            "label": {"message":"resources-parameter-split-tone-balance"}
           },
           {
             "default": {"kind":"number","value":30},
             "key": "strength",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-split-tone-strength"}
           }
         ],
         "wgsl": ["effects.wgsl","filter_library.wgsl"]
@@ -791,38 +791,38 @@
         "entry": "capy_vignette",
         "id": "vignette",
         "kind": "adjustment",
-        "label": "Vignette",
+        "label": {"message":"resources-filter-vignette"},
         "parameters": [
           {
             "default": {"kind":"number","value":40},
             "key": "strength",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-vignette-strength"}
           },
           {
             "default": {"kind":"number","value":95},
             "key": "radius",
             "kind": {"decimals":0,"kind":"number","max":150,"min":10,"step":1,"unit":"%"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-vignette-radius"}
           },
           {
             "default": {"kind":"number","value":55},
             "key": "softness",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Softness"
+            "label": {"message":"resources-parameter-vignette-softness"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_x",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center X",
-            "section": "Position"
+            "label": {"message":"resources-parameter-vignette-center-x"},
+            "section": {"message":"resources-section-vignette-position"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_y",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center Y"
+            "label": {"message":"resources-parameter-vignette-center-y"}
           }
         ],
         "space": "linear",
@@ -838,45 +838,45 @@
         "entry": "capy_film_grain",
         "id": "film_grain",
         "kind": "adjustment",
-        "label": "Film Grain",
+        "label": {"message":"resources-filter-film-grain"},
         "parameters": [
           {
             "default": {"kind":"number","value":18},
             "key": "amount",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Amount"
+            "label": {"message":"resources-parameter-film-grain-amount"}
           },
           {
             "default": {"kind":"number","value":1},
             "key": "size",
             "kind": {"decimals":1,"kind":"number","max":8,"min":0.5,"step":0.1,"unit":"px"},
-            "label": "Size"
+            "label": {"message":"resources-parameter-film-grain-size"}
           },
           {
             "default": {"kind":"toggle","value":false},
             "key": "color",
             "kind": {"kind":"toggle"},
-            "label": "Color grain"
+            "label": {"message":"resources-parameter-film-grain-color"}
           },
           {
             "default": {"kind":"number","value":1},
             "key": "speed",
             "kind": {"decimals":2,"kind":"number","max":4,"min":0,"step":0.05,"unit":""},
-            "label": "Speed"
+            "label": {"message":"resources-parameter-film-grain-speed"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "animate",
             "kind": {"kind":"toggle"},
-            "label": "Animate",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-film-grain-animate"},
+            "section": {"message":"resources-section-film-grain-animation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
-            "label": "Frozen time",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-film-grain-time"},
+            "section": {"message":"resources-section-film-grain-animation"}
           }
         ],
         "time": true,
@@ -892,7 +892,7 @@
         "entry": "capy_bloom",
         "id": "bloom",
         "kind": "adjustment",
-        "label": "Bloom",
+        "label": {"message":"resources-filter-bloom"},
         "lookups": [
           {
             "dependencies": ["sigma"],
@@ -908,19 +908,19 @@
             "default": {"kind":"number","value":6},
             "key": "sigma",
             "kind": {"decimals":1,"kind":"number","max":21,"min":0,"step":0.1,"unit":"px"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-bloom-sigma"}
           },
           {
             "default": {"kind":"number","value":60},
             "key": "amount",
             "kind": {"decimals":0,"kind":"number","max":200,"min":0,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-bloom-amount"}
           },
           {
             "default": {"kind":"number","value":60},
             "key": "threshold",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Threshold"
+            "label": {"message":"resources-parameter-bloom-threshold"}
           }
         ],
         "passes": [
@@ -942,7 +942,7 @@
         "entry": "capy_soft_focus",
         "id": "soft_focus",
         "kind": "adjustment",
-        "label": "Soft Focus",
+        "label": {"message":"resources-filter-soft-focus"},
         "lookups": [
           {
             "dependencies": ["sigma"],
@@ -958,13 +958,13 @@
             "default": {"kind":"number","value":5},
             "key": "sigma",
             "kind": {"decimals":1,"kind":"number","max":21,"min":0,"step":0.1,"unit":"px"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-soft-focus-sigma"}
           },
           {
             "default": {"kind":"number","value":40},
             "key": "amount",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-soft-focus-amount"}
           }
         ],
         "passes": [
@@ -989,37 +989,37 @@
         "entry": "capy_halftone",
         "id": "halftone",
         "kind": "adjustment",
-        "label": "Halftone",
+        "label": {"message":"resources-filter-halftone"},
         "parameters": [
           {
             "default": {"kind":"number","value":9},
             "key": "size",
             "kind": {"decimals":1,"kind":"number","max":48,"min":3,"step":0.5,"unit":"px"},
-            "label": "Dot spacing"
+            "label": {"message":"resources-parameter-halftone-size"}
           },
           {
             "default": {"kind":"number","value":15},
             "key": "angle",
             "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
-            "label": "Angle"
+            "label": {"message":"resources-parameter-halftone-angle"}
           },
           {
             "default": {"kind":"number","value":30},
             "key": "contrast",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Contrast"
+            "label": {"message":"resources-parameter-halftone-contrast"}
           },
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.05,0.07,0.09,1]}},
             "key": "ink",
             "kind": {"kind":"color"},
-            "label": "Ink"
+            "label": {"message":"resources-parameter-halftone-ink"}
           },
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.96,0.94,0.87,1]}},
             "key": "paper",
             "kind": {"kind":"color"},
-            "label": "Paper"
+            "label": {"message":"resources-parameter-halftone-paper"}
           }
         ],
         "passes": [
@@ -1039,37 +1039,37 @@
         "entry": "capy_crosshatch",
         "id": "crosshatch",
         "kind": "adjustment",
-        "label": "Crosshatch",
+        "label": {"message":"resources-filter-crosshatch"},
         "parameters": [
           {
             "default": {"kind":"number","value":8},
             "key": "spacing",
             "kind": {"decimals":1,"kind":"number","max":32,"min":3,"step":0.5,"unit":"px"},
-            "label": "Spacing"
+            "label": {"message":"resources-parameter-crosshatch-spacing"}
           },
           {
             "default": {"kind":"number","value":1},
             "key": "width",
             "kind": {"decimals":1,"kind":"number","max":4,"min":0.25,"step":0.1,"unit":"px"},
-            "label": "Line width"
+            "label": {"message":"resources-parameter-crosshatch-width"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "angle",
             "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
-            "label": "Angle"
+            "label": {"message":"resources-parameter-crosshatch-angle"}
           },
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.07,0.08,0.09,1]}},
             "key": "ink",
             "kind": {"kind":"color"},
-            "label": "Ink"
+            "label": {"message":"resources-parameter-crosshatch-ink"}
           },
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.97,0.95,0.91,1]}},
             "key": "paper",
             "kind": {"kind":"color"},
-            "label": "Paper"
+            "label": {"message":"resources-parameter-crosshatch-paper"}
           }
         ],
         "wgsl": ["effects.wgsl","filter_library.wgsl"]
@@ -1083,25 +1083,25 @@
         "entry": "capy_emboss",
         "id": "emboss",
         "kind": "adjustment",
-        "label": "Emboss",
+        "label": {"message":"resources-filter-emboss"},
         "parameters": [
           {
             "default": {"kind":"number","value":1.5},
             "key": "radius",
             "kind": {"decimals":1,"kind":"number","max":8,"min":0.5,"step":0.1,"unit":"px"},
-            "label": "Width"
+            "label": {"message":"resources-parameter-emboss-radius"}
           },
           {
             "default": {"kind":"number","value":135},
             "key": "angle",
             "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
-            "label": "Angle"
+            "label": {"message":"resources-parameter-emboss-angle"}
           },
           {
             "default": {"kind":"number","value":100},
             "key": "strength",
             "kind": {"decimals":0,"kind":"number","max":400,"min":0,"step":1,"unit":"%"},
-            "label": "Depth"
+            "label": {"message":"resources-parameter-emboss-strength"}
           }
         ],
         "passes": [
@@ -1122,13 +1122,13 @@
         "entry": "capy_pixel_mosaic",
         "id": "pixel_mosaic",
         "kind": "adjustment",
-        "label": "Pixel Mosaic",
+        "label": {"message":"resources-filter-pixel-mosaic"},
         "parameters": [
           {
             "default": {"kind":"number","value":12},
             "key": "size",
             "kind": {"decimals":0,"kind":"number","max":96,"min":1,"step":1,"unit":"px"},
-            "label": "Cell size"
+            "label": {"message":"resources-parameter-pixel-mosaic-size"}
           }
         ],
         "passes": [
@@ -1149,19 +1149,19 @@
         "entry": "capy_chromatic_aberration",
         "id": "chromatic_aberration",
         "kind": "adjustment",
-        "label": "Chromatic Aberration",
+        "label": {"message":"resources-filter-chromatic-aberration"},
         "parameters": [
           {
             "default": {"kind":"number","value":3},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":32,"min":0,"step":0.1,"unit":"px"},
-            "label": "Separation"
+            "label": {"message":"resources-parameter-chromatic-aberration-distance"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "angle",
             "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
-            "label": "Angle"
+            "label": {"message":"resources-parameter-chromatic-aberration-angle"}
           }
         ],
         "passes": [
@@ -1181,19 +1181,19 @@
         "entry": "capy_painterly",
         "id": "painterly",
         "kind": "adjustment",
-        "label": "Painterly",
+        "label": {"message":"resources-filter-painterly"},
         "parameters": [
           {
             "default": {"kind":"number","value":5},
             "key": "radius",
             "kind": {"decimals":1,"kind":"number","max":16,"min":1,"step":0.5,"unit":"px"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-painterly-radius"}
           },
           {
             "default": {"kind":"number","value":100},
             "key": "strength",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-painterly-strength"}
           }
         ],
         "passes": [
@@ -1214,19 +1214,19 @@
         "id": "solarize",
         "resolution": "display",
         "kind": "adjustment",
-        "label": "Solarize",
+        "label": {"message":"resources-filter-solarize"},
         "parameters": [
           {
             "default": {"kind":"number","value":50},
             "key": "threshold",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Threshold"
+            "label": {"message":"resources-parameter-solarize-threshold"}
           },
           {
             "default": {"kind":"number","value":100},
             "key": "strength",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-solarize-strength"}
           }
         ],
         "wgsl": ["effects.wgsl","filter_library.wgsl"]
@@ -1240,7 +1240,7 @@
         "entry": "capy_pencil",
         "id": "pencil",
         "kind": "adjustment",
-        "label": "Pencil",
+        "label": {"message":"resources-filter-pencil"},
         "lookups": [
           {
             "dependencies": ["sigma"],
@@ -1256,25 +1256,25 @@
             "default": {"kind":"number","value":2},
             "key": "sigma",
             "kind": {"decimals":1,"kind":"number","max":21,"min":0,"step":0.1,"unit":"px"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-pencil-sigma"}
           },
           {
             "default": {"kind":"number","value":40},
             "key": "contrast",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Contrast"
+            "label": {"message":"resources-parameter-pencil-contrast"}
           },
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.07,0.06,0.05,1]}},
             "key": "ink",
             "kind": {"kind":"color"},
-            "label": "Ink"
+            "label": {"message":"resources-parameter-pencil-ink"}
           },
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.97,0.95,0.9,1]}},
             "key": "paper",
             "kind": {"kind":"color"},
-            "label": "Paper"
+            "label": {"message":"resources-parameter-pencil-paper"}
           }
         ],
         "passes": [
@@ -1299,32 +1299,32 @@
         "entry": "capy_kaleidoscope",
         "id": "kaleidoscope",
         "kind": "adjustment",
-        "label": "Kaleidoscope",
+        "label": {"message":"resources-filter-kaleidoscope"},
         "parameters": [
           {
             "default": {"kind":"number","value":6},
             "key": "segments",
             "kind": {"decimals":0,"kind":"number","max":24,"min":2,"step":1,"unit":""},
-            "label": "Segments"
+            "label": {"message":"resources-parameter-kaleidoscope-segments"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "angle",
             "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
-            "label": "Angle"
+            "label": {"message":"resources-parameter-kaleidoscope-angle"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_x",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center X",
-            "section": "Position"
+            "label": {"message":"resources-parameter-kaleidoscope-center-x"},
+            "section": {"message":"resources-section-kaleidoscope-position"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_y",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center Y"
+            "label": {"message":"resources-parameter-kaleidoscope-center-y"}
           }
         ],
         "passes": [{"entry":"capy_kaleidoscope","sampling":{"kind":"document"}}],
@@ -1340,32 +1340,32 @@
         "entry": "capy_swirl",
         "id": "swirl",
         "kind": "adjustment",
-        "label": "Swirl",
+        "label": {"message":"resources-filter-swirl"},
         "parameters": [
           {
             "default": {"kind":"number","value":120},
             "key": "turn",
             "kind": {"decimals":0,"kind":"number","max":720,"min":-720,"step":1,"unit":"°"},
-            "label": "Twist"
+            "label": {"message":"resources-parameter-swirl-turn"}
           },
           {
             "default": {"kind":"number","value":70},
             "key": "radius",
             "kind": {"decimals":0,"kind":"number","max":150,"min":1,"step":1,"unit":"%"},
-            "label": "Radius"
+            "label": {"message":"resources-parameter-swirl-radius"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_x",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center X",
-            "section": "Position"
+            "label": {"message":"resources-parameter-swirl-center-x"},
+            "section": {"message":"resources-section-swirl-position"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_y",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center Y"
+            "label": {"message":"resources-parameter-swirl-center-y"}
           }
         ],
         "passes": [{"entry":"capy_swirl","sampling":{"kind":"document"}}],
@@ -1382,52 +1382,52 @@
         "entry": "capy_ripple",
         "id": "ripple",
         "kind": "adjustment",
-        "label": "Ripple",
+        "label": {"message":"resources-filter-ripple"},
         "parameters": [
           {
             "default": {"kind":"number","value":12},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":48,"min":0,"step":0.1,"unit":"px"},
-            "label": "Amplitude"
+            "label": {"message":"resources-parameter-ripple-distance"}
           },
           {
             "default": {"kind":"number","value":64},
             "key": "wavelength",
             "kind": {"decimals":0,"kind":"number","max":256,"min":8,"step":1,"unit":"px"},
-            "label": "Wavelength"
+            "label": {"message":"resources-parameter-ripple-wavelength"}
           },
           {
             "default": {"kind":"number","value":0.5},
             "key": "speed",
             "kind": {"decimals":2,"kind":"number","max":4,"min":0,"step":0.05,"unit":""},
-            "label": "Speed"
+            "label": {"message":"resources-parameter-ripple-speed"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_x",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center X",
-            "section": "Position"
+            "label": {"message":"resources-parameter-ripple-center-x"},
+            "section": {"message":"resources-section-ripple-position"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_y",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center Y"
+            "label": {"message":"resources-parameter-ripple-center-y"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "animate",
             "kind": {"kind":"toggle"},
-            "label": "Animate",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-ripple-animate"},
+            "section": {"message":"resources-section-ripple-animation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
-            "label": "Frozen time",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-ripple-time"},
+            "section": {"message":"resources-section-ripple-animation"}
           }
         ],
         "passes": [
@@ -1449,25 +1449,25 @@
         "entry": "capy_glass",
         "id": "glass",
         "kind": "adjustment",
-        "label": "Glass",
+        "label": {"message":"resources-filter-glass"},
         "parameters": [
           {
             "default": {"kind":"number","value":12},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":48,"min":0,"step":0.1,"unit":"px"},
-            "label": "Distortion"
+            "label": {"message":"resources-parameter-glass-distance"}
           },
           {
             "default": {"kind":"number","value":24},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":160,"min":4,"step":1,"unit":"px"},
-            "label": "Texture size"
+            "label": {"message":"resources-parameter-glass-scale"}
           },
           {
             "default": {"kind":"number","value":35},
             "key": "roughness",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Roughness"
+            "label": {"message":"resources-parameter-glass-roughness"}
           }
         ],
         "passes": [
@@ -1489,45 +1489,45 @@
         "entry": "capy_rainy_glass",
         "id": "rainy_glass",
         "kind": "adjustment",
-        "label": "Rainy Glass",
+        "label": {"message":"resources-filter-rainy-glass"},
         "parameters": [
           {
             "default": {"kind":"number","value":8},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":32,"min":0,"step":0.1,"unit":"px"},
-            "label": "Refraction"
+            "label": {"message":"resources-parameter-rainy-glass-distance"}
           },
           {
             "default": {"kind":"number","value":48},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":120,"min":12,"step":1,"unit":"px"},
-            "label": "Drop size"
+            "label": {"message":"resources-parameter-rainy-glass-scale"}
           },
           {
             "default": {"kind":"number","value":65},
             "key": "amount",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Rain"
+            "label": {"message":"resources-parameter-rainy-glass-amount"}
           },
           {
             "default": {"kind":"number","value":0.5},
             "key": "speed",
             "kind": {"decimals":2,"kind":"number","max":4,"min":0,"step":0.05,"unit":""},
-            "label": "Speed"
+            "label": {"message":"resources-parameter-rainy-glass-speed"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "animate",
             "kind": {"kind":"toggle"},
-            "label": "Animate",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-rainy-glass-animate"},
+            "section": {"message":"resources-section-rainy-glass-animation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
-            "label": "Frozen time",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-rainy-glass-time"},
+            "section": {"message":"resources-section-rainy-glass-animation"}
           }
         ],
         "passes": [
@@ -1550,45 +1550,45 @@
         "entry": "capy_vhs",
         "id": "vhs",
         "kind": "adjustment",
-        "label": "VHS",
+        "label": {"message":"resources-filter-vhs"},
         "parameters": [
           {
             "default": {"kind":"number","value":5},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":32,"min":0,"step":0.1,"unit":"px"},
-            "label": "Tracking"
+            "label": {"message":"resources-parameter-vhs-distance"}
           },
           {
             "default": {"kind":"number","value":12},
             "key": "noise",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Noise"
+            "label": {"message":"resources-parameter-vhs-noise"}
           },
           {
             "default": {"kind":"number","value":20},
             "key": "lines",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Scanlines"
+            "label": {"message":"resources-parameter-vhs-lines"}
           },
           {
             "default": {"kind":"number","value":1},
             "key": "speed",
             "kind": {"decimals":2,"kind":"number","max":4,"min":0,"step":0.05,"unit":""},
-            "label": "Speed"
+            "label": {"message":"resources-parameter-vhs-speed"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "animate",
             "kind": {"kind":"toggle"},
-            "label": "Animate",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-vhs-animate"},
+            "section": {"message":"resources-section-vhs-animation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
-            "label": "Frozen time",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-vhs-time"},
+            "section": {"message":"resources-section-vhs-animation"}
           }
         ],
         "passes": [
@@ -1611,45 +1611,45 @@
         "entry": "capy_crt",
         "id": "crt",
         "kind": "adjustment",
-        "label": "CRT",
+        "label": {"message":"resources-filter-crt"},
         "parameters": [
           {
             "default": {"kind":"number","value":8},
             "key": "curvature",
             "kind": {"decimals":0,"kind":"number","max":30,"min":0,"step":1,"unit":"%"},
-            "label": "Curvature"
+            "label": {"message":"resources-parameter-crt-curvature"}
           },
           {
             "default": {"kind":"number","value":35},
             "key": "lines",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Scanlines"
+            "label": {"message":"resources-parameter-crt-lines"}
           },
           {
             "default": {"kind":"number","value":25},
             "key": "mask",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Pixel mask"
+            "label": {"message":"resources-parameter-crt-mask"}
           },
           {
             "default": {"kind":"number","value":1},
             "key": "separation",
             "kind": {"decimals":1,"kind":"number","max":5,"min":0,"step":0.1,"unit":"px"},
-            "label": "Separation"
+            "label": {"message":"resources-parameter-crt-separation"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "animate",
             "kind": {"kind":"toggle"},
-            "label": "Animate",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-crt-animate"},
+            "section": {"message":"resources-section-crt-animation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
-            "label": "Frozen time",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-crt-time"},
+            "section": {"message":"resources-section-crt-animation"}
           }
         ],
         "passes": [{"entry":"capy_crt","sampling":{"kind":"document"}}],
@@ -1667,45 +1667,45 @@
         "entry": "capy_heat_haze",
         "id": "heat_haze",
         "kind": "adjustment",
-        "label": "Heat Haze",
+        "label": {"message":"resources-filter-heat-haze"},
         "parameters": [
           {
             "default": {"kind":"number","value":8},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":48,"min":0,"step":0.1,"unit":"px"},
-            "label": "Distortion"
+            "label": {"message":"resources-parameter-heat-haze-distance"}
           },
           {
             "default": {"kind":"number","value":90},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":240,"min":10,"step":1,"unit":"px"},
-            "label": "Wave size"
+            "label": {"message":"resources-parameter-heat-haze-scale"}
           },
           {
             "default": {"kind":"number","value":0.6},
             "key": "speed",
             "kind": {"decimals":2,"kind":"number","max":4,"min":0,"step":0.05,"unit":""},
-            "label": "Speed"
+            "label": {"message":"resources-parameter-heat-haze-speed"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "detail",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Detail"
+            "label": {"message":"resources-parameter-heat-haze-detail"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "animate",
             "kind": {"kind":"toggle"},
-            "label": "Animate",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-heat-haze-animate"},
+            "section": {"message":"resources-section-heat-haze-animation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
-            "label": "Frozen time",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-heat-haze-time"},
+            "section": {"message":"resources-section-heat-haze-animation"}
           }
         ],
         "passes": [
@@ -1727,39 +1727,39 @@
         "entry": "capy_iridescence",
         "id": "iridescence",
         "kind": "adjustment",
-        "label": "Iridescence",
+        "label": {"message":"resources-filter-iridescence"},
         "parameters": [
           {
             "default": {"kind":"number","value":55},
             "key": "strength",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Strength"
+            "label": {"message":"resources-parameter-iridescence-strength"}
           },
           {
             "default": {"kind":"number","value":64},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":240,"min":8,"step":1,"unit":"px"},
-            "label": "Film size"
+            "label": {"message":"resources-parameter-iridescence-scale"}
           },
           {
             "default": {"kind":"number","value":0.3},
             "key": "speed",
             "kind": {"decimals":2,"kind":"number","max":4,"min":0,"step":0.05,"unit":""},
-            "label": "Speed"
+            "label": {"message":"resources-parameter-iridescence-speed"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "animate",
             "kind": {"kind":"toggle"},
-            "label": "Animate",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-iridescence-animate"},
+            "section": {"message":"resources-section-iridescence-animation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
-            "label": "Frozen time",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-iridescence-time"},
+            "section": {"message":"resources-section-iridescence-animation"}
           }
         ],
         "time": true,
@@ -1776,45 +1776,45 @@
         "entry": "capy_domain_warp",
         "id": "domain_warp",
         "kind": "adjustment",
-        "label": "Domain Warp",
+        "label": {"message":"resources-filter-domain-warp"},
         "parameters": [
           {
             "default": {"kind":"number","value":24},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":64,"min":0,"step":0.1,"unit":"px"},
-            "label": "Distortion"
+            "label": {"message":"resources-parameter-domain-warp-distance"}
           },
           {
             "default": {"kind":"number","value":96},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":256,"min":8,"step":1,"unit":"px"},
-            "label": "Pattern size"
+            "label": {"message":"resources-parameter-domain-warp-scale"}
           },
           {
             "default": {"kind":"number","value":3},
             "key": "octaves",
             "kind": {"decimals":0,"kind":"number","max":5,"min":1,"step":1,"unit":""},
-            "label": "Detail"
+            "label": {"message":"resources-parameter-domain-warp-octaves"}
           },
           {
             "default": {"kind":"number","value":0.25},
             "key": "speed",
             "kind": {"decimals":2,"kind":"number","max":4,"min":0,"step":0.05,"unit":""},
-            "label": "Speed"
+            "label": {"message":"resources-parameter-domain-warp-speed"}
           },
           {
             "default": {"kind":"toggle","value":true},
             "key": "animate",
             "kind": {"kind":"toggle"},
-            "label": "Animate",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-domain-warp-animate"},
+            "section": {"message":"resources-section-domain-warp-animation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
-            "label": "Frozen time",
-            "section": "Animation"
+            "label": {"message":"resources-parameter-domain-warp-time"},
+            "section": {"message":"resources-section-domain-warp-animation"}
           }
         ],
         "passes": [
@@ -1836,13 +1836,13 @@
         "id": "solid_color",
         "resolution": "display",
         "kind": "generator",
-        "label": "Solid Color",
+        "label": {"message":"resources-filter-solid-color"},
         "parameters": [
           {
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.16,0.33,0.58,1]}},
             "key": "color",
             "kind": {"kind":"color"},
-            "label": "Color"
+            "label": {"message":"resources-parameter-solid-color-color"}
           }
         ],
         "wgsl": ["effects.wgsl","filter_library.wgsl"]
@@ -1857,7 +1857,7 @@
         "id": "gradient_fill",
         "resolution": "display",
         "kind": "generator",
-        "label": "Gradient Fill",
+        "label": {"message":"resources-filter-gradient-fill"},
         "parameters": [
           {
             "default": {
@@ -1866,49 +1866,49 @@
             },
             "key": "gradient",
             "kind": {"kind":"gradient"},
-            "label": "Gradient"
+            "label": {"message":"resources-parameter-gradient-fill-gradient"}
           },
           {
             "default": {"kind":"toggle","value":false},
             "key": "reverse",
             "kind": {"kind":"toggle"},
-            "label": "Reverse"
+            "label": {"message":"resources-parameter-gradient-fill-reverse"}
           },
           {
             "default": {"kind":"choice","value":0},
             "key": "style",
-            "kind": {"kind":"choice","options":["Linear","Radial"]},
-            "label": "Style"
+            "kind": {"kind":"choice","options": [{"value":"Linear","label":{"message":"resources-choice-gradient-fill-style-linear"}},{"value":"Radial","label":{"message":"resources-choice-gradient-fill-style-radial"}}]},
+            "label": {"message":"resources-parameter-gradient-fill-style"}
           },
           {
             "default": {"kind":"number","value":90},
             "key": "angle",
             "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
-            "label": "Angle"
+            "label": {"message":"resources-parameter-gradient-fill-angle"}
           },
           {
             "default": {"kind":"number","value":100},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":400,"min":10,"step":1,"unit":"%"},
-            "label": "Scale"
+            "label": {"message":"resources-parameter-gradient-fill-scale"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_x",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center X",
-            "section": "Position"
+            "label": {"message":"resources-parameter-gradient-fill-center-x"},
+            "section": {"message":"resources-section-gradient-fill-position"}
           },
           {
             "default": {"kind":"number","value":50},
             "key": "center_y",
             "kind": {"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},
-            "label": "Center Y"
+            "label": {"message":"resources-parameter-gradient-fill-center-y"}
           }
         ],
         "wgsl": ["effects.wgsl","filter_library.wgsl"]
       }
     }
   ],
-  "format": 1
+  "format": 2
 }

@@ -512,19 +512,19 @@ pub(crate) fn import(settings: &Settings, text: &str, platform: crate::Platform)
         let (before, after) = (label(settings.keys(&definition.id)), label(candidate.keys(&definition.id)));
         match (before.is_empty(), after.is_empty()) {
             _ if before == after => {}
-            (true, false) => preview.added.push(format!("{}: {after}", definition.label)),
-            (false, true) => preview.removed.push(format!("{}: {before}", definition.label)),
-            _ => preview.changed.push(format!("{}: {before} → {after}", definition.label)),
+            (true, false) => preview.added.push(format!("{}: {after}", definition.label.resolve(&crate::Localizer::shared(crate::UiLanguage::English)))),
+            (false, true) => preview.removed.push(format!("{}: {before}", definition.label.resolve(&crate::Localizer::shared(crate::UiLanguage::English)))),
+            _ => preview.changed.push(format!("{}: {before} → {after}", definition.label.resolve(&crate::Localizer::shared(crate::UiLanguage::English)))),
         }
     }
     for trigger in crate::GESTURE_TRIGGERS {
         let name = |s: &Settings| {
             let id = s.gesture_binding(trigger.id);
-            definitions.iter().find(|(d, _)| d.id == id).map_or_else(|| "Nothing".to_string(), |(d, _)| d.label.clone())
+            definitions.iter().find(|(d, _)| d.id == id).map_or_else(|| "Nothing".to_string(), |(d, _)| d.label.resolve(&crate::Localizer::shared(crate::UiLanguage::English)))
         };
         let (before, after) = (name(settings), name(&candidate));
         if before != after {
-            preview.changed.push(format!("{}: {before} → {after}", trigger.label));
+            preview.changed.push(format!("{}: {before} → {after}", trigger.localized_label(&crate::Localizer::shared(crate::UiLanguage::English))));
         }
     }
     Ok(KeymapImport { settings: candidate, preview })

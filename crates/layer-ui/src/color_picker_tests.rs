@@ -417,7 +417,7 @@ fn color_picker_size_and_style_are_settings_and_navigator_stays_navigation() {
             .tool_set
             .subtools
             .iter()
-            .map(|i| i.label)
+            .map(|i| i.label.as_ref())
             .collect::<Vec<_>>(),
         ["Color Picker", "Eyedropper"]
     );
@@ -481,14 +481,14 @@ fn standalone_picker_restores_glass_and_categories_retain_both_tools() {
         assert_eq!(drawer.column_widths(), [184., 240.]);
         assert_eq!(drawer.dismissal, DrawerDismissal::Explicit);
         assert_eq!(s.command(CommandId::Eyedropper).icon, Some("eyedropper"));
-        assert_eq!(s.command(CommandId::Eyedropper).label, "Eyedropper");
+        assert_eq!(s.command(CommandId::Eyedropper).label.as_ref(), "Eyedropper");
         invoke(&mut s, CommandId::Eyedropper);
         assert_eq!(
             s.state
                 .tool_set
                 .subtools
                 .iter()
-                .map(|item| item.label)
+                .map(|item| item.label.as_ref())
                 .collect::<Vec<_>>(),
             ["Color Picker", "Eyedropper"]
         );

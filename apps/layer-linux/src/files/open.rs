@@ -16,13 +16,14 @@ pub(super) async fn prepare(
     file: gio::File,
     policy: layer_ui::PhotoOpenPolicy,
     working: layer_core::color::RgbSpace,
+    names: layer_core::DocumentNames,
 ) -> Result<Option<(Project, Option<DocumentLocation>)>, String> {
     let path = file.path().ok_or("Choose a file on this device")?;
     let location = DocumentLocation {
         uri: file.uri().into(),
         name: path.file_name().ok_or("Choose a filename")?.to_string_lossy().into_owned(),
     };
-    let Some((mut project, location)) = run(window, path, location, policy).await? else {
+    let Some((mut project, location)) = run(window, path, location, policy, names).await? else {
         return Ok(None);
     };
     if !window.is_visible() { return Ok(None); }
@@ -30,8 +31,9 @@ pub(super) async fn prepare(
         let source = Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or("Photo source unavailable")?);
         let metadata = std::mem::take(&mut project.document.metadata);
         let Some(source) = interpret_window(window, source, policy, working).await? else { return Ok(None); };
-        let name = project.document.layers[0].name.to_string();
-        project = gio::spawn_blocking(move || policy.photo_project(source, metadata, &name))
+        let names = layer_core::DocumentNames { paint: project.document.layers[0].name.clone(),
+            paper: project.document.layers[1].name.clone() };
+        project = gio::spawn_blocking(move || policy.photo_project(source, metadata, names))
             .await.map_err(|_| "Profile reader failed")??;
     }
     Ok(window.is_visible().then_some((project, location)))
@@ -42,6 +44,7 @@ async fn run(
     path: PathBuf,
     location: DocumentLocation,
     policy: layer_ui::PhotoOpenPolicy,
+    names: layer_core::DocumentNames,
 ) -> Result<Option<(Project, Option<DocumentLocation>)>, String> {
     let dialog = adw::AlertDialog::builder()
         .heading("Opening image or project…")
@@ -59,7 +62,7 @@ async fn run(
     let control = cancelled.clone();
     // Await acknowledgement even after Cancel. A successor cannot overlap a
     // detached decoder, and a cancelled candidate never reaches a new window.
-    let result = gio::spawn_blocking(move || read(&path, location, policy, control))
+    let result = gio::spawn_blocking(move || read(&path, location, policy, names, control))
         .await
         .map_err(|_| "Project reader failed".to_string())
         .and_then(|result| result);
@@ -141,12 +144,13 @@ pub(crate) fn read(
     path: &Path,
     location: DocumentLocation,
     policy: layer_ui::PhotoOpenPolicy,
+    names: layer_core::DocumentNames,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(Project, Option<DocumentLocation>), String> {
     let file = super::reader::cancellable_file(path, cancelled.clone())
         .map_err(|e| format!("Cannot open file: {e}"))?;
     let imported = layer_ui::read_import(file, layer_ui::ImportIntent::Open, policy,
-        &path.file_name().unwrap_or_default().to_string_lossy(), Default::default(), Default::default(), &cancelled)?;
+        names, Default::default(), Default::default(), &cancelled)?;
     Ok((imported.project, imported.source.adoption_location(Some(location))))
 }
 
@@ -194,6 +198,7 @@ mod tests {
                 name: "Ordinary.jpg".into(),
             },
             Default::default(),
+            layer_ui::photo_document_names("Ordinary.jpg", &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)),
             Default::default(),
         )
         .unwrap();

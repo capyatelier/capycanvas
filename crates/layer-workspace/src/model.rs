@@ -4,7 +4,7 @@ use layer_ui::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 pub const HISTORY_BUDGET_BYTES: u64 = 100 * 1024 * 1024;
 pub const OWNER_LEASE_MS: u64 = 30_000;
 pub const OWNER_RENEW_MS: u64 = 10_000;
@@ -182,12 +182,12 @@ pub struct ToolbarDefinition {
     pub hide_tab: bool,
 }
 impl ToolbarDefinition {
-    pub fn capture(panel: &PanelConfig) -> Result<Self, StoreError> {
+    pub fn capture(panel: &PanelConfig, localization: &layer_ui::Localizer) -> Result<Self, StoreError> {
         let layer_ui::PanelContent::Toolbar { name, tiles } = &panel.content else {
             return Err(StoreError::invalid("Choose a toolbar."));
         };
         Ok(Self {
-            name: name.clone(),
+            name: name.clone().unwrap_or_else(|| panel.id.localized_label(localization).to_string()),
             tiles: tiles.clone(),
             tile_style: panel.tile_style,
             hide_tab: panel.hide_tab,
@@ -203,7 +203,7 @@ impl ToolbarDefinition {
         }
         PanelConfig {
             id: layer_ui::Panel::Toolbar, hide_tab: self.hide_tab, tile_style: self.tile_style,
-            content: layer_ui::PanelContent::Toolbar { name: self.name.clone(), tiles: self.tiles.clone() },
+            content: layer_ui::PanelContent::Toolbar { name: Some(self.name.clone()), tiles: self.tiles.clone() },
         }.validate().map_err(StoreError::invalid)?;
         let mut ids = std::collections::BTreeSet::new();
         if self.tiles.iter().any(|tile| tile.id == 0 || !ids.insert(tile.id)) {
@@ -397,4 +397,56 @@ pub struct ItemSummary {
     pub generations: Generations,
     pub claim: Option<Claim>,
     pub error: Option<String>,
+}
+
+pub fn workspace_display_name(id: &str, metadata: &Metadata, localization: &layer_ui::Localizer) -> String {
+    if metadata.builtin && metadata.kind == ItemKind::Workspace {
+        if let Some((_, preset)) = DEFAULT_WORKSPACES.iter().find(|(key, _)| *key == id) {
+            use layer_ui::{MessageId as M, WorkspacePreset as P};
+            return localization.text(match preset { P::Painter => M::WORKSPACE_BUILTIN_PAINTER, P::Illustrator => M::WORKSPACE_BUILTIN_ILLUSTRATOR, P::Photographer => M::WORKSPACE_BUILTIN_PHOTOGRAPHER }).to_string();
+        }
+    }
+    metadata.name.clone()
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use super::*;
+
+    #[test]
+    fn builtin_identity_projection_preserves_literal_metadata_and_package_semantics() {
+        let mut entity = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, layer_ui::Platform::Gtk, 10).unwrap();
+        entity.metadata.name = "stored suffix 2".into();
+        let before = serde_json::to_vec(&entity).unwrap();
+        for language in layer_ui::UiLanguage::ALL {
+            let localization = layer_ui::Localizer::shared(language);
+            assert_eq!(workspace_display_name(&entity.id, &entity.metadata, &localization), localization.text(layer_ui::MessageId::WORKSPACE_BUILTIN_PAINTER).to_string());
+            let mut custom = entity.metadata.clone();
+            custom.builtin = false;
+            custom.name = "Sketch".into();
+            assert_eq!(workspace_display_name(&entity.id, &custom, &localization), "Sketch");
+            assert_eq!(workspace_display_name("literal-user-workspace", &entity.metadata, &localization), "stored suffix 2");
+        }
+        assert_eq!(serde_json::to_vec(&entity).unwrap(), before);
+        let ItemContent::Workspace { history, .. } = &mut entity.content else { panic!() };
+        let mut layout = history.layout().clone();
+        let panel = layout.add_toolbar(None, "Sketch 日本語 🎨", &[]).unwrap();
+        history.append(&layout, layer_ui::LayoutChange::Automatic);
+        layout.rename_toolbar(panel, "Tools").unwrap();
+        history.append(&layout, layer_ui::LayoutChange::Automatic);
+        let descriptions: Vec<_> = crate::layout_history_versions(history).into_iter().map(|r| r.description).collect();
+        let ids: Vec<_> = history.revisions.keys().cloned().collect();
+        let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+        let bytes = crate::export_package_localized(&entity, &localization).unwrap();
+        let imported = crate::import_package(&bytes, crate::PackageKind::WorkspaceBackup, 30).unwrap();
+        assert_eq!(imported.metadata.name, localization.text(layer_ui::MessageId::WORKSPACE_BUILTIN_PAINTER).to_string());
+        let ItemContent::Workspace { history, .. } = &imported.content else { panic!() };
+        assert!(history.revisions.keys().all(|id| !ids.contains(id)));
+        let mut expected = descriptions;
+        let mut actual: Vec<_> = history.revisions.values().map(|r| r.description.clone()).collect();
+        expected.sort_by_key(|d| serde_json::to_string(d).unwrap());
+        actual.sort_by_key(|d| serde_json::to_string(d).unwrap());
+        assert_eq!(actual, expected);
+        history.validate().unwrap();
+    }
 }

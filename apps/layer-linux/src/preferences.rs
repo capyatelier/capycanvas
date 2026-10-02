@@ -281,7 +281,7 @@ fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x:
                 }
             ));
             actions.add_action(&action);
-            let entry = gtk::gio::MenuItem::new(Some(item.label), Some(&format!("field.{name}")));
+            let entry = gtk::gio::MenuItem::new(Some(&item.label), Some(&format!("field.{name}")));
             entry.set_attribute_value(
                 "accel",
                 Some(&crate::workspace::native_accelerator(&item.key).to_variant()),

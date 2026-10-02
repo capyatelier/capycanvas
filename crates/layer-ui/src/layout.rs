@@ -1428,7 +1428,7 @@ impl DockLayout {
                 hide_tab: false,
                 tile_style: TileStyle::Small,
                 content: PanelContent::Toolbar {
-                    name: id.label().into(),
+                    name: None,
                     tiles,
                 },
             };
@@ -1800,9 +1800,9 @@ impl DockLayout {
             {
                 return Err("Invalid toolbar identity".into());
             }
-            // Menus distinguish “Tools panel” from “Tools toolbar”. New built-in
-            // content panels must also coexist with previously named toolbars.
-            if !names.insert((config.id.kind() == PanelKind::Tiles, config.title().to_lowercase())) {
+            if let Some(name) = config.custom_name()
+                && !names.insert(name.to_lowercase())
+            {
                 return Err("Panel names must be unique".into());
             }
             for tile in config.tiles() {
@@ -1884,7 +1884,7 @@ impl DockLayout {
             let mut config = preset.panel(panel)?.clone();
             let controls: Vec<_> = config.tiles().iter().map(|t| t.control).collect();
             config.content = PanelContent::Toolbar {
-                name: next.unused_toolbar_name(panel.label()),
+                name: None,
                 tiles: Vec::new(),
             };
             next.panels.push(config);
@@ -1918,7 +1918,7 @@ impl DockLayout {
             hide_tab: false,
             tile_style: crate::TileStyle::Small,
             content: PanelContent::Toolbar {
-                name: name.into(),
+                name: Some(name.into()),
                 tiles: Vec::new(),
             },
         });
@@ -2089,7 +2089,7 @@ impl DockLayout {
         let PanelContent::Toolbar { name: old, .. } = &mut self.panel_mut(panel)?.content else {
             return Err("Built-in panels cannot be renamed".into());
         };
-        *old = name.trim().into();
+        *old = Some(name.trim().into());
         Ok(())
     }
 
@@ -4745,7 +4745,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_builtin_toolbar_recovers_legacy_registry_without_replacing_custom_tools() {
+    fn restored_builtin_toolbar_keeps_default_identity_and_literal_custom_names() {
         let mut layout = DockLayout::default();
         let old_tools = layout.panel(Panel::Toolbar).unwrap().clone();
         let custom = layout
@@ -4756,7 +4756,12 @@ mod tests {
             .unwrap();
         assert_eq!(layout.panel(Panel::Toolbar).unwrap(), &old_tools);
         assert_eq!(layout.panel(custom).unwrap().title(), "Commands");
-        assert_eq!(layout.panel(Panel::Commands).unwrap().title(), "Commands 2");
+        assert!(layout.panel(Panel::Commands).unwrap().custom_name().is_none());
+        for language in crate::UiLanguage::ALL {
+            let localization = crate::Localizer::shared(language);
+            assert_eq!(layout.panel(Panel::Commands).unwrap().title_localized(&localization), Panel::Commands.localized_label(&localization).as_ref());
+            assert_eq!(layout.panel(custom).unwrap().title_localized(&localization), "Commands");
+        }
         assert_eq!(
             layout.group_edge(layout.panel_group(Panel::Commands).unwrap()),
             Some(Edge::Top)

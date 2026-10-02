@@ -364,7 +364,7 @@ mod tests {
     fn replacement_retains_sources_undo_redo_workspace_and_pending_save() {
         let mut s = UiSession::new(
             sources(),
-            Document::new("recovery", 128, 128),
+            Document::new("recovery", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [256, 256],
             Platform::Windows,
         )
@@ -402,7 +402,7 @@ mod tests {
     fn replacement_clears_gpu_waits_and_resumes_filter_validation() {
         let mut s = UiSession::new(
             Recorder::default(),
-            Document::new("requests", 128, 128),
+            Document::new("requests", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [128, 128],
             Platform::Gtk,
         )
@@ -444,9 +444,8 @@ mod tests {
                 .get(&original_validation.programs[0].id)
                 .unwrap()
                 .program
-                .label
-                .as_ref(),
-            "Recovered candidate"
+                .label,
+            layer_core::ResourceLabel::from("Recovered candidate")
         );
         assert!(!s.eyedropper.busy());
         s.eyedropper
@@ -459,7 +458,7 @@ mod tests {
     fn suspension_cancels_transform_and_filter_candidate_without_changing_sources() {
         let mut s = UiSession::new(
             sources(),
-            Document::new("retire", 128, 128),
+            Document::new("retire", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [128, 128],
             Platform::Windows,
         )

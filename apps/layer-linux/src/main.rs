@@ -133,7 +133,8 @@ fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Work
 }
 
 fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>) {
-    files::launch::install(app, active);
+    files::launch::install(app, active, layer_ui::photo_document_names("",
+        &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)));
     let settings_changed =
         gtk::gio::SimpleAction::new("settings-changed", Some(glib::VariantTy::STRING));
     settings_changed.connect_activate(glib::clone!(
@@ -197,9 +198,12 @@ fn open_workspace(
             .as_ref()
             .map(|g| g.session.state().settings.clone())
     });
+    let localization = active.borrow().last()
+        .map(|w| w.localization.clone())
+        .unwrap_or_else(|| layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
     let workspace = match project {
-        None => workspace::Workspace::new(app),
-        Some(project) => workspace::Workspace::with_project(app, Some(project)),
+        None => workspace::Workspace::new_localized(app, localization),
+        Some(project) => workspace::Workspace::with_project_localized(app, Some(project), localization),
     };
     let owner = Rc::downgrade(&workspace);
     *workspace.open_document.borrow_mut() = Some(Rc::new(move |project, location, recovered| {

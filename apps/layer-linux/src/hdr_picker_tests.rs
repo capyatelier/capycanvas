@@ -384,7 +384,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
             w.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Foreground } });
             // Exercise ordinary SDR picking through the same real pointer,
             // independently of the older hue-gradient comparison tolerance.
-            let sdr = Workspace::with_project(&app, Some((new_drawing(64, 64).unwrap(), None)));
+            let sdr = Workspace::with_project(&app, Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
             sdr.window.maximize();
             sdr.window.present();
             ready(&sdr);

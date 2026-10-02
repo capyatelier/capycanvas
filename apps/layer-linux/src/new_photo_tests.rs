@@ -195,7 +195,7 @@ pub(super) fn capture_ui(w: &Rc<Workspace>, directory: &std::path::Path, name: &
 #[allow(deprecated)]
 fn native_open_cancellation_releases_request_and_preserves_current_document() {
     let app = native_test_app("art.capycanvas.CancelOpen");
-    let w = Workspace::with_project(&app, Some((new_drawing(128, 128).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     let created = Rc::new(RefCell::new(None));
     let result = created.clone();
     *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
@@ -290,7 +290,7 @@ fn native_new_presets_and_profiled_photo_master() {
     let output = std::path::Path::new("../../artifacts/color-m2/new-photo-ui");
     std::fs::create_dir_all(output).unwrap();
     let output = output.canonicalize().unwrap();
-    let w = Workspace::with_project(&app, Some((new_drawing(256, 256).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     let created = Rc::new(RefCell::new(None));
     let result = created.clone();
     *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
@@ -318,18 +318,13 @@ fn native_new_presets_and_profiled_photo_master() {
         background: DocumentBackground::Transparent,
         blend_space: layer_core::BlendSpace::Perceptual,
     };
-    click(
-        &find_button(
-            w.window.visible_dialog().unwrap().upcast_ref(),
-            "Save Preset…",
-        )
-        .unwrap(),
-    );
+    click(&named::<gtk::Button>(w.window.visible_dialog().unwrap().upcast_ref(), "new-document-save-preset"));
     pump(100);
     named::<adw::EntryRow>(w.window.visible_dialog().unwrap().upcast_ref(), "new-document-preset-name")
-    .set_text("P3 cover");
+    .set_text("HDR drawing");
     response(&w, "save");
     assert_eq!(state(&w).settings.new_document.presets[0].options, options);
+    assert_eq!(state(&w).settings.new_document.presets[0].name, "HDR drawing");
     assert_eq!(combo(&w, "new-document-preset").selected(), 5);
     named::<gtk::CheckButton>(w.window.upcast_ref(), "new-document-remember")
         .set_active(true);
@@ -347,6 +342,13 @@ fn native_new_presets_and_profiled_photo_master() {
     assert!(location.is_none());
     invoke(&w, CommandId::NewDocument);
     assert_eq!(combo(&w, "new-document-preset").selected(), 5);
+    assert!(named::<gtk::Button>(w.window.upcast_ref(), "new-document-remove-preset").is_sensitive());
+    combo(&w, "new-document-preset").set_selected(4);
+    assert_eq!(combo(&w, "new-document-depth").selected(), 2);
+    assert!(!named::<gtk::Button>(w.window.upcast_ref(), "new-document-remove-preset").is_sensitive());
+    combo(&w, "new-document-preset").set_selected(5);
+    assert_eq!(combo(&w, "new-document-space").selected(), 1);
+    assert_eq!(combo(&w, "new-document-depth").selected(), 0);
     combo(&w, "new-document-preset").set_selected(3);
     assert_eq!(combo(&w, "new-document-space").selected(), 3);
     assert_eq!(combo(&w, "new-document-depth").selected(), 1);

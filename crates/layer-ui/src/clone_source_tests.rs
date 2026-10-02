@@ -26,7 +26,7 @@ fn near(a: Point, b: Point) -> bool {
 fn clone_joins_the_sculpting_tools_with_its_options_and_a_source_in_view() {
     let mut s = clone_session();
     assert_eq!(UiSession::<Recorder>::tool_category(s.layer_interaction.tool, s.state.brush.tool), ToolCategory::Retouching);
-    assert!(s.state.tool_panels.sculpt_sets.groups.iter().any(|g| g.label == "Clone" && g.selected));
+    assert!(s.state.tool_panels.sculpt_sets.groups.iter().any(|g| g.label.as_ref() == "Clone" && g.selected));
     assert!(s.command(CommandId::Sculpt).selected && s.command(CommandId::Clone).selected);
     let actions: Vec<_> = s.state.tool_actions.iter().map(|a| a.command).collect();
     assert_eq!(actions, [
@@ -162,8 +162,8 @@ fn the_source_disc_drags_at_once_with_every_device_and_a_tap_shows_its_bar() {
         CommandId::CloneSourceArm,
     ]);
     let ToolOption::Choice { label, items, .. } = &bar.items[1].option else { panic!("Source is a choice") };
-    assert_eq!(*label, "Source");
-    assert_eq!(items.iter().map(|i| (i.label, i.selected)).collect::<Vec<_>>(), [("Reference layers", true), ("Editing layer", false)]);
+    assert_eq!(label.as_ref(), "Source");
+    assert_eq!(items.iter().map(|i| (i.label.as_ref(), i.selected)).collect::<Vec<_>>(), [("Reference layers", true), ("Editing layer", false)]);
     let [x0, y0, x1, y1] = bar.anchor.unwrap();
     let center = s.engine.clone_source().point.unwrap();
     assert!(x0 < center.x && center.x < x1 && y0 < center.y && center.y < y1, "the bar is anchored on the disc");
@@ -219,7 +219,7 @@ fn healing_brushes_join_the_retouching_tools_and_spot_healing_needs_no_disc() {
         assert_eq!(s.state.brush.tool, tool, "S cycles the retouching tools");
     }
     assert_eq!(
-        s.state.tool_panels.sculpt_sets.groups.iter().map(|g| g.label).collect::<Vec<_>>(),
+        s.state.tool_panels.sculpt_sets.groups.iter().map(|g| g.label.as_ref()).collect::<Vec<_>>(),
         ["Blend", "Liquify", "Clone", "Heal", "Spot Heal"]
     );
 

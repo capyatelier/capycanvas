@@ -4,7 +4,7 @@ const PAPER: LayerId = LayerId(2);
 
 /// Top to bottom: the named paint layers, then the paper.
 fn document(names: &[&str]) -> Document {
-    let mut doc = Document::new("merge", 600, 400);
+    let mut doc = Document::new("merge", 600, 400, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.layers.remove(0);
     for (i, name) in names.iter().enumerate() {
         let id = doc.allocate_layer_id();

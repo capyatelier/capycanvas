@@ -1348,6 +1348,12 @@ pub struct Document {
     next_stroke_id: u64,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DocumentNames {
+    pub paint: Arc<str>,
+    pub paper: Arc<str>,
+}
+
 impl Document {
     pub fn has_animated_effects(&self) -> bool {
         self.layers.iter().any(|l| {
@@ -1367,7 +1373,7 @@ impl Document {
             true
         })
     }
-    pub fn new(id: impl Into<Arc<str>>, width: u32, height: u32) -> Self {
+    pub fn new(id: impl Into<Arc<str>>, width: u32, height: u32, names: DocumentNames) -> Self {
         let paint_id = LayerId(1);
         Self {
             id: id.into(),
@@ -1380,10 +1386,10 @@ impl Document {
             metadata: PhotoMetadata::default(),
             sdr_rendition: Default::default(),
             layers: vec![
-                Layer::paint(paint_id, "Current ink"),
+                Layer::paint(paint_id, names.paint),
                 Layer {
                     kind: LayerKind::Background,
-                    ..Layer::paint(LayerId(2), "Paper")
+                    ..Layer::paint(LayerId(2), names.paper)
                 },
             ],
             active_layer: paint_id,
@@ -2261,7 +2267,7 @@ mod tests {
 
     #[test]
     fn changing_the_blend_space_is_one_undo_step_that_keeps_every_pixel() {
-        let document = Document::new("Blend", 64, 64);
+        let document = Document::new("Blend", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut editor = Editor::new(document.clone());
         let edit = Edit::SetBlendSpace(BlendSpace::Perceptual);
         assert!(edit.changes_image());
@@ -2271,7 +2277,7 @@ mod tests {
         assert!(editor.undo().unwrap());
         assert_eq!(editor.document(), &Document { revision: editor.document().revision, ..document });
         assert!(!editor.can_undo());
-        let mut float = Document::new("Float", 64, 64);
+        let mut float = Document::new("Float", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         float.color.depth = color::SampleDepth::F16;
         assert!(Editor::new(float).perform(Edit::SetBlendSpace(BlendSpace::Perceptual)).is_err());
     }
@@ -2334,7 +2340,7 @@ mod tests {
 
     #[test]
     fn edit_history_restores_exact_revision_identity() {
-        let mut editor = Editor::new(Document::new("study", 1024, 1536));
+        let mut editor = Editor::new(Document::new("study", 1024, 1536, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         let before = editor.document().layers[0].raster.clone();
         let after = raster::RasterRevision::pending();
         editor
@@ -2358,7 +2364,7 @@ mod tests {
 
     #[test]
     fn history_is_bounded_and_keeps_the_newest_exact_states() {
-        let mut editor = Editor::new(Document::new("bounded", 256, 256));
+        let mut editor = Editor::new(Document::new("bounded", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         for i in 0..400 {
             editor
                 .perform(Edit::SetLayerOpacity {
@@ -2392,7 +2398,7 @@ mod tests {
 
     #[test]
     fn project_checkpoint_tracks_undo_branches_not_navigation() {
-        let mut editor = Editor::new(Document::new("checkpoint", 64, 64));
+        let mut editor = Editor::new(Document::new("checkpoint", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         let initial = editor.checkpoint();
         editor
             .perform(Edit::SetRaster {
@@ -2430,7 +2436,7 @@ mod tests {
 
     #[test]
     fn every_layer_can_be_deleted_and_restored() {
-        let mut document = Document::new("study", 800, 800);
+        let mut document = Document::new("study", 800, 800, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let paint = document.apply(document.delete_layers_edit(&[LayerId(1)]).unwrap()).unwrap();
         assert_eq!(document.active_layer, LayerId(2));
         let paper = document.apply(document.delete_layers_edit(&[LayerId(2)]).unwrap()).unwrap();

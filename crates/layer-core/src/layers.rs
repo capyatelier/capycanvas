@@ -216,7 +216,7 @@ mod organization_tests {
 
     #[test]
     fn placement_composes_group_offsets_and_linked_masks() {
-        let mut doc = Document::new("geometry", 2000, 1500);
+        let mut doc = Document::new("geometry", 2000, 1500, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut group = Layer::paint(LayerId(10), "group");
         group.kind = LayerKind::Group;
         group.properties.offset = Point { x: 20., y: -30. };
@@ -274,7 +274,7 @@ mod organization_tests {
     }
     #[test]
     fn references_preserve_objects_and_ancestors_not_unrelated_siblings() {
-        let mut doc = Document::new("references", 128, 128);
+        let mut doc = Document::new("references", 128, 128, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut group = Layer::paint(LayerId(10), "Group");
         group.kind = LayerKind::Group;
         group.properties.offset = Point { x: 5., y: 8. };
@@ -317,7 +317,7 @@ mod organization_tests {
 
     #[test]
     fn clipping_stack_top_respects_siblings_and_hidden_members() {
-        let mut doc = Document::new("stack", 100, 100);
+        let mut doc = Document::new("stack", 100, 100, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut group = Layer::paint(LayerId(7), "Group");
         group.kind = LayerKind::Group;
         let mut clip = Layer::paint(LayerId(3), "Hidden clip");
@@ -345,7 +345,7 @@ mod organization_tests {
 
     #[test]
     fn grouping_and_ungrouping_preserve_order_and_world_coordinates() {
-        let mut doc = Document::new("groups", 100, 100);
+        let mut doc = Document::new("groups", 100, 100, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         doc.apply(Edit::InsertLayer {
             index: 0,
             layer: Layer::paint(LayerId(3), "Texture"),
@@ -353,8 +353,10 @@ mod organization_tests {
         .unwrap();
         doc.layers[0].mask = Some(LayerMask::reveal_all(LayerId(99), Point { x: 7., y: 9. }));
         let roots = doc.layer_roots(&BTreeSet::from([LayerId(1), LayerId(3)]));
-        doc.apply(doc.group_layers_edit(&roots, LayerId(10), LayerBlend::Normal).unwrap())
+        let name = "  Group { $name }「グループ」🖌️\u{2068}literal\u{2069}  ";
+        doc.apply(doc.group_layers_edit(&roots, LayerId(10), LayerBlend::Normal, name).unwrap())
             .unwrap();
+        assert_eq!(doc.layer(LayerId(10)).unwrap().name.as_ref(), name);
         assert_eq!(
             doc.layer_roots(&BTreeSet::from([LayerId(10), LayerId(3)])),
             vec![LayerId(10)]
@@ -410,7 +412,7 @@ mod organization_tests {
     }
     #[test]
     fn bulk_edits_protect_clipping_stacks_and_locks() {
-        let mut doc = Document::new("clipping", 100, 100);
+        let mut doc = Document::new("clipping", 100, 100, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut clip = Layer::paint(LayerId(3), "Shade");
         clip.properties.clipped = true;
         doc.apply(Edit::InsertLayer {
@@ -419,7 +421,7 @@ mod organization_tests {
         })
         .unwrap();
         assert!(doc.delete_layers_edit(&[LayerId(1)]).is_err());
-        assert!(doc.group_layers_edit(&[LayerId(1)], LayerId(10), LayerBlend::Normal).is_err());
+        assert!(doc.group_layers_edit(&[LayerId(1)], LayerId(10), LayerBlend::Normal, "Group").is_err());
         assert!(doc.delete_layers_edit(&[LayerId(1), LayerId(3)]).is_ok());
         doc.apply(Edit::InsertLayer {
             index: 0,
@@ -469,7 +471,7 @@ mod organization_tests {
     }
 
     fn pass_through_document() -> Document {
-        let mut doc = Document::new("pass through", 64, 64);
+        let mut doc = Document::new("pass through", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut group = Layer::paint(LayerId(10), "Group");
         group.kind = LayerKind::Group;
         group.properties.blend = LayerBlend::PassThrough;
@@ -1192,6 +1194,7 @@ impl Document {
         roots: &[LayerId],
         group_id: LayerId,
         blend: LayerBlend,
+        name: impl Into<std::sync::Arc<str>>,
     ) -> Result<Edit, DocumentError> {
         let first = self
             .layer(
@@ -1241,7 +1244,7 @@ impl Document {
             }
         }
         let top = siblings[positions[0]].id;
-        let mut group = Layer::paint(group_id, "Group");
+        let mut group = Layer::paint(group_id, name);
         group.kind = LayerKind::Group;
         group.properties.parent = parent;
         group.properties.blend = blend;

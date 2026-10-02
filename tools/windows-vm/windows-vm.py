@@ -522,7 +522,7 @@ def build_inputs(hashes):
     return {name: digest for name, digest in hashes.items()
             if name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml") or name in scripts
             or name.startswith(("crates/", "vendor/", ".cargo/")) and not name.endswith(".md")
-            or name.startswith(("apps/layer-web/icons/", "apps/layer-web/brush-previews/"))
+            or name.startswith(("apps/layer-web/icons/", "apps/layer-web/brush-previews/", "assets/locales/"))
             or name.startswith("apps/layer-windows/") and not name.endswith(".md")
             and not name.startswith("apps/layer-windows/scripts/")}
 

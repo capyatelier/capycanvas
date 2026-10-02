@@ -12,7 +12,7 @@ fn codes(x: u32) -> [u16; 4] {
     [10000 + (x / 256) as u16 * 16000, 32123, 51007, 40000]
 }
 fn document(color: DocumentColor) -> Document {
-    let mut doc = Document::new("exact query", EXTENT[0], EXTENT[1]);
+    let mut doc = Document::new("exact query", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.color = color;
     doc.layers[1].visible = false;
     let mut data = RasterData::default();

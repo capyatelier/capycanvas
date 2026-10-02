@@ -1454,7 +1454,7 @@ fn native_brush_drawer_input() {
     d.click_name(&sculpt);
     let sculpt_sets = d.named("drawer-panel-SculptSets");
     assert_eq!(
-        state(&d.w).tool_panels.sculpt_sets.groups.iter().map(|s| s.label).collect::<Vec<_>>(),
+        state(&d.w).tool_panels.sculpt_sets.groups.iter().map(|s| s.label.as_ref()).collect::<Vec<_>>(),
         ["Blend", "Liquify", "Clone", "Heal", "Spot Heal"]
     );
     let liquify = find_named(&sculpt_sets, "sculpt-set-liquify").unwrap();
@@ -1487,7 +1487,7 @@ fn native_brush_drawer_input() {
     assert_eq!(state(&d.w).brush.diameter, 37.);
     d.click_name(&opener);
     assert!(state(&d.w).customization.drawer.is_some());
-    assert_eq!(ui_session(&d.w).command(CommandId::Brush).label, "Paint Brush");
+    assert_eq!(ui_session(&d.w).command(CommandId::Brush).label.as_ref(), "Paint Brush");
     d.finish();
 }
 

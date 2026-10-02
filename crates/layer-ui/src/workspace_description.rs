@@ -1,16 +1,86 @@
 //! Human names for completed layout edits, derived from semantic changes.
 use crate::{DockItem, DockLayout, DockNode, Panel, PanelKind};
 
-pub(crate) fn panel_name(layout: &DockLayout, panel: Panel) -> String {
-    let name = layout.panel(panel).map_or(panel.label(), |p| p.title());
-    format!(
-        "{name} {}",
-        if panel.kind() == PanelKind::Tiles {
-            "toolbar"
-        } else {
-            "panel"
+use serde::{Deserialize, Serialize};
+use crate::{Localizer, FluentArgs, MessageId};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutPanelName {
+    pub panel: Panel,
+    pub custom_name: Option<String>,
+}
+impl LayoutPanelName {
+    fn validate(&self) -> Result<(), String> {
+        if matches!(self.panel, Panel::CustomToolbar(0 | u32::MAX)) { return Err("Invalid history panel identity".into()); }
+        if let Some(name) = &self.custom_name { if self.panel.kind() != PanelKind::Tiles { return Err("History custom title requires a toolbar".into()); } crate::customization::validate_toolbar_name(name)?; }
+        Ok(())
+    }
+    pub fn title(&self, localization: &Localizer) -> String {
+        self.custom_name.clone().unwrap_or_else(|| self.panel.localized_label(localization).to_string())
+    }
+    fn display(&self, localization: &Localizer) -> String {
+        let mut args = FluentArgs::new(); args.set("name", self.title(localization));
+        localization.format(if self.panel.kind() == PanelKind::Tiles { MessageId::WORKSPACE_HISTORY_TOOLBAR } else { MessageId::WORKSPACE_HISTORY_PANEL }, &args)
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayoutPanelAction { Added, Deleted, Moved, Resized, Collapsed, Expanded, Hidden, Shown, Rearranged, TabReordered, TabsChanged, ToolsAdded, ToolsRemoved, ToolsChanged, Customized, Replaced, Selected }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "change", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LayoutChange {
+    Automatic, Starting, HeaderSize { size: crate::HeaderSize }, HeaderAdded { item: crate::HeaderItem }, HeaderRemoved { item: crate::HeaderItem }, HeaderRearranged, CanvasInfo, CanvasBar, Restored, RestoredEarlier,
+    Panels { action: LayoutPanelAction, panels: Vec<LayoutPanelName> },
+    Renamed { before: LayoutPanelName, after: LayoutPanelName },
+}
+impl LayoutChange {
+    pub fn panels(action: LayoutPanelAction, panels: Vec<LayoutPanelName>) -> Self { Self::Panels { action, panels } }
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Automatic => return Err("Automatic layout change must be resolved before storage".into()),
+            Self::Panels { panels, .. } => {
+                if panels.len() > 4096 { return Err("Layout history panel list exceeds supported limits".into()); }
+                for panel in panels { panel.validate()?; }
+            }
+            Self::Renamed { before, after } => { before.validate()?; after.validate()?; }
+            Self::HeaderAdded { item: crate::HeaderItem::Tool { control } } | Self::HeaderRemoved { item: crate::HeaderItem::Tool { control } } => control.validate()?,
+            _ => {},
         }
-    )
+        Ok(())
+    }
+    pub fn display(&self, localization: &Localizer) -> String {
+        use LayoutPanelAction as A;
+        let mut args = FluentArgs::new();
+        let id = match self {
+            Self::Automatic => MessageId::WORKSPACE_HISTORY_REARRANGED,
+            Self::Starting => MessageId::WORKSPACE_HISTORY_STARTING,
+            Self::HeaderSize { size } => { args.set("size", localization.text(match size { crate::HeaderSize::Small => MessageId::WORKSPACE_SIZE_SMALL, crate::HeaderSize::Medium => MessageId::WORKSPACE_SIZE_MEDIUM, crate::HeaderSize::Large => MessageId::WORKSPACE_SIZE_LARGE }).to_string()); MessageId::WORKSPACE_HISTORY_HEADER_SIZE },
+            Self::HeaderAdded { item } | Self::HeaderRemoved { item } => { args.set("item", header_label(*item, localization)); if matches!(self, Self::HeaderAdded { .. }) { MessageId::WORKSPACE_HISTORY_HEADER_ADDED } else { MessageId::WORKSPACE_HISTORY_HEADER_REMOVED } },
+            Self::HeaderRearranged => MessageId::WORKSPACE_HISTORY_HEADER_REARRANGED,
+            Self::CanvasInfo => MessageId::WORKSPACE_HISTORY_CANVAS_INFO,
+            Self::CanvasBar => MessageId::WORKSPACE_HISTORY_CANVAS_BAR,
+            Self::Restored => MessageId::WORKSPACE_HISTORY_RESTORED,
+            Self::RestoredEarlier => MessageId::WORKSPACE_HISTORY_RESTORED_EARLIER,
+            Self::Renamed { before, after } => { args.set("before", before.display(localization)); args.set("after", after.title(localization)); MessageId::WORKSPACE_HISTORY_RENAMED },
+            Self::Panels { action, panels } => { args.set("panels", display_names(localization, panels, *action == A::Selected)); match action {
+                A::Added => MessageId::WORKSPACE_HISTORY_ADDED, A::Deleted => MessageId::WORKSPACE_HISTORY_DELETED, A::Moved => MessageId::WORKSPACE_HISTORY_MOVED, A::Resized => MessageId::WORKSPACE_HISTORY_RESIZED, A::Collapsed => MessageId::WORKSPACE_HISTORY_COLLAPSED, A::Expanded => MessageId::WORKSPACE_HISTORY_EXPANDED, A::Hidden => MessageId::WORKSPACE_HISTORY_HIDDEN, A::Shown => MessageId::WORKSPACE_HISTORY_SHOWN, A::Rearranged => MessageId::WORKSPACE_HISTORY_REARRANGED, A::TabReordered => MessageId::WORKSPACE_HISTORY_TAB_REORDERED, A::TabsChanged => MessageId::WORKSPACE_HISTORY_TABS_CHANGED, A::ToolsAdded => MessageId::WORKSPACE_HISTORY_TOOLS_ADDED, A::ToolsRemoved => MessageId::WORKSPACE_HISTORY_TOOLS_REMOVED, A::ToolsChanged => MessageId::WORKSPACE_HISTORY_TOOLS_CHANGED, A::Customized => MessageId::WORKSPACE_HISTORY_CUSTOMIZED, A::Replaced => MessageId::WORKSPACE_HISTORY_REPLACED, A::Selected => MessageId::WORKSPACE_HISTORY_SELECTED,
+            } },
+        };
+        if matches!(self, Self::Automatic) { args.set("panels", localization.text(MessageId::WORKSPACE_HISTORY_LAYOUT).to_string()); }
+        localization.format(id, &args)
+    }
+}
+fn display_names(localization: &Localizer, panels: &[LayoutPanelName], titles: bool) -> String {
+    if panels.is_empty() { return localization.text(MessageId::WORKSPACE_HISTORY_LAYOUT).to_string(); }
+    let names: Vec<_> = panels.iter().take(3).map(|p| if titles { p.title(localization) } else { p.display(localization) }).collect();
+    let mut args = FluentArgs::new();
+    for (key, name) in ["first", "second", "third"].into_iter().zip(&names) { args.set(key, name.as_str()); }
+    args.set("others", panels.len().saturating_sub(3));
+    localization.format(match panels.len() { 1 => MessageId::WORKSPACE_HISTORY_LIST_ONE, 2 => MessageId::WORKSPACE_HISTORY_LIST_TWO, 3 => MessageId::WORKSPACE_HISTORY_LIST_THREE, _ => MessageId::WORKSPACE_HISTORY_LIST_MORE }, &args)
+}
+pub(crate) fn panel_name(layout: &DockLayout, panel: Panel) -> LayoutPanelName {
+    LayoutPanelName { panel, custom_name: layout.panel(panel).ok().and_then(|p| p.custom_name()).map(str::to_owned) }
 }
 fn node_panels(node: &DockNode, panels: &mut Vec<Panel>) {
     match node {
@@ -30,22 +100,13 @@ fn find(node: &DockNode, id: u32) -> Option<&DockNode> {
         _ => None,
     }
 }
-fn names(layout: &DockLayout, panels: &[Panel]) -> String {
-    let mut result = panels
-        .iter()
-        .take(3)
-        .map(|p| panel_name(layout, *p))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if panels.len() > 3 {
-        result.push_str(&format!(" and {} others", panels.len() - 3));
-    }
-    result
+fn names(layout: &DockLayout, panels: &[Panel]) -> Vec<LayoutPanelName> {
+    panels.iter().map(|p| panel_name(layout, *p)).collect()
 }
-pub(crate) fn item_name(layout: &DockLayout, item: DockItem) -> String {
+pub(crate) fn item_name(layout: &DockLayout, item: DockItem) -> Vec<LayoutPanelName> {
     let id = match item {
         DockItem::Panel { panel } | DockItem::Tile { panel, .. } => {
-            return panel_name(layout, panel);
+            return vec![panel_name(layout, panel)];
         }
         DockItem::Group { group } => group,
         DockItem::Column { column } => column,
@@ -60,37 +121,34 @@ pub(crate) fn item_name(layout: &DockLayout, item: DockItem) -> String {
     {
         node_panels(node, &mut panels);
     }
-    if panels.is_empty() {
-        "panel layout".into()
-    } else {
-        names(layout, &panels)
-    }
+    names(layout, &panels)
 }
-pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> String {
+pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> LayoutChange {
+    use LayoutPanelAction as A;
     if before.header != after.header {
         return if before.header.size != after.header.size {
-            format!("Set title bar size to {}", after.header.size.label())
+            LayoutChange::HeaderSize { size: after.header.size }
         } else if let Some(e) = after
             .header
             .entries()
             .find(|e| before.header.entry(e.id).is_err())
         {
-            format!("Added {} to title bar", e.item.label())
+            LayoutChange::HeaderAdded { item: e.item }
         } else if let Some(e) = before
             .header
             .entries()
             .find(|e| after.header.entry(e.id).is_err())
         {
-            format!("Removed {} from title bar", e.item.label())
+            LayoutChange::HeaderRemoved { item: e.item }
         } else {
-            "Rearranged title bar".into()
+            LayoutChange::HeaderRearranged
         };
     }
     if before.canvas_info != after.canvas_info {
-        return "Changed canvas information display".into();
+        return LayoutChange::CanvasInfo;
     }
     if before.canvas_bar != after.canvas_bar {
-        return "Changed canvas action bar".into();
+        return LayoutChange::CanvasBar;
     }
     let added: Vec<_> = after
         .panels
@@ -99,7 +157,7 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
         .map(|p| p.id)
         .collect();
     if !added.is_empty() {
-        return format!("Added {}", names(after, &added));
+        return LayoutChange::panels(A::Added, names(after, &added));
     }
     let deleted: Vec<_> = before
         .panels
@@ -108,46 +166,46 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
         .map(|p| p.id)
         .collect();
     if !deleted.is_empty() {
-        return format!("Deleted {}", names(before, &deleted));
+        return LayoutChange::panels(A::Deleted, names(before, &deleted));
     }
     for old in &before.panels {
         let Ok(new) = after.panel(old.id) else {
             continue;
         };
         let name = panel_name(after, old.id);
-        if old.title() != new.title() {
-            return format!("Renamed {} to {}", panel_name(before, old.id), new.title());
+        if old.custom_name() != new.custom_name() {
+            return LayoutChange::Renamed { before: panel_name(before, old.id), after: panel_name(after, old.id) };
         }
         if old.tiles() != new.tiles() {
             return if old.tiles().len() < new.tiles().len() {
-                format!("Added tools to {name}")
+                LayoutChange::panels(A::ToolsAdded, vec![name])
             } else if old.tiles().len() > new.tiles().len() {
-                format!("Removed tools from {name}")
+                LayoutChange::panels(A::ToolsRemoved, vec![name])
             } else {
-                format!("Changed tools in {name}")
+                LayoutChange::panels(A::ToolsChanged, vec![name])
             };
         }
         if old != new {
-            return format!("Customized {name}");
+            return LayoutChange::panels(A::Customized, vec![name]);
         }
     }
     for panel in &after.panels {
         let (old, new) = (before.panel_group(panel.id), after.panel_group(panel.id));
         if old.is_some() && new.is_none() {
-            return format!("Hid {}", panel_name(after, panel.id));
+            return LayoutChange::panels(A::Hidden, vec![panel_name(after, panel.id)]);
         }
         if old.is_none() && new.is_some() {
-            return format!("Showed {}", panel_name(after, panel.id));
+            return LayoutChange::panels(A::Shown, vec![panel_name(after, panel.id)]);
         }
     }
-    for (layout, other, verb) in [(after, before, "Collapsed"), (before, after, "Expanded")] {
+    for (layout, other, action) in [(after, before, A::Collapsed), (before, after, A::Expanded)] {
         if let Some(column) = layout
             .collapsed
             .iter()
             .find(|c| !other.collapsed.iter().any(|o| o.root == c.root))
         {
-            return format!(
-                "{verb} {}",
+            return LayoutChange::panels(
+                action,
                 item_name(
                     layout,
                     DockItem::Column {
@@ -170,10 +228,10 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
                 },
             );
             if old.position != new.position {
-                return format!("Moved {name}");
+                return LayoutChange::panels(A::Moved, name);
             }
             if old.width != new.width || old.height != new.height {
-                return format!("Resized {name}");
+                return LayoutChange::panels(A::Resized, name);
             }
         }
     }
@@ -184,9 +242,9 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
         .map(|p| p.id)
         .collect();
     if !moved.is_empty() {
-        return format!("Moved {}", names(after, &moved));
+        return LayoutChange::panels(A::Moved, names(after, &moved));
     }
-    fn tab_change(old: &DockNode, new: &DockNode, layout: &DockLayout) -> Option<String> {
+    fn tab_change(old: &DockNode, new: &DockNode, layout: &DockLayout) -> Option<LayoutChange> {
         match new {
             DockNode::Tabs {
                 id,
@@ -202,16 +260,13 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
                 }) = find(old, *id)
                 {
                     if panels != old_panels {
-                        return Some(format!("Reordered {} tabs", names(layout, panels)));
+                        return Some(LayoutChange::panels(LayoutPanelAction::TabReordered, names(layout, panels)));
                     }
                     if active != old_active {
-                        return Some(format!(
-                            "Selected {} tab",
-                            layout.panel(*active).map_or(active.label(), |p| p.title())
-                        ));
+                        return Some(LayoutChange::panels(LayoutPanelAction::Selected, vec![panel_name(layout, *active)]));
                     }
                     if tab_style != old_style {
-                        return Some(format!("Changed tabs for {}", names(layout, panels)));
+                        return Some(LayoutChange::panels(LayoutPanelAction::TabsChanged, names(layout, panels)));
                     }
                 }
                 None
@@ -227,8 +282,8 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
                 return description;
             }
             if old != new {
-                return format!(
-                    "Resized {}",
+                return LayoutChange::panels(
+                    A::Resized,
                     item_name(
                         after,
                         DockItem::Column {
@@ -255,5 +310,17 @@ pub fn layout_change_description(before: &DockLayout, after: &DockLayout) -> Str
         .filter(|p| after.panel_group(p.id).is_some())
         .map(|p| p.id)
         .collect();
-    format!("Rearranged {}", names(after, &panels))
+    LayoutChange::panels(A::Rearranged, names(after, &panels))
+}
+
+fn header_label(item: crate::HeaderItem, localization: &Localizer) -> String {
+    use crate::HeaderItem as H;
+    localization.text(match item {
+        H::Capy => MessageId::WORKSPACE_HEADER_CAPY, H::Menu => MessageId::WORKSPACE_HEADER_MENU,
+        H::MenuLabels => MessageId::WORKSPACE_HEADER_MENU_LABELS, H::Settings => MessageId::WORKSPACE_HEADER_SETTINGS,
+        H::Fullscreen => MessageId::WORKSPACE_HEADER_FULLSCREEN, H::Workspaces => MessageId::WORKSPACE_HEADER_WORKSPACES,
+        H::DocumentTitle => MessageId::WORKSPACE_HEADER_DOCUMENT_TITLE, H::Clock => MessageId::WORKSPACE_HEADER_CLOCK,
+        H::Battery => MessageId::WORKSPACE_HEADER_BATTERY, H::Space => MessageId::WORKSPACE_HEADER_SPACE,
+        H::Tool { control } => return crate::tool_choice_localized(control, localization).label,
+    }).to_string()
 }

@@ -6,7 +6,7 @@ use std::{io::Write, sync::Arc};
 fn main() -> Result<(), String> {
     let path = std::env::args().nth(1).ok_or("Pass an output .capy path")?;
     let [width, height] = [9504, 6336];
-    let mut document = Document::new("Generated binary transport fixture", width, height);
+    let mut document = Document::new("Generated binary transport fixture", width, height, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let words: Vec<u32> = (0..height)
         .flat_map(|y| {
             (0..width / 4).map(move |x| {

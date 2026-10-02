@@ -314,7 +314,7 @@ mod tests {
         let encoded = serde_json::to_string(&pixels).unwrap();
         let restored: crate::SelectionPixels = serde_json::from_str(&encoded).unwrap();
         assert_eq!(pixels, restored);
-        let mut document = Document::new("selection", 5, 1);
+        let mut document = Document::new("selection", 5, 1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.selection = Some(Selection::pixels(Arc::new(restored)));
         assert!(validate_document(&document, ProjectLimits::default()).is_ok());
         for (bounds, words) in [([2,0,5,1],vec![0xff804000,0x20]),([0,0,5,1],vec![0,0x2000])] {
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn malformed_metadata_is_rejected_before_raster_adoption() {
-        let document = Document::new("metadata", 256, 256);
+        let document = Document::new("metadata", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         for mutate in [
             |d: &mut Document| d.width = 0,
             |d: &mut Document| d.active_layer = LayerId(999),

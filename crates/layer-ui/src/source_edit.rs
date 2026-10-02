@@ -95,25 +95,26 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     /// Why Revert to Original Photo can't run on the active layer once the
     /// document is idle.
-    pub(super) fn revert_to_original_refusal(&self) -> Option<&'static str> {
+    pub(super) fn revert_to_original_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         let document = self.engine.document();
         if self.selection_masks.target().is_some() {
-            return Some("Return to the artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
         }
         if document.active_mask {
-            return Some("Return to the layer's artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST));
         }
         if self.state.document_file.busy {
-            return Some("Wait for the current file operation");
+            return Some(l.text(MessageId::COMMANDS_WAIT_FOR_THE_CURRENT_FILE_OPERATION));
         }
         let Some(layer) = document.layer(document.active_layer).filter(|l| l.kind == LayerKind::Paint) else {
-            return Some("Select a placed photo layer");
+            return Some(l.text(MessageId::COMMANDS_REFUSAL_SOURCE_EDIT_SELECT_A_PLACED_PHOTO_LAYER));
         };
         match &layer.source {
-            None => Some("Select a placed photo layer"),
-            Some(source) if !source.is_original() => Some("A rasterized photo has no original to return to"),
-            Some(_) if document.is_locked(layer.id) => Some("The active layer is locked"),
-            Some(_) => (!baked(layer)).then_some("This photo has no edits"),
+            None => Some(l.text(MessageId::COMMANDS_REFUSAL_SOURCE_EDIT_SELECT_A_PLACED_PHOTO_LAYER)),
+            Some(source) if !source.is_original() => Some(l.text(MessageId::COMMANDS_REFUSAL_SOURCE_EDIT_A_RASTERIZED_PHOTO_HAS_NO_ORIGINAL_TO_RETURN_TO)),
+            Some(_) if document.is_locked(layer.id) => Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED)),
+            Some(_) => (!baked(layer)).then_some(l.text(MessageId::COMMANDS_REFUSAL_SOURCE_EDIT_THIS_PHOTO_HAS_NO_EDITS)),
         }
     }
     /// Discards the active photo's raster edits in one undo step, keeping its

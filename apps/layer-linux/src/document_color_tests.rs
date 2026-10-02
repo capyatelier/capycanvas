@@ -80,7 +80,7 @@ fn assert_visible_choice(w: &Rc<Workspace>, name: &str, expected: &str) {
 fn native_document_color_assignment_conversion_depth_history_and_copy() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.DocumentColor");
-    let mut project = new_drawing(256, 128).unwrap();
+    let mut project = new_drawing(256, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,

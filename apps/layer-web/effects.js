@@ -125,7 +125,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   function refresh(){
     refreshPicker();
     const view=state().layer_properties;title.textContent=view.title;title.title=view.description;
-    const next=JSON.stringify([String(view.layer),view.controls.map(c=>[c.key,c.kind,c.label,c.section,c.color_action])],(_,v)=>typeof v==="bigint"?String(v):v);
+    const next=JSON.stringify([String(view.layer),view.controls.map(c=>[c.key,c.kind,c.label,c.section,c.section_id,c.color_action])],(_,v)=>typeof v==="bigint"?String(v):v);
     if(schema!==next){
       schema=next;body.replaceChildren();fields.clear();
       const curves=view.controls.filter(c=>c.kind.kind==="curve");let curveBox;
@@ -133,12 +133,13 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
         for(const c of curves){const option=element("option","",c.label);option.value=c.key;select.append(option);}
         select.onchange=()=>{for(const child of stack.children)child.toggleAttribute("hidden",child.dataset.key!==select.value);};body.append(select,stack);
       }
-      let section=null;
+      let section=JSON.stringify(null);
       for(const [index,c] of view.controls.entries()){
-        if(section!==c.section){
+        const identity=JSON.stringify(c.section_id);
+        if(section!==identity){
           if(index>0)body.append(element("hr","property-divider"));
-          section=c.section;
-          if(section)body.append(element("h4","property-section",section));
+          section=identity;
+          if(c.section)body.append(element("h4","property-section",c.section));
         }
         const change=value=>send({op:"set",layer:view.layer,key:c.key,value:{kind:c.kind.kind,value}});let field;
         if(c.kind.kind==="number") {const n=numberField(c.kind.numeric,c.label,value=>change(value));field={node:n,update:c=>n.update(c.value.value),disable:x=>n.setDisabled(x)};}

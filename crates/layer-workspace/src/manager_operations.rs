@@ -68,6 +68,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .layout()
                 .panel(panel)
                 .map_err(StoreError::invalid)?,
+            &self.localization,
         )?;
         definition.name = name.trim().into();
         self.save_reusable(Entity::toolbar(definition, now), NamePolicy::Exact)
@@ -120,6 +121,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .layout()
                 .panel(panel)
                 .map_err(StoreError::invalid)?,
+            &self.localization,
         )?;
         self.update_toolbar(id, definition, now).await
     }
@@ -140,7 +142,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 definition
             }
             None => ToolbarDefinition {
-                name: "New Toolbar".into(),
+                name: self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR).to_string(),
                 tiles: Vec::new(),
                 tile_style: layer_ui::TileStyle::Small,
                 hide_tab: false,
@@ -155,7 +157,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             hide_tab: definition.hide_tab,
             tile_style: definition.tile_style,
             content: layer_ui::PanelContent::Toolbar {
-                name: definition.name,
+                name: Some(definition.name),
                 tiles: definition.tiles,
             },
         })
@@ -164,7 +166,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         &self,
         stored: &StoredEntity,
         layout: &DockLayout,
-        description: &str,
+        description: layer_ui::LayoutChange,
         now: u64,
     ) -> Result<StoredEntity> {
         let mut content = stored.entity.content.clone();
@@ -216,11 +218,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             self.publish_layout(
                 &stored,
                 &layout,
-                if revision.is_some() {
-                    "Restored earlier layout"
-                } else {
-                    "Restored starting layout"
-                },
+                if revision.is_some() { layer_ui::LayoutChange::RestoredEarlier } else { layer_ui::LayoutChange::Restored },
                 now,
             )
             .await

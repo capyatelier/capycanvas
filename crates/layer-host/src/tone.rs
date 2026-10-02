@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn tone_service_publishes_only_the_current_key_and_retains_compatible_guides() {
-        let mut document = layer_core::Document::new("HDR", 32, 24);
+        let mut document = layer_core::Document::new("HDR", 32, 24, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color.depth = SampleDepth::F32;
         let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();

@@ -286,7 +286,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
         let mut capture = m.current().unwrap().capture().unwrap();
         let mut layout = capture.history.layout().clone();
         layout.header.size = layer_ui::HeaderSize::Large;
-        capture.history.append(&layout, "Resize Window Bar");
+        capture.history.append(&layout, layer_ui::LayoutChange::Automatic);
         capture
             .working
             .tools
@@ -334,7 +334,7 @@ fn included_workspace_history_restores_layout_but_respects_active_owners() {
         let original = capture.history.layout().clone();
         let mut changed = original.clone();
         changed.bands[0].extent += 60.;
-        capture.history.append(&changed, "Resize toolbar");
+        capture.history.append(&changed, layer_ui::LayoutChange::Automatic);
         m.observe(capture.clone(), 2_000);
         m.flush().await.unwrap();
         let other =
@@ -646,7 +646,7 @@ fn manager_recovery_library_and_backup_round_trip() {
         let mut capture = painting.entity.capture().unwrap();
         let mut changed = original.clone();
         changed.bands[0].extent += 80.;
-        capture.history.append(&changed, "Resize panels");
+        capture.history.append(&changed, layer_ui::LayoutChange::Automatic);
         capture.working.zen_mode = true;
         capture
             .working
@@ -800,7 +800,7 @@ fn duplication_switching_and_original_baselines_are_independent() {
         let mut capture = initial.capture().unwrap();
         let mut layout = capture.history.layout().clone();
         layout.bands[0].extent += 100.;
-        capture.history.append(&layout, "Resize panels");
+        capture.history.append(&layout, layer_ui::LayoutChange::Automatic);
         capture.working.zen_mode = true;
         capture
             .working

@@ -14,7 +14,7 @@ use std::sync::Arc;
 fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outside() {
     let source = Arc::unwrap_or_clone(rgba8_source([20, 10], |_, _| [255; 4]));
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("touch placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
+        Document::new("touch placement", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
     session.place_layer_source("Photo", source, None).unwrap();
     let input = |id, phase, position| pointer_input(id, phase, PointerKind::Touch, PointerButton::Primary, position, 0);
     assert!(!session.input(input(1, ContactPhase::Down, [10., 10.])).unwrap().paint);
@@ -34,7 +34,7 @@ fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outs
 #[test]
 fn image_placement_context_keeps_drop_point_and_rejects_changed_targets() {
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("drop", 2000, 1500), [800, 600], Platform::Gtk).unwrap();
+        Document::new("drop", 2000, 1500, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
     let point = Point { x: 410., y: 280. };
     let expected = session.state.camera.input_transform().map(point);
     let context = session.image_placement_context(Some(point), None).unwrap();
@@ -57,7 +57,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     let source = |extent| Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [255; 4]));
     let first = source([600, 400]);
     let second = source([100, 300]);
-    let mut photo = Document::new("batch", 200, 150);
+    let mut photo = Document::new("batch", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     photo.metadata.xmp = Some(b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".as_slice().into());
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
         photo, [800, 600], Platform::Gtk).unwrap();
@@ -117,7 +117,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
 fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     use crate::{ImageLayerDestination, LayerDropPosition};
     use layer_core::{Layer, LayerKind};
-    let mut doc = Document::new("drop", 200, 150);
+    let mut doc = Document::new("drop", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let group_id = doc.allocate_layer_id();
     let mut group = Layer::paint(group_id, "Group");
     group.kind = LayerKind::Group;
@@ -167,7 +167,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
 
 #[test]
 fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
-    let mut doc = Document::new("locked photo", 200, 150);
+    let mut doc = Document::new("locked photo", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.layers[0].source = Some(rgba8_source([2, 1], |_, _| [255; 4]));
     doc.layers[0].properties.locked = true;
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600], Platform::Gtk).unwrap();
@@ -187,7 +187,7 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
     use layer_core::Affine;
     let source = u16_source([600, 400], Default::default(), false, 8 * 1024 * 1024, &[255; 600 * 8]);
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("placement", 200, 150), [800, 600], Platform::Gtk).unwrap();
+        Document::new("placement", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
     let original = session.engine.document().clone();
     session.place_layer_source("Photo", source.clone(), None).unwrap();
     let placed = session.engine.document().layer(session.engine.document().active_layer).unwrap();
@@ -611,7 +611,7 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
     use layer_core::color::{ColorProfile, RgbSpace, SampleDepth};
     let source = std::sync::Arc::new(u16_source([2, 1], ColorProfile::Builtin(RgbSpace::ProPhoto), true, 1024 * 1024,
         &[1, 0, 2, 0, 3, 0, 0, 0, 4, 0, 5, 0, 6, 0, 255, 255]));
-    let mut document = Document::new("retained", 20, 20);
+    let mut document = Document::new("retained", 20, 20, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.layers[0].source = Some(source.clone());
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
@@ -655,7 +655,7 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
 fn unchanged_source_profile_on_painted_layer_does_not_claim_to_add_a_layer() {
     use layer_core::{color::{ColorProfile, RgbSpace, source::*}, raster::*};
     let source = rgba8_source([1, 1], |_, _| [32, 64, 96, 255]);
-    let mut document = Document::new("painted source", 20, 20);
+    let mut document = Document::new("painted source", 20, 20, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.layers[0].source = Some(source);
     let descriptor = document.color.paint_descriptor();
     let tile = RasterTile::backed(TileBlob::encode(descriptor,

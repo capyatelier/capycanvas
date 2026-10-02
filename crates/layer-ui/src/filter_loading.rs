@@ -63,10 +63,17 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<UiChange, String> {
         self.require_idle()?;
         if self.pending_filters.is_some() {
-            return Err("A filter package is already being validated".into());
+            return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_PACKAGE_PENDING).to_string());
         }
-        let package = EffectPackage::parse(json)?.resolve(read)?;
-        let candidate = self.effect_catalog.stage(package, mode)?;
+        let package = EffectPackage::parse(json).and_then(|p| p.resolve(read)).map_err(|error| {
+            eprintln!("Filter package: {error}");
+            self.state.localization.text(MessageId::RESOURCES_PACKAGE_FAILED).to_string()
+        })?;
+        effects::validate_catalog_labels(&package, &self.state.localization)?;
+        let candidate = self.effect_catalog.stage(package, mode).map_err(|error| {
+            eprintln!("Filter catalog: {error}");
+            self.state.localization.text(MessageId::RESOURCES_PACKAGE_CONFLICT).to_string()
+        })?;
         let changed: Vec<_> = candidate
             .filters()
             .iter()
@@ -99,10 +106,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .any(|p| p.id == effect.program.id && *p != effect.program)
             {
-                return Err(format!(
-                    "Filter ID already belongs to a document program: {}",
-                    effect.program.id
-                ));
+                return Err(self.state.localization.text(MessageId::RESOURCES_DOCUMENT_FILTER_CONFLICT).to_string());
             }
             if let Some(effect) = &layer.effect
                 && (!migrate_instances || !changed.iter().any(|p| p.id == effect.program.id))
@@ -121,9 +125,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             .engine
             .backend_mut()
             .request_effect_validation(validation.clone())
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| {
+                eprintln!("Filter validation request: {error}");
+                self.state.localization.text(MessageId::RESOURCES_PACKAGE_VALIDATION_FAILED).to_string()
+            })?;
         if !accepted {
-            return Err("The GPU is unavailable or busy validating filters".into());
+            return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_DEVICE_BUSY).to_string());
         }
         self.pending_filters = Some(Pending {
             catalog: candidate,
@@ -149,7 +156,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Err(error) = result.result {
                 self.pending_filters = None;
                 self.state.filter_load.pending = false;
-                self.state.filter_load.error = Some(error);
+                eprintln!("Filter validation: {error}");
+                self.state.filter_load.error = Some(self.state.localization.text(MessageId::RESOURCES_PACKAGE_VALIDATION_FAILED).to_string());
                 return regions::DOCUMENT;
             }
             pending.validated = true;
@@ -197,7 +205,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             let replacement = effect
                 .rebind(definition.program())
-                .map_err(|e| format!("Cannot update {}: {e}", definition.label()))?;
+                .map_err(|error| {
+                    eprintln!("Filter update {}: {error}", definition.id());
+                    let mut args = fluent_bundle::FluentArgs::new();
+                    args.set("name", effects::resource_label(definition.label(), &self.state.localization).to_string());
+                    self.state.localization.format(MessageId::RESOURCES_UPDATE_FAILED, &args)
+                })?;
             let mut layer = layer.clone();
             layer.effect = Some(Arc::new(replacement));
             edits.push(Edit::ReplaceLayer(Box::new(layer)));
@@ -207,8 +220,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.effect_catalog = catalog;
         self.state.filter_catalog_revision = self.state.filter_catalog_revision.wrapping_add(1);
-        self.state.adjustments = effects::catalog(&self.effect_catalog, &self.state.filter_picker);
-        self.state.filter_categories = effects::categories(&self.effect_catalog);
+        self.state.adjustments = effects::catalog(&self.effect_catalog, &self.state.filter_picker, &self.state.localization);
+        self.state.filter_categories = effects::categories(&self.effect_catalog, &self.state.localization);
         self.refresh_document();
         self.refresh_commands();
         Ok(())

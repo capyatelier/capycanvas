@@ -1,6 +1,8 @@
 //! One configurable keymap routes to the same typed actions as native controls.
 //! Raw pen samples and gesture records are deliberately not keyboard commands.
 use crate::*;
+use crate::localization::{Localizer, MessageId, UiLanguage, FluentArgs};
+
 use serde::{Deserialize, Serialize};
 pub(crate) const MAX_SHORTCUTS: usize = 4;
 
@@ -17,24 +19,25 @@ pub enum TextEditAction {
 #[derive(Clone, Debug, Serialize)]
 pub struct TextEditMenuItem {
     pub action: TextEditAction,
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub key: KeyChord,
     pub shortcut: String,
 }
-pub fn text_edit_menu(platform: Platform) -> Vec<TextEditMenuItem> {
+pub fn text_edit_menu(platform: Platform) -> Vec<TextEditMenuItem> { text_edit_menu_localized(platform, &Localizer::shared(UiLanguage::English)) }
+pub fn text_edit_menu_localized(platform: Platform, l: &Localizer) -> Vec<TextEditMenuItem> {
     [
-        (TextEditAction::Cut, "Cut", "x"),
-        (TextEditAction::Copy, "Copy", "c"),
-        (TextEditAction::Paste, "Paste", "v"),
-        (TextEditAction::SelectAll, "Select All", "a"),
+        (TextEditAction::Cut, MessageId::COMMAND_CUT, "x"),
+        (TextEditAction::Copy, MessageId::COMMAND_COPY, "c"),
+        (TextEditAction::Paste, MessageId::SHORTCUT_PASTE, "v"),
+        (TextEditAction::SelectAll, MessageId::SHORTCUT_SELECT_ALL, "a"),
     ]
     .into_iter()
     .map(|(action, label, letter)| {
         let key = key(letter, true, false);
         TextEditMenuItem {
             action,
-            label,
-            shortcut: key.label(platform),
+            label: l.text(label),
+            shortcut: key.localized_label(platform, l),
             key,
         }
     })
@@ -90,9 +93,9 @@ impl KeyChord {
             _ => return None,
         })
     }
-    fn device_label(key: &str) -> Option<String> {
+    fn device_label_localized(key: &str, l: &Localizer) -> Option<String> {
         if let Some(button) = key.strip_prefix("pad_button_") {
-            return Some(format!("Pad button {button}"));
+            return Some(shortcut_pad_button(l, button.into()));
         }
         if let Some(name) = key.strip_prefix("xf86").filter(|name| !name.is_empty()) {
             return Some(name[..1].to_uppercase() + &name[1..]);
@@ -100,25 +103,26 @@ impl KeyChord {
         if let Some(button) = key.strip_prefix("gamepad_") {
             return GAMEPAD_BUTTONS
                 .contains(&key)
-                .then(|| format!("Gamepad {}", match button {
+                .then(|| shortcut_gamepad_button(l, match button {
                     "up" => "↑".into(),
                     "down" => "↓".into(),
                     "left" => "←".into(),
                     "right" => "→".into(),
-                    "select" | "start" | "home" => button[..1].to_uppercase() + &button[1..],
+                    "select" => l.text(MessageId::SHORTCUT_GAMEPAD_SELECT).to_string(),
+                    "start" => l.text(MessageId::SHORTCUT_GAMEPAD_START).to_string(),
+                    "home" => l.text(MessageId::SHORTCUT_GAMEPAD_HOME).to_string(),
                     _ => button.to_uppercase(),
                 }));
         }
-        Some(match key {
-            "volumeup" => "Volume Up",
-            "volumedown" => "Volume Down",
-            "volumemute" => "Mute",
-            "mediaplaypause" => "Play/Pause",
-            "mediatracknext" => "Next Track",
-            "mediatrackprevious" => "Previous Track",
+        Some(l.text(match key {
+            "volumeup" => MessageId::SHORTCUT_VOLUME_UP,
+            "volumedown" => MessageId::SHORTCUT_VOLUME_DOWN,
+            "volumemute" => MessageId::SHORTCUT_MUTE,
+            "mediaplaypause" => MessageId::SHORTCUT_PLAY_PAUSE,
+            "mediatracknext" => MessageId::SHORTCUT_NEXT_TRACK,
+            "mediatrackprevious" => MessageId::SHORTCUT_PREVIOUS_TRACK,
             _ => return None,
-        }
-        .into())
+        }).to_string())
     }
     /// Any key or button, alone or combined; Escape stays free to cancel.
     pub fn holdable(&self) -> bool {
@@ -130,13 +134,13 @@ impl KeyChord {
             _ => self.validate().is_ok(),
         }
     }
-    pub fn validate_for(&self, held: bool) -> Result<(), String> {
+    pub fn validate_for_localized(&self, held: bool, l: &Localizer) -> Result<(), String> {
         if held && matches!(self.key.as_str(), "shift" | "control" | "alt") && !self.command && !self.shift && !self.alt {
             return Ok(());
         }
-        self.validate()
+        self.validate_localized(l)
     }
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate_localized(&self, l: &Localizer) -> Result<(), String> {
         let printable = self.key.chars().count() == 1 && !self.key.chars().any(char::is_control);
         let named = matches!(
             self.key.as_str(),
@@ -153,7 +157,10 @@ impl KeyChord {
                 | "arrowright"
                 | "arrowup"
                 | "arrowdown"
-        ) || Self::device_label(&self.key).is_some()
+        ) || Self::device_key(&self.key).is_some()
+            || self.key.starts_with("pad_button_")
+            || self.key.strip_prefix("xf86").is_some_and(|name| !name.is_empty())
+            || GAMEPAD_BUTTONS.contains(&self.key.as_str())
             || (self.key.len() > 1
                 && !self.key.starts_with("gamepad_")
                 && self.key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
@@ -168,10 +175,12 @@ impl KeyChord {
             || Self::modifier(&self.key)
             || self.key == "escape"
         {
-            return Err("Choose another key for this shortcut.".into());
+            return Err(l.text(MessageId::SHORTCUT_KEY_UNAVAILABLE).to_string());
         }
         Ok(())
     }
+    pub fn validate(&self) -> Result<(), String> { self.validate_localized(&Localizer::shared(UiLanguage::English)) }
+    pub fn validate_for(&self, held: bool) -> Result<(), String> { self.validate_for_localized(held, &Localizer::shared(UiLanguage::English)) }
     pub fn modifier(key: &str) -> bool {
         matches!(
             key,
@@ -203,30 +212,41 @@ impl KeyChord {
                     && !self.alt
                     && matches!(self.key.as_str(), "w" | "t" | "n" | "r" | "l" | "q" | "p")))
     }
-    pub fn label(&self, platform: Platform) -> String {
-        self.label_parts(platform).join("+")
-    }
-    pub fn label_parts(&self, platform: Platform) -> Vec<String> {
+    pub fn label(&self, platform: Platform) -> String { self.localized_label(platform, &Localizer::shared(UiLanguage::English)) }
+    pub fn localized_label(&self, platform: Platform, l: &Localizer) -> String { self.localized_label_parts(platform, l).join("+") }
+    pub fn label_parts(&self, platform: Platform) -> Vec<String> { self.localized_label_parts(platform, &Localizer::shared(UiLanguage::English)) }
+    pub fn localized_label_parts(&self, platform: Platform, l: &Localizer) -> Vec<String> {
         let mut parts = Vec::new();
         if self.command {
-            parts.push(if platform.apple() { "⌘" } else { "Ctrl" }.to_string());
+            parts.push(if platform.apple() { "⌘".to_string() } else { l.text(MessageId::SHORTCUT_CTRL).to_string() });
         }
         if self.alt {
-            parts.push("Alt".into());
+            parts.push(l.text(MessageId::SHORTCUT_ALT).to_string());
         }
         if self.shift {
-            parts.push("Shift".into());
+            parts.push(l.text(MessageId::SHORTCUT_SHIFT).to_string());
         }
         parts.push(match self.key.as_str() {
-            " " => "Space".into(),
-            "control" => if platform.apple() { "⌃" } else { "Ctrl" }.into(),
-            "alt" => if platform.apple() { "⌥" } else { "Alt" }.into(),
+            " " => l.text(MessageId::SHORTCUT_SPACE).to_string(),
+            "control" => if platform.apple() { "⌃".to_string() } else { l.text(MessageId::SHORTCUT_CTRL).to_string() },
+            "alt" => if platform.apple() { "⌥".to_string() } else { l.text(MessageId::SHORTCUT_ALT).to_string() },
+            "enter" => l.text(MessageId::SHORTCUT_KEY_ENTER).to_string(),
+            "tab" => l.text(MessageId::SHORTCUT_KEY_TAB).to_string(),
+            "backspace" => l.text(MessageId::SHORTCUT_KEY_BACKSPACE).to_string(),
+            "delete" => l.text(MessageId::SHORTCUT_KEY_DELETE).to_string(),
+            "insert" => l.text(MessageId::SHORTCUT_KEY_INSERT).to_string(),
+            "home" => l.text(MessageId::SHORTCUT_KEY_HOME).to_string(),
+            "end" => l.text(MessageId::SHORTCUT_KEY_END).to_string(),
+            "pageup" => l.text(MessageId::SHORTCUT_KEY_PAGEUP).to_string(),
+            "pagedown" => l.text(MessageId::SHORTCUT_KEY_PAGEDOWN).to_string(),
+            "shift" => l.text(MessageId::SHORTCUT_KEY_SHIFT).to_string(),
+            "meta" => l.text(MessageId::SHORTCUT_KEY_META).to_string(),
             "arrowleft" => "←".into(),
             "arrowright" => "→".into(),
             "arrowup" => "↑".into(),
             "arrowdown" => "↓".into(),
             key if key.len() == 1 => key.to_uppercase(),
-            key if let Some(label) = Self::device_label(key) => label,
+            key if let Some(label) = Self::device_label_localized(key, l) => label,
             key => {
                 let mut chars = key.chars();
                 chars.next().map_or_else(String::new, |c| {
@@ -312,17 +332,17 @@ pub const GAMEPAD_BUTTONS: [&str; 17] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GestureTrigger {
     pub id: &'static str,
-    pub label: &'static str,
+    pub label: MessageId,
     pub default: &'static str,
     pub held: bool,
 }
 pub const GESTURE_TRIGGERS: [GestureTrigger; 6] = [
-    GestureTrigger { id: "touch.tap.2", label: "Two-finger tap", default: "command.Undo", held: false },
-    GestureTrigger { id: "touch.tap.3", label: "Three-finger tap", default: "command.Redo", held: false },
-    GestureTrigger { id: "touch.tap.4", label: "Four-finger tap", default: "", held: false },
-    GestureTrigger { id: "pen.button.primary", label: "Lower side button", default: "", held: true },
-    GestureTrigger { id: "pen.button.secondary", label: "Upper side button", default: "", held: true },
-    GestureTrigger { id: "pen.button.tertiary", label: "Third side button", default: "", held: true },
+    GestureTrigger { id: "touch.tap.2", label: MessageId::SHORTCUT_TWO_FINGER_TAP, default: "command.Undo", held: false },
+    GestureTrigger { id: "touch.tap.3", label: MessageId::SHORTCUT_THREE_FINGER_TAP, default: "command.Redo", held: false },
+    GestureTrigger { id: "touch.tap.4", label: MessageId::SHORTCUT_FOUR_FINGER_TAP, default: "", held: false },
+    GestureTrigger { id: "pen.button.primary", label: MessageId::SHORTCUT_LOWER_SIDE_BUTTON, default: "", held: true },
+    GestureTrigger { id: "pen.button.secondary", label: MessageId::SHORTCUT_UPPER_SIDE_BUTTON, default: "", held: true },
+    GestureTrigger { id: "pen.button.tertiary", label: MessageId::SHORTCUT_THIRD_SIDE_BUTTON, default: "", held: true },
 ];
 pub const MODIFIER_CAPTURE: &str = "modifier";
 pub(crate) const MODIFIER_PREFIX: &str = "modifier:";
@@ -374,9 +394,46 @@ fn holdable(target: &str) -> bool {
         || command(target).is_some_and(|c| CommandId::TOOLS.contains(&c) || MOMENTARY_COMMANDS.contains(&c))
 }
 #[derive(Clone, Debug, PartialEq)]
+pub enum ShortcutLabel {
+ Message(MessageId), Command(CommandId), Family(ToolFamily), Brush(u32), Size(f32), Held(Box<ShortcutLabel>), Modifier(KeyChord, Platform),
+}
+impl ShortcutLabel {
+ pub(crate) fn named_tool(&self) -> Option<CommandId> {
+  match self {
+   Self::Command(command) => command.paint_tool().map(|_| *command),
+   Self::Brush(id) => match crate::tools::preset(*id).ok()? {
+    layer_core::DefaultBrushPreset::Pencil => Some(CommandId::Pencil),
+    layer_core::DefaultBrushPreset::Eraser => Some(CommandId::Eraser),
+    layer_core::DefaultBrushPreset::Airbrush => Some(CommandId::Airbrush),
+    layer_core::DefaultBrushPreset::CloneStamp => Some(CommandId::Clone),
+    layer_core::DefaultBrushPreset::HealingBrush => Some(CommandId::Heal),
+    layer_core::DefaultBrushPreset::SpotHealingBrush => Some(CommandId::SpotHeal),
+    _ => None,
+   },
+   _ => None,
+  }
+ }
+ pub fn resolve(&self, l: &Localizer) -> String {
+  match self {
+   Self::Message(id) => l.text(*id).to_string(),
+   Self::Command(c) => c.localized_label(l).to_string(),
+   Self::Family(f) => f.localized_label(l).to_string(),
+   Self::Brush(id) => crate::tools::brush_label_localized(*id, l).map_or_else(String::new, |label| label.to_string()),
+   Self::Size(value) => shortcut_brush_size(l, value.to_string()),
+   Self::Held(label) => shortcut_while_held(l, label.resolve(l)),
+   Self::Modifier(key, platform) => shortcut_modifier_key(l, key.localized_label(*platform, l)),
+  }
+ }
+}
+fn shortcut_format(l: &Localizer, id: MessageId, values: &[(&str, String)]) -> String {
+ let mut args = FluentArgs::new();
+ for (key, value) in values { args.set(*key, value.as_str()); }
+ l.format(id, &args)
+}
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShortcutDefinition {
     pub id: String,
-    pub label: String,
+    pub label: ShortcutLabel,
     pub action: ShortcutAction,
     pub repeat: bool,
     pub scope: BindingScope,
@@ -543,31 +600,37 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
     vec![chord]
 }
 
-pub const SHORTCUT_SECTIONS: [&str; 13] = [
-    "Tools", "Painting", "Edit", "Select", "Transform", "Layer", "View", "Color", "File", "Window", "Help",
-    "Brush presets", "Brush sizes",
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShortcutSection { Tools, Painting, Edit, Select, Transform, Layer, View, Color, File, Window, Help, BrushPresets, BrushSizes }
+impl ShortcutSection {
+ pub fn id(self) -> &'static str { match self { Self::Tools => "Tools", Self::Painting => "Painting", Self::Edit => "Edit", Self::Select => "Select", Self::Transform => "Transform", Self::Layer => "Layer", Self::View => "View", Self::Color => "Color", Self::File => "File", Self::Window => "Window", Self::Help => "Help", Self::BrushPresets => "Brush presets", Self::BrushSizes => "Brush sizes" } }
+ pub fn localized_label(self, l: &Localizer) -> String { l.text(match self { Self::Tools => MessageId::SHORTCUT_TOOLS, Self::Painting => MessageId::SHORTCUT_PAINTING, Self::Edit => MessageId::SHORTCUT_EDIT, Self::Select => MessageId::SHORTCUT_SELECT, Self::Transform => MessageId::SHORTCUT_TRANSFORM, Self::Layer => MessageId::SHORTCUT_LAYER, Self::View => MessageId::SHORTCUT_VIEW, Self::Color => MessageId::SHORTCUT_COLOR, Self::File => MessageId::SHORTCUT_FILE, Self::Window => MessageId::SHORTCUT_WINDOW, Self::Help => MessageId::SHORTCUT_HELP, Self::BrushPresets => MessageId::SHORTCUT_BRUSH_PRESETS, Self::BrushSizes => MessageId::SHORTCUT_BRUSH_SIZES }).to_string() }
+}
+pub const SHORTCUT_SECTIONS: [ShortcutSection; 13] = [
+    ShortcutSection::Tools, ShortcutSection::Painting, ShortcutSection::Edit, ShortcutSection::Select, ShortcutSection::Transform, ShortcutSection::Layer, ShortcutSection::View, ShortcutSection::Color, ShortcutSection::File, ShortcutSection::Window, ShortcutSection::Help,
+    ShortcutSection::BrushPresets, ShortcutSection::BrushSizes,
 ];
 
-fn command_section(command: CommandId) -> &'static str {
+fn command_section(command: CommandId) -> ShortcutSection {
     use CommandId as C;
     match command {
         C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::Copy | C::Cut | C::CopyMerged | C::PasteImage
         | C::PasteInPlace | C::PasteInto | C::ClearLayer | C::FillSelection
         | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection | C::ImageSize
         | C::RotateImageLeft | C::RotateImageRight | C::RotateImage180 | C::FlipImageHorizontal
-        | C::FlipImageVertical | C::Trim | C::RevealAll => "Edit",
+        | C::FlipImageVertical | C::Trim | C::RevealAll => ShortcutSection::Edit,
         C::CropRatioFree | C::CropRatioOriginal | C::CropRatioSquare | C::CropRatioFourFive | C::CropRatioTwoThree
         | C::CropRatioFiveSeven | C::CropRatioSixteenNine | C::CropSwapOrientation | C::CropOverlayThirds
         | C::CropOverlayGrid | C::CropOverlayDiagonal | C::CropOverlayGolden | C::CropCycleOverlay | C::CropStraighten
-        | C::CropDeleteCroppedPixels | C::StraightenToGuide => "Transform",
+        | C::CropDeleteCroppedPixels | C::StraightenToGuide => ShortcutSection::Transform,
         C::ApplyTransform | C::CancelTransform | C::PlacementOriginalSize | C::ResetTransform
         | C::TransformFlipHorizontal | C::TransformFlipVertical | C::TransformRotateLeft | C::TransformRotateRight
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
-        | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => "Transform",
-        C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic => "Painting",
-        command if CommandId::TOOLS.contains(&command) => "Tools",
+        | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => ShortcutSection::Transform,
+        C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic => ShortcutSection::Painting,
+        command if CommandId::TOOLS.contains(&command) => ShortcutSection::Tools,
         C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical | C::CloneResetOffset => {
-            "Painting"
+            ShortcutSection::Painting
         }
         C::TonalSelect | C::QuickMask | C::ReturnToArtwork | C::NewSelectionLayer | C::SaveSelectionLayer | C::Reselect
         | C::SelectionOutline | C::MaskOverlay | C::MaskOverlayProtected | C::ResetMaskColors | C::SwapMaskColors
@@ -577,20 +640,20 @@ fn command_section(command: CommandId) -> &'static str {
         | C::CancelSelection | C::SelectionVisible | C::SelectionEditing | C::SelectionReference | C::SelectAll
         | C::Deselect | C::InvertSelection | C::RemoveSelectionPoint | C::MaskSelection | C::LoadSelectionLayer
         | C::InvertSelectionLayer | C::GrowSelection | C::ShrinkSelection | C::FeatherSelection | C::BorderSelection
-        | C::SmoothSelection | C::TransformSelectionOutline => "Select",
+        | C::SmoothSelection | C::TransformSelectionOutline => ShortcutSection::Select,
         C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile
         | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer | C::RevertToOriginal | C::InvertLayerMask
         | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask | C::EditLayerContent | C::MergeDown | C::MergeGroup
-        | C::MergeVisible | C::FlattenImage | C::StampVisible | C::NewDodgeBurnLayer | C::FrequencySeparation => "Layer",
+        | C::MergeVisible | C::FlattenImage | C::StampVisible | C::NewDodgeBurnLayer | C::FrequencySeparation => ShortcutSection::Layer,
         C::FitCanvas | C::ActualPixels | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
         | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
-        | C::ToggleTheme => "View",
+        | C::ToggleTheme => ShortcutSection::View,
         C::SdrRendition | C::PreviewSdr | C::SoftProofSetup | C::SoftProof | C::GamutWarning | C::Histogram
-        | C::AssignProfile | C::ConvertColorSpace | C::ChangeBitDepth | C::BlendPerceptual | C::BlendLinear => "Color",
+        | C::AssignProfile | C::ConvertColorSpace | C::ChangeBitDepth | C::BlendPerceptual | C::BlendLinear => ShortcutSection::Color,
         C::NewDocument | C::OpenDocument | C::SaveDocument | C::SaveDocumentAs | C::ExportDocument | C::CloseDocument
-        | C::ImportImage | C::DocumentProperties | C::NewWindow | C::Drawings => "File",
-        C::About | C::Website | C::SourceCode => "Help",
-        _ => "Window",
+        | C::ImportImage | C::DocumentProperties | C::NewWindow | C::Drawings => ShortcutSection::File,
+        C::About | C::Website | C::SourceCode => ShortcutSection::Help,
+        _ => ShortcutSection::Window,
     }
 }
 
@@ -606,7 +669,7 @@ fn command_scope(command: CommandId) -> BindingScope {
     }
 }
 
-pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'static str)> {
+pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, ShortcutSection)> {
     let mut rows: Vec<_> = CommandId::ALL
         .into_iter()
         .filter(|c| c.available_on(platform))
@@ -614,7 +677,7 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
             (
                 ShortcutDefinition {
                     id: command.shortcut_id(),
-                    label: command.label().into(),
+                    label: ShortcutLabel::Command(command),
                     action: ShortcutAction::Action {
                         action: Box::new(UiAction::Invoke { command }),
                     },
@@ -630,7 +693,7 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
         (
             ShortcutDefinition {
                 id: family.shortcut_id().into(),
-                label: family.label().into(),
+                label: ShortcutLabel::Family(family),
                 action: ShortcutAction::Action {
                     action: Box::new(UiAction::CycleTool { family }),
                 },
@@ -638,15 +701,15 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                 scope: BindingScope::Application,
                 target: None,
             },
-            "Tools",
+            ShortcutSection::Tools,
         )
     }));
-    for (setting, noun) in [("size", "brush size"), ("opacity", "brush opacity")] {
+    for setting in ["size", "opacity"] {
         for (direction, steps) in [("decrease", -1.), ("increase", 1.)] {
             rows.push((
                 ShortcutDefinition {
                     id: format!("tool_setting.{setting}.{direction}"),
-                    label: format!("{}{} {noun}", direction[..1].to_uppercase(), &direction[1..]),
+                    label: ShortcutLabel::Message(match (setting, direction) { ("size", "decrease") => MessageId::SHORTCUT_DECREASE_BRUSH_SIZE, ("size", "increase") => MessageId::SHORTCUT_INCREASE_BRUSH_SIZE, ("opacity", "decrease") => MessageId::SHORTCUT_DECREASE_BRUSH_OPACITY, ("opacity", "increase") => MessageId::SHORTCUT_INCREASE_BRUSH_OPACITY, _ => unreachable!() }),
                     action: ShortcutAction::Action {
                         action: Box::new(UiAction::StepToolSetting { id: setting.into(), steps }),
                     },
@@ -654,20 +717,20 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                     scope: BindingScope::Canvas,
                     target: None,
                 },
-                "Painting",
+                ShortcutSection::Painting,
             ));
         }
     }
     for (id, label, action, group) in [
-        ("color.swap", "Swap colors", UiAction::Color { action: ColorAction::Swap }, "Painting"),
-        ("color.transparent", "Paint with transparency", UiAction::Color { action: ColorAction::ToggleTransparent }, "Painting"),
-        ("layer.duplicate", "Duplicate layer", UiAction::Layer { action: LayerAction::DuplicateSelected }, "Layer"),
-        ("layer.group", "Group layers", UiAction::Layer { action: LayerAction::GroupSelected }, "Layer"),
+        ("color.swap", MessageId::SHORTCUT_SWAP_COLORS, UiAction::Color { action: ColorAction::Swap }, ShortcutSection::Painting),
+        ("color.transparent", MessageId::SHORTCUT_PAINT_WITH_TRANSPARENCY, UiAction::Color { action: ColorAction::ToggleTransparent }, ShortcutSection::Painting),
+        ("layer.duplicate", MessageId::SHORTCUT_DUPLICATE_LAYER, UiAction::Layer { action: LayerAction::DuplicateSelected }, ShortcutSection::Layer),
+        ("layer.group", MessageId::SHORTCUT_GROUP_LAYERS, UiAction::Layer { action: LayerAction::GroupSelected }, ShortcutSection::Layer),
     ] {
         rows.push((
             ShortcutDefinition {
                 id: id.into(),
-                label: label.into(),
+                label: ShortcutLabel::Message(label),
                 action: ShortcutAction::Action { action: Box::new(action) },
                 repeat: false,
                 scope: BindingScope::Application,
@@ -680,7 +743,7 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
         (
             ShortcutDefinition {
                 id: format!("brush.{}", brush.id),
-                label: brush.label.into(),
+                label: ShortcutLabel::Brush(brush.id),
                 action: ShortcutAction::Action {
                     action: Box::new(UiAction::SelectBrush { id: brush.id }),
                 },
@@ -688,14 +751,14 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                 scope: BindingScope::Application,
                 target: None,
             },
-            "Brush presets",
+            ShortcutSection::BrushPresets,
         )
     }));
     rows.extend(BRUSH_SIZES.iter().map(|&value| {
         (
             ShortcutDefinition {
                 id: format!("size.{value}"),
-                label: format!("Brush size {value}"),
+                label: ShortcutLabel::Size(value),
                 action: ShortcutAction::Action {
                     action: Box::new(UiAction::SetBrushSize { value }),
                 },
@@ -703,34 +766,34 @@ pub(crate) fn definitions(platform: Platform) -> Vec<(ShortcutDefinition, &'stat
                 scope: BindingScope::Application,
                 target: None,
             },
-            "Brush sizes",
+            ShortcutSection::BrushSizes,
         )
     }));
     let held: Vec<_> = rows.iter().filter_map(|(definition, section)| held(definition, section)).collect();
     rows.extend(held);
     rows
 }
-fn held(target: &ShortcutDefinition, section: &'static str) -> Option<(ShortcutDefinition, &'static str)> {
+fn held(target: &ShortcutDefinition, section: &ShortcutSection) -> Option<(ShortcutDefinition, ShortcutSection)> {
     use ToolCategory as C;
     let id = hold_id(&target.id)?;
     let ShortcutAction::Action { action } = &target.action else {
         return None;
     };
     let (label, action, scope) = match id.as_str() {
-        "canvas.pan" => ("Pan while held".to_string(), ShortcutAction::Pan, BindingScope::Canvas),
+        "canvas.pan" => (ShortcutLabel::Held(Box::new(ShortcutLabel::Message(MessageId::SHORTCUT_PAN))), ShortcutAction::Pan, BindingScope::Canvas),
         "hold.eyedropper" => (
-            "Sample color while held".into(),
+            ShortcutLabel::Held(Box::new(ShortcutLabel::Message(MessageId::SHORTCUT_SAMPLE_COLOR))),
             ShortcutAction::Hold { action: action.clone() },
             BindingScope::Tools { categories: vec![C::Drawing, C::Blending, C::FillGradient] },
         ),
         "hold.eraser" => (
-            "Erase while held".into(),
+            ShortcutLabel::Held(Box::new(ShortcutLabel::Message(MessageId::SHORTCUT_ERASE))),
             ShortcutAction::Hold { action: action.clone() },
             BindingScope::Tools { categories: vec![C::Drawing, C::Blending] },
         ),
-        "hold.move" => ("Move while held".into(), ShortcutAction::Hold { action: action.clone() }, BindingScope::Canvas),
+        "hold.move" => (ShortcutLabel::Held(Box::new(ShortcutLabel::Message(MessageId::SHORTCUT_MOVE))), ShortcutAction::Hold { action: action.clone() }, BindingScope::Canvas),
         "hold.command.CloneSourceArm" => (
-            "Set source while held".into(),
+            ShortcutLabel::Held(Box::new(ShortcutLabel::Message(MessageId::SHORTCUT_SET_SOURCE))),
             ShortcutAction::Momentary { action: action.clone() },
             command_scope(CommandId::CloneSourceArm),
         ),
@@ -743,7 +806,7 @@ fn held(target: &ShortcutDefinition, section: &'static str) -> Option<(ShortcutD
                 _ => None,
             };
             (
-                format!("{} while held", target.label),
+                ShortcutLabel::Held(Box::new(target.label.clone())),
                 match momentary {
                     Some(action) => ShortcutAction::Momentary { action: Box::new(action) },
                     None => ShortcutAction::Hold { action: action.clone() },
@@ -752,14 +815,16 @@ fn held(target: &ShortcutDefinition, section: &'static str) -> Option<(ShortcutD
             )
         }
     };
-    Some((ShortcutDefinition { id, label, action, repeat: false, scope, target: Some(target.id.clone()) }, section))
+    Some((ShortcutDefinition { id, label, action, repeat: false, scope, target: Some(target.id.clone()) }, *section))
 }
+impl GestureTrigger { pub fn localized_label(&self, l: &Localizer) -> String { l.text(self.label).to_string() } }
 impl Settings {
     /// Resolve action identity, not translated labels or widget names.
-    pub fn action_shortcut(&self, action: &UiAction, platform: Platform) -> String {
+    pub fn action_shortcut(&self, action: &UiAction, platform: Platform) -> String { self.action_shortcut_localized(action, platform, &Localizer::shared(UiLanguage::English)) }
+    pub fn action_shortcut_localized(&self, action: &UiAction, platform: Platform, l: &Localizer) -> String {
         self.action_keys(action, platform)
             .iter()
-            .map(|key| key.label(platform))
+            .map(|key| key.localized_label(platform, l))
             .collect::<Vec<_>>()
             .join(" / ")
     }
@@ -796,12 +861,13 @@ impl Settings {
         keys
     }
 
-    pub fn action_tooltip(&self, label: &str, action: &UiAction, platform: Platform) -> String {
-        let shortcut = self.action_shortcut(action, platform);
+    pub fn action_tooltip(&self, label: &str, action: &UiAction, platform: Platform) -> String { self.action_tooltip_localized(label, action, platform, &Localizer::shared(UiLanguage::English)) }
+    pub fn action_tooltip_localized(&self, label: &str, action: &UiAction, platform: Platform, l: &Localizer) -> String {
+        let shortcut = self.action_shortcut_localized(action, platform, l);
         if shortcut.is_empty() {
             label.into()
         } else {
-            format!("{label} ({shortcut})")
+            shortcut_tooltip(l, label.into(), shortcut)
         }
     }
     pub(crate) fn keymap_preset(&self) -> Option<&'static crate::keymaps::ParsedPreset> {
@@ -852,11 +918,11 @@ impl Settings {
         }
         keys
     }
-    pub(crate) fn shortcut_label(&self, id: &str, platform: Platform) -> String {
+    pub(crate) fn shortcut_label_localized(&self, id: &str, platform: Platform, l: &Localizer) -> String {
         self.keys(id)
             .iter()
             .filter(|c| c.available(platform))
-            .map(|c| c.label(platform))
+            .map(|c| c.localized_label(platform, l))
             .collect::<Vec<_>>()
             .join(" / ")
     }
@@ -894,41 +960,24 @@ impl Settings {
         matches.sort_by_key(|definition| std::cmp::Reverse(definition.scope.specificity()));
         matches
     }
-    pub(crate) fn shortcut_scope(&self, id: &str, platform: Platform) -> (String, Vec<String>) {
+    pub(crate) fn shortcut_scope_localized(&self, id: &str, platform: Platform, l: &Localizer) -> (String, Vec<String>) {
         let all = definitions(platform);
-        let Some((definition, _)) = all.iter().find(|(d, _)| d.id == id) else {
-            return (String::new(), Vec::new());
-        };
+        let Some((definition, _)) = all.iter().find(|(d, _)| d.id == id) else { return (String::new(), Vec::new()); };
         let describe = |scope: &BindingScope| match scope {
-            BindingScope::Application => "everywhere".to_string(),
-            BindingScope::Canvas => "on the canvas".to_string(),
-            BindingScope::Tools { categories } => {
-                let names: Vec<_> = categories.iter().map(|c| c.label().to_lowercase()).collect();
-                format!("with {} tools", match names.as_slice() {
-                    [one] => one.clone(),
-                    [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-                    [] => String::new(),
-                })
-            }
+            BindingScope::Application => l.text(MessageId::SHORTCUT_EVERYWHERE).to_string(),
+            BindingScope::Canvas => l.text(MessageId::SHORTCUT_ON_CANVAS).to_string(),
+            BindingScope::Tools { categories } => shortcut_with_tools(l, categories.iter().map(|c| c.localized_label(l).to_string()).collect::<Vec<_>>().join(", ")),
         };
         let mut overlaps = Vec::new();
         for chord in self.keys(id) {
             for (other, _) in &all {
-                if other.id != definition.id
-                    && other.scope.overlaps(&definition.scope)
-                    && other.scope.specificity() != definition.scope.specificity()
-                    && self.keys(&other.id).contains(&chord)
-                {
-                    overlaps.push(if other.scope.specificity() > definition.scope.specificity() {
-                        format!("{} does {} {} instead", chord.label(platform), other.label, describe(&other.scope))
-                    } else {
-                        format!("{} does {} elsewhere", chord.label(platform), other.label)
-                    });
+                if other.id != definition.id && other.scope.overlaps(&definition.scope)
+                    && other.scope.specificity() != definition.scope.specificity() && self.keys(&other.id).contains(&chord) {
+                    overlaps.push(shortcut_scope_overlap(l, chord.localized_label(platform, l), other.label.resolve(l), &other.scope, other.scope.specificity() > definition.scope.specificity()));
                 }
             }
         }
-        let scope = describe(&definition.scope);
-        (scope[..1].to_uppercase() + &scope[1..], overlaps)
+        (describe(&definition.scope), overlaps)
     }
     pub(crate) fn held_shortcut(&self, id: &str, platform: Platform) -> bool {
         definitions(platform).iter().any(|(definition, _)| definition.id == id && definition.action.held())
@@ -951,7 +1000,7 @@ impl Settings {
         if press && self.hold_keys(platform).iter().any(|h| h.key == *chord && !h.actions.is_empty()) {
             conflicts.push(ShortcutDefinition {
                 id: format!("{MODIFIER_PREFIX}{}", chord.label(platform)),
-                label: format!("the modifier key {}", chord.label(platform)),
+                label: ShortcutLabel::Modifier(chord.clone(), platform),
                 action: ShortcutAction::Pan,
                 repeat: false,
                 scope: BindingScope::Canvas,
@@ -1024,63 +1073,64 @@ impl Settings {
         }
         definitions(platform).into_iter().map(|(d, _)| d).find(|d| d.id == id)
     }
-    fn validate_gestures(&self) -> Result<(), String> {
+    fn validate_gestures(&self, l: &Localizer) -> Result<(), String> {
         if self.keymap.as_ref().is_some_and(|k| crate::keymaps::preset(&k.id).is_none()) {
-            return Err("Unknown keymap".into());
+            return Err(l.text(MessageId::SHORTCUT_UNKNOWN_KEYMAP).to_string());
         }
         let all = definitions(Platform::Gtk);
         for (trigger, id) in &self.gestures {
             let trigger = GESTURE_TRIGGERS
                 .iter()
                 .find(|t| t.id == trigger)
-                .ok_or("Unknown gesture or pen button")?;
+                .ok_or_else(|| l.text(MessageId::SHORTCUT_UNKNOWN_GESTURE_OR_PEN_BUTTON).to_string())?;
             if id.is_empty() {
                 continue;
             }
             let definition = all
                 .iter()
                 .find(|(d, _)| d.id == *id)
-                .ok_or("Unknown gesture action")?;
+                .ok_or_else(|| l.text(MessageId::SHORTCUT_UNKNOWN_GESTURE_ACTION).to_string())?;
             if definition.0.action.held() && !trigger.held {
-                return Err(format!("{} cannot hold an action", trigger.label));
+                return Err(shortcut_cannot_hold(l, trigger.localized_label(l)));
             }
         }
         for (trigger, actions) in &self.pen_buttons {
             if !GESTURE_TRIGGERS.iter().any(|t| t.id == trigger && t.held) {
-                return Err("Unknown pen button".into());
+                return Err(l.text(MessageId::SHORTCUT_UNKNOWN_PEN_BUTTON).to_string());
             }
             if actions.values().any(|id| !all.iter().any(|(d, _)| d.id == *id && d.target.is_none())) {
-                return Err("Unknown pen button action".into());
+                return Err(l.text(MessageId::SHORTCUT_UNKNOWN_PEN_BUTTON_ACTION).to_string());
             }
         }
         Ok(())
     }
-    pub(crate) fn validate_shortcuts(&self) -> Result<(), String> {
-        self.validate_gestures()?;
+    pub(crate) fn validate_shortcuts(&self) -> Result<(), String> { self.validate_shortcuts_localized(&Localizer::shared(UiLanguage::English)) }
+    pub(crate) fn validate_shortcuts_localized(&self, l: &Localizer) -> Result<(), String> {
+        self.validate_gestures(l)?;
         let all = definitions(Platform::Gtk);
         for (index, hold) in self.hold_keys.iter().flatten().enumerate() {
             if !hold.key.holdable() {
-                return Err("Modifier keys use Space, Shift, Ctrl or Alt".into());
+                return Err(l.text(MessageId::SHORTCUT_MODIFIER_UNSUPPORTED).to_string());
             }
             if self.hold_keys.iter().flatten().take(index).any(|other| other.key == hold.key) {
-                return Err("Each modifier key is listed once".into());
+                return Err(l.text(MessageId::SHORTCUT_MODIFIER_DUPLICATE).to_string());
             }
             if hold.actions.values().any(|target| hold_id(target).is_none()) {
-                return Err("This action can't be used while a key is held".into());
+                return Err(l.text(MessageId::SHORTCUT_HELD_ACTION_INVALID).to_string());
             }
         }
         for (id, keys) in &self.shortcuts {
             if !all.iter().any(|(a, _)| a.id == *id) || keys.len() > MAX_SHORTCUTS {
-                return Err("Unknown action or too many shortcut alternatives".into());
+                return Err(l.text(MessageId::SHORTCUT_BINDING_INVALID).to_string());
             }
             let held = all.iter().any(|(a, _)| a.id == *id && a.action.held());
             for (index, chord) in keys.iter().enumerate() {
-                chord.validate_for(held)?;
+                chord.validate_for_localized(held, l)?;
                 if keys[..index].contains(chord) {
-                    return Err("Duplicate shortcut alternative".into());
+                    return Err(l.text(MessageId::SHORTCUT_ALTERNATIVE_DUPLICATE).to_string());
                 }
                 if self.ambiguous(id, chord, Platform::Gtk) {
-                    return Err("Two actions cannot use the same shortcut".into());
+                    return Err(l.text(MessageId::SHORTCUT_BINDING_CONFLICT).to_string());
                 }
             }
         }
@@ -1210,4 +1260,45 @@ mod tests {
             [key("i", true, true)]
         );
     }
+}
+
+pub(crate) fn shortcut_cannot_hold(l: &Localizer, trigger: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CANNOT_HOLD, &[("trigger", trigger)]) }
+
+pub(crate) fn shortcut_with_tools(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_WITH_TOOLS, &[("tools", tools)]) }
+
+pub(crate) fn shortcut_tooltip(l: &Localizer, label: String, shortcut: String) -> String { shortcut_format(l, MessageId::SHORTCUT_TOOLTIP, &[("label", label), ("shortcut", shortcut)]) }
+
+pub(crate) fn shortcut_modifier_key(l: &Localizer, key: String) -> String { shortcut_format(l, MessageId::SHORTCUT_MODIFIER_KEY, &[("key", key)]) }
+
+pub(crate) fn shortcut_while_held(l: &Localizer, action: String) -> String { shortcut_format(l, MessageId::SHORTCUT_WHILE_HELD, &[("action", action)]) }
+
+pub(crate) fn shortcut_brush_size(l: &Localizer, value: String) -> String { shortcut_format(l, MessageId::SHORTCUT_BRUSH_SIZE, &[("value", value)]) }
+
+pub(crate) fn shortcut_gamepad_button(l: &Localizer, button: String) -> String { shortcut_format(l, MessageId::SHORTCUT_GAMEPAD_BUTTON, &[("button", button)]) }
+
+pub(crate) fn shortcut_pad_button(l: &Localizer, button: String) -> String { shortcut_format(l, MessageId::SHORTCUT_PAD_BUTTON, &[("button", button)]) }
+
+pub(crate) fn shortcut_context_choice(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CONTEXT_CHOICE, &[("tools", tools)]) }
+
+pub(crate) fn shortcut_hold_help(l: &Localizer, key: String) -> String { shortcut_format(l, MessageId::SHORTCUT_HOLD_HELP, &[("key", key)]) }
+
+pub(crate) fn shortcut_key_context(l: &Localizer, key: String, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_KEY_CONTEXT, &[("key", key), ("tools", tools)]) }
+
+pub(crate) fn shortcut_brush_detail(l: &Localizer, tool: String) -> String { shortcut_format(l, MessageId::SHORTCUT_BRUSH_DETAIL, &[("tool", tool)]) }
+
+pub(crate) fn shortcut_context_empty(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CONTEXT_EMPTY, &[("tools", tools)]) }
+
+pub(crate) fn shortcut_key_unassigned(l: &Localizer, key: String) -> String { shortcut_format(l, MessageId::SHORTCUT_KEY_UNASSIGNED, &[("key", key)]) }
+
+pub(crate) fn shortcut_context_summary(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CONTEXT_SUMMARY, &[("tools", tools)]) }
+
+pub(crate) fn shortcut_list_and(l: &Localizer, rest: String, last: String) -> String { shortcut_format(l, MessageId::SHORTCUT_LIST_AND, &[("rest", rest), ("last", last)]) }
+
+fn shortcut_scope_overlap(l: &Localizer, key: String, action: String, scope: &BindingScope, instead: bool) -> String {
+    let (scope, tools) = match scope {
+        BindingScope::Application => ("application", String::new()),
+        BindingScope::Canvas => ("canvas", String::new()),
+        BindingScope::Tools { categories } => ("tools", categories.iter().map(|category| category.localized_label(l).to_string()).collect::<Vec<_>>().join(", ")),
+    };
+    shortcut_format(l, if instead { MessageId::SHORTCUT_SCOPE_INSTEAD } else { MessageId::SHORTCUT_SCOPE_ELSEWHERE }, &[("key", key), ("action", action), ("scope", scope.into()), ("tools", tools)])
 }

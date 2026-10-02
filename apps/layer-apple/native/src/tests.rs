@@ -939,7 +939,7 @@ fn bundled_library_refresh_waits_without_migrating_document_filters() {
         let mut definition = catalog.get("unsharp_mask").unwrap().clone();
         std::sync::Arc::make_mut(&mut definition.program).label = "Updated library".into();
         let package = layer_core::EffectPackage {
-            format: 1,
+            format: 2,
             categories: catalog.categories().to_vec(),
             filters: vec![definition],
         };

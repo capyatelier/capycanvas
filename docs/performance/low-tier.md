@@ -504,7 +504,7 @@ Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with t
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | 61.14 fresh updates/s (60.69–61.70); completion gap p99 28.98–29.50 ms | **Met for this stroke** |
+| G-Pen (1) | Simple | 1024 px | Pinned localization candidate: 66.27–67.26 fresh updates/s; fresh gap p99 ≤26.57 ms | Meets pinned stroke criteria; current successor unqualified |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |
@@ -695,3 +695,48 @@ Measured on 2026-09-29, three runs per brush on the tier photo, 512 px,
 Perceptual, Fit and Stats closed. Dependent painting queues until the healed
 raster publishes. The [responsiveness record](responsiveness.md#healing-finalization)
 contains the build, workload, tool-action limits and raw records.
+
+## Pinned localization comparison
+
+Measured on 2026-10-01 PDT / 2026-10-02 UTC on the TCL reference tablet.
+Baseline `271918681` is compared with source tree
+`e56742a57787e6bf8dd6da3f4fecadcc718657a6`. Release, unminified APK SHA-256:
+baseline `616b5b10d19eb4732d9631db122cbce49be7cf139fcdd3f61d24208e93ec36c8`,
+candidate `33e88926fd66491d437f8397af08755c2ae5e4832ac8aaf4b0d06ab38e124e48`.
+These observations do not qualify the later GPU-bounds successor.
+
+The 4248 × 2832 Sony photo has one empty paint layer, Perceptual blending,
+Fit zoom 15.97%, default Navigator and glass, Stats closed and 16 ms prediction.
+Three warmed ten-second OS stylus strokes use G-Pen 1024 px and a contained
+220 × 100 px trajectory. Camera, settings and visible layers match; painting
+thermal status is zero before and after each run.
+
+| Source sequence | Fresh completed updates/s | Maximum fresh gap p99 | Stroke criteria |
+| --- | --- | --- | --- |
+| Baseline | 66.89–67.32 | 26.56 ms | Met |
+| Candidate | 66.27–67.26 | 26.57 ms | Met |
+| Repeated baseline | 64.77–66.49 | 27.62 ms | Met |
+
+Candidate painting ranges overlap the baseline drift; no regression is
+demonstrated for this stroke. This does not qualify other brushes or scanout.
+
+Three warmed ten-second slider drags use the same photo, empty paint layer and
+Navigator, with Exposure on the photo or a Levels/Vibrance/Exposure chain.
+The identical test fixture uses the photo workload on both builds.
+
+| Numeric motion | Baseline UI Hz / maximum p99 | Candidate UI Hz / maximum p99 | Raw canvas completions/s, baseline → candidate |
+| --- | --- | --- | --- |
+| Exposure | 48.93–52.07 / 49.99 ms | 53.45–54.36 / 33.35 ms | 12.27–13.17 → 10.49–10.98 |
+| Chain Exposure | 59.11–59.62 / 33.32 ms | 59.32–59.62 / 16.73 ms | 8.49–10.28 → 7.28–9.18 |
+
+Direct Exposure misses the native UI floor on both builds. The chain meets
+native UI cadence, but fresh photo preview remains **unqualified**. Completion
+counts include Navigator, have no effect input/revision pairing and cannot
+establish preview freshness. All three direct candidate runs have fewer
+completions; sampled values and dynamic memory budgets also differ. Neither
+causal attribution nor harmlessness is established. Numeric thermal status was
+zero before each gesture; the final after-snapshot was not captured.
+
+Raw records and complete APK/test-fixture provenance are retained under
+`artifacts/reference-localization/`. The initial overflowing paint footprint
+and hidden-Navigator numeric attempts are excluded and retained separately.

@@ -14,6 +14,7 @@ struct Batch {
     target: Option<Weak<Workspace>>,
 }
 struct Launcher {
+    names: layer_core::DocumentNames,
     batches: RefCell<VecDeque<Batch>>,
     running: Cell<bool>,
     windows: Weak<RefCell<Vec<Rc<Workspace>>>>,
@@ -34,8 +35,9 @@ fn active(app: &adw::Application, windows: &[Rc<Workspace>]) -> Option<Rc<Worksp
                 .cloned()
         })
 }
-pub(crate) fn install(app: &adw::Application, windows: &Rc<RefCell<Vec<Rc<Workspace>>>>) {
+pub(crate) fn install(app: &adw::Application, windows: &Rc<RefCell<Vec<Rc<Workspace>>>>, names: layer_core::DocumentNames) {
     let launcher = Rc::new(Launcher {
+        names,
         batches: Default::default(),
         running: Cell::new(false),
         windows: Rc::downgrade(windows),
@@ -216,6 +218,11 @@ impl Launcher {
                 file,
                 settings.photo_open,
                 settings.new_document.defaults.color.space,
+                target.as_ref().map_or_else(|| {
+                    let mut names = self.names.clone();
+                    if !name.is_empty() { names.paint = name.clone().into(); }
+                    names
+                }, |w| layer_ui::photo_document_names(&name, &w.localization)),
             )
             .await;
             if let Some(w) = &target {

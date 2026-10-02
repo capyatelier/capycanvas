@@ -64,7 +64,7 @@ fn setup(extent: [u32; 2]) -> Layer {
     layer
 }
 fn filter(id: &layer_core::EffectDefinition) -> Layer {
-    let mut layer = Layer::paint(LayerId(2), id.label());
+    let mut layer = Layer::paint(LayerId(2), id.id());
     layer.kind = LayerKind::Effect;
     layer.effect = Some(Arc::new(id.preview().unwrap()));
     layer
@@ -140,7 +140,7 @@ fn runtime_manifest_loads_a_new_filter_and_its_preparation() {
         None,
     );
     let original = image(&mut r);
-    let mut layer = Layer::paint(LayerId(2), definition.label());
+    let mut layer = Layer::paint(LayerId(2), definition.id());
     layer.kind = LayerKind::Effect;
     layer.effect = Some(Arc::new(definition.preview().unwrap()));
     let mut layers = vec![layer, base];
@@ -182,12 +182,12 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
             output,
             original,
             "{} preview must demonstrate its effect",
-            id.label()
+            id.id()
         );
         assert!(
             output.chunks_exact(4).any(|p| p[3] > 0),
             "{} must not erase the image",
-            id.label()
+            id.id()
         );
         let program = &layers[0].effect.as_ref().unwrap().program;
         if program.kind == layer_core::EffectKind::Adjustment && program.alpha == EffectAlpha::Preserve {
@@ -197,17 +197,17 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
                     .zip(original.chunks_exact(4))
                     .all(|(a, b)| a[3] == b[3]),
                 "{} preserves alpha",
-                id.label()
+                id.id()
             );
         }
         let before = r.scene.as_ref().map_or([0, 0], |s| s.image_work());
         submit(&mut r, EXTENT, &layers, 20., false, false, None);
-        assert_eq!(image(&mut r), output, "{} frozen result", id.label());
+        assert_eq!(image(&mut r), output, "{} frozen result", id.id());
         assert_eq!(
             r.scene.as_ref().map_or([0, 0], |s| s.image_work()),
             before,
             "{} frozen frame does no image work",
-            id.label()
+            id.id()
         );
         layers[0].opacity = 0.;
         submit(&mut r, EXTENT, &layers, 20., false, true, None);
@@ -215,7 +215,7 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
             image(&mut r),
             original,
             "{} zero opacity is identity",
-            id.label()
+            id.id()
         );
         layers[0].opacity = 1.;
         layers[0].mask = Some(layer_core::LayerMask::reveal_all(
@@ -228,7 +228,7 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
             image(&mut r),
             original,
             "{} zero mask is identity",
-            id.label()
+            id.id()
         );
         layers[0].mask = None;
         layers[0].properties.clipped = true;
@@ -239,7 +239,7 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
                 .zip(original.chunks_exact(4))
                 .all(|(a, b)| a[3] == b[3]),
             "{} clipping preserves base coverage",
-            id.label()
+            id.id()
         );
         if layers[0].effect.as_ref().unwrap().program.time {
             Arc::make_mut(layers[0].effect.as_mut().unwrap())
@@ -249,7 +249,7 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
             let first = image(&mut r);
             submit(&mut r, EXTENT, &layers, 1., false, false, None);
             let second = image(&mut r);
-            assert_ne!(first, second, "{} animation must change pixels", id.label());
+            assert_ne!(first, second, "{} animation must change pixels", id.id());
         }
     }
 }

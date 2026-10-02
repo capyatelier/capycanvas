@@ -40,7 +40,7 @@ fn native_wide_color_gpu_failure_recovery() {
 
 fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::DocumentColor) {
     use layer_render::CanvasRenderer;
-    let mut project = new_drawing(384, 256).unwrap();
+    let mut project = new_drawing(384, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = color;
     project.document.blend_space = project.document.blend_space.for_depth(color.depth);
     let w = Workspace::with_project(app, Some((project, None)));

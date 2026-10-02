@@ -33,12 +33,11 @@ pub fn flattened_document(
     let mut source = builder.finish()?;
     source.kind = SourceKind::Rasterized;
     source.resolution = resolution;
-    let mut document = Document::new("Converted copy", extent[0], extent[1]);
+    let mut document = Document::new("Converted copy", extent[0], extent[1], layer_core::DocumentNames { paint: "Converted image".into(), paper: "".into() });
     document.color = color;
     document.blend_space = BlendSpace::Perceptual.for_depth(color.depth);
     document.resolution = resolution;
     document.layers.truncate(1);
-    document.layers[0].name = "Converted image".into();
     document.layers[0].source = Some(Arc::new(source));
     let project = Project { document };
     project.validate(Default::default())?;

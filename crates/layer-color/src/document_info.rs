@@ -111,7 +111,7 @@ mod tests {
     use super::*;
     #[test]
     fn properties_show_how_layers_blend() {
-        let mut document = Document::new("Properties", 64, 48);
+        let mut document = Document::new("Properties", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let rows = |document: &Document| DocumentInfo::capture(document).describe().unwrap();
         assert!(rows(&document).contains(&("Blending".into(), "Linear light".into())));
         document.blend_space = BlendSpace::Perceptual;

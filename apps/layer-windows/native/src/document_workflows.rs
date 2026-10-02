@@ -768,7 +768,7 @@ mod tests {
         gpu.finish_startup_cache();
         assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
         assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
-        let project = layer_ui::new_drawing(24, 18).unwrap();
+        let project = layer_ui::new_drawing(24, 18, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let master = directory.join("native-master.capy");
         project
             .write(std::fs::File::create(&master).unwrap())
@@ -877,7 +877,7 @@ mod tests {
                 std::fs::File::open(&path).unwrap(),
                 layer_ui::ImportIntent::Open,
                 Default::default(),
-                "Delivery",
+                layer_ui::photo_document_names("Delivery", &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)),
                 Default::default(),
                 Default::default(),
                 &Default::default(),

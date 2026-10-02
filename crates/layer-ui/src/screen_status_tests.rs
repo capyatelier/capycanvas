@@ -20,7 +20,7 @@ fn gnome(mode: &str) -> layer_color::screen::ScreenColor {
 }
 
 fn screen_session(space: layer_core::color::RgbSpace, depth: layer_core::color::SampleDepth) -> UiSession<Recorder> {
-    let mut document = Document::new("Screen", 32, 32);
+    let mut document = Document::new("Screen", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color.space = space;
     document.color.depth = depth;
     UiSession::new(Recorder { color: document.color, ..Default::default() }, document, [32, 32], Platform::Gtk).unwrap()

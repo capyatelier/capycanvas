@@ -4,7 +4,7 @@ use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 
 fn half_green_drawing() -> layer_core::Project {
-    let mut project = new_drawing(96, 64).unwrap();
+    let mut project = new_drawing(96, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
     let mut source = SourceBuilder::new(
         [96, 64],
@@ -188,7 +188,7 @@ fn native_screen_status_gallery() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "../../artifacts/screen-status/gtk-gallery".into());
     std::fs::create_dir_all(&output).unwrap();
-    let mut project = new_drawing(96, 64).unwrap();
+    let mut project = new_drawing(96, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
     let mut source = SourceBuilder::new(
         [96, 64],

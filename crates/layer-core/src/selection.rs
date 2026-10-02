@@ -415,7 +415,7 @@ mod selection_tests {
 
     #[test]
     fn saved_selection_roundtrip_and_working_copy_are_independent() {
-        let mut editor = Editor::new(Document::new("saved coverage", 64, 64));
+        let mut editor = Editor::new(Document::new("saved coverage", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         let id = editor.allocate_layer_id();
         let original = soft_mask();
         let mut layer = Layer::selection(id, "Hair", original.clone());
@@ -476,7 +476,7 @@ mod selection_tests {
 
     #[test]
     fn saved_selection_resolves_group_placement_and_checks_ancestor_locks() {
-        let mut doc = Document::new("group coverage", 64, 64);
+        let mut doc = Document::new("group coverage", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let group_id = doc.allocate_layer_id();
         let mut group = Layer::paint(group_id, "Character");
         group.kind = LayerKind::Group;
@@ -520,7 +520,7 @@ mod selection_tests {
 
     #[test]
     fn selection_nodes_reject_artwork_and_project_limits_include_saved_coverage() {
-        let mut doc = Document::new("validation", 64, 64);
+        let mut doc = Document::new("validation", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let id = doc.allocate_layer_id();
         let layer = Layer::selection(id, "Region", soft_mask());
         for mutate in [
@@ -544,7 +544,7 @@ mod selection_tests {
                 })
                 .is_err()
         );
-        let mut old = serde_json::to_value(Document::new("old", 64, 64)).unwrap();
+        let mut old = serde_json::to_value(Document::new("old", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() })).unwrap();
         for layer in old["layers"].as_array_mut().unwrap() {
             layer.as_object_mut().unwrap().remove("selection");
         }
@@ -556,7 +556,7 @@ mod selection_tests {
 
     #[test]
     fn saved_rows_do_not_interrupt_artwork_clipping_or_accept_raster_edits() {
-        let mut doc = Document::new("clipping", 64, 64);
+        let mut doc = Document::new("clipping", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let saved = doc.allocate_layer_id();
         doc.apply(Edit::InsertLayer {
             index: 0,
@@ -716,7 +716,7 @@ mod refinement_tests {
     #[test]
     fn refined_selections_keep_original_undo_and_final_redo() {
         for target in [SelectionTarget::Current,SelectionTarget::Saved(LayerId(3))] {
-            let mut doc=Document::new("refine",4,1);
+            let mut doc=Document::new("refine",4,1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             doc.layers.push(Layer::selection(LayerId(3),"Mask",Selection::empty()));
             let original=doc.clone();let mut editor=Editor::new(doc);
             editor.perform(editor.document().selection_edit(target,mask(0xff000000)).unwrap()).unwrap();
@@ -736,7 +736,7 @@ mod refinement_tests {
     }
     #[test]
     fn refinement_rejects_stale_revision_and_undo_branches() {
-        let mut editor=Editor::new(Document::new("refine",4,1));
+        let mut editor=Editor::new(Document::new("refine",4,1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         editor.perform(Edit::SetSelection(Some(mask(0xff)))).unwrap();
         let revision=editor.document().revision;
         editor.perform(Edit::SetSelection(None)).unwrap();
@@ -749,7 +749,7 @@ mod refinement_tests {
     #[test]
     fn withdrawn_refinements_leave_no_history() {
         for target in [SelectionTarget::Current,SelectionTarget::Saved(LayerId(3))] {
-            let mut doc=Document::new("refine",4,1);
+            let mut doc=Document::new("refine",4,1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             doc.layers.push(Layer::selection(LayerId(3),"Mask",mask(0xff)));
             doc.selection=Some(mask(0xff00));
             let mut editor=Editor::new(doc);

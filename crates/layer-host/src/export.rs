@@ -248,7 +248,7 @@ mod tests {
     use std::io::Cursor;
 
     fn export(pixel: [f32; 4]) -> (NativeHost, ExportTask) {
-        let mut document = layer_core::Document::new("Export", 8, 6);
+        let mut document = layer_core::Document::new("Export", 8, 6, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color.depth = SampleDepth::F32;
         let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn webp_export_writes_lossless_rgba_and_refuses_encoder_limits() {
-        let mut document = layer_core::Document::new("Export", 8, 6);
+        let mut document = layer_core::Document::new("Export", 8, 6, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.resolution = Some(layer_core::ImageResolution::ppi(240));
         let artist_and_gps = [
             b"II\x2a\0\x08\0\0\0\x02\0".as_slice(),

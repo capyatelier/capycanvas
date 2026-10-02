@@ -39,14 +39,10 @@ fn native_contact_brushes() {
         .enumerate()
     {
         let id = preset as u32;
-        let category = layer_ui::brush_catalog()
+        let group = layer_ui::brush_catalog()
             .find(|b| b.id == id)
             .unwrap()
-            .category;
-        let group = layer_ui::ToolGroup::ALL
-            .into_iter()
-            .find(|group| group.label() == category)
-            .unwrap();
+            .group;
         w.dispatch(UiAction::Invoke {
             command: group.tool().command(),
         });

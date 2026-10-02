@@ -90,7 +90,7 @@ fn assert_gradient_pixels(w: &Rc<Workspace>, bar: &gtk::Widget, stops: &[Gradien
 fn native_effect_colors_gradients_and_retained_controls() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.EffectColors");
-    let mut project = new_drawing(128, 128).unwrap();
+    let mut project = new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,

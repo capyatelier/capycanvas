@@ -33,39 +33,53 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   const cancel=(footer,finish)=>footer.append(button("Cancel",()=>finish(null)));
   const proof=createProof({app,dialog,element,button,icon,applyChange,wake,dispatch,contentChanged});
   async function newDocument() {
-    const spec=app.editor_models(innerWidth,innerHeight).document_options,model=spec.creation;
-    return dialog(spec.new_title,(form,finish)=>{
-      const field=(title,node)=>{const label=element("label","document-size",title);node.setAttribute("aria-label",title);label.append(node);form.append(label);return node;};
-      const select=(title,choices,value)=>{const node=element("select");for(const [id,label] of choices){const option=element("option","",label);option.value=id;node.append(option);}node.value=value;return field(title,node);};
-      const preset=select("Preset",[["custom","Custom"],...model.presets.map((p,i)=>[String(i),p.name])],"custom");
+    const spec=app.editor_models(innerWidth,innerHeight).document_options;
+    let model=spec.creation;
+    return dialog(model.text.new_title,(form,finish)=>{
+      const field=(id,title,node)=>{const label=element("label","document-size",title);node.dataset.documentField=id;node.setAttribute("aria-label",title);label.append(node);form.append(label);return node;};
+      const select=(id,title,choices,value)=>{const node=element("select");for(const [key,label] of choices){const option=element("option","",label);option.value=key;node.append(option);}node.value=value;return field(id,title,node);};
+      const presetKey=id=>id?JSON.stringify(id):"custom";
+      const preset=select("preset",model.text.preset,[["custom",model.text.custom],...model.presets.map(p=>[presetKey(p.id),p.name])],presetKey(model.selected));
+      const selectedPreset=()=>model.presets.find(p=>presetKey(p.id)===preset.value);
+      const remove=button(model.text.remove_preset,()=>{const action=selectedPreset()?.remove;if(!action)return;
+        applyChange(app.dispatch({type:"new_document_preferences",action}));
+        model=app.editor_models(innerWidth,innerHeight).document_options.creation;
+        preset.replaceChildren(...[["custom",model.text.custom],...model.presets.map(p=>[presetKey(p.id),p.name])].map(([key,label])=>{const option=element("option","",label);option.value=key;return option;}));
+        preset.value="custom";remove.disabled=true;
+      });remove.dataset.documentAction="remove-preset";remove.disabled=!selectedPreset()?.remove;form.append(remove);
       const fields=model.options.extent.map((value,i)=>{
-        const input=element("input");Object.assign(input,{type:"number",min:1,max:spec.max_dimension,step:1,value,required:true});
-        return field(i?spec.height_label:spec.width_label,input);
+        const input=element("input");Object.assign(input,{type:"number",min:spec.min_dimension,max:spec.max_dimension,step:1,value,required:true});
+        return field(i?"height":"width",i?model.text.height:model.text.width,input);
       });
-      const space=select("Color space",model.spaces,model.options.color.space);
-      const depth=select("Bit depth",[["U8","8-bit SDR"],["U16","16-bit SDR"],["F16","16-bit float HDR"],["F32","32-bit float HDR"]],model.options.color.depth);
-      const blending=select(model.blending.label,model.blending.choices.map(c=>[c.id,c.label]),model.options.blend_space);
+      const space=select("space",model.text.space,model.spaces,model.options.color.space);
+      const depth=select("depth",model.text.depth,model.depths,model.options.color.depth);
+      const blending=select("blending",model.blending.label,model.blending.choices.map(c=>[c.id,c.label]),model.options.blend_space);
       const blendingNote=element("p","document-note");form.append(blendingNote);
+      const summary=element("p","document-color-summary"),note=element("p","document-color-note");form.append(summary,note);
+      const background=select("background",model.text.background,model.backgrounds,model.options.background);
       let chosen=model.options.blend_space;
-      const describeBlending=()=>{
-        const linear=model.blending.linear_only.includes(depth.value);
-        blending.disabled=linear;blending.value=linear?"Linear":chosen;
-        blendingNote.textContent=linear?model.blending.float_reason:model.blending.choices.find(c=>c.id===blending.value).description;
-      };
-      blending.onchange=()=>{chosen=blending.value;describeBlending();};
-      depth.addEventListener("change",describeBlending);
-      describeBlending();
-      const background=select("Background",[["White","White"],["Transparent","Transparent"]],model.options.background);
       const read=()=>({extent:fields.map(i=>Number(i.value)),color:{space:space.value,depth:depth.value},background:background.value,blend_space:chosen});
-      preset.onchange=()=>{const p=model.presets[Number(preset.value)];if(!p)return;fields.forEach((f,i)=>f.value=p.options.extent[i]);space.value=p.options.color.space;depth.value=p.options.color.depth;background.value=p.options.background;chosen=p.options.blend_space;describeBlending();};
-      const name=field("Save as preset",element("input"));name.maxLength=64;name.placeholder="Optional name";
-      const remember=element("input");remember.type="checkbox";field("Use as defaults",remember);
+      const describe=()=>{if(!fields.every(input=>input.validity.valid))return;const appearance=app.new_document_appearance(read());
+        blending.disabled=!appearance.blending_editable;blending.value=appearance.blending;
+        blendingNote.textContent=appearance.blending_help;summary.textContent=appearance.summary;
+        note.textContent=appearance.note??"";note.hidden=appearance.note==null;
+      };
+      const edited=()=>{preset.value="custom";remove.disabled=true;};
+      for(const input of fields){input.addEventListener("input",edited);input.addEventListener("change",describe);}
+      for(const input of [space,depth,background])input.addEventListener("change",()=>{edited();describe();});
+      blending.onchange=()=>{chosen=blending.value;edited();describe();};
+      preset.onchange=()=>{const p=selectedPreset();remove.disabled=!p?.remove;if(!p)return;
+        fields.forEach((f,i)=>f.value=p.options.extent[i]);space.value=p.options.color.space;depth.value=p.options.color.depth;background.value=p.options.background;chosen=p.options.blend_space;describe();
+      };
+      describe();
+      const name=field("preset-name",model.text.preset_name,element("input"));name.maxLength=64;
+      const remember=element("input");remember.type="checkbox";field("remember",model.text.remember,remember);
       const error=element("p","error-message");form.append(error);
-      const footer=element("footer");cancel(footer,finish);
-      const create=button("Create",()=>{if(!form.reportValidity())return;const options=read();try{
+      const footer=element("footer"),cancelNew=button(model.text.cancel,()=>finish(null));cancelNew.dataset.documentAction="cancel";footer.append(cancelNew);
+      const create=button(model.text.create,()=>{if(!form.reportValidity())return;const options=read();try{
         applyChange(app.dispatch({type:"new_document_preferences",action:{type:"remember",options,name:name.value,defaults:remember.checked}}));
         finish(options);
-      }catch(e){error.textContent=String(e);}},"suggested-action");
+      }catch(e){error.textContent=String(e);}},"suggested-action");create.dataset.documentAction="create";
       footer.append(create);form.append(footer);form.onsubmit=e=>{e.preventDefault();create.click();};
     });
   }

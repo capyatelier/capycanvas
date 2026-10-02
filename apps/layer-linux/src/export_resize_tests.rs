@@ -14,7 +14,7 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
         .join(std::process::id().to_string());
     std::fs::create_dir_all(&output).unwrap();
     let output = output.canonicalize().unwrap();
-    let mut project = new_drawing(192, 128).unwrap();
+    let mut project = new_drawing(192, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
@@ -347,7 +347,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     library.save("Lab RGB", custom.clone()).unwrap();
     library.remember(0, ExportRecipe::web_share().draft(layer_ui::ExportDraftAction::Format(layer_ui::ExportFormat::JpegHdr)).recipe).unwrap();
     std::fs::write(&path, library.encode().unwrap()).unwrap();
-    let w = Workspace::with_project(&app, Some((new_drawing(64, 48).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     ready(&w);
     let master = snapshot(&w);
@@ -520,7 +520,7 @@ fn native_export_webp_to_a_prechosen_file() {
         .join(std::process::id().to_string());
     std::fs::create_dir_all(&output).unwrap();
     let output = output.canonicalize().unwrap();
-    let mut project = new_drawing(192, 128).unwrap();
+    let mut project = new_drawing(192, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.resolution = Some(layer_core::ImageResolution::ppi(144));
     for paper in project.document.layers.iter_mut().filter(|l| l.kind == layer_core::LayerKind::Background) {
         paper.visible = false;
@@ -695,6 +695,7 @@ fn native_export_keeps_camera_lens_and_copyright_without_location() {
         &camera,
         layer_ui::DocumentLocation { uri: gtk::gio::File::for_path(&camera).uri().into(), name: "camera.jpg".into() },
         Default::default(),
+        layer_ui::photo_document_names("camera.jpg", &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)),
         Default::default(),
     )
     .unwrap();

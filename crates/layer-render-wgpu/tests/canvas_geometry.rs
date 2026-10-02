@@ -14,7 +14,7 @@ fn geometry(origin: [i32; 2], size: [u32; 2]) -> CanvasGeometry {
 /// Two painted layers across tile boundaries, the upper one masked by a
 /// selection so its mask offset and initial coverage are exercised too.
 fn painted() -> (Engine, InputProducer<PenEvent>) {
-    let mut doc = Document::new("canvas geometry", SIZE[0], SIZE[1]);
+    let mut doc = Document::new("canvas geometry", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let upper = doc.allocate_layer_id();
     let mut layer = Layer::paint(upper, "Upper");
     let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), Point::default());
@@ -107,7 +107,7 @@ fn painting_reaches_a_new_strip_on_the_left_and_top() {
 
 #[test]
 fn a_placed_photo_crops_as_metadata_and_never_rebases() {
-    let mut doc = Document::new("photo geometry", SIZE[0], SIZE[1]);
+    let mut doc = Document::new("photo geometry", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.layers[0].source = Some(color::source::rgba8_source(SIZE, |x, y| {
         [(x * 5 % 256) as u8, (y * 3 % 256) as u8, ((x ^ y) % 256) as u8, 255]
     }));
@@ -130,7 +130,7 @@ fn a_placed_photo_crops_as_metadata_and_never_rebases() {
 fn deleting_cropped_pixels_leaves_nothing_hidden_to_reveal() {
     let (mut engine, _input) = painted();
     let original = image(&mut engine, 3_000_000_000);
-    let (mut blank_engine, _) = self::engine(Document::new("blank", SIZE[0], SIZE[1]));
+    let (mut blank_engine, _) = self::engine(Document::new("blank", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
     let blank = image(&mut blank_engine, 0);
     let delete = CanvasGeometry { delete_outside: true, ..geometry([50, 30], [200, 150]) };
     engine.apply_canvas_geometry(&delete).unwrap();
@@ -159,7 +159,7 @@ fn deleting_cropped_pixels_leaves_nothing_hidden_to_reveal() {
 /// Two smooth gradients, so interpolation differs from the oracle by less
 /// than a code, with the paper hidden so coverage shows in alpha.
 fn gradients() -> (Engine, InputProducer<PenEvent>) {
-    let mut doc = Document::new("straighten", SIZE[0], SIZE[1]);
+    let mut doc = Document::new("straighten", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let upper = doc.allocate_layer_id();
     doc.layers.insert(0, Layer::paint(upper, "Upper"));
     doc.layers.last_mut().unwrap().visible = false;
@@ -262,7 +262,7 @@ fn straightening_matches_a_cpu_rotation_and_keeps_the_hidden_corners() {
 
 #[test]
 fn straightening_turns_a_placed_photo_without_resampling_its_pixels() {
-    let mut doc = Document::new("photo straighten", SIZE[0], SIZE[1]);
+    let mut doc = Document::new("photo straighten", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.layers[0].source = Some(color::source::rgba8_source(SIZE, |x, y| {
         [(60 + x / 3) as u8, (40 + y / 2) as u8, (200 - (x + y) / 6) as u8, 255]
     }));
@@ -317,7 +317,7 @@ fn settled(engine: &mut Engine, time: u64) {
 #[test]
 fn resizing_a_whole_layer_leaves_no_vacated_tiles() {
     let extent = [6000, 4000];
-    let doc = Document::new("24 MP resize", extent[0], extent[1]);
+    let doc = Document::new("24 MP resize", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let paint = doc.layers[0].id;
     let (mut engine, _input) = engine(doc);
     engine
@@ -348,7 +348,7 @@ fn resizing_a_whole_layer_leaves_no_vacated_tiles() {
 
 /// A non-square drawing on a layer moved left of the canvas, with a mask.
 fn oriented_fixture() -> (Engine, InputProducer<PenEvent>, LayerId) {
-    let mut doc = Document::new("orientation", SIZE[0], SIZE[1]);
+    let mut doc = Document::new("orientation", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let upper = doc.allocate_layer_id();
     let mut layer = Layer::paint(upper, "Upper");
     layer.properties.offset = Point { x: -256., y: 0. };

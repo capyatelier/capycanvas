@@ -485,7 +485,7 @@ fn published_disabled_reasons_match_command_disabled_reason() {
     assert_published_reasons(&mut s, "paper");
     let reasons: Vec<_> = s.state.commands.iter().filter_map(|c| c.disabled_reason.as_deref()).collect();
     assert!(reasons.contains(&"Nothing to undo"));
-    assert!(reasons.contains(&super::notices::NO_REFERENCE_BELOW));
+    assert!(reasons.contains(&s.localization().text(super::notices::NO_REFERENCE_BELOW).as_ref()));
     s.dispatch(UiAction::SelectLayer { id: 1 }).unwrap();
     s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 1, value: true } }).unwrap();
     assert_published_reasons(&mut s, "locked");
@@ -559,7 +559,94 @@ fn apply_mask_explains_group_and_effect_masks() {
     assert_eq!(entry.label, "Apply mask to layer", "the Layer menu routes the active layer's Apply to the command");
     assert_eq!(s.dispatch(command).unwrap_err(), error);
     assert_eq!(
-        art_layers::apply_mask_refusal(LayerKind::Effect),
+        art_layers::apply_mask_refusal(LayerKind::Effect, s.localization()).as_deref(),
         Some("An effect layer's mask sets where the effect shows; it can't be applied")
     );
+}
+
+#[test]
+fn command_search_matches_active_and_canonical_labels_with_stable_ids() {
+    let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk,
+        Localizer::shared(UiLanguage::Japanese)).unwrap();
+    invoke(&mut s, CommandId::SearchCommands);
+    for query in ["元に戻す", "undo", "ＵＮＤＯ"] {
+        search_action(&mut s, CommandSearchAction::Query { text: query.into() });
+        let results = &s.state.command_search.as_ref().unwrap().results;
+        let undo = results.iter().find(|row| row.id == "command.undo").unwrap();
+        assert_eq!(undo.label, "元に戻す");
+    }
+    let catalog = s.command_catalog();
+    assert!(catalog.iter().any(|row| row.category == "ブラシ"));
+    for query in ["brush", "ブラシ"] {
+        search_action(&mut s, CommandSearchAction::Query { text: query.into() });
+        assert!(s.state.command_search.as_ref().unwrap().results.iter().all(|row| row.category != "ブラシ"));
+    }
+}
+
+#[test]
+fn disabled_command_reasons_retain_cached_labels_across_refreshes() {
+    let mut s = session(Platform::Gtk);
+    let cached = s.localization().text(MessageId::COMMANDS_NOTHING_TO_UNDO);
+    assert!(std::sync::Arc::ptr_eq(&cached, &s.disabled_reason_unchecked(CommandId::Undo)));
+    for _ in 0..2 {
+        s.refresh_commands();
+        let undo = s.state.commands.iter().find(|command| command.id == CommandId::Undo).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&cached, undo.disabled_reason.as_ref().unwrap()));
+        assert_eq!(serde_json::to_value(undo).unwrap()["disabled_reason"], "Nothing to undo");
+    }
+}
+
+#[test]
+fn static_refusal_providers_retain_cached_reasons_before_published_comparison() {
+    fn shared(left: Option<std::sync::Arc<str>>, right: Option<std::sync::Arc<str>>) {
+        assert!(std::sync::Arc::ptr_eq(&left.unwrap(), &right.unwrap()));
+    }
+    let mut s = session(Platform::Gtk);
+    for command in [CommandId::GrowSelection, CommandId::ShrinkSelection, CommandId::FeatherSelection,
+        CommandId::BorderSelection, CommandId::SmoothSelection, CommandId::CropCanvasToSelection,
+        CommandId::PasteInto, CommandId::TransformSelectionOutline, CommandId::UseReferenceBelow,
+        CommandId::ClearSelected, CommandId::ClearOutside, CommandId::CutSelectionToLayer,
+        CommandId::RevertToOriginal, CommandId::MergeGroup, CommandId::StraightenToGuide] {
+        assert!(!s.command(command).enabled, "{command:?}");
+        let direct = s.disabled_reason_unchecked(command);
+        assert!(std::sync::Arc::ptr_eq(&direct, &s.disabled_reason_unchecked(command)), "{command:?}");
+        s.refresh_commands();
+        let published = s.state.commands.iter().find(|state| state.id == command).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&direct, published.disabled_reason.as_ref().unwrap()), "{command:?}");
+    }
+    s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
+    shared(s.copy_refusal(CommandId::Copy), s.copy_refusal(CommandId::Copy));
+    shared(s.separation_refusal(), s.separation_refusal());
+    shared(art_layers::apply_mask_refusal(LayerKind::Group, s.localization()),
+        art_layers::apply_mask_refusal(LayerKind::Group, s.localization()));
+    invoke(&mut s, CommandId::QuickMask);
+    shared(s.canvas_geometry_refusal(), s.canvas_geometry_refusal());
+    shared(s.dodge_burn_refusal(), s.dodge_burn_refusal());
+    shared(s.copy_refusal(CommandId::Copy), s.copy_refusal(CommandId::Copy));
+    shared(s.clear_refusal(), s.clear_refusal());
+    let mut s = filled_selection_session();
+    invoke(&mut s, CommandId::ScaleRotate);
+    assert!(std::sync::Arc::ptr_eq(&s.operation_refusal(), &s.operation_refusal()));
+    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.color.depth = layer_core::color::SampleDepth::F32;
+    let renderer = Recorder { color: document.color, ..Default::default() };
+    let s = UiSession::new(renderer, document, [256, 256], Platform::Gtk).unwrap();
+    shared(s.blending_refusal(), s.blending_refusal());
+}
+
+#[test]
+fn toolbar_visibility_search_projects_default_and_literal_custom_titles() {
+    let localization = Localizer::shared(UiLanguage::Japanese);
+    let mut session = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, localization.clone()).unwrap();
+    let descriptor = |session: &UiSession<Recorder>| {
+        let identity = command_catalog::identity(&UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: Panel::Toolbar, visible: true } });
+        session.command_catalog().into_iter().find(|entry| entry.id == identity).unwrap().label
+    };
+    assert!(descriptor(&session).contains("ツール"));
+    session.dispatch(UiAction::Customize { action: CustomizationAction::RenameToolbar { panel: Panel::Toolbar } }).unwrap();
+    session.dispatch(UiAction::Customize { action: CustomizationAction::ToolbarName { name: "Tools 日本語 {literal}".into() } }).unwrap();
+    session.dispatch(UiAction::Customize { action: CustomizationAction::ConfirmToolbar }).unwrap();
+    assert!(descriptor(&session).contains("Tools 日本語 {literal}"));
+    invoke(&mut session, CommandId::UndoWorkspace);
+    assert!(descriptor(&session).contains("ツール"));
 }

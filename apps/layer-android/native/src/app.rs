@@ -31,7 +31,7 @@ impl App {
             )),
         })?;
         Ok(Self {
-            window: Default::default(),
+            window: crate::document_tabs::Window::localized(host.session.localization()),
             tone: Default::default(),
             host,
             workspaces: None,

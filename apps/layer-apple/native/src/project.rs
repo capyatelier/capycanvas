@@ -446,7 +446,7 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
         let context = environment.as_ref().ok_or("This open task has already run")?;
         match input {
             Input::New(options) => *imported = Some(layer_ui::ImportedDocument {
-                project: options.unwrap_or(context.new_options).project()?,
+                project: options.unwrap_or(context.new_options).project(&context.localization)?,
                 source: layer_ui::ImportSource::Master,
             }),
             Input::File(fd) => {

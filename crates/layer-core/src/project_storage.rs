@@ -14,12 +14,12 @@ use photo_metadata::MetadataIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x0c\0";
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x0d\0";
 /// Version 8 has no stored layer extents, versions before 10 no photo
 /// metadata, versions before 11 no blend space and versions before 12 no
 /// filter spaces; those files read with none, and Linear blending.
-const READABLE: [&[u8; 12]; 5] =
-    [b"CAPYRASTER\x08\0", b"CAPYRASTER\x09\0", b"CAPYRASTER\x0a\0", b"CAPYRASTER\x0b\0", MAGIC];
+const READABLE: [&[u8; 12]; 6] =
+    [b"CAPYRASTER\x08\0", b"CAPYRASTER\x09\0", b"CAPYRASTER\x0a\0", b"CAPYRASTER\x0b\0", b"CAPYRASTER\x0c\0", MAGIC];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -476,8 +476,44 @@ mod tests {
         assert!(read(&sources).is_err());
         bytes[10] = 7;
         assert!(read(&bytes).is_err());
-        bytes[10] = 13;
+        bytes[10] = 14;
         assert!(read(&bytes).is_err());
+    }
+
+    #[test]
+    fn published_version_12_choices_and_pixels_resave_unchanged() {
+        let bytes = include_bytes!("../tests/fixtures/published-v12-choice.capy");
+        assert_eq!(&bytes[..12], b"CAPYRASTER\x0c\0");
+        let project = Project::read(bytes.as_slice(), Default::default()).unwrap();
+        assert_eq!(project.document.layers[0].name.as_ref(), "  My curves { $name } 한글 🎨  ");
+        assert_eq!(project.document.layers[1].name.as_ref(), "  Current ink { $name } 漢字 🖌️\u{2068}literal\u{2069}  ");
+        let effect = project.document.layers[0].effect.as_ref().unwrap();
+        assert_eq!(effect.program.label, ResourceLabel::from("Curves"));
+        assert_eq!(effect.choice("domain"), Some("Log HDR"));
+        let parameter = effect.program.parameters.iter().find(|p| p.key.as_ref() == "domain").unwrap();
+        let EffectParameterKind::Choice { options } = &parameter.kind else { panic!() };
+        assert!(options.iter().all(|o| matches!(o, EffectOption::Literal(_))));
+        let mut rows = project.document.layers[1].source.as_ref().unwrap().rows();
+        let mut row = [0; 8];
+        for y in 0..2 { rows.read(y, &mut row).unwrap(); assert_eq!(row, [10,20+y as u8*60,30,255,60,20+y as u8*60,30,255]); }
+        let mut saved = Vec::new(); project.write(&mut saved).unwrap();
+        assert_eq!(&saved[..12], MAGIC);
+        assert_eq!(Project::read(saved.as_slice(), Default::default()).unwrap(), project);
+        let mut explicit = project.clone();
+        let effect = Arc::make_mut(explicit.document.layers[0].effect.as_mut().unwrap());
+        let program = Arc::make_mut(&mut effect.program);
+        program.label = ResourceLabel::Message { message: "resources-filter-curves".into() };
+        let parameters = Arc::make_mut(&mut program.parameters);
+        let parameter = parameters.iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
+        let EffectParameterKind::Choice { options } = &mut parameter.kind else { panic!() };
+        Arc::make_mut(options)[1] = EffectOption::Labeled { value: "Log HDR".into(), label: ResourceLabel::Message { message: "resources-choice-curves-domain-log-hdr".into() } };
+        let values = effect.values.clone();
+        saved.clear(); explicit.write(&mut saved).unwrap();
+        let reopened = Project::read(saved.as_slice(), Default::default()).unwrap();
+        assert_eq!(reopened, explicit);
+        assert_eq!(reopened.document.layers[0].name, project.document.layers[0].name);
+        assert_eq!(reopened.document.layers[1], project.document.layers[1]);
+        assert_eq!(reopened.document.layers[0].effect.as_ref().unwrap().values, values);
     }
 
     #[test]
@@ -708,7 +744,7 @@ mod tests {
         }
     }
     fn fixture() -> Project {
-        let mut document = Document::new("raster fixture", 512, 256);
+        let mut document = Document::new("raster fixture", 512, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let descriptor = RasterPlane::Color.descriptor(document.color);
         let tile = RasterTile::backed(
             TileBlob::encode(

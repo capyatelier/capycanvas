@@ -1,5 +1,6 @@
 //! Pure effect descriptions and parameters. No graphics API or UI widget types.
 use crate::color::{RgbColor, RgbSpace};
+use crate::effect_catalog::ResourceLabel;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -101,7 +102,7 @@ pub enum EffectResolution {
 pub struct EffectProgram {
     pub abi: u32,
     pub id: Arc<str>,
-    pub label: Arc<str>,
+    pub label: ResourceLabel,
     pub kind: EffectKind,
     #[serde(default)]
     pub alpha: EffectAlpha,
@@ -203,12 +204,24 @@ pub enum EffectConstraint {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectParameter {
     pub key: Arc<str>,
-    pub label: Arc<str>,
+    pub label: ResourceLabel,
     /// Consecutive parameters in the same section share one heading/divider.
     #[serde(default)]
-    pub section: Option<Arc<str>>,
+    pub section: Option<ResourceLabel>,
     pub kind: EffectParameterKind,
     pub default: EffectValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum EffectOption {
+    Literal(Arc<str>),
+    Labeled { value: Arc<str>, label: ResourceLabel },
+}
+impl EffectOption {
+    pub fn value(&self) -> &str {
+        match self { Self::Literal(value) | Self::Labeled { value, .. } => value }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -223,7 +236,7 @@ pub enum EffectParameterKind {
     },
     Toggle,
     Choice {
-        options: Arc<[Arc<str>]>,
+        options: Arc<[EffectOption]>,
     },
     Color,
     Curve,
@@ -308,7 +321,7 @@ impl EffectInstance {
         let i = self.program.parameters.iter().position(|p| &*p.key == key)?;
         match (&self.program.parameters[i].kind, &self.values[i]) {
             (EffectParameterKind::Choice { options }, EffectValue::Choice(v)) => {
-                options.get(*v as usize).map(|o| &**o)
+                options.get(*v as usize).map(EffectOption::value)
             }
             _ => None,
         }
@@ -323,14 +336,20 @@ impl EffectInstance {
             program,
         }
     }
-    /// Runtime schema replacement preserves compatible values by key, not by
-    /// position. New or individually incompatible fields use their defaults.
+    /// Runtime schema replacement preserves parameters by key and choices by
+    /// stable value. New or individually incompatible fields use their defaults.
     /// Conflicting joint constraints reject publication instead of silently
     /// changing otherwise valid user values.
     pub fn rebind(&self, program: Arc<EffectProgram>) -> Result<Self, &'static str> {
         let mut next = Self::new(program);
         for (parameter, value) in next.program.parameters.iter().zip(&mut next.values) {
-            if let Some(old) = self.value(&parameter.key)
+            if let EffectParameterKind::Choice { options } = &parameter.kind {
+                if let Some(index) = self.choice(&parameter.key)
+                    .and_then(|selected| options.iter().position(|option| option.value() == selected))
+                {
+                    *value = EffectValue::Choice(index as u32);
+                }
+            } else if let Some(old) = self.value(&parameter.key)
                 && parameter.validate(old).is_ok()
             {
                 *value = old.clone();
@@ -345,6 +364,7 @@ impl EffectInstance {
             return Err("Empty or oversized effect shader");
         }
         if self.program.abi != EFFECT_ABI
+            || !self.program.label.valid(256)
             || self.program.passes.len() > 8
             || self.program.parameters.len() > 64
             || self.program.constraints.len() > 128
@@ -540,9 +560,8 @@ impl EffectParameter {
     pub fn validate(&self, value: &EffectValue) -> Result<(), &'static str> {
         if self.key.is_empty()
             || self.key.len() > 128
-            || self.label.is_empty()
-            || self.label.len() > 256
-            || self.section.as_ref().is_some_and(|s| s.len() > 256)
+            || !self.label.valid(256)
+            || self.section.as_ref().is_some_and(|s| !s.valid(256))
         {
             return Err("Invalid effect parameter metadata");
         }
@@ -570,7 +589,10 @@ impl EffectParameter {
             (EffectParameterKind::Choice { options }, EffectValue::Choice(v)) => {
                 (*v as usize) < options.len()
                     && options.len() <= 256
-                    && options.iter().all(|o| !o.is_empty() && o.len() <= 256)
+                    && options.iter().enumerate().all(|(index, option)|
+                        !option.value().is_empty() && option.value().len() <= 256
+                        && match option { EffectOption::Literal(_) => true, EffectOption::Labeled { label, .. } => label.valid(256) }
+                        && options[..index].iter().all(|other| other.value() != option.value()))
             }
             (EffectParameterKind::Color, EffectValue::Color(c)) => valid_color(c),
             (EffectParameterKind::Curve, EffectValue::Curve(p)) => {
@@ -931,19 +953,65 @@ mod tests {
         assert_eq!(rebound.value("white"), instance.value("white"));
     }
     #[test]
+    fn literal_choice_metadata_preserves_its_value_and_wire_shape() {
+        let mut program = (*fixture("curves").program()).clone();
+        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
+        parameter.kind = EffectParameterKind::Choice { options: [
+            EffectOption::Literal("Encoded RGB".into()), EffectOption::Literal("Log HDR".into()),
+        ].into() };
+        let mut instance = EffectInstance::new(Arc::new(program));
+        instance.set("domain", EffectValue::Choice(1)).unwrap();
+        let encoded = serde_json::to_string(&instance).unwrap();
+        let wire: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(wire["program"]["parameters"][4]["kind"]["options"], serde_json::json!(["Encoded RGB", "Log HDR"]));
+        let copy: EffectInstance = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(copy, instance);
+        assert_eq!(copy.choice("domain"), Some("Log HDR"));
+        let literal: EffectOption = serde_json::from_str(r#""我的 { $name } 🎨""#).unwrap();
+        assert_eq!(literal.value(), "我的 { $name } 🎨");
+        assert_eq!(serde_json::to_string(&literal).unwrap(), r#""我的 { $name } 🎨""#);
+    }
+    #[test]
+    fn choice_rebinding_preserves_stable_values_and_defaults_when_values_are_removed() {
+        let mut instance = EffectInstance::new(fixture("curves").program());
+        instance.set("domain", EffectValue::Choice(1)).unwrap();
+        let mut program = (*instance.program).clone();
+        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
+        let option = |value: &str| EffectOption::Labeled { value: value.into(), label: "同じ表示名 🎨".into() };
+        parameter.kind = EffectParameterKind::Choice { options: [option("Log HDR"), option("Encoded RGB")].into() };
+        parameter.default = EffectValue::Choice(1);
+        let rebound = instance.rebind(Arc::new(program.clone())).unwrap();
+        assert_eq!(rebound.value("domain"), Some(&EffectValue::Choice(0)));
+        assert_eq!(rebound.choice("domain"), Some("Log HDR"));
+        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
+        parameter.kind = EffectParameterKind::Choice { options: [option("Encoded RGB"), option("Linear HDR")].into() };
+        parameter.default = EffectValue::Choice(0);
+        let rebound = instance.rebind(Arc::new(program.clone())).unwrap();
+        assert_eq!(rebound.value("domain"), Some(&EffectValue::Choice(0)));
+        assert_eq!(rebound.choice("domain"), Some("Encoded RGB"));
+        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
+        parameter.default = EffectValue::Choice(1);
+        let rebound = instance.rebind(Arc::new(program.clone())).unwrap();
+        assert_eq!(rebound.value("domain"), Some(&EffectValue::Choice(1)));
+        assert_eq!(rebound.choice("domain"), Some("Linear HDR"));
+        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
+        parameter.kind = EffectParameterKind::Choice { options: [option("Encoded RGB"), option("Encoded RGB")].into() };
+        assert!(instance.rebind(Arc::new(program)).is_err());
+    }
+    #[test]
     fn sections_shorten_labels_without_changing_shader_parameters() {
         let program = fixture("color_balance").program();
         for (i, section) in ["Shadows", "Midtones", "Highlights"]
             .into_iter()
             .enumerate()
         {
-            for (j, label) in ["Cyan — Red", "Magenta — Green", "Yellow — Blue"]
+            for (j, _) in ["Cyan — Red", "Magenta — Green", "Yellow — Blue"]
                 .into_iter()
                 .enumerate()
             {
                 let parameter = &program.parameters[i * 3 + j];
-                assert_eq!(parameter.section.as_deref(), Some(section));
-                assert_eq!(parameter.label.as_ref(), label);
+                assert_eq!(parameter.section, Some(ResourceLabel::Message { message: format!("resources-section-color-balance-{}", section.to_ascii_lowercase()).into() }));
+                assert_eq!(parameter.label, ResourceLabel::Message { message: format!("resources-parameter-color-balance-{}", parameter.key.replace('_', "-")).into() });
             }
         }
         assert!(program.parameters[9].section.is_none());

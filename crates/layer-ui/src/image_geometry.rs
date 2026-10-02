@@ -114,11 +114,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     /// Why a content bounds command can't run.
-    pub(super) fn content_bounds_refusal(&self, purpose: ContentUse) -> Option<&'static str> {
+    pub(super) fn content_bounds_refusal(&self, purpose: ContentUse) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         match purpose {
-            ContentUse::FitContent => (!self.cropping()).then_some("Choose the Crop tool first"),
+            ContentUse::FitContent => (!self.cropping()).then_some(l.text(MessageId::COMMANDS_CHOOSE_THE_CROP_TOOL_FIRST)),
             ContentUse::Trim | ContentUse::RevealAll => self.canvas_geometry_refusal(),
-            ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove => (!self.can_transform()).then_some("Select unlocked paint content or a layer mask"),
+            ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove => (!self.can_transform()).then_some(l.text(MessageId::COMMANDS_SELECT_UNLOCKED_PAINT_CONTENT_OR_A_LAYER_MASK)),
         }
     }
 

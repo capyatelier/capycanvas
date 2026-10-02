@@ -27,7 +27,7 @@ fn grey(v: f32) -> [u8; 4] {
 
 /// Layer 1, empty, over a photo marked as a reference.
 fn photo(pixel: impl Fn(u32, u32) -> [u8; 4]) -> Document {
-    let mut doc = Document::new("heal", EXTENT[0], EXTENT[1]);
+    let mut doc = Document::new("heal", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     assert_eq!(doc.allocate_layer_id(), PHOTO);
     let mut layer = Layer::paint(PHOTO, "Photo");
     layer.source = Some(rgba8_source(EXTENT, pixel));

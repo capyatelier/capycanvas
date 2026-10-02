@@ -65,7 +65,7 @@ pub(crate) enum DocumentAction {
 pub(crate) fn recovery_environment(session: &UiSession<Renderer>) -> Result<OpenEnvironment, String> {
     OpenEnvironment::capture(
         session,
-        layer_ui::DocumentSessions::<()>::default().admission(&session.retained_document_tiles()),
+        layer_ui::DocumentSessions::<()>::localized(session.localization()).admission(&session.retained_document_tiles()),
         Default::default(),
     )
 }
@@ -250,7 +250,7 @@ fn prepare(
     cancel: &AtomicBool,
 ) -> Result<Completed, String> {
     let imported = match source {
-        Source::Create(options) => layer_ui::ImportedDocument { project: options.project()?, source: layer_ui::ImportSource::Master },
+        Source::Create(options) => layer_ui::ImportedDocument { project: options.project(&environment.localization)?, source: layer_ui::ImportSource::Master },
         Source::Recovery(path) => environment.read(layer_core::Cancellable { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancelled: || cancel.load(Ordering::Acquire) },
             layer_ui::ImportIntent::Recovery, "Recovered drawing", cancel)?,
         Source::Interpret(mut imported, profile) => { imported.interpret(profile.resolve(cancel)?)?; *imported },
@@ -302,7 +302,11 @@ pub(crate) struct DocumentService {
     recording_save: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
 impl DocumentService {
+    #[cfg(test)]
     pub(crate) fn open(wake: impl Fn() + Send + Sync + 'static) -> Result<Self, String> {
+        Self::open_localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English), wake)
+    }
+    pub(crate) fn open_localized(localization: &layer_ui::Localizer, wake: impl Fn() + Send + Sync + 'static) -> Result<Self, String> {
         let wake = std::sync::Arc::new(wake);
         let notify = wake.clone();
         Ok(Self {
@@ -310,7 +314,7 @@ impl DocumentService {
             tone: layer_host::tone::ToneService::new(Some(wake.clone())),
             palettes: crate::palette_files::Service::new(wake.clone()),
             wake,
-            window: Default::default(),
+            window: layer_host::window::DocumentWindow::localized(localization),
             recovery: None,
             activating: false,
             spilling: false,
@@ -625,7 +629,7 @@ impl DocumentService {
                 DocumentAction::Create { epoch, revision, options, preset, defaults, .. }
                     if matches!(request, DocumentRequest::New) => {
                     Self::matches(host, epoch, revision)?;
-                    options.validate()?;
+                    options.validate().map_err(|error| error.message(host.session.localization()))?;
                     let environment = OpenEnvironment::capture(&host.session,
                         self.window.documents.admission(&host.session.retained_document_tiles()), host.renderer_options(None))?;
                     if defaults || !preset.trim().is_empty() {
@@ -793,6 +797,15 @@ mod tests {
     use layer_ui::{CommandId, Platform, UiAction};
     use std::sync::mpsc;
     use std::time::Duration;
+    #[test]
+    fn localized_service_seeds_japanese_tab_caption_without_gpu() {
+        let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+        let host = NativeHost::new_localized(Platform::Windows, localization.clone()).unwrap();
+        let mut service = DocumentService::open_localized(host.session.localization(), || {}).unwrap();
+        assert!(std::sync::Arc::ptr_eq(host.session.localization(), &localization));
+        assert_eq!(service.window.view(&host, 900.)["tabs"][0]["title"], "無題 1");
+        service.stop_worker().unwrap();
+    }
     struct Fixture {
         host: NativeHost,
         service: DocumentService,
@@ -875,7 +888,7 @@ mod tests {
             RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey,
         };
         let mut f = Fixture::new();
-        let mut project = layer_ui::new_drawing(256, 256).unwrap();
+        let mut project = layer_ui::new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let bytes = [27, 89, 143, 255].repeat(256 * 256);
         let descriptor = RasterPlane::Color.descriptor(project.document.color);
         let tile = RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap());
@@ -1133,7 +1146,7 @@ mod tests {
             });
             let candidate = UiSession::from_project(
                 Renderer(None),
-                layer_ui::new_drawing(64, 48).unwrap(),
+                layer_ui::new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
                 None,
                 f.host.session.state().camera.viewport,
                 Platform::Windows,
@@ -1229,7 +1242,7 @@ mod gpu_tests {
         let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
         assert!(gpu.adapter().get_info().device_type != wgpu::DeviceType::Cpu || layer_render_wgpu::software_adapter_tests());
-        let project = layer_ui::new_drawing(63, 47).unwrap();
+        let project = layer_ui::new_drawing(63, 47, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session =
             UiSession::from_project(Renderer(Some(gpu.into())), project, None, [31, 29], Platform::Windows).unwrap();
@@ -1290,7 +1303,7 @@ mod gpu_tests {
         let mut host = NativeHost::new(Platform::Gtk).unwrap();
         host.session = UiSession::from_project(
             Renderer(Some(gpu.into())),
-            layer_ui::new_drawing(64, 48).unwrap(),
+            layer_ui::new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
             None,
             [64, 48],
             Platform::Gtk,

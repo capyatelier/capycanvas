@@ -57,7 +57,7 @@ fn quantiles(values: &mut [f64]) -> [f64; 3] {
 impl Canvas {
     fn new(extent: [u32; 2], name: &str, color: DocumentColor) -> Result<Self> {
         let start = Instant::now();
-        let mut document = Document::new(name, extent[0], extent[1]);
+        let mut document = Document::new(name, extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color = color;
         let mut builder = SourceBuilder::new(
             extent,

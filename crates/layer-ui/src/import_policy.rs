@@ -2,7 +2,7 @@
 //! URI permissions cannot grant overwrite authority to an imported photograph.
 use crate::{DocumentLocation, MissingProfilePolicy, PhotoOpenPolicy};
 use layer_core::{
-    Project, ProjectLimits,
+    DocumentNames, Project, ProjectLimits,
     color::{ColorProfile, source::SourceImage},
 };
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,13 @@ impl ImportSource {
         }
     }
 }
+pub fn photo_document_names(name: &str, localization: &crate::Localizer) -> DocumentNames {
+    DocumentNames {
+        paint: if name.is_empty() { localization.text(crate::MessageId::DOCUMENTS_PHOTO_NAME) } else { name.into() },
+        paper: localization.text(crate::MessageId::DOCUMENTS_PAPER),
+    }
+}
+
 impl PhotoOpenPolicy {
     pub fn needs_interpretation(self, source: &SourceImage) -> bool {
         source.interpretation.profile_assumed && self.missing_profile == MissingProfilePolicy::Ask
@@ -53,10 +60,10 @@ impl PhotoOpenPolicy {
         self,
         source: SourceImage,
         metadata: layer_core::PhotoMetadata,
-        name: &str,
+        names: DocumentNames,
     ) -> Result<Project, String> {
         let depth = self.editing_depth(source.interpretation.depth);
-        layer_color::photo_project(source, metadata, name, depth)
+        layer_color::photo_project(source, metadata, names, depth)
     }
 }
 pub struct ImportedDocument {
@@ -91,7 +98,8 @@ impl ImportedDocument {
         self.project = layer_color::photo_project(
             source,
             metadata,
-            &layer.name,
+            DocumentNames { paint: layer.name.clone(),
+                paper: self.project.document.layers.get(1).map_or_else(|| "".into(), |layer| layer.name.clone()) },
             self.project.document.color.depth,
         )?;
         Ok(())
@@ -103,7 +111,7 @@ pub fn read_import(
     input: impl Read + Seek,
     intent: ImportIntent,
     policy: PhotoOpenPolicy,
-    name: &str,
+    mut names: DocumentNames,
     project_limits: ProjectLimits,
     photo_limits: layer_color::photo::DecodeLimits,
     cancelled: &AtomicBool,
@@ -121,9 +129,9 @@ pub fn read_import(
                 photo_limits,
                 cancelled,
             )?;
-            let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
-            let name = photo.display_name(stem);
-            policy.photo_project(photo.source, photo.metadata, &name)?
+            let stem = names.paint.rsplit_once('.').map_or(names.paint.as_ref(), |(stem, _)| stem);
+            names.paint = photo.display_name(stem).into();
+            policy.photo_project(photo.source, photo.metadata, names)?
         }
     };
     if cancelled.load(std::sync::atomic::Ordering::Acquire) {
@@ -291,9 +299,44 @@ mod tests {
         builder.finish().unwrap()
     }
     fn open(bytes: &[u8], intent: ImportIntent, policy: PhotoOpenPolicy, name: &str) -> Result<ImportedDocument, String> {
-        read_import(std::io::Cursor::new(bytes), intent, policy, name,
+        read_import(std::io::Cursor::new(bytes), intent, policy,
+            photo_document_names(name, &crate::Localizer::shared(crate::UiLanguage::English)),
             Default::default(), Default::default(), &Default::default())
     }
+    #[test]
+    fn photo_creation_and_reinterpretation_keep_supplied_names_and_source_pixels() {
+        let localization = crate::Localizer::shared(crate::UiLanguage::Japanese);
+        let literal = "  Photo { $name }「写真」🖼️\u{2068}literal\u{2069}  ";
+        let source = source();
+        let names = photo_document_names(literal, &localization);
+        assert_eq!(names.paint.as_ref(), literal);
+        assert_eq!(names.paper.as_ref(), "用紙");
+        let fallback = photo_document_names("", &localization);
+        assert_eq!(fallback.paint, localization.text(crate::MessageId::DOCUMENTS_PHOTO_NAME));
+        let policy = PhotoOpenPolicy { promote_to_16: true, missing_profile: MissingProfilePolicy::Ask };
+        let mut imported = ImportedDocument {
+            project: policy.photo_project(source.clone(), Default::default(), names).unwrap(),
+            source: ImportSource::Photo,
+        };
+        let document = &imported.project.document;
+        assert_eq!(document.layers[0].name.as_ref(), literal);
+        assert_eq!(document.layers[1].name.as_ref(), "用紙");
+        assert!(!document.layers[1].visible);
+        let source_before = document.layers[0].source.clone().unwrap();
+        imported.interpret(ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
+        let document = &imported.project.document;
+        assert_eq!(document.layers[0].name.as_ref(), literal);
+        assert_eq!(document.layers[1].name.as_ref(), "用紙");
+        let source_after = document.layers[0].source.as_ref().unwrap();
+        assert_eq!(source_after.tiles.len(), source_before.tiles.len());
+        assert!(source_after.tiles.iter().all(|(position, tile)|
+            source_before.tiles.get(position).is_some_and(|before| std::sync::Arc::ptr_eq(tile, before))));
+        let mut bytes = Vec::new();
+        imported.project.write(&mut bytes).unwrap();
+        let reopened = Project::read(std::io::Cursor::new(bytes), Default::default()).unwrap();
+        assert_eq!(reopened, imported.project);
+    }
+
     #[test]
     fn source_kind_owns_master_location_profile_decision_and_photo_depth() {
         let source = source();
@@ -302,7 +345,7 @@ mod tests {
             missing_profile: MissingProfilePolicy::Ask,
         };
         let mut photo = ImportedDocument {
-            project: policy.photo_project(source.clone(), Default::default(), "photo").unwrap(),
+            project: policy.photo_project(source.clone(), Default::default(), photo_document_names("photo", &crate::Localizer::shared(crate::UiLanguage::English))).unwrap(),
             source: ImportSource::Photo,
         };
         assert!(photo.interpretation_required(policy).is_some());

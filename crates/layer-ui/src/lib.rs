@@ -15,17 +15,21 @@ macro_rules! variants {
 pub(crate) use variants;
 
 pub mod localization;
+pub use fluent_bundle::FluentArgs;
 pub use localization::{LanguagePreference, Localizer, MessageId, UiLanguage, resolve_language};
 #[cfg(test)]
 mod localization_catalog_tests;
+#[cfg(test)]
+mod localization_inventory;
 
+mod search;
 mod camera;
 mod document_tabs;
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
 pub use document_sessions::{DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
 mod document_creation;
-pub use document_creation::{BlendingChoice, DocumentBackground, NewDocumentAction, NewDocumentBlending, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
+pub use document_creation::{BlendingChoice, DocumentBackground, NewDocumentAction, NewDocumentBlending, NewDocumentOptions, NewDocumentPreset, NewDocumentPresetId, NewDocumentPresetView, NewDocumentSettings, NewDocumentError, NewDocumentForm, NewDocumentText, NewDocumentAppearance};
 mod document_workflow;
 pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, SourceWorkflow};
 
@@ -36,7 +40,7 @@ pub mod color_management;
 pub mod parameter_pad;
 
 mod import_policy;
-pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, read_import};
+pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, photo_document_names, read_import};
 
 pub mod recovery;
 mod workspace_update;
@@ -106,12 +110,12 @@ pub use session::{ImageLayerDestination, ImagePlacementContext, LayerAction, Lay
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{
-    AdjustmentChoice, ApplicationLink, ApplicationMenu, CANCEL_DOCUMENT_LABEL, ClipboardCapture, CloseDecision,
+    AdjustmentChoice, ApplicationLink, ApplicationMenu, ClipboardCapture, CloseDecision,
     LARGE_CLIP_PIXELS, PasteMode, PixelClip,
-    DEFAULT_DOCUMENT_EXTENT, DISCARD_DOCUMENT_LABEL, DOCUMENT_HEIGHT_LABEL, DOCUMENT_WIDTH_LABEL,
-    DocumentColorOperation, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
+    DEFAULT_DOCUMENT_EXTENT,
+    DocumentColorOperation, DocumentHostError, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
     FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
-    MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, UNSAVED_DESCRIPTION, new_drawing,
+    MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, new_drawing, new_document_spec,
 };
 pub use stats::{StatRow, StatsView};
 
@@ -121,7 +125,7 @@ pub use customization::{
     ContextMenu, ContextMenuItem, ContextTarget, CustomizationAction, CustomizationState,
     PanelConfig, PanelContent, PanelControl, PanelControlView, PanelView, TabPresentation,
     TabStyle, TilePresentation, TileStyle, TileView, ToolChoice, ToolPickerView, ToolbarManagerView, ToolbarTile,
-    tool_choice,
+    tool_choice, tool_choice_localized,
 };
 pub use interaction::{
     ChromeEvent, ChromeFacts, InputReply, Modifiers, PenButton, PointerButton, PointerKind, StylusAction, TouchPolicy,
@@ -171,7 +175,7 @@ pub use theme::{
     ThemePalette,
 };
 pub use workspace::{
-    LayoutHistory, LayoutRevision, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
+    LayoutHistory, LayoutRevision, LayoutChange, LayoutPanelAction, LayoutPanelName, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
     counter, durable_layout, layout_change_description,
 };
 
@@ -189,11 +193,12 @@ pub const BRUSH_SIZES: &[f32] = &[
     2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 48.0, 64.0, 96.0, 128.0, 192.0, 256.0, 384.0, 512.0,
 ];
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct BrushChoice {
     pub id: u32,
-    pub label: &'static str,
-    pub category: &'static str,
+    pub group: ToolGroup,
+    pub label: std::sync::Arc<str>,
+    pub category: std::sync::Arc<str>,
     pub icon: &'static str,
 }
 
@@ -237,11 +242,11 @@ pub const TOOLBAR_CONTROLS: &[ToolbarControl] = &[
 
 #[derive(Clone, Copy, Debug)]
 pub struct MenuSpec {
-    pub label: &'static str,
+    pub id: ApplicationMenu,
     pub sections: &'static [&'static [CommandId]],
 }
 pub const VIEW_MENU: MenuSpec = MenuSpec {
-    label: "View",
+    id: ApplicationMenu::View,
     sections: &[
         &[CommandId::Histogram],
         &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning, CommandId::SdrRendition, CommandId::PreviewSdr],
@@ -255,7 +260,7 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
 };
 /// GTK-first until the document transport is available on the other hosts.
 pub const FILE_MENU: MenuSpec = MenuSpec {
-    label: "File",
+    id: ApplicationMenu::File,
     sections: &[
         &[
             CommandId::NewDocument,
@@ -277,12 +282,13 @@ pub const ZEN_ICON_SIZE: u32 = 31;
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelChoice {
     pub id: Panel,
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub kind: PanelKind,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct BrushCategory {
-    pub label: &'static str,
+    pub id: ToolGroup,
+    pub label: std::sync::Arc<str>,
     pub icon: &'static str,
     pub brushes: Vec<BrushChoice>,
 }
@@ -306,9 +312,12 @@ pub struct UiCatalog {
     pub layer_opacity: NumericControl,
     pub zoom: NumericControl,
     /// Blend mode labels in code order, for hosts that show a flat list.
-    pub layer_blends: Vec<&'static str>,
+    pub layer_blends: Vec<std::sync::Arc<str>>,
 }
 pub fn ui_catalog() -> UiCatalog {
+    ui_catalog_localized(&Localizer::shared(UiLanguage::English))
+}
+pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
     UiCatalog {
         command_search_style: COMMAND_SEARCH_STYLE,
         canvas_bar_reappear_ms: CANVAS_BAR_REAPPEAR_MS,
@@ -320,14 +329,14 @@ pub fn ui_catalog() -> UiCatalog {
             .into_iter()
             .map(|id| PanelChoice {
                 id,
-                label: id.label(),
+                label: id.localized_label(localization),
                 kind: id.kind(),
             })
             .collect(),
-        new_document: session::new_document_spec(),
+        new_document: session::new_document_spec(localization),
         layer_commands: &CommandId::LAYERS,
         tool_commands: &CommandId::TOOLS,
-        brush_categories: brush_categories().collect(),
+        brush_categories: tools::brush_categories_localized(localization).collect(),
         brush_sizes: BRUSH_SIZES,
         brush_size: NumericControl::brush_size(),
         opacity: NumericControl::percent(),
@@ -335,7 +344,7 @@ pub fn ui_catalog() -> UiCatalog {
         zoom: NumericControl::zoom(),
         layer_blends: layer_core::LayerBlend::ALL
             .iter()
-            .map(|b| b.label())
+            .map(|b| session::effects::blend_label(*b, localization))
             .collect(),
     }
 }
@@ -843,221 +852,227 @@ impl CommandId {
         Self::RaiseLayer,
         Self::LowerLayer,
     ];
-    pub fn label(self) -> &'static str {
+    pub fn message_id(self) -> MessageId {
         match self {
-            Self::SearchCommands => "Search Commands…",
-            Self::DrawingBrush => "Brush",
-            Self::Sculpt => "Sculpt",
-            Self::SdrRendition => "Proof SDR",
-            Self::PreviewSdr => "Preview SDR",
-            Self::SoftProofSetup => "Proof…",
-            Self::SoftProof => "Proof Colors",
-            Self::GamutWarning => "Gamut Warning",
-            Self::Histogram => "Histogram…",
-            Self::ImportImage => "Import Image as Layer…",
-            Self::PasteImage => "Paste",
-            Self::DocumentProperties => "Document Properties…",
-            Self::AssignProfile => "Assign Profile…",
-            Self::ConvertColorSpace => "Convert Color Space…",
-            Self::ChangeBitDepth => "Change Bit Depth…",
-            Self::RepairSourceProfile => "Repair Source Profile…",
-            Self::RasterizeSource => "Rasterize Source…",
-            Self::NewDocument => "New…",
-            Self::OpenDocument => "Open…",
-            Self::SaveDocument => "Save",
-            Self::SaveDocumentAs => "Save As…",
-            Self::ExportDocument => "Export…",
-            Self::CloseDocument => "Close",
-            Self::Pen => "Pen",
-            Self::Pencil => "Pencil",
-            Self::Brush => "Paint Brush",
-            Self::Eraser => "Eraser",
-            Self::Airbrush => "Airbrush",
-            Self::Decoration => "Decoration",
-            Self::Blend => "Blend",
-            Self::Liquify => "Liquify",
-            Self::Lasso => "Lasso selection",
-            Self::Select => "Select",
-            Self::RectangleSelect => "Rectangle select",
-            Self::EllipseSelect => "Ellipse select",
-            Self::PolygonSelect => "Polygonal lasso",
-            Self::ColorSelect => "Select by color",
-            Self::SelectionBrush => "Paint selection",
-            Self::TonalSelect => "Tonal range",
-            Self::QuickMask => "Quick Mask",
-            Self::ReturnToArtwork => "Return to Artwork",
-            Self::NewSelectionLayer => "New Selection Layer",
-            Self::SaveSelectionLayer => "Save as Selection Layer",
-            Self::Reselect => "Reselect",
-            Self::SelectionOutline => "Show Selection Outline",
-            Self::MaskOverlay => "Show Mask Overlay",
-            Self::MaskOverlayProtected => "Grayscale mask",
-            Self::ResetMaskColors => "Reset to Black / White",
-            Self::SwapMaskColors => "Swap Mask Colors",
-            Self::FillSelectionMask => "Fill Mask",
-            Self::ClearSelectionMask => "Clear Selection Coverage",
-
-            Self::SelectionBrushPressure => "Pressure controls size",
-            Self::SelectionNew => "New selection",
-            Self::SelectionAdd => "Add to selection",
-            Self::SelectionSubtract => "Subtract from selection",
-            Self::SelectionIntersect => "Intersect with selection",
-            Self::SelectionAntialias => "Anti-aliasing",
-            Self::SelectionConstrainAngles => "Constrain edges to 45°",
-            Self::SelectionFixedRatio => "Fixed aspect ratio",
-            Self::SelectionFixedSize => "Fixed size",
-            Self::SelectionFromCenter => "Draw from center",
-            Self::CompleteSelection => "Finish selection",
-            Self::CancelSelection => "Cancel selection",
-            Self::CloneSourceArm => "Set Source",
-            Self::Clone => "Clone Stamp",
-            Self::Heal => "Healing Brush",
-            Self::SpotHeal => "Spot Healing Brush",
-            Self::CloneAligned => "Aligned Source",
-            Self::CloneFlipHorizontal => "Flip Source Horizontally",
-            Self::CloneFlipVertical => "Flip Source Vertically",
-            Self::CloneResetOffset => "Reset Source Offset",
-            Self::SelectionVisible => "Visible artwork",
-            Self::SelectionEditing => "Editing layer",
-            Self::SelectionReference => "Reference layers",
-
-            Self::Move => "Operation",
-            Self::ScaleRotate => "Transform",
-            Self::ApplyTransform => "Apply transform",
-            Self::CancelTransform => "Cancel transform",
-            Self::PlacementOriginalSize => "Original Size (100%)",
-            Self::Hand => "Hand",
-            Self::Eyedropper => "Eyedropper",
-            Self::Gradient => "Gradient",
-            Self::Figure => "Figure",
-            Self::Ruler => "Ruler",
-            Self::ShowRulers => "Show rulers",
-            Self::SnapRulers => "Snap to rulers",
-            Self::DeleteRuler => "Delete ruler",
-            Self::AutoSelect => "Auto select",
-            Self::Fill => "Fill",
-            Self::Undo => "Undo",
-            Self::Redo => "Redo",
-            Self::ClearLayer => "Clear Entire Layer",
-            Self::FillSelection => "Fill selection",
-            Self::SelectAll => "Select all pixels",
-            Self::Deselect => "Deselect pixels",
-            Self::InvertSelection => "Invert selection",
-            Self::UndoWorkspace => "Undo Layout Change",
-            Self::RedoWorkspace => "Redo Layout Change",
-            Self::NewToolbar => "New Toolbar…",
-            Self::ManageToolbars => "Manage Toolbars…",
-            Self::CustomizeWorkspaceUi => "Customize Title Bar…",
-            Self::FitCanvas => "Fit canvas",
-            Self::ZoomIn => "Zoom in",
-            Self::ZoomOut => "Zoom out",
-            Self::RotateLeft => "Rotate view 90° left",
-            Self::RotateRight => "Rotate view 90° right",
-            Self::FlipHorizontal => "Flip view horizontally",
-            Self::FlipVertical => "Flip view vertically",
-            Self::Settings => "Preferences",
-            Self::ToggleTheme => "Dark Mode",
-            Self::AddLayer => "New layer",
-            Self::DeleteLayer => "Delete layer",
-            Self::RaiseLayer => "Raise layer",
-            Self::LowerLayer => "Lower layer",
-            Self::ResetLayout => "Reset layout",
-            Self::ZenMode => "Zen mode",
-            Self::Fullscreen => "Full screen",
-            Self::NewWindow => "New Window",
-            Self::Drawings => "Drawings…",
-            Self::ShowCanvasActionBar => "Show canvas action bar",
-            Self::TransformFlipHorizontal => "Flip horizontally",
-            Self::TransformFlipVertical => "Flip vertically",
-            Self::TransformRotateLeft => "Rotate 90° left",
-            Self::TransformRotateRight => "Rotate 90° right",
-            Self::ResetTransform => "Reset transform",
-            Self::RemoveSelectionPoint => "Remove last point",
-            Self::MaskSelection => "Mask to selection",
-            Self::TransformFree => "Free transform",
-            Self::TransformUniform => "Uniform transform",
-            Self::TransformDistort => "Distort",
-            Self::TransformPerspective => "Perspective",
-            Self::TransformNearest => "Nearest neighbor",
-            Self::TransformBilinear => "Bilinear",
-            Self::TransformBicubic => "Bicubic",
-            Self::TransformWarp => "Warp",
-            Self::WarpGridThree => "3 × 3 warp grid",
-            Self::WarpGridFour => "4 × 4 warp grid",
-            Self::WarpGridFive => "5 × 5 warp grid",
-            Self::KeyboardShortcuts => "Keyboard Shortcuts",
-            Self::About => "About Capy Canvas",
-            Self::Website => ApplicationLink::Website.label(),
-            Self::SourceCode => ApplicationLink::SourceCode.label(),
-            Self::UseReferenceBelow => "Use layer below as reference",
-            Self::ClearSelected => "Clear Selected Pixels",
-            Self::ClearOutside => "Clear Outside Selection",
-            Self::CopySelectionToLayer => "Copy Selection to New Layer",
-            Self::CutSelectionToLayer => "Cut Selection to New Layer",
-            Self::ActualPixels => "Actual Pixels",
-            Self::RevertToOriginal => "Revert to Original Photo",
-            Self::LoadSelectionLayer => "Load Selection Layer",
-            Self::InvertSelectionLayer => "Invert Selection Layer",
-            Self::InvertLayerMask => "Invert Layer Mask",
-            Self::LayerMaskEnabled => "Enable Layer Mask",
-            Self::ApplyLayerMask => "Apply Layer Mask",
-            Self::EditLayerMask => "Edit Layer Mask",
-            Self::EditLayerContent => "Edit Layer Content",
-            Self::LassoFill => "Lasso fill",
-            Self::CanvasSize => "Canvas Size…",
-            Self::CropCanvasToSelection => "Crop Canvas to Selection",
-            Self::GrowSelection => "Grow Selection…",
-            Self::ShrinkSelection => "Shrink Selection…",
-            Self::FeatherSelection => "Feather Selection…",
-            Self::BorderSelection => "Border Selection…",
-            Self::SmoothSelection => "Smooth Selection…",
-            Self::TransformSelectionOutline => "Transform Selection Outline",
-            Self::Crop => "Crop",
-            Self::CropRatioFree => "Free crop ratio",
-            Self::CropRatioOriginal => "Original crop ratio",
-            Self::CropRatioSquare => "Square crop (1:1)",
-            Self::CropRatioFourFive => "4:5 crop ratio",
-            Self::CropRatioTwoThree => "2:3 crop ratio",
-            Self::CropRatioFiveSeven => "5:7 crop ratio",
-            Self::CropRatioSixteenNine => "16:9 crop ratio",
-            Self::CropSwapOrientation => "Swap crop orientation",
-            Self::CropOverlayThirds => "Rule of thirds overlay",
-            Self::CropOverlayGrid => "Grid overlay",
-            Self::CropOverlayDiagonal => "Diagonal overlay",
-            Self::CropOverlayGolden => "Golden ratio overlay",
-            Self::CropCycleOverlay => "Cycle crop overlay",
-            Self::CropStraighten => "Straighten",
-            Self::CropDeleteCroppedPixels => "Delete Cropped Pixels",
-            Self::StraightenToGuide => "Straighten Image to Guide",
-            Self::ImageSize => "Image Size…",
-            Self::RotateImageLeft => "Rotate Image 90° Left",
-            Self::RotateImageRight => "Rotate Image 90° Right",
-            Self::RotateImage180 => "Rotate Image 180°",
-            Self::FlipImageHorizontal => "Flip Image Horizontally",
-            Self::FlipImageVertical => "Flip Image Vertically",
-            Self::Trim => "Trim",
-            Self::RevealAll => "Reveal All",
-            Self::CropFitContent => "Fit Crop to Content",
-            Self::TransformLanczos => "Lanczos",
-            Self::MoveLeaveCopy => "Leave Copy",
-            Self::Copy => "Copy",
-            Self::Cut => "Cut",
-            Self::CopyMerged => "Copy Merged",
-            Self::PasteInPlace => "Paste in Place",
-            Self::PasteInto => "Paste Into",
-            Self::MergeDown => "Merge Down",
-            Self::MergeVisible => "Merge Visible",
-            Self::FlattenImage => "Flatten Image",
-            Self::StampVisible => "Stamp Visible",
-            Self::MergeGroup => "Merge Group",
-            Self::ColorMixOklab => "Oklab mixing",
-            Self::ColorMixLinear => "Linear light mixing",
-            Self::ColorMixClassic => "Classic mixing",
-            Self::BlendPerceptual => "Perceptual Blending",
-            Self::BlendLinear => "Linear Light Blending",
-            Self::NewDodgeBurnLayer => "New Dodge & Burn Layer",
-            Self::FrequencySeparation => "Frequency Separation…",
+            Self::SearchCommands => MessageId::COMMAND_SEARCH_COMMANDS,
+            Self::DrawingBrush => MessageId::COMMAND_DRAWING_BRUSH,
+            Self::Sculpt => MessageId::COMMAND_SCULPT,
+            Self::SdrRendition => MessageId::COMMAND_SDR_RENDITION,
+            Self::PreviewSdr => MessageId::COMMAND_PREVIEW_SDR,
+            Self::SoftProofSetup => MessageId::COMMAND_SOFT_PROOF_SETUP,
+            Self::SoftProof => MessageId::COMMAND_SOFT_PROOF,
+            Self::GamutWarning => MessageId::COMMAND_GAMUT_WARNING,
+            Self::Histogram => MessageId::COMMAND_HISTOGRAM,
+            Self::ImportImage => MessageId::COMMAND_IMPORT_IMAGE,
+            Self::PasteImage => MessageId::COMMAND_PASTE_IMAGE,
+            Self::DocumentProperties => MessageId::COMMAND_DOCUMENT_PROPERTIES,
+            Self::AssignProfile => MessageId::COMMAND_ASSIGN_PROFILE,
+            Self::ConvertColorSpace => MessageId::COMMAND_CONVERT_COLOR_SPACE,
+            Self::ChangeBitDepth => MessageId::COMMAND_CHANGE_BIT_DEPTH,
+            Self::RepairSourceProfile => MessageId::COMMAND_REPAIR_SOURCE_PROFILE,
+            Self::RasterizeSource => MessageId::COMMAND_RASTERIZE_SOURCE,
+            Self::NewDocument => MessageId::COMMAND_NEW_DOCUMENT,
+            Self::OpenDocument => MessageId::COMMAND_OPEN_DOCUMENT,
+            Self::SaveDocument => MessageId::COMMAND_SAVE_DOCUMENT,
+            Self::SaveDocumentAs => MessageId::COMMAND_SAVE_DOCUMENT_AS,
+            Self::ExportDocument => MessageId::COMMAND_EXPORT_DOCUMENT,
+            Self::CloseDocument => MessageId::COMMAND_CLOSE_DOCUMENT,
+            Self::Pen => MessageId::COMMAND_PEN,
+            Self::Pencil => MessageId::COMMAND_PENCIL,
+            Self::Brush => MessageId::COMMAND_BRUSH,
+            Self::Eraser => MessageId::COMMAND_ERASER,
+            Self::Airbrush => MessageId::COMMAND_AIRBRUSH,
+            Self::Decoration => MessageId::COMMAND_DECORATION,
+            Self::Blend => MessageId::COMMAND_BLEND,
+            Self::Liquify => MessageId::COMMAND_LIQUIFY,
+            Self::Lasso => MessageId::COMMAND_LASSO,
+            Self::Select => MessageId::COMMAND_SELECT,
+            Self::RectangleSelect => MessageId::COMMAND_RECTANGLE_SELECT,
+            Self::EllipseSelect => MessageId::COMMAND_ELLIPSE_SELECT,
+            Self::PolygonSelect => MessageId::COMMAND_POLYGON_SELECT,
+            Self::ColorSelect => MessageId::COMMAND_COLOR_SELECT,
+            Self::SelectionBrush => MessageId::COMMAND_SELECTION_BRUSH,
+            Self::TonalSelect => MessageId::COMMAND_TONAL_SELECT,
+            Self::QuickMask => MessageId::COMMAND_QUICK_MASK,
+            Self::ReturnToArtwork => MessageId::COMMAND_RETURN_TO_ARTWORK,
+            Self::NewSelectionLayer => MessageId::COMMAND_NEW_SELECTION_LAYER,
+            Self::SaveSelectionLayer => MessageId::COMMAND_SAVE_SELECTION_LAYER,
+            Self::Reselect => MessageId::COMMAND_RESELECT,
+            Self::SelectionOutline => MessageId::COMMAND_SELECTION_OUTLINE,
+            Self::MaskOverlay => MessageId::COMMAND_MASK_OVERLAY,
+            Self::MaskOverlayProtected => MessageId::COMMAND_MASK_OVERLAY_PROTECTED,
+            Self::ResetMaskColors => MessageId::COMMAND_RESET_MASK_COLORS,
+            Self::SwapMaskColors => MessageId::COMMAND_SWAP_MASK_COLORS,
+            Self::FillSelectionMask => MessageId::COMMAND_FILL_SELECTION_MASK,
+            Self::ClearSelectionMask => MessageId::COMMAND_CLEAR_SELECTION_MASK,
+            Self::SelectionBrushPressure => MessageId::COMMAND_SELECTION_BRUSH_PRESSURE,
+            Self::SelectionNew => MessageId::COMMAND_SELECTION_NEW,
+            Self::SelectionAdd => MessageId::COMMAND_SELECTION_ADD,
+            Self::SelectionSubtract => MessageId::COMMAND_SELECTION_SUBTRACT,
+            Self::SelectionIntersect => MessageId::COMMAND_SELECTION_INTERSECT,
+            Self::SelectionAntialias => MessageId::COMMAND_SELECTION_ANTIALIAS,
+            Self::SelectionConstrainAngles => MessageId::COMMAND_SELECTION_CONSTRAIN_ANGLES,
+            Self::SelectionFixedRatio => MessageId::COMMAND_SELECTION_FIXED_RATIO,
+            Self::SelectionFixedSize => MessageId::COMMAND_SELECTION_FIXED_SIZE,
+            Self::SelectionFromCenter => MessageId::COMMAND_SELECTION_FROM_CENTER,
+            Self::CompleteSelection => MessageId::COMMAND_COMPLETE_SELECTION,
+            Self::CancelSelection => MessageId::COMMAND_CANCEL_SELECTION,
+            Self::CloneSourceArm => MessageId::COMMAND_CLONE_SOURCE_ARM,
+            Self::Clone => MessageId::COMMAND_CLONE,
+            Self::Heal => MessageId::COMMAND_HEAL,
+            Self::SpotHeal => MessageId::COMMAND_SPOT_HEAL,
+            Self::CloneAligned => MessageId::COMMAND_CLONE_ALIGNED,
+            Self::CloneFlipHorizontal => MessageId::COMMAND_CLONE_FLIP_HORIZONTAL,
+            Self::CloneFlipVertical => MessageId::COMMAND_CLONE_FLIP_VERTICAL,
+            Self::CloneResetOffset => MessageId::COMMAND_CLONE_RESET_OFFSET,
+            Self::SelectionVisible => MessageId::COMMAND_SELECTION_VISIBLE,
+            Self::SelectionEditing => MessageId::COMMAND_SELECTION_EDITING,
+            Self::SelectionReference => MessageId::COMMAND_SELECTION_REFERENCE,
+            Self::Move => MessageId::COMMAND_MOVE,
+            Self::ScaleRotate => MessageId::COMMAND_SCALE_ROTATE,
+            Self::ApplyTransform => MessageId::COMMAND_APPLY_TRANSFORM,
+            Self::CancelTransform => MessageId::COMMAND_CANCEL_TRANSFORM,
+            Self::PlacementOriginalSize => MessageId::COMMAND_PLACEMENT_ORIGINAL_SIZE,
+            Self::Hand => MessageId::COMMAND_HAND,
+            Self::Eyedropper => MessageId::COMMAND_EYEDROPPER,
+            Self::Gradient => MessageId::COMMAND_GRADIENT,
+            Self::Figure => MessageId::COMMAND_FIGURE,
+            Self::Ruler => MessageId::COMMAND_RULER,
+            Self::ShowRulers => MessageId::COMMAND_SHOW_RULERS,
+            Self::SnapRulers => MessageId::COMMAND_SNAP_RULERS,
+            Self::DeleteRuler => MessageId::COMMAND_DELETE_RULER,
+            Self::AutoSelect => MessageId::COMMAND_AUTO_SELECT,
+            Self::Fill => MessageId::COMMAND_FILL,
+            Self::Undo => MessageId::COMMAND_UNDO,
+            Self::Redo => MessageId::COMMAND_REDO,
+            Self::ClearLayer => MessageId::COMMAND_CLEAR_LAYER,
+            Self::FillSelection => MessageId::COMMAND_FILL_SELECTION,
+            Self::SelectAll => MessageId::COMMAND_SELECT_ALL,
+            Self::Deselect => MessageId::COMMAND_DESELECT,
+            Self::InvertSelection => MessageId::COMMAND_INVERT_SELECTION,
+            Self::UndoWorkspace => MessageId::COMMAND_UNDO_WORKSPACE,
+            Self::RedoWorkspace => MessageId::COMMAND_REDO_WORKSPACE,
+            Self::NewToolbar => MessageId::COMMAND_NEW_TOOLBAR,
+            Self::ManageToolbars => MessageId::COMMAND_MANAGE_TOOLBARS,
+            Self::CustomizeWorkspaceUi => MessageId::COMMAND_CUSTOMIZE_WORKSPACE_UI,
+            Self::FitCanvas => MessageId::COMMAND_FIT_CANVAS,
+            Self::ZoomIn => MessageId::COMMAND_ZOOM_IN,
+            Self::ZoomOut => MessageId::COMMAND_ZOOM_OUT,
+            Self::RotateLeft => MessageId::COMMAND_ROTATE_LEFT,
+            Self::RotateRight => MessageId::COMMAND_ROTATE_RIGHT,
+            Self::FlipHorizontal => MessageId::COMMAND_FLIP_HORIZONTAL,
+            Self::FlipVertical => MessageId::COMMAND_FLIP_VERTICAL,
+            Self::Settings => MessageId::COMMAND_SETTINGS,
+            Self::ToggleTheme => MessageId::COMMAND_TOGGLE_THEME,
+            Self::AddLayer => MessageId::COMMAND_ADD_LAYER,
+            Self::DeleteLayer => MessageId::COMMAND_DELETE_LAYER,
+            Self::RaiseLayer => MessageId::COMMAND_RAISE_LAYER,
+            Self::LowerLayer => MessageId::COMMAND_LOWER_LAYER,
+            Self::ResetLayout => MessageId::COMMAND_RESET_LAYOUT,
+            Self::ZenMode => MessageId::COMMAND_ZEN_MODE,
+            Self::Fullscreen => MessageId::COMMAND_FULLSCREEN,
+            Self::NewWindow => MessageId::COMMAND_NEW_WINDOW,
+            Self::Drawings => MessageId::COMMAND_DRAWINGS,
+            Self::ShowCanvasActionBar => MessageId::COMMAND_SHOW_CANVAS_ACTION_BAR,
+            Self::TransformFlipHorizontal => MessageId::COMMAND_TRANSFORM_FLIP_HORIZONTAL,
+            Self::TransformFlipVertical => MessageId::COMMAND_TRANSFORM_FLIP_VERTICAL,
+            Self::TransformRotateLeft => MessageId::COMMAND_TRANSFORM_ROTATE_LEFT,
+            Self::TransformRotateRight => MessageId::COMMAND_TRANSFORM_ROTATE_RIGHT,
+            Self::ResetTransform => MessageId::COMMAND_RESET_TRANSFORM,
+            Self::RemoveSelectionPoint => MessageId::COMMAND_REMOVE_SELECTION_POINT,
+            Self::MaskSelection => MessageId::COMMAND_MASK_SELECTION,
+            Self::TransformFree => MessageId::COMMAND_TRANSFORM_FREE,
+            Self::TransformUniform => MessageId::COMMAND_TRANSFORM_UNIFORM,
+            Self::TransformDistort => MessageId::COMMAND_TRANSFORM_DISTORT,
+            Self::TransformPerspective => MessageId::COMMAND_TRANSFORM_PERSPECTIVE,
+            Self::TransformNearest => MessageId::COMMAND_TRANSFORM_NEAREST,
+            Self::TransformBilinear => MessageId::COMMAND_TRANSFORM_BILINEAR,
+            Self::TransformBicubic => MessageId::COMMAND_TRANSFORM_BICUBIC,
+            Self::TransformWarp => MessageId::COMMAND_TRANSFORM_WARP,
+            Self::WarpGridThree => MessageId::COMMAND_WARP_GRID_THREE,
+            Self::WarpGridFour => MessageId::COMMAND_WARP_GRID_FOUR,
+            Self::WarpGridFive => MessageId::COMMAND_WARP_GRID_FIVE,
+            Self::KeyboardShortcuts => MessageId::COMMAND_KEYBOARD_SHORTCUTS,
+            Self::About => MessageId::COMMAND_ABOUT,
+            Self::Website => MessageId::COMMAND_WEBSITE,
+            Self::SourceCode => MessageId::COMMAND_SOURCE_CODE,
+            Self::UseReferenceBelow => MessageId::COMMAND_USE_REFERENCE_BELOW,
+            Self::ClearSelected => MessageId::COMMAND_CLEAR_SELECTED,
+            Self::ClearOutside => MessageId::COMMAND_CLEAR_OUTSIDE,
+            Self::CopySelectionToLayer => MessageId::COMMAND_COPY_SELECTION_TO_LAYER,
+            Self::CutSelectionToLayer => MessageId::COMMAND_CUT_SELECTION_TO_LAYER,
+            Self::ActualPixels => MessageId::COMMAND_ACTUAL_PIXELS,
+            Self::RevertToOriginal => MessageId::COMMAND_REVERT_TO_ORIGINAL,
+            Self::LoadSelectionLayer => MessageId::COMMAND_LOAD_SELECTION_LAYER,
+            Self::InvertSelectionLayer => MessageId::COMMAND_INVERT_SELECTION_LAYER,
+            Self::InvertLayerMask => MessageId::COMMAND_INVERT_LAYER_MASK,
+            Self::LayerMaskEnabled => MessageId::COMMAND_LAYER_MASK_ENABLED,
+            Self::ApplyLayerMask => MessageId::COMMAND_APPLY_LAYER_MASK,
+            Self::EditLayerMask => MessageId::COMMAND_EDIT_LAYER_MASK,
+            Self::EditLayerContent => MessageId::COMMAND_EDIT_LAYER_CONTENT,
+            Self::LassoFill => MessageId::COMMAND_LASSO_FILL,
+            Self::CanvasSize => MessageId::COMMAND_CANVAS_SIZE,
+            Self::CropCanvasToSelection => MessageId::COMMAND_CROP_CANVAS_TO_SELECTION,
+            Self::GrowSelection => MessageId::COMMAND_GROW_SELECTION,
+            Self::ShrinkSelection => MessageId::COMMAND_SHRINK_SELECTION,
+            Self::FeatherSelection => MessageId::COMMAND_FEATHER_SELECTION,
+            Self::BorderSelection => MessageId::COMMAND_BORDER_SELECTION,
+            Self::SmoothSelection => MessageId::COMMAND_SMOOTH_SELECTION,
+            Self::TransformSelectionOutline => MessageId::COMMAND_TRANSFORM_SELECTION_OUTLINE,
+            Self::Crop => MessageId::COMMAND_CROP,
+            Self::CropRatioFree => MessageId::COMMAND_CROP_RATIO_FREE,
+            Self::CropRatioOriginal => MessageId::COMMAND_CROP_RATIO_ORIGINAL,
+            Self::CropRatioSquare => MessageId::COMMAND_CROP_RATIO_SQUARE,
+            Self::CropRatioFourFive => MessageId::COMMAND_CROP_RATIO_FOUR_FIVE,
+            Self::CropRatioTwoThree => MessageId::COMMAND_CROP_RATIO_TWO_THREE,
+            Self::CropRatioFiveSeven => MessageId::COMMAND_CROP_RATIO_FIVE_SEVEN,
+            Self::CropRatioSixteenNine => MessageId::COMMAND_CROP_RATIO_SIXTEEN_NINE,
+            Self::CropSwapOrientation => MessageId::COMMAND_CROP_SWAP_ORIENTATION,
+            Self::CropOverlayThirds => MessageId::COMMAND_CROP_OVERLAY_THIRDS,
+            Self::CropOverlayGrid => MessageId::COMMAND_CROP_OVERLAY_GRID,
+            Self::CropOverlayDiagonal => MessageId::COMMAND_CROP_OVERLAY_DIAGONAL,
+            Self::CropOverlayGolden => MessageId::COMMAND_CROP_OVERLAY_GOLDEN,
+            Self::CropCycleOverlay => MessageId::COMMAND_CROP_CYCLE_OVERLAY,
+            Self::CropStraighten => MessageId::COMMAND_CROP_STRAIGHTEN,
+            Self::CropDeleteCroppedPixels => MessageId::COMMAND_CROP_DELETE_CROPPED_PIXELS,
+            Self::StraightenToGuide => MessageId::COMMAND_STRAIGHTEN_TO_GUIDE,
+            Self::ImageSize => MessageId::COMMAND_IMAGE_SIZE,
+            Self::RotateImageLeft => MessageId::COMMAND_ROTATE_IMAGE_LEFT,
+            Self::RotateImageRight => MessageId::COMMAND_ROTATE_IMAGE_RIGHT,
+            Self::RotateImage180 => MessageId::COMMAND_ROTATE_IMAGE180,
+            Self::FlipImageHorizontal => MessageId::COMMAND_FLIP_IMAGE_HORIZONTAL,
+            Self::FlipImageVertical => MessageId::COMMAND_FLIP_IMAGE_VERTICAL,
+            Self::Trim => MessageId::COMMAND_TRIM,
+            Self::RevealAll => MessageId::COMMAND_REVEAL_ALL,
+            Self::CropFitContent => MessageId::COMMAND_CROP_FIT_CONTENT,
+            Self::TransformLanczos => MessageId::COMMAND_TRANSFORM_LANCZOS,
+            Self::MoveLeaveCopy => MessageId::COMMAND_MOVE_LEAVE_COPY,
+            Self::Copy => MessageId::COMMAND_COPY,
+            Self::Cut => MessageId::COMMAND_CUT,
+            Self::CopyMerged => MessageId::COMMAND_COPY_MERGED,
+            Self::PasteInPlace => MessageId::COMMAND_PASTE_IN_PLACE,
+            Self::PasteInto => MessageId::COMMAND_PASTE_INTO,
+            Self::MergeDown => MessageId::COMMAND_MERGE_DOWN,
+            Self::MergeVisible => MessageId::COMMAND_MERGE_VISIBLE,
+            Self::FlattenImage => MessageId::COMMAND_FLATTEN_IMAGE,
+            Self::StampVisible => MessageId::COMMAND_STAMP_VISIBLE,
+            Self::MergeGroup => MessageId::COMMAND_MERGE_GROUP,
+            Self::ColorMixOklab => MessageId::COMMAND_COLOR_MIX_OKLAB,
+            Self::ColorMixLinear => MessageId::COMMAND_COLOR_MIX_LINEAR,
+            Self::ColorMixClassic => MessageId::COMMAND_COLOR_MIX_CLASSIC,
+            Self::BlendPerceptual => MessageId::COMMAND_BLEND_PERCEPTUAL,
+            Self::BlendLinear => MessageId::COMMAND_BLEND_LINEAR,
+            Self::NewDodgeBurnLayer => MessageId::COMMAND_NEW_DODGE_BURN_LAYER,
+            Self::FrequencySeparation => MessageId::COMMAND_FREQUENCY_SEPARATION,
         }
+    }
+
+    pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        localization.text(self.message_id())
+    }
+
+    pub fn label(self) -> std::sync::Arc<str> {
+        self.localized_label(&Localizer::shared(UiLanguage::English))
     }
 }
 
@@ -1067,12 +1082,12 @@ pub struct CommandState {
     /// Use a native checkable menu item only for retained on/off commands.
     pub checkable: bool,
     pub icon: Option<&'static str>,
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub enabled: bool,
     /// Why a disabled command is unavailable; always serialized, as null when
     /// enabled. Retained controls keep it steady during canvas input, as they
     /// keep `enabled`.
-    pub disabled_reason: Option<std::borrow::Cow<'static, str>>,
+    pub disabled_reason: Option<std::sync::Arc<str>>,
     pub selected: bool,
     pub shortcut: String,
     pub tooltip: String,
@@ -1141,6 +1156,8 @@ pub struct DocumentTab {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UiState {
+    #[serde(skip)]
+    pub(crate) localization: std::sync::Arc<Localizer>,
     pub command_search: Option<CommandSearchView>,
     /// Temporary viewing choices, excluded from document and workspace saving.
     pub soft_proof: bool,
@@ -1525,7 +1542,7 @@ mod icon_tests {
         }
         let mut meanings = std::collections::BTreeSet::new();
         for filter in layer_core::bundled_effect_catalog().filters() {
-            assert_ne!(filter.icon.as_ref(), "adjustments", "{} must not use the picker icon", filter.program.label);
+            assert_ne!(filter.icon.as_ref(), "adjustments", "{} must not use the picker icon", filter.program.id);
             assert!(meanings.insert(filter.icon.as_ref()), "Different filters need recognizable identities");
         }
     }
@@ -1589,3 +1606,5 @@ mod icon_tests {
         }
     }
 }
+
+pub fn normalize_search(text: &str) -> String { search::normalize(text) }

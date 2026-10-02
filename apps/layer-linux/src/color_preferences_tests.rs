@@ -45,7 +45,7 @@ fn preferences(w: &Rc<Workspace>) {
 fn native_color_preferences_profiles_and_untagged_photo_policy() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.ColorPreferences");
-    let w = Workspace::with_project(&app, Some((new_drawing(64, 64).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     ready(&w);
     let created = Rc::new(RefCell::new(None));

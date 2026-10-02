@@ -314,11 +314,12 @@ impl WebApp {
                 )),
             })
             .map_err(js)?;
+        let documents = layer_ui::DocumentSessions::localized(session.localization());
         Ok(Self {
             proof: Default::default(),
             tone: Default::default(),
             session,
-            documents: Default::default(),
+            documents,
             document_gpu: None,
             surface: None,
             workspaces: None,
@@ -560,8 +561,6 @@ impl WebApp {
     /// boundary again. `state()` remains an independent full snapshot.
     pub fn state_update(&mut self) -> Result<JsValue, JsValue> {
         let state = self.session.state();
-        // Exhaustive destructuring makes newly added UI fields a compile error
-        // until this transport includes them.
         let layer_ui::UiState {
             command_search,
             soft_proof,
@@ -604,6 +603,7 @@ impl WebApp {
             notice,
             camera,
             toolbar_context_generation,
+            ..
         } = state;
         let result = js_sys::Object::new();
         macro_rules! field {

@@ -1,6 +1,7 @@
 package art.capycanvas
 
 import android.os.Handler
+import android.os.ParcelFileDescriptor
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
@@ -104,6 +105,31 @@ class AndroidCanvasBarBenchmarkTest {
                 waitFor("placement bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "placement" }
                 waitFor("canvas ready") { host.snapshot?.let { it.optBoolean("canvas_ready") && it.optBoolean("brush_ready") } == true }
             }
+            fun photoDocument(): Long {
+                val file = photo()
+                val task = native { handle ->
+                    Native.dispatch(handle, obj("type" to "invoke", "command" to "open_document").toString())
+                    val snapshot = JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
+                    val request = snapshot.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
+                    val document = snapshot.getJSONObject("document_file")
+                    Native.projectTask(handle, request.getInt("id"), "null", document.getLong("epoch"), document.getLong("revision"))
+                }
+                try {
+                    Native.projectWork(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
+                    native { Native.projectAdopt(it, task, "null") }
+                } finally { Native.projectFree(task) }
+                instrumentation.runOnMainSync { host.documentChanged() }
+                waitFor("tier photo document") { host.snapshot?.optBoolean("shaders_ready") == true &&
+                    state().array("tabs").objects().any { it.optBoolean("active") && it.optInt("width") == width && it.optInt("height") == height } }
+                documentExtent = "${width}x$height"
+                blending?.let { invoke("blend_$it") }
+                val photoLayer = state().array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
+                for (layer in state().array("layers").objects().filter { it.getLong("id") != photoLayer })
+                    action(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to false))
+                invoke("add_layer")
+                invoke("fit_canvas")
+                return photoLayer
+            }
             fun anchorPoint(fraction: Double): Pair<Double, Double> {
                 val anchor = state().getJSONObject("canvas_bar").getJSONArray("anchor")
                 val camera = state().getJSONObject("camera")
@@ -203,6 +229,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val displayBefore = native { JSONObject(Native.displayStatus(it)) }
                 check(displayBefore.getInt("overview_count") == if (args.getString("panel") == "navigator") 1 else 0) { "Navigator visibility differs from the requested workload" }
                 val cameraBefore = JSONObject(state().getJSONObject("camera").toString())
+                val visibleLayerIdsBefore = state().array("layers").objects().filter { it.optBoolean("visible") }.map { it.getLong("id") }
                 synchronized(uiFrames) { uiFrames.clear() }
                 val bars = mutableListOf<Boolean>()
                 val anchorBefore = state().optJSONObject("canvas_bar")?.optJSONArray("anchor")
@@ -238,6 +265,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val seconds = (operated - began) / 1e9
                 val result = obj("label" to label, "display_hz" to refreshRate, "seconds" to seconds, "transparency" to transparency,
                     "canvas" to documentExtent, "debuggable" to BuildConfig.DEBUG,
+                    "visible_layer_ids_before" to JSONArray(visibleLayerIdsBefore), "visible_layer_count_before" to visibleLayerIdsBefore.size,
                     "photo" to (photoPath ?: "synthetic"), "renderer_profile" to (args.getString("rendererProfile") == "true"), "camera_before" to cameraBefore,
                     "motion" to obj("begin_ns" to began, "end_ns" to operated,
                         "begin_boot_ns" to beganBoot, "end_boot_ns" to operatedBoot),
@@ -247,6 +275,7 @@ class AndroidCanvasBarBenchmarkTest {
                     "memory_after" to if (memory) native { JSONObject(Native.rendererMemory(it)) } else null,
                     "renderer_after" to native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) },
                     "display_before" to displayBefore, "display_after_input" to displayAfterInput,
+                    "photo_source" to (photoPath ?: "generated"),
                     "bar_visible_fraction" to if (bars.isEmpty()) 0.0 else bars.count { it } / bars.size.toDouble(),
                     "bar_transitions" to bars.zipWithNext().count { (a, b) -> a != b },
                     "anchor_before" to anchorBefore,
@@ -315,12 +344,13 @@ class AndroidCanvasBarBenchmarkTest {
             }
 
             if (wanted("ui")) {
-                newDocument(2048 to 1536)
-                invoke("zoom_out")
-                invoke("select_all"); invoke("fill_selection"); SystemClock.sleep(800)
+                val photoLayer = photoDocument()
+                action(obj("type" to "select_layer", "id" to photoLayer))
                 invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
                 waitFor("transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
                 SystemClock.sleep(1500)
+                primeTransform()
+                hideAndShow(1200)
                 measure("ui-bar-show-hide") { hideAndShow(duration) }
                 measure("ui-bar-move") {
                     val began = SystemClock.uptimeMillis()
@@ -363,10 +393,10 @@ class AndroidCanvasBarBenchmarkTest {
                     Scrub("exposure", "exposure", "Exposure", "effect-chain-exposure-drag", .45, true),
                 )
                 for (scrub in scrubs) {
-                    newDocument()
-                    place(photo())
-                    invoke("apply_transform")
-                    waitFor("placed photo") { state().optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") != "placement" }
+                    val photoLayer = photoDocument()
+                    val fixtureVisibleLayerIds = state().array("layers").objects().filter { it.optBoolean("visible") }.map { it.getLong("id") }
+                    check(fixtureVisibleLayerIds.size == 2 && photoLayer in fixtureVisibleLayerIds) { "Effect fixture must contain only the photo and empty paint layer" }
+                    action(obj("type" to "select_layer", "id" to photoLayer))
                     fun effect(op: JSONObject) = action(obj("type" to "effect", "action" to op))
                     if (scrub.chain) {
                         effect(obj("op" to "insert", "effect" to "levels"))
@@ -410,7 +440,8 @@ class AndroidCanvasBarBenchmarkTest {
                         sampler.join()
                     }
                     val result = File(output, "$label.json")
-                    result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted())).put("slider_bounds",
+                    result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted()))
+                        .put("photo_fixture_visible_layer_ids", JSONArray(fixtureVisibleLayerIds)).put("photo_fixture_visible_layer_count", fixtureVisibleLayerIds.size).put("slider_bounds",
                         JSONArray(listOf(track.left, track.top, track.right, track.bottom))).toString(2))
                     check(values.size > 1) { "$label did not change its value during motion" }
                     if (scrub.id == "gaussian_blur") check(values.all { it > 0 && it < 21 }) { "$label reached a stationary slider limit" }

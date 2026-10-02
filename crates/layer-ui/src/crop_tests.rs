@@ -2,7 +2,7 @@
 /// 1600×1000 view.
 fn crop_session() -> UiSession<Recorder> {
     use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey, TILE_SIZE};
-    let mut doc = Document::new("crop", 1000, 800);
+    let mut doc = Document::new("crop", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let descriptor = RasterPlane::Color.descriptor(doc.color);
     let bytes = vec![90; descriptor.byte_len([TILE_SIZE; 2]).unwrap()];
     let tile = RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap());
@@ -77,8 +77,8 @@ fn crop_starts_at_the_canvas_with_its_bar_and_blocks_other_edits() {
         .items
         .iter()
         .map(|item| match &item.option {
-            ToolOption::Choice { id, items, .. } => (*id, items.iter().map(|i| i.label).collect::<Vec<_>>().join(" ")),
-            ToolOption::Action { state, .. } => (state.label, item.label.to_string()),
+            ToolOption::Choice { id, items, .. } => (*id, items.iter().map(|i| i.label.as_ref()).collect::<Vec<_>>().join(" ")),
+            ToolOption::Action { state, .. } => (state.label.as_ref(), item.label.to_string()),
             ToolOption::Numeric(_) | ToolOption::Range { .. } => unreachable!("bars hold no values"),
         })
         .collect();
@@ -95,7 +95,7 @@ fn crop_starts_at_the_canvas_with_its_bar_and_blocks_other_edits() {
         (CommandId::CancelTransform, "Cancel", false),
         (CommandId::ApplyTransform, "Apply", false),
     ]);
-    assert_eq!(s.command(CommandId::ApplyTransform).label, "Apply crop");
+    assert_eq!(s.command(CommandId::ApplyTransform).label.as_ref(), "Apply crop");
     let actions: Vec<_> = s.state.tool_actions.iter().map(|a| a.command).collect();
     assert!(actions.contains(&CommandId::ApplyTransform) && actions.contains(&CommandId::CropStraighten), "Tool Options shows the bar's items");
     let settings: Vec<_> = s.state.tool_settings.iter().map(|c| (c.id, c.value)).collect();

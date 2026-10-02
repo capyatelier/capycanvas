@@ -1,1 +1,9 @@
-# Draft catalog; requires terminology and contextual review.
+documents-untitled = 無題
+documents-untitled-numbered = 無題 { $number }
+documents-current-ink = 現在のインク
+documents-paper = 用紙
+documents-layer-name = レイヤー { $number }
+documents-group-name = グループ { $number }
+documents-selection-name = 選択範囲 { $number }
+documents-copy-name = { $name } のコピー
+documents-close-confirm = 「{ $name }」への変更を保存しますか？

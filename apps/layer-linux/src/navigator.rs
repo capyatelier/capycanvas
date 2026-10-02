@@ -360,7 +360,7 @@ impl Navigator {
             let button = crate::icons::button(&format!("layer-{}-symbolic", id.icon().unwrap()));
             button.add_css_class("flat");
             button.set_widget_name(&format!("navigator-{id:?}"));
-            button.set_tooltip_text(Some(id.label()));
+            button.set_tooltip_text(Some(&id.label()));
             row.append(&button);
             (id, button)
         })

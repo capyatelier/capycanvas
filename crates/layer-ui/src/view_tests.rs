@@ -21,7 +21,7 @@ fn actual_pixels_zooms_to_one_on_whole_device_pixels() {
     }
     assert!((s.state.camera.rotation.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
     assert!(s.command(CommandId::ActualPixels).enabled);
-    assert_eq!(s.command(CommandId::ActualPixels).label, "Actual Pixels");
+    assert_eq!(s.command(CommandId::ActualPixels).label.as_ref(), "Actual Pixels");
     assert_ne!(CommandId::ActualPixels.label(), CommandId::PlacementOriginalSize.label());
     let view = s.application_menu(ApplicationMenu::View);
     let zoom_section = view

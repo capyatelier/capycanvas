@@ -74,9 +74,10 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
         })
         .ok()?;
         host.session.set_document_replacement(false);
+        let window = document_tabs::Window::localized(host.session.localization());
         Some(Box::into_raw(Box::new(CapyApple {
             host,
-            window: Default::default(),
+            window,
             metal: metal::MetalHost::default(),
             error: None,
             chrome_facts: Default::default(),

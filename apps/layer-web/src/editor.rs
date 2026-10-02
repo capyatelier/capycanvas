@@ -32,20 +32,27 @@ struct DrawerQuery {
 impl WebApp {
     pub fn editor_models(&self, _width: f32, _height: f32) -> Result<JsValue, JsValue> {
         let state = self.session.state();
+        let document = layer_ui::new_document_spec(self.session.localization());
         js_sys::JSON::parse(&serde_json::to_string(&json!({
             "color_panel": state.preview_colors().view_mapped(self.session.effective_sdr_rendition()),
             "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.label(), "model":self.session.application_menu(menu)})),
             "document_options": json!({
                 "extent": state.settings.new_document.defaults.extent,
-                "creation": state.settings.new_document.form(),
-                "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
-                "width_label": layer_ui::DOCUMENT_WIDTH_LABEL,
-                "height_label": layer_ui::DOCUMENT_HEIGHT_LABEL,
-                "new_title": layer_ui::DocumentRequest::New.title(),
-                "unsaved_description": layer_ui::UNSAVED_DESCRIPTION,
-                "discard_label": layer_ui::DISCARD_DOCUMENT_LABEL,
+                "creation": state.settings.new_document.form(self.session.localization()),
+                "min_dimension": document.minimum,
+                "max_dimension": document.maximum,
+                "width_label": document.labels[0],
+                "height_label": document.labels[1],
+                "new_title": document.title,
+                "unsaved_description": document.unsaved_description,
+                "discard_label": document.discard,
+                "cancel_label": document.cancel,
             }),
         })).map_err(js)?)
+    }
+    pub fn new_document_appearance(&self, options: JsValue) -> Result<JsValue, JsValue> {
+        let options: layer_ui::NewDocumentOptions = serde_wasm_bindgen::from_value(options).map_err(js)?;
+        serialize(&options.appearance(self.session.localization()))
     }
     pub fn color_panel(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().preview_colors().view_mapped(self.session.effective_sdr_rendition()))

@@ -111,7 +111,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             background: layer_ui::DocumentBackground::Transparent,
             ..Default::default()
         }
-        .project()
+        .project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
         .unwrap();
         let input = [4.125, 2., 0.5, 0.5];
         let sample = if depth == SampleDepth::F16 {
@@ -246,7 +246,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             Cursor::new(pq),
             layer_ui::ImportIntent::Open,
             Default::default(),
-            "PQ",
+            layer_ui::photo_document_names("PQ", &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)),
             Default::default(),
             Default::default(),
             &Default::default(),
@@ -276,7 +276,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
                 Cursor::new(bytes.clone()),
                 layer_ui::ImportIntent::Open,
                 Default::default(),
-                "gain-map photo",
+                layer_ui::photo_document_names("gain-map photo", &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)),
                 Default::default(),
                 Default::default(),
                 &Default::default(),

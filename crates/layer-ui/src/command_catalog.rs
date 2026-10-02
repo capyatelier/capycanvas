@@ -2,9 +2,9 @@
 //! existing command/menu/tool schemas; execution always returns to dispatch.
 use super::*;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
+use std::sync::Arc;
 
-const UNAVAILABLE: &str = "Unavailable in the current tool or edit target";
+
 
 /// Shared rhythm for native search surfaces; toolkit themes supply colors,
 /// typography and motion. Touch hosts may increase row_height.
@@ -51,20 +51,21 @@ pub enum ToolCategory {
     Retouching,
 }
 impl ToolCategory {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Drawing => "Drawing",
-            Self::Erasing => "Erasing",
-            Self::Blending => "Blending",
-            Self::Warping => "Warping",
-            Self::Selection => "Selection",
-            Self::FillGradient => "Fill and gradient",
-            Self::ShapesRulers => "Shape and ruler",
-            Self::MoveTransform => "Move and transform",
-            Self::ColorSampling => "Color sampling",
-            Self::Navigation => "Navigation",
-            Self::Retouching => "Retouching",
-        }
+    pub fn label(self) -> std::sync::Arc<str> { self.localized_label(&Localizer::shared(UiLanguage::English)) }
+    pub fn localized_label(self, l: &Localizer) -> std::sync::Arc<str> {
+        l.text(match self {
+            Self::Drawing => MessageId::COMMANDS_DRAWING,
+            Self::Erasing => MessageId::COMMANDS_ERASING,
+            Self::Blending => MessageId::COMMANDS_BLENDING,
+            Self::Warping => MessageId::COMMANDS_WARPING,
+            Self::Selection => MessageId::COMMANDS_SELECTION,
+            Self::FillGradient => MessageId::COMMANDS_FILL_AND_GRADIENT,
+            Self::ShapesRulers => MessageId::COMMANDS_SHAPE_AND_RULER,
+            Self::MoveTransform => MessageId::COMMANDS_MOVE_AND_TRANSFORM,
+            Self::ColorSampling => MessageId::COMMANDS_COLOR_SAMPLING,
+            Self::Navigation => MessageId::COMMANDS_NAVIGATION,
+            Self::Retouching => MessageId::COMMANDS_RETOUCHING,
+        })
     }
 }
 
@@ -151,10 +152,16 @@ pub enum CommandSearchAction {
     Close,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EntryCategory { Other, Brushes }
+
 struct Entry {
     descriptor: CommandDescriptor,
     action: Option<UiAction>,
     search: String,
+    label_search: String,
+    canonical_search: String,
+    category: EntryCategory,
 }
 
 #[derive(Default)]
@@ -211,28 +218,22 @@ pub(super) fn identity(action: &UiAction) -> String {
 }
 
 fn entry(
-    label: &str,
-    category: &str,
+    label: impl AsRef<str>,
+    category: impl AsRef<str>,
     action: UiAction,
     enabled: bool,
     selected: Option<bool>,
     settings: &Settings,
     platform: Platform,
+    l: &Localizer,
 ) -> Entry {
+    let label = label.as_ref();
+    let category = category.as_ref();
     let action = crate::shortcuts::action_command(&action)
         .map(|command| UiAction::Invoke { command })
         .unwrap_or(action);
     let presentation_label = match &action {
-        UiAction::Customize {
-            action: CustomizationAction::SetPanelVisible { panel, .. },
-        } => {
-            let noun = if panel.kind() == PanelKind::Tiles { "toolbar" } else { "panel" };
-            if label.to_lowercase().ends_with(noun) {
-                label.to_owned()
-            } else {
-                format!("{label} {noun}")
-            }
-        }
+        UiAction::Invoke { .. } => label.to_owned(),
         _ => label.to_owned(),
     };
     let label = presentation_label.as_str();
@@ -240,186 +241,197 @@ fn entry(
         .action_keys(&action, platform)
         .into_iter()
         .find(|k| k.available(platform))
-        .map(|k| k.label(platform))
+        .map(|k| k.localized_label(platform, l))
         .unwrap_or_default();
     let aliases = match &action {
         UiAction::Invoke {
             command: CommandId::Settings,
-        } => "preferences settings options",
+        } => Some(MessageId::COMMANDS_ALIAS_SETTINGS),
         UiAction::Invoke {
             command: CommandId::Eyedropper,
-        } => "color picker sampler",
+        } => Some(MessageId::COMMANDS_ALIAS_EYEDROPPER),
         UiAction::Invoke {
             command: CommandId::Move,
-        } => "move object layer",
+        } => Some(MessageId::COMMANDS_ALIAS_MOVE),
         UiAction::Invoke {
             command: CommandId::ScaleRotate,
-        } => "transform resize scale rotate",
+        } => Some(MessageId::COMMANDS_ALIAS_SCALE_ROTATE),
         UiAction::Invoke {
             command: CommandId::FitCanvas,
-        } => "fit canvas zoom drawing page",
+        } => Some(MessageId::COMMANDS_ALIAS_FIT_CANVAS),
         UiAction::Invoke {
             command: CommandId::Deselect,
-        } => "clear remove selection deselect",
+        } => Some(MessageId::COMMANDS_ALIAS_DESELECT),
         UiAction::Invoke {
             command: CommandId::ToggleTheme,
-        } => "appearance theme light dark",
+        } => Some(MessageId::COMMANDS_ALIAS_TOGGLE_THEME),
         UiAction::Invoke {
             command: CommandId::GrowSelection,
-        } => "expand modify selection",
+        } => Some(MessageId::COMMANDS_ALIAS_GROW_SELECTION),
         UiAction::Invoke {
             command: CommandId::ShrinkSelection,
-        } => "contract modify selection",
+        } => Some(MessageId::COMMANDS_ALIAS_SHRINK_SELECTION),
         UiAction::Invoke {
             command: CommandId::FeatherSelection,
-        } => "soften blur edge modify selection",
+        } => Some(MessageId::COMMANDS_ALIAS_FEATHER_SELECTION),
         UiAction::Invoke {
             command: CommandId::BorderSelection,
-        } => "frame ring edge modify selection",
+        } => Some(MessageId::COMMANDS_ALIAS_BORDER_SELECTION),
         UiAction::Invoke {
             command: CommandId::SmoothSelection,
-        } => "clean jagged modify selection",
+        } => Some(MessageId::COMMANDS_ALIAS_SMOOTH_SELECTION),
         UiAction::Invoke {
             command: CommandId::TransformSelectionOutline,
-        } => "transform selection marquee scale rotate",
+        } => Some(MessageId::COMMANDS_ALIAS_TRANSFORM_SELECTION_OUTLINE),
         UiAction::Invoke {
             command: CommandId::MoveLeaveCopy,
-        } => "duplicate keep original move selection alt",
+        } => Some(MessageId::COMMANDS_ALIAS_MOVE_LEAVE_COPY),
         UiAction::Invoke {
             command: CommandId::CopyMerged,
-        } => "copy visible flattened",
+        } => Some(MessageId::COMMANDS_ALIAS_COPY_MERGED),
         UiAction::Invoke {
             command: CommandId::PasteImage,
-        } => "paste image clipboard",
+        } => Some(MessageId::COMMANDS_ALIAS_PASTE_IMAGE),
         UiAction::Invoke {
             command: CommandId::NewDodgeBurnLayer,
-        } => "neutral gray soft light retouch lighten darken",
+        } => Some(MessageId::COMMANDS_ALIAS_NEW_DODGE_BURN_LAYER),
         UiAction::Invoke {
             command: CommandId::FrequencySeparation,
-        } => "skin retouch texture tone low high split",
-        _ => "",
+        } => Some(MessageId::COMMANDS_ALIAS_FREQUENCY_SEPARATION),
+        _ => None,
+    };
+    let english = Localizer::shared(UiLanguage::English);
+    let aliases = aliases.map_or_else(String::new, |id| format!("{} {}", l.text(id), english.text(id)));
+    let canonical = match &action {
+        UiAction::Invoke { command } => command.localized_label(&english).to_string(),
+        UiAction::CycleTool { family } => family.localized_label(&english).to_string(),
+        UiAction::SelectBrush { id } => tools::brush_label_localized(*id, &english).map_or_else(String::new, |label| label.to_string()),
+        _ => String::new(),
     };
     Entry {
         descriptor: CommandDescriptor {
             id: identity(&action),
             label: label.into(),
             category: category.into(),
-            description: action_description(&action).into(),
+            description: action_description(&action, l),
             enabled,
             disabled_reason: None,
             selected: selected.unwrap_or(false),
             shortcut,
             parameter: None,
         },
-        action: Some(action),
-        search: format!("{label} {category} {aliases}").to_lowercase(),
+        action: Some(action.clone()),
+        search: crate::search::normalize(&format!("{label} {category} {aliases} {canonical}")),
+        label_search: crate::search::normalize(label),
+        canonical_search: crate::search::normalize(&canonical),
+        category: EntryCategory::Other,
     }
 }
 
-fn action_description(action: &UiAction) -> &'static str {
+fn action_description(action: &UiAction, l: &Localizer) -> String {
     use CommandId::*;
     match action {
         UiAction::Invoke { command } => match command {
-            DrawingBrush => "Return to the last drawing brush.",
-            Sculpt => "Return to the last sculpting tool.",
+            DrawingBrush => l.text(MessageId::COMMANDS_HELP_DRAWING_BRUSH).to_string(),
+            Sculpt => l.text(MessageId::COMMANDS_HELP_SCULPT).to_string(),
             Pen | Pencil | Brush | Eraser | Airbrush | Decoration | Blend | Liquify => {
-                "Use the last brush selected in this tool family."
+                l.text(MessageId::COMMANDS_HELP_PEN).to_string()
             }
-            Clone => "Paint with pixels copied from the source disc; Set Source picks its spot. With Reference layers it copies the marked layers below the editing layer and the editing layer itself, while Wand and Fill sample every marked layer.",
-            Heal => "Paint with pixels copied from the source disc, like the Clone Stamp. When you lift the pen, the copy takes on the color and brightness around the stroke while keeping its texture.",
-            SpotHeal => "Paint over a spot or blemish. When you lift the pen, it is replaced with texture from the most similar nearby area, blended into its surroundings. It matches by proximity only; Content-Aware and Create Texture aren't available.",
-            Select => "Return to the last selection tool.",
-            SelectionBrush => "Paint the area that subsequent edits will affect.",
-            SelectionIntersect => "Keep only the area shared by the existing and new selections.",
-            SelectionVisible => "Find matching colors across the visible artwork.",
-            SelectionEditing => "Sample the editing layer only: selection tools find colors in it, and retouching copies from it.",
-            SelectionReference => "Sample layers marked as references; retouching copies the ones below the editing layer with the editing layer over them.",
-            SelectionFixedRatio => "Keep the selection's width-to-height ratio fixed.",
-            SelectionFixedSize => "Use the configured selection width and height.",
-            QuickMask => "Edit the selection as a painted mask.",
-            Reselect => "Restore the previous pixel selection.",
-            SaveSelectionLayer => "Keep the current selection as a reusable selection layer.",
-            Move => "Move artwork and manage image placement on the canvas.",
-            ScaleRotate => "Resize or rotate the current transform target.",
-            FitCanvas => "Adjust the zoom to show the entire canvas.",
-            ActualPixels => "Zoom to 100% so each image pixel covers one screen pixel.",
-            FlipHorizontal | FlipVertical => "Mirror the view without changing the artwork.",
-            RotateLeft | RotateRight => "Rotate the view without changing the artwork.",
-            UndoWorkspace => "Restore the previous toolbar, panel or workspace layout.",
-            RedoWorkspace => "Reapply an undone workspace layout change.",
-            ZenMode => "Hide or restore workspace controls to give the canvas more room.",
-            ShowCanvasActionBar => "Show next steps beside selections, transforms and placed images.",
-            TransformFlipHorizontal | TransformFlipVertical => "Mirror the content being transformed, about the centre of its box.",
-            TransformRotateLeft | TransformRotateRight => "Turn the content being transformed by a quarter turn.",
-            ResetTransform => "Undo every change made in this transform, keeping it open.",
-            RemoveSelectionPoint => "Remove the most recent point of a polygon selection in progress.",
-            MaskSelection => "Add or replace the active layer's mask so only the selection shows.",
-            TransformFree | TransformUniform => "Transform with box handles; Uniform keeps proportions.",
-            TransformDistort => "Pin each corner of the transform box independently, including perspective.",
-            TransformPerspective => "While distorting, mirror each corner drag onto its neighbour for symmetric perspective.",
-            TransformNearest | TransformBilinear | TransformBicubic | TransformLanczos => "Choose how transformed pixels are resampled: hard-edged, smooth, smooth and sharp, or with the most detail.",
-            TransformWarp => "Bend the content with a mesh of curved patches, dragging its nodes and their tangent handles.",
-            WarpGridThree | WarpGridFour | WarpGridFive => "Choose how many patches the warp mesh has, keeping its current shape.",
-            UseReferenceBelow => "Mark the nearest visible photo or paint layer below as a reference for Wand and Fill.",
-            CloneSourceArm => "Pick where retouching copies from: the next pen or mouse click sets the source.",
-            CloneAligned => "Keep one offset between the source and the brush across strokes; when off, every stroke starts copying at the source disc.",
-            CloneFlipHorizontal | CloneFlipVertical => "Mirror the copied pixels about the source disc.",
-            CloneResetOffset => "Start the next stroke copying at the source disc again.",
-            ClearLayer => "Erase everything on the active layer. A placed photo's original is discarded too.",
-            ClearSelected => "Erase the selected pixels of the active layer; soft edges erase partially. A placed photo keeps its original.",
-            ClearOutside => "Erase the pixels of the active layer outside the selection.",
-            CopySelectionToLayer => "Copy the selected pixels to a new layer above, in place. Without a selection, duplicate the layer.",
-            CutSelectionToLayer => "Move the selected pixels from the active layer to a new layer above, in place.",
-            RevertToOriginal => "Discard painting, erasing and applied masks on a placed photo, keeping its placement, mask, opacity and blend mode.",
-            MergeDown => "Merge the active layer into the layer below. A clipping base merges its clipped layers, and an effect layer applies to the layer below only. Placed photos become document pixels.",
-            MergeGroup => "Merge the active group into one layer with the group's blend mode and opacity, discarding its hidden layers. Placed photos become document pixels.",
-            MergeVisible => "Merge every visible layer into one, keeping hidden layers. Placed photos become document pixels.",
-            FlattenImage => "Merge every visible layer into one over the paper and discard hidden layers and pixels outside the canvas. Placed photos become document pixels.",
-            StampVisible => "Add a layer on top with everything visible merged into it, keeping every layer.",
-            BlendPerceptual => "Combine layers on the document's encoded values, as Photoshop and Clip Studio Paint do. Painted pixels keep their values.",
-            BlendLinear => "Combine layers in linear light, which is physically based. Painted pixels keep their values.",
-            LoadSelectionLayer => "Use the Selection Layer being edited as the current selection and return to the artwork.",
-            InvertSelectionLayer => "Invert the stored coverage of the Selection Layer being edited, staying in the mode.",
-            InvertLayerMask => "Swap what the active layer's mask shows and hides.",
-            LayerMaskEnabled => "Turn the active layer's mask on or off without changing it.",
-            ApplyLayerMask => "Erase the pixels the active layer's mask hides, then remove the mask.",
-            EditLayerMask => "Paint on the active layer's mask instead of its pixels.",
-            EditLayerContent => "Leave mask editing and paint on the active layer's pixels.",
-            LassoFill => "Draw a freehand shape filled with the drawing color.",
-            CanvasSize => "Set the canvas size from an anchor, in pixels or percent. Layers keep pixels outside the canvas, so a smaller canvas can grow back.",
-            CropCanvasToSelection => "Shrink the canvas to the selection's bounds. Pixels outside stay on their layers, hidden until the canvas grows again.",
-            GrowSelection => "Expand the selection, Quick Mask or edited Selection Layer by a distance, keeping soft values.",
-            ShrinkSelection => "Contract the selection, Quick Mask or edited Selection Layer by a distance, keeping soft values.",
-            FeatherSelection => "Soften the edges of the selection, Quick Mask or edited Selection Layer with a Gaussian blur.",
-            BorderSelection => "Replace the selection with a band of the chosen width along its edge.",
-            SmoothSelection => "Fill notches and remove spikes narrower than twice the radius, keeping the canvas edges.",
-            TransformSelectionOutline => "Move, scale, rotate or flip the selection outline; the pixels stay where they are.",
-            Crop => "Drag the crop handles, choose a ratio or straighten, then apply. Cropped pixels stay hidden on their layers unless Delete Cropped Pixels is on; dragging past the canvas adds transparent canvas.",
-            CropSwapOrientation => "Swap the crop between landscape and portrait.",
-            CropCycleOverlay => "Show the next crop guide: thirds, grid, diagonal or golden ratio.",
-            CropStraighten => "Draw a line along something that should be level or upright; the crop turns to match.",
-            CropDeleteCroppedPixels => "Discard the pixels outside the crop when it is applied, instead of keeping them hidden. Placed photos keep their original.",
-            StraightenToGuide => "Start a crop turned level with the selected straight guide.",
-            CropFitContent => "Set the crop to the bounds of the visible pixels, including those beyond the canvas.",
-            ImageSize => "Scale the whole image to a new size in pixels or percent, or change only its resolution. Paint layers are resampled; placed photos keep their original pixels.",
-            RotateImageLeft | RotateImageRight | RotateImage180 => "Turn the whole image, with its selection and guides. Pixels move without resampling.",
-            FlipImageHorizontal | FlipImageVertical => "Mirror the whole image, with its selection and guides. Pixels move without resampling.",
-            Trim => "Shrink the canvas to the visible pixels, removing transparent edges. Pixels outside stay on their layers, hidden.",
-            RevealAll => "Grow the canvas to show every layer's pixels, including hidden layers and pixels outside the canvas.",
-            MoveLeaveCopy => "When Move drags selected pixels, place a copy and keep the original in place. Holding Alt as the drag starts does the opposite.",
-            Copy => "Copy the active layer's own pixels within the selection, before its opacity, mask and effects. Without a selection, copy the whole layer within the canvas.",
-            Cut => "Copy the active layer's selected pixels, then erase them from the layer.",
-            CopyMerged => "Copy the visible image within the selection, as an export would show it.",
-            PasteImage => "Add the clipboard as a new layer. A copy from Capy Canvas keeps its position when that is in view; an image from another app opens with placement handles.",
-            PasteInPlace => "Add the clipboard as a new layer where it was copied from, with no placement handles. An image from another app is centred at full size.",
-            PasteInto => "Add the clipboard where it was copied from, as a new layer whose mask shows only the selection.",
-            NewDodgeBurnLayer => "Add a Soft Light layer of neutral gray above the active layer. Paint on it in white to lighten and in black to darken.",
-            FrequencySeparation => "Split the active layer into Low, its colors and tones blurred to a radius, and High, its fine texture, in a new group. The layer stays below, hidden.",
-            ColorMixOklab | ColorMixLinear | ColorMixClassic => "Choose how this brush mixes the colors it picks up: Oklab blends evenly as the eye sees color, Linear light blends as light does, and Classic blends like Clip Studio Paint.",
-            _ => "",
+            Clone => l.text(MessageId::COMMANDS_HELP_CLONE).to_string(),
+            Heal => l.text(MessageId::COMMANDS_HELP_HEAL).to_string(),
+            SpotHeal => l.text(MessageId::COMMANDS_HELP_SPOT_HEAL).to_string(),
+            Select => l.text(MessageId::COMMANDS_HELP_SELECT).to_string(),
+            SelectionBrush => l.text(MessageId::COMMANDS_HELP_SELECTION_BRUSH).to_string(),
+            SelectionIntersect => l.text(MessageId::COMMANDS_HELP_SELECTION_INTERSECT).to_string(),
+            SelectionVisible => l.text(MessageId::COMMANDS_HELP_SELECTION_VISIBLE).to_string(),
+            SelectionEditing => l.text(MessageId::COMMANDS_HELP_SELECTION_EDITING).to_string(),
+            SelectionReference => l.text(MessageId::COMMANDS_HELP_SELECTION_REFERENCE).to_string(),
+            SelectionFixedRatio => l.text(MessageId::COMMANDS_HELP_SELECTION_FIXED_RATIO).to_string(),
+            SelectionFixedSize => l.text(MessageId::COMMANDS_HELP_SELECTION_FIXED_SIZE).to_string(),
+            QuickMask => l.text(MessageId::COMMANDS_HELP_QUICK_MASK).to_string(),
+            Reselect => l.text(MessageId::COMMANDS_HELP_RESELECT).to_string(),
+            SaveSelectionLayer => l.text(MessageId::COMMANDS_HELP_SAVE_SELECTION_LAYER).to_string(),
+            Move => l.text(MessageId::COMMANDS_HELP_MOVE).to_string(),
+            ScaleRotate => l.text(MessageId::COMMANDS_HELP_SCALE_ROTATE).to_string(),
+            FitCanvas => l.text(MessageId::COMMANDS_HELP_FIT_CANVAS).to_string(),
+            ActualPixels => l.text(MessageId::COMMANDS_HELP_ACTUAL_PIXELS).to_string(),
+            FlipHorizontal | FlipVertical => l.text(MessageId::COMMANDS_HELP_FLIP_HORIZONTAL).to_string(),
+            RotateLeft | RotateRight => l.text(MessageId::COMMANDS_HELP_ROTATE_LEFT).to_string(),
+            UndoWorkspace => l.text(MessageId::COMMANDS_HELP_UNDO_WORKSPACE).to_string(),
+            RedoWorkspace => l.text(MessageId::COMMANDS_HELP_REDO_WORKSPACE).to_string(),
+            ZenMode => l.text(MessageId::COMMANDS_HELP_ZEN_MODE).to_string(),
+            ShowCanvasActionBar => l.text(MessageId::COMMANDS_HELP_SHOW_CANVAS_ACTION_BAR).to_string(),
+            TransformFlipHorizontal | TransformFlipVertical => l.text(MessageId::COMMANDS_HELP_TRANSFORM_FLIP_HORIZONTAL).to_string(),
+            TransformRotateLeft | TransformRotateRight => l.text(MessageId::COMMANDS_HELP_TRANSFORM_ROTATE_LEFT).to_string(),
+            ResetTransform => l.text(MessageId::COMMANDS_HELP_RESET_TRANSFORM).to_string(),
+            RemoveSelectionPoint => l.text(MessageId::COMMANDS_HELP_REMOVE_SELECTION_POINT).to_string(),
+            MaskSelection => l.text(MessageId::COMMANDS_HELP_MASK_SELECTION).to_string(),
+            TransformFree | TransformUniform => l.text(MessageId::COMMANDS_HELP_TRANSFORM_FREE).to_string(),
+            TransformDistort => l.text(MessageId::COMMANDS_HELP_TRANSFORM_DISTORT).to_string(),
+            TransformPerspective => l.text(MessageId::COMMANDS_HELP_TRANSFORM_PERSPECTIVE).to_string(),
+            TransformNearest | TransformBilinear | TransformBicubic | TransformLanczos => l.text(MessageId::COMMANDS_HELP_TRANSFORM_NEAREST).to_string(),
+            TransformWarp => l.text(MessageId::COMMANDS_HELP_TRANSFORM_WARP).to_string(),
+            WarpGridThree | WarpGridFour | WarpGridFive => l.text(MessageId::COMMANDS_HELP_WARP_GRID_THREE).to_string(),
+            UseReferenceBelow => l.text(MessageId::COMMANDS_HELP_USE_REFERENCE_BELOW).to_string(),
+            CloneSourceArm => l.text(MessageId::COMMANDS_HELP_CLONE_SOURCE_ARM).to_string(),
+            CloneAligned => l.text(MessageId::COMMANDS_HELP_CLONE_ALIGNED).to_string(),
+            CloneFlipHorizontal | CloneFlipVertical => l.text(MessageId::COMMANDS_HELP_CLONE_FLIP_HORIZONTAL).to_string(),
+            CloneResetOffset => l.text(MessageId::COMMANDS_HELP_CLONE_RESET_OFFSET).to_string(),
+            ClearLayer => l.text(MessageId::COMMANDS_HELP_CLEAR_LAYER).to_string(),
+            ClearSelected => l.text(MessageId::COMMANDS_HELP_CLEAR_SELECTED).to_string(),
+            ClearOutside => l.text(MessageId::COMMANDS_HELP_CLEAR_OUTSIDE).to_string(),
+            CopySelectionToLayer => l.text(MessageId::COMMANDS_HELP_COPY_SELECTION_TO_LAYER).to_string(),
+            CutSelectionToLayer => l.text(MessageId::COMMANDS_HELP_CUT_SELECTION_TO_LAYER).to_string(),
+            RevertToOriginal => l.text(MessageId::COMMANDS_HELP_REVERT_TO_ORIGINAL).to_string(),
+            MergeDown => l.text(MessageId::COMMANDS_HELP_MERGE_DOWN).to_string(),
+            MergeGroup => l.text(MessageId::COMMANDS_HELP_MERGE_GROUP).to_string(),
+            MergeVisible => l.text(MessageId::COMMANDS_HELP_MERGE_VISIBLE).to_string(),
+            FlattenImage => l.text(MessageId::COMMANDS_HELP_FLATTEN_IMAGE).to_string(),
+            StampVisible => l.text(MessageId::COMMANDS_HELP_STAMP_VISIBLE).to_string(),
+            BlendPerceptual => l.text(MessageId::COMMANDS_HELP_BLEND_PERCEPTUAL).to_string(),
+            BlendLinear => l.text(MessageId::COMMANDS_HELP_BLEND_LINEAR).to_string(),
+            LoadSelectionLayer => l.text(MessageId::COMMANDS_HELP_LOAD_SELECTION_LAYER).to_string(),
+            InvertSelectionLayer => l.text(MessageId::COMMANDS_HELP_INVERT_SELECTION_LAYER).to_string(),
+            InvertLayerMask => l.text(MessageId::COMMANDS_HELP_INVERT_LAYER_MASK).to_string(),
+            LayerMaskEnabled => l.text(MessageId::COMMANDS_HELP_LAYER_MASK_ENABLED).to_string(),
+            ApplyLayerMask => l.text(MessageId::COMMANDS_HELP_APPLY_LAYER_MASK).to_string(),
+            EditLayerMask => l.text(MessageId::COMMANDS_HELP_EDIT_LAYER_MASK).to_string(),
+            EditLayerContent => l.text(MessageId::COMMANDS_HELP_EDIT_LAYER_CONTENT).to_string(),
+            LassoFill => l.text(MessageId::COMMANDS_HELP_LASSO_FILL).to_string(),
+            CanvasSize => l.text(MessageId::COMMANDS_HELP_CANVAS_SIZE).to_string(),
+            CropCanvasToSelection => l.text(MessageId::COMMANDS_HELP_CROP_CANVAS_TO_SELECTION).to_string(),
+            GrowSelection => l.text(MessageId::COMMANDS_HELP_GROW_SELECTION).to_string(),
+            ShrinkSelection => l.text(MessageId::COMMANDS_HELP_SHRINK_SELECTION).to_string(),
+            FeatherSelection => l.text(MessageId::COMMANDS_HELP_FEATHER_SELECTION).to_string(),
+            BorderSelection => l.text(MessageId::COMMANDS_HELP_BORDER_SELECTION).to_string(),
+            SmoothSelection => l.text(MessageId::COMMANDS_HELP_SMOOTH_SELECTION).to_string(),
+            TransformSelectionOutline => l.text(MessageId::COMMANDS_HELP_TRANSFORM_SELECTION_OUTLINE).to_string(),
+            Crop => l.text(MessageId::COMMANDS_HELP_CROP).to_string(),
+            CropSwapOrientation => l.text(MessageId::COMMANDS_HELP_CROP_SWAP_ORIENTATION).to_string(),
+            CropCycleOverlay => l.text(MessageId::COMMANDS_HELP_CROP_CYCLE_OVERLAY).to_string(),
+            CropStraighten => l.text(MessageId::COMMANDS_HELP_CROP_STRAIGHTEN).to_string(),
+            CropDeleteCroppedPixels => l.text(MessageId::COMMANDS_HELP_CROP_DELETE_CROPPED_PIXELS).to_string(),
+            StraightenToGuide => l.text(MessageId::COMMANDS_HELP_STRAIGHTEN_TO_GUIDE).to_string(),
+            CropFitContent => l.text(MessageId::COMMANDS_HELP_CROP_FIT_CONTENT).to_string(),
+            ImageSize => l.text(MessageId::COMMANDS_HELP_IMAGE_SIZE).to_string(),
+            RotateImageLeft | RotateImageRight | RotateImage180 => l.text(MessageId::COMMANDS_HELP_ROTATE_IMAGE_LEFT).to_string(),
+            FlipImageHorizontal | FlipImageVertical => l.text(MessageId::COMMANDS_HELP_FLIP_IMAGE_HORIZONTAL).to_string(),
+            Trim => l.text(MessageId::COMMANDS_HELP_TRIM).to_string(),
+            RevealAll => l.text(MessageId::COMMANDS_HELP_REVEAL_ALL).to_string(),
+            MoveLeaveCopy => l.text(MessageId::COMMANDS_HELP_MOVE_LEAVE_COPY).to_string(),
+            Copy => l.text(MessageId::COMMANDS_HELP_COPY).to_string(),
+            Cut => l.text(MessageId::COMMANDS_HELP_CUT).to_string(),
+            CopyMerged => l.text(MessageId::COMMANDS_HELP_COPY_MERGED).to_string(),
+            PasteImage => l.text(MessageId::COMMANDS_HELP_PASTE_IMAGE).to_string(),
+            PasteInPlace => l.text(MessageId::COMMANDS_HELP_PASTE_IN_PLACE).to_string(),
+            PasteInto => l.text(MessageId::COMMANDS_HELP_PASTE_INTO).to_string(),
+            NewDodgeBurnLayer => l.text(MessageId::COMMANDS_HELP_NEW_DODGE_BURN_LAYER).to_string(),
+            FrequencySeparation => l.text(MessageId::COMMANDS_HELP_FREQUENCY_SEPARATION).to_string(),
+            ColorMixOklab | ColorMixLinear | ColorMixClassic => l.text(MessageId::COMMANDS_HELP_COLOR_MIX_OKLAB).to_string(),
+            _ => String::new(),
         },
-        UiAction::CycleTool { .. } => "Cycle through tools in this family.",
-        _ => "",
+        UiAction::CycleTool { .. } => l.text(MessageId::COMMANDS_CYCLE_THROUGH_TOOLS_IN_THIS_FAMILY).to_string(),
+        _ => String::new(),
     }
 }
 
@@ -430,6 +442,7 @@ fn menu_entries(
     alias: &dyn Fn(UiAction) -> UiAction,
     settings: &Settings,
     platform: Platform,
+    l: &Localizer,
 ) {
     for item in items.into_iter().flatten() {
         if let Some(action) = item.action {
@@ -441,20 +454,22 @@ fn menu_entries(
                 item.selected,
                 settings,
                 platform,
+                l,
             );
             if item_entry.descriptor.description.is_empty() {
-                item_entry.descriptor.description = format!("Menu: {path} › {}", item.label);
+                item_entry.descriptor.description = command_text(l, MessageId::COMMANDS_MENU_LOCATION, &[("path", path.to_owned()), ("label", item.label.to_string())]);
             }
             entries.push(item_entry);
         }
         if !item.sections.is_empty() {
             menu_entries(
                 item.sections,
-                &format!("{path} › {}", item.label),
+                &command_text(l, MessageId::COMMANDS_PATH, &[("path", path.to_owned()), ("label", item.label.to_string())]),
                 entries,
                 alias,
                 settings,
                 platform,
+                l,
             );
         }
     }
@@ -498,6 +513,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn catalog_entries(&self) -> Vec<Entry> {
+        let l = self.localization();
         let settings = &self.state.settings;
         let platform = self.state.platform;
         let document = self.engine.document();
@@ -524,11 +540,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         for menu in ApplicationMenu::ALL {
             menu_entries(
                 self.application_menu(menu).sections,
-                menu.label(),
+                &menu.localized_label(l),
                 &mut entries,
                 &alias,
                 settings,
                 platform,
+                l,
             );
         }
         // Menus own their ordering and validation. Commands outside menus still
@@ -539,51 +556,56 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             let state = self.command(command);
             entries.push(entry(
-                state.label,
-                "Commands",
+                &state.label,
+                l.text(MessageId::COMMANDS_COMMANDS).to_string(),
                 UiAction::Invoke { command },
                 state.enabled,
                 state.checkable.then_some(state.selected),
                 settings,
                 platform,
+                l,
             ));
         }
         for family in ToolFamily::ALL {
             entries.push(entry(
-                family.label(),
-                "Tools",
+                family.localized_label(l),
+                l.text(MessageId::COMMANDS_TOOLS).to_string(),
                 UiAction::CycleTool { family },
                 idle,
                 None,
                 settings,
                 platform,
+                l,
             ));
         }
-        for brush in brush_catalog() {
+        for brush in tools::brush_catalog_localized(l) {
             let mut item = entry(
-                brush.label,
-                "Brushes",
+                &brush.label,
+                l.text(MessageId::COMMANDS_BRUSHES).to_string(),
                 UiAction::SelectBrush { id: brush.id },
                 idle,
                 None,
                 settings,
                 platform,
+                l,
             );
-            item.descriptor.description = format!("Load this {} brush preset.", brush.category);
+            item.category = EntryCategory::Brushes;
+            item.descriptor.description = command_text(l, MessageId::COMMANDS_BRUSH_PRESET_HELP, &[("category", brush.category.to_string())]);
             entries.push(item);
         }
         let panels = &self.state.tool_panels;
         for set in panels.brush_sets.groups.iter().chain(&panels.sculpt_sets.groups) {
             let mut item = entry(
-                &format!("{} brushes", set.label),
-                "Brush sets",
+                &command_text(l, MessageId::COMMANDS_BRUSH_SET_LABEL, &[("label", set.label.to_string())]),
+                l.text(MessageId::COMMANDS_BRUSH_SETS).to_string(),
                 set.action.clone(),
                 idle,
                 None,
                 settings,
                 platform,
+                l,
             );
-            item.descriptor.description = "Use the last brush chosen in this set.".into();
+            item.descriptor.description = l.text(MessageId::COMMANDS_USE_THE_LAST_BRUSH_CHOSEN_IN_THIS_SET).to_string().into();
             entries.push(item);
         }
         let current = self.layer_interaction.tool;
@@ -603,18 +625,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             };
             let tool = if same { current } else { representative };
             let family = crate::shortcuts::tool_command(&UiAction::Layer { action: LayerAction::Tool { tool } })
-                .map_or("", |command| self.command(command).label);
-            let view = tools::view(&self.state.brush, tool);
+                .map_or_else(String::new, |command| self.command(command).label.to_string());
+            let view = tools::view(&self.state.brush, tool, l);
             for item in view.groups.iter().chain(&view.subtools) {
                 if !matches!(item.action, UiAction::Invoke { .. }) {
                     entries.push(entry(
-                        &format!("{family} › {}", item.label),
-                        "Tool options",
+                        &command_text(l, MessageId::COMMANDS_PATH, &[("path", family.to_string()), ("label", item.label.to_string())]),
+                        l.text(MessageId::COMMANDS_TOOL_OPTIONS).to_string(),
                         item.action.clone(),
                         idle,
                         Some(same && item.selected),
                         settings,
                         platform,
+                        l,
                     ));
                 }
             }
@@ -628,15 +651,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 }) {
                     let family = crate::shortcuts::tool_command(&item.action)
-                        .map_or(label, |command| self.command(command).label);
+                        .map_or_else(|| label.to_string(), |command| self.command(command).label.to_string());
                     entries.push(entry(
-                        &format!("{family} › {}", item.label),
-                        "Tool options",
+                        &command_text(l, MessageId::COMMANDS_PATH, &[("path", family.to_string()), ("label", item.label.to_string())]),
+                        l.text(MessageId::COMMANDS_TOOL_OPTIONS).to_string(),
                         item.action,
                         idle,
                         Some(item.selected),
                         settings,
                         platform,
+                        l,
                     ));
                 }
             }
@@ -644,9 +668,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         for setting in &self.state.tool_settings {
             let item = parameter_entry(
                 format!("tool_setting.{}", setting.id),
-                setting.label,
-                "Tool settings",
-                setting.label,
+                &setting.label,
+                l.text(MessageId::COMMANDS_TOOL_SETTINGS).to_string(),
+                &setting.label,
                 &setting.numeric,
                 setting.value,
                 UiAction::SetToolSetting {
@@ -656,6 +680,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 idle,
                 settings,
                 platform,
+                l,
             );
             entries.push(item);
         }
@@ -668,18 +693,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 action: EffectAction::Set { layer: active, key: key.into(), value },
             };
             for control in properties.controls.iter().filter(|c| c.key != "blend") {
-                let context = format!("{} · {}", properties.title, control.label);
+                let context = command_text(l, MessageId::COMMANDS_PROPERTY_CONTEXT, &[("context", properties.title.to_string()), ("label", control.label.to_string())]);
                 let label = if control.key == "opacity" {
-                    format!("Layer {}", control.label.to_lowercase())
+                    l.text(MessageId::COMMANDS_LAYER_OPACITY_LABEL).to_string()
                 } else {
-                    format!("{} {}", properties.title, control.label.to_lowercase())
+                    command_text(l, MessageId::COMMANDS_PROPERTY_LABEL, &[("context", properties.title.to_string()), ("label", control.label.to_string())])
                 };
                 match (&control.kind, &control.value) {
                     (PropertyKind::Number { numeric }, layer_core::EffectValue::Number(value)) => {
                         entries.push(parameter_entry(
                             format!("layer_property.{}", control.key),
                             &label,
-                            "Layer properties",
+                            l.text(MessageId::COMMANDS_LAYER_PROPERTIES).to_string(),
                             &context,
                             numeric,
                             *value,
@@ -687,18 +712,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                             properties.enabled,
                             settings,
                             platform,
+                            l,
                         ));
                     }
                     (PropertyKind::Choice { options }, layer_core::EffectValue::Choice(current)) => {
                         for (i, option) in options.iter().enumerate() {
                             let mut item = entry(
-                                &format!("{label}: {option}"),
-                                "Layer properties",
+                                &command_text(l, MessageId::COMMANDS_PROPERTY_CHOICE, &[("label", label.to_string()), ("option", option.to_string())]),
+                                l.text(MessageId::COMMANDS_LAYER_PROPERTIES).to_string(),
                                 set(&control.key, layer_core::EffectValue::Choice(i as u32)),
                                 properties.enabled,
                                 Some(i as u32 == *current),
                                 settings,
                                 platform,
+                                l,
                             );
                             item.descriptor.description = context.clone();
                             entries.push(item);
@@ -707,12 +734,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     (PropertyKind::Toggle, layer_core::EffectValue::Toggle(on)) => {
                         let mut item = entry(
                             &label,
-                            "Layer properties",
+                            l.text(MessageId::COMMANDS_LAYER_PROPERTIES).to_string(),
                             set(&control.key, layer_core::EffectValue::Toggle(!on)),
                             properties.enabled,
                             Some(*on),
                             settings,
                             platform,
+                            l,
                         );
                         item.descriptor.id = format!("layer_property.{}", control.key);
                         item.descriptor.description = context;
@@ -728,7 +756,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let current = choice.id == workspace.id;
                 let mut item = entry(
                     &choice.name,
-                    "Workspaces",
+                    l.text(MessageId::COMMANDS_WORKSPACES).to_string(),
                     UiAction::WorkspaceManager {
                         command: WorkspaceCommand::Switch { id: choice.id.clone() },
                     },
@@ -736,42 +764,51 @@ impl<R: CanvasRenderer> UiSession<R> {
                     Some(current),
                     settings,
                     platform,
+                    l,
                 );
-                item.descriptor.description = "Switch to this workspace.".into();
+                item.descriptor.description = l.text(MessageId::COMMANDS_SWITCH_TO_THIS_WORKSPACE).to_string().into();
                 entries.push(item);
             }
         }
-        for (slot, label) in crate::color::PAINT_SLOTS {
+        for (slot, _) in crate::color::PAINT_SLOTS {
+            let label = l.text(match slot {
+                ColorSlot::Foreground => MessageId::COMMANDS_FOREGROUND_COLOR,
+                ColorSlot::Background => MessageId::COMMANDS_BACKGROUND_COLOR,
+                ColorSlot::Transparent => MessageId::COMMANDS_TRANSPARENT_PAINT,
+                ColorSlot::Temporary => MessageId::COMMANDS_TEMPORARY_COLOR,
+            });
             let mut item = entry(
                 label,
-                "Color",
+                l.text(MessageId::COMMANDS_COLOR).to_string(),
                 UiAction::Color { action: ColorAction::Select { slot } },
                 idle,
                 Some(self.state.colors.slot == slot),
                 settings,
                 platform,
+                l,
             );
-            item.descriptor.description = "Paint with this color.".into();
+            item.descriptor.description = l.text(MessageId::COMMANDS_PAINT_WITH_THIS_COLOR).to_string().into();
             entries.push(item);
         }
         for (label, action) in [
-            ("Swap foreground and background", ColorAction::Swap),
-            ("Black", ColorAction::QuickColor { white: false }),
-            ("White", ColorAction::QuickColor { white: true }),
+            (l.text(MessageId::COMMANDS_SWAP_FOREGROUND_AND_BACKGROUND).to_string(), ColorAction::Swap),
+            (l.text(MessageId::COMMANDS_BLACK).to_string(), ColorAction::QuickColor { white: false }),
+            (l.text(MessageId::COMMANDS_WHITE).to_string(), ColorAction::QuickColor { white: true }),
         ] {
             entries.push(entry(
                 label,
-                "Color",
+                l.text(MessageId::COMMANDS_COLOR).to_string(),
                 UiAction::Color { action },
                 idle,
                 None,
                 settings,
                 platform,
+                l,
             ));
         }
         let mut pan = entry(
-            "Pan while held",
-            "Navigation",
+            l.text(MessageId::COMMANDS_PAN_WHILE_HELD).to_string(),
+            l.text(MessageId::COMMANDS_NAVIGATION).to_string(),
             UiAction::Invoke {
                 command: CommandId::Hand,
             },
@@ -779,11 +816,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             None,
             settings,
             platform,
+            l,
         );
         pan.descriptor.id = "canvas.pan".into();
         pan.descriptor.description =
-            "Temporarily pan the view; release to return to the tool.".into();
-        pan.descriptor.shortcut = settings.shortcut_label("canvas.pan", platform);
+            l.text(MessageId::COMMANDS_TEMPORARILY_PAN_THE_VIEW_RELEASE_TO_RETURN_TO_THE_TOOL).to_string().into();
+        pan.descriptor.shortcut = settings.shortcut_label_localized("canvas.pan", platform, l);
         pan.action = None;
         entries.push(pan);
         let definitions = crate::shortcuts::definitions(platform);
@@ -800,21 +838,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let target = definitions
                         .iter()
                         .find(|(d, _)| Some(&d.id) == definition.target.as_ref())
-                        .map_or_else(String::new, |(d, _)| d.label.clone());
+                        .map_or_else(String::new, |(d, _)| d.label.resolve(l));
                     let enabled = match *action {
                         UiAction::Invoke { command } => self.command(command).enabled,
                         _ => true,
                     };
                     let reason = (!enabled).then(|| self.action_disabled_reason(&action));
-                    let mut held = entry(&definition.label, "Canvas", *action, enabled, None, settings, platform);
+                    let mut held = entry(definition.label.resolve(l), l.text(MessageId::COMMANDS_CANVAS).to_string(), *action, enabled, None, settings, platform, l);
                     held.descriptor.disabled_reason = reason;
                     held.descriptor.id = definition.id.clone();
                     held.descriptor.description = if momentary {
-                        format!("Turn on {target} until you release the key.")
+                        command_text(l, MessageId::COMMANDS_MOMENTARY_HELP, &[("target", target.to_string())])
                     } else {
-                        format!("Temporarily use {target}; release to return to the tool.")
+                        command_text(l, MessageId::COMMANDS_HOLD_HELP, &[("target", target.to_string())])
                     };
-                    held.descriptor.shortcut = settings.shortcut_label(&definition.id, platform);
+                    held.descriptor.shortcut = settings.shortcut_label_localized(&definition.id, platform, l);
                     held.action = None;
                     entries.push(held);
                 }
@@ -823,28 +861,38 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     let enabled = matches!(&*action, UiAction::StepToolSetting { id, .. }
                         if self.state.tool_settings.iter().any(|c| c.id == *id));
-                    let mut step = entry(&definition.label, "Tool settings", *action, enabled, None, settings, platform);
+                    let mut step = entry(definition.label.resolve(l), l.text(MessageId::COMMANDS_TOOL_SETTINGS).to_string(), *action, enabled, None, settings, platform, l);
                     step.descriptor.id = definition.id;
                     entries.push(step);
                 }
                 _ => (),
             }
         }
+        for entry in &mut entries {
+            if let Some(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel, .. } }) = &entry.action {
+                entry.descriptor.label = match self.state.workspace.layout.panel(*panel) {
+                    Ok(config) if matches!(&config.content, PanelContent::Toolbar { .. }) =>
+                        command_text(l, MessageId::COMMANDS_TOOLBAR_LABEL, &[("label", config.title_localized(l))]),
+                    _ => panel_visibility_label(l, *panel),
+                };
+                entry.search = crate::search::normalize(&format!("{} {}", entry.descriptor.label, entry.search));
+            }
+        }
         let mut seen = std::collections::BTreeSet::new();
         entries.retain(|e| seen.insert(e.descriptor.id.clone()));
         let mut labels = std::collections::BTreeMap::<String, usize>::new();
         for e in &entries {
-            *labels.entry(e.descriptor.label.to_lowercase()).or_default() += 1;
+            *labels.entry(crate::search::normalize(&e.descriptor.label)).or_default() += 1;
         }
         for e in &mut entries {
-            let noun = match &e.action {
-                Some(UiAction::SelectBrush { .. }) => "brush",
-                Some(UiAction::Effect { action: EffectAction::Insert { .. } }) => "filter",
+            let message = match &e.action {
+                Some(UiAction::SelectBrush { .. }) => MessageId::COMMANDS_BRUSH_LABEL,
+                Some(UiAction::Effect { action: EffectAction::Insert { .. } }) => MessageId::COMMANDS_FILTER_LABEL,
                 _ => continue,
             };
-            if labels[&e.descriptor.label.to_lowercase()] > 1 {
-                e.descriptor.label = format!("{} {noun}", e.descriptor.label);
-                e.search = format!("{} {}", e.descriptor.label.to_lowercase(), e.search);
+            if labels[&crate::search::normalize(&e.descriptor.label)] > 1 {
+                e.descriptor.label = command_text(l, message, &[("label", e.descriptor.label.clone())]);
+                e.search = format!("{} {}", crate::search::normalize(&e.descriptor.label), e.search);
             }
         }
         // Use exactly the command's live predicate/reason even when its first
@@ -873,69 +921,71 @@ impl<R: CanvasRenderer> UiSession<R> {
                         },
                     });
                     e.descriptor.label = if redo {
-                        "Redo Color Reorder"
+                        l.text(MessageId::COMMANDS_REDO_COLOR_REORDER).to_string()
                     } else {
-                        "Undo Color Reorder"
+                        l.text(MessageId::COMMANDS_UNDO_COLOR_REORDER).to_string()
                     }
                     .into();
-                    e.descriptor.category = "Palette".into();
+                    e.descriptor.category = l.text(MessageId::COMMANDS_PALETTE).to_string().into();
                     e.descriptor.description = if redo {
-                        "Reapply the last undone color reorder in this palette."
+                        l.text(MessageId::COMMANDS_REAPPLY_THE_LAST_UNDONE_COLOR_REORDER_IN_THIS_PALETTE).to_string()
                     } else {
-                        "Restore the previous color order in this palette."
+                        l.text(MessageId::COMMANDS_RESTORE_THE_PREVIOUS_COLOR_ORDER_IN_THIS_PALETTE).to_string()
                     }
                     .into();
                     e.descriptor.enabled =
                         self.state.colors.library.can_undo_reorder(palette, redo);
                     e.descriptor.disabled_reason =
-                        (!e.descriptor.enabled).then(|| "No color reorder to restore".into());
-                    e.search = e.descriptor.label.to_lowercase();
+                        (!e.descriptor.enabled).then(|| l.text(MessageId::COMMANDS_NO_COLOR_REORDER_TO_RESTORE).to_string().into());
+                    e.search = crate::search::normalize(&format!("{} {}", e.descriptor.label, e.search));
                 }
             }
         }
         if self.command_search.focus == CommandFocus::Text {
             for (id, label) in [
-                ("command.undo", "Undo Text Edit"),
-                ("command.redo", "Redo Text Edit"),
+                ("command.undo", l.text(MessageId::COMMANDS_UNDO_TEXT_EDIT).to_string()),
+                ("command.redo", l.text(MessageId::COMMANDS_REDO_TEXT_EDIT).to_string()),
             ] {
                 if let Some(e) = entries.iter_mut().find(|e| e.descriptor.id == id) {
-                    e.descriptor.label = label.into();
-                    e.descriptor.category = "Text editing".into();
+                    e.descriptor.label = label.clone();
+                    e.descriptor.category = l.text(MessageId::COMMANDS_TEXT_EDITING).to_string().into();
                     e.descriptor.enabled = false;
                     e.descriptor.disabled_reason =
-                        Some("Close command search to undo or redo in the text field".into());
-                    e.search = label.to_lowercase();
+                        Some(l.text(MessageId::COMMANDS_CLOSE_COMMAND_SEARCH_TO_UNDO_OR_REDO_IN_THE_TEXT_FIELD).to_string().into());
+                    e.search = crate::search::normalize(&format!("{label} {}", e.search));
                 }
             }
         }
+        for entry in &mut entries { entry.label_search = crate::search::normalize(&entry.descriptor.label); }
         entries
     }
 
     pub fn command_disabled_reason(&self, command: CommandId) -> Option<String> {
-        (!self.command_flags(command).0).then(|| self.disabled_reason_unchecked(command).into_owned())
+        (!self.command_flags(command).0).then(|| self.disabled_reason_unchecked(command).to_string())
     }
 
     /// The reason for a command that `command_flags` reports disabled.
-    pub(super) fn disabled_reason_unchecked(&self, command: CommandId) -> Cow<'static, str> {
+    pub(super) fn disabled_reason_unchecked(&self, command: CommandId) -> Arc<str> {
+        let l = self.localization();
         use CommandId as C;
         if !command.available_on(self.state.platform) {
-            return "Not available on this platform".into();
+            return l.text(MessageId::COMMANDS_NOT_AVAILABLE_ON_THIS_PLATFORM).into();
         }
         if self.state.document_file.close_ready {
-            return "This drawing is closing".into();
+            return l.text(MessageId::COMMANDS_THIS_DRAWING_IS_CLOSING).into();
         }
         if self.workspace_read_only && !matches!(command, C::ApplyTransform | C::CancelTransform) {
             return if self.managed_workspace.is_none() {
-                "The workspace is still loading"
+                l.text(MessageId::COMMANDS_THE_WORKSPACE_IS_STILL_LOADING)
             } else {
-                "Workspace ownership needs recovery"
+                l.text(MessageId::COMMANDS_WORKSPACE_OWNERSHIP_NEEDS_RECOVERY)
             }.into();
         }
         if self.workspace_transition {
-            return "A workspace change is in progress".into();
+            return l.text(MessageId::COMMANDS_A_WORKSPACE_CHANGE_IS_IN_PROGRESS).into();
         }
         if self.rendering_suspended && !Self::command_without_renderer(command) {
-            return "Painting is unavailable. Save the drawing and reopen it.".into();
+            return l.text(MessageId::COMMANDS_PAINTING_IS_UNAVAILABLE_SAVE_THE_DRAWING_AND_REOPEN_IT).into();
         }
         let gate = match command {
             C::SdrRendition
@@ -1014,16 +1064,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         let locked = document.is_locked(document.active_layer);
         let mask_target = self.selection_masks.target();
         let selection = self.has_selection();
-        let apply_refusal = active.and_then(|l| art_layers::apply_mask_refusal(l.kind));
-        let reason = match command {
-            C::Undo => "Nothing to undo",
-            C::Redo if self.cropping() => "Apply or cancel the crop first",
-            C::Redo => "Nothing to redo",
+        let apply_refusal = active.and_then(|l| art_layers::apply_mask_refusal(l.kind, self.localization()));
+        let reason: Arc<str> = match command {
+            C::Undo => l.text(MessageId::COMMANDS_NOTHING_TO_UNDO),
+            C::Redo if self.cropping() => l.text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_CROP_FIRST),
+            C::Redo => l.text(MessageId::COMMANDS_NOTHING_TO_REDO),
             C::UndoWorkspace | C::RedoWorkspace if self.state.customization.header_editing => {
-                "Finish customizing the title bar first"
+                l.text(MessageId::COMMANDS_FINISH_CUSTOMIZING_THE_TITLE_BAR_FIRST)
             }
-            C::UndoWorkspace => "No workspace change to undo",
-            C::RedoWorkspace => "No workspace change to redo",
+            C::UndoWorkspace => l.text(MessageId::COMMANDS_NO_WORKSPACE_CHANGE_TO_UNDO),
+            C::RedoWorkspace => l.text(MessageId::COMMANDS_NO_WORKSPACE_CHANGE_TO_REDO),
             C::ReturnToArtwork
             | C::ResetMaskColors
             | C::SwapMaskColors
@@ -1032,17 +1082,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::ClearSelectionMask
                 if mask_target.is_none() =>
             {
-                "Edit a selection mask first"
+                l.text(MessageId::COMMANDS_EDIT_A_SELECTION_MASK_FIRST)
             }
             C::MaskOverlayProtected | C::FillSelectionMask | C::ClearSelectionMask => {
-                "This selection layer is locked"
+                l.text(MessageId::COMMANDS_THIS_SELECTION_LAYER_IS_LOCKED)
             }
             C::LoadSelectionLayer | C::InvertSelectionLayer
                 if !matches!(mask_target, Some(layer_core::SelectionTarget::Saved(_))) =>
             {
-                "Edit a Selection Layer first"
+                l.text(MessageId::COMMANDS_EDIT_A_SELECTION_LAYER_FIRST)
             }
-            C::InvertSelectionLayer => "This selection layer is locked",
+            C::InvertSelectionLayer => l.text(MessageId::COMMANDS_THIS_SELECTION_LAYER_IS_LOCKED),
             C::ScaleRotate
             | C::ClearLayer
             | C::Figure
@@ -1056,44 +1106,44 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::ApplyLayerMask
                 if mask_target.is_some() =>
             {
-                "Return to the artwork first"
+                l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST)
             }
             C::InvertLayerMask | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask
                 if active.is_none_or(|l| l.mask.is_none()) =>
             {
-                "The layer has no mask"
+                l.text(MessageId::COMMANDS_THE_LAYER_HAS_NO_MASK)
             }
-            C::EditLayerMask => "Already editing the layer mask",
-            C::EditLayerContent => "Already editing the layer content",
+            C::EditLayerMask => l.text(MessageId::COMMANDS_ALREADY_EDITING_THE_LAYER_MASK),
+            C::EditLayerContent => l.text(MessageId::COMMANDS_ALREADY_EDITING_THE_LAYER_CONTENT),
             C::QuickMask | C::NewSelectionLayer | C::PlacementOriginalSize | C::ScaleRotate
                 if self.operation.active() && !self.operation.placing() =>
             {
                 self.operation_refusal()
             }
-            C::PlacementOriginalSize => "Place an image first",
-            C::Reselect if selection => "Deselect before restoring the previous selection",
-            C::Reselect => "No previous selection to restore",
+            C::PlacementOriginalSize => l.text(MessageId::COMMANDS_PLACE_AN_IMAGE_FIRST),
+            C::Reselect if selection => l.text(MessageId::COMMANDS_DESELECT_BEFORE_RESTORING_THE_PREVIOUS_SELECTION),
+            C::Reselect => l.text(MessageId::COMMANDS_NO_PREVIOUS_SELECTION_TO_RESTORE),
             C::Deselect | C::InvertSelection | C::FillSelection | C::SaveSelectionLayer if !selection => {
-                "Create a selection first"
+                l.text(MessageId::COMMANDS_CREATE_A_SELECTION_FIRST)
             }
-            C::DeleteLayer if self.selection_masks.quick() => "Leave Quick Mask first",
+            C::DeleteLayer if self.selection_masks.quick() => l.text(MessageId::COMMANDS_LEAVE_QUICK_MASK_FIRST),
             C::DeleteLayer => {
                 return document
                     .delete_layers_edit(&[document.active_layer])
                     .err()
-                    .map_or("This layer can't be deleted".into(), |e| layer_error(e).into());
+                    .map_or(l.text(MessageId::COMMANDS_THIS_LAYER_CAN_T_BE_DELETED).into(), |e| layer_error(e, l).into());
             }
             C::SdrRendition | C::PreviewSdr if !document.color.depth.is_float() => {
-                "Requires a high dynamic range drawing"
+                l.text(MessageId::COMMANDS_REQUIRES_A_HIGH_DYNAMIC_RANGE_DRAWING)
             }
-            C::PreviewSdr if !self.state.hdr_display_available => "Requires a high dynamic range display",
-            C::PreviewSdr => "Turn off soft proofing and the gamut warning first",
-            C::GamutWarning => "Set up soft proofing first",
-            C::ResetLayout if self.managed_workspace.is_some() => "The layout already matches its starting state",
-            C::RepairSourceProfile | C::RasterizeSource if document.active_mask => "Return to the layer's artwork first",
-            C::RepairSourceProfile | C::RasterizeSource => "Select an unlocked retained image layer",
-            C::ApplyTransform if self.region_tools.applying_transform() => "Applying the transform",
-            C::TransformPerspective if self.operation.transforming() => "Choose Distort first",
+            C::PreviewSdr if !self.state.hdr_display_available => l.text(MessageId::COMMANDS_REQUIRES_A_HIGH_DYNAMIC_RANGE_DISPLAY),
+            C::PreviewSdr => l.text(MessageId::COMMANDS_TURN_OFF_SOFT_PROOFING_AND_THE_GAMUT_WARNING_FIRST),
+            C::GamutWarning => l.text(MessageId::COMMANDS_SET_UP_SOFT_PROOFING_FIRST),
+            C::ResetLayout if self.managed_workspace.is_some() => l.text(MessageId::COMMANDS_THE_LAYOUT_ALREADY_MATCHES_ITS_STARTING_STATE),
+            C::RepairSourceProfile | C::RasterizeSource if document.active_mask => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
+            C::RepairSourceProfile | C::RasterizeSource => l.text(MessageId::COMMANDS_SELECT_AN_UNLOCKED_RETAINED_IMAGE_LAYER),
+            C::ApplyTransform if self.region_tools.applying_transform() => l.text(MessageId::COMMANDS_APPLYING_THE_TRANSFORM),
+            C::TransformPerspective if self.operation.transforming() => l.text(MessageId::COMMANDS_CHOOSE_DISTORT_FIRST),
             C::ApplyTransform
             | C::CancelTransform
             | C::TransformFlipHorizontal
@@ -1103,43 +1153,43 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::ResetTransform
             | C::TransformFree
             | C::TransformUniform
-            | C::TransformPerspective => "Start a transform first",
-            C::TransformDistort | C::TransformWarp if self.operation.outline() => crate::session::operation::OUTLINE_AFFINE,
+            | C::TransformPerspective => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
+            C::TransformDistort | C::TransformWarp if self.operation.outline() => l.text(crate::session::operation::OUTLINE_AFFINE),
             C::TransformNearest | C::TransformBilinear | C::TransformBicubic if self.operation.outline() => {
-                crate::session::operation::OUTLINE_PIXELS
+                l.text(crate::session::operation::OUTLINE_PIXELS)
             }
-            C::TransformDistort | C::TransformWarp if self.operation.placing() => crate::session::operation::DISTORT_PLACEMENT,
-            C::TransformWarp => "Start a transform first",
-            C::WarpGridThree | C::WarpGridFour | C::WarpGridFive => "Choose Warp first",
+            C::TransformDistort | C::TransformWarp if self.operation.placing() => l.text(crate::session::operation::DISTORT_PLACEMENT),
+            C::TransformWarp => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
+            C::WarpGridThree | C::WarpGridFour | C::WarpGridFive => l.text(MessageId::COMMANDS_CHOOSE_WARP_FIRST),
             C::TransformNearest | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos if self.operation.placing() => {
-                "Placed photos keep their original pixels"
+                l.text(MessageId::COMMANDS_PLACED_PHOTOS_KEEP_THEIR_ORIGINAL_PIXELS)
             }
-            C::TransformNearest | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos => "Start a transform first",
-            C::TransformDistort => "Start a transform first",
-            C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic => crate::tool_settings::NOT_MIXING,
-            C::SnapRulers => "Show rulers first",
-            C::DeleteRuler => "Select a ruler first",
+            C::TransformNearest | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
+            C::TransformDistort => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
+            C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic => l.text(MessageId::COMMANDS_PAINT_MIXING_UNAVAILABLE),
+            C::SnapRulers => l.text(MessageId::COMMANDS_SHOW_RULERS_FIRST),
+            C::DeleteRuler => l.text(MessageId::COMMANDS_SELECT_A_RULER_FIRST),
             C::CompleteSelection
                 if self.layer_interaction.tool
                     != (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) =>
             {
-                "Use the polygon selection tool"
+                l.text(MessageId::COMMANDS_USE_THE_POLYGON_SELECTION_TOOL)
             }
-            C::CompleteSelection => "Place at least three points first",
-            C::CancelSelection => "No selection path to cancel",
-            C::RemoveSelectionPoint => "Place a polygon point first",
-            C::UseReferenceBelow => self.use_reference_below_reason().unwrap_or(super::notices::NO_REFERENCE_BELOW),
-            C::ClearSelected | C::ClearOutside => self.clear_refusal().unwrap_or(UNAVAILABLE),
+            C::CompleteSelection => l.text(MessageId::COMMANDS_PLACE_AT_LEAST_THREE_POINTS_FIRST),
+            C::CancelSelection => l.text(MessageId::COMMANDS_NO_SELECTION_PATH_TO_CANCEL),
+            C::RemoveSelectionPoint => l.text(MessageId::COMMANDS_PLACE_A_POLYGON_POINT_FIRST),
+            C::UseReferenceBelow => self.use_reference_below_reason().unwrap_or_else(|| l.text(super::notices::NO_REFERENCE_BELOW)),
+            C::ClearSelected | C::ClearOutside => self.clear_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::CopySelectionToLayer | C::CutSelectionToLayer => {
-                self.selection_to_layer_refusal(command == C::CutSelectionToLayer).unwrap_or(UNAVAILABLE)
+                self.selection_to_layer_refusal(command == C::CutSelectionToLayer).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET))
             }
-            C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or(UNAVAILABLE),
+            C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::MergeDown | C::MergeGroup | C::MergeVisible | C::FlattenImage | C::StampVisible => {
-                super::merges::merge_kind(command).and_then(|kind| self.merge_refusal(kind)).unwrap_or(UNAVAILABLE)
+                super::merges::merge_kind(command).and_then(|kind| self.merge_refusal(kind)).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET))
             }
-            C::BlendPerceptual | C::BlendLinear => self.blending_refusal().unwrap_or(UNAVAILABLE),
-            C::NewDodgeBurnLayer => self.dodge_burn_refusal().unwrap_or(UNAVAILABLE),
-            C::FrequencySeparation => self.separation_refusal().unwrap_or(UNAVAILABLE),
+            C::BlendPerceptual | C::BlendLinear => self.blending_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::NewDodgeBurnLayer => self.dodge_burn_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::FrequencySeparation => self.separation_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::CanvasSize
             | C::ImageSize
             | C::RotateImageLeft
@@ -1148,9 +1198,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::FlipImageHorizontal
             | C::FlipImageVertical
             | C::Trim
-            | C::RevealAll => self.canvas_geometry_refusal().unwrap_or(UNAVAILABLE),
-            C::Crop if self.operation.transforming() => "Apply or cancel the transform first",
-            C::Crop => self.canvas_geometry_refusal().unwrap_or(UNAVAILABLE),
+            | C::RevealAll => self.canvas_geometry_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::Crop if self.operation.transforming() => l.text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST),
+            C::Crop => self.canvas_geometry_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::CropRatioFree
             | C::CropRatioOriginal
             | C::CropRatioSquare
@@ -1166,52 +1216,53 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::CropCycleOverlay
             | C::CropStraighten
             | C::CropDeleteCroppedPixels
-            | C::CropFitContent => "Choose the Crop tool first",
-            C::StraightenToGuide => self.straighten_to_guide_refusal().unwrap_or(UNAVAILABLE),
-            C::CropCanvasToSelection => self.crop_to_selection_refusal().unwrap_or(UNAVAILABLE),
+            | C::CropFitContent => l.text(MessageId::COMMANDS_CHOOSE_THE_CROP_TOOL_FIRST),
+            C::StraightenToGuide => self.straighten_to_guide_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::CropCanvasToSelection => self.crop_to_selection_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::GrowSelection | C::ShrinkSelection | C::FeatherSelection | C::BorderSelection | C::SmoothSelection => {
-                self.refine_refusal().unwrap_or(UNAVAILABLE)
+                self.refine_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET))
             }
-            C::TransformSelectionOutline => self.outline_refusal().unwrap_or(UNAVAILABLE),
+            C::TransformSelectionOutline => self.outline_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::Copy | C::Cut | C::CopyMerged | C::PasteInto if self.state.document_file.busy => {
-                "Wait for the current file operation"
+                l.text(MessageId::COMMANDS_WAIT_FOR_THE_CURRENT_FILE_OPERATION)
             }
-            C::Copy | C::Cut | C::CopyMerged => self.copy_refusal(command).unwrap_or(UNAVAILABLE),
-            C::PasteInto => self.paste_into_refusal().unwrap_or(UNAVAILABLE),
-            C::MaskSelection if self.engine.document().selection.is_none() => "Make a selection first",
-            C::ApplyLayerMask if apply_refusal.is_some() => apply_refusal.unwrap_or(UNAVAILABLE),
+            C::Copy | C::Cut | C::CopyMerged => self.copy_refusal(command).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::PasteInto => self.paste_into_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::MaskSelection if self.engine.document().selection.is_none() => l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST),
+            C::ApplyLayerMask if apply_refusal.is_some() => apply_refusal.unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::ApplyLayerMask if active.and_then(|l| l.mask.as_ref()).is_some_and(|m| !m.enabled) => {
-                "Enable the mask before applying it"
+                l.text(MessageId::COMMANDS_ENABLE_THE_MASK_BEFORE_APPLYING_IT)
             }
-            C::MaskSelection => "Select an unlocked artwork layer",
-            C::SelectionVisible => "Choose a selection tool first",
-            C::SelectionEditing | C::SelectionReference => "Choose a selection or retouching tool first",
+            C::MaskSelection => l.text(MessageId::COMMANDS_SELECT_AN_UNLOCKED_ARTWORK_LAYER),
+            C::SelectionVisible => l.text(MessageId::COMMANDS_CHOOSE_A_SELECTION_TOOL_FIRST),
+            C::SelectionEditing | C::SelectionReference => l.text(MessageId::COMMANDS_CHOOSE_A_SELECTION_OR_RETOUCHING_TOOL_FIRST),
             C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical | C::CloneResetOffset
                 if self.state.brush.tool == Tool::SpotHeal && self.retouching() =>
             {
-                "Spot Healing finds its own source"
+                l.text(MessageId::COMMANDS_SPOT_HEALING_FINDS_ITS_OWN_SOURCE)
             }
             C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical => {
-                "Choose a retouching tool first"
+                l.text(MessageId::COMMANDS_CHOOSE_A_RETOUCHING_TOOL_FIRST)
             }
-            C::CloneResetOffset if self.retouching() => "Clone an aligned stroke first",
-            C::CloneResetOffset => "Choose a retouching tool first",
-            C::ZoomIn => "Already at the maximum zoom",
-            C::ZoomOut => "Already at the minimum zoom",
+            C::CloneResetOffset if self.retouching() => l.text(MessageId::COMMANDS_CLONE_AN_ALIGNED_STROKE_FIRST),
+            C::CloneResetOffset => l.text(MessageId::COMMANDS_CHOOSE_A_RETOUCHING_TOOL_FIRST),
+            C::ZoomIn => l.text(MessageId::COMMANDS_ALREADY_AT_THE_MAXIMUM_ZOOM),
+            C::ZoomOut => l.text(MessageId::COMMANDS_ALREADY_AT_THE_MINIMUM_ZOOM),
             _ if self.operation.active() => self.operation_refusal(),
-            _ if self.state.document_file.busy => "Wait for the current file operation",
-            _ if locked => "The active layer is locked",
-            C::ScaleRotate => "Select unlocked paint content or a layer mask",
-            C::ClearLayer | C::FillSelection | C::RaiseLayer | C::LowerLayer if !paint => "Select a paint layer",
-            C::ClearLayer | C::FillSelection if document.active_mask => "Return to the layer's artwork first",
-            C::RaiseLayer => "The layer is already at the top",
-            C::LowerLayer => "The layer is already at the bottom",
-            _ => UNAVAILABLE,
+            _ if self.state.document_file.busy => l.text(MessageId::COMMANDS_WAIT_FOR_THE_CURRENT_FILE_OPERATION),
+            _ if locked => l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED),
+            C::ScaleRotate => l.text(MessageId::COMMANDS_SELECT_UNLOCKED_PAINT_CONTENT_OR_A_LAYER_MASK),
+            C::ClearLayer | C::FillSelection | C::RaiseLayer | C::LowerLayer if !paint => l.text(MessageId::COMMANDS_SELECT_A_PAINT_LAYER),
+            C::ClearLayer | C::FillSelection if document.active_mask => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
+            C::RaiseLayer => l.text(MessageId::COMMANDS_THE_LAYER_IS_ALREADY_AT_THE_TOP),
+            C::LowerLayer => l.text(MessageId::COMMANDS_THE_LAYER_IS_ALREADY_AT_THE_BOTTOM),
+            _ => l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET),
         };
         reason.into()
     }
 
     fn action_disabled_reason(&self, action: &UiAction) -> String {
+        let l = self.localization();
         if let UiAction::Invoke { command } = action
             && let Some(reason) = self.command_disabled_reason(*command)
         {
@@ -1229,19 +1280,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         let roots = document.layer_roots(&self.layer_interaction.selected);
         let apply_mask_refusal = document
             .layer(document.active_layer)
-            .and_then(|l| art_layers::apply_mask_refusal(l.kind));
+            .and_then(|l| art_layers::apply_mask_refusal(l.kind, self.localization()));
         let reason = match action {
             UiAction::Layer { action: LayerAction::GroupSelected } => {
-                document.group_layers_edit(&roots, LayerId(0), layer_core::LayerBlend::Normal).err().map(layer_error)
+                document.group_layers_edit(&roots, LayerId(0), layer_core::LayerBlend::Normal, "").err().map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer { action: LayerAction::Ungroup { .. } } => {
-                document.ungroup_layer_edit(document.active_layer).err().map(layer_error)
+                document.ungroup_layer_edit(document.active_layer).err().map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer { action: LayerAction::DeleteSelected } => {
-                document.delete_layers_edit(&roots).err().map(layer_error)
+                document.delete_layers_edit(&roots).err().map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer { action: LayerAction::Delete { .. } } => {
-                document.delete_layers_edit(&[document.active_layer]).err().map(layer_error)
+                document.delete_layers_edit(&[document.active_layer]).err().map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer {
                 action:
@@ -1253,43 +1304,43 @@ impl<R: CanvasRenderer> UiSession<R> {
             | UiAction::Selection { .. }
                 if document.selection.is_none() && self.current_selection().is_none() =>
             {
-                Some("Create a selection first".into())
+                Some(l.text(MessageId::COMMANDS_CREATE_A_SELECTION_FIRST).to_string().into())
             }
             UiAction::Layer { action: LayerAction::PasteMask { .. } }
                 if self.layer_interaction.clipboard_mask.is_none() =>
             {
-                Some("Copy a layer mask first".into())
+                Some(l.text(MessageId::COMMANDS_COPY_A_LAYER_MASK_FIRST).to_string().into())
             }
             UiAction::Layer { action: LayerAction::CopyMask { .. } | LayerAction::ApplyMask { .. } }
                 if document.layer(document.active_layer).is_some_and(|l| l.mask.is_none()) =>
             {
-                Some("The layer has no mask".into())
+                Some(l.text(MessageId::COMMANDS_THE_LAYER_HAS_NO_MASK).to_string().into())
             }
             UiAction::Layer { action: LayerAction::ApplyMask { .. } } if apply_mask_refusal.is_some() => {
-                apply_mask_refusal.map(Into::into)
+                apply_mask_refusal.map(|reason| reason.to_string())
             }
             UiAction::Layer { action: LayerAction::ReferenceSelection } => {
-                Some("Mark layers as references first".into())
+                Some(l.text(MessageId::COMMANDS_MARK_LAYERS_AS_REFERENCES_FIRST).to_string().into())
             }
             UiAction::StepToolSetting { id, .. } if !self.state.tool_settings.iter().any(|c| c.id == *id) => {
-                Some(format!("The selected tool has no {id} setting"))
+                Some(command_text(l, MessageId::COMMANDS_SETTING_UNAVAILABLE, &[("setting", id.to_string())]))
             }
             UiAction::Effect { .. } if self.selection_masks.target().is_some() || document.active_mask => {
-                Some("Return to the artwork before applying a filter".into())
+                Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_BEFORE_APPLYING_A_FILTER).to_string().into())
             }
             UiAction::Layer { .. } | UiAction::Effect { .. } | UiAction::Selection { .. }
                 if document.is_locked(document.active_layer) =>
             {
-                Some("The active layer is locked".into())
+                Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string().into())
             }
             UiAction::Layer { .. } | UiAction::Effect { .. }
                 if document.layer(document.active_layer).is_some_and(|l| l.kind == LayerKind::Background) =>
             {
-                Some("The background can't be changed this way".into())
+                Some(l.text(MessageId::COMMANDS_THE_BACKGROUND_CAN_T_BE_CHANGED_THIS_WAY).to_string().into())
             }
             _ => None,
         };
-        reason.unwrap_or_else(|| "Unavailable in the current tool or edit target".into())
+        reason.unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string().into())
     }
     pub(super) fn open_command_search(&mut self) -> Result<(), String> {
         self.require_idle()?;
@@ -1305,7 +1356,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn search_commands(&mut self, query: String) {
-        let terms = query.to_lowercase();
+        let terms = crate::search::normalize(&query);
+        let brush_query = crate::search::normalize(&CommandId::DrawingBrush.localized_label(self.localization()));
+        let brush_category_query = crate::search::normalize(&self.localization().text(MessageId::COMMANDS_BRUSHES));
         let mut matches: Vec<_> = self
             .command_search
             .entries
@@ -1315,7 +1368,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if entry.action.is_none() || d.id == "command.search_commands" {
                     return None;
                 }
-                if d.category == "Brushes" && matches!(terms.trim(), "brush" | "brushes") {
+                if entry.category == EntryCategory::Brushes && (matches!(terms.trim(), "brush" | "brushes") || terms.trim() == brush_query || terms.trim() == brush_category_query) {
                     return None;
                 }
                 let score = if terms.trim().is_empty() {
@@ -1335,7 +1388,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                     }
                 } else {
-                    search_score(&terms, &d.label.to_lowercase(), &entry.search)?
+                    search_score(&terms, &entry.label_search, &entry.search)
+                        .into_iter().chain(search_score(&terms, &entry.canonical_search, &entry.search)).max()?
                 };
                 Some((score, d))
             })
@@ -1370,17 +1424,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         id: &str,
         value: Option<String>,
     ) -> Result<UiChange, String> {
+        let l = self.localization();
         let entry = self
             .catalog_entries()
             .into_iter()
             .find(|e| e.descriptor.id == id)
-            .ok_or("This command is no longer available")?;
+            .ok_or(l.text(MessageId::COMMANDS_THIS_COMMAND_IS_NO_LONGER_AVAILABLE).to_string())?;
         if !entry.descriptor.enabled {
             return Err(entry.descriptor.disabled_reason.unwrap_or_default());
         }
-        let mut action = entry.action.ok_or("This command requires a held input")?;
+        let mut action = entry.action.ok_or(l.text(MessageId::COMMANDS_THIS_COMMAND_REQUIRES_A_HELD_INPUT).to_string())?;
         if let Some(parameter) = entry.descriptor.parameter {
-            let text = value.ok_or("Enter a value for this command")?;
+            let text = value.ok_or(l.text(MessageId::COMMANDS_ENTER_A_VALUE_FOR_THIS_COMMAND).to_string())?;
             let number = parameter
                 .numeric
                 .resolve(
@@ -1403,6 +1458,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         &mut self,
         action: CommandSearchAction,
     ) -> Result<UiChange, String> {
+        let l = self.localization().clone();
         use CommandSearchAction as A;
         if let A::Focus { focus } = action {
             self.set_command_focus(focus);
@@ -1417,7 +1473,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(self.changed(0, false));
         }
         if self.command_search.epoch != self.state.document_file.epoch {
-            return Err("This command search belongs to a previous drawing".into());
+            return Err(l.text(MessageId::COMMANDS_THIS_COMMAND_SEARCH_BELONGS_TO_A_PREVIOUS_DRAWING).to_string().into());
         }
         match action {
             A::Commit { text } => {
@@ -1483,7 +1539,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .filter(|d| d.id == id)
                     .or_else(|| view.results.iter().find(|d| d.id == id))
                     .cloned()
-                    .ok_or("Choose a current search result")?;
+                    .ok_or(l.text(MessageId::COMMANDS_CHOOSE_A_CURRENT_SEARCH_RESULT).to_string())?;
                 if descriptor.parameter.is_some() && value.is_none() {
                     self.state.command_search.as_mut().unwrap().parameter = Some(descriptor);
                 } else {
@@ -1518,17 +1574,21 @@ impl<R: CanvasRenderer> UiSession<R> {
 #[allow(clippy::too_many_arguments)]
 fn parameter_entry(
     id: String,
-    label: &str,
-    category: &str,
-    context: &str,
+    label: impl AsRef<str>,
+    category: impl AsRef<str>,
+    context: impl AsRef<str>,
     numeric: &NumericControl,
     value: f32,
     action: UiAction,
     enabled: bool,
     settings: &Settings,
     platform: Platform,
+    l: &Localizer,
 ) -> Entry {
-    let mut item = entry(&format!("{label}…"), category, action, enabled, None, settings, platform);
+    let label = label.as_ref();
+    let category = category.as_ref();
+    let context = context.as_ref();
+    let mut item = entry(&command_text(l, MessageId::COMMANDS_PARAMETER_LABEL, &[("label", label.to_owned())]), category, action, enabled, None, settings, platform, l);
     item.search.push_str(" set adjust");
     item.descriptor.id = id;
     // Compact toolbar readouts round to tenths, which would misstate
@@ -1544,17 +1604,12 @@ fn parameter_entry(
             text
         }
     };
-    let unit = if numeric.unit.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", numeric.unit)
-    };
-    item.descriptor.description = format!(
-        "{context} · Current {}{unit} · Range {}–{}{unit}",
-        number(value as f64),
-        number(numeric.min),
-        number(numeric.max),
-    );
+    item.descriptor.description = command_text(l, MessageId::COMMANDS_PARAMETER_HELP, &[
+        ("context", context.to_owned()), ("current", number(value as f64)),
+        ("minimum", number(numeric.min)), ("maximum", number(numeric.max)),
+        ("unit", numeric.unit.to_string()),
+        ("hasUnit", if numeric.unit.is_empty() { "no" } else { "yes" }.to_owned()),
+    ]);
     item.descriptor.parameter = Some(CommandParameter {
         numeric: numeric.clone(),
         value,
@@ -1563,42 +1618,75 @@ fn parameter_entry(
     item
 }
 
-fn layer_error(error: layer_core::DocumentError) -> String {
+fn layer_error(error: layer_core::DocumentError, l: &Localizer) -> Arc<str> {
     match error {
-        layer_core::DocumentError::InvalidLayerOperation(message) => message.into(),
-        layer_core::DocumentError::ProtectedLayer(_) => "The layer is locked".into(),
-        _ => "Unavailable for the selected layers".into(),
+        layer_core::DocumentError::InvalidLayerOperation(message) => Arc::from(message),
+        layer_core::DocumentError::ProtectedLayer(_) => l.text(MessageId::COMMANDS_THE_LAYER_IS_LOCKED),
+        _ => l.text(MessageId::COMMANDS_UNAVAILABLE_FOR_THE_SELECTED_LAYERS),
     }
 }
 
 /// Exact labels, prefixes, word matches, then ordered fuzzy characters. Work is
 /// bounded by a small cached catalog and a capped query; no I/O or debounce.
 fn search_score(query: &str, label: &str, text: &str) -> Option<i32> {
-    if label.trim_end_matches('…') == query.trim() {
-        return Some(10000);
-    }
-    if label.starts_with(query) {
-        return Some(8000 - label.len() as i32);
-    }
+    if label.trim_end_matches('…') == query.trim() { return Some(10000); }
+    if label.starts_with(query) { return Some(8000 - label.chars().count() as i32); }
     let mut score = 0;
     for term in query.split_whitespace() {
-        if let Some(i) = text.find(term) {
-            score += 400 - i.min(200) as i32;
+        if let Some(byte) = text.find(term) {
+            let position = text[..byte].chars().count();
+            score += 400 - position.min(200) as i32;
         } else {
-            // Fuzzy characters belong to the command name, not distant words
-            // in a menu path ("undo" must not match "Brushes › Window").
-            let mut rest = label;
+            let mut rest = label.chars();
             let mut distance = 0;
-            for c in term.chars() {
-                let i = rest.find(c)?;
-                distance += i;
-                rest = &rest[i + c.len_utf8()..];
+            for character in term.chars() {
+                distance += rest.by_ref().position(|candidate| candidate == character)?;
             }
-            if distance > term.len() * 3 {
-                return None;
-            }
+            if distance > term.chars().count() * 3 { return None; }
             score += 100 - distance.min(99) as i32;
         }
     }
     Some(score)
+}
+
+fn command_text(l: &Localizer, id: MessageId, values: &[(&str, String)]) -> String {
+    let mut args = localization::FluentArgs::new();
+    for (name, value) in values { args.set(*name, value.as_str()); }
+    l.format(id, &args)
+}
+
+#[cfg(test)]
+mod scoring_tests {
+    use super::search_score;
+    #[test]
+    fn fuzzy_distance_counts_characters_across_scripts() {
+        assert_eq!(search_score("ad", "abcd", ""), search_score("一四", "一二三四", ""));
+        assert_eq!(search_score("a", "abcd", ""), search_score("一", "一二三四", ""));
+        assert_eq!(search_score("ab", "a1234567b", ""), None);
+        assert_eq!(search_score("一二", "一三四五六七八九二", ""), None);
+    }
+}
+
+fn panel_visibility_label(l: &Localizer, panel: Panel) -> String {
+    let message = match panel {
+        Panel::Toolbar => MessageId::COMMANDS_SHOW_TOOLBAR,
+        Panel::Commands => MessageId::COMMANDS_SHOW_COMMANDS,
+        Panel::Brushes => MessageId::COMMANDS_SHOW_BRUSHES,
+        Panel::BrushSets => MessageId::COMMANDS_SHOW_BRUSH_SETS,
+        Panel::FilterTypes => MessageId::COMMANDS_SHOW_FILTER_TYPES,
+        Panel::SculptSets => MessageId::COMMANDS_SHOW_SCULPT_SETS,
+        Panel::Tools => MessageId::COMMANDS_SHOW_TOOLS,
+        Panel::ToolSettings => MessageId::COMMANDS_SHOW_TOOL_SETTINGS,
+        Panel::Color => MessageId::COMMANDS_SHOW_COLOR,
+        Panel::Palettes => MessageId::COMMANDS_SHOW_PALETTES,
+        Panel::Sizes => MessageId::COMMANDS_SHOW_SIZES,
+        Panel::Layers => MessageId::COMMANDS_SHOW_LAYERS,
+        Panel::Adjustments => MessageId::COMMANDS_SHOW_ADJUSTMENTS,
+        Panel::Properties => MessageId::COMMANDS_SHOW_PROPERTIES,
+        Panel::Stats => MessageId::COMMANDS_SHOW_STATS,
+        Panel::Navigator => MessageId::COMMANDS_SHOW_NAVIGATOR,
+        Panel::Proof => MessageId::COMMANDS_SHOW_PROOF,
+        Panel::CustomToolbar(_) => MessageId::COMMANDS_CUSTOM_TOOLBAR,
+    };
+    l.text(message).to_string()
 }

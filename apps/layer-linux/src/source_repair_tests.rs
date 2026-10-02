@@ -18,7 +18,7 @@ fn layer(w: &Rc<Workspace>, id: layer_core::LayerId) -> layer_core::Layer {
 fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.SourceRepair");
-    let mut project = new_drawing(256, 128).unwrap();
+    let mut project = new_drawing(256, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let id = project.document.active_layer;
     let original = std::sync::Arc::new(source());
     project

@@ -7,6 +7,8 @@ fn switch(w: &Rc<Workspace>, id: u64) {
         .block_on(w.documents.activate(w, id))
         .unwrap();
     new_photo::ready(w);
+    assert!(std::sync::Arc::ptr_eq(ui_session(w).localization(), &w.localization));
+    assert_eq!(ui_session(w).localization().language(), w.localization.language());
 }
 
 #[test]
@@ -108,7 +110,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     };
     capture("behind", [255, 0, 255]);
     let pause = crate::render_thread::pause_next_startup();
-    let w = Workspace::with_project(&app, Some((new_drawing(256, 256).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.maximize();
     w.window.present();
     w.dispatch(UiAction::SetTheme {
@@ -133,7 +135,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(128, 128).unwrap(), None, None)),
+                .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
         )
         .unwrap();
     capture("new-tab-wait", [51; 3]);
@@ -196,7 +198,7 @@ fn native_document_tabs_history_storage_and_close() {
     let (app, windows) = crate::application("art.capycanvas.DocumentTabs");
     let app = NativeTestApp(app);
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
-    let mut project = new_drawing(256, 256).unwrap();
+    let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let blob = TileBlob::encode(
         project.document.color.paint_descriptor(),
         &vec![128; 256 * 256 * 4],
@@ -358,7 +360,7 @@ fn native_document_tabs_history_storage_and_close() {
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(80, 80).unwrap(), None, None)),
+                .open(&w, (new_drawing(80, 80, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
         )
         .unwrap();
     new_photo::ready(&w);
@@ -458,7 +460,7 @@ fn native_document_tabs_history_storage_and_close() {
 #[ignore = "native-input.js --native-test=native_document_tab_input --native-storage"]
 fn native_document_tab_input() {
     let app = native_test_app("art.capycanvas.DocumentTabInput");
-    let w = Workspace::with_project(&app, Some((new_drawing(256, 256).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.maximize();
     w.window.present();
     new_photo::ready(&w);
@@ -480,7 +482,7 @@ fn native_document_tab_input() {
         glib::MainContext::default()
             .block_on(
                 w.documents
-                    .open(&w, (new_drawing(128, 128).unwrap(), None, None)),
+                    .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
             )
             .unwrap();
         new_photo::ready(&w);
@@ -694,7 +696,7 @@ fn native_document_tab_input() {
 #[ignore = "isolated Wayland and GPU"]
 fn native_document_tabs_failed_renderer_remains_navigable() {
     let app = native_test_app("art.capycanvas.TabFailure");
-    let w = Workspace::with_project(&app, Some((new_drawing(96, 96).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(96, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     new_photo::ready(&w);
     new_photo::invoke(&w, CommandId::AddLayer);
@@ -702,7 +704,7 @@ fn native_document_tabs_failed_renderer_remains_navigable() {
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(128, 128).unwrap(), None, None)),
+                .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
         )
         .unwrap();
     new_photo::ready(&w);
@@ -750,7 +752,7 @@ fn native_document_tabs_multiple_recovery_offers() {
     crate::open_workspace(
         &app,
         &windows,
-        Some((new_drawing(64, 64).unwrap(), None)),
+        Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         None,
     );
     let w = windows.borrow()[0].clone();
@@ -762,7 +764,7 @@ fn native_document_tabs_multiple_recovery_offers() {
         .enumerate()
         .map(|(i, width)| {
             let path = dir.join(format!("999999999-tab-{i}.capy"));
-            new_drawing(width, width)
+            new_drawing(width, width, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
                 .unwrap()
                 .write(std::fs::File::create(&path).unwrap())
                 .unwrap();
@@ -820,14 +822,14 @@ fn native_document_tabs_multiple_recovery_offers() {
 #[ignore = "isolated Wayland and GPU"]
 fn native_document_tabs_immediate_stroke_and_undo() {
     let app = native_test_app("art.capycanvas.TabPendingStroke");
-    let w = Workspace::with_project(&app, Some((new_drawing(256, 256).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     new_photo::ready(&w);
     w.documents.ram_budget.set(0);
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(96, 96).unwrap(), None, None)),
+                .open(&w, (new_drawing(96, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
         )
         .unwrap();
     new_photo::ready(&w);
@@ -911,7 +913,7 @@ fn native_document_tabs_disk_failure_keeps_data() {
         "/dev/null/capy-tabs"
     );
     let app = native_test_app("art.capycanvas.TabDiskFailure");
-    let mut project = new_drawing(256, 256).unwrap();
+    let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let blob = std::sync::Arc::new(
         TileBlob::encode(
             project.document.color.paint_descriptor(),
@@ -937,7 +939,7 @@ fn native_document_tabs_disk_failure_keeps_data() {
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(96, 96).unwrap(), None, None)),
+                .open(&w, (new_drawing(96, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
         )
         .unwrap();
     new_photo::ready(&w);
@@ -950,7 +952,7 @@ fn native_document_tabs_disk_failure_keeps_data() {
     let error = glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(80, 80).unwrap(), None, None)),
+                .open(&w, (new_drawing(80, 80, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
         )
         .unwrap_err();
     assert!(error.contains("Free disk space"));

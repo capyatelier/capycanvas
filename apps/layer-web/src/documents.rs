@@ -205,7 +205,7 @@ impl WebApp {
                     .min(ProjectLimits::default().dimension),
                 ..Default::default()
             };
-            let source_name = source_name.unwrap_or_else(|| "Photo".into());
+            let source_name = source_name.unwrap_or_default();
             let mut imported = match bytes {
                 Some(bytes) => {
                     raster_project::open(
@@ -213,14 +213,14 @@ impl WebApp {
                         raster_project::OpenOptions {
                             dimension: limits.dimension,
                             photo_policy,
-                            name: source_name.clone(),
+                            names: layer_ui::photo_document_names(&source_name, &localization),
                             intent: if recovered { layer_ui::ImportIntent::Recovery } else if placing { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
                             source_bytes: None,
                         },
                     )
                     .await?
                 }
-                None => layer_ui::ImportedDocument { project: new_options.project().map_err(js)?, source: layer_ui::ImportSource::Master },
+                None => layer_ui::ImportedDocument { project: new_options.project(&localization).map_err(js)?, source: layer_ui::ImportSource::Master },
             };
             check_cancelled()?;
             if let Some(source) = imported.interpretation_required(photo_policy) {
@@ -417,7 +417,7 @@ impl WebApp {
         // destroying the device here would also destroy the prepared drawing.
         self.session.renderer_mut().0.take();
         let previous = std::mem::replace(&mut self.session, candidate);
-        self.documents.append(previous, tiles);
+        self.documents.append(previous, tiles, self.session.localization());
         if let Some(control) = self.tone.pending.take() { control.cancel(); }
         self.tone = Default::default();
         self.proof = Default::default();

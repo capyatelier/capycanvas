@@ -7,7 +7,7 @@ use std::sync::Arc;
 pub(super) fn photo(extent: [u32; 2]) -> layer_core::Project {
     let depth = match std::env::var("LAYER_NAVIGATION_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 };
     let hdr = depth.is_float();
-    let mut project = new_drawing(1, 1).unwrap();
+    let mut project = new_drawing(1, 1, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     // Imported photographs may exceed the New Drawing dialog's size ceiling.
     project.document.width = extent[0];
     project.document.height = extent[1];

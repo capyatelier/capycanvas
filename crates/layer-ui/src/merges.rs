@@ -16,51 +16,52 @@ pub(super) fn merge_kind(command: CommandId) -> Option<MergeKind> {
     })
 }
 
-fn refusal_text(refusal: MergeRefusal) -> &'static str {
+fn refusal_text(refusal: MergeRefusal, l: &Localizer) -> std::sync::Arc<str> {
     use MergeRefusal as R;
     match refusal {
-        R::NoLayer => "Select a layer first",
-        R::Paper => "The paper can't be merged",
-        R::SelectionLayer => "A selection layer holds a selection, not artwork",
-        R::Hidden => "Show the layer before merging it",
-        R::NotNormal => "Set the layer to Normal before merging it down",
-        R::Locked => "Unlock the layers to merge first",
-        R::NoLayerBelow => "There's no layer below to merge into",
-        R::PaperBelow => "The paper can't receive merged pixels",
-        R::BelowHidden => "Show the layer below first",
-        R::BelowLocked => "The layer below is locked",
-        R::BelowNotNormal => "Set the layer below to Normal before merging",
-        R::BelowEffect => "The layer below is an effect layer, with no pixels to merge into",
-        R::BelowClipped => "The layer below is clipped; merge its clipped layers first",
-        R::BaseHidden => "Show the clipping base first",
-        R::BaseNotNormal => "Set the clipping base to Normal before merging",
-        R::ClipsHidden => "The clipped layers are hidden",
-        R::NotGroup => "Select a group to merge",
-        R::NothingVisible => "No visible layers to merge",
-        R::SelectionLayersInside => "Move the selection layers out of the group first",
-        R::TooLarge => "The merged layer would exceed the 1 GiB limit for one edit",
+        R::NoLayer => l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_A_LAYER_FIRST),
+        R::Paper => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_PAPER_CAN_T_BE_MERGED),
+        R::SelectionLayer => l.text(MessageId::COMMANDS_REFUSAL_MERGES_A_SELECTION_LAYER_HOLDS_A_SELECTION_NOT_ARTWORK),
+        R::Hidden => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SHOW_THE_LAYER_BEFORE_MERGING_IT),
+        R::NotNormal => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SET_THE_LAYER_TO_NORMAL_BEFORE_MERGING_IT_DOWN),
+        R::Locked => l.text(MessageId::COMMANDS_REFUSAL_MERGES_UNLOCK_THE_LAYERS_TO_MERGE_FIRST),
+        R::NoLayerBelow => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THERE_S_NO_LAYER_BELOW_TO_MERGE_INTO),
+        R::PaperBelow => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_PAPER_CAN_T_RECEIVE_MERGED_PIXELS),
+        R::BelowHidden => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SHOW_THE_LAYER_BELOW_FIRST),
+        R::BelowLocked => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_LAYER_BELOW_IS_LOCKED),
+        R::BelowNotNormal => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SET_THE_LAYER_BELOW_TO_NORMAL_BEFORE_MERGING),
+        R::BelowEffect => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_LAYER_BELOW_IS_AN_EFFECT_LAYER_WITH_NO_PIXELS_TO_MERGE_INTO),
+        R::BelowClipped => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_LAYER_BELOW_IS_CLIPPED_MERGE_ITS_CLIPPED_LAYERS_FIRST),
+        R::BaseHidden => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SHOW_THE_CLIPPING_BASE_FIRST),
+        R::BaseNotNormal => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SET_THE_CLIPPING_BASE_TO_NORMAL_BEFORE_MERGING),
+        R::ClipsHidden => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_CLIPPED_LAYERS_ARE_HIDDEN),
+        R::NotGroup => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SELECT_A_GROUP_TO_MERGE),
+        R::NothingVisible => l.text(MessageId::COMMANDS_REFUSAL_MERGES_NO_VISIBLE_LAYERS_TO_MERGE),
+        R::SelectionLayersInside => l.text(MessageId::COMMANDS_REFUSAL_MERGES_MOVE_THE_SELECTION_LAYERS_OUT_OF_THE_GROUP_FIRST),
+        R::TooLarge => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_MERGED_LAYER_WOULD_EXCEED_THE_1_GIB_LIMIT_FOR_ONE_EDIT),
     }
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    pub(super) fn merge_down_label(&self) -> &'static str {
+    pub(super) fn merge_down_label(&self) -> std::sync::Arc<str> {
         match self.engine.document().merge_down() {
-            MergeDown::Layer => CommandId::MergeDown.label(),
-            MergeDown::ClippingStack => "Merge Clipped Layers",
-            MergeDown::ApplyEffect => "Apply Effect to Layer Below",
+            MergeDown::Layer => CommandId::MergeDown.localized_label(self.localization()),
+            MergeDown::ClippingStack => self.localization().text(MessageId::COMMAND_MERGE_CLIPPED_LAYERS),
+            MergeDown::ApplyEffect => self.localization().text(MessageId::COMMAND_APPLY_EFFECT_TO_LAYER_BELOW),
         }
     }
 
     /// Why a merge can't run once the document is idle. The size limit is
     /// checked when it runs.
-    pub(super) fn merge_refusal(&self, kind: MergeKind) -> Option<&'static str> {
+    pub(super) fn merge_refusal(&self, kind: MergeKind) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         if self.selection_masks.target().is_some() {
-            return Some("Return to the artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
         }
         if self.operation.active() {
             return Some(self.operation_refusal());
         }
-        self.engine.document().merge_refusal(kind).map(refusal_text)
+        self.engine.document().merge_refusal(kind).map(|refusal| refusal_text(refusal, l))
     }
 
     /// Flatten Image asks, through the notice, before it discards hidden layers.
@@ -82,7 +83,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         refused(self.merge_refusal(kind))?;
         let result = self.engine.allocate_layer_id();
         let coverage = self.engine.allocate_layer_id();
-        let plan = self.engine.document().merge_plan(kind, result, coverage).map_err(refusal_text)?;
+        let plan = self.engine.document().merge_plan(kind, result, coverage).map_err(|refusal| refusal_text(refusal, self.localization()).to_string())?;
         self.engine
             .insert_with_operations(plan.edits, vec![(result, plan.operation)], None)
             .map_err(error)?;
@@ -103,7 +104,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .chain(&[CommandId::MergeVisible, CommandId::StampVisible, CommandId::FlattenImage])
             .map(|&command| {
                 let state = self.command(command);
-                ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label, UiAction::Invoke { command }) }
+                ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label.to_string(), UiAction::Invoke { command }) }
             })
             .collect()
     }

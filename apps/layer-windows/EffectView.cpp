@@ -69,19 +69,19 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         title.Text(str(view,L"title"));CapyUi::tooltip(title,str(view,L"description"));
         A keys;for(auto value:array(view,L"controls")){
             auto c=value.GetObject();keys.Append(O({{L"key",S(str(c,L"key"))},{L"label",S(str(c,L"label"))},
-                {L"section",S(str(c,L"section"))},{L"kind",object(c,L"kind")},{L"color_action",object(c,L"color_action")}}));
+                {L"section",S(str(c,L"section"))},{L"section_id",c.GetNamedValue(L"section_id",JsonValue::CreateNullValue())},{L"kind",object(c,L"kind")},{L"color_action",object(c,L"color_action")}}));
         }
         auto next=O({{L"epoch",N(num(object(data->state,L"document_file"),L"epoch"))},
             {L"layer",view.GetNamedValue(L"layer",JsonValue::CreateNullValue())},{L"controls",keys}}).Stringify();
         if(next!=schema){
             schema=next;fields.clear();body.Children().Clear();
             std::vector<std::pair<hstring,FrameworkElement>> curves;
-            auto controls=array(view,L"controls");hstring section;
+            auto controls=array(view,L"controls");hstring sectionId=L"null";
             for(auto value:controls){
                 auto c=value.GetObject();auto property=std::make_shared<Property>(data,c);
                 auto kind=object(c,L"kind");auto type=str(kind,L"kind");auto name=str(c,L"label");
-                auto nextSection=str(c,L"section");
-                if(section!=nextSection){section=nextSection;
+                auto nextSectionId=c.GetNamedValue(L"section_id",JsonValue::CreateNullValue()).Stringify();
+                if(sectionId!=nextSectionId){sectionId=nextSectionId;auto section=str(c,L"section");
                     if(body.Children().Size()){Shapes::Rectangle line;line.Height(1);line.Opacity(.15);line.Fill(data->brush(L"text"));line.Margin({0,3,0,3});body.Children().Append(line);}
                     if(!section.empty()){auto heading=label(data,section,true);heading.Margin({6,0,0,0});body.Children().Append(heading);}
                 }

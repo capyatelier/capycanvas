@@ -38,7 +38,7 @@ fn raster(plane: RasterPlane, color: DocumentColor, coverage: impl Fn(u32, u32) 
 }
 
 fn document(color: DocumentColor) -> Document {
-    let mut document = Document::new("bounds", 128, 128);
+    let mut document = Document::new("bounds", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = color;
     document.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
     document
@@ -182,7 +182,7 @@ fn group_mask_products_and_paper_are_evaluated_at_document_coordinates() {
     document.layers.push(group);
     assert!(bounds(&renderer, &document, ContentScope::Visible).is_empty());
     assert_eq!(bounds(&renderer, &document, ContentScope::All), rect(20., 20., 41., 21.));
-    let paper = Document::new("paper", 128, 96);
+    let paper = Document::new("paper", 128, 96, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     assert_eq!(bounds(&renderer, &paper, ContentScope::Visible), rect(0., 0., 128., 96.));
 }
 
@@ -211,7 +211,7 @@ fn wetness_pages_without_color_do_not_create_content_bounds() {
 #[test]
 fn transparent_offcanvas_photo_does_not_expand_paper_coverage() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut document = Document::new("paper with transparent photo", 128, 96);
+    let mut document = Document::new("paper with transparent photo", 128, 96, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.layers[0].source = Some(source([96, 80], |_, _| 0));
     document.layers[0].properties.offset = Point { x: -80., y: -70. };
     assert_eq!(bounds(&renderer, &document, ContentScope::All), rect(0., 0., 128., 96.));

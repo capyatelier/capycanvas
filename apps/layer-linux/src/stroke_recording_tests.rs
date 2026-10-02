@@ -7,7 +7,7 @@ fn native_stroke_recording() {
     use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
     glib::set_prgname(Some("capy-stroke-recording-test"));
     let app = native_test_app("art.capycanvas.StrokeRecordingTest");
-    let w = Workspace::with_project(&app, Some((new_drawing(384, 256).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(384, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     let deadline = Instant::now() + Duration::from_secs(60);
     while !w

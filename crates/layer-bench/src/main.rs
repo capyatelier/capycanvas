@@ -292,7 +292,7 @@ impl Canvas {
 
     fn configured(extent: [u32; 2], background_rgba_linear: [f32; 4]) -> Result<Self, String> {
         let color = document_color();
-        let mut document = Document::new("untitled", extent[0], extent[1]);
+        let mut document = Document::new("untitled", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color = color;
         document.blend_space = document_blending();
         let (producer, consumer) = input_queue(16_384);

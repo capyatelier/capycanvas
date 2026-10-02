@@ -141,7 +141,7 @@ fn native_application_file_launch() {
     )
     .unwrap();
     let master = directory.join("Master drawing.capy");
-    let project = new_drawing(321, 217).unwrap();
+    let project = new_drawing(321, 217, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project
         .write(std::fs::File::create(&master).unwrap())
         .unwrap();

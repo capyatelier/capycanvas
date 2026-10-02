@@ -10,7 +10,7 @@ use std::io::Cursor;
 
 const EXTENT: [u32; 2] = [4352, 512]; // 33 backed tiles and one transparent hole.
 fn project(color: DocumentColor) -> Project {
-    let mut document = Document::new("cold paint", EXTENT[0], EXTENT[1]);
+    let mut document = Document::new("cold paint", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = color;
     document.layers[1].visible = false;
     let mut data = RasterData::default();

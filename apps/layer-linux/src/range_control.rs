@@ -71,8 +71,8 @@ impl RangeHandle {
         scale.set_hexpand(true);
         scale.add_css_class("interval-handle");
         scale.set_focusable(true);
-        scale.set_tooltip_text(Some(field.tooltip()));
-        scale.update_property(&[gtk::accessible::Property::Label(field.tooltip())]);
+        scale.set_tooltip_text(Some(&field.tooltip()));
+        scale.update_property(&[gtk::accessible::Property::Label(&field.tooltip())]);
         scale.set_widget_name(&format!("range-handle-{}", field.id));
         scale.imp().lower.set(lower);
         scale
@@ -101,7 +101,7 @@ impl RangeControl {
         root.set_widget_name(&format!("tool-range-{id}"));
         root.set_tooltip_text(Some(tooltip));
         let inputs = fields.map(|f| {
-            let number = NumberControl::value_only(f.numeric.clone(), f.tooltip());
+            let number = NumberControl::value_only(f.numeric.clone(), &f.tooltip());
             number.set_hexpand(false);
             number.set_widget_name(&format!("tool-setting-{}", f.id));
             number

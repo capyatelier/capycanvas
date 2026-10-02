@@ -580,7 +580,7 @@ mod tests {
     }
     #[test]
     fn nonblocking_parking_waits_for_redo_only_captures_and_reports_failure() {
-        let mut editor = Editor::new(Document::new("pending redo", 256, 256));
+        let mut editor = Editor::new(Document::new("pending redo", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         let target = editor.document().layers[0].id;
         let root = RasterRevision::pending();
         editor
@@ -611,7 +611,7 @@ mod tests {
     }
     #[test]
     fn spill_shared_history_save_and_restore_are_exact() {
-        let mut editor = Editor::new(Document::new("parked", 256, 256));
+        let mut editor = Editor::new(Document::new("parked", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         let target = editor.document().layers[0].id;
         let first = blob(30);
         let second = blob(80);

@@ -171,7 +171,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
                     extent: [width, height],
                     ..e.open.new_options
                 }
-                .project()?
+                .project(&e.open.localization)?
             }
         }
     };
@@ -256,7 +256,6 @@ pub extern "system" fn Java_art_capycanvas_Native_projectOptions(
     let result = (|| {
         let options: layer_ui::NewDocumentOptions =
             serde_json::from_str(&read(&mut env, &options)?).map_err(error)?;
-        options.validate()?;
         let Payload::Open {
             environment: Some(environment),
             ..
@@ -264,6 +263,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectOptions(
         else {
             return Err("New drawing task is no longer configurable".into());
         };
+        options.validate().map_err(|failure| failure.message(&environment.open.localization))?;
         environment.open.new_options = options;
         Ok(())
     })();

@@ -512,7 +512,7 @@ mod tests {
             // tickets own their layout. No pixel allocation/readback is needed
             // to enforce the 512 MiB history ceiling. 450 tiles leave room
             // for the codec's worst-case expansion within that ceiling.
-            let mut editor = Editor::new(Document::new("pending history", 6400, 5120));
+            let mut editor = Editor::new(Document::new("pending history", 6400, 5120, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
             let descriptor = DocumentColor {
                 space: RgbSpace::ProPhoto,
                 depth: match bits { 8 => SampleDepth::U8, 16 => SampleDepth::U16, _ => SampleDepth::F32 },
@@ -593,7 +593,7 @@ mod tests {
     fn failed_raster_suffix_recovers_atomically_without_redoing_lost_pixels() {
         use crate::{Document, Edit, Editor, LayerId};
         for tile_failure in [false, true] {
-            let mut editor = Editor::new(Document::new("recovery", 256, 256));
+            let mut editor = Editor::new(Document::new("recovery", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
             let first = RasterRevision::backed(RasterData::default());
             editor
                 .perform(Edit::SetRaster {
@@ -641,7 +641,7 @@ mod tests {
             assert_eq!(editor.document().layers[0].raster, first);
             assert_eq!(editor.recover_failed_rasters().unwrap(), 0);
         }
-        let mut document = Document::new("no retained boundary", 256, 256);
+        let mut document = Document::new("no retained boundary", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.layers[0].raster = RasterRevision::pending();
         document.layers[0]
             .raster
@@ -655,7 +655,7 @@ mod tests {
             "failure cannot partially roll back"
         );
 
-        let mut editor = Editor::new(Document::new("failure after undo", 256, 256));
+        let mut editor = Editor::new(Document::new("failure after undo", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         let pending = RasterRevision::pending();
         editor
             .perform(Edit::SetRaster {

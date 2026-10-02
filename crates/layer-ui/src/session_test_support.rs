@@ -224,7 +224,7 @@ impl CanvasRenderer for Recorder {
 pub(crate) fn session(platform: Platform) -> UiSession<Recorder> {
     UiSession::new(
         Recorder::default(),
-        Document::new("test", 1000, 1000),
+        Document::new("test", 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
         [1000, 1000],
         platform,
     )
@@ -364,7 +364,7 @@ impl UiSession<Recorder> {
             .settings
             .palette(self.state.theme, platform, self.system_accent);
         self.refresh_commands();
-        self.refresh_shortcuts();
+        self.refresh_shortcuts(true);
     }
 }
 
@@ -400,7 +400,7 @@ pub(crate) fn notice_text(s: &UiSession<Recorder>) -> Option<&str> {
 }
 
 pub(crate) fn package_json(categories: Vec<layer_core::EffectCategory>, filters: Vec<layer_core::EffectDefinition>) -> String {
-    serde_json::to_string(&layer_core::EffectPackage { format: 1, categories, filters }).unwrap()
+    serde_json::to_string(&layer_core::EffectPackage { format: 2, categories, filters }).unwrap()
 }
 
 pub(crate) fn insert_effect(s: &mut UiSession<Recorder>, effect: &str) {

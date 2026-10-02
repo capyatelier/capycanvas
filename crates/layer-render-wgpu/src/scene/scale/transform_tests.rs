@@ -393,7 +393,7 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
 #[test]
 fn retained_transform_detail_still_filters_the_current_output_footprint() {
     let extent = [65,33];
-    let mut doc = Document::new("transform reconstruction", extent[0], extent[1]);
+    let mut doc = Document::new("transform reconstruction", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.layers[0].source = Some(rgba8_source(extent, |x, _| [if (x/3)%2 == 0 {255} else {0}, 0, 0, 255]));
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut frame = packet(&doc.layers, extent);
@@ -420,7 +420,7 @@ fn retained_transform_detail_still_filters_the_current_output_footprint() {
 #[test]
 fn whole_image_selections_reserve_one_transform_input_pyramid() {
     let extent = [4248,2832];
-    let doc = Document::new("transform admission", extent[0], extent[1]);
+    let doc = Document::new("transform admission", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut frame = packet(&doc.layers, extent);
     frame.composite_all = false; frame.view.document_to_surface = [0.1597,0.,0.,0.1597,0.,0.];

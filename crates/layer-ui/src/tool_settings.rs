@@ -1,6 +1,8 @@
 //! Brush controls are a shared schema, not a GTK form. Field access is kept
 //! beside its label, constraints and visibility so native hosts never guess.
 use crate::NumericControl;
+use crate::localization::{Localizer, MessageId, UiLanguage};
+use std::sync::Arc;
 use layer_core::{BrushExecution, BrushSnapshot, BrushTip, ColorMixSpace, LiquifyMode};
 use serde::Serialize;
 
@@ -13,7 +15,7 @@ pub struct ToolSettingAction {
 }
 
 macro_rules! tool_action_groups {
-    ($($group:ident: $id:literal, $label:literal, $segmented:literal, [$($command:ident),+];)+) => {
+    ($($group:ident: $id:literal, $label:ident, $segmented:literal, [$($command:ident),+];)+) => {
         /// Mutually exclusive actions retain their bar or list presentation when compact.
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum ToolActionGroup { $($group),+ }
@@ -24,9 +26,9 @@ macro_rules! tool_action_groups {
             pub fn id(self) -> &'static str {
                 match self { $(Self::$group => $id),+ }
             }
-            pub fn label(self) -> &'static str {
-                match self { $(Self::$group => $label),+ }
-            }
+            pub fn message_id(self) -> MessageId { match self { $(Self::$group => MessageId::$label),+ } }
+            pub fn localized_label(self, localizer: &Localizer) -> Arc<str> { localizer.text(self.message_id()) }
+            pub fn label(self) -> Arc<str> { self.localized_label(&Localizer::shared(UiLanguage::English)) }
         }
         impl ToolSettingAction {
             pub fn group(self) -> Option<ToolActionGroup> {
@@ -40,48 +42,49 @@ macro_rules! tool_action_groups {
 }
 
 tool_action_groups! {
-    SelectionMode: "selection-mode", "Mode", true,
+    SelectionMode: "selection-mode", TOOL_ACTION_GROUP_SELECTION_MODE, true,
         [SelectionNew, SelectionAdd, SelectionSubtract, SelectionIntersect];
-    SelectionSource: "selection-source", "Source", false,
+    SelectionSource: "selection-source", TOOL_ACTION_GROUP_SELECTION_SOURCE, false,
         [SelectionVisible, SelectionEditing, SelectionReference];
-    TransformMode: "transform-mode", "Mode", true,
+    TransformMode: "transform-mode", TOOL_ACTION_GROUP_TRANSFORM_MODE, true,
         [TransformFree, TransformUniform, TransformDistort, TransformWarp];
-    TransformInterpolation: "transform-interpolation", "Interpolation", false,
+    TransformInterpolation: "transform-interpolation", TOOL_ACTION_GROUP_TRANSFORM_INTERPOLATION, false,
         [TransformNearest, TransformBilinear, TransformBicubic, TransformLanczos];
-    TransformWarpGrid: "transform-warp-grid", "Grid", false,
+    TransformWarpGrid: "transform-warp-grid", TOOL_ACTION_GROUP_TRANSFORM_WARP_GRID, false,
         [WarpGridThree, WarpGridFour, WarpGridFive];
-    CropRatio: "crop-ratio", "Ratio", false,
+    CropRatio: "crop-ratio", TOOL_ACTION_GROUP_CROP_RATIO, false,
         [CropRatioFree, CropRatioOriginal, CropRatioSquare, CropRatioFourFive, CropRatioTwoThree, CropRatioFiveSeven, CropRatioSixteenNine];
-    CropOverlay: "crop-overlay", "Overlay", false,
+    CropOverlay: "crop-overlay", TOOL_ACTION_GROUP_CROP_OVERLAY, false,
         [CropOverlayThirds, CropOverlayGrid, CropOverlayDiagonal, CropOverlayGolden];
-    ColorMixing: "color-mixing", "Color mixing", false,
+    ColorMixing: "color-mixing", TOOL_ACTION_GROUP_COLOR_MIXING, false,
         [ColorMixOklab, ColorMixLinear, ColorMixClassic];
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolSetting {
     pub id: &'static str,
-    pub label: &'static str,
-    pub group: &'static str,
+    pub label: Arc<str>,
+    pub group: Arc<str>,
     pub numeric: NumericControl,
     pub value: f32,
 }
 
 impl ToolSetting {
-    pub fn tooltip(&self) -> &'static str {
+    pub fn tooltip_localized(&self, localizer: &Localizer) -> Arc<str> {
         match self.id {
-            "tonal_lower" => "From — lower bound in stops relative to reference white (0)",
-            "tonal_upper" => "To — upper bound in stops relative to reference white (0)",
-            "bristle_scale" => "Bristle texture size relative to the configured brush size",
-            _ => self.label,
+            "tonal_lower" => localizer.text(MessageId::TOOL_SETTING_TONAL_LOWER_TOOLTIP),
+            "tonal_upper" => localizer.text(MessageId::TOOL_SETTING_TONAL_UPPER_TOOLTIP),
+            "bristle_scale" => localizer.text(MessageId::TOOL_SETTING_BRISTLE_SCALE_TOOLTIP),
+            _ => self.label.clone(),
         }
     }
+    pub fn tooltip(&self) -> Arc<str> { self.tooltip_localized(&Localizer::shared(UiLanguage::English)) }
 }
 
 struct Definition {
     id: &'static str,
-    label: &'static str,
-    group: &'static str,
+    label: MessageId,
+    group: Option<MessageId>,
     numeric: fn() -> NumericControl,
     field: fn(&mut BrushSnapshot) -> Option<&mut f32>,
 }
@@ -123,36 +126,36 @@ pub(crate) fn value(brush: &BrushSnapshot, id: &str) -> Option<f32> {
 const DEFINITIONS: &[Definition] = &[
     Definition {
         id: "size",
-        label: "Brush size",
-        group: "",
+        label: MessageId::TOOL_SETTING_SIZE,
+        group: None,
         numeric: NumericControl::brush_size,
         field: |b| Some(&mut b.diameter),
     },
     Definition {
         id: "opacity",
-        label: "Opacity",
-        group: "",
+        label: MessageId::TOOL_SETTING_OPACITY,
+        group: None,
         numeric: NumericControl::percent,
         field: |b| Some(&mut b.opacity),
     },
     Definition {
         id: "flow",
-        label: "Flow",
-        group: "",
+        label: MessageId::TOOL_SETTING_FLOW,
+        group: None,
         numeric: NumericControl::percent,
         field: |b| (b.execution != BrushExecution::Liquify).then_some(&mut b.flow),
     },
     Definition {
         id: "hardness",
-        label: "Hardness",
-        group: "Tip",
+        label: MessageId::TOOL_SETTING_HARDNESS,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TIP),
         numeric: NumericControl::percent,
         field: |b| (b.tip == BrushTip::AnalyticEllipse).then_some(&mut b.hardness),
     },
     Definition {
         id: "spacing",
-        label: "Spacing",
-        group: "Tip",
+        label: MessageId::TOOL_SETTING_SPACING,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TIP),
         numeric: || NumericControl {
             min: 0.005,
             soft_min: 0.005,
@@ -164,8 +167,8 @@ const DEFINITIONS: &[Definition] = &[
     },
     Definition {
         id: "angle",
-        label: "Angle",
-        group: "Tip",
+        label: MessageId::TOOL_SETTING_ANGLE,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TIP),
         numeric: || NumericControl {
             scale: 180.0 / std::f64::consts::PI,
             step: std::f64::consts::PI / 180.0,
@@ -177,29 +180,29 @@ const DEFINITIONS: &[Definition] = &[
     },
     Definition {
         id: "size_jitter",
-        label: "Size variation",
-        group: "Tip",
+        label: MessageId::TOOL_SETTING_SIZE_JITTER,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TIP),
         numeric: NumericControl::percent,
         field: |b| Some(&mut b.shape.size_jitter),
     },
     Definition {
         id: "rotation_jitter",
-        label: "Rotation variation",
-        group: "Tip",
+        label: MessageId::TOOL_SETTING_ROTATION_JITTER,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TIP),
         numeric: NumericControl::percent,
         field: |b| Some(&mut b.shape.rotation_jitter),
     },
     Definition {
         id: "grain_depth",
-        label: "Texture strength",
-        group: "Texture",
+        label: MessageId::TOOL_SETTING_GRAIN_DEPTH,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TEXTURE),
         numeric: NumericControl::percent,
         field: |b| b.grain.as_mut().map(|g| &mut g.depth),
     },
     Definition {
         id: "bristle_scale",
-        label: "Bristle scale",
-        group: "Bristles",
+        label: MessageId::TOOL_SETTING_BRISTLE_SCALE,
+        group: Some(MessageId::TOOL_SETTING_GROUP_BRISTLES),
         numeric: || NumericControl {
             min: 0.25,
             soft_min: 0.25,
@@ -217,43 +220,43 @@ const DEFINITIONS: &[Definition] = &[
     },
     Definition {
         id: "bristle_load",
-        label: "Paint load",
-        group: "Bristles",
+        label: MessageId::TOOL_SETTING_BRISTLE_LOAD,
+        group: Some(MessageId::TOOL_SETTING_GROUP_BRISTLES),
         numeric: NumericControl::percent,
         field: |b| b.contact.as_mut()?.bristles.as_mut().map(|b| &mut b.load),
     },
     Definition {
         id: "paint",
-        label: "Paint load",
-        group: "Mixing",
+        label: MessageId::TOOL_SETTING_PAINT,
+        group: Some(MessageId::TOOL_SETTING_GROUP_MIXING),
         numeric: NumericControl::percent,
         field: |b| mixes_color(b).then_some(&mut b.wet_mix.amount_of_paint),
     },
     Definition {
         id: "pull",
-        label: "Color pickup",
-        group: "Mixing",
+        label: MessageId::TOOL_SETTING_PULL,
+        group: Some(MessageId::TOOL_SETTING_GROUP_MIXING),
         numeric: NumericControl::percent,
         field: |b| mixes_color(b).then_some(&mut b.wet_mix.pull),
     },
     Definition {
         id: "dilution",
-        label: "Dilution",
-        group: "Mixing",
+        label: MessageId::TOOL_SETTING_DILUTION,
+        group: Some(MessageId::TOOL_SETTING_GROUP_MIXING),
         numeric: NumericControl::percent,
         field: |b| mixes_color(b).then_some(&mut b.wet_mix.dilution),
     },
     Definition {
         id: "wet_edge",
-        label: "Edge strength",
-        group: "Watercolor",
+        label: MessageId::TOOL_SETTING_WET_EDGE,
+        group: Some(MessageId::TOOL_SETTING_GROUP_WATERCOLOR),
         numeric: NumericControl::percent,
         field: |b| (b.execution == BrushExecution::Watercolor).then_some(&mut b.rendering.wet_edge),
     },
     Definition {
         id: "edge_width",
-        label: "Edge width",
-        group: "Watercolor",
+        label: MessageId::TOOL_SETTING_EDGE_WIDTH,
+        group: Some(MessageId::TOOL_SETTING_GROUP_WATERCOLOR),
         numeric: || NumericControl::number(0.0, 32.0, 1.0, 1).unit("px"),
         field: |b| {
             (b.execution == BrushExecution::Watercolor).then_some(&mut b.rendering.edge_width)
@@ -261,50 +264,50 @@ const DEFINITIONS: &[Definition] = &[
     },
     Definition {
         id: "wet_flow",
-        label: "Wet bleed",
-        group: "Bleed",
+        label: MessageId::TOOL_SETTING_WET_FLOW,
+        group: Some(MessageId::TOOL_SETTING_GROUP_BLEED),
         numeric: NumericControl::percent,
         field: |b| b.transport.as_mut().map(|t| &mut t.wet_flow),
     },
     Definition {
         id: "dry_flow",
-        label: "Dry bleed",
-        group: "Bleed",
+        label: MessageId::TOOL_SETTING_DRY_FLOW,
+        group: Some(MessageId::TOOL_SETTING_GROUP_BLEED),
         numeric: NumericControl::percent,
         field: |b| b.transport.as_mut().map(|t| &mut t.dry_flow),
     },
     Definition {
         id: "distance",
-        label: "Bleed distance",
-        group: "Bleed",
+        label: MessageId::TOOL_SETTING_DISTANCE,
+        group: Some(MessageId::TOOL_SETTING_GROUP_BLEED),
         numeric: || NumericControl::number(0.0, 96.0, 1.0, 1).unit("px"),
         field: |b| b.transport.as_mut().map(|t| &mut t.distance),
     },
     Definition {
         id: "water_load",
-        label: "Water load",
-        group: "Bleed",
+        label: MessageId::TOOL_SETTING_WATER_LOAD,
+        group: Some(MessageId::TOOL_SETTING_GROUP_BLEED),
         numeric: NumericControl::percent,
         field: |b| b.transport.as_mut().map(|t| &mut t.water_load),
     },
     Definition {
         id: "strength",
-        label: "Strength",
-        group: "Liquify",
+        label: MessageId::TOOL_SETTING_STRENGTH,
+        group: Some(MessageId::TOOL_SETTING_GROUP_LIQUIFY),
         numeric: NumericControl::percent,
         field: |b| (b.execution == BrushExecution::Liquify).then_some(&mut b.deform.strength),
     },
     Definition {
         id: "distortion",
-        label: "Distortion",
-        group: "Liquify",
+        label: MessageId::TOOL_SETTING_DISTORTION,
+        group: Some(MessageId::TOOL_SETTING_GROUP_LIQUIFY),
         numeric: NumericControl::percent,
         field: |b| liquify(b, LiquifyMode::Crystals).then_some(&mut b.deform.distortion),
     },
     Definition {
         id: "momentum",
-        label: "Momentum",
-        group: "Liquify",
+        label: MessageId::TOOL_SETTING_MOMENTUM,
+        group: Some(MessageId::TOOL_SETTING_GROUP_LIQUIFY),
         numeric: NumericControl::percent,
         field: |b| liquify(b, LiquifyMode::Push).then_some(&mut b.deform.momentum),
     },
@@ -314,15 +317,15 @@ fn liquify(b: &BrushSnapshot, mode: LiquifyMode) -> bool {
     b.execution == BrushExecution::Liquify && b.deform.mode == mode
 }
 
-pub(crate) fn controls(brush: &BrushSnapshot) -> Vec<ToolSetting> {
+pub(crate) fn controls(brush: &BrushSnapshot, localizer: &Localizer) -> Vec<ToolSetting> {
     let mut brush = brush.clone();
     DEFINITIONS
         .iter()
         .filter_map(|d| {
             Some(ToolSetting {
                 id: d.id,
-                label: d.label,
-                group: d.group,
+                label: localizer.text(d.label),
+                group: d.group.map(|id| localizer.text(id)).unwrap_or_else(|| Arc::from("")),
                 numeric: (d.numeric)(),
                 value: *(d.field)(&mut brush)?,
             })
@@ -347,7 +350,7 @@ pub(crate) fn edit(brush: &BrushSnapshot, id: &str, value: f32) -> Result<BrushS
         .iter()
         .find(|d| d.id == id)
         .ok_or("Unknown tool setting")?;
-    (d.numeric)().validate(value, d.label)?;
+    (d.numeric)().validate(value, &Localizer::shared(UiLanguage::English).text(d.label))?;
     let mut next = brush.clone();
     *(d.field)(&mut next).ok_or("This setting is not used by the selected tool")? = value;
     next.validate().map_err(|e| e.to_string())?;
@@ -360,10 +363,35 @@ mod tests {
     use layer_core::{DefaultBrushPreset, default_brush};
 
     #[test]
+    fn option_control_localization_preserves_ids_values_and_numeric_rules() {
+        let project = |localizer: &Localizer| {
+            let mut selection = crate::SelectionOptions::default();
+            selection.constraint = crate::SelectionConstraint::Ratio;
+            let mut controls = selection.controls(localizer);
+            controls.extend(selection.edge_controls(localizer));
+            selection.constraint = crate::SelectionConstraint::Size;
+            controls.extend(selection.controls(localizer));
+            controls.extend(crate::SelectionBrushOptions::default().controls(localizer));
+            controls.extend(crate::TonalOptions { tone: 7, ..Default::default() }.controls(localizer));
+            controls
+        };
+        let canonical = project(&Localizer::shared(UiLanguage::English));
+        for language in UiLanguage::ALL {
+            let controls = project(&Localizer::shared(language));
+            assert_eq!(controls.len(), canonical.len());
+            for (control, expected) in controls.iter().zip(&canonical) {
+                assert_eq!((control.id, control.value, &control.numeric), (expected.id, expected.value, &expected.numeric));
+                assert!(!control.label.is_empty());
+                control.numeric.validate(control.value, &control.label).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn every_visible_control_accepts_its_default_and_endpoints() {
         for choice in crate::brush_catalog() {
             let brush = default_brush(crate::preset(choice.id).unwrap());
-            for control in controls(&brush) {
+            for control in controls(&brush, &Localizer::shared(UiLanguage::English)) {
                 assert_eq!(
                     edit(&brush, control.id, control.value).unwrap(),
                     brush,
@@ -380,7 +408,7 @@ mod tests {
 
     #[test]
     fn liquify_shows_distortion_for_crystals_and_momentum_for_push() {
-        let ids = |preset| -> Vec<_> { controls(&default_brush(preset)).iter().map(|c| c.id).collect() };
+        let ids = |preset| -> Vec<_> { controls(&default_brush(preset), &Localizer::shared(UiLanguage::English)).iter().map(|c| c.id).collect() };
         for (preset, distortion, momentum) in [
             (DefaultBrushPreset::LiquifyPush, false, true),
             (DefaultBrushPreset::LiquifyTwirl, false, false),
@@ -432,7 +460,7 @@ mod tests {
             DefaultBrushPreset::BristlePaintbrush as u32
         );
         assert!(
-            controls(&default_brush(DefaultBrushPreset::Paintbrush))
+            controls(&default_brush(DefaultBrushPreset::Paintbrush), &Localizer::shared(UiLanguage::English))
                 .iter()
                 .all(|c| c.id != "bristle_scale")
         );

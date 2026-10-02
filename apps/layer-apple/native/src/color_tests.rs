@@ -95,7 +95,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                 color,
                 ..Default::default()
             }
-            .project()
+            .project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
             .unwrap();
             let mut file = fixtures::tempfile();
             project.write(&mut file).unwrap();

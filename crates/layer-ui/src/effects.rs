@@ -1,8 +1,77 @@
 //! Effect catalog, properties and navigation policy shared by every native view.
 use super::*;
-use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, Layer};
+use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, Layer, ResourceLabel};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+pub(crate) fn blend_label(blend: layer_core::LayerBlend, l: &Localizer) -> Arc<str> {
+    l.text(match blend {
+        layer_core::LayerBlend::Normal => MessageId::RESOURCES_BLEND_NORMAL,
+        layer_core::LayerBlend::Multiply => MessageId::RESOURCES_BLEND_MULTIPLY,
+        layer_core::LayerBlend::Screen => MessageId::RESOURCES_BLEND_SCREEN,
+        layer_core::LayerBlend::Add => MessageId::RESOURCES_BLEND_ADD,
+        layer_core::LayerBlend::Overlay => MessageId::RESOURCES_BLEND_OVERLAY,
+        layer_core::LayerBlend::SoftLight => MessageId::RESOURCES_BLEND_SOFT_LIGHT,
+        layer_core::LayerBlend::Color => MessageId::RESOURCES_BLEND_COLOR,
+        layer_core::LayerBlend::Darken => MessageId::RESOURCES_BLEND_DARKEN,
+        layer_core::LayerBlend::Lighten => MessageId::RESOURCES_BLEND_LIGHTEN,
+        layer_core::LayerBlend::ColorBurn => MessageId::RESOURCES_BLEND_COLOR_BURN,
+        layer_core::LayerBlend::LinearBurn => MessageId::RESOURCES_BLEND_LINEAR_BURN,
+        layer_core::LayerBlend::ColorDodge => MessageId::RESOURCES_BLEND_COLOR_DODGE,
+        layer_core::LayerBlend::HardLight => MessageId::RESOURCES_BLEND_HARD_LIGHT,
+        layer_core::LayerBlend::VividLight => MessageId::RESOURCES_BLEND_VIVID_LIGHT,
+        layer_core::LayerBlend::LinearLight => MessageId::RESOURCES_BLEND_LINEAR_LIGHT,
+        layer_core::LayerBlend::PinLight => MessageId::RESOURCES_BLEND_PIN_LIGHT,
+        layer_core::LayerBlend::HardMix => MessageId::RESOURCES_BLEND_HARD_MIX,
+        layer_core::LayerBlend::Difference => MessageId::RESOURCES_BLEND_DIFFERENCE,
+        layer_core::LayerBlend::Exclusion => MessageId::RESOURCES_BLEND_EXCLUSION,
+        layer_core::LayerBlend::Subtract => MessageId::RESOURCES_BLEND_SUBTRACT,
+        layer_core::LayerBlend::Divide => MessageId::RESOURCES_BLEND_DIVIDE,
+        layer_core::LayerBlend::Hue => MessageId::RESOURCES_BLEND_HUE,
+        layer_core::LayerBlend::Saturation => MessageId::RESOURCES_BLEND_SATURATION,
+        layer_core::LayerBlend::Luminosity => MessageId::RESOURCES_BLEND_LUMINOSITY,
+        layer_core::LayerBlend::PassThrough => MessageId::RESOURCES_BLEND_PASS_THROUGH,
+    })
+}
+pub(super) fn resource_label(label: &ResourceLabel, l: &Localizer) -> Arc<str> {
+    match label {
+        ResourceLabel::Literal(text) => text.clone(),
+        ResourceLabel::Message { message } => l.static_message(message)
+            .map(|id| l.text(id)).unwrap_or_else(|| l.text(MessageId::COMMON_ERROR)),
+    }
+}
+fn validate_label(label: &ResourceLabel, l: &Localizer) -> Result<(), String> {
+    if let ResourceLabel::Message { message } = label
+        && l.static_message(message).is_none()
+    {
+        return Err(l.text(MessageId::RESOURCES_INVALID_MESSAGE).to_string());
+    }
+    Ok(())
+}
+fn validate_program_labels(program: &layer_core::EffectProgram, l: &Localizer) -> Result<(), String> {
+    validate_label(&program.label, l)?;
+    for parameter in program.parameters.iter() {
+        validate_label(&parameter.label, l)?;
+        if let Some(section) = &parameter.section { validate_label(section, l)?; }
+        if let EffectParameterKind::Choice { options } = &parameter.kind {
+            for option in options.iter() {
+                if let layer_core::EffectOption::Labeled { label, .. } = option { validate_label(label, l)?; }
+            }
+        }
+    }
+    Ok(())
+}
+pub(super) fn validate_catalog_labels(catalog: &layer_core::EffectCatalog, l: &Localizer) -> Result<(), String> {
+    for category in catalog.categories() { validate_label(&category.label, l)?; }
+    for filter in catalog.filters() { validate_program_labels(&filter.program, l)?; }
+    Ok(())
+}
+pub(super) fn validate_document_labels(document: &Document, l: &Localizer) -> Result<(), String> {
+    for layer in &document.layers {
+        if let Some(effect) = &layer.effect { validate_program_labels(&effect.program, l)?; }
+    }
+    Ok(())
+}
 
 impl<B: CanvasRenderer> UiSession<B> {
     pub(crate) fn update_shader_idle(&mut self) {
@@ -20,7 +89,7 @@ impl<B: CanvasRenderer> UiSession<B> {
             .or_else(|| self.state.filter_picker.category.clone())
             .or_else(|| self.effect_catalog.categories().first().map(|c| c.id.clone()));
         self.state.filter_picker.search = None;
-        self.state.adjustments = catalog(&self.effect_catalog, &self.state.filter_picker);
+        self.state.adjustments = catalog(&self.effect_catalog, &self.state.filter_picker, &self.state.localization);
     }
     /// Optional preview work yields to delivered input and unfinished edits.
     /// Apply this to completion service as well as admission: taking a preview
@@ -64,7 +133,7 @@ impl<B: CanvasRenderer> UiSession<B> {
                 .find(|l| l.properties.parent == current.properties.parent).map(|l| l.id)
         } else if self.filter_drawer_open() {
             Some(current.id)
-        } else { doc.clipping_stack_top(current.id) }.ok_or("Select a layer first")?;
+        } else { doc.clipping_stack_top(current.id) }.ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())?;
         let request = layer_render::FilterPreviewRequest {
             request_id,
             target,
@@ -80,7 +149,7 @@ impl<B: CanvasRenderer> UiSession<B> {
                 .map(|id| {
                     self.effect_catalog
                         .get(&id)
-                        .ok_or_else(|| format!("Unknown filter: {id}"))?
+                        .ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_FILTER).to_string())?
                         .preview()
                         .map(Arc::new)
                 })
@@ -89,7 +158,10 @@ impl<B: CanvasRenderer> UiSession<B> {
         self.engine
             .backend_mut()
             .request_filter_previews(request)
-            .map_err(|e| e.to_string())
+            .map_err(|error| {
+                eprintln!("Filter preview request: {error}");
+                self.state.localization.text(MessageId::RESOURCES_PREVIEW_FAILED).to_string()
+            })
     }
 }
 
@@ -98,19 +170,22 @@ pub struct FilterPickerState {
     pub selected: Option<Arc<str>>,
     pub category: Option<Arc<str>>,
     pub search: Option<String>,
-    pub search_label: &'static str,
-    pub empty_label: &'static str,
+    pub search_label: Arc<str>,
+    pub empty_label: Arc<str>,
 }
-impl Default for FilterPickerState {
-    fn default() -> Self {
+impl FilterPickerState {
+    pub fn new(l: &Localizer) -> Self {
         Self {
             selected: None,
             category: None,
             search: None,
-            search_label: "Search filters",
-            empty_label: "No matching filters",
+            search_label: l.text(MessageId::RESOURCES_SEARCH_FILTERS),
+            empty_label: l.text(MessageId::RESOURCES_NO_MATCHING_FILTERS),
         }
     }
+}
+impl Default for FilterPickerState {
+    fn default() -> Self { Self::new(&Localizer::shared(UiLanguage::English)) }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -138,15 +213,15 @@ fn category_icon(id: &str) -> &'static str {
         _ => "adjustments",
     }
 }
-pub(super) fn categories(catalog: &layer_core::EffectCatalog) -> Vec<FilterCategoryChoice> {
+pub(super) fn categories(catalog: &layer_core::EffectCatalog, l: &Localizer) -> Vec<FilterCategoryChoice> {
     std::iter::once(FilterCategoryChoice {
         id: None,
-        label: "All filters".into(),
+        label: l.text(MessageId::RESOURCES_ALL_FILTERS),
         icon: "adjustments",
     })
     .chain(catalog.categories().iter().map(|c| FilterCategoryChoice {
         id: Some(c.id.clone()),
-        label: c.label.clone(),
+        label: resource_label(&c.label, l),
         icon: category_icon(&c.id),
     }))
     .collect()
@@ -236,8 +311,10 @@ pub struct AdjustmentChoice {
 pub(super) fn catalog(
     catalog: &layer_core::EffectCatalog,
     picker: &FilterPickerState,
+    l: &Localizer,
 ) -> Vec<AdjustmentChoice> {
-    let query = picker.search.as_deref().unwrap_or("").trim().to_lowercase();
+    let query = crate::search::normalize(picker.search.as_deref().unwrap_or(""));
+    let english = Localizer::shared(UiLanguage::English);
     catalog
         .categories()
         .iter()
@@ -254,13 +331,13 @@ pub(super) fn catalog(
                 .is_none_or(|c| definition.category == *c)
         })
         .filter(|id| {
-            query
-                .split_whitespace()
-                .all(|word| id.label().to_lowercase().contains(word))
+            query.split_whitespace().all(|word|
+                crate::search::normalize(&resource_label(id.label(), l)).contains(word)
+                || crate::search::normalize(&resource_label(id.label(), &english)).contains(word))
         })
         .map(|id| AdjustmentChoice {
             id: id.program.id.clone(),
-            label: id.program.label.clone(),
+            label: resource_label(&id.program.label, l),
             icon: id.icon.clone(),
             action: UiAction::Effect {
                 action: EffectAction::Insert {
@@ -269,18 +346,15 @@ pub(super) fn catalog(
             },
             category: id.category.clone(),
             category_icon: category_icon(&id.category),
-            category_label: catalog
-                .categories()
-                .iter()
-                .find(|c| c.id == id.category)
-                .unwrap()
-                .label
-                .clone(),
+            category_label: resource_label(&catalog.categories().iter()
+                .find(|c| c.id == id.category).unwrap().label, l),
             animated: id.program().time,
             tooltip: if id.program().time {
-                format!("{} · Animated", id.label())
+                { let mut args = fluent_bundle::FluentArgs::new();
+                args.set("name", resource_label(id.label(), l).to_string());
+                l.format(MessageId::RESOURCES_ANIMATED_TOOLTIP, &args) }
             } else {
-                id.label().into()
+                resource_label(id.label(), l).to_string()
             },
         })
         .collect()
@@ -302,6 +376,7 @@ pub struct PropertyControl {
     pub key: String,
     pub label: String,
     pub section: Option<String>,
+    pub section_id: Option<ResourceLabel>,
     pub kind: PropertyKind,
     pub value: EffectValue,
     pub default: EffectValue,
@@ -316,6 +391,7 @@ impl PropertyControl {
             key: key.into(),
             label: label.into(),
             section: None,
+            section_id: None,
             kind,
             modified: value != default,
             value,
@@ -329,19 +405,20 @@ pub(super) fn property_value(
     key: &str,
     action: &EffectAction,
     color: layer_core::color::RgbColor,
+    l: &Localizer,
 ) -> Result<EffectValue, String> {
-    let control = view.controls.iter().find(|c| c.key == key).ok_or("Unknown property")?;
+    let control = view.controls.iter().find(|c| c.key == key).ok_or_else(|| l.text(MessageId::RESOURCES_ERROR_UNKNOWN_PROPERTY).to_string())?;
     Ok(match action {
         EffectAction::Set { value, .. } => value.clone(),
         EffectAction::Reset { .. } => control.default.clone(),
         EffectAction::UseCurrentColor { .. } => EffectValue::Color(color),
         EffectAction::Number { operation, .. } => {
             let (PropertyKind::Number { numeric }, EffectValue::Number(value)) = (&control.kind, &control.value) else {
-                return Err("Not a numeric property".into());
+                return Err(l.text(MessageId::RESOURCES_ERROR_NUMERIC_PROPERTY_REQUIRED).to_string());
             };
             EffectValue::Number(numeric.resolve(*value as f64, operation.clone())?.value as f32)
         }
-        _ => return Err("Not a property edit".into()),
+        _ => return Err(l.text(MessageId::RESOURCES_ERROR_PROPERTY_EDIT_REQUIRED).to_string()),
     })
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -370,12 +447,15 @@ pub(super) fn number_control(p: &layer_core::EffectParameter) -> Option<NumericC
     }
     Some(numeric)
 }
-fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue) -> PropertyControl {
+fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &Localizer) -> PropertyControl {
     let kind = match &p.kind {
         EffectParameterKind::Number { .. } => PropertyKind::Number { numeric: number_control(p).unwrap() },
         EffectParameterKind::Toggle => PropertyKind::Toggle,
         EffectParameterKind::Choice { options } => PropertyKind::Choice {
-            options: options.clone(),
+            options: options.iter().map(|option| match option {
+                layer_core::EffectOption::Literal(label) => label.clone(),
+                layer_core::EffectOption::Labeled { label, .. } => resource_label(label, l),
+            }).collect(),
         },
         EffectParameterKind::Color => PropertyKind::Color,
         EffectParameterKind::Curve => PropertyKind::Curve,
@@ -396,9 +476,10 @@ fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue) -> P
     });
     PropertyControl {
         plot,
-        section: p.section.as_ref().map(ToString::to_string),
+        section: p.section.as_ref().map(|s| resource_label(s, l).to_string()),
+        section_id: p.section.clone(),
         color_action,
-        ..PropertyControl::new(&p.key, &p.label, kind, value, p.default.clone())
+        ..PropertyControl::new(&p.key, &resource_label(&p.label, l), kind, value, p.default.clone())
     }
 }
 /// Extend only the bundled linear algorithms, whose math is independent of
@@ -420,12 +501,12 @@ fn float32_program(program: &Arc<layer_core::EffectProgram>, depth: layer_core::
     result
 }
 
-pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBehavior) -> LayerPropertiesView {
+pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBehavior, l: &Localizer) -> LayerPropertiesView {
     let Some(layer) = doc.layer(doc.active_layer) else {
         return LayerPropertiesView::default();
     };
     if layer.kind == LayerKind::Selection {
-        return super::selection_properties::properties(layer.id.0, &layer.name, &layer.properties.selection_mask.clone().unwrap_or_default(), painting, !doc.is_locked(layer.id));
+        return super::selection_properties::properties(layer.id.0, &layer.name, &layer.properties.selection_mask.clone().unwrap_or_default(), painting, !doc.is_locked(layer.id), l);
     }
     let mut controls = Vec::new();
     let mut curve_max = None;
@@ -437,7 +518,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
                 .parameters
                 .iter()
                 .zip(&effect.values)
-                .map(|(p, v)| control(layer.id.0, p, v.clone())),
+                .map(|(p, v)| control(layer.id.0, p, v.clone(), l)),
         );
         if effect.program.id.as_ref() == "curves" {
             if let (Some(space), Some(EffectValue::Number(stops))) = (effect.choice("domain"), effect.value("hdr_stops")) {
@@ -451,28 +532,28 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
                 _ => true,
             });
         }
-        effect.program.label.to_string()
+        resource_label(&effect.program.label, l).to_string()
     } else if layer.kind == LayerKind::Background {
         let paper = layer.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE);
         controls.push(PropertyControl {
             color_action: Some(UiAction::Effect { action: EffectAction::UseCurrentColor {
                 layer: layer.id.0, key: "paper_color".into(),
             } }),
-            ..PropertyControl::new("paper_color", "Paper color", PropertyKind::Color,
+            ..PropertyControl::new("paper_color", &l.text(MessageId::RESOURCES_PAPER_COLOR), PropertyKind::Color,
                 EffectValue::Color(paper), EffectValue::Color(layer_core::color::RgbColor::WHITE))
         });
         String::new()
     } else {
         let mut numeric = NumericControl::percent();
         numeric.default_value = Some(1.);
-        controls.push(PropertyControl::new("opacity", "Opacity", PropertyKind::Number { numeric },
+        controls.push(PropertyControl::new("opacity", &l.text(MessageId::RESOURCES_OPACITY), PropertyKind::Number { numeric },
             EffectValue::Number(layer.opacity), EffectValue::Number(1.)));
         let options = layer_core::LayerBlend::ALL
             .iter()
             .filter(|b| **b != layer_core::LayerBlend::PassThrough || layer.kind == LayerKind::Group)
-            .map(|b| Arc::from(b.label()))
+            .map(|b| blend_label(*b, l))
             .collect();
-        controls.push(PropertyControl::new("blend", "Blend mode", PropertyKind::Choice { options },
+        controls.push(PropertyControl::new("blend", &l.text(MessageId::RESOURCES_BLEND_MODE), PropertyKind::Choice { options },
             EffectValue::Choice(layer.properties.blend.code()), EffectValue::Choice(0)));
         String::new()
     };
@@ -522,7 +603,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 key,
                 value: EffectValue::Number(_) | EffectValue::Color(_),
             } => (*layer, key.clone()),
-            _ => return Err("Not a draggable effect property".into()),
+            _ => return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_PROPERTY_NOT_DRAGGABLE).to_string()),
         };
         if layer == 0 && self.selection_masks.quick() && key.starts_with("mask_") {
             if phase == ContactPhase::Down {
@@ -548,10 +629,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .engine
                 .document()
                 .layer(LayerId(layer))
-                .ok_or("Unknown layer")?
+                .ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_LAYER).to_string())?
                 .clone();
             if self.engine.document().is_locked(original.id) {
-                return Err("This layer is locked".into());
+                return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string());
             }
             self.effect_gesture = Some(EffectGesture {
                 original,
@@ -600,14 +681,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn effect_parameter(&self, layer: u64, key: &str) -> Result<EffectValue, String> {
-        let layer = self.engine.document().layer(LayerId(layer)).ok_or("Unknown layer")?;
-        let effect = layer.effect.as_ref().ok_or("Not an adjustment")?;
-        effect.value(key).cloned().ok_or_else(|| "Unknown property".into())
+        let layer = self.engine.document().layer(LayerId(layer)).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_LAYER).to_string())?;
+        let effect = layer.effect.as_ref().ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_ADJUSTMENT_REQUIRED).to_string())?;
+        effect.value(key).cloned().ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_PROPERTY).to_string())
     }
 
     pub(super) fn effect_action(&mut self, action: EffectAction) -> Result<(), String> {
         if let Some(result) = self.mask_property_action(&action) { return result; }
-        if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err("Return to artwork before applying a filter".into());}
+        if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_ARTWORK_REQUIRED).to_string());}
         match action {
             EffectAction::CancelFilter => {
                 let doc = self.engine.document();
@@ -620,11 +701,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             EffectAction::UseCurrentColor { layer, ref key }
             | EffectAction::Number { layer, ref key, .. }
             | EffectAction::Reset { layer, ref key } => {
-                let view = properties(self.engine.document(), self.state.settings.selection_painting);
+                let view = properties(self.engine.document(), self.state.settings.selection_painting, &self.state.localization);
                 if view.layer != Some(layer) {
-                    return Err("Select this layer before editing its properties".into());
+                    return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_PROPERTY_LAYER).to_string());
                 }
-                let value = property_value(&view, key, &action, self.state.colors.definition())?;
+                let value = property_value(&view, key, &action, self.state.colors.definition(), &self.state.localization)?;
                 return self.effect_action(EffectAction::Set { layer, key: key.clone(), value });
             }
             EffectAction::Gesture { phase, action } => return self.effect_gesture_action(phase, *action),
@@ -637,14 +718,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 remove,
             } => {
                 if !position.is_finite() {
-                    return Err("Invalid gradient position".into());
+                    return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_INVALID_GRADIENT_POSITION).to_string());
                 }
                 let EffectValue::Gradient(mut stops) = self.effect_parameter(layer, &key)? else {
-                    return Err("Not a gradient".into());
+                    return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_GRADIENT_REQUIRED).to_string());
                 };
                 if let Some(i) = index {
                     if i >= stops.len() {
-                        return Err("Unknown gradient stop".into());
+                        return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_GRADIENT_STOP).to_string());
                     }
                     if remove {
                         if i > 0 && i + 1 < stops.len() {
@@ -687,10 +768,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 remove,
             } => {
                 if !point.iter().all(|x| x.is_finite()) {
-                    return Err("Invalid curve coordinate".into());
+                    return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_INVALID_CURVE_COORDINATE).to_string());
                 }
                 let EffectValue::Curve(mut points) = self.effect_parameter(layer, &key)? else {
-                    return Err("Not a curve".into());
+                    return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_CURVE_REQUIRED).to_string());
                 };
                 let dragging = self.effect_gesture.as_ref().filter(|g| g.original.id.0 == layer && g.key == key);
                 let detached = dragging.is_some_and(|g| g.detached_curve_point);
@@ -698,7 +779,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && point.iter().any(|v| !(-CURVE_DETACH_MARGIN..=1. + CURVE_DETACH_MARGIN).contains(v));
                 if let Some(i) = index {
                     if i >= points.len() || (detached && i == 0) {
-                        return Err("Unknown curve point".into());
+                        return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_CURVE_POINT).to_string());
                     }
                     if detached {
                         if off_graph {
@@ -738,13 +819,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             EffectAction::Insert { effect } => {
                 let choosing = self.filter_drawer_open();
-                let effect = self.effect_catalog.get(&effect).ok_or("Unknown filter")?;
+                let effect = self.effect_catalog.get(&effect).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_FILTER).to_string())?;
                 let generator = effect.program.kind == layer_core::EffectKind::Generator;
                 let doc = self.engine.document();
-                let current = doc.layer(doc.active_layer).ok_or("Select a layer first")?;
+                let current = doc.layer(doc.active_layer).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())?;
                 let replacing = choosing && current.effect.as_ref().is_some_and(|fx| fx.program.kind == effect.program.kind);
                 let masked = !replacing && doc.selection.is_some();
-                if replacing && doc.is_locked(current.id) { return Err("This layer is locked".into()); }
+                if replacing && doc.is_locked(current.id) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
                 if replacing && current.effect.as_ref().is_some_and(|fx| fx.program.id == effect.program.id) {
                     return Ok(());
                 }
@@ -755,12 +836,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let hdr = depth.is_float();
                 let mut layer = if replacing { current.clone() } else {
                     let clipped = choosing && current.properties.clipped;
-                    let mut layer = Layer::paint(self.engine.allocate_layer_id(), effect.label());
+                    let mut layer = Layer::paint(self.engine.allocate_layer_id(), resource_label(effect.label(), &self.state.localization));
                     layer.properties.clipped = clipped;
                     layer
                 };
                 let id = layer.id;
-                layer.name = effect.label().into();
                 layer.kind = LayerKind::Effect;
                 layer.properties.parent = parent;
                 let mut instance = EffectInstance::new(float32_program(&effect.program(), depth));
@@ -803,7 +883,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             let doc = self.engine.document();
                             let mut layer = doc.layer(LayerId(id)).unwrap().clone();
                             if layer.kind != LayerKind::Background || doc.is_locked(layer.id) {
-                                return Err("Select unlocked paper to change its color".into());
+                                return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_PAPER_LOCKED).to_string());
                             }
                             layer.properties.paper_color = Some(color);
                             let edit = Edit::ReplaceLayer(Box::new(layer));
@@ -820,11 +900,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                         ("blend", EffectValue::Choice(value)) => {
                             self.layer_action(LayerAction::Blend { id, value })
                         }
-                        _ => Err("Invalid layer property".into()),
+                        _ => Err(self.state.localization.text(MessageId::RESOURCES_ERROR_INVALID_LAYER_PROPERTY).to_string()),
                     };
                 }
                 let mut layer = self.editable_layer(id)?;
-                let effect = layer.effect.as_mut().ok_or("Not an effect layer")?;
+                let effect = layer.effect.as_mut().ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_EFFECT_LAYER_REQUIRED).to_string())?;
                 let original = effect.clone();
                 let changed = Arc::make_mut(effect);
                 changed.program = float32_program(&changed.program, self.engine.document().color.depth);
@@ -842,5 +922,135 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+    use layer_core::{EffectCatalog, EffectInstallMode, EffectPackage};
+
+    fn package() -> EffectPackage {
+        let bundled = layer_core::bundled_effect_catalog();
+        EffectPackage { format: 2, categories: bundled.categories().to_vec(), filters: bundled.filters().to_vec() }
+    }
+    fn resolve(package: EffectPackage) -> EffectCatalog {
+        package.resolve(|_| Err("resolved fixture has no module imports".into())).unwrap()
+    }
+    fn message(id: MessageId) -> ResourceLabel {
+        ResourceLabel::Message { message: id.key().into() }
+    }
+
+    #[test]
+    fn resource_builtin_references_resolve_without_changing_programs() {
+        let bundled = layer_core::bundled_effect_catalog();
+        for language in [UiLanguage::English, UiLanguage::Japanese, UiLanguage::SimplifiedChinese,
+            UiLanguage::TraditionalChinese, UiLanguage::Korean]
+        {
+            let l = Localizer::shared(language);
+            validate_catalog_labels(bundled, &l).unwrap();
+            let before = bundled.get("curves").unwrap().preview().unwrap();
+            let _ = catalog(bundled, &FilterPickerState::new(&l), &l);
+            let program = before.program.clone();
+            for parameter in program.parameters.iter() {
+                let _ = control(7, parameter, parameter.default.clone(), &l);
+            }
+            assert_eq!(before.program, program);
+            assert_eq!(before.gpu_parameters(layer_core::color::RgbSpace::Srgb).unwrap(),
+                bundled.get("curves").unwrap().preview().unwrap().gpu_parameters(layer_core::color::RgbSpace::Srgb).unwrap());
+        }
+    }
+
+    #[test]
+    fn resource_builtin_id_literal_replacement_survives_localization_and_serialization() {
+        let l = Localizer::shared(UiLanguage::Japanese);
+        let mut replacement = package();
+        replacement.filters.retain(|f| f.id() == "curves");
+        let program = Arc::make_mut(&mut replacement.filters[0].program);
+        program.label = "私の \"曲線\" {名前} 🎨".into();
+        let parameters = Arc::make_mut(&mut program.parameters);
+        parameters[0].label = "한글 설정".into();
+        parameters[0].section = Some("我的分组".into());
+        let candidate = layer_core::bundled_effect_catalog()
+            .stage(resolve(replacement), EffectInstallMode::Replace).unwrap();
+        validate_catalog_labels(&candidate, &l).unwrap();
+        let picker = FilterPickerState { search: Some("曲".into()), ..FilterPickerState::new(&l) };
+        let choices = catalog(&candidate, &picker, &l);
+        assert_eq!(choices.len(), 1);
+        assert_eq!(&*choices[0].label, "私の \"曲線\" {名前} 🎨");
+        let instance = EffectInstance::new(candidate.get("curves").unwrap().program());
+        let copy: EffectInstance = serde_json::from_str(&serde_json::to_string(&instance).unwrap()).unwrap();
+        assert_eq!(copy, instance);
+        let control = control(7, &copy.program.parameters[0], copy.values[0].clone(), &l);
+        assert_eq!(control.label, "한글 설정");
+        assert_eq!(control.section.as_deref(), Some("我的分组"));
+    }
+
+    #[test]
+    fn resource_groups_and_choice_values_keep_identity_when_display_labels_match() {
+        let l = Localizer::shared(UiLanguage::Japanese);
+        let mut custom = package();
+        custom.categories[0].label = message(MessageId::COMMON_CANCEL);
+        custom.categories[1].label = "キャンセル".into();
+        let program = Arc::make_mut(&mut custom.filters[0].program);
+        let parameters = Arc::make_mut(&mut program.parameters);
+        parameters[0].section = Some(message(MessageId::COMMON_CANCEL));
+        parameters[1].section = Some("キャンセル".into());
+        let EffectParameterKind::Choice { options } = &mut parameters[4].kind else { panic!() };
+        let layer_core::EffectOption::Labeled { label, .. } = &mut Arc::make_mut(options)[1] else { panic!() };
+        *label = message(MessageId::COMMON_CANCEL);
+        let custom = resolve(custom);
+        let categories = categories(&custom, &l);
+        assert_eq!(categories[1].label, categories[2].label);
+        assert_ne!(categories[1].id, categories[2].id);
+        let choices = catalog(&custom, &FilterPickerState::new(&l), &l);
+        assert_eq!(choices.len(), custom.filters().len());
+        assert_eq!(choices.iter().map(|c| &c.id).collect::<std::collections::HashSet<_>>().len(), choices.len());
+        let tone = catalog(&custom, &FilterPickerState { category: Some("tone".into()), ..FilterPickerState::new(&l) }, &l);
+        assert!(tone.iter().all(|choice| choice.category.as_ref() == "tone"));
+        assert_eq!(tone.len(), custom.filters().iter().filter(|f| f.category.as_ref() == "tone").count());
+        let instance = custom.get("curves").unwrap().preview().unwrap();
+        let a = control(7, &instance.program.parameters[0], instance.values[0].clone(), &l);
+        let b = control(7, &instance.program.parameters[1], instance.values[1].clone(), &l);
+        assert_eq!(a.section, b.section);
+        assert_ne!(a.section_id, b.section_id);
+        let choice = control(7, &instance.program.parameters[4], EffectValue::Choice(1), &l);
+        let PropertyKind::Choice { options } = choice.kind else { panic!() };
+        assert_eq!(&*options[1], "キャンセル");
+        let mut instance = instance;
+        instance.set("domain", EffectValue::Choice(1)).unwrap();
+        assert_eq!(instance.choice("domain"), Some("Log HDR"));
+    }
+
+    #[test]
+    fn resource_unknown_or_dynamic_references_fail_admission() {
+        let l = Localizer::shared(UiLanguage::English);
+        for key in ["resources-does-not-exist", MessageId::RESOURCES_ANIMATED_TOOLTIP.key()] {
+            for field in 0..5 {
+                let invalid = ResourceLabel::Message { message: key.into() };
+                let mut custom = package();
+                if field == 0 { custom.categories[0].label = invalid; }
+                else {
+                    let program = Arc::make_mut(&mut custom.filters[0].program);
+                    match field {
+                        1 => program.label = invalid,
+                        2 => Arc::make_mut(&mut program.parameters)[0].label = invalid,
+                        3 => Arc::make_mut(&mut program.parameters)[0].section = Some(invalid),
+                        _ => {
+                            let EffectParameterKind::Choice { options } = &mut Arc::make_mut(&mut program.parameters)[4].kind else { panic!() };
+                            let layer_core::EffectOption::Labeled { label, .. } = &mut Arc::make_mut(options)[0] else { panic!() };
+                            *label = invalid;
+                        }
+                    }
+                }
+                let custom = resolve(custom);
+                assert!(validate_catalog_labels(&custom, &l).is_err(), "field {field}: {key}");
+                if field != 0 {
+                    let mut document = Document::new("resource", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+                    document.layers[0].effect = Some(Arc::new(EffectInstance::new(custom.filters()[0].program())));
+                    assert!(validate_document_labels(&document, &l).is_err(), "embedded field {field}: {key}");
+                }
+            }
+        }
     }
 }

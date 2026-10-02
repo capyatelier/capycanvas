@@ -15,8 +15,7 @@ use std::sync::Arc;
 
 /// Copies larger than this show the import-style progress with Cancel.
 pub const LARGE_CLIP_PIXELS: u64 = 1 << 21;
-const NO_COVERAGE: &str = "The selection doesn't cover any of the canvas";
-const NO_SELECTION: &str = "Make a selection to paste into";
+const NO_COVERAGE: MessageId = MessageId::COMMANDS_REFUSAL_CLIPBOARD_THE_SELECTION_DOESN_T_COVER_ANY_OF_THE_CANVAS;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -119,31 +118,32 @@ fn selects_everything(selection: &Selection, [width, height]: [u32; 2]) -> bool 
 
 impl<R: CanvasRenderer> UiSession<R> {
     /// Why Copy, Cut or Copy Merged can't run on the idle document.
-    pub(super) fn copy_refusal(&self, command: CommandId) -> Option<&'static str> {
+    pub(super) fn copy_refusal(&self, command: CommandId) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         let document = self.engine.document();
         if self.selection_masks.quick() {
-            return Some("Quick Mask edits the selection; leave it to copy artwork");
+            return Some(l.text(MessageId::COMMANDS_REFUSAL_CLIPBOARD_QUICK_MASK_EDITS_THE_SELECTION_LEAVE_IT_TO_COPY_ARTWORK));
         }
         if self.selection_masks.target().is_some() {
-            return Some("Return to the artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
         }
         if !self.selection_meets_canvas() {
-            return Some(NO_COVERAGE);
+            return Some(l.text(MessageId::COMMANDS_REFUSAL_CLIPBOARD_THE_SELECTION_DOESN_T_COVER_ANY_OF_THE_CANVAS));
         }
         if command == CommandId::CopyMerged {
             return None;
         }
         if document.active_mask {
-            return Some("Return to the layer's artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST));
         }
         let layer = document.layer(document.active_layer)?;
         match layer.kind {
             LayerKind::Paint => {}
-            LayerKind::Background => return Some("The paper has no pixels to copy"),
-            LayerKind::Group => return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::Group)),
-            LayerKind::Effect => return Some("An effect layer has no pixels of its own"),
+            LayerKind::Background => return Some(l.text(MessageId::COMMANDS_REFUSAL_CLIPBOARD_THE_PAPER_HAS_NO_PIXELS_TO_COPY)),
+            LayerKind::Group => return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::Group, l)),
+            LayerKind::Effect => return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_AN_EFFECT_LAYER_HAS_NO_PIXELS_OF_ITS_OWN)),
             LayerKind::Selection => {
-                return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::SelectionLayer));
+                return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::SelectionLayer, l));
             }
         }
         if command == CommandId::Cut {
@@ -152,11 +152,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         None
     }
 
-    pub(super) fn paste_into_refusal(&self) -> Option<&'static str> {
+    pub(super) fn paste_into_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         if self.selection_masks.target().is_some() {
-            return Some("Return to the artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
         }
-        self.engine.document().selection.is_none().then_some(NO_SELECTION)
+        self.engine.document().selection.is_none().then_some(l.text(MessageId::COMMANDS_REFUSAL_CLIPBOARD_MAKE_A_SELECTION_TO_PASTE_INTO))
     }
 
     /// Whether the selection's conservative bounds reach the canvas. Command
@@ -187,7 +188,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let max = [(bounds.max.x, canvas[0]), (bounds.max.y, canvas[1])]
             .map(|(v, limit)| (v - TOLERANCE).ceil().min(limit as f32));
         if bounds.is_empty() || (0..2).any(|axis| max[axis] <= min[axis]) {
-            return Err(NO_COVERAGE.into());
+            return Err(self.localization().text(NO_COVERAGE).to_string());
         }
         Ok([min[0] as u32, min[1] as u32, (max[0] - min[0]) as u32, (max[1] - min[1]) as u32])
     }
@@ -206,7 +207,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if mode == PasteMode::Into
             && let Some(reason) = self.paste_into_refusal()
         {
-            return Err(reason.into());
+            return Err(reason.to_string());
         }
         self.request_document(DocumentRequest::Paste { mode })
     }
@@ -380,7 +381,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Copy an image to paste".into());
         }
         if masked && let Some(reason) = self.paste_into_refusal() {
-            return Err(reason.into());
+            return Err(reason.to_string());
         }
         let (index, parent) = self.image_layer_destination(None)?;
         let document = self.engine.document();

@@ -39,7 +39,7 @@ fn photo(depth: SampleDepth) -> Arc<SourceImage> {
 
 /// A photo layer inside an offset group over the paper.
 fn document(depth: SampleDepth, space: BlendSpace) -> Document {
-    let mut doc = Document::new("retouch", SIZE[0], SIZE[1]);
+    let mut doc = Document::new("retouch", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.color = DocumentColor { space: RgbSpace::Srgb, depth };
     doc.blend_space = space;
     let group = doc.allocate_layer_id();
@@ -98,7 +98,7 @@ fn a_dodge_and_burn_layer_stores_the_middle_code_and_leaves_the_image_unchanged(
             let original = codes(&mut engine, maximum);
             let before = image(&mut engine, 0);
             let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-            let plan = engine.document().dodge_burn_plan(ids).unwrap();
+            let plan = engine.document().dodge_burn_plan(ids, "Dodge & Burn").unwrap();
             let id = plan.active;
             insert(&mut engine, plan);
             let what = format!("{depth:?} {space:?}");
@@ -135,7 +135,7 @@ fn painting_white_on_a_dodge_and_burn_layer_dodges_and_black_burns() {
         let (mut engine, mut input) = engine(document(SampleDepth::U8, space));
         let before = image(&mut engine, 0);
         let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-        let plan = engine.document().dodge_burn_plan(ids).unwrap();
+        let plan = engine.document().dodge_burn_plan(ids, "Dodge & Burn").unwrap();
         insert(&mut engine, plan);
         draw(&mut engine, &mut input, [1., 1., 1., 0.3], Point { x: 20., y: 70. }, Point { x: 360., y: 70. }, 1_000_000_000);
         draw(&mut engine, &mut input, [0., 0., 0., 0.3], Point { x: 20., y: 190. }, Point { x: 360., y: 190. }, 2_000_000_000);
@@ -152,7 +152,7 @@ fn painting_white_on_a_dodge_and_burn_layer_dodges_and_black_burns() {
 #[test]
 fn a_large_separation_yields_without_publishing_partial_rasters() {
     let extent = [1280, 768];
-    let mut document = Document::new("bounded separation", extent[0], extent[1]);
+    let mut document = Document::new("bounded separation", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.blend_space = BlendSpace::Perceptual;
     document.layers[0].source = Some(color::source::rgba8_source(extent, |x, y| {
         [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
@@ -162,7 +162,7 @@ fn a_large_separation_yields_without_publishing_partial_rasters() {
     let photo = engine.document().active_layer;
     let filters = SeparationFilters::new(bundled_effect_catalog(), 21.).unwrap();
     let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-    let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+    let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
     let targets: Vec<_> = plan.operations.iter().map(|(id, _)| *id).collect();
     insert(&mut engine, plan);
     engine.render_frame_at(1).unwrap();
@@ -189,12 +189,12 @@ fn frequency_separation_recombines_into_the_original_layer() {
             let photo = engine.document().active_layer;
             let filters = SeparationFilters::new(bundled_effect_catalog(), radius).unwrap();
             let preview = engine.allocate_layer_id();
-            engine.set_layer_preview(Some(layer_engine::LayerPreview { above: photo, layer: SeparationFilters::clipped(preview, &filters.blur) }));
+            engine.set_layer_preview(Some(layer_engine::LayerPreview { above: photo, layer: SeparationFilters::clipped(preview, &filters.blur, filters.blur.program.id.clone()) }));
             let previewed = image(&mut engine, 0);
             engine.set_layer_preview(None);
             image(&mut engine, 0).assert_eq(&before, "the preview leaves nothing behind");
             let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-            let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+            let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
             let (high, low) = (plan.active, plan.operations[0].0);
             insert(&mut engine, plan);
             let what = format!("{depth:?} radius {radius}");
@@ -225,7 +225,7 @@ fn frequency_separation_recombines_into_the_original_layer() {
 fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() {
     use layer_engine::{CanvasEngine, ViewTransform, input_queue};
     let extent = [6000, 4000];
-    let mut doc = Document::new("24 MP retouch", extent[0], extent[1]);
+    let mut doc = Document::new("24 MP retouch", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.blend_space = BlendSpace::Perceptual;
     doc.layers[0].source = Some(color::source::rgba8_source(extent, |x, y| {
         [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
@@ -257,7 +257,7 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
     let preview = engine.allocate_layer_id();
     for radius in [4., 4.5, 21.] {
         let filters = SeparationFilters::new(bundled_effect_catalog(), radius).unwrap();
-        engine.set_layer_preview(Some(layer_engine::LayerPreview { above: photo, layer: SeparationFilters::clipped(preview, &filters.blur) }));
+        engine.set_layer_preview(Some(layer_engine::LayerPreview { above: photo, layer: SeparationFilters::clipped(preview, &filters.blur, filters.blur.program.id.clone()) }));
         let elapsed = settle(&mut engine);
         let allocated = held(&engine);
         println!("Preview radius {radius}: frame to settled GPU {:.1} ms, {:.1} MiB above the photo", ms(elapsed), (allocated as i64 - loaded as i64) as f64 / 1048576.);
@@ -270,7 +270,7 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
         let begin = now();
         let start = std::time::Instant::now();
         let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-        let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+        let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
         let low = plan.operations[0].0;
         insert(&mut engine, plan);
         let apply = start.elapsed();
@@ -290,7 +290,7 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
         assert!(allocated <= loaded + (2 * 384 + 300) * (1 << 20), "separation retains more than its pages and scratch");
         if radius == 4. {
             let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-            let plan = engine.document().separation_plan(low, &filters, ids).unwrap();
+            let plan = engine.document().separation_plan(low, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
             insert(&mut engine, plan);
             let elapsed = settle(&mut engine);
             let second = held(&engine);
@@ -329,7 +329,7 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
     engine.undo().unwrap();
     settle(&mut engine);
     let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-    let plan = engine.document().dodge_burn_plan(ids).unwrap();
+    let plan = engine.document().dodge_burn_plan(ids, "Dodge & Burn").unwrap();
     let id = plan.active;
     insert(&mut engine, plan);
     let frame = settle(&mut engine);

@@ -28,7 +28,7 @@ fn color_mixing_is_a_tool_option_of_mixing_brushes_kept_per_brush() {
     assert_eq!(mixing.map(|c| s.command(c).selected), [false, false, true]);
     assert!(!s.engine.can_undo(), "brush options are not document edits");
     assert!(s.state.tool_options().iter().any(|o| matches!(o,
-        ToolOption::Choice { id: "color-mixing", label: "Color mixing", items, .. } if items.len() == 3 && items[2].selected)));
+        ToolOption::Choice { id: "color-mixing", label, items, .. } if label.as_ref() == "Color mixing" && items.len() == 3 && items[2].selected)));
     s.dispatch(UiAction::Invoke { command: CommandId::Move }).unwrap();
     assert!(shown(&s).is_empty(), "only the brush tool shows brush options");
     s.select_brush(DefaultBrushPreset::WetRound as u32).unwrap();

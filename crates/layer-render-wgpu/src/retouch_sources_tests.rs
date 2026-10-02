@@ -62,7 +62,7 @@ fn over_in(space: layer_core::BlendSpace, top: [f32; 4], below: [f32; 4]) -> [f3
 /// The target (layer 1) above a patterned photo marked as a reference, above
 /// the paper.
 fn document(extent: [u32; 2]) -> Document {
-    let mut doc = Document::new("retouch sources", extent[0], extent[1]);
+    let mut doc = Document::new("retouch sources", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     assert_eq!(doc.allocate_layer_id(), PHOTO);
     let mut photo = Layer::paint(PHOTO, "Photo");
     photo.source = Some(rgba8_source(extent, pattern));

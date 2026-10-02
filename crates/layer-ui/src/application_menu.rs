@@ -8,11 +8,14 @@ pub enum ApplicationLink {
     SourceCode,
 }
 impl ApplicationLink {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Website => "Website",
-            Self::SourceCode => "Source code",
-        }
+    pub fn label(self) -> std::sync::Arc<str> {
+        self.localized_label(&Localizer::shared(UiLanguage::English))
+    }
+    pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        localization.text(match self {
+            Self::Website => CommandId::Website.message_id(),
+            Self::SourceCode => CommandId::SourceCode.message_id(),
+        })
     }
     pub fn display(self) -> &'static str {
         match self {
@@ -52,18 +55,21 @@ impl ApplicationMenu {
         Self::Window,
         Self::Help,
     ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::File => FILE_MENU.label,
-            Self::Edit => "Edit",
-            Self::Layer => "Layer",
-            Self::Select => "Select",
-            Self::Filter => "Filter",
-            Self::View => VIEW_MENU.label,
-            Self::Window => WORKSPACE_MENU_LABEL,
-            Self::Help => "Help",
-            Self::Primary => "Main Menu",
-        }
+    pub fn label(self) -> std::sync::Arc<str> {
+        self.localized_label(&Localizer::shared(UiLanguage::English))
+    }
+    pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        localization.text(match self {
+            Self::File => MessageId::MENU_FILE,
+            Self::Edit => MessageId::MENU_EDIT,
+            Self::Layer => MessageId::MENU_LAYER,
+            Self::Select => MessageId::MENU_SELECT,
+            Self::Filter => MessageId::MENU_FILTER,
+            Self::View => MessageId::MENU_VIEW,
+            Self::Window => MessageId::MENU_WINDOW,
+            Self::Help => MessageId::MENU_HELP,
+            Self::Primary => MessageId::MENU_MAIN_MENU,
+        })
     }
 }
 
@@ -72,22 +78,17 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// selection bar's Adjust menu. It ignores the panel's search and category,
     /// leaves fill generators to Layer › New and never requests thumbnails.
     pub(crate) fn filter_category_items(&self) -> Vec<ContextMenuItem> {
-        let choices = effects::catalog(&self.effect_catalog, &Default::default());
         let enabled = self.effect_insert_enabled();
-        let generators: Vec<_> = self.effect_catalog.filters().iter()
-            .filter(|d| d.program.kind == layer_core::EffectKind::Generator)
-            .map(|d| d.program.id.clone())
-            .collect();
         self.effect_catalog
             .categories()
             .iter()
             .filter_map(|category| {
-                let items: Vec<_> = choices
+                let items: Vec<_> = self.effect_catalog.filters()
                     .iter()
-                    .filter(|f| f.category == category.id && !generators.contains(&f.id))
-                    .map(|f| ContextMenuItem { enabled, ..ContextMenuItem::command(f.label.to_string(), f.action.clone()) })
+                    .filter(|f| f.category == category.id && f.program.kind != layer_core::EffectKind::Generator)
+                    .map(|f| ContextMenuItem { enabled, ..ContextMenuItem::command(effects::resource_label(f.label(), self.localization()).to_string(), UiAction::Effect { action: EffectAction::Insert { effect: f.program.id.clone() } }) })
                     .collect();
-                (!items.is_empty()).then(|| ContextMenuItem::submenu(&category.label, vec![items]))
+                (!items.is_empty()).then(|| ContextMenuItem::submenu(&effects::resource_label(&category.label, self.localization()), vec![items]))
             })
             .collect()
     }
@@ -99,16 +100,16 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(crate) fn fill_layer_items(&self) -> Vec<ContextMenuItem> {
         let enabled = self.effect_insert_enabled();
         let dodge_burn = self.command(CommandId::NewDodgeBurnLayer);
-        [("Solid Color Fill", "solid_color"), ("Gradient Fill", "gradient_fill")]
+        [(MessageId::MENU_SOLID_COLOR_FILL, "solid_color"), (MessageId::MENU_GRADIENT_FILL, "gradient_fill")]
             .into_iter()
             .filter(|(_, id)| self.effect_catalog.get(id).is_some())
             .map(|(label, id)| ContextMenuItem {
                 enabled,
-                ..ContextMenuItem::command(label, UiAction::Effect { action: EffectAction::Insert { effect: id.into() } })
+                ..ContextMenuItem::command(self.localization().text(label).to_string(), UiAction::Effect { action: EffectAction::Insert { effect: id.into() } })
             })
             .chain([ContextMenuItem {
                 enabled: dodge_burn.enabled,
-                ..ContextMenuItem::command(dodge_burn.label, UiAction::Invoke { command: dodge_burn.id })
+                ..ContextMenuItem::command(dodge_burn.label.to_string(), UiAction::Invoke { command: dodge_burn.id })
             }])
             .collect()
     }
@@ -119,25 +120,25 @@ impl<R: CanvasRenderer> UiSession<R> {
         use ApplicationMenu as M;
         let command = |id: CommandId| {
             let state = self.command(id);
-            let mut item = ContextMenuItem::command(state.label, UiAction::Invoke { command: id });
+            let mut item = ContextMenuItem::command(state.label.to_string(), UiAction::Invoke { command: id });
             item.enabled = state.enabled;
             item.selected = id.is_toggle().then_some(state.selected);
             item
         };
         let mut model = match menu {
             M::Primary => ContextMenu {
-                title: menu.label().into(),
+                title: menu.localized_label(self.localization()).to_string(),
                 sections: vec![
                     M::ALL
                         .into_iter()
                         .map(|id| {
-                            ContextMenuItem::submenu(id.label(), self.application_menu(id).sections)
+                            ContextMenuItem::submenu(&id.localized_label(self.localization()), self.application_menu(id).sections)
                         })
                         .collect(),
                 ],
             },
             M::Layer if self.selection_masks.quick() => self.quick_mask_menu(),
-            M::Edit => ContextMenu { title: menu.label().into(), sections: vec![
+            M::Edit => ContextMenu { title: menu.localized_label(self.localization()).to_string(), sections: vec![
                 vec![command(CommandId::SearchCommands)],
                 [CommandId::Undo, CommandId::Redo].map(command).into(),
                 [CommandId::Cut, CommandId::Copy, CommandId::CopyMerged, CommandId::PasteImage, CommandId::PasteInPlace, CommandId::PasteInto]
@@ -147,18 +148,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .collect(),
                 [CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
                 vec![command(CommandId::ScaleRotate)],
-                vec![ContextMenuItem::submenu("Image", vec![
+                vec![ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_IMAGE), vec![
                     [CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize, CommandId::ImageSize].map(command).into(),
                     [CommandId::RotateImageLeft, CommandId::RotateImageRight, CommandId::RotateImage180].map(command).into(),
                     [CommandId::FlipImageHorizontal, CommandId::FlipImageVertical].map(command).into(),
                     [CommandId::Trim, CommandId::RevealAll].map(command).into(),
                 ])],
                 [CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth].map(command).into_iter()
-                    .chain([ContextMenuItem::submenu("Blending", vec![[CommandId::BlendPerceptual, CommandId::BlendLinear].map(command).into()])])
+                    .chain([ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_BLENDING), vec![[CommandId::BlendPerceptual, CommandId::BlendLinear].map(command).into()])])
                     .collect(),
                 vec![command(CommandId::Settings)],
             ] },
-            M::Select => ContextMenu { title: menu.label().into(), sections: vec![
+            M::Select => ContextMenu { title: menu.localized_label(self.localization()).to_string(), sections: vec![
                 [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
                 [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::SaveSelectionLayer].into_iter().map(command).collect(),
                 [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer, CommandId::ClearSelected, CommandId::ClearOutside].into_iter().map(command).collect(),
@@ -174,7 +175,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(command)
                 .collect(),
                 self.selection_source_menu_items(),
-                vec![ContextMenuItem::submenu("Load Selection", vec![self.saved_selection_menu_items()]), ContextMenuItem::submenu("Replace Selection Layer from Current Selection",vec![self.replace_selection_menu_items()])],
+                vec![ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_LOAD_SELECTION), vec![self.saved_selection_menu_items()]), ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_REPLACE_SELECTION_LAYER_FROM_CURRENT_SELECTION),vec![self.replace_selection_menu_items()])],
                 vec![command(CommandId::SelectionOutline)],
             ] },
             M::Layer => self
@@ -183,12 +184,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.engine.document().active_mask,
                 )
                 .unwrap_or(ContextMenu {
-                    title: menu.label().into(),
+                    title: menu.localized_label(self.localization()).to_string(),
                     sections: Vec::new(),
                 }),
             M::Window => self.workspace_menu(),
             M::Filter => ContextMenu {
-                title: menu.label().into(),
+                title: menu.localized_label(self.localization()).to_string(),
                 sections: vec![self.filter_category_items(), vec![command(CommandId::FrequencySeparation)]],
             },
             _ => {
@@ -203,7 +204,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => unreachable!(),
                 };
                 ContextMenu {
-                    title: menu.label().into(),
+                    title: menu.localized_label(self.localization()).to_string(),
                     sections: sections
                         .iter()
                         .map(|section| {
@@ -229,8 +230,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if menu==M::View {model.sections.push(vec![command(CommandId::SelectionOutline)]);}
-        model.title = menu.label().into();
-        model.with_shortcuts(&self.state.settings, self.state.platform)
+        model.title = menu.localized_label(self.localization()).to_string();
+        model.with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization())
     }
 
     /// The zoom readout's menu: the view commands, then fixed percentages.
@@ -238,20 +239,24 @@ impl<R: CanvasRenderer> UiSession<R> {
         let idle = self.require_idle().is_ok();
         let command = |id: CommandId| {
             let state = self.command(id);
-            ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label, UiAction::Invoke { command: id }) }
+            ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label.to_string(), UiAction::Invoke { command: id }) }
         };
         let level = |zoom: f32| ContextMenuItem {
             enabled: idle,
-            ..ContextMenuItem::command(format!("{}%", zoom * 100.), UiAction::SetZoom { zoom })
+            ..ContextMenuItem::command({
+                let mut args = localization::FluentArgs::new();
+                args.set("percent", (zoom * 100.) as f64);
+                self.localization().format(MessageId::MENU_ZOOM_LEVEL, &args)
+            }, UiAction::SetZoom { zoom })
         };
         ContextMenu {
-            title: "Zoom".into(),
+            title: self.localization().text(MessageId::MENU_ZOOM).to_string().into(),
             sections: vec![
                 [CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels].map(command).into(),
                 ZOOM_LEVELS.map(level).into(),
             ],
         }
-        .with_shortcuts(&self.state.settings, self.state.platform)
+        .with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization())
     }
 }
 

@@ -109,7 +109,7 @@ fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::SampleDepth
         color: layer_core::color::DocumentColor { depth, ..Default::default() },
         ..Default::default()
     }
-    .project()
+    .project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
     .unwrap()
 }
 
@@ -595,7 +595,7 @@ fn native_document_files() {
     };
     let w = Workspace::with_project(
         &app,
-        Some((new_drawing(384, 256).unwrap(), Some(location.clone()))),
+        Some((new_drawing(384, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), Some(location.clone()))),
     );
     let created = Rc::new(RefCell::new(None));
     let result = created.clone();
@@ -1005,7 +1005,7 @@ fn native_document_files() {
     // The title-bar customization bank also owns a hidden Cancel button.
     // Target the current native dialog rather than the first label in the window.
     let dialog = w.window.visible_dialog().unwrap();
-    click(&find_button(dialog.upcast_ref(), CANCEL_DOCUMENT_LABEL).unwrap());
+    click(&find_button(dialog.upcast_ref(), &layer_ui::new_document_spec(&w.localization).cancel).unwrap());
     finish();
     assert!(created.borrow().is_none());
     let reopened = Workspace::with_project(&app, Some((project, Some(location))));
@@ -1041,7 +1041,7 @@ fn native_document_files() {
                 .unwrap(),
             1.,
         );
-        click(&find_button(w.window.upcast_ref(), CANCEL_DOCUMENT_LABEL).unwrap());
+        click(&find_button(w.window.upcast_ref(), &layer_ui::new_document_spec(&w.localization).cancel).unwrap());
         pump(180);
         assert!(w.window.is_visible());
         assert!(state(&w).document_file.modified);
@@ -3821,7 +3821,14 @@ fn native_adjustment_panels_review() {
         assert!(w.effects.properties.is_mapped());
         let s = state(&w);
         let id = s.layer_properties.layer.unwrap();
-        assert_eq!(s.layer_properties.description, kind.label());
+        let expected = match kind.label() {
+            layer_core::ResourceLabel::Literal(text) => text.clone(),
+            layer_core::ResourceLabel::Message { message } => {
+                let session = ui_session(&w);
+                session.localization().text(session.localization().static_message(message).unwrap())
+            }
+        };
+        assert_eq!(s.layer_properties.description, expected.as_ref());
         if kind.id() == "color_balance" {
             let mut headings = Vec::new();
             let mut child = w.effects.properties.last_child().unwrap().first_child();
@@ -4756,7 +4763,7 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
         pump(30);
         let action = popup
             .menu_model()
-            .and_then(|model| menu_action(&model, id.label()));
+            .and_then(|model| menu_action(&model, &id.label()));
         popup.popdown();
         if let Some(action) = action {
             let button = gtk::Button::new();
@@ -5882,7 +5889,7 @@ fn native_workspace_management() {
             .toolbar_prompt()
             .unwrap()
             .confirm_label;
-        click(&find_button(prompt().upcast_ref(), label).unwrap());
+        click(&find_button(prompt().upcast_ref(), &label).unwrap());
         pump(180);
         assert!(
             ui_session(&w)
@@ -6878,7 +6885,7 @@ fn native_menu_sections() {
             .iter()
             .filter_map(|p| p.upgrade())
             .filter_map(|p| p.downcast::<gtk::PopoverMenu>().ok())
-            .find(|p| p.parent().unwrap().tooltip_text().as_deref() == Some(id.label()))
+            .find(|p| p.parent().unwrap().tooltip_text().as_deref() == Some(&id.label()))
             .unwrap();
         popup.popup();
         pump(100);
@@ -6951,12 +6958,12 @@ fn native_menu_sections() {
                     assert!(!find_menu_item(menu.upcast_ref(), label).unwrap().is_sensitive());
                 }
                 assert!(find_menu_item(menu.upcast_ref(), "Modify").is_none());
-                assert!(find_menu_item(menu.upcast_ref(), CommandId::GrowSelection.label()).is_some());
-                assert!(find_menu_item(menu.upcast_ref(), CommandId::ShrinkSelection.label()).is_some());
+                assert!(find_menu_item(menu.upcast_ref(), &CommandId::GrowSelection.label()).is_some());
+                assert!(find_menu_item(menu.upcast_ref(), &CommandId::ShrinkSelection.label()).is_some());
             }
             if id == ApplicationMenu::View {
                 assert!(
-                    menu_action(&menu.menu_model().unwrap(), CommandId::ToggleTheme.label())
+                    menu_action(&menu.menu_model().unwrap(), &CommandId::ToggleTheme.label())
                         .is_none()
                 );
             }
@@ -6969,30 +6976,30 @@ fn native_menu_sections() {
             pump(100);
         }
     }
-    activate(&open(ApplicationMenu::Select), CommandId::SelectAll.label());
+    activate(&open(ApplicationMenu::Select), &CommandId::SelectAll.label());
     assert!(state(&w).layer_tools.has_selection);
     activate(
         &open(ApplicationMenu::Edit),
-        CommandId::FillSelection.label(),
+        &CommandId::FillSelection.label(),
     );
     let checkpoint = ui_session(&w)
         .engine()
         .checkpoint();
-    activate(&open(ApplicationMenu::Edit), CommandId::ClearLayer.label());
+    activate(&open(ApplicationMenu::Edit), &CommandId::ClearLayer.label());
     assert_ne!(
         ui_session(&w)
             .engine()
             .checkpoint(),
         checkpoint
     );
-    activate(&open(ApplicationMenu::Edit), CommandId::Undo.label());
+    activate(&open(ApplicationMenu::Edit), &CommandId::Undo.label());
     assert_eq!(
         ui_session(&w)
             .engine()
             .checkpoint(),
         checkpoint
     );
-    activate(&open(ApplicationMenu::Select), CommandId::Deselect.label());
+    activate(&open(ApplicationMenu::Select), &CommandId::Deselect.label());
     assert!(!state(&w).layer_tools.has_selection);
     let filter = state(&w).adjustments[0].label.clone();
     activate(&open(ApplicationMenu::Filter), &filter);

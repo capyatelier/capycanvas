@@ -1,5 +1,5 @@
 {
-  "format": 1,
+  "format": 2,
   "categories": [{"id": "examples", "label": "Examples"}],
   "filters": [{
     "category": "examples",

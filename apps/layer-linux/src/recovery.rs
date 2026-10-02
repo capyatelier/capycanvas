@@ -270,7 +270,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("capy-recovery-failure-{}.capy", std::process::id()));
         let mut project = Project {
-            document: Document::new("recovery", 256, 256),
+            document: Document::new("recovery", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
         };
         let discarded = AtomicBool::new(false);
         publish(&path, project.clone(), &discarded).unwrap();
@@ -310,7 +310,7 @@ mod tests {
         let path = dir.join("drawing.capy");
         let tile = RasterTile::pending(RasterPlane::Color.descriptor(Default::default()));
         let mut project = Project {
-            document: Document::new("recovery", 256, 256),
+            document: Document::new("recovery", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
         };
         project.document.layers[0].raster = RasterRevision::backed(RasterData {
             tiles: [(

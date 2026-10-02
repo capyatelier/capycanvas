@@ -185,6 +185,10 @@ See [Android development](../development/android.md#benchmarks).
 
 - Run `AndroidCanvasBarBenchmarkTest` with `-e width` and `-e height` set to the
   tier canvas.
+- Its UI scenario opens the requested photo, adds an empty paint layer and uses
+  Fit zoom. Pass `-e photo` with the tier Sony photo for target measurements; the
+  generated image default does not establish the target workload. It primes the
+  transform and bar transitions before collecting UI samples.
 - Its "Hz" is renderer submissions. `gpu_completed_hz` counts completed canvas
   updates, including retained Navigator refreshes, so it does not establish fresh
   input throughput. Its JSON also records `display_hz` and the UI `FrameMetrics`.

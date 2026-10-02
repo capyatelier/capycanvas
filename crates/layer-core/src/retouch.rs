@@ -147,7 +147,7 @@ mod tests {
     use crate::{EffectKind, Layer, LayerKind};
 
     fn document() -> Document {
-        let mut doc = Document::new("retouch", 64, 64);
+        let mut doc = Document::new("retouch", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut group = Layer::paint(LayerId(10), "Group");
         group.kind = LayerKind::Group;
         let mut above = Layer::paint(LayerId(11), "Above");
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn a_clipping_stack_below_keeps_only_clips_below_the_target() {
-        let mut doc = Document::new("clips", 64, 64);
+        let mut doc = Document::new("clips", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut top_clip = Layer::paint(LayerId(20), "Top clip");
         top_clip.properties.clipped = true;
         let mut target = Layer::paint(LayerId(21), "Target");
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn an_adjustment_below_brings_its_inputs() {
-        let mut doc = Document::new("adjust", 64, 64);
+        let mut doc = Document::new("adjust", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let target = Layer::paint(LayerId(30), "Target");
         let mut curves = Layer::paint(LayerId(31), "Curves");
         curves.kind = LayerKind::Effect;

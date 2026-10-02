@@ -24,6 +24,7 @@ struct State {
 /// Called from one UI/input owner. RefCell borrows never span storage awaits;
 /// accepted live edits can continue while an immutable save is in flight.
 pub struct WorkspaceManager<S: WorkspaceStore> {
+    pub(crate) localization: std::sync::Arc<layer_ui::Localizer>,
     pub store: S,
     pub owner: Owner,
     pub platform: Platform,
@@ -41,7 +42,11 @@ impl<S: WorkspaceStore> Drop for WorkspaceManager<S> {
 }
 impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn new(store: S, platform: Platform) -> Self {
+        Self::new_localized(store, platform, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+    }
+    pub fn new_localized(store: S, platform: Platform, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
         Self {
+            localization,
             store,
             owner: Owner::fresh(),
             platform,
@@ -74,12 +79,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn active_id(&self) -> Option<String> {
         self.state.borrow().latest.as_ref().map(|e| e.id.clone())
     }
+    pub fn display_name(&self, id: &str, metadata: &Metadata) -> String {
+        workspace_display_name(id, metadata, &self.localization)
+    }
     pub fn active_name(&self) -> Option<String> {
         self.state
             .borrow()
             .latest
             .as_ref()
-            .map(|e| e.metadata.name.clone())
+            .map(|e| self.display_name(&e.id, &e.metadata))
     }
     pub fn current(&self) -> Option<Entity> {
         self.state.borrow().latest.clone()
@@ -100,14 +108,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         items.retain(|i| i.metadata.kind == ItemKind::Workspace);
         items.sort_by_key(|i| std::cmp::Reverse(i.metadata.last_used_ms));
         Some(layer_ui::ManagedWorkspace {
-            id: current.id,
-            name: current.metadata.name,
+            id: current.id.clone(),
+            name: self.display_name(&current.id, &current.metadata),
             baseline,
             choices: items
                 .into_iter()
                 .map(|i| layer_ui::WorkspaceChoice {
+                    name: self.display_name(&i.id, &i.metadata),
                     id: i.id,
-                    name: i.metadata.name,
                 })
                 .collect(),
         })
@@ -413,7 +421,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .first()
             .ok_or_else(|| StoreError::invalid("No workspaces are available."))?;
         let source = self.load(&source.id).await?.entity;
-        let name = format!("{} Copy", source.metadata.name);
+        let name = message(&self.localization, layer_ui::MessageId::WORKSPACE_COPY_NAME, &[("name", self.display_name(&source.id, &source.metadata))]);
         self.create_from_snapshot(source, &name, true, now).await
     }
 

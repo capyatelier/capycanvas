@@ -13,7 +13,7 @@ impl Default for WorkspaceWorkingState {
             canvas_tool: LayerCanvasTool::Paint,
             selection: SelectionOptions::default(),
             region_values: region
-                .controls()
+                .controls(&Localizer::shared(UiLanguage::English))
                 .into_iter()
                 .map(|c| (c.id.into(), c.value))
                 .collect(),
@@ -85,6 +85,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let PanelContent::Toolbar { name, tiles } = &config.content else {
             return Err("Choose a toolbar".into());
         };
+        let title = name.clone().unwrap_or_else(|| config.id.localized_label(self.localization()).to_string());
+        let name = &title;
         let controls: Vec<_> = tiles.iter().map(|t| t.control).collect();
         let before = self.state.workspace.clone();
         let mut layout = before.layout.clone();
@@ -122,17 +124,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         added.hide_tab = config.hide_tab;
         layout.validate()?;
         self.state.workspace.layout = layout;
-        let description = format!(
-            "{} {}",
-            if replace.is_some() {
-                "Replaced"
-            } else {
-                "Added"
-            },
-            workspace::description::panel_name(&self.state.workspace.layout, panel)
+        let description = LayoutChange::panels(
+            if replace.is_some() { LayoutPanelAction::Replaced } else { LayoutPanelAction::Added },
+            vec![workspace::description::panel_name(&self.state.workspace.layout, panel)],
         );
-        self.workspace_history
-            .record_named(before, &self.state.workspace, &description);
+        self.workspace_history.record_named(before, &self.state.workspace, description);
         self.state.customization = CustomizationState::default();
         self.sync_work_area();
         self.refresh_commands();
@@ -209,7 +205,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             selection: self.selection_tools.options.clone(),
             region_values: self
                 .region_tools
-                .controls()
+                .controls(self.localization())
                 .into_iter()
                 .map(|c| (c.id.into(), c.value))
                 .collect(),
@@ -350,7 +346,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let header_presentation = self.state.workspace.layout.header_presentation.clone();
         self.state.toolbar_context_generation += 1;
         self.state.workspace = WorkspaceState {
-            version: 1,
+            version: 2,
             layout: capture.history.layout().clone(),
             zen_mode: working.zen_mode,
         };

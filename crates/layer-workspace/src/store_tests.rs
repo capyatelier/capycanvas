@@ -327,12 +327,12 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
     let original = baseline.as_ref().clone();
     let mut first = original.clone();
     first.bands[0].extent += 20.;
-    history.append(&first, "First");
+    history.append(&first, layer_ui::LayoutChange::Automatic);
     let abandoned = history.current.clone();
     history.undo();
     let mut second = original.clone();
     second.bands[0].extent += 40.;
-    history.append(&second, "Second");
+    history.append(&second, layer_ui::LayoutChange::Automatic);
     let navigation = (
         history.current.clone(),
         history.undo.clone(),
@@ -486,7 +486,7 @@ fn layout_and_working_generations_are_independent_and_stale_writes_fail() {
     };
     let mut layout = history.layout().clone();
     layout.bands[0].extent += 50.;
-    history.append(&layout, "Resize panel column");
+    history.append(&layout, layer_ui::LayoutChange::Automatic);
     // The old working generation does not invalidate an independent layout write.
     f.store
         .commit(
@@ -670,7 +670,7 @@ fn undo_revisits_content_but_never_reuses_a_write_generation() {
     if let ItemContent::Workspace { history, .. } = &mut content {
         let mut layout = history.layout().clone();
         layout.bands[0].extent += 80.;
-        history.append(&layout, "Resize panels");
+        history.append(&layout, layer_ui::LayoutChange::Automatic);
     }
     f.store
         .commit(
@@ -1175,7 +1175,7 @@ fn simultaneous_readers_observe_complete_layout_and_working_publication() {
             if let ItemContent::Workspace { history, .. } = &mut content {
                 let mut layout = history.layout().clone();
                 layout.bands[0].extent = 100. + index as f32;
-                history.append(&layout, "Resize column");
+                history.append(&layout, layer_ui::LayoutChange::Automatic);
             }
             store
                 .commit(

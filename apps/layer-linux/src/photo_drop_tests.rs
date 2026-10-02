@@ -245,7 +245,7 @@ fn native_multiple_photo_import_chooser() {
         None
     }
     let app = native_test_app("art.capycanvas.MultiplePhotoImport");
-    let w = Workspace::with_project(&app, Some((new_drawing(200, 150).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(200, 150, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.maximize();
     w.window.present();
     ready(&w);
@@ -311,7 +311,7 @@ fn native_multiple_photo_import_chooser() {
 #[ignore = "isolated workspace-motion.sh gtk --native-test=native_photo_file_drops"]
 fn native_photo_file_drops() {
     let app = native_test_app("art.capycanvas.PhotoFileDrops");
-    let mut project = new_drawing(200, 150).unwrap();
+    let mut project = new_drawing(200, 150, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let group = project.document.allocate_layer_id();
     let mut row = layer_core::Layer::paint(group, "Photo destination");
     row.kind = layer_core::LayerKind::Group;

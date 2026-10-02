@@ -216,7 +216,7 @@ pub(super) async fn render_output(
     )).flatten();
     let buffers = if let Some(original) = original {
         let project =
-            layer_color::photo_project((*original).clone(), Default::default(), "Original", metadata.color.depth)
+            layer_color::photo_project((*original).clone(), Default::default(), layer_core::DocumentNames { paint: "Original".into(), paper: "".into() }, metadata.color.depth)
                 .map_err(js)?;
         let packed = raster_project::pack(project).await?;
         metadata.original = Some(
@@ -426,7 +426,7 @@ pub async fn raster_worker_output(
         let (source, png) = layer_color::write_clip_rows(rows, &mut read_row).map_err(js)?;
         let result = match source {
             Some(source) => {
-                let mut document = layer_core::Document::new("Clipboard", source.extent[0], source.extent[1]);
+                let mut document = layer_core::Document::new("Clipboard", source.extent[0], source.extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
                 document.color = metadata.color;
                 document.layers.truncate(1);
                 document.layers[0].source = Some(std::sync::Arc::new(source));

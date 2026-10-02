@@ -82,7 +82,7 @@ fn engine(
 
 #[test]
 fn partial_bakes_back_tiles_without_publishing_the_layer() {
-    let mut document = layer_core::Document::new("incremental capture", 1280, 768);
+    let mut document = layer_core::Document::new("incremental capture", 1280, 768, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.blend_space = layer_core::BlendSpace::Perceptual;
     document.layers[0].source = Some(layer_core::color::source::rgba8_source([1280, 768], |x, y| {
         [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
@@ -96,7 +96,7 @@ fn partial_bakes_back_tiles_without_publishing_the_layer() {
     engine.backend_mut().native_edit.as_mut().unwrap().color_cache_bytes = 4 << 20;
     let ids = std::array::from_fn(|_| engine.allocate_layer_id());
     let filters = layer_core::SeparationFilters::new(layer_core::bundled_effect_catalog(), 8.).unwrap();
-    let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+    let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
     let low = plan.operations[0].0;
     engine.insert_with_operations(plan.edits, plan.operations, None).unwrap();
     engine.render_frame().unwrap();
@@ -128,7 +128,7 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16] {
             let color = DocumentColor { space, depth };
-            let mut document = layer_core::Document::new("portable paint", 384, 128);
+            let mut document = layer_core::Document::new("portable paint", 384, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             document.color = color;
             let id = document.layers[0].id;
             let (_, mut live) = engine(document);
@@ -224,7 +224,7 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
             let color = DocumentColor { space, depth };
-            let mut document = layer_core::Document::new("native workflow", 256, 256);
+            let mut document = layer_core::Document::new("native workflow", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             document.color = color;
             let id = document.layers[0].id;
             let (mut input, mut live) = engine(document);
@@ -301,7 +301,7 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
     use layer_core::color::{ColorProfile, source::*};
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         for in_place in [false, true] {
-            let mut document = layer_core::Document::new("photo pen", 4353, 769);
+            let mut document = layer_core::Document::new("photo pen", 4353, 769, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             document.color = DocumentColor {
                 space: RgbSpace::Srgb,
                 depth,
@@ -795,7 +795,7 @@ fn deferred_native_outputs_preserve_versions_and_status_during_following_frames(
 
 #[test]
 fn pending_native_save_and_immediate_undo_finish_after_presentation_releases_backing() {
-    let mut document = layer_core::Document::new("pending backing", 256, 256);
+    let mut document = layer_core::Document::new("pending backing", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
     let (mut input, mut live) = engine(document);
     while !live.backend().raster_ready() { std::thread::yield_now(); }

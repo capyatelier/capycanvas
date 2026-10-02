@@ -131,7 +131,7 @@ mod tests {
         let directory = TempDir::new();
         let path = directory.path.join("drawing.capy");
         let cancel = AtomicBool::new(false);
-        let project = layer_ui::new_drawing(32, 24).unwrap();
+        let project = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         atomic_write(&path, &cancel, |f| project.write(f)).unwrap();
         let before = fs::read(&path).unwrap();
         let error = atomic_write(&path, &cancel, |f| {
@@ -153,7 +153,7 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), before);
         assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
         cancel.store(false, Ordering::Release);
-        let next = layer_ui::new_drawing(40, 30).unwrap();
+        let next = layer_ui::new_drawing(40, 30, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         atomic_write(&path, &cancel, |f| next.write(f)).unwrap();
         assert_eq!(
             layer_core::Project::read(File::open(&path).unwrap(), Default::default()).unwrap(),
@@ -193,7 +193,7 @@ mod tests {
         for cancelled in [false, true] {
             let directory = TempDir::new();
             let path = directory.path.join("drawing.capy");
-            let project = layer_ui::new_drawing(32, 24).unwrap();
+            let project = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
             std::fs::write(&path, b"previous destination").unwrap();
             let mut locked = Some(
                 OpenOptions::new()

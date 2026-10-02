@@ -118,8 +118,11 @@ impl Localizer {
         Arc::clone(slot.get_or_init(|| Arc::new(Self::new(language))))
     }
     pub fn new(language: UiLanguage) -> Self {
-        let mut localizer = Self { language, active: bundle(language), english: bundle(UiLanguage::English), labels: BTreeMap::new() };
-        for &id in MessageId::ALL {
+        Self::from_bundles(language, bundle(language), bundle(UiLanguage::English))
+    }
+    fn from_bundles(language: UiLanguage, active: FluentBundle<FluentResource>, english: FluentBundle<FluentResource>) -> Self {
+        let mut localizer = Self { language, active, english, labels: BTreeMap::new() };
+        for &id in MessageId::STATIC {
             match render(&localizer.active, id, None) {
                 Ok(text) => { localizer.labels.insert(id, Arc::from(text)); }
                 Err(error) => {
@@ -139,6 +142,9 @@ impl Localizer {
             if cfg!(debug_assertions) { panic!("Message {} requires named arguments", id.key()); }
             Arc::clone(self.labels.get(&MessageId::COMMON_ERROR).expect("Generic failure label must be cached"))
         })
+    }
+    pub fn static_message(&self, key: &str) -> Option<MessageId> {
+        self.labels.get_key_value(key).map(|(&id, _)| id)
     }
     pub fn format(&self, id: MessageId, args: &FluentArgs<'_>) -> String {
         match render(&self.active, id, Some(args)) {
@@ -206,6 +212,19 @@ mod tests {
         bundle.set_use_isolating(false);
         bundle.add_resource(FluentResource::try_new(source.to_owned()).unwrap()).unwrap();
         bundle
+    }
+
+    #[test]
+    fn translated_argument_omission_does_not_change_static_resource_eligibility() {
+        let english = "common-error = Error\nresources-animated-tooltip = { $name }\n";
+        let translated = "common-error = 問題\nresources-animated-tooltip = 固定の説明\n";
+        for (language, active) in [(UiLanguage::English, english), (UiLanguage::Japanese, translated)] {
+            let localizer = Localizer::from_bundles(language, fixture(active), fixture(english));
+            assert!(localizer.static_message(MessageId::RESOURCES_ANIMATED_TOOLTIP.key()).is_none());
+            assert_eq!(localizer.static_message(MessageId::COMMON_ERROR.key()), Some(MessageId::COMMON_ERROR));
+            let mut args = FluentArgs::new(); args.set("name", "日本語 {literal}");
+            assert_eq!(localizer.format(MessageId::RESOURCES_ANIMATED_TOOLTIP, &args), if language == UiLanguage::English { "日本語 {literal}" } else { "固定の説明" });
+        }
     }
 
     #[test]

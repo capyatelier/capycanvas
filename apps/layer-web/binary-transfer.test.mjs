@@ -15,7 +15,7 @@ export async function checkBinaryTransfer({evaluate}, fixture) {
       const id=++next;pending.set(id,{resolve,reject});
       worker.postMessage({id,request:{operation,metadata,buffers}},buffers.map(b=>b.buffer));
     });
-    const options=JSON.stringify({dimension:16384,photo_policy:{},name:'Binary fixture',intent:'Open'});
+    const options=JSON.stringify({dimension:16384,photo_policy:{},names:{paint:'Binary fixture',paper:'Paper'},intent:'Open'});
     try {
       const bytes=new Uint8Array(await(await fetch(${JSON.stringify(fixture)})).arrayBuffer());
       const start=performance.now();

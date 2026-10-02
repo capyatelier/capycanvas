@@ -285,9 +285,9 @@ impl EffectPanels {
             }
         ));
         self.search_entry
-            .set_placeholder_text(Some(state.filter_picker.search_label));
+            .set_placeholder_text(Some(&state.filter_picker.search_label));
         self.search_button
-            .set_tooltip_text(Some(state.filter_picker.search_label));
+            .set_tooltip_text(Some(&state.filter_picker.search_label));
         self.search_button.connect_clicked(glib::clone!(
             #[weak]
             w,
@@ -451,7 +451,7 @@ impl EffectPanels {
             else { row.0.remove_css_class("selected-tool"); }
         }
         if ids.is_empty() {
-            let empty = gtk::Label::new(Some(picker.empty_label));
+            let empty = gtk::Label::new(Some(&picker.empty_label));
             empty.add_css_class("dim-label");
             self.picker_body.append(&empty);
         }
@@ -548,6 +548,7 @@ impl EffectPanels {
                         || a.kind != b.kind
                         || a.label != b.label
                         || a.section != b.section
+                        || a.section_id != b.section_id
                 })
         });
         if rebuild {
@@ -582,14 +583,14 @@ impl EffectPanels {
             if let Some(layer) = view.layer {
                 let mut section = None;
                 for (index, control) in view.controls.iter().enumerate() {
-                    if section != control.section.as_deref() {
+                    if section != control.section_id.as_ref() {
                         if index > 0 {
                             let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
                             divider.add_css_class("property-divider");
                             self.body.append(&divider);
                         }
-                        section = control.section.as_deref();
-                        if let Some(text) = section {
+                        section = control.section_id.as_ref();
+                        if let Some(text) = control.section.as_deref() {
                             let heading = gtk::Label::new(Some(text));
                             heading.set_xalign(0.);
                             heading.add_css_class("heading");

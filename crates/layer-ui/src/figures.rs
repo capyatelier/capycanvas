@@ -3,7 +3,7 @@ use crate::*;
 use layer_core::{Figure, LayerOperationKind, Point};
 use layer_render::CanvasRenderer;
 
-pub(crate) fn tool_set(shape: FigureShape, paint: FigurePaint) -> ToolSetView {
+pub(crate) fn tool_set(shape: FigureShape, paint: FigurePaint, localizer: &crate::localization::Localizer) -> ToolSetView {
     let item = |label, icon, shape, paint, selected| ToolSetItem {
         label,
         icon,
@@ -16,9 +16,9 @@ pub(crate) fn tool_set(shape: FigureShape, paint: FigurePaint) -> ToolSetView {
         },
     };
     let shapes = [
-        (FigureShape::Line, "Line", "line"),
-        (FigureShape::Rectangle, "Rectangle", "rectangle"),
-        (FigureShape::Ellipse, "Ellipse", "ellipse"),
+        (FigureShape::Line, localizer.text(crate::localization::MessageId::TOOL_FIGURES_LINE), "line"),
+        (FigureShape::Rectangle, localizer.text(crate::localization::MessageId::TOOL_FIGURES_RECTANGLE), "rectangle"),
+        (FigureShape::Ellipse, localizer.text(crate::localization::MessageId::TOOL_FIGURES_ELLIPSE), "ellipse"),
     ];
     let icon = shapes[shape as usize].2;
     ToolSetView {
@@ -39,9 +39,9 @@ pub(crate) fn tool_set(shape: FigureShape, paint: FigurePaint) -> ToolSetView {
             })
             .collect(),
         subtools: [
-            (FigurePaint::Outline, "Outline"),
-            (FigurePaint::Fill, "Fill"),
-            (FigurePaint::Both, "Outline + fill"),
+            (FigurePaint::Outline, localizer.text(crate::localization::MessageId::TOOL_FIGURES_OUTLINE)),
+            (FigurePaint::Fill, localizer.text(crate::localization::MessageId::TOOL_FIGURES_FILL)),
+            (FigurePaint::Both, localizer.text(crate::localization::MessageId::TOOL_FIGURES_OUTLINE_AND_FILL)),
         ]
         .into_iter()
         .filter(|(p, _)| shape != FigureShape::Line || *p == FigurePaint::Outline)

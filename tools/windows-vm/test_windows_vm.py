@@ -13,11 +13,13 @@ spec.loader.exec_module(vm)
 
 class FixtureRunnerTests(unittest.TestCase):
     def test_no_build_rejects_changed_sources_and_binaries(self):
-        inputs = {"apps/layer-windows/CanvasWindow.cpp": "original"}
+        inputs = vm.build_inputs({"apps/layer-windows/CanvasWindow.cpp": "original",
+                                  "assets/locales/ja/commands.ftl": "original-catalog"})
         files = {"CapyCanvas.exe": "exe", "layer_windows.dll": "rust"}
         record = {"inputs": inputs, "files": files}
         vm.validate_build(record, inputs, files)
         for candidate, artifacts in (({**inputs, "Cargo.lock": "new"}, files),
+                                     (vm.build_inputs({**inputs, "assets/locales/ja/commands.ftl": "edited-catalog"}), files),
                                      (inputs, {**files, "layer_windows.dll": "changed"})):
             with self.assertRaises(SystemExit):
                 vm.validate_build(record, candidate, artifacts)
@@ -30,6 +32,7 @@ class FixtureRunnerTests(unittest.TestCase):
                   "apps/layer-windows/scripts/build.ps1": "build",
                   "apps/layer-windows/scripts/stage-assets.ps1": "staging",
                   "apps/layer-web/icons/layer-select-symbolic.svg": "icon",
+                  "assets/locales/en/commands.ftl": "catalog",
                   "apps/layer-windows/scripts/exercise-layers.ps1": "fixture"}
         changed = {**source, "apps/layer-windows/scripts/exercise-layers.ps1": "fixed",
                    "apps/layer-windows/scripts/CapyUia.ps1": "helper",

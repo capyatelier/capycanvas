@@ -26,7 +26,7 @@ fn effect(document: &mut Document, id: &str) -> Layer {
 /// Every blend mode, masks, a group, a clipping stack, pointwise, image and
 /// generator effects, an offset layer and a placed photo over the paper.
 fn representative(depth: SampleDepth) -> Document {
-    let mut document = Document::new("Representative", EXTENT[0], EXTENT[1]);
+    let mut document = Document::new("Representative", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = DocumentColor { space: RgbSpace::Srgb, depth };
     let paper = document.layers.pop().unwrap();
     document.layers.clear();
@@ -218,7 +218,7 @@ fn plain(depth: SampleDepth, color: [f32; 4]) -> Arc<SourceImage> {
 fn black_at_half_opacity_over_white_is_middle_gray_only_when_blending_perceptually() {
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         for (space, expected) in [(BlendSpace::Perceptual, 128.), (BlendSpace::Linear, 188.)] {
-            let mut document = Document::new("Gray", EXTENT[0], EXTENT[1]);
+            let mut document = Document::new("Gray", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             document.color = DocumentColor { space: RgbSpace::Srgb, depth };
             document.blend_space = space;
             document.layers[0].source = Some(plain(depth, [0., 0., 0., 1.]));
@@ -253,7 +253,7 @@ fn groups_masks_clips_and_opacity_match_an_encoded_reference() {
     let perceptual = BlendSpace::Perceptual;
     let luma = [0.3, 0.59, 0.11];
     for (depth, tolerance) in [(SampleDepth::U8, 1. / 255.), (SampleDepth::U16, 3. / 65535.)] {
-        let mut document = Document::new("Stack", EXTENT[0], EXTENT[1]);
+        let mut document = Document::new("Stack", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color = DocumentColor { space: RgbSpace::Srgb, depth };
         document.blend_space = perceptual;
         let paper = document.layers.pop().unwrap();

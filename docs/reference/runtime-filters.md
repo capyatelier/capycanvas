@@ -26,11 +26,39 @@ The same parser resolves external packages and the embedded startup fallback.
 | `layer-render-wgpu/effects.rs`, `effect_preparation.rs` | Shared storage, compilation reuse, ordered preparation/render work |
 | GTK, web, Android, Windows hosts | Obtain bytes and render the shared schema |
 
-A package has `format: 1`, `categories` and `filters`. Each filter contains a
+A package has `format: 2`, `categories` and `filters`. Other package versions are
+rejected; there is no compatibility reader. Each filter contains a
 `program`, category, icon and optional preview overrides. A shader accepts inline
 WGSL or an ordered array of manifest-local WGSL filenames. Modules resolve to
 shared source chunks, so fused filters include common helpers once. Serialized
 document programs contain resolved code and do not need their original package.
+
+Category, program and parameter labels, parameter sections and choice labels use
+`ResourceLabel`: a literal JSON string, or an explicit message reference such as
+`{"message":"resources-filter-curves"}`. Bundled labels carry references from
+`assets/locales/en/resources.ftl`; external labels may remain literal. Reusing a
+built-in filter ID never translates a supplied literal label. References must
+name known parameterless catalog messages. Core validates their structure;
+shared UI validates and resolves them through its active cached `Localizer`
+before admitting packages or embedded document programs.
+
+A choice option is a literal string, whose stable value and display label both
+remain that supplied text, or an explicit object separating them:
+
+```json
+{"kind":"choice","options":[
+  "Encoded RGB",
+  {"value":"Log HDR","label":{"message":"resources-choice-curves-domain-log-hdr"}}
+]}
+```
+
+Option values are nonempty and unique within a parameter. Display labels may
+match. The stored `EffectValue::Choice` and GPU parameter remain an index into
+this ordered list; hosts forward that index. Category IDs, parameter keys and
+shader identities are independent of labels. Property views supply raw
+`section_id` metadata alongside the resolved `section` heading, so hosts group
+controls by identity even when translated headings match. User layer names and
+literal resource metadata remain saved text when the application language changes.
 
 `program.resolution` declares the input resolution permitted for interactive
 composition. The default, `"native"`, requires document-resolution evaluation.
@@ -162,8 +190,11 @@ allocate canvas image intermediates. Accepted compilation results are reused.
 
 Publication waits until input, the active stroke and pending document edits are
 settled. Live values are matched by parameter key, including edits made while
-validation was pending. New/incompatible fields use defaults; conflicting joint
-constraints reject the replacement rather than silently altering valid values.
+validation was pending. Choices preserve the selected stable option value and
+use its new index when options are reordered. A removed choice or another
+incompatible field uses the new declared default; display labels do not affect
+rebinding. Conflicting joint constraints reject the replacement rather than
+silently altering valid values.
 A single document edit replaces affected live programs. Unrelated layers and
 paint history remain unchanged. Invalid replacement retains the working state.
 

@@ -1,5 +1,5 @@
 fn content_session(size: [u32; 2]) -> UiSession<Recorder> {
-    let mut doc = Document::new("content", size[0], size[1]);
+    let mut doc = Document::new("content", size[0], size[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.layers.retain(|l| l.kind != layer_core::LayerKind::Background);
     let mut s = UiSession::new(Recorder::default(), doc, [1600, 1000], Platform::Gtk).unwrap();
     s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();

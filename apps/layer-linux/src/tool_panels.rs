@@ -78,7 +78,7 @@ impl ToolSet {
             let mut buttons = self.group_buttons.borrow_mut();
             buttons.clear();
             for item in &view.groups {
-                let button = workspace.action_button(item.label, item.action.clone());
+                let button = workspace.action_button(&item.label, item.action.clone());
                 button.add_css_class("flat");
                 button.add_css_class("tool-group");
                 let media = matches!(self.panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets);
@@ -89,7 +89,7 @@ impl ToolSet {
                     ((if media { layer_ui::BRUSH_SETS_MIN_WIDTH } else { layer_ui::TOOL_PANEL_MIN_WIDTH }) - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32,
                     if media { TOOL_ROW_HEIGHT } else { layer_ui::TILE_SIZE as i32 },
                 );
-                button.set_child(Some(&aligned_icon_label(item.label, item.icon, if media { 0.0 } else { 1.0 })));
+                button.set_child(Some(&aligned_icon_label(&item.label, item.icon, if media { 0.0 } else { 1.0 })));
                 self.groups.insert(&button, -1);
                 buttons.push(button);
             }
@@ -106,7 +106,7 @@ impl ToolSet {
             let mut buttons = self.buttons.borrow_mut();
             buttons.clear();
             for item in &view.subtools {
-                let button = workspace.action_button(item.label, item.action.clone());
+                let button = workspace.action_button(&item.label, item.action.clone());
                 button.add_css_class("flat");
                 button.add_css_class("brush-choice");
                 let preview = item.preview.map(|id| {
@@ -150,7 +150,7 @@ impl ToolSet {
     }
 }
 fn tool_label(item: &ToolSetItem) -> gtk::Box {
-    aligned_icon_label(item.label, item.icon, if matches!(item.action, UiAction::ColorPicker { .. }) { 0.0 } else { 1.0 })
+    aligned_icon_label(&item.label, item.icon, if matches!(item.action, UiAction::ColorPicker { .. }) { 0.0 } else { 1.0 })
 }
 
 pub fn icon_label(text: &str, icon: &str) -> gtk::Box {
@@ -186,7 +186,7 @@ pub struct ToolSettings {
     picker: crate::color_picker::Settings,
     fields: RefCell<Vec<(ToolSetting, NumberControl)>>,
     range: RefCell<Option<Rc<crate::range_control::RangeControl>>>,
-    actions: RefCell<Vec<(ToolSettingAction, &'static str, gtk::Widget)>>,
+    actions: RefCell<Vec<(ToolSettingAction, std::sync::Arc<str>, gtk::Widget)>>,
     selection_actions: gtk::MenuButton,
     selection_menu: gtk::PopoverMenu,
     selection_bound: Cell<bool>,
@@ -322,8 +322,8 @@ impl ToolSettings {
                     self.range.replace(Some(range));
                     continue;
                 }
-                if group != control.group {
-                    group = control.group;
+                if group != control.group.as_ref() {
+                    group = control.group.as_ref();
                     if !group.is_empty() {
                         let title = gtk::Label::new(Some(group));
                         title.add_css_class("heading");
@@ -335,8 +335,8 @@ impl ToolSettings {
                     }
                 }
                 let input = if compact {
-                    NumberControl::labeled_inline(control.numeric.clone(), control.label, control.tooltip(), &inline_labels, &inline_values)
-                } else { NumberControl::new(control.numeric.clone(), control.label, "") };
+                    NumberControl::labeled_inline(control.numeric.clone(), &control.label, &control.tooltip(), &inline_labels, &inline_values)
+                } else { NumberControl::new(control.numeric.clone(), &control.label, "") };
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;
                 input.connect_value_changed(glib::clone!(
@@ -375,7 +375,7 @@ impl ToolSettings {
                         button.set_child(Some(&row));
                         button.set_size_request(44,44);
                     } else { button.set_child(Some(&image)); }
-                    button.update_property(&[gtk::accessible::Property::Label(command.label)]);
+                    button.update_property(&[gtk::accessible::Property::Label(&command.label)]);
                     if let Some(first) = &mode_group { button.set_group(Some(first)); }
                     else { mode_group = Some(button.clone()); }
                     let updating = self.updating.clone();
@@ -398,8 +398,8 @@ impl ToolSettings {
                         if let Some(first) = &source_group { check.set_group(Some(first)); }
                         else { source_group = Some(check.clone()); }
                     }
-                    let label = gtk::Label::new(Some(command.label));
-                    check.set_tooltip_text(Some(command.label));
+                    let label = gtk::Label::new(Some(&command.label));
+                    check.set_tooltip_text(Some(&command.label));
                     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                     label.set_xalign(0.);
                     check.set_child(Some(&label));
@@ -417,18 +417,18 @@ impl ToolSettings {
                     check.upcast()
                 } else {
                     let button = workspace.action_button(
-                        command.label,
+                        &command.label,
                         UiAction::Invoke {
                             command: action.command,
                         },
                     );
-                    button.set_child(Some(&icon_label(command.label, command.icon.unwrap())));
+                    button.set_child(Some(&icon_label(&command.label, command.icon.unwrap())));
                     button.upcast()
                 };
                 widget.set_widget_name(&format!("tool-action-{:?}", action.command));
                 if mode { self.modes.append(&widget); }
                 else { self.form.append(&widget); }
-                actions.push((*action, command.label, widget));
+                actions.push((*action, command.label.clone(), widget));
             }
         }
         for ((_, input), control) in fields.iter().zip(controls) {

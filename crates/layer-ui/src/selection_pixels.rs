@@ -5,32 +5,32 @@ use super::*;
 use layer_core::{Affine, Edit, Layer, LayerMask, LayerOperation, LayerOperationKind, Point, Selection};
 use std::collections::BTreeSet;
 
-const ALPHA_LOCKED: &str = "Alpha lock keeps transparency; unlock the layer first";
-const NO_SELECTION: &str = "Make a selection first";
+const NO_SELECTION: MessageId = MessageId::COMMANDS_MAKE_A_SELECTION_FIRST;
 
 impl<R: CanvasRenderer> UiSession<R> {
     /// Why Clear Selected and Clear Outside can't run on the drawing target
     /// once the document is idle.
-    pub(super) fn clear_refusal(&self) -> Option<&'static str> {
+    pub(super) fn clear_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         let document = self.engine.document();
         if self.selection_masks.quick() {
-            return Some("Quick Mask edits the selection; leave it to clear artwork");
+            return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_QUICK_MASK_EDITS_THE_SELECTION_LEAVE_IT_TO_CLEAR_ARTWORK));
         }
         if self.selection_masks.target().is_some() {
-            return Some("Return to the artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
         }
         if document.active_mask {
-            return Some("Masks aren't cleared this way; return to the layer's artwork first");
+            return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_MASKS_AREN_T_CLEARED_THIS_WAY_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST));
         }
         if document.selection.is_none() {
-            return Some(NO_SELECTION);
+            return Some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST));
         }
         match document.try_drawing_content() {
-            Err(refusal) => Some(notices::drawing_refusal_text(refusal)),
+            Err(refusal) => Some(notices::drawing_refusal_text(refusal, l)),
             Ok(target) => document
                 .layer(target)
                 .is_some_and(|l| l.properties.alpha_locked)
-                .then_some(ALPHA_LOCKED),
+                .then_some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_ALPHA_LOCK_KEEPS_TRANSPARENCY_UNLOCK_THE_LAYER_FIRST)),
         }
     }
 
@@ -41,7 +41,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let document = self.engine.document();
         let target = document.drawing_content().ok_or("Select a drawing layer")?;
         let alpha_locked = document.layer(target).is_some_and(|l| l.properties.alpha_locked);
-        let mut selection = document.selection.clone().ok_or(NO_SELECTION)?;
+        let mut selection = document.selection.clone().ok_or_else(|| self.localization().text(NO_SELECTION).to_string())?;
         selection.inverted ^= outside;
         let operation = self.erase_operation(target, &selection, alpha_locked)?;
         self.engine.append_layer_operation(target, operation).map_err(error)?;
@@ -74,46 +74,47 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Why Copy or Cut Selection to New Layer can't run once the document is
     /// idle. Copy without a selection duplicates the selected layers.
-    pub(super) fn selection_to_layer_refusal(&self, cut: bool) -> Option<&'static str> {
+    pub(super) fn selection_to_layer_refusal(&self, cut: bool) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         let document = self.engine.document();
         if self.selection_masks.target().is_some() {
-            return Some("Return to the artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
         }
         if document.active_mask {
-            return Some("Return to the layer's artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST));
         }
         if document.selection.is_none() {
             if cut {
-                return Some(NO_SELECTION);
+                return Some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST));
             }
             let mut selected = self.layer_interaction.selected.iter().filter_map(|id| document.layer(*id));
             return match selected.next() {
-                None => Some("Select layers first"),
+                None => Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_LAYERS_FIRST)),
                 Some(first) if std::iter::once(first).chain(selected).any(|l| l.kind == LayerKind::Background) => {
-                    Some("The paper can't be duplicated")
+                    Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_THE_PAPER_CAN_T_BE_DUPLICATED))
                 }
                 Some(_) => None,
             };
         }
         let Some(layer) = document.layer(document.active_layer) else {
-            return Some("Select a layer first");
+            return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_A_LAYER_FIRST));
         };
         match layer.kind {
             LayerKind::Paint => {}
-            LayerKind::Background => return Some("The paper can't be copied to a layer"),
-            LayerKind::Group => return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::Group)),
-            LayerKind::Effect => return Some("An effect layer has no pixels of its own"),
+            LayerKind::Background => return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_THE_PAPER_CAN_T_BE_COPIED_TO_A_LAYER)),
+            LayerKind::Group => return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::Group, l)),
+            LayerKind::Effect => return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_AN_EFFECT_LAYER_HAS_NO_PIXELS_OF_ITS_OWN)),
             LayerKind::Selection => {
-                return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::SelectionLayer));
+                return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::SelectionLayer, l));
             }
         }
         if layer.properties.parent.is_some_and(|parent| document.is_locked(parent)) {
-            return Some("The layer's group is locked");
+            return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_THE_LAYER_S_GROUP_IS_LOCKED));
         }
         if cut && document.is_locked(layer.id) {
-            return Some("The active layer is locked");
+            return Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED));
         }
-        (cut && layer.properties.alpha_locked).then_some(ALPHA_LOCKED)
+        (cut && layer.properties.alpha_locked).then_some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_ALPHA_LOCK_KEEPS_TRANSPARENCY_UNLOCK_THE_LAYER_FIRST))
     }
 
     /// Copy the active layer's selected pixels to a new layer above its

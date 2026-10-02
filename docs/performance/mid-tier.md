@@ -193,7 +193,7 @@ the rest of the simple class remains unqualified there.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1536 px | 54.8 fresh/input updates/s (54.43–54.87); input completion gap p99 30.98–34.40 ms | **Not met** |
+| G-Pen (1) | Simple | 1536 px | Pinned localization candidate: 55.81–56.45 fresh updates/s; fresh gap p99 ≤29.55 ms | **Not met**; current successor unqualified |
 | Rough G-Pen (28) | Simple | 2048 px | 12.2 updates/s (12.0–12.2); gap p99 152.2 ms | 1536 px unmeasured |
 | Calligraphy Pen (29) | Simple | 2048 px | 35.2 updates/s (35.1–35.3); gap p99 73.2 ms | 1536 px unmeasured |
 | Antique Pen (30) | Simple | 2048 px | 16.2 updates/s (16.0–16.3); gap p99 171.2 ms | 1536 px unmeasured |
@@ -388,3 +388,36 @@ Measured on 2026-09-29, three runs per brush on the tier photo, 512 px,
 Perceptual, Fit and Stats closed. Dependent painting queues until the healed
 raster publishes. The [responsiveness record](responsiveness.md#healing-finalization)
 contains the build, workload, tool-action limits and raw records.
+
+## Pinned localization comparison
+
+Measured on 2026-10-01 PDT / 2026-10-02 UTC on the Wacom reference tablet,
+comparing `271918681` with source tree `e56742a5`. The release APK hashes and
+attribution limits are in the [low-tier comparison](low-tier.md#pinned-localization-comparison).
+These observations do not qualify the later GPU-bounds successor.
+
+The 6000 × 4000 Sony photo has one empty paint layer, Perceptual blending,
+Fit zoom 15.99%, default Navigator and glass, Stats closed and 16 ms prediction.
+Three warmed ten-second OS stylus strokes use G-Pen 1536 px and a contained
+310 × 150 px trajectory. Settings, camera and visible layers match; painting
+thermal status is zero before and after each run.
+
+| Source sequence | Fresh completed updates/s | Maximum fresh gap p99 | 90 fps / 22.2 ms criteria |
+| --- | --- | --- | --- |
+| Baseline | 55.54–55.90 | 30.61 ms | Not met |
+| Candidate | 55.81–56.45 | 29.55 ms | Not met |
+| Repeated baseline | 55.49–56.17 | 28.86 ms | Not met |
+
+The ranges overlap; no regression is demonstrated for this stroke. Both
+versions miss the target. This does not qualify other brushes or scanout.
+
+| Numeric motion, three warmed ten-second drags | Baseline UI Hz / maximum p99 | Candidate UI Hz / maximum p99 | Raw canvas completions/s, baseline → candidate |
+| --- | --- | --- | --- |
+| Exposure | 59.20–59.50 / 16.77 ms | 59.20–59.40 / 16.77 ms | 32.05–32.95 → 31.08–32.42 |
+| Chain Exposure | 59.00–59.30 / 33.50 ms | 59.20–59.30 / 16.79 ms | 24.46–24.77 → 24.05–24.67 |
+
+The display holds 60 Hz and neither numeric row meets 90 fps. UI frames and
+raw completions do not establish fresh photo previews: completion records
+include Navigator and lack effect input/revision pairing. The low-tier numeric
+decrease and its attribution limits remain explicit. Numeric thermal status
+was zero before every gesture; the final after-snapshot was not captured.

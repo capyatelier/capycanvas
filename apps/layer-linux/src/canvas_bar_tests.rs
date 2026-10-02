@@ -122,7 +122,7 @@ fn native_canvas_bar_input() {
         "the selection bar appears beside the new selection",
     );
     let mut native = remote_input();
-    press_bar_command(&w, &mut native, "canvas-bar-ScaleRotate", CommandId::ScaleRotate.label());
+    press_bar_command(&w, &mut native, "canvas-bar-ScaleRotate", &CommandId::ScaleRotate.label());
     until(
         || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w),
         "Transform on the selection bar opens the transform bar",
@@ -403,7 +403,7 @@ fn native_canvas_bar_warps_a_selection() {
     let click = |native: &mut RemoteInput, widget: &gtk::Widget| {
         native.click(center(&w, widget));
     };
-    press_bar_command(&w, &mut native, "canvas-bar-ScaleRotate", CommandId::ScaleRotate.label());
+    press_bar_command(&w, &mut native, "canvas-bar-ScaleRotate", &CommandId::ScaleRotate.label());
     until(|| kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w), "Transform opens the transform bar");
     let modes = bar_widget(&w, "canvas-bar-choice-transform-mode");
     let mut warp = modes.first_child();
@@ -554,17 +554,18 @@ fn menu_action(model: &gtk::gio::MenuModel, labels: &[&str]) -> Option<String> {
 /// popup, so a pen opens the menu and its item runs through the menu's action.
 pub(super) fn choose_from_bar_menu(w: &Workspace, native: &mut RemoteInput, device: Device, menu: layer_ui::CanvasBarMenu, labels: &[&str]) {
     let button = bar_widget(w, &format!("canvas-bar-menu-{}", menu.id()));
+    let menu_label = menu.label(ui_session(w).localization());
     let mut path = labels.to_vec();
     let opener = if button.is_mapped() {
         button
     } else {
-        path.insert(0, menu.label());
+        path.insert(0, &menu_label);
         bar_widget(w, "canvas-bar-more")
     };
     tap(native, device, center(w, &opener));
     let popover = until_some(
         || opener.downcast_ref::<gtk::MenuButton>()?.popover()?.downcast::<gtk::PopoverMenu>().ok().filter(|p| p.is_visible()),
-        &format!("{device:?} opens {}", menu.label()),
+        &format!("{device:?} opens {}", menu_label),
     );
     if let Device::Pen = device {
         let action = until_some(|| popover.menu_model().and_then(|m| menu_action(&m, &path)), &path.join(" › "));

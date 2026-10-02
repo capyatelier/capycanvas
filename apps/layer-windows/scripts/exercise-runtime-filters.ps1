@@ -158,8 +158,17 @@ try {
     Capture 'replacement-controls'
     $catalog=(Model).state.filter_catalog_revision
     $revision=(Model).state.document_file.revision
+    if(([string](Get-Content -LiteralPath $stderr -Raw -Encoding utf8)).Length){throw 'Unexpected diagnostics before rejected WGSL'}
     [IO.File]::WriteAllText($shaderPath,'this is not valid WGSL')
     Reload -Failure
+    if((Load-State).error -cne 'These filters cannot run on the graphics device.'){throw 'Invalid WGSL did not report the shared validation reason'}
+    $parserMessage='expected global item (`struct`, `const`, `var`, `alias`, `fn`, `diagnostic`, `enable`, `requires`, `;`) or the end of the file'
+    $escapedMessage=[regex]::Escape($parserMessage)
+    $diagnosticPattern='\AFilter validation request: effect shader: error: '+$escapedMessage+', found "this"\r?\n     ┌─ wgsl:(?<line>[1-9][0-9]*):1\r?\n     │\r?\n\k<line> │ this is not valid WGSL\r?\n     │ \^\^\^\^ '+$escapedMessage+'\r?\n\r?\n\r?\n\z'
+    Wait-Until {[regex]::IsMatch(([string](Get-Content -LiteralPath $stderr -Raw -Encoding utf8)),$diagnosticPattern)} 'Rejected WGSL did not produce exactly one matching parser diagnostic'
+    $expectedDiagnostic=([string](Get-Content -LiteralPath $stderr -Raw -Encoding utf8))
+    if(![regex]::IsMatch($expectedDiagnostic,$diagnosticPattern)){throw 'Unexpected diagnostics while retaining rejected WGSL evidence'}
+    [IO.File]::WriteAllText((Join-Path $run 'expected-wgsl-diagnostic.log'),$expectedDiagnostic)
     if((Model).state.filter_catalog_revision -ne $catalog -or (Model).state.document_file.revision -ne $revision -or (Property 'radius').value.value -ne 7){throw 'Invalid WGSL changed the working catalog, document or values'}
     Capture 'rejected-wgsl'
 
@@ -184,7 +193,7 @@ try {
     Capture 'replacement-picker'
     if((Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash -ne $beforeBinary){throw 'Executable changed during runtime package checks'}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
-    if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+    if(![string]::Equals(([string](Get-Content -LiteralPath $stderr -Raw -Encoding utf8)),$expectedDiagnostic,[StringComparison]::Ordinal)){throw 'Unexpected native diagnostics after rejected WGSL'}
     [pscustomobject]@{startup_package='passed';native_picker_and_properties='passed';live_wgsl_and_metadata='passed';compatible_values='passed';invalid_wgsl_preserves_work='passed';missing_module_preserves_work='passed';retry='passed';changed_gpu_preview='passed';unchanged_executable='passed';scope='native D3D12/UI Automation and controlled drawing; full-image GPU assertions and physical/performance acceptance remain separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}

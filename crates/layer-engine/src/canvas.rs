@@ -2554,7 +2554,7 @@ mod tests {
     ) -> (InputProducer<PenEvent>, CanvasEngine<RecordingRenderer>) {
         engine_with(
             RecordingRenderer::default(),
-            Document::new(name, width, height),
+            Document::new(name, width, height, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             view(width, height),
             TRANSFORM,
         )
@@ -2738,7 +2738,7 @@ mod tests {
     }
 
     fn retouch_document() -> Document {
-        let mut document = Document::new("retouch", 64, 64);
+        let mut document = Document::new("retouch", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let photo = layer_core::Layer::paint(LayerId(40), "Photo");
         document.layers.push(photo);
         document
@@ -2837,7 +2837,7 @@ mod tests {
 
     #[test]
     fn dabs_follow_the_documents_blending_and_masks_blend_linearly() {
-        let mut document = Document::new("blending", 64, 64);
+        let mut document = Document::new("blending", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.blend_space = layer_core::BlendSpace::Perceptual;
         let (mut input, mut engine) = engine_with(RecordingRenderer::default(), document, view(64, 64), TRANSFORM);
         let mut spaces = Vec::new();
@@ -3209,7 +3209,7 @@ mod tests {
                 Point { x: 4., y: 40. },
             ])
             .unwrap();
-            let mut doc = Document::new("selected brush", 128, 128);
+            let mut doc = Document::new("selected brush", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             doc.selection = Some(selection.clone());
             let layer = doc
                 .layers
@@ -3356,7 +3356,7 @@ mod tests {
     fn linked_mask_transform_commits_both_histories_and_selection_as_one_edit() {
         use layer_core::{Affine, ImageTransform, LayerMask, LayerOperationKind, Selection};
         for primary_mask in [false, true] {
-            let mut doc = Document::new("linked transform", 128, 128);
+            let mut doc = Document::new("linked transform", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             doc.layers[0].properties.offset = Point { x: 7., y: 3. };
             doc.layers[0].mask = Some(LayerMask::reveal_all(LayerId(9), Point { x: 15., y: 11. }));
             doc.selection = Some(
@@ -3433,7 +3433,7 @@ mod tests {
     #[test]
     fn applying_transform_moves_selection_atomically_and_cancel_keeps_original() {
         use layer_core::{Affine, ImageTransform, Selection};
-        let mut doc = Document::new("selection transform", 128, 128);
+        let mut doc = Document::new("selection transform", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let layer = doc.active_layer;
         doc.layers[0].properties.offset = Point { x: 12., y: 7. };
         let selection = Selection::polygon(vec![
@@ -3512,7 +3512,7 @@ mod tests {
     #[test]
     fn perspective_transform_carries_contours_and_waits_for_pixel_coverage() {
         use layer_core::{ImageTransform, Projective, Selection, SelectionPixels, TransformMap};
-        let mut doc = Document::new("perspective transform", 128, 128);
+        let mut doc = Document::new("perspective transform", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let layer = doc.active_layer;
         let selection = Selection::polygon(vec![
             Point { x: 20., y: 20. },
@@ -3733,7 +3733,7 @@ mod tests {
         engine.append_layer_operation(layer, op).unwrap();
         assert_eq!(engine.batches[0].damage, small.bounds(), "plain pixels erase only the selected pages");
 
-        let mut document = Document::new("watercolor erase", 512, 512);
+        let mut document = Document::new("watercolor erase", 512, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.layers[0].raster = layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
             watercolor: Some(layer_core::raster::RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.2, edge_width: 2. }),
             ..Default::default()
@@ -3981,7 +3981,7 @@ mod tests {
                 let mut variants = Vec::new();
                 for recover in [false, true] {
                     for correct_after_up in [false, true] {
-                        let mut document = Document::new("color dynamics", 128, 128);
+                        let mut document = Document::new("color dynamics", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
                         document.color = color;
                         let (mut input, mut engine) = engine_with(
                             RecordingRenderer {
@@ -4100,7 +4100,7 @@ mod tests {
         for space in RgbSpace::ALL {
             for depth in [SampleDepth::U8, SampleDepth::U16] {
                 let color = DocumentColor { space, depth };
-                let mut document = Document::new("native adoption", 64, 64);
+                let mut document = Document::new("native adoption", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
                 document.color = color;
                 if color != Default::default() {
                     let (_, consumer) = input_queue(8);
@@ -4264,7 +4264,7 @@ mod tests {
     #[test]
     fn prepared_color_does_not_consume_queued_input_or_overflow_tool_coordinates() {
         use layer_core::{ColorTransition, color::{DocumentColor, SampleDepth, RgbSpace}};
-        let mut document = Document::new("color input", 64, 64);
+        let mut document = Document::new("color input", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
         let (mut input, mut engine) = engine_with(
             RecordingRenderer { color: document.color, ..Default::default() }, document,
@@ -4852,7 +4852,7 @@ mod tests {
         use layer_core::{Ruler, RulerGeometry};
         let (mut producer, mut engine) = engine_with(
             RecordingRenderer::default(),
-            Document::new("ruler-view", 128, 128),
+            Document::new("ruler-view", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             view(256, 256),
             ViewTransform {
                 revision: 1,

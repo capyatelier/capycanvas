@@ -886,7 +886,7 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     assert!(preview > 0.1, "a moving preview averages at most four taps and aliases: {preview}");
     assert!(commit < 1e-3, "the commit averages the whole footprint: {commit} from the area reduction");
 
-    let mut document = layer_core::Document::new("placed zone plate", size, size);
+    let mut document = layer_core::Document::new("placed zone plate", size, size, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.layers[1].visible = false;
     document.layers[0].source = Some(zone_plate());
     document.layers[0].properties.placement = EIGHTH;

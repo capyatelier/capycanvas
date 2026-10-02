@@ -14,7 +14,7 @@ fn color_picker_circular_oklab_averaging_keeps_points_alpha_and_extended_values(
             space,
             depth: SampleDepth::F32,
         };
-        let mut doc = Document::new("picker", 128, 128);
+        let mut doc = Document::new("picker", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         doc.color = color;
         doc.layers[1].visible = false;
         let mut bytes = Vec::with_capacity(256 * 256 * 16);

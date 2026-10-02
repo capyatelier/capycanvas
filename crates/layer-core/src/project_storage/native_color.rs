@@ -2,7 +2,7 @@ use super::*;
 use crate::color::{DocumentColor, SampleDepth, RgbSpace};
 
 fn project(color: DocumentColor) -> Project {
-    let mut document = Document::new("native color archive", 512, 256);
+    let mut document = Document::new("native color archive", 512, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = color;
     let tile = |plane| {
         let descriptor = RasterPlane::descriptor(plane, color);
@@ -215,7 +215,7 @@ fn proof_metadata_roundtrips_deduplicates_profile_and_undo_keeps_raster_exact() 
 #[test]
 fn hdr_archive_and_history_preserve_samples_and_authored_rendition() {
     let color=DocumentColor {space:RgbSpace::DisplayP3,depth:SampleDepth::F16};
-    let mut document=Document::new("HDR master",256,256);document.color=color;
+    let mut document=Document::new("HDR master",256,256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.color=color;
     let samples:Vec<_>=(0..65536u32).flat_map(|i| {
         let value=crate::color::f16::from_bits(i as u16).to_f32();
         let value=if value.is_finite(){value}else{0.};
@@ -239,7 +239,7 @@ fn hdr_archive_and_history_preserve_samples_and_authored_rendition() {
 #[test]
 fn float32_archive_history_preserve_every_bit_including_hidden_rgb() {
     let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::F32 };
-    let mut document = Document::new("Float32", 256, 256);
+    let mut document = Document::new("Float32", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = color;
     assert_eq!(color.paint_descriptor().bytes_per_pixel(), Some(16));
     assert_eq!(color.coverage_descriptor().depth(), SampleDepth::U16);

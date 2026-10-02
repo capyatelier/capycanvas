@@ -2,6 +2,7 @@
 //! constraints, handles, guides and a dimmed shield, applied as one canvas
 //! geometry edit. Straighten turns the rectangle to a drawn line or a typed
 //! angle. Hosts forward contacts and present the shared bar and overlay.
+use crate::localization::MessageId;
 use super::operation::{HANDLE_HALF_SIZE, HANDLES, inside_convex, local_handle, nearest_handle};
 use super::*;
 use layer_core::{Affine, CanvasGeometry, CanvasRect, Interpolation, Point, Rect};
@@ -208,8 +209,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     /// Why a command that edits the document waits on the open canvas operation.
-    pub(super) fn operation_refusal(&self) -> &'static str {
-        if self.cropping() { "Apply or cancel the crop first" } else { "Apply or cancel the transform first" }
+    pub(super) fn operation_refusal(&self) -> std::sync::Arc<str> {
+        let l = self.localization();
+        if self.cropping() { l.text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_CROP_FIRST) } else { l.text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST) }
     }
 
     /// Width over height of the chosen ratio in the frame's orientation.
@@ -367,14 +369,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn crop_controls(&self) -> Vec<tool_settings::ToolSetting> {
+        let localizer = self.localization();
         let Some(session) = &self.operation.crop else {
             return Vec::new();
         };
         let limit = f64::from(self.engine.geometry_limits().canvas_dimension());
         let pixels = |label| tool_settings::ToolSetting {
             id: "",
-            label,
-            group: "Size",
+            label: localizer.text(label),
+            group: localizer.text(MessageId::TOOL_CONTROL_GROUP_SIZE),
             numeric: NumericControl::number(1., limit, 1., 0).unit("px"),
             value: 0.,
         };
@@ -387,16 +390,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let [w, h] = session.frame.size;
         vec![
-            tool_settings::ToolSetting { id: "crop_width", value: w, ..pixels("Width") },
-            tool_settings::ToolSetting { id: "crop_height", value: h, ..pixels("Height") },
-            tool_settings::ToolSetting { id: "crop_angle", label: "Straighten", group: "", numeric: degrees, value: session.frame.angle },
+            tool_settings::ToolSetting { id: "crop_width", value: w, ..pixels(MessageId::TOOL_CONTROL_CROP_WIDTH) },
+            tool_settings::ToolSetting { id: "crop_height", value: h, ..pixels(MessageId::TOOL_CONTROL_CROP_HEIGHT) },
+            tool_settings::ToolSetting { id: "crop_angle", label: localizer.text(MessageId::TOOL_CONTROL_CROP_STRAIGHTEN), group: std::sync::Arc::from(""), numeric: degrees, value: session.frame.angle },
         ]
     }
 
     pub(super) fn set_crop_control(&mut self, id: &str, value: f32) -> Result<(), String> {
         self.require_idle()?;
         let control = self.crop_controls().into_iter().find(|c| c.id == id).ok_or("No crop setting")?;
-        control.numeric.validate(value, control.label)?;
+        control.numeric.validate(value, &control.label)?;
         if id == "crop_angle" {
             return self.set_crop_angle(value);
         }
@@ -655,12 +658,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.begin_crop(Some(angle))
     }
 
-    pub(super) fn straighten_to_guide_refusal(&self) -> Option<&'static str> {
+    pub(super) fn straighten_to_guide_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         match self.selected_ruler().map(|r| r.geometry) {
             Some(layer_core::RulerGeometry::Straight { .. }) => {
-                if self.operation.transforming() { Some("Apply or cancel the transform first") } else { self.canvas_geometry_refusal().filter(|_| !self.cropping()) }
+                if self.operation.transforming() { Some(l.text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST)) } else { self.canvas_geometry_refusal().filter(|_| !self.cropping()) }
             }
-            _ => Some("Select a straight guide first"),
+            _ => Some(l.text(MessageId::COMMANDS_REFUSAL_CROP_SELECT_A_STRAIGHT_GUIDE_FIRST)),
         }
     }
 }

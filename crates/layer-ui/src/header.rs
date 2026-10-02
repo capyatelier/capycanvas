@@ -591,6 +591,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
     pub fn header_view_with(&self, primary_menu: bool) -> HeaderView {
         let state = self.state();
         let model = state.workspace.layout.header.projected_for(state.platform);
+        self.retain_header_tool_labels(&model);
         let items = model
             .entries()
             .map(|entry| {
@@ -604,7 +605,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                 };
                 HeaderItemView {
                     id: entry.id,
-                    label: entry.item.label(),
+                    label: match entry.item { HeaderItem::Tool { control } => self.header_tool_label(control), item => item.label() },
                     enabled,
                     selected,
                     icon,
@@ -891,7 +892,7 @@ pub fn tool_icon(state: &UiState, control: ToolbarControl) -> &'static str {
     {
         return icon;
     }
-    tool_choice(control).icon
+    control.icon()
 }
 
 /// The same selected/enabled policy is used by toolbar and window-bar tools.

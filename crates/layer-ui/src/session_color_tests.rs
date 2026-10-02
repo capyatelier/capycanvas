@@ -3,7 +3,7 @@
 fn tone_preview_survives_edits_but_not_document_replacement() {
     use crate::proof_workflow::ToneKey;
     use layer_core::color::{SampleDepth,hdr::SdrRendition};
-    let mut document=Document::new("HDR",32,32); document.color.depth=SampleDepth::F32;
+    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }); document.color.depth=SampleDepth::F32;
     let make = || UiSession::new(Recorder {color:document.color,..Default::default()},document.clone(),[32,32], Platform::Gtk).unwrap();
     let mut s=make();
     let original=ToneKey::current(&s).unwrap();
@@ -215,7 +215,7 @@ fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
             space,
             depth: SampleDepth::U16,
         };
-        let mut document = Document::new("wide", 1000, 1000);
+        let mut document = Document::new("wide", 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color = color;
         UiSession::new(
             Recorder {
@@ -317,7 +317,7 @@ fn figures_and_gradients_convert_both_portable_paints() {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    let mut document = Document::new("wide", 1000, 1000);
+    let mut document = Document::new("wide", 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = color;
     let mut s = UiSession::new(
         Recorder {
@@ -435,7 +435,7 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
 #[test]
 fn sdr_preview_follows_display_capability_and_rendition_edits_undo() {
     use layer_core::color::{SampleDepth, hdr::SdrRendition};
-    let mut document = Document::new("HDR", 32, 32);
+    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color.depth = SampleDepth::F16;
     let renderer = Recorder { color: document.color, ..Default::default() };
     let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
@@ -460,7 +460,7 @@ fn sdr_preview_follows_display_capability_and_rendition_edits_undo() {
 #[test]
 fn live_sdr_panel_gesture_commits_once_and_cancels_without_losing_redo() {
     use layer_core::color::{SampleDepth,hdr::SdrRendition};
-    let mut document=Document::new("HDR",32,32);document.color.depth=SampleDepth::F16;
+    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.color.depth=SampleDepth::F16;
     let renderer=Recorder{color:document.color,..Default::default()};
     let mut s=UiSession::new(renderer,document,[32,32], Platform::Gtk).unwrap();
     let original=s.engine.document().sdr_rendition;
@@ -495,7 +495,7 @@ fn live_sdr_panel_gesture_commits_once_and_cancels_without_losing_redo() {
 #[test]
 fn proof_modes_share_view_state_and_preserve_both_saved_recipes() {
     use layer_core::color::{SampleDepth,ProofRecipe,ColorProfile,RgbSpace};
-    let mut document=Document::new("HDR",32,32);document.color.depth=SampleDepth::F16;
+    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.color.depth=SampleDepth::F16;
     let renderer=Recorder{color:document.color,..Default::default()};
     let mut s=UiSession::new(renderer,document,[32,32], Platform::Gtk).unwrap();
     assert!(s.set_proof_mode(ProofMode::Print).is_err());
@@ -515,7 +515,7 @@ fn proof_modes_share_view_state_and_preserve_both_saved_recipes() {
 #[test]
 fn proof_toggle_remembers_mode_and_keeps_pending_setup_separate_from_rendering() {
     use layer_core::color::{SampleDepth, ProofRecipe, ColorProfile};
-    let mut document = Document::new("HDR", 32, 32);
+    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color.depth = SampleDepth::F16;
     let renderer = Recorder { color: document.color, ..Default::default() };
     let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
@@ -576,7 +576,7 @@ fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
     use layer_core::color::SampleDepth;
     for (name, key, value) in [("exposure", "exposure", 30.), ("curves", "hdr_stops", 40.)] {
         // An older embedded program keeps its original range when promoted.
-        let mut document = Document::new("Float32", 32, 32);
+        let mut document = Document::new("Float32", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color.depth = SampleDepth::F32;
         let id = document.allocate_layer_id();
         let mut layer = Layer::paint(id, name);
@@ -630,7 +630,7 @@ fn proof_reveal_preserves_placement_and_opens_a_collapsed_drawer_idempotently() 
 #[test]
 fn proof_dial_and_queued_numeric_edits_share_cancellation_and_one_step_history() {
     use crate::proof_panel::{apply, ProofAction};
-    let mut document=Document::new("HDR",32,32);document.color.depth=layer_core::color::SampleDepth::F32;
+    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.color.depth=layer_core::color::SampleDepth::F32;
     let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32], Platform::Windows).unwrap();
     let original=s.engine.document().sdr_rendition;
     let checkpoint=s.engine.checkpoint();
@@ -660,12 +660,12 @@ fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
     use layer_core::{EffectInstance, EffectParameterKind, EffectValue, Layer, LayerKind};
     use layer_core::color::SampleDepth;
     use std::sync::Arc;
-    let mut document = Document::new("HDR", 32, 32);
+    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color.depth = SampleDepth::F16;
     let mut legacy = (*layer_core::bundled_effect_catalog().get("curves").unwrap().program()).clone();
     let parameters = Arc::make_mut(&mut legacy.parameters);
     let domain = parameters.iter_mut().find(|p| &*p.key == "domain").unwrap();
-    domain.kind = EffectParameterKind::Choice { options: ["Encoded RGB".into(), "Linear HDR".into()].into() };
+    domain.kind = EffectParameterKind::Choice { options: [layer_core::EffectOption::Literal("Encoded RGB".into()), layer_core::EffectOption::Literal("Linear HDR".into())].into() };
     let legacy_id = document.allocate_layer_id();
     let mut layer = Layer::paint(legacy_id, "Legacy curves");
     layer.kind = LayerKind::Effect;
@@ -694,7 +694,7 @@ fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
 #[test]
 fn phased_proof_controls_commit_once() {
     use crate::proof_panel::{apply, ProofAction, SdrControlEdit};
-    let mut document=Document::new("HDR",32,32);document.color.depth=layer_core::color::SampleDepth::F32;
+    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.color.depth=layer_core::color::SampleDepth::F32;
     let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32], Platform::Gtk).unwrap();
     let checkpoint=s.engine.checkpoint();
     for (phase,steps) in [(ContactPhase::Down,1.),(ContactPhase::Move,1.),(ContactPhase::Up,0.)] {

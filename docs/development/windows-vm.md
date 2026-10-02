@@ -100,7 +100,7 @@ and every fixture that launches its own app, once with its defaults and once for
 each switch and each other `ValidateSet` choice, including document GPU recovery
 and exhausted recovery. The isolated removal hook drains rendering and
 presentation before removing the real device; raw in-flight GPU loss remains
-a hardware check. `--no-build` verifies the synced build inputs
+a hardware check. `--no-build` verifies the synced build inputs, including embedded Fluent catalogs,
 and executable/DLL hashes before reusing a build. Fixture-only changes can reuse it; changes to Rust, native code
 or build scripts require rebuilding.
 

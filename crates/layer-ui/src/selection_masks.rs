@@ -237,7 +237,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn selection_command_item(&self, command: CommandId) -> ContextMenuItem {
         let state = self.command(command);
-        let mut item = ContextMenuItem::command(state.label, UiAction::Invoke { command });
+        let mut item = ContextMenuItem::command(state.label.as_ref(), UiAction::Invoke { command });
         item.enabled = state.enabled;
         item.selected = command.is_toggle().then_some(state.selected);
         item
@@ -248,13 +248,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         RefineKind::ALL
             .into_iter()
             .map(|kind| {
-                let label = canvas_bar::short_label(kind.command());
+                let label = canvas_bar::short_label(kind.command(), self.localization());
                 match layer {
-                    None => ContextMenuItem { label: label.into(), ..self.selection_command_item(kind.command()) },
+                    None => ContextMenuItem { label: label.to_string(), ..self.selection_command_item(kind.command()) },
                     Some(id) => ContextMenuItem {
                         enabled: self.require_document_idle().is_ok() && !self.engine.document().is_locked(id),
                         ..ContextMenuItem::command(
-                            label,
+                            label.as_ref(),
                             UiAction::Selection { action: SelectionAction::BeginRefine { kind, layer: Some(id.0) } },
                         )
                     },
@@ -371,6 +371,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     &doc.layer_roots(&self.layer_interaction.selected),
                     LayerId(0),
                     layer_core::LayerBlend::Normal,
+                    "",
                 )
                 .is_ok(),
             ),
@@ -837,7 +838,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .map_err(error)?;
                 }
                 let id = self.engine.allocate_layer_id();
-                let mut layer = Layer::selection(id, format!("Selection {}", id.0), selection);
+                let mut layer = Layer::selection(id, self.numbered_document_name(MessageId::DOCUMENTS_SELECTION_NAME, id.0), selection);
                 layer.properties.parent = parent;
                 if save_current && self.selection_masks.target().is_some() {
                     layer.properties.selection_mask = Some(self.mask_properties());

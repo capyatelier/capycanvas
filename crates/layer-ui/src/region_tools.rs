@@ -1,5 +1,6 @@
 //! Shared click-to-select/fill policy. Hosts forward input and render controls;
 //! source choice, cancellation, stale-result handling and edits stay here.
+use crate::localization::{Localizer, MessageId, UiLanguage};
 use super::*;
 use layer_core::{Edit, Point, Selection};
 use layer_render::RegionRequest;
@@ -48,34 +49,34 @@ impl Default for RegionTools {
     }
 }
 impl RegionTools {
-    pub fn controls(&self) -> Vec<ToolSetting> {
+    pub fn controls(&self, localizer: &Localizer) -> Vec<ToolSetting> {
         let distance = layer_render::RegionRefinement::MAX_DISTANCE as f64;
         [
             (
                 "tolerance",
-                "Tolerance",
-                "",
+                MessageId::TOOL_CONTROL_TOLERANCE,
+                None,
                 NumericControl::percent(),
                 self.tolerance,
             ),
             (
                 "gap_closing",
-                "Close gaps",
-                "Edges",
+                MessageId::TOOL_CONTROL_GAP_CLOSING,
+                Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
                 NumericControl::number(0., distance, 1., 0).unit("px"),
                 self.refinement.gap_closing as f32,
             ),
             (
                 "expansion",
-                "Expansion",
-                "Edges",
+                MessageId::TOOL_CONTROL_EXPANSION,
+                Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
                 NumericControl::number(-distance, distance, 1., 0).unit("px"),
                 self.refinement.expansion as f32,
             ),
             (
                 "smoothing",
-                "Edge smoothing",
-                "Edges",
+                MessageId::TOOL_CONTROL_SMOOTHING,
+                Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
                 NumericControl::percent(),
                 self.refinement.smoothing,
             ),
@@ -83,8 +84,8 @@ impl RegionTools {
         .into_iter()
         .map(|(id, label, group, numeric, value)| ToolSetting {
             id,
-            label,
-            group,
+            label: localizer.text(label),
+            group: group.map(|id| localizer.text(id)).unwrap_or_else(|| std::sync::Arc::from("")),
             numeric,
             value,
         })
@@ -92,11 +93,11 @@ impl RegionTools {
     }
     pub fn edit(&mut self, id: &str, value: f32) -> Result<(), String> {
         let control = self
-            .controls()
+            .controls(&Localizer::shared(UiLanguage::English))
             .into_iter()
             .find(|c| c.id == id)
             .ok_or("Unknown region setting")?;
-        control.numeric.validate(value, control.label)?;
+        control.numeric.validate(value, &control.label)?;
         if matches!(id, "gap_closing" | "expansion") && value.fract() != 0. {
             return Err(format!("{} needs a whole number of pixels", control.label));
         }

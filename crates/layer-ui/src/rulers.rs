@@ -37,11 +37,11 @@ impl Default for RulerInteraction {
         }
     }
 }
-pub(crate) fn tool_set(kind: RulerKind) -> ToolSetView {
+pub(crate) fn tool_set(kind: RulerKind, localizer: &crate::localization::Localizer) -> ToolSetView {
     let groups = [
-        (RulerKind::Straight, "Straight", "ruler"),
-        (RulerKind::Parallel, "Parallel", "ruler-parallel"),
-        (RulerKind::Radial, "Radial", "ruler-radial"),
+        (RulerKind::Straight, localizer.text(crate::localization::MessageId::TOOL_RULERS_STRAIGHT), "ruler"),
+        (RulerKind::Parallel, localizer.text(crate::localization::MessageId::TOOL_RULERS_PARALLEL), "ruler-parallel"),
+        (RulerKind::Radial, localizer.text(crate::localization::MessageId::TOOL_RULERS_RADIAL), "ruler-radial"),
     ]
     .into_iter()
     .map(|(k, label, icon)| ToolSetItem {

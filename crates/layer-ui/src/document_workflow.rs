@@ -1,7 +1,7 @@
 //! Portable color/source operation state. Executors supply cancellation and
 //! device-lifetime observations, bytes and completed previews; the session owns
 //! request identity, admissible choices, comparison readiness and publication.
-use crate::{DocumentColorOperation, DocumentRequest, HostRequestKind, UiChange, UiSession};
+use crate::{DocumentColorOperation, DocumentRequest, HostRequestKind, UiChange, UiSession, Localizer, MessageId};
 use layer_color::DocumentColorChange;
 use layer_core::{
     ColorTransition, LayerId, PreparedColorTransition, Project,
@@ -9,6 +9,35 @@ use layer_core::{
 };
 use layer_render::CanvasRenderer;
 use std::sync::Arc;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkflowFailure { InactiveOperation, StaleCandidate, NotColorRequest, ColorChoiceMismatch, MissingColorCandidate, CopyCancelled, PreviewCopy, CopyNotReady, SeparateCopy, PreviewColor, ConsumedHistory, NotSourceRequest, MissingSourceLayer, MissingSource, RasterizationProfile, ChooseProfile, SourceCancelled, SourceNotPrepared, PreviewSource, MissingSourceCandidate }
+impl WorkflowFailure {
+    fn message(self, localization: &Localizer) -> String {
+        localization.text(match self {
+            Self::InactiveOperation => MessageId::DOCUMENTS_ERROR_INACTIVE_OPERATION,
+            Self::StaleCandidate => MessageId::DOCUMENTS_ERROR_STALE_CANDIDATE,
+            Self::NotColorRequest => MessageId::DOCUMENTS_ERROR_NOT_COLOR_REQUEST,
+            Self::ColorChoiceMismatch => MessageId::DOCUMENTS_ERROR_COLOR_CHOICE_MISMATCH,
+            Self::MissingColorCandidate => MessageId::DOCUMENTS_ERROR_MISSING_COLOR_CANDIDATE,
+            Self::CopyCancelled => MessageId::DOCUMENTS_ERROR_COPY_CANCELLED,
+            Self::PreviewCopy => MessageId::DOCUMENTS_ERROR_PREVIEW_COPY,
+            Self::CopyNotReady => MessageId::DOCUMENTS_ERROR_COPY_NOT_READY,
+            Self::SeparateCopy => MessageId::DOCUMENTS_ERROR_SEPARATE_COPY,
+            Self::PreviewColor => MessageId::DOCUMENTS_ERROR_PREVIEW_COLOR,
+            Self::ConsumedHistory => MessageId::DOCUMENTS_ERROR_CONSUMED_HISTORY,
+            Self::NotSourceRequest => MessageId::DOCUMENTS_ERROR_NOT_SOURCE_REQUEST,
+            Self::MissingSourceLayer => MessageId::DOCUMENTS_ERROR_MISSING_SOURCE_LAYER,
+            Self::MissingSource => MessageId::DOCUMENTS_ERROR_MISSING_SOURCE,
+            Self::RasterizationProfile => MessageId::DOCUMENTS_ERROR_RASTERIZATION_PROFILE,
+            Self::ChooseProfile => MessageId::DOCUMENTS_ERROR_CHOOSE_PROFILE,
+            Self::SourceCancelled => MessageId::DOCUMENTS_ERROR_SOURCE_CANCELLED,
+            Self::SourceNotPrepared => MessageId::DOCUMENTS_ERROR_SOURCE_NOT_PREPARED,
+            Self::PreviewSource => MessageId::DOCUMENTS_ERROR_PREVIEW_SOURCE,
+            Self::MissingSourceCandidate => MessageId::DOCUMENTS_ERROR_MISSING_SOURCE_CANDIDATE,
+        }).to_string()
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct CandidateIdentity {
@@ -23,7 +52,7 @@ impl CandidateIdentity {
     ) -> Result<Self, String> {
         session.require_document_idle()?;
         if !session.state().requests.iter().any(|r| r.id == request) {
-            return Err("The operation is no longer active".into());
+            return Err(WorkflowFailure::InactiveOperation.message(session.localization()));
         }
         Ok(Self {
             epoch: session.state().document_file.epoch,
@@ -53,7 +82,7 @@ impl CandidateIdentity {
                 .any(|r| r.id == self.request)
         {
             return Err(
-                "The document, operation or canvas changed; prepare the change again".into(),
+                WorkflowFailure::StaleCandidate.message(session.localization()),
             );
         }
         session.require_document_idle()
@@ -72,6 +101,7 @@ pub enum ColorPreparation {
 /// Immutable source capture plus one selected candidate. No GPU resources or
 /// executor are retained here, so workers can prepare on any supported host.
 pub struct ColorWorkflow {
+    localization: Arc<Localizer>,
     pub identity: CandidateIdentity,
     pub original: Project,
     pub candidate: Option<Project>,
@@ -98,9 +128,10 @@ impl ColorWorkflow {
                 })?;
                 (None, Some(transition), Some(project))
             }
-            _ => return Err("Not a document color request".into()),
+            _ => return Err(WorkflowFailure::NotColorRequest.message(s.localization())),
         };
         Ok(Self {
+            localization: s.localization().clone(),
             identity,
             original: s.capture_project_recovery()?,
             operation,
@@ -136,7 +167,7 @@ impl ColorWorkflow {
             (Some(O::Assign), Some(c @ C::Assign(_)), false)
             | (Some(O::Convert), Some(c @ C::Convert { .. }), false)
             | (Some(O::Depth), Some(c @ C::Depth { .. }), false) => ColorPreparation::Edit(c),
-            _ => return Err("Color choice does not match the request".into()),
+            _ => return Err(WorkflowFailure::ColorChoiceMismatch.message(&self.localization)),
         };
         self.plan = Some(plan);
         self.compared = false;
@@ -150,21 +181,21 @@ impl ColorWorkflow {
     }
     pub fn comparison_completed(&mut self) -> Result<(), String> {
         if self.candidate.is_none() || self.plan.is_none() {
-            return Err("Color candidate is missing".into());
+            return Err(WorkflowFailure::MissingColorCandidate.message(&self.localization));
         }
         self.compared = true;
         Ok(())
     }
     pub fn copy_project(&self, cancelled: bool) -> Result<&Project, String> {
         if cancelled {
-            return Err("Converted copy cancelled".into());
+            return Err(WorkflowFailure::CopyCancelled.message(&self.localization));
         }
         if !self.is_copy() || !self.compared {
-            return Err("Preview a flattened copy before saving".into());
+            return Err(WorkflowFailure::PreviewCopy.message(&self.localization));
         }
         self.candidate
             .as_ref()
-            .ok_or_else(|| "Converted copy is not ready".into())
+            .ok_or_else(|| WorkflowFailure::CopyNotReady.message(&self.localization))
     }
     pub fn prepare_commit<R: CanvasRenderer>(
         &mut self,
@@ -174,18 +205,18 @@ impl ColorWorkflow {
     ) -> Result<PreparedColorTransition, String> {
         self.identity.validate(s, cancelled, device_current)?;
         if self.is_copy() {
-            return Err("Save the converted copy as a separate document".into());
+            return Err(WorkflowFailure::SeparateCopy.message(&self.localization));
         }
         if self.plan.is_none() || (!self.is_history() && !self.compared) {
-            return Err("Preview the complete color result first".into());
+            return Err(WorkflowFailure::PreviewColor.message(&self.localization));
         }
         if self.is_history() {
-            return self.transition.take().ok_or_else(|| "The history candidate was already consumed; prepare it again".into());
+            return self.transition.take().ok_or_else(|| WorkflowFailure::ConsumedHistory.message(&self.localization));
         }
         let p = self
             .candidate
             .as_ref()
-            .ok_or("Color candidate is missing")?;
+            .ok_or_else(|| WorkflowFailure::MissingColorCandidate.message(&self.localization))?;
         Ok(s.prepare_document_color_transition(ColorTransition::Apply {
             color: p.document.color,
             layers: p.document.layers.clone(),
@@ -215,6 +246,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
 #[derive(Clone)]
 pub struct SourceWorkflow {
+    localization: Arc<Localizer>,
     pub identity: CandidateIdentity,
     pub project: Project,
     pub original: Arc<SourceImage>,
@@ -235,16 +267,17 @@ impl SourceWorkflow {
             HostRequestKind::Document {
                 request: DocumentRequest::RasterizeSource { layer },
             } => (LayerId(*layer), true),
-            _ => return Err("Not a retained source request".into()),
+            _ => return Err(WorkflowFailure::NotSourceRequest.message(s.localization())),
         };
         let project = s.capture_project_recovery()?;
         let l = project
             .document
             .layer(layer)
-            .ok_or("Source layer no longer exists")?;
-        let original = l.source.clone().ok_or("No retained source")?;
+            .ok_or_else(|| WorkflowFailure::MissingSourceLayer.message(s.localization()))?;
+        let original = l.source.clone().ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
         let adds_layer = !rasterize && crate::session::source_edit::baked(l);
         Ok(Self {
+            localization: s.localization().clone(),
             identity,
             project,
             original,
@@ -263,8 +296,8 @@ impl SourceWorkflow {
     }
     pub fn validate_choice(&self, profile: &Option<ColorProfile>) -> Result<(), String> {
         match (self.rasterize, profile.is_some()) {
-            (true, true) => Err("Rasterization uses the document profile".into()),
-            (false, false) => Err("Choose a source profile".into()),
+            (true, true) => Err(WorkflowFailure::RasterizationProfile.message(&self.localization)),
+            (false, false) => Err(WorkflowFailure::ChooseProfile.message(&self.localization)),
             _ => Ok(()),
         }
     }
@@ -278,7 +311,7 @@ impl SourceWorkflow {
     ) -> Result<(Arc<SourceImage>, u64), String> {
         self.validate_choice(&profile)?;
         if cancelled() {
-            return Err("Source change cancelled".into());
+            return Err(WorkflowFailure::SourceCancelled.message(&self.localization));
         }
         let (source, clipped) = if self.rasterize {
             let (source, statistics) = layer_color::rasterize_source(
@@ -299,7 +332,7 @@ impl SourceWorkflow {
             (source, 0)
         };
         if cancelled() {
-            return Err("Source change cancelled".into());
+            return Err(WorkflowFailure::SourceCancelled.message(&self.localization));
         }
         Ok((Arc::new(source), clipped))
     }
@@ -323,7 +356,7 @@ impl SourceWorkflow {
     }
     pub fn comparison_completed(&mut self) -> Result<(), String> {
         if self.converted.is_none() {
-            return Err("Source comparison is not prepared".into());
+            return Err(WorkflowFailure::SourceNotPrepared.message(&self.localization));
         }
         self.compared = true;
         Ok(())
@@ -336,12 +369,12 @@ impl SourceWorkflow {
     ) -> Result<(), String> {
         self.identity.validate(s, cancelled, device_current)?;
         if !self.compared {
-            return Err("Preview the complete source result first".into());
+            return Err(WorkflowFailure::PreviewSource.message(&self.localization));
         }
         let source = self
             .converted
             .as_ref()
-            .ok_or("Source candidate is missing")?
+            .ok_or_else(|| WorkflowFailure::MissingSourceCandidate.message(&self.localization))?
             .clone();
         if self.rasterize {
             s.apply_rasterized_source(self.layer, &self.original, source)?;

@@ -1,7 +1,7 @@
 //! Shared photo-to-master policy. Original samples and metadata are retained;
 //! source file locations remain the host's separate, read-only import reference.
 use layer_core::{
-    BlendSpace, Document, PhotoMetadata, Project, ProjectLimits,
+    BlendSpace, Document, DocumentNames, PhotoMetadata, Project, ProjectLimits,
     color::{DocumentColor, SampleDepth, RgbSpace, source::SourceImage},
 };
 use std::sync::Arc;
@@ -21,24 +21,18 @@ pub fn assume_source_profile(
 pub fn photo_project(
     source: SourceImage,
     metadata: PhotoMetadata,
-    name: &str,
+    names: DocumentNames,
     depth: SampleDepth,
 ) -> Result<Project, String> {
     source.validate()?;
     if source.interpretation.depth.is_float() && !depth.is_float() { return Err("HDR placement requires an HDR document; export an SDR rendition for SDR placement".into()); }
     let space = crate::suggested_working_space(&source.interpretation.profile)?
         .unwrap_or(RgbSpace::ProPhoto);
-    let mut document = Document::new("untitled", source.extent[0], source.extent[1]);
+    let mut document = Document::new("untitled", source.extent[0], source.extent[1], names);
     document.resolution = source.resolution;
     document.metadata = metadata;
     document.color = DocumentColor { space, depth };
     document.blend_space = BlendSpace::Perceptual.for_depth(depth);
-    let name: String = name.chars().filter(|c| !c.is_control()).take(128).collect();
-    document.layers[0].name = if name.is_empty() {
-        "Photo".into()
-    } else {
-        name.into()
-    };
     document.layers[0].source = Some(Arc::new(source));
     document.layers[1].visible = false;
     let project = Project { document };

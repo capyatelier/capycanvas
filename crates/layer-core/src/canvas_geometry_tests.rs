@@ -45,7 +45,7 @@ fn rect(origin: [i32; 2], size: [u32; 2]) -> CanvasGeometry {
 /// A 512×256 drawing: a masked paint layer, a group with a child, a Selection
 /// Layer, a selection and a ruler.
 fn fixture() -> Document {
-    let mut doc = Document::new("geometry", 512, 256);
+    let mut doc = Document::new("geometry", 512, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let color = doc.color;
     doc.layers[0].raster = raster(RasterPlane::Color, color, &[[0, 0], [1, 0]]);
     let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), Point::default());
@@ -252,7 +252,7 @@ fn rebasing_conjugates_a_placement_so_pixels_stay_put() {
 
 /// A 1024×768 drawing whose paint layer fills every tile, with a mask.
 fn tiled() -> Document {
-    let mut doc = Document::new("tiled", 1024, 768);
+    let mut doc = Document::new("tiled", 1024, 768, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let color = doc.color;
     let keys: Vec<_> = (0..3).flat_map(|y| (0..4).map(move |x| [x, y])).collect();
     doc.layers[0].raster = raster(RasterPlane::Color, color, &keys);

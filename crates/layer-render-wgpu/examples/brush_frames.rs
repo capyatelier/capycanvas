@@ -218,7 +218,7 @@ fn main() -> Result<()> {
         {
             continue;
         }
-        let document = Document::new("brush frames", EXTENT[0], EXTENT[1]);
+        let document = Document::new("brush frames", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut brush = default_brush(preset);
         brush.diameter = 1000.;
         let mut gpu = WgpuRasterizer::from_wgpu_native_staged(

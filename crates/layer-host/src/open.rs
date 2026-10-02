@@ -70,7 +70,7 @@ impl OpenEnvironment {
             input,
             intent,
             self.photo_policy,
-            name,
+            layer_ui::photo_document_names(name, &self.localization),
             self.limits(),
             Default::default(),
             cancel,
@@ -154,12 +154,12 @@ mod tests {
 
     #[test]
     fn open_prepares_a_ready_candidate_and_honours_cancellation() {
-        let project = layer_ui::NewDocumentOptions::default().project().unwrap();
+        let project = layer_ui::NewDocumentOptions::default().project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let gpu = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
         let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
         let session = UiSession::from_project_localized(
             Renderer(Some(gpu.into())),
-            layer_ui::new_drawing(64, 48).unwrap(),
+            layer_ui::new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
             None,
             [640, 480],
             layer_ui::Platform::Mac,

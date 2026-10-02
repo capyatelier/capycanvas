@@ -119,12 +119,12 @@ pub enum ToolOption {
     /// One atomic interval field; endpoint edits use the existing setting IDs.
     Range {
         id: &'static str,
-        label: &'static str,
+        label: std::sync::Arc<str>,
         bounds: [ToolSetting; 2],
     },
     Choice {
         id: &'static str,
-        label: &'static str,
+        label: std::sync::Arc<str>,
         segmented: bool,
         items: Vec<ToolSetItem>,
     },
@@ -183,7 +183,7 @@ impl ToolOption {
 }
 
 impl CommandState {
-    pub(crate) fn choice_item(&self, label: &'static str) -> ToolSetItem {
+    pub(crate) fn choice_item(&self, label: std::sync::Arc<str>) -> ToolSetItem {
         ToolSetItem {
             label,
             icon: self.icon.unwrap_or("select"),
@@ -286,7 +286,7 @@ impl UiState {
                 .filter(|a| completion(a.command))
                 .filter_map(action),
         );
-        let choice = |id, label, segmented, items: Vec<ToolSetItem>| {
+        let choice = |id, label: std::sync::Arc<str>, segmented, items: Vec<ToolSetItem>| {
             (items.len() > 1).then_some(ToolOption::Choice {
                 id,
                 label,
@@ -295,7 +295,7 @@ impl UiState {
             })
         };
         if !self.toolbar_context().operation {
-            options.extend(choice("tool", "Tool", false, self.tool_set.groups.clone()));
+            options.extend(choice("tool", self.localization.text(MessageId::TOOLBAR_TOOL), false, self.tool_set.groups.clone()));
             let (samples, variants): (Vec<_>, Vec<_>) = self
                 .tool_set
                 .subtools
@@ -305,25 +305,25 @@ impl UiState {
             let label = if self.layer_tools.tool.picks_color()
                 || matches!(self.layer_tools.tool, LayerCanvasTool::Region { .. })
             {
-                "Source"
+                self.localization.text(MessageId::TOOLBAR_SOURCE)
             } else {
-                "Variant"
+                self.localization.text(MessageId::TOOLBAR_VARIANT)
             };
             if self.layer_tools.tool.picks_color() {
-                options.extend(choice("picker-style", "Style", false, variants));
-                let sources = [("Visible color", false), ("Selected layer", true)].into_iter()
+                options.extend(choice("picker-style", self.localization.text(MessageId::TOOLBAR_STYLE), false, variants));
+                let sources = [(MessageId::TOOLBAR_VISIBLE_COLOR, false), (MessageId::TOOLBAR_SELECTED_LAYER, true)].into_iter()
                     .filter(|(_, layer)| !layer || self.color_picker.can_sample_layer)
-                    .map(|(label, layer)| ToolSetItem { label, icon: if layer { "layers" } else { "eye" },
+                    .map(|(label, layer)| ToolSetItem { label: self.localization.text(label), icon: if layer { "layers" } else { "eye" },
                         action: UiAction::ColorPicker { action: crate::ColorPickerAction::Source { layer } },
                         selected: self.color_picker.layer == layer, preview: None }).collect();
-                options.extend(choice("variant", "Source", false, sources));
-                let sizes = [("Single pixel",1),("5 px circle",5),("15 px circle",15),("51 px circle",51),("101 px circle",101)].into_iter()
-                    .map(|(label,width)| ToolSetItem { label, icon: "eyedropper", action: UiAction::SetColorSampleSize { width },
+                options.extend(choice("variant", self.localization.text(MessageId::TOOLBAR_SOURCE), false, sources));
+                let sizes = [(MessageId::TOOLBAR_SINGLE_PIXEL,1),(MessageId::TOOLBAR_5_PX_CIRCLE,5),(MessageId::TOOLBAR_15_PX_CIRCLE,15),(MessageId::TOOLBAR_51_PX_CIRCLE,51),(MessageId::TOOLBAR_101_PX_CIRCLE,101)].into_iter()
+                    .map(|(label,width)| ToolSetItem { label: self.localization.text(label), icon: "eyedropper", action: UiAction::SetColorSampleSize { width },
                         selected: self.color_picker.sample_width == width, preview: None }).collect();
-                options.extend(choice("sample-size", "Sample size", false, sizes));
+                options.extend(choice("sample-size", self.localization.text(MessageId::TOOLBAR_SAMPLE_SIZE), false, sizes));
             } else {
                 options.extend(choice("variant", label, false, variants));
-                options.extend(choice("sample-size", "Sample size", false, samples));
+                options.extend(choice("sample-size", self.localization.text(MessageId::TOOLBAR_SAMPLE_SIZE), false, samples));
             }
         }
         for group in [
@@ -339,9 +339,9 @@ impl UiState {
                 .iter()
                 .filter(|a| a.group() == Some(group))
                 .filter_map(|a| self.commands.iter().find(|c| c.id == a.command))
-                .map(|c| c.choice_item(c.label))
+                .map(|c| c.choice_item(c.label.clone()))
                 .collect();
-            options.extend(choice(group.id(), group.label(), group.segmented(), items));
+            options.extend(choice(group.id(), group.localized_label(&self.localization), group.segmented(), items));
         }
         options.extend(self.tool_extra.iter().cloned());
         let mut fields = self.tool_settings.iter().peekable();
@@ -349,7 +349,7 @@ impl UiState {
             if field.id == "tonal_lower" && fields.peek().is_some_and(|f| f.id == "tonal_upper") {
                 options.push(ToolOption::Range {
                     id: "tonal",
-                    label: "Range in stops relative to reference white (0)",
+                    label: self.localization.text(MessageId::TOOLBAR_RANGE_IN_STOPS_RELATIVE_TO_REFERENCE_WHITE_0),
                     bounds: [field.clone(), fields.next().unwrap().clone()],
                 });
             } else {

@@ -73,6 +73,7 @@ androidComponents.onVariants { variant ->
         inputs.files(fileTree(rootDir.resolve("../../vendor")) { include("**/*.rs", "**/*.wgsl", "**/Cargo.toml") })
         inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "Cargo.toml") })
         inputs.files(fileTree(rootDir.resolve("../../assets/filters")))
+        inputs.files(fileTree(rootDir.resolve("../../assets/locales")) { include("**/*.ftl") })
         inputs.files(rootDir.resolve("../../Cargo.lock"), rootDir.resolve("../../Cargo.toml"), rootDir.resolve("../../.cargo/config.toml"))
         inputs.property("abi", capyAbis)
         inputs.property("profile", profile)

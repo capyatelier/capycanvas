@@ -2,6 +2,7 @@
 //! render ordinary tool controls; no platform owns transform math or history.
 use super::{error, refused};
 use crate::*;
+use crate::localization::MessageId;
 use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerId, LayerKind, MeshMap, Point, Projective, Rect, Selection, TransformMap};
 use std::sync::Arc;
 use layer_engine::{PenEvent, PenPhase};
@@ -63,10 +64,9 @@ impl Pose {
         }
     }
 }
-pub(super) const DISTORT_PLACEMENT: &str = "Select All, then Transform, to distort this photo's pixels";
-pub(super) const OUTLINE_AFFINE: &str =
-    "A selection outline can be moved, scaled, rotated and skewed; use Transform to distort or warp the pixels";
-pub(super) const OUTLINE_PIXELS: &str = "Transform Outline moves no pixels";
+pub(super) const DISTORT_PLACEMENT: MessageId = MessageId::COMMANDS_REFUSAL_OPERATION_SELECT_ALL_THEN_TRANSFORM_TO_DISTORT_THIS_PHOTO_S_PIXELS;
+pub(super) const OUTLINE_AFFINE: MessageId = MessageId::COMMANDS_REFUSAL_OPERATION_A_SELECTION_OUTLINE_CAN_BE_MOVED_SCALED_ROTATED_AND_SKEWED_USE_TRANSFORM_TO_DISTORT_OR_WARP_THE_PIXELS;
+pub(super) const OUTLINE_PIXELS: MessageId = MessageId::COMMANDS_REFUSAL_OPERATION_TRANSFORM_OUTLINE_MOVES_NO_PIXELS;
 /// Skew is presented as an angle; its tangent is the pose shear.
 const MAX_SKEW: f32 = 85. * std::f32::consts::PI / 180.;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,11 +230,11 @@ pub(super) const HANDLES: [[f32; 2]; 8] = [
     [-1., 0.],
 ];
 
-pub(crate) fn tool_set(transform: bool) -> ToolSetView {
+pub(crate) fn tool_set(transform: bool, localizer: &crate::localization::Localizer) -> ToolSetView {
     ToolSetView {
         groups: [
-            ("Move", "move", false),
-            ("Transform", "transform", true),
+            (localizer.text(crate::localization::MessageId::TOOL_OPERATION_MOVE), "move", false),
+            (localizer.text(crate::localization::MessageId::TOOL_OPERATION_TRANSFORM), "transform", true),
         ]
         .into_iter()
         .map(|(label, icon, item)| ToolSetItem {
@@ -366,9 +366,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         t.geometry.frame = t.bounds;
         Ok(t)
     }
-    pub(super) fn outline_refusal(&self) -> Option<&'static str> {
+    pub(super) fn outline_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         if self.selection_masks.target().is_some() {
-            return Some("Return to the artwork first");
+            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
         }
         let empty = |s: &Selection| {
             !s.inverted
@@ -381,8 +382,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         };
         match &self.engine.document().selection {
-            None => Some("Make a selection first"),
-            Some(s) if empty(s) => Some("The selection is empty"),
+            None => Some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST)),
+            Some(s) if empty(s) => Some(l.text(MessageId::COMMANDS_REFUSAL_OPERATION_THE_SELECTION_IS_EMPTY)),
             Some(_) => None,
         }
     }
@@ -532,6 +533,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn transform_controls(&self) -> Vec<tool_settings::ToolSetting> {
+        let localizer = self.localization();
         let Some(t) = self.operation.current.as_ref().filter(|t| t.mode != TransformMode::Warp) else {
             return Vec::new();
         };
@@ -559,43 +561,43 @@ impl<R: CanvasRenderer> UiSession<R> {
         [
             (
                 "transform_x",
-                "X",
-                "Position",
+                MessageId::TOOL_CONTROL_TRANSFORM_X,
+                MessageId::TOOL_CONTROL_GROUP_POSITION,
                 pixels(t.bounds.max.x - t.bounds.min.x),
                 pose.offset.x,
             ),
             (
                 "transform_y",
-                "Y",
-                "Position",
+                MessageId::TOOL_CONTROL_TRANSFORM_Y,
+                MessageId::TOOL_CONTROL_GROUP_POSITION,
                 pixels(t.bounds.max.y - t.bounds.min.y),
                 pose.offset.y,
             ),
             (
                 "transform_width",
-                "Width",
-                "Scale",
+                MessageId::TOOL_CONTROL_TRANSFORM_WIDTH,
+                MessageId::TOOL_CONTROL_GROUP_SCALE,
                 percent(),
                 pose.scale[0],
             ),
             (
                 "transform_height",
-                "Height",
-                "Scale",
+                MessageId::TOOL_CONTROL_TRANSFORM_HEIGHT,
+                MessageId::TOOL_CONTROL_GROUP_SCALE,
                 percent(),
                 pose.scale[1],
             ),
             (
                 "transform_angle",
-                "Angle",
-                "Rotation",
+                MessageId::TOOL_CONTROL_TRANSFORM_ANGLE,
+                MessageId::TOOL_CONTROL_GROUP_ROTATION,
                 degrees(std::f64::consts::PI),
                 pose.angle,
             ),
             (
                 "transform_skew",
-                "Skew",
-                "Skew",
+                MessageId::TOOL_CONTROL_TRANSFORM_SKEW,
+                MessageId::TOOL_CONTROL_GROUP_SKEW,
                 degrees(f64::from(MAX_SKEW)),
                 pose.shear.atan(),
             ),
@@ -604,8 +606,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         .map(
             |(id, label, group, numeric, value)| tool_settings::ToolSetting {
                 id,
-                label,
-                group,
+                label: localizer.text(label),
+                group: localizer.text(group),
                 numeric,
                 value,
             },
@@ -619,7 +621,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .into_iter()
             .find(|c| c.id == id)
             .ok_or("No transform setting")?;
-        control.numeric.validate(value, control.label)?;
+        control.numeric.validate(value, &control.label)?;
         let t = self.operation.current.as_mut().ok_or("No transform")?;
         let mut pose = t.geometry.pose;
         match id {
@@ -810,10 +812,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_idle()?;
         let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
         if mode != TransformMode::Free && t.outline.is_some() {
-            return Err(OUTLINE_AFFINE.into());
+            return Err(self.localization().text(OUTLINE_AFFINE).to_string());
         }
         if mode != TransformMode::Free && t.placement.is_some() {
-            return Err(DISTORT_PLACEMENT.into());
+            return Err(self.localization().text(DISTORT_PLACEMENT).to_string());
         }
         t.set_mode(mode);
         self.operation.aspect = uniform;
@@ -853,7 +855,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_idle()?;
         let t = self.operation.current.as_ref().ok_or("Start a transform first")?;
         if t.outline.is_some() {
-            return Err(OUTLINE_PIXELS.into());
+            return Err(self.localization().text(OUTLINE_PIXELS).to_string());
         }
         if t.placement.is_some() {
             return Err("Placed photos keep their original pixels".into());

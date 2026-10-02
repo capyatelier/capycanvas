@@ -120,6 +120,18 @@ Sculpt's Sculpting panel, beside Blend and Liquify.
   workspaces, and adds no layout history.
 - Ordinary opening and closing of a collapsed strip is transient and adds no
   layout history.
+- Built-in names resolve from `builtin:workspace:*` identities in the launch
+  language. Metadata and custom names remain literal, including names that match
+  an English built-in name. Display search normalizes a copy of each label;
+  stored name uniqueness keeps its existing rules.
+- Layout revisions store bounded `LayoutChange` values with panel identities and
+  captured custom titles. History descriptions resolve when presenting the view,
+  so renaming or deleting a toolbar does not rewrite earlier names. Automatic
+  changes resolve before storage, and locale presentation never advances history.
+- A toolbar without a custom title stores `None`; an entered title stores `Some`
+  even when it matches the default. Library capture preserves the displayed title
+  as editable literal data.
+
 
 ## Workspace manager
 

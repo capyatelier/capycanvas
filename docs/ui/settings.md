@@ -20,7 +20,16 @@ reset action. Theme colors use the shared
 [palette transformation](theme-colors.md); numeric controls use the same
 [parsing and stepping policy](numeric-controls.md) as tool panels.
 
-An accepted preference edit applies immediately and requests persistence. Closing
+An accepted preference edit applies immediately and requests persistence.
+**Language** is the exception: it saves the choice immediately and applies it when
+Capy Canvas next opens. System follows the operating system's preferred languages.
+The picker offers only complete, reviewed catalogs, using each language's native
+name. Restoring a language unavailable in this build keeps the System default.
+Each running session keeps its launch language while preferences change.
+
+Preference pages, rows, choices, resets and search results use the session's
+shared localization context. Search normalizes Unicode compatibility forms and
+matches translated labels as well as canonical English labels. Closing
 a settings dialog dismisses the view; it is not a second Apply operation.
 Dependent fields are enabled or disabled by shared rules, so different clients
 cannot disagree about whether a setting is valid.
@@ -82,7 +91,7 @@ while held.
 
 The shortcuts page lists categories, with one search line that also accepts a
 pressed chord, a tool filter and an All actions / With shortcuts / Customized
-filter. A single typed character matches keys, not names. The editor is one
+filter. A single ASCII character matches keys; other characters search action names. The editor is one
 sheet: the action's keys, Add Shortcut with inline recording, and reset. Actions
 that share a name, such as the Eraser tool and the Eraser brush, describe which
 is which.

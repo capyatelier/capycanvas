@@ -1,5 +1,6 @@
 //! Ordered selection gestures. Completed contacts survive asynchronous capture;
 //! subsequent contacts resolve their base only after preceding edits commit.
+use crate::localization::{Localizer, MessageId, UiLanguage};
 use super::*;
 use layer_core::{BrushSnapshot, Selection, SelectionTarget};
 use layer_engine::{SampleFlags, SelectionStroke, ToolKind};
@@ -28,28 +29,28 @@ impl Default for SelectionBrushOptions {
 }
 impl SelectionBrushOptions {
     pub fn validate(&self) -> Result<(), String> {
-        for c in self.controls() {
-            c.numeric.validate(c.value, c.label)?;
+        for c in self.controls(&Localizer::shared(UiLanguage::English)) {
+            c.numeric.validate(c.value, &c.label)?;
         }
         Ok(())
     }
-    pub fn controls(&self) -> Vec<ToolSetting> {
+    pub fn controls(&self, localizer: &Localizer) -> Vec<ToolSetting> {
         [
             (
                 "selection_brush_size",
-                "Size",
+                MessageId::TOOL_CONTROL_SELECTION_BRUSH_SIZE,
                 self.size,
                 NumericControl::brush_size(),
             ),
             (
                 "selection_brush_hardness",
-                "Hardness",
+                MessageId::TOOL_CONTROL_SELECTION_BRUSH_HARDNESS,
                 self.hardness,
                 NumericControl::percent(),
             ),
             (
                 "selection_brush_opacity",
-                "Opacity",
+                MessageId::TOOL_CONTROL_SELECTION_BRUSH_OPACITY,
                 self.opacity,
                 NumericControl::percent(),
             ),
@@ -57,20 +58,20 @@ impl SelectionBrushOptions {
         .into_iter()
         .map(|(id, label, value, numeric)| ToolSetting {
             id,
-            label,
+            label: localizer.text(label),
             value,
             numeric,
-            group: "",
+            group: std::sync::Arc::from(""),
         })
         .collect()
     }
     pub fn edit(&mut self, id: &str, value: f32) -> Result<(), String> {
         let control = self
-            .controls()
+            .controls(&Localizer::shared(UiLanguage::English))
             .into_iter()
             .find(|c| c.id == id)
             .ok_or("Unknown Paint selection setting")?;
-        control.numeric.validate(value, control.label)?;
+        control.numeric.validate(value, &control.label)?;
         match id {
             "selection_brush_size" => self.size = value,
             "selection_brush_hardness" => self.hardness = value,

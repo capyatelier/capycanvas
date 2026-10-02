@@ -198,7 +198,7 @@ pub(super) async fn run(
     content.append(&detail);
     content.append(&comparison.widget);
     let request = DocumentRequest::ChangeColor { operation };
-    let dialog = adw::AlertDialog::builder().heading(request.title()).body(match operation {
+    let dialog = adw::AlertDialog::builder().heading(request.title(&w.localization).as_ref()).body(match operation {
         DocumentColorOperation::Assign => "Keep RGB numbers and change how committed pixels are interpreted. Appearance may change. Retained originals keep their own profiles.",
         DocumentColorOperation::Convert => "Editable layers may change blending and adjustments. A flattened copy preserves their combined appearance as far as gamut and precision allow and keeps the layered original.",
         DocumentColorOperation::Depth => "Change editing precision independently of the profile. Compare reductions before applying. Undo restores the exact original state.",

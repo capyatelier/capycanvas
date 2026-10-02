@@ -208,7 +208,7 @@ fn native_trim_to_the_visible_pixels() {
 fn painted_24_mp() -> layer_core::Project {
     use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TILE_SIZE, TileBlob, TileKey};
     let extent = [6000u32, 4000];
-    let mut project = layer_ui::new_drawing(1, 1).unwrap();
+    let mut project = layer_ui::new_drawing(1, 1, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let doc = &mut project.document;
     [doc.width, doc.height] = extent;
     doc.color = layer_core::color::DocumentColor {

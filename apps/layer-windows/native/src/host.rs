@@ -474,7 +474,7 @@ pub unsafe extern "C" fn capy_start_services(
     guard(host, |host| {
         if host.documents.is_none() {
             let context = context as usize;
-            host.documents = Some(crate::documents::DocumentService::open(move || {
+            host.documents = Some(crate::documents::DocumentService::open_localized(host.native.session.localization(), move || {
                 if let Some(wake) = wake {
                     wake(context as *mut c_void);
                 }

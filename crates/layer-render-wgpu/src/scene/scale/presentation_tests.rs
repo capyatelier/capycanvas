@@ -10,7 +10,7 @@ fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterErr
 }
 
 fn document(extent: [u32; 2]) -> layer_core::Document {
-    let mut doc = layer_core::Document::new("bounded live display", extent[0], extent[1]);
+    let mut doc = layer_core::Document::new("bounded live display", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
@@ -356,7 +356,7 @@ fn large_document_waits_for_mip_compilation_before_reporting_canvas_ready() {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
     };
-    let mut doc = layer_core::Document::new("large staged document", 4097, 1025);
+    let mut doc = layer_core::Document::new("large staged document", 4097, 1025, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.color = color;
     let mut r = bounded_renderer(color).unwrap();
     r.startup = Some(startup::Startup::new(&r.device).unwrap());
@@ -395,7 +395,7 @@ fn committed_contact_strokes_present_their_canonical_native_pixels() {
     use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase,
         SampleFlags, ViewTransform, input_queue};
     for preset in [layer_core::DefaultBrushPreset::AntiquePen, layer_core::DefaultBrushPreset::BrushedInk] {
-        let doc = layer_core::Document::new("canonical contact", 1024, 512);
+        let doc = layer_core::Document::new("canonical contact", 1024, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let v = view([0.5, 0., 0., 0.5, 0., 0.]);
         let (mut input, consumer) = input_queue(64);
         let mut engine = CanvasEngine::new(bounded_renderer(doc.color).unwrap(), doc, consumer, v,
@@ -442,7 +442,7 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    let mut doc = layer_core::Document::new("bounded native drawing", 1025, 513);
+    let mut doc = layer_core::Document::new("bounded native drawing", 1025, 513, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.color = color;
     let v = view([1., 0., 0., 1., 0., 0.]);
     let renderer = || bounded_renderer(color).unwrap();

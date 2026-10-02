@@ -128,7 +128,7 @@ fn paper_bounds_follow_alpha_filters_and_masked_pass_through_groups() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     for case in 0..3 {
         let grouped = case == 1;
-        let mut document = Document::new("filtered paper", 128, 96);
+        let mut document = Document::new("filtered paper", 128, 96, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         if case == 2 {
             document.layers[0].source = Some(source([10, 10], |_, _| 255));
             document.layers[0].properties.offset = Point { x: -10., y: -10. };

@@ -261,7 +261,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         &self.localization
     }
     pub fn new_owned_localized(store: S, platform: Platform, owner: Owner, now: u64, localization: Arc<layer_ui::Localizer>) -> Self {
-        let mut manager = WorkspaceManager::new(store, platform);
+        let mut manager = WorkspaceManager::new_localized(store, platform, localization.clone());
         manager.owner = owner;
         let mut c = Self {
             localization,
@@ -504,7 +504,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     let item = items.iter().find(|item| item.id == id)?;
                     Some(WorkspaceRow {
                         current: active.as_ref() == Some(&id),
-                        title: item.metadata.name.clone(),
+                        title: m.display_name(&item.id, &item.metadata),
                         subtitle: String::new(),
                         actions: Vec::new(),
                         id,
@@ -516,18 +516,18 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.view.switcher_display = switcher_rows(m.switcher_display_ids());
         let page = self.view.page;
         let (title, intro) = match page {
-            Some(ManagerPage::History) => (format!("Layout History — {}", self.view.name), ""),
+            Some(ManagerPage::History) => (message(&self.localization, layer_ui::MessageId::WORKSPACE_HISTORY_TITLE, &[("name", self.view.name.clone())]), String::new()),
             Some(ManagerPage::ThisWorkspace) => (
-                "Manage Toolbars".into(),
-                "Arrange the toolbars in this workspace.",
+                self.localization.text(layer_ui::MessageId::WORKSPACE_MANAGE_TOOLBARS).to_string(),
+                self.localization.text(layer_ui::MessageId::WORKSPACE_TOOLBARS_INTRO).to_string(),
             ),
             Some(ManagerPage::ToolbarLibrary) => (
-                "Manage Toolbars".into(),
-                "Save toolbars to reuse in any workspace.",
+                self.localization.text(layer_ui::MessageId::WORKSPACE_MANAGE_TOOLBARS).to_string(),
+                self.localization.text(layer_ui::MessageId::WORKSPACE_LIBRARY_INTRO).to_string(),
             ),
             _ => (
-                "Workspaces".into(),
-                "Workspaces save your tool settings and layout for different tasks.",
+                self.localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES).to_string(),
+                self.localization.text(layer_ui::MessageId::WORKSPACE_INTRO).to_string(),
             ),
         };
         self.view.title = title;
@@ -545,13 +545,13 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         let current = r.id == history.current;
                         WorkspaceRow {
                             subtitle: if current {
-                                format!("Current layout · {}", date(r.timestamp_ms))
+                                message(&self.localization, layer_ui::MessageId::WORKSPACE_HISTORY_CURRENT, &[("date", date(r.timestamp_ms))])
                             } else {
                                 date(r.timestamp_ms)
                             },
                             current,
                             id: r.id,
-                            title: r.description,
+                            title: r.description.display(&self.localization),
                             actions: Vec::new(),
                         }
                     })
@@ -566,6 +566,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         .zip(history.as_ref())
                         .map(|(panel, history)| {
                             toolbar_actions(
+                                &self.localization,
                                 panel,
                                 history.layout().panel_group(panel).is_some(),
                                 true,
@@ -610,11 +611,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     active
                 };
                 self.view.primary = if page == Some(ManagerPage::History) {
-                    "Restore This Version"
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESTORE_VERSION).to_string()
                 } else if self.selected_elsewhere {
-                    ManagerAction::SwitchToWindow(String::new()).label()
+                    ManagerAction::SwitchToWindow(String::new()).label(&self.localization)
                 } else {
-                    "Switch to Workspace"
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_SWITCH_WORKSPACE).to_string()
                 }
                 .into();
                 self.view.enabled = idle && selected.is_some_and(|id| current != Some(id));
@@ -929,7 +930,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             _ => None,
         };
         let prompt = match &action {
-            ManagerAction::RecoverInterrupted => recover_prompt(self.interrupted.clone())?,
+            ManagerAction::RecoverInterrupted => recover_prompt(&self.localization, self.interrupted.clone())?,
             _ => self.manager.form_prompt(&action, source.as_ref())?,
         };
         self.start_transition(session)?;

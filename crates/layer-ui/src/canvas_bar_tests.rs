@@ -81,7 +81,7 @@ fn bar_commands(items: &[CanvasBarItem]) -> Vec<CommandId> {
 
 fn placed_photo(name: &str) -> UiSession<Recorder> {
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new(name, 200, 150), [800, 600], Platform::Gtk).unwrap();
+        Document::new(name, 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
     let photo = layer_core::color::source::rgba8_source([20, 10], |_, _| [255; 4]);
     s.place_layer_source("Photo", std::sync::Arc::unwrap_or_clone(photo), None).unwrap();
     s
@@ -335,6 +335,24 @@ fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
         ]
     );
     assert_eq!(bar.label, None);
+    invoke(&mut s, CommandId::CancelTransform);
+    let photo = layer_core::color::source::rgba8_source([20, 10], |_, _| [255; 4]);
+    let source = std::sync::Arc::unwrap_or_clone(photo);
+    s.place_layer_sources(vec![("First".into(), source.clone()), ("Second".into(), source)], None, None).unwrap();
+    s.frame(1, 1).unwrap();
+    let batch = s.state.canvas_bar.as_ref().unwrap();
+    assert_eq!(batch.label.as_deref(), Some("2 images"));
+    assert_ne!(batch.context, bar.context);
+    let context = batch.context;
+    let caption = batch.label.as_ref().unwrap().as_ptr();
+    invoke(&mut s, CommandId::ZoomIn);
+    s.frame(2, 2).unwrap();
+    let moved = s.state.canvas_bar.as_ref().unwrap();
+    assert_eq!(moved.context, context);
+    assert_eq!(moved.label.as_ref().unwrap().as_ptr(), caption);
+    assert_eq!(moved.label.as_deref(), Some("2 images"));
+    invoke(&mut s, CommandId::CancelTransform);
+    assert!(s.state.canvas_bar.is_none());
 }
 
 #[test]
@@ -412,7 +430,7 @@ fn selection_bar_follows_selection_tools_commands_and_history() {
     assert!(x0 <= 100. && y0 <= 100. && x1 >= 300. && y1 >= 250.);
     assert_eq!(
         bar.items.iter().map(|item| (
-            bar_commands(std::slice::from_ref(item)).first().copied(), item.label, item.menu,
+            bar_commands(std::slice::from_ref(item)).first().copied(), item.label.as_ref(), item.menu,
         )).collect::<Vec<_>>(),
         [
             (Some(CommandId::Deselect), "Deselect", None),
@@ -609,7 +627,7 @@ fn distort_and_warp_are_refused_on_photo_placements_with_the_route_that_works() 
     let mut s = placed_photo("distort placement");
     for command in [CommandId::TransformDistort, CommandId::TransformWarp] {
         assert!(!s.command(command).enabled);
-        assert_eq!(s.command_disabled_reason(command).as_deref(), Some(operation::DISTORT_PLACEMENT));
+        assert_eq!(s.command_disabled_reason(command).as_deref(), Some(s.localization().text(operation::DISTORT_PLACEMENT).as_ref()));
         assert!(s.dispatch(UiAction::Invoke { command }).is_err());
     }
     assert!(!s.command(CommandId::WarpGridFour).enabled);
@@ -618,10 +636,10 @@ fn distort_and_warp_are_refused_on_photo_placements_with_the_route_that_works() 
     assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformNearest }).is_err());
 }
 
-fn interpolation_choice(s: &UiSession<Recorder>) -> Option<(bool, Vec<(&'static str, bool)>)> {
+fn interpolation_choice(s: &UiSession<Recorder>) -> Option<(bool, Vec<(&str, bool)>)> {
     s.state.canvas_bar.as_ref()?.items.iter().find_map(|item| match &item.option {
         ToolOption::Choice { id: "transform-interpolation", segmented, items, .. } => {
-            Some((*segmented, items.iter().map(|i| (i.label, i.selected)).collect()))
+            Some((*segmented, items.iter().map(|i| (i.label.as_ref(), i.selected)).collect()))
         }
         _ => None,
     })
@@ -1002,12 +1020,12 @@ fn bar_edit(s: &mut UiSession<Recorder>, command: CommandId) {
     s.frame(9, 9).unwrap();
 }
 
-fn bar_items(items: &[CanvasBarItem]) -> Vec<(CommandId, &'static str, bool)> {
+fn bar_items(items: &[CanvasBarItem]) -> Vec<(CommandId, &str, bool)> {
     items
         .iter()
         .map(|item| match &item.option {
-            ToolOption::Action { state, checkable } => (state.id, item.label, *checkable),
-            ToolOption::Choice { .. } => (CommandId::SearchCommands, item.label, false),
+            ToolOption::Action { state, checkable } => (state.id, item.label.as_ref(), *checkable),
+            ToolOption::Choice { .. } => (CommandId::SearchCommands, item.label.as_ref(), false),
             ToolOption::Numeric(_) | ToolOption::Range { .. } => unreachable!("bars hold no values"),
         })
         .collect()
@@ -1092,6 +1110,17 @@ fn selection_layer_bar_inverts_loads_and_returns_to_artwork() {
     assert_eq!(bar.context.kind, CanvasBarKind::SelectionLayer);
     assert_eq!(bar.label, Some(format!("Editing {name}")));
     assert_eq!(bar.placement, CanvasBarPlacement::BottomEdge);
+    let caption = s.state.canvas_bar.as_ref().unwrap().label.as_ref().unwrap().as_ptr();
+    invoke(&mut s, CommandId::ZoomIn);
+    s.frame(4, 4).unwrap();
+    let moved = s.state.canvas_bar.as_ref().unwrap();
+    assert_eq!(moved.context, bar.context);
+    assert_eq!(moved.label.as_ref().unwrap().as_ptr(), caption);
+    s.layer_action(LayerAction::Rename { id: id.0, name: "Literal { $name }".into() }).unwrap();
+    s.frame(5, 5).unwrap();
+    let renamed = s.state.canvas_bar.as_ref().unwrap();
+    assert_eq!(renamed.label.as_deref(), Some("Editing Literal { $name }"));
+    assert_eq!(renamed.context, bar.context);
     assert_eq!(
         bar_items(&bar.items),
         [(CommandId::LoadSelectionLayer, "Load", false), (CommandId::InvertSelectionLayer, "Invert", false)]
@@ -1179,7 +1208,7 @@ fn layer_mask_bar_inverts_disables_applies_and_edits_content() {
     assert!(!mask(&s).unwrap().enabled);
     let disabled = s.state.canvas_bar.clone().unwrap();
     assert_eq!(disabled.context, bar.context);
-    assert_eq!(disabled.items[1].label, "Enable");
+    assert_eq!(disabled.items[1].label.as_ref(), "Enable");
     assert_eq!(s.command_disabled_reason(CommandId::ApplyLayerMask).as_deref(), Some("Enable the mask before applying it"));
     invoke(&mut s, CommandId::Undo);
     assert!(mask(&s).unwrap().enabled, "Disable is one undo step");
@@ -1343,7 +1372,7 @@ fn new_mode_commands_follow_the_command_checklist() {
         (CommandId::LassoFill, "Tools"),
     ] {
         let row = rows.iter().find(|(d, _)| d.id == command.shortcut_id()).unwrap();
-        assert_eq!(row.1, section, "{command:?}");
+        assert_eq!(row.1.id(), section, "{command:?}");
         assert!(s.state.settings.command_keys(command).is_empty(), "{command:?} has no default keys");
         assert!(!crate::customization::tool_choice(ToolbarControl::Command { command }).description.is_empty());
         let entry = s.command_catalog().into_iter().find(|d| d.id == command_catalog::identity(&UiAction::Invoke { command })).unwrap();
@@ -1363,4 +1392,20 @@ fn lasso_fill_is_a_tool_command() {
     assert_eq!(crate::shortcuts::tool_command(&action), Some(CommandId::LassoFill));
     invoke(&mut s, CommandId::QuickMask);
     assert_eq!(s.command_disabled_reason(CommandId::LassoFill).as_deref(), Some("Return to the artwork first"));
+}
+
+#[test]
+fn localized_crop_bar_preserves_actions_and_fallback_captions() {
+    for (language, apply) in [(UiLanguage::English, "Apply"), (UiLanguage::Japanese, "適用")] {
+        let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk,
+            Localizer::shared(language)).unwrap();
+        invoke(&mut s, CommandId::Crop);
+        let bar = s.state.canvas_bar.as_ref().unwrap();
+        assert_eq!(bar.context.kind, CanvasBarKind::Crop);
+        let completion = bar_items(&bar.completion);
+        assert!(completion.contains(&(CommandId::ApplyTransform, apply, false)));
+        assert!(completion.contains(&(CommandId::CancelTransform, "Cancel", false)));
+        bar_edit(&mut s, CommandId::CancelTransform);
+        assert!(!s.operation.active());
+    }
 }

@@ -343,7 +343,7 @@ fn photo_filter_frame_time() {
             Default::default(),
         )
         .unwrap();
-        let project = layer_color::photo_project(source, Default::default(), "Water", SampleDepth::U8).unwrap();
+        let project = layer_color::photo_project(source, Default::default(), layer_core::DocumentNames { paint: "Water".into(), paper: "Paper".into() }, SampleDepth::U8).unwrap();
         base = project.document.layers[0].clone();
         eprintln!(
             "decoded_source_channels={:?} embedded_icc={} pose={:?}",

@@ -35,7 +35,7 @@ fn native_numeric_colors_and_saved_palettes() {
     let app = native_test_app("art.capycanvas.NumericColors");
     let output = std::path::Path::new("../../artifacts/color-m2/numeric-palette-ui");
     std::fs::create_dir_all(output).unwrap();
-    let mut project = new_drawing(256, 256).unwrap();
+    let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
@@ -162,7 +162,7 @@ fn native_numeric_colors_and_saved_palettes() {
         .capture_workspace()
         .unwrap();
     let bytes = serde_json::to_vec(&capture).unwrap();
-    let next = Workspace::with_project(&app, Some((new_drawing(128, 128).unwrap(), None)));
+    let next = Workspace::with_project(&app, Some((new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     next.window.present();
     sdr_ready(&next);
     let prepared =
@@ -248,7 +248,7 @@ fn native_sdr_portable_paint_and_sampling() {
     let app = native_test_app("art.capycanvas.PortablePaint");
     let definition = RgbColor::new(RgbSpace::DisplayP3, [0.68, 0.23, 0.47, 1.]).unwrap();
     for space in RgbSpace::ALL {
-        let mut project = new_drawing(256, 256).unwrap();
+        let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         project.document.color = DocumentColor {
             space,
             depth: SampleDepth::U16,
@@ -347,7 +347,7 @@ fn native_sdr_document_modes() {
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16] {
             let color = DocumentColor { space, depth };
-            let mut project = new_drawing(513, 257).unwrap();
+            let mut project = new_drawing(513, 257, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
             project.document.color = color;
             let mut builder = SourceBuilder::new(
                 [513, 257],
@@ -480,7 +480,7 @@ fn native_sdr_bounded_canvas_startup_and_paint() {
     let app = native_test_app("art.capycanvas.SdrBoundedCanvas");
     // Exceeds the dense Float32 display ceiling and starts zoomed out in a real
     // GTK window, including the host's initial paper presentation and warmup.
-    let mut project = new_drawing(4097, 1025).unwrap();
+    let mut project = new_drawing(4097, 1025, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,

@@ -20,15 +20,25 @@ generates `MessageId` from English; do not maintain a second key inventory.
 `UiLanguage` identifies a language. `resolve_language` matches a preference and
 ordered host-supplied language tags without reading the environment. A `Localizer`
 owns an immutable active language, concurrent Fluent bundles and cached simple
-labels. `text(MessageId)` returns shared static display text; `format(MessageId,
-&FluentArgs)` resolves a complete dynamic message. Formatting failure records a
+labels. The build script derives parameterless identities from all canonical
+English branches and references. `text(MessageId)` returns their warmed shared
+display text; `format(MessageId, &FluentArgs)` resolves a complete dynamic message.
+Translations may omit arguments without changing a resource reference's eligibility. Formatting failure records a
 diagnostic and retries English. Invalid English must fail development checks.
+
+The session stores its sole launch context privately in `UiState`. State clones
+retain the same `Arc`; serialization omits it. Editing or restoring the saved
+language preference does not replace this context. Language takes effect at the
+next launch.
 
 Create the localization context before editing begins. Share it with the owners
 that need its text; prepare catalogs and static labels outside painting, pointer
 and animation callbacks. Hosts present resolved strings from shared views and
 retain stable action identities. Hosts must not duplicate translation or fallback
-policy.
+policy. Commands, shortcut sections, tool families and brush presets retain
+semantic identities when their display labels change. Search normalizes text with
+NFKC and Unicode lowercase, checks active and English labels, and scores character
+distance. Shortcut key queries accept one ASCII graphic character.
 
 ## Catalogs and arguments
 

@@ -1055,7 +1055,7 @@ mod tests {
         let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
         let mut host = NativeHost::new(platform).unwrap();
         host.session = UiSession::from_project(
-            Renderer(Some(gpu.into())), layer_ui::new_drawing(size[0], size[1]).unwrap(),
+            Renderer(Some(gpu.into())), layer_ui::new_drawing(size[0], size[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
             None, [640, 480], platform,
         ).unwrap();
         host.startup = Default::default();
@@ -1884,7 +1884,7 @@ mod tests {
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session = UiSession::from_project(
             Renderer(Some(gpu.into())),
-            layer_ui::new_drawing(64, 48).unwrap(),
+            layer_ui::new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
             None,
             [64, 48],
             layer_ui::Platform::Mac,

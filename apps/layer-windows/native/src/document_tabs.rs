@@ -221,7 +221,7 @@ impl DocumentService {
                     session: std::mem::replace(&mut host.session, *candidate),
                     recovery: Some(outgoing_recovery),
                 };
-                self.window.documents.append(outgoing, tiles);
+                self.window.documents.append(outgoing, tiles, host.session.localization());
                 self.window.changed(host);
                 Ok(())
             }

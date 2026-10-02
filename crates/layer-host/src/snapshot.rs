@@ -256,12 +256,12 @@ impl NativeHost {
         #[derive(Serialize)]
         struct Menu {
             id: layer_ui::ApplicationMenu,
-            label: &'static str,
+            label: std::sync::Arc<str>,
             model: layer_ui::ContextMenu,
         }
         let menus = layer_ui::ApplicationMenu::ALL.map(|id| Menu {
             id,
-            label: id.label(),
+            label: id.localized_label(self.session.localization()),
             model: self.session.application_menu(id),
         });
         let mut map = serializer.serialize_map(None)?;
@@ -285,17 +285,18 @@ impl NativeHost {
                 self.swatch_preview(colors, color)
             }),
         )?;
+        let document_spec = layer_ui::new_document_spec(self.session.localization());
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
-            "creation": state.settings.new_document.form(),
+            "creation": state.settings.new_document.form(self.session.localization()),
             "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
-            "width_label": layer_ui::DOCUMENT_WIDTH_LABEL, "height_label": layer_ui::DOCUMENT_HEIGHT_LABEL,
-            "new_title": layer_ui::DocumentRequest::New.title(),
-            "unsaved_description": layer_ui::UNSAVED_DESCRIPTION, "discard_label": layer_ui::DISCARD_DOCUMENT_LABEL,
-            "cancel_label": layer_ui::CANCEL_DOCUMENT_LABEL,
-            "save_label": layer_ui::DocumentRequest::ConfirmClose { title: String::new() }.accept_label(),
-            "open_label": layer_ui::DocumentRequest::Open.accept_label(),
-            "filter_label": layer_ui::DocumentRequest::Open.filter().0,
-            "extension": layer_ui::DocumentRequest::Open.filter().1}))?;
+            "width_label": document_spec.labels[0], "height_label": document_spec.labels[1],
+            "new_title": layer_ui::DocumentRequest::New.title(self.session.localization()),
+            "unsaved_description": document_spec.unsaved_description, "discard_label": document_spec.discard,
+            "cancel_label": document_spec.cancel,
+            "save_label": layer_ui::DocumentRequest::ConfirmClose { title: String::new() }.accept_label(self.session.localization()),
+            "open_label": layer_ui::DocumentRequest::Open.accept_label(self.session.localization()),
+            "filter_label": layer_ui::DocumentRequest::Open.filter(self.session.localization()).0,
+            "extension": layer_ui::DocumentRequest::Open.filter(self.session.localization()).1}))?;
         map.serialize_entry("preferences", &self.session.preferences())?;
         map.serialize_entry("picker", &self.session.tool_picker())?;
         map.serialize_entry("workspace_menu", &self.session.workspace_menu())?;

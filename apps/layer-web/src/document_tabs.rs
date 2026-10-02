@@ -61,7 +61,7 @@ impl WebApp {
     }
     pub fn document_tabs(&self, width: f32) -> Result<JsValue, JsValue> {
         serialize(&serde_json::json!({
-            "tabs": self.documents.labels(&self.session.state().document_file, |s| &s.state().document_file),
+            "tabs": self.documents.labels(&self.session.state().document_file, |s| &s.state().document_file, self.session.localization()),
             "selected": self.documents.selected(),
             "compact": layer_ui::DocumentTabs::compact(width, self.documents.order().len()),
             "can_undo": self.documents.can_undo(),
@@ -207,7 +207,7 @@ impl WebApp {
             self.session.park_document().map_err(js)?;
             self.retire_document_gpu();
             self.documents.close_selected();
-            self.documents.start_empty().map_err(js)?;
+            self.documents.start_empty(next.localization()).map_err(js)?;
             self.session = next;
         }
         self.document_changed()

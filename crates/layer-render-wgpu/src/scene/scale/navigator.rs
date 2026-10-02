@@ -95,7 +95,7 @@ mod tests {
     use layer_core::{Affine, Document, ImageTransform, Point};
 
     fn document() -> Document {
-        let mut doc = Document::new("Navigator", 1025, 513);
+        let mut doc = Document::new("Navigator", 1025, 513, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         doc.layers[0].source = Some(layer_core::color::source::rgba8_source([1025, 513], |x, y|
             [(x / 5) as u8, (y / 3) as u8, 40, 255]));
         doc

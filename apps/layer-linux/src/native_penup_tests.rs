@@ -6,7 +6,7 @@ use super::*;
 fn native_penup_and_following_strokes() {
     use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     let app = native_test_app("art.capycanvas.NativePenupPacing");
-    let mut project = new_drawing(4096, 4096).unwrap();
+    let mut project = new_drawing(4096, 4096, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: match std::env::var("LAYER_DRAWING_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 },
@@ -271,7 +271,7 @@ fn native_penup_and_following_strokes() {
 fn native_terminal_wake_preserves_commit_cancel_and_idle() {
     use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     let app = native_test_app("art.capycanvas.TerminalWake");
-    let mut project = new_drawing(256, 256).unwrap();
+    let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,

@@ -95,7 +95,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || cache.rows.len() > CACHE_ROWS
             || filters.iter().chain(&cache.rows).any(|id| id.len() > 256)
         {
-            return Err("Invalid visible filter list".into());
+            return Err(self.state.localization.text(crate::MessageId::RESOURCES_INVALID_VISIBLE_FILTERS).to_string());
         }
         let mut visible = Vec::new();
         for id in filters {
@@ -235,7 +235,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             wait_ms,
             retained: driver.loaded.keys().cloned().collect(),
             requests: driver.requests,
-            error,
+            error: error.map(|error| {
+                eprintln!("Filter preview: {error}");
+                self.state.localization.text(crate::MessageId::RESOURCES_PREVIEW_FAILED).to_string()
+            }),
         };
         self.filter_previews = driver;
         Ok(FilterPreviewUpdate { status, image })
@@ -295,7 +298,7 @@ mod tests {
     fn session() -> UiSession<Recorder> {
         let mut session = UiSession::new(
             Recorder::default(),
-            Document::new("preview", 512, 512),
+            Document::new("preview", 512, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [512, 512],
             crate::Platform::Gtk,
         )

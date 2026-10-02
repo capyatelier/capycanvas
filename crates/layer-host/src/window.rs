@@ -120,10 +120,12 @@ pub struct DocumentWindow<P> {
 }
 impl<P> Default for DocumentWindow<P> {
     fn default() -> Self {
-        Self {
-            documents: Default::default(),
-            gpu: None,
-        }
+        Self::localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+    }
+}
+impl<P> DocumentWindow<P> {
+    pub fn localized(localization: &layer_ui::Localizer) -> Self {
+        Self { documents: DocumentSessions::localized(localization), gpu: None }
     }
 }
 
@@ -170,7 +172,7 @@ impl<P: Parked> DocumentWindow<P> {
     pub fn view(&self, host: &NativeHost, width: f32) -> Value {
         let documents = &self.documents;
         json!({
-            "tabs": documents.labels(&host.session.state().document_file, |p| &p.session().state().document_file),
+            "tabs": documents.labels(&host.session.state().document_file, |p| &p.session().state().document_file, host.session.localization()),
             "selected": documents.selected(),
             "compact": layer_ui::DocumentTabs::compact(width, documents.order().len()),
             "can_undo": documents.can_undo(),
@@ -403,7 +405,7 @@ impl<P: Parked> DocumentWindow<P> {
         let tiles = host.session.park_document()?;
         let retired = self.retire_gpu(host);
         let outgoing = std::mem::replace(&mut host.session, *candidate.take().unwrap());
-        self.documents.append(park(outgoing), tiles);
+        self.documents.append(park(outgoing), tiles, host.session.localization());
         self.changed(host);
         Ok(retired)
     }
@@ -432,7 +434,7 @@ mod tests {
     type Window = DocumentWindow<UiSession<Renderer>>;
 
     fn host() -> NativeHost {
-        let document = layer_core::Document::new("Window", 64, 48);
+        let document = layer_core::Document::new("Window", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session = UiSession::new(Renderer(Some(gpu.into())), document, [64, 48], layer_ui::Platform::Mac).unwrap();
@@ -491,7 +493,7 @@ mod tests {
             .admission(&host.session.retained_document_tiles());
         let environment =
             OpenEnvironment::capture(&host.session, admission, Default::default()).unwrap();
-        let project = layer_ui::NewDocumentOptions::default().project().unwrap();
+        let project = layer_ui::NewDocumentOptions::default().project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         Some(environment.prepare(project, || false).unwrap())
     }
 

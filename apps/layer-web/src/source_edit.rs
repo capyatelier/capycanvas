@@ -81,7 +81,7 @@ impl WebApp {
                 // Only the selected source enters the conversion worker, never
                 // the rest of the master or its painted raster backing.
                 let mut document =
-                    layer_core::Document::new("source", original.extent[0], original.extent[1]);
+                    layer_core::Document::new("source", original.extent[0], original.extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
                 document.color = project.document.color;
                 document.layers[0].source = Some(original.clone());
                 document.layers[1].visible = false;

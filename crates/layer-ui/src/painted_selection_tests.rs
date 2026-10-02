@@ -64,7 +64,7 @@ mod painted_selection_checks {
         assert_eq!(s.state.layer_properties.controls.iter().map(|c|c.key.as_str()).collect::<Vec<_>>(),["mask_mode","mask_color","mask_opacity"]);
         let menu = s.application_menu(ApplicationMenu::Select);
         assert!(!menu.sections.iter().flatten().any(|i| matches!(i.action, Some(UiAction::Invoke { command: CommandId::RectangleSelect | CommandId::SelectionBrush | CommandId::Lasso }))));
-        assert_eq!(CommandId::SelectionBrush.label(), "Paint selection");
+        assert_eq!(CommandId::SelectionBrush.label().as_ref(), "Paint selection");
     }
     #[test]
     fn mask_mode_is_global_persisted_and_preserves_colors_and_layer_properties() {

@@ -48,6 +48,16 @@ impl TabStyle {
             Self::Icon => "Icons only",
         }
     }
+    pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        match self {
+            Self::Automatic => localization.text(MessageId::WORKSPACE_TAB_STYLE_AUTOMATIC),
+            Self::ActiveName => localization.text(MessageId::WORKSPACE_TAB_STYLE_ACTIVE_NAME),
+            Self::IconName => localization.text(MessageId::WORKSPACE_TAB_STYLE_ICON_NAME),
+            Self::Name => localization.text(MessageId::WORKSPACE_TAB_STYLE_NAME),
+            Self::Icon => localization.text(MessageId::WORKSPACE_TAB_STYLE_ICON),
+        }
+    }
+
     // Unmeasured fallback for hosts awaiting the allocation-aware projection.
     // GTK refines Automatic with automatic_names and native measurements.
     fn presentation(self, active: bool, tab_count: usize) -> TabPresentation {
@@ -124,6 +134,16 @@ impl TileStyle {
             Self::Labeled => "Large Labeled Tiles",
         }
     }
+    pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        match self {
+            Self::Small => localization.text(MessageId::WORKSPACE_TILE_STYLE_SMALL),
+            Self::Medium => localization.text(MessageId::WORKSPACE_TILE_STYLE_MEDIUM),
+            Self::Large => localization.text(MessageId::WORKSPACE_TILE_STYLE_LARGE),
+            Self::MediumLabeled => localization.text(MessageId::WORKSPACE_TILE_STYLE_MEDIUM_LABELED),
+            Self::Labeled => localization.text(MessageId::WORKSPACE_TILE_STYLE_LABELED),
+        }
+    }
+
     pub fn icon_size(self) -> u32 {
         match self {
             Self::Small | Self::MediumLabeled | Self::Labeled => 16,
@@ -216,6 +236,28 @@ impl PanelControl {
             Self::Navigator => "Navigator",
         }
     }
+    pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        match self {
+            Self::Brushes => localization.text(MessageId::WORKSPACE_CONTROL_BRUSHES),
+            Self::BrushSets => Panel::BrushSets.localized_label(localization),
+            Self::FilterTypes => Panel::FilterTypes.localized_label(localization),
+            Self::SculptSets => Panel::SculptSets.localized_label(localization),
+            Self::Tools => Panel::Tools.localized_label(localization),
+            Self::ToolSettings => Panel::ToolSettings.localized_label(localization),
+            Self::ColorWheel => localization.text(MessageId::WORKSPACE_CONTROL_COLOR_WHEEL),
+            Self::BrushSize => localization.text(MessageId::WORKSPACE_CONTROL_BRUSH_SIZE),
+            Self::SizePresets => localization.text(MessageId::WORKSPACE_CONTROL_SIZE_PRESETS),
+            Self::BrushOpacity => localization.text(MessageId::WORKSPACE_CONTROL_BRUSH_OPACITY),
+            Self::BrushColor => localization.text(MessageId::WORKSPACE_CONTROL_BRUSH_COLOR),
+            Self::Layers => localization.text(MessageId::WORKSPACE_CONTROL_LAYERS),
+            Self::LayerActions => localization.text(MessageId::WORKSPACE_CONTROL_LAYER_ACTIONS),
+            Self::LayerOpacity => localization.text(MessageId::WORKSPACE_CONTROL_LAYER_OPACITY),
+            Self::Adjustments => localization.text(MessageId::WORKSPACE_CONTROL_ADJUSTMENTS),
+            Self::Properties => localization.text(MessageId::WORKSPACE_CONTROL_PROPERTIES),
+            Self::Stats => localization.text(MessageId::WORKSPACE_CONTROL_STATS),
+            Self::Navigator => localization.text(MessageId::WORKSPACE_CONTROL_NAVIGATOR),
+        }
+    }
     pub fn available(panel: Panel) -> &'static [Self] {
         match panel {
             Panel::BrushSets => &[Self::BrushSets],
@@ -278,7 +320,7 @@ pub enum PanelContent {
         visible: Vec<PanelControl>,
     },
     Toolbar {
-        name: String,
+        name: Option<String>,
         tiles: Vec<ToolbarTile>,
     },
 }
@@ -291,29 +333,46 @@ pub struct PanelConfig {
     pub tile_style: TileStyle,
     pub content: PanelContent,
 }
+impl Panel {
+    pub fn localized_label(self, localization: &Localizer) -> std::sync::Arc<str> {
+        match self {
+            Self::Toolbar => localization.text(MessageId::WORKSPACE_PANEL_TOOLBAR),
+            Self::Commands => localization.text(MessageId::WORKSPACE_PANEL_COMMANDS),
+            Self::Brushes => localization.text(MessageId::WORKSPACE_PANEL_BRUSHES),
+            Self::BrushSets => localization.text(MessageId::WORKSPACE_PANEL_BRUSH_SETS),
+            Self::FilterTypes => localization.text(MessageId::WORKSPACE_PANEL_FILTER_TYPES),
+            Self::SculptSets => localization.text(MessageId::WORKSPACE_PANEL_SCULPT_SETS),
+            Self::Tools => localization.text(MessageId::WORKSPACE_PANEL_TOOLS),
+            Self::ToolSettings => localization.text(MessageId::WORKSPACE_PANEL_TOOL_SETTINGS),
+            Self::Color => localization.text(MessageId::WORKSPACE_PANEL_COLOR),
+            Self::Palettes => localization.text(MessageId::WORKSPACE_PANEL_PALETTES),
+            Self::Sizes => localization.text(MessageId::WORKSPACE_PANEL_SIZES),
+            Self::Layers => localization.text(MessageId::WORKSPACE_PANEL_LAYERS),
+            Self::Adjustments => localization.text(MessageId::WORKSPACE_PANEL_ADJUSTMENTS),
+            Self::Properties => localization.text(MessageId::WORKSPACE_PANEL_PROPERTIES),
+            Self::Stats => localization.text(MessageId::WORKSPACE_PANEL_STATS),
+            Self::Navigator => localization.text(MessageId::WORKSPACE_PANEL_NAVIGATOR),
+            Self::Proof => localization.text(MessageId::WORKSPACE_PANEL_PROOF),
+            Self::CustomToolbar(_) => localization.text(MessageId::WORKSPACE_PANEL_CUSTOM_TOOLBAR),
+        }
+    }
+}
 impl PanelConfig {
     pub fn icon(&self) -> &'static str {
         self.tiles()
             .first()
-            .map(|t| tool_choice(t.control).icon)
+            .map(|t| t.control.icon())
             .unwrap_or(self.id.icon())
     }
-    pub fn title(&self) -> &str {
-        match &self.content {
-            PanelContent::Toolbar { name, .. } => name,
-            PanelContent::Controls { .. } => self.id.label(),
-        }
+    pub fn custom_name(&self) -> Option<&str> {
+        match &self.content { PanelContent::Toolbar { name, .. } => name.as_deref(), _ => None }
     }
-    fn menu_name(&self) -> String {
-        format!(
-            "{} {}",
-            self.title(),
-            if self.id.kind() == PanelKind::Content {
-                "panel"
-            } else {
-                "toolbar"
-            }
-        )
+    pub fn title(&self) -> &str { self.custom_name().unwrap_or_else(|| self.id.label()) }
+    pub fn title_localized(&self, localization: &Localizer) -> String {
+        self.custom_name().map(str::to_owned).unwrap_or_else(|| self.id.localized_label(localization).to_string())
+    }
+    pub(crate) fn menu_name(&self, localization: &Localizer) -> String {
+        customization_text(localization, if self.id.kind() == PanelKind::Content { MessageId::WORKSPACE_HISTORY_PANEL } else { MessageId::WORKSPACE_HISTORY_TOOLBAR }, &[("name", self.title_localized(localization))])
     }
     pub fn tiles(&self) -> &[ToolbarTile] {
         match &self.content {
@@ -341,7 +400,7 @@ impl PanelConfig {
                 tile_style: TileStyle::Small,
                 content: if id == Panel::Toolbar {
                     PanelContent::Toolbar {
-                        name: id.label().into(),
+                        name: None,
                         tiles: TOOLBAR_CONTROLS
                             .iter()
                             .enumerate()
@@ -371,7 +430,7 @@ impl PanelConfig {
                 }
             }
             PanelContent::Toolbar { name, tiles } if self.id.kind() == PanelKind::Tiles => {
-                validate_toolbar_name(name)?;
+                if let Some(name) = name { validate_toolbar_name(name)?; }
                 for tile in tiles {
                     tile.control.validate()?;
                 }
@@ -393,8 +452,18 @@ pub(crate) fn validate_toolbar_name(name: &str) -> Result<(), String> {
 }
 
 impl ToolbarControl {
-    /// Immediate action, if any. Drawer-only controls are opened through
-    /// ActivateTile or ActivateHeaderItem, whose identity anchors their drawer.
+    pub(crate) fn icon(self) -> &'static str {
+        match self {
+            Self::Command { command } => command.icon().unwrap_or(match command {
+                CommandId::ToggleTheme => "appearance", CommandId::KeyboardShortcuts => "keyboard", CommandId::About => "info", _ => "menu",
+            }),
+            Self::Brush { id } => preset(id).map(|_| crate::tools::group(id).icon()).unwrap_or("brush"),
+            Self::Size { .. } | Self::BrushSizeSlider => "size",
+            Self::Color => "colors", Self::ColorPicker => "color-picker",
+            Self::Opacity | Self::BrushOpacitySlider => "opacity",
+            Self::ToolOptions { .. } => "settings", Self::Panel { panel } => panel.icon(), Self::Divider => "minus",
+        }
+    }
     pub fn action(self) -> Option<UiAction> {
         Some(match self {
             Self::ColorPicker => UiAction::ColorPicker { action: crate::ColorPickerAction::Toggle },
@@ -575,7 +644,7 @@ impl ContextMenuItem {
             sections: Vec::new(),
         }
     }
-    fn edit(label: impl Into<String>, action: CustomizationAction) -> Self {
+    pub(crate) fn edit(label: impl Into<String>, action: CustomizationAction) -> Self {
         Self::command(label, UiAction::Customize { action })
     }
     pub(crate) fn submenu(label: &str, sections: Vec<Vec<Self>>) -> Self {
@@ -597,15 +666,18 @@ pub struct ContextMenu {
     pub sections: Vec<Vec<ContextMenuItem>>,
 }
 impl ContextMenu {
-    pub(crate) fn with_shortcuts(mut self, settings: &Settings, platform: Platform) -> Self {
-        fn visit(sections: &mut [Vec<ContextMenuItem>], settings: &Settings, platform: Platform) {
+    pub(crate) fn with_shortcuts(self, settings: &Settings, platform: Platform) -> Self {
+        self.with_shortcuts_localized(settings, platform, &Localizer::shared(UiLanguage::English))
+    }
+    pub(crate) fn with_shortcuts_localized(mut self, settings: &Settings, platform: Platform, localization: &Localizer) -> Self {
+        fn visit(sections: &mut [Vec<ContextMenuItem>], settings: &Settings, platform: Platform, localization: &Localizer) {
             for item in sections.iter_mut().flatten() {
                 if let Some(action) = &item.action {
                     item.bindings = settings.action_keys(action, platform);
                     let shortcut = item
                         .bindings
                         .iter()
-                        .map(|key| key.label(platform))
+                        .map(|key| key.localized_label(platform, localization))
                         .collect::<Vec<_>>()
                         .join(" / ");
                     if !shortcut.is_empty() && item.hint != shortcut {
@@ -616,10 +688,10 @@ impl ContextMenu {
                         };
                     }
                 }
-                visit(&mut item.sections, settings, platform);
+                visit(&mut item.sections, settings, platform, localization);
             }
         }
-        visit(&mut self.sections, settings, platform);
+        visit(&mut self.sections, settings, platform, localization);
         self
     }
 }
@@ -629,6 +701,9 @@ impl DockLayout {
         target: ContextTarget,
         platform: Platform,
     ) -> Result<ContextMenu, String> {
+        self.context_menu_localized_on(target, platform, &Localizer::shared(UiLanguage::English))
+    }
+    pub(crate) fn context_menu_localized_on(&self, target: ContextTarget, platform: Platform, localization: &Localizer) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
             ContextTarget::Header { id } => {
@@ -639,47 +714,47 @@ impl DockLayout {
                     return Err("The column is not collapsed".into());
                 }
                 (
-                    "Column".into(),
-                    self.column_sections(Some(column)),
+                    localization.text(MessageId::WORKSPACE_COLUMN_TITLE).to_string(),
+                    self.column_sections(Some(column), localization),
                 )
             }
             ContextTarget::ZenMode => return Err("Not a panel context".into()),
             ContextTarget::Panel { panel } => {
                 let p = self.panel(panel)?;
-                let mut sections = vec![self.hide_tab_items(target)?];
-                sections.extend(self.column_sections(self.panel_group(panel)));
-                sections.push(self.panel_actions(p));
-                (p.menu_name(), sections)
+                let mut sections = vec![self.hide_tab_items(target, localization)?];
+                sections.extend(self.column_sections(self.panel_group(panel), localization));
+                sections.push(self.panel_actions(p, localization));
+                (p.menu_name(localization), sections)
             }
             ContextTarget::Group { group } => {
-                let mut sections = vec![self.tab_style_items(group)?, self.hide_tab_items(target)?];
-                sections.extend(self.column_sections(Some(group)));
+                let mut sections = vec![self.tab_style_items(group, localization)?, self.hide_tab_items(target, localization)?];
+                sections.extend(self.column_sections(Some(group), localization));
                 sections.extend([
                     if let [panel] = self.group_panels(group)?
                         && let p = self.panel(*panel)?
                         && panel.kind() == PanelKind::Content
                         && p.hide_tab
                     {
-                        self.panel_actions(p)
+                        self.panel_actions(p, localization)
                     } else {
                         Vec::new()
                     },
                     vec![
                         ContextMenuItem::submenu(
-                            "Add built-in panel",
-                            vec![self.panel_items(PanelKind::Content, Some(group))],
+                            &localization.text(MessageId::WORKSPACE_ADD_PANEL_MENU).to_string(),
+                            vec![self.panel_items_localized(PanelKind::Content, Some(group), localization)],
                         ),
                         ContextMenuItem::submenu(
-                            "Add Toolbar",
-                            vec![self.panel_items(PanelKind::Tiles, Some(group))],
+                            &localization.text(MessageId::WORKSPACE_ADD_TOOLBAR_MENU).to_string(),
+                            vec![self.panel_items_localized(PanelKind::Tiles, Some(group), localization)],
                         ),
                     ],
                     vec![entry(
-                        "New Toolbar…",
+                        localization.text(MessageId::WORKSPACE_NEW_TOOLBAR_MENU).to_string(),
                         CustomizationAction::NewToolbar { group: Some(group) },
                     )],
                 ]);
-                ("Panel Group".into(), sections)
+                (localization.text(MessageId::WORKSPACE_GROUP_TITLE).to_string(), sections)
             }
             ContextTarget::Tile { panel, tile } => {
                 let p = self.panel(panel)?;
@@ -689,47 +764,47 @@ impl DockLayout {
                     .find(|t| t.id == tile)
                     .ok_or("The tool no longer exists")?;
                 let mut sections = vec![vec![
-                    entry("Remove Tool", CustomizationAction::RemoveTool { panel, tile }),
-                    entry("Insert Tools…", CustomizationAction::InsertTools { panel, before: Some(tile) }),
+                    entry(localization.text(MessageId::WORKSPACE_REMOVE_TOOL_MENU).to_string(), CustomizationAction::RemoveTool { panel, tile }),
+                    entry(localization.text(MessageId::WORKSPACE_INSERT_TOOLS_MENU).to_string(), CustomizationAction::InsertTools { panel, before: Some(tile) }),
                 ]];
                 if let Some(style) = t.control.options_style() {
                     let mut choices = Vec::new();
-                    for (label, text) in [("Horizontal: Text", true), ("Horizontal: Icons", false)] {
+                    for (label, text) in [(localization.text(MessageId::WORKSPACE_TOOL_OPTIONS_TEXT).to_string(), true), (localization.text(MessageId::WORKSPACE_TOOL_OPTIONS_ICONS).to_string(), false)] {
                         let mut item = entry(label, CustomizationAction::SetToolOptionsStyle {
                             panel, tile, style: crate::ToolOptionsStyle { text, ..style },
                         });
                         item.selected = Some(style.text == text);
                         choices.push(item);
                     }
-                    let mut sliders = entry("Show Sliders", CustomizationAction::SetToolOptionsStyle {
+                    let mut sliders = entry(localization.text(MessageId::WORKSPACE_SHOW_SLIDERS_MENU).to_string(), CustomizationAction::SetToolOptionsStyle {
                         panel, tile, style: crate::ToolOptionsStyle { sliders: !style.sliders, ..style },
                     });
                     sliders.selected = Some(style.sliders);
                     choices.push(sliders);
                     sections.insert(0, choices);
                 }
-                (tool_choice(t.control).label, sections)
+                (tool_choice_localized(t.control, localization).label, sections)
             }
             ContextTarget::Ribbon { panel } => {
                 let p = self.panel(panel)?;
                 if panel.kind() != PanelKind::Tiles {
                     return Err("Choose a toolbar".into());
                 }
-                (p.menu_name(), self.toolbar_options(panel)?)
+                (p.menu_name(localization), self.toolbar_options_localized(panel, localization)?)
             }
         };
         Ok(ContextMenu { title, sections })
     }
-    fn panel_actions(&self, panel: &PanelConfig) -> Vec<ContextMenuItem> {
+    fn panel_actions(&self, panel: &PanelConfig, localization: &Localizer) -> Vec<ContextMenuItem> {
         vec![
             ContextMenuItem::edit(
-                format!("Configure {}…", panel.menu_name()),
+                customization_text(localization, MessageId::WORKSPACE_CONFIGURE_MENU, &[("name", panel.menu_name(localization))]),
                 CustomizationAction::ShowAllControls { panel: panel.id },
             ),
-            self.hide_item(panel.id),
+            self.hide_item(panel.id, localization),
         ]
     }
-    fn column_sections(&self, group: Option<u32>) -> Vec<Vec<ContextMenuItem>> {
+    fn column_sections(&self, group: Option<u32>, localization: &Localizer) -> Vec<Vec<ContextMenuItem>> {
         let Some(group) = group else { return Vec::new(); };
         if self.collapsible_column_for_group(group).is_none()
             && self.collapsed_column_for_group(group).is_none()
@@ -739,9 +814,9 @@ impl DockLayout {
         let column = self.collapsed_column_for_group(group);
         let mut sections = vec![vec![ContextMenuItem::edit(
             if column.is_some() {
-                "Expand column"
+                localization.text(MessageId::WORKSPACE_EXPAND_COLUMN_MENU).to_string()
             } else {
-                "Collapse column"
+                localization.text(MessageId::WORKSPACE_COLLAPSE_COLUMN_MENU).to_string()
             },
             CustomizationAction::SetColumnCollapsed {
                 group: column.unwrap_or(group),
@@ -750,12 +825,12 @@ impl DockLayout {
         )]];
         if let Some(column) = column {
             let settings = self.column_stack(column);
-            let mut item = ContextMenuItem::edit("Open individual panels",
+            let mut item = ContextMenuItem::edit(localization.text(MessageId::WORKSPACE_COLUMN_DRAWERS_MENU).to_string(),
                 CustomizationAction::SetColumnDrawers { column, drawers: !settings.drawers });
             item.selected = Some(settings.drawers);
             sections.push(vec![item]);
             let mut item = ContextMenuItem::edit(
-                "Auto-hide",
+                localization.text(MessageId::WORKSPACE_AUTO_HIDE_MENU).to_string(),
                 CustomizationAction::SetColumnAutoHide {
                     column,
                     auto_hide: !settings.auto_hide,
@@ -764,18 +839,15 @@ impl DockLayout {
             item.selected = Some(settings.auto_hide);
             sections.push(vec![item]);
             sections.push(vec![ContextMenuItem::edit(
-                "Apply to all columns",
+                localization.text(MessageId::WORKSPACE_APPLY_COLUMNS_MENU).to_string(),
                 CustomizationAction::ApplyColumnStack { column },
             )]);
         }
         sections
     }
-    fn hide_item(&self, panel: Panel) -> ContextMenuItem {
+    fn hide_item(&self, panel: Panel, localization: &Localizer) -> ContextMenuItem {
         ContextMenuItem::edit(
-            format!(
-                "Hide {}",
-                self.panel(panel).expect("validated panel").menu_name()
-            ),
+            customization_text(localization, MessageId::WORKSPACE_HIDE_MENU, &[("name", self.panel(panel).expect("validated panel").menu_name(localization))]),
             CustomizationAction::SetPanelVisible {
                 panel,
                 visible: false,
@@ -783,6 +855,9 @@ impl DockLayout {
         )
     }
     pub fn panel_items(&self, kind: PanelKind, group: Option<u32>) -> Vec<ContextMenuItem> {
+        self.panel_items_localized(kind, group, &Localizer::shared(UiLanguage::English))
+    }
+    pub fn panel_items_localized(&self, kind: PanelKind, group: Option<u32>, localization: &Localizer) -> Vec<ContextMenuItem> {
         let mut items: Vec<_> = self
             .panels
             .iter()
@@ -801,7 +876,7 @@ impl DockLayout {
                         visible: !selected,
                     }
                 };
-                let mut item = ContextMenuItem::edit(p.menu_name(), action);
+                let mut item = ContextMenuItem::edit(p.menu_name(localization), action);
                 item.selected = Some(selected);
                 item.enabled = selected
                     || group.is_none_or(|g| {
@@ -817,7 +892,7 @@ impl DockLayout {
                     .filter(|p| self.panel(*p).is_err())
                     .map(|panel| {
                         ContextMenuItem::edit(
-                            format!("Restore {} toolbar", panel.label()),
+                            customization_text(localization, MessageId::WORKSPACE_RESTORE_TOOLBAR_MENU, &[("name", panel.localized_label(localization).to_string())]),
                             CustomizationAction::RestoreBuiltinToolbar { panel, group },
                         )
                     }),
@@ -826,19 +901,22 @@ impl DockLayout {
         items
     }
     pub fn toolbar_options(&self, panel: Panel) -> Result<Vec<Vec<ContextMenuItem>>, String> {
+        self.toolbar_options_localized(panel, &Localizer::shared(UiLanguage::English))
+    }
+    pub fn toolbar_options_localized(&self, panel: Panel, localization: &Localizer) -> Result<Vec<Vec<ContextMenuItem>>, String> {
         let p = self.panel(panel)?;
         if panel.kind() != PanelKind::Tiles {
             return Err("Choose a toolbar".into());
         }
-        let name = p.menu_name();
+        let name = p.menu_name(localization);
         Ok(vec![
             vec![
                 ContextMenuItem::edit(
-                    format!("Configure {name}…"),
+                    customization_text(localization, MessageId::WORKSPACE_CONFIGURE_MENU, &[("name", name.clone())]),
                     CustomizationAction::ShowAllControls { panel },
                 ),
                 ContextMenuItem::edit(
-                    "Add Tools…",
+                    localization.text(MessageId::WORKSPACE_ADD_TOOLS_MENU).to_string(),
                     CustomizationAction::InsertTools {
                         panel,
                         before: None,
@@ -855,7 +933,7 @@ impl DockLayout {
             .into_iter()
             .map(|style| {
                 let mut item = ContextMenuItem::edit(
-                    style.label(),
+                    style.localized_label(localization).to_string(),
                     CustomizationAction::SetTileStyle { panel, style },
                 );
                 item.selected = Some(p.tile_style == style);
@@ -864,24 +942,24 @@ impl DockLayout {
             .collect(),
             vec![
                 ContextMenuItem::edit(
-                    format!("Rename {name}…"),
+                    customization_text(localization, MessageId::WORKSPACE_RENAME_MENU, &[("name", name.clone())]),
                     CustomizationAction::RenameToolbar { panel },
                 ),
                 ContextMenuItem::edit(
-                    format!("Duplicate {name}…"),
+                    customization_text(localization, MessageId::WORKSPACE_DUPLICATE_MENU, &[("name", name.clone())]),
                     CustomizationAction::DuplicateToolbar { panel },
                 ),
             ],
-            vec![self.hide_item(panel)],
+            vec![self.hide_item(panel, localization)],
         ])
     }
-    fn tab_style_items(&self, group: u32) -> Result<Vec<ContextMenuItem>, String> {
+    fn tab_style_items(&self, group: u32, localization: &Localizer) -> Result<Vec<ContextMenuItem>, String> {
         let selected = self.group_tab_style(group)?;
         Ok(TabStyle::ALL
             .into_iter()
             .map(|style| {
                 let mut item = ContextMenuItem::edit(
-                    style.label(),
+                    style.localized_label(localization).to_string(),
                     CustomizationAction::SetTabStyle { group, style },
                 );
                 item.selected = Some(selected == style);
@@ -904,7 +982,7 @@ impl DockLayout {
         };
         tab_style.presentation(*active == panel, panels.len())
     }
-    fn hide_tab_items(&self, target: ContextTarget) -> Result<Vec<ContextMenuItem>, String> {
+    fn hide_tab_items(&self, target: ContextTarget, localization: &Localizer) -> Result<Vec<ContextMenuItem>, String> {
         let group = match target {
             ContextTarget::Panel { panel } => self.panel_group(panel),
             ContextTarget::Group { group } => Some(group),
@@ -921,7 +999,7 @@ impl DockLayout {
         }
         let hidden = self.panel(*panel)?.hide_tab;
         let mut item = ContextMenuItem::edit(
-            "Show tab bar",
+            localization.text(MessageId::WORKSPACE_SHOW_TAB_BAR_MENU).to_string(),
             CustomizationAction::SetTabHidden {
                 panel: *panel,
                 hidden: !hidden,
@@ -942,7 +1020,7 @@ impl DockLayout {
         if self
             .panels
             .iter()
-            .any(|p| Some(p.id) != except && p.title().to_lowercase() == name.trim().to_lowercase())
+            .any(|p| Some(p.id) != except && p.custom_name().is_some_and(|title| title.to_lowercase() == name.trim().to_lowercase()))
         {
             return Err("A panel already uses this name".into());
         }
@@ -971,271 +1049,269 @@ pub struct ToolChoice {
     pub selected: bool,
 }
 pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
+    tool_choice_localized(control, &Localizer::shared(UiLanguage::English))
+}
+pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) -> ToolChoice {
     let (label, description, icon) = match control {
-        ToolbarControl::Command { command } => (
-            command.label().into(),
+        ToolbarControl::Command { command } => {
+            let label = command.localized_label(localization);
+            (
+            label.to_string(),
             match command {
-                CommandId::SearchCommands => "Commands",
-                CommandId::DrawingBrush => "Draw with pens, pencils, pastels, paint and other brushes",
-                CommandId::Sculpt => "Shape existing strokes with Blend and Liquify",
-                CommandId::DocumentProperties => "Inspect document color, depth and retained sources",
-                CommandId::SdrRendition => "Edit the saved HDR-to-SDR delivery mapping",
-                CommandId::PreviewSdr => "Preview the authored SDR rendition without changing artwork",
-                CommandId::SoftProofSetup => "Choose a printer and paper profile for viewing",
-                CommandId::SoftProof => "Compare print simulation with normal viewing",
-                CommandId::GamutWarning => "Show colors outside the proof target gamut",
-                CommandId::Histogram => "Inspect composite RGB, luminance and SDR clipping",
-                CommandId::AssignProfile => "Change profile interpretation while keeping RGB numbers",
-                CommandId::ConvertColorSpace => "Convert editable layers or create a flattened color copy",
-                CommandId::ChangeBitDepth => "Change editing precision with exact Undo",
-                CommandId::ImportImage => "Place a photo while retaining its original profile and depth",
-                CommandId::RasterizeSource => "Convert a retained original to document pixels",
-                CommandId::RepairSourceProfile => "Correct a retained image’s source profile while preserving baked edits",
-                CommandId::Copy => "Copy the active layer's selected pixels to the clipboard",
-                CommandId::Cut => "Copy the selected pixels to the clipboard, then erase them",
-                CommandId::CopyMerged => "Copy the visible image within the selection to the clipboard",
-                CommandId::PasteImage => "Paste the clipboard as a new layer",
-                CommandId::PasteInPlace => "Paste the clipboard as a new layer where it was copied from",
-                CommandId::PasteInto => "Paste the clipboard as a new layer masked by the selection",
-                CommandId::Pen => "Draw ink lines with a pen",
-                CommandId::Pencil => "Sketch with pencils and pastels",
-                CommandId::Brush => "Paint with the current brush",
-                CommandId::Eraser => "Erase paint from the active layer",
-                CommandId::Airbrush => "Build up soft color or spray",
-                CommandId::Decoration => "Paint with textured stamps",
-                CommandId::Blend => "Mix and smear existing paint",
-                CommandId::Liquify => "Push and twist existing paint",
-                CommandId::Lasso => "Draw a freehand selection",
-                CommandId::LassoFill => "Draw a freehand shape filled with the drawing color",
-                CommandId::Select => "Choose a selection tool",
-                CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => command.label(),
-                CommandId::TonalSelect => command.label(),
-                CommandId::SelectionBrush => "Paint a selection; enclosed areas fill automatically",
-                CommandId::SelectionBrushPressure => "Use pen pressure to vary Paint selection size",
-                CommandId::RectangleSelect => "Drag a rectangular selection; Shift constrains a square, Alt draws from center",
-                CommandId::EllipseSelect => "Drag an elliptical selection; Shift constrains a circle, Alt draws from center",
-                CommandId::PolygonSelect => "Click corners; click the first point or press Enter to finish, Backspace removes a point",
-                CommandId::ColorSelect => "Select matching colors throughout the image, including disconnected areas",
-                CommandId::SelectionNew => "Replace the selection with the next completed area",
-                CommandId::SelectionAdd => "Add the next area to the current selection",
-                CommandId::SelectionSubtract => "Remove the next area from the current selection",
-                CommandId::SelectionIntersect => "Keep only the overlap with the next area",
-                CommandId::SelectionAntialias => "Smooth the selection boundary with partial pixel coverage",
-                CommandId::SelectionConstrainAngles => "Snap polygon edges to 45-degree increments",
-                CommandId::SelectionFixedRatio => "Constrain the selection to the chosen width-to-height ratio",
-                CommandId::SelectionFixedSize => "Use exact selection dimensions in image pixels",
-                CommandId::SelectionFromCenter => "Place the center of the selection at the starting point",
-                CommandId::CompleteSelection => "Close the polygon and create the selection (Enter)",
-                CommandId::CancelSelection => "Discard the unfinished selection (Escape)",
-                CommandId::SelectionVisible => "Sample all visible artwork",
-                CommandId::SelectionEditing => "Sample only the editing layer",
-                CommandId::SelectionReference => "Sample layers marked as references",
-                CommandId::CloneSourceArm => "Click to choose where retouching copies from",
-                CommandId::Clone => "Paint with pixels copied from another part of the image",
-                CommandId::Heal => "Copy pixels that blend into the tone around the stroke",
-                CommandId::SpotHeal => "Remove spots with texture from nearby",
-                CommandId::CloneAligned => "Keep the source moving with the brush across strokes",
-                CommandId::CloneFlipHorizontal => "Mirror the copied pixels left to right",
-                CommandId::CloneFlipVertical => "Mirror the copied pixels top to bottom",
-                CommandId::CloneResetOffset => "Start the next stroke at the source disc again",
+                CommandId::SearchCommands => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SEARCH_COMMANDS).to_string(),
+                CommandId::DrawingBrush => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_DRAWING_BRUSH).to_string(),
+                CommandId::Sculpt => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SCULPT).to_string(),
+                CommandId::DocumentProperties => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_DOCUMENT_PROPERTIES).to_string(),
+                CommandId::SdrRendition => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SDR_RENDITION).to_string(),
+                CommandId::PreviewSdr => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PREVIEW_SDR).to_string(),
+                CommandId::SoftProofSetup => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SOFT_PROOF_SETUP).to_string(),
+                CommandId::SoftProof => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SOFT_PROOF).to_string(),
+                CommandId::GamutWarning => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_GAMUT_WARNING).to_string(),
+                CommandId::Histogram => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_HISTOGRAM).to_string(),
+                CommandId::AssignProfile => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ASSIGN_PROFILE).to_string(),
+                CommandId::ConvertColorSpace => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CONVERT_COLOR_SPACE).to_string(),
+                CommandId::ChangeBitDepth => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CHANGE_BIT_DEPTH).to_string(),
+                CommandId::ImportImage => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_IMPORT_IMAGE).to_string(),
+                CommandId::RasterizeSource => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_RASTERIZE_SOURCE).to_string(),
+                CommandId::RepairSourceProfile => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_REPAIR_SOURCE_PROFILE).to_string(),
+                CommandId::Copy => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COPY).to_string(),
+                CommandId::Cut => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CUT).to_string(),
+                CommandId::CopyMerged => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COPY_MERGED).to_string(),
+                CommandId::PasteImage => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PASTE_IMAGE).to_string(),
+                CommandId::PasteInPlace => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PASTE_IN_PLACE).to_string(),
+                CommandId::PasteInto => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PASTE_INTO).to_string(),
+                CommandId::Pen => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PEN).to_string(),
+                CommandId::Pencil => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PENCIL).to_string(),
+                CommandId::Brush => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_BRUSH).to_string(),
+                CommandId::Eraser => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ERASER).to_string(),
+                CommandId::Airbrush => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_AIRBRUSH).to_string(),
+                CommandId::Decoration => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_DECORATION).to_string(),
+                CommandId::Blend => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_BLEND).to_string(),
+                CommandId::Liquify => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_LIQUIFY).to_string(),
+                CommandId::Lasso => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_LASSO).to_string(),
+                CommandId::LassoFill => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_LASSO_FILL).to_string(),
+                CommandId::Select => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECT).to_string(),
+                CommandId::QuickMask | CommandId::ReturnToArtwork | CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer | CommandId::Reselect | CommandId::SelectionOutline | CommandId::MaskOverlay | CommandId::MaskOverlayProtected | CommandId::ResetMaskColors | CommandId::SwapMaskColors | CommandId::FillSelectionMask | CommandId::ClearSelectionMask => label.to_string(),
+                CommandId::TonalSelect => label.to_string(),
+                CommandId::SelectionBrush => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_BRUSH).to_string(),
+                CommandId::SelectionBrushPressure => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_BRUSH_PRESSURE).to_string(),
+                CommandId::RectangleSelect => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_RECTANGLE_SELECT).to_string(),
+                CommandId::EllipseSelect => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ELLIPSE_SELECT).to_string(),
+                CommandId::PolygonSelect => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_POLYGON_SELECT).to_string(),
+                CommandId::ColorSelect => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COLOR_SELECT).to_string(),
+                CommandId::SelectionNew => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_NEW).to_string(),
+                CommandId::SelectionAdd => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_ADD).to_string(),
+                CommandId::SelectionSubtract => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_SUBTRACT).to_string(),
+                CommandId::SelectionIntersect => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_INTERSECT).to_string(),
+                CommandId::SelectionAntialias => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_ANTIALIAS).to_string(),
+                CommandId::SelectionConstrainAngles => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_CONSTRAIN_ANGLES).to_string(),
+                CommandId::SelectionFixedRatio => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_FIXED_RATIO).to_string(),
+                CommandId::SelectionFixedSize => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_FIXED_SIZE).to_string(),
+                CommandId::SelectionFromCenter => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_FROM_CENTER).to_string(),
+                CommandId::CompleteSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COMPLETE_SELECTION).to_string(),
+                CommandId::CancelSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CANCEL_SELECTION).to_string(),
+                CommandId::SelectionVisible => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_VISIBLE).to_string(),
+                CommandId::SelectionEditing => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_EDITING).to_string(),
+                CommandId::SelectionReference => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECTION_REFERENCE).to_string(),
+                CommandId::CloneSourceArm => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLONE_SOURCE_ARM).to_string(),
+                CommandId::Clone => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLONE).to_string(),
+                CommandId::Heal => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_HEAL).to_string(),
+                CommandId::SpotHeal => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SPOT_HEAL).to_string(),
+                CommandId::CloneAligned => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLONE_ALIGNED).to_string(),
+                CommandId::CloneFlipHorizontal => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLONE_FLIP_HORIZONTAL).to_string(),
+                CommandId::CloneFlipVertical => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLONE_FLIP_VERTICAL).to_string(),
+                CommandId::CloneResetOffset => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLONE_RESET_OFFSET).to_string(),
 
-                CommandId::Move => "Move and transform artwork or guides",
-                CommandId::MoveLeaveCopy => "Keep the original in place when Move drags selected pixels; Alt does the opposite",
-                CommandId::ScaleRotate => "Scale or rotate the selected paint",
-                CommandId::ApplyTransform => "Keep the displayed transform",
-                CommandId::CancelTransform => "Restore the original artwork",
-                CommandId::PlacementOriginalSize => "Restore the photo to its original pixel size",
-                CommandId::Hand => "Drag to move the canvas view",
-                CommandId::Eyedropper => "Pick a color from the canvas",
-                CommandId::Gradient => "Drag to fill with a gradient",
-                CommandId::Figure => "Draw lines, rectangles and ellipses",
-                CommandId::Ruler => "Create and edit drawing guides",
-                CommandId::ShowRulers => "Show or hide drawing guides",
-                CommandId::SnapRulers => "Constrain strokes to drawing guides",
-                CommandId::DeleteRuler => "Delete the selected drawing guide",
-                CommandId::AutoSelect => "Select a connected area of similar color",
-                CommandId::Fill => "Fill a connected area with the drawing color",
-                CommandId::Undo => "Undo the last change",
-                CommandId::Redo => "Restore the last undone change",
-                CommandId::ClearLayer => "Erase all artwork on the editing layer, discarding a placed photo's original",
-                CommandId::ClearSelected => "Erase the selected pixels, keeping soft edges",
-                CommandId::ClearOutside => "Erase the pixels outside the selection",
-                CommandId::CopySelectionToLayer => "Copy the selected pixels to a new layer; without a selection, duplicate the layer",
-                CommandId::CutSelectionToLayer => "Move the selected pixels to a new layer",
-                CommandId::RevertToOriginal => "Discard every edit on a placed photo, keeping its placement and mask",
-                CommandId::MergeDown => "Merge the layer into the one below, or apply an effect to it",
-                CommandId::MergeGroup => "Merge a group into one layer",
-                CommandId::MergeVisible => "Merge every visible layer into one",
-                CommandId::FlattenImage => "Merge every visible layer and discard hidden ones",
-                CommandId::StampVisible => "Add a layer holding everything visible",
-                CommandId::BlendPerceptual => "Blend layers like Photoshop and Clip Studio Paint",
-                CommandId::BlendLinear => "Blend layers in physically based linear light",
-                CommandId::NewDodgeBurnLayer => "Add a neutral Soft Light layer to lighten and darken by painting",
-                CommandId::FrequencySeparation => "Split a layer into tone and texture layers, previewed live",
-                CommandId::CanvasSize => "Add or remove canvas around the image",
-                CommandId::CropCanvasToSelection => "Crop the canvas to the selection, keeping the hidden pixels",
-                CommandId::GrowSelection => "Expand the selection or edited mask by a distance, previewed live",
-                CommandId::ShrinkSelection => "Contract the selection or edited mask by a distance, previewed live",
-                CommandId::FeatherSelection => "Soften the edges of the selection or edited mask, previewed live",
-                CommandId::BorderSelection => "Select a band along the edge of the selection or edited mask",
-                CommandId::SmoothSelection => "Fill small notches and remove small spikes from the selection or edited mask",
-                CommandId::TransformSelectionOutline => "Move, scale or rotate the selection outline without moving pixels",
-                CommandId::Crop => "Frame, straighten and crop the image",
-                CommandId::CropRatioFree => "Crop to any shape",
-                CommandId::CropRatioOriginal => "Keep the canvas's proportions",
-                CommandId::CropRatioSquare => "Crop to a square",
-                CommandId::CropRatioFourFive => "Crop to 4:5, as for an 8 × 10 print",
-                CommandId::CropRatioTwoThree => "Crop to 2:3, as for a 4 × 6 print",
-                CommandId::CropRatioFiveSeven => "Crop to 5:7",
-                CommandId::CropRatioSixteenNine => "Crop to widescreen 16:9",
-                CommandId::CropSwapOrientation => "Swap between landscape and portrait",
-                CommandId::CropOverlayThirds => "Show rule-of-thirds guides in the crop",
-                CommandId::CropOverlayGrid => "Show a grid in the crop",
-                CommandId::CropOverlayDiagonal => "Show diagonal guides in the crop",
-                CommandId::CropOverlayGolden => "Show golden-ratio guides in the crop",
-                CommandId::CropCycleOverlay => "Switch to the next crop guide overlay",
-                CommandId::CropStraighten => "Draw along a line that should be level",
-                CommandId::CropDeleteCroppedPixels => "Discard pixels outside the crop instead of keeping them hidden",
-                CommandId::StraightenToGuide => "Crop the image level with the selected straight guide",
-                CommandId::CropFitContent => "Set the crop to the visible pixels",
-                CommandId::ImageSize => "Scale the whole image or change its resolution",
-                CommandId::RotateImageLeft => "Turn the whole image a quarter turn counterclockwise",
-                CommandId::RotateImageRight => "Turn the whole image a quarter turn clockwise",
-                CommandId::RotateImage180 => "Turn the whole image upside down",
-                CommandId::FlipImageHorizontal => "Mirror the whole image left to right",
-                CommandId::FlipImageVertical => "Mirror the whole image top to bottom",
-                CommandId::Trim => "Shrink the canvas to the visible pixels",
-                CommandId::RevealAll => "Grow the canvas to show every layer's pixels",
-                CommandId::FillSelection => "Fill selected pixels with the drawing color",
-                CommandId::SelectAll => "Select the entire canvas",
-                CommandId::Deselect => "Remove the pixel selection",
-                CommandId::InvertSelection => "Select pixels outside the current selection",
-                CommandId::UndoWorkspace => "Undo the last workspace change",
-                CommandId::RedoWorkspace => "Restore the last undone workspace change",
-                CommandId::NewToolbar => "Create a named toolbar",
-                CommandId::ManageToolbars => "Select and delete toolbars",
-                CommandId::FitCanvas => "Fit the whole drawing in the available space",
-                CommandId::ActualPixels => "Show one image pixel per screen pixel",
-                CommandId::Settings => "Open application preferences",
-                CommandId::ToggleTheme => "Switch between light and dark appearance",
-                CommandId::AddLayer => "Create a new paint layer",
-                CommandId::DeleteLayer => "Delete the active layer",
-                CommandId::RaiseLayer => "Move the active layer up",
-                CommandId::LowerLayer => "Move the active layer down",
-                CommandId::ResetLayout => "Restore panel docking positions",
-                CommandId::ZenMode => "Hide or show the editor controls",
+                CommandId::Move => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MOVE).to_string(),
+                CommandId::MoveLeaveCopy => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MOVE_LEAVE_COPY).to_string(),
+                CommandId::ScaleRotate => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SCALE_ROTATE).to_string(),
+                CommandId::ApplyTransform => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_APPLY_TRANSFORM).to_string(),
+                CommandId::CancelTransform => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CANCEL_TRANSFORM).to_string(),
+                CommandId::PlacementOriginalSize => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PLACEMENT_ORIGINAL_SIZE).to_string(),
+                CommandId::Hand => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_HAND).to_string(),
+                CommandId::Eyedropper => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_EYEDROPPER).to_string(),
+                CommandId::Gradient => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_GRADIENT).to_string(),
+                CommandId::Figure => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FIGURE).to_string(),
+                CommandId::Ruler => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_RULER).to_string(),
+                CommandId::ShowRulers => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SHOW_RULERS).to_string(),
+                CommandId::SnapRulers => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SNAP_RULERS).to_string(),
+                CommandId::DeleteRuler => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_DELETE_RULER).to_string(),
+                CommandId::AutoSelect => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_AUTO_SELECT).to_string(),
+                CommandId::Fill => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FILL).to_string(),
+                CommandId::Undo => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_UNDO).to_string(),
+                CommandId::Redo => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_REDO).to_string(),
+                CommandId::ClearLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLEAR_LAYER).to_string(),
+                CommandId::ClearSelected => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLEAR_SELECTED).to_string(),
+                CommandId::ClearOutside => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLEAR_OUTSIDE).to_string(),
+                CommandId::CopySelectionToLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COPY_SELECTION_TO_LAYER).to_string(),
+                CommandId::CutSelectionToLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CUT_SELECTION_TO_LAYER).to_string(),
+                CommandId::RevertToOriginal => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_REVERT_TO_ORIGINAL).to_string(),
+                CommandId::MergeDown => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MERGE_DOWN).to_string(),
+                CommandId::MergeGroup => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MERGE_GROUP).to_string(),
+                CommandId::MergeVisible => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MERGE_VISIBLE).to_string(),
+                CommandId::FlattenImage => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FLATTEN_IMAGE).to_string(),
+                CommandId::StampVisible => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_STAMP_VISIBLE).to_string(),
+                CommandId::BlendPerceptual => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_BLEND_PERCEPTUAL).to_string(),
+                CommandId::BlendLinear => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_BLEND_LINEAR).to_string(),
+                CommandId::NewDodgeBurnLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_NEW_DODGE_BURN_LAYER).to_string(),
+                CommandId::FrequencySeparation => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FREQUENCY_SEPARATION).to_string(),
+                CommandId::CanvasSize => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CANVAS_SIZE).to_string(),
+                CommandId::CropCanvasToSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_CANVAS_TO_SELECTION).to_string(),
+                CommandId::GrowSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_GROW_SELECTION).to_string(),
+                CommandId::ShrinkSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SHRINK_SELECTION).to_string(),
+                CommandId::FeatherSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FEATHER_SELECTION).to_string(),
+                CommandId::BorderSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_BORDER_SELECTION).to_string(),
+                CommandId::SmoothSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SMOOTH_SELECTION).to_string(),
+                CommandId::TransformSelectionOutline => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_SELECTION_OUTLINE).to_string(),
+                CommandId::Crop => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP).to_string(),
+                CommandId::CropRatioFree => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_RATIO_FREE).to_string(),
+                CommandId::CropRatioOriginal => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_RATIO_ORIGINAL).to_string(),
+                CommandId::CropRatioSquare => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_RATIO_SQUARE).to_string(),
+                CommandId::CropRatioFourFive => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_RATIO_FOUR_FIVE).to_string(),
+                CommandId::CropRatioTwoThree => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_RATIO_TWO_THREE).to_string(),
+                CommandId::CropRatioFiveSeven => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_RATIO_FIVE_SEVEN).to_string(),
+                CommandId::CropRatioSixteenNine => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_RATIO_SIXTEEN_NINE).to_string(),
+                CommandId::CropSwapOrientation => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_SWAP_ORIENTATION).to_string(),
+                CommandId::CropOverlayThirds => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_OVERLAY_THIRDS).to_string(),
+                CommandId::CropOverlayGrid => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_OVERLAY_GRID).to_string(),
+                CommandId::CropOverlayDiagonal => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_OVERLAY_DIAGONAL).to_string(),
+                CommandId::CropOverlayGolden => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_OVERLAY_GOLDEN).to_string(),
+                CommandId::CropCycleOverlay => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_CYCLE_OVERLAY).to_string(),
+                CommandId::CropStraighten => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_STRAIGHTEN).to_string(),
+                CommandId::CropDeleteCroppedPixels => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_DELETE_CROPPED_PIXELS).to_string(),
+                CommandId::StraightenToGuide => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_STRAIGHTEN_TO_GUIDE).to_string(),
+                CommandId::CropFitContent => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CROP_FIT_CONTENT).to_string(),
+                CommandId::ImageSize => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_IMAGE_SIZE).to_string(),
+                CommandId::RotateImageLeft => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ROTATE_IMAGE_LEFT).to_string(),
+                CommandId::RotateImageRight => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ROTATE_IMAGE_RIGHT).to_string(),
+                CommandId::RotateImage180 => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ROTATE_IMAGE_180).to_string(),
+                CommandId::FlipImageHorizontal => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FLIP_IMAGE_HORIZONTAL).to_string(),
+                CommandId::FlipImageVertical => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FLIP_IMAGE_VERTICAL).to_string(),
+                CommandId::Trim => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRIM).to_string(),
+                CommandId::RevealAll => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_REVEAL_ALL).to_string(),
+                CommandId::FillSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FILL_SELECTION).to_string(),
+                CommandId::SelectAll => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SELECT_ALL).to_string(),
+                CommandId::Deselect => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_DESELECT).to_string(),
+                CommandId::InvertSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_INVERT_SELECTION).to_string(),
+                CommandId::UndoWorkspace => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_UNDO_WORKSPACE).to_string(),
+                CommandId::RedoWorkspace => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_REDO_WORKSPACE).to_string(),
+                CommandId::NewToolbar => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_NEW_TOOLBAR).to_string(),
+                CommandId::ManageToolbars => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MANAGE_TOOLBARS).to_string(),
+                CommandId::FitCanvas => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FIT_CANVAS).to_string(),
+                CommandId::ActualPixels => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ACTUAL_PIXELS).to_string(),
+                CommandId::Settings => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SETTINGS).to_string(),
+                CommandId::ToggleTheme => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TOGGLE_THEME).to_string(),
+                CommandId::AddLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ADD_LAYER).to_string(),
+                CommandId::DeleteLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_DELETE_LAYER).to_string(),
+                CommandId::RaiseLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_RAISE_LAYER).to_string(),
+                CommandId::LowerLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_LOWER_LAYER).to_string(),
+                CommandId::ResetLayout => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_RESET_LAYOUT).to_string(),
+                CommandId::ZenMode => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ZEN_MODE).to_string(),
                 CommandId::CustomizeWorkspaceUi => {
-                    "Arrange the title bar and footer inline"
+                    localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CUSTOMIZE_WORKSPACE_UI).to_string()
                 }
-                CommandId::Fullscreen => "Enter or leave full screen",
-                CommandId::NewWindow => "Open another drawing window",
-                CommandId::Drawings => "Select, reorder or close an open drawing",
-                CommandId::ShowCanvasActionBar => "Show next steps beside selections, transforms and placed images",
-                CommandId::TransformFlipHorizontal => "Mirror the transform box left to right",
-                CommandId::TransformFlipVertical => "Mirror the transform box top to bottom",
-                CommandId::TransformRotateLeft => "Turn the transform box a quarter turn counterclockwise",
-                CommandId::TransformRotateRight => "Turn the transform box a quarter turn clockwise",
-                CommandId::ResetTransform => "Return the transform box to where it started",
-                CommandId::RemoveSelectionPoint => "Remove the polygon point placed last (Backspace)",
-                CommandId::MaskSelection => "Hide the active layer outside the selection with a mask",
-                CommandId::UseReferenceBelow => "Mark the nearest visible layer below as a reference",
-                CommandId::LoadSelectionLayer => "Use the Selection Layer being edited as the selection",
-                CommandId::InvertSelectionLayer => "Invert the coverage of the Selection Layer being edited",
-                CommandId::InvertLayerMask => "Swap what the active layer's mask shows and hides",
-                CommandId::LayerMaskEnabled => "Turn the active layer's mask on or off",
-                CommandId::ApplyLayerMask => "Erase the pixels the mask hides and remove the mask",
-                CommandId::EditLayerMask => "Paint on the active layer's mask",
-                CommandId::EditLayerContent => "Paint on the active layer's pixels instead of its mask",
-                CommandId::TransformFree => "Scale, rotate and skew with the box handles",
-                CommandId::TransformUniform => "Scale, rotate and skew, keeping proportions",
-                CommandId::TransformDistort => "Move each corner of the box independently",
-                CommandId::TransformPerspective => "Move opposite corners together while distorting",
-                CommandId::TransformNearest => "Resample with hard pixel edges",
-                CommandId::TransformBilinear => "Resample smoothly",
-                CommandId::TransformBicubic => "Resample smoothly, keeping detail sharp",
-                CommandId::TransformLanczos => "Resample keeping the most detail",
-                CommandId::ColorMixOklab => "Mix picked-up colors evenly, as the eye sees them",
-                CommandId::ColorMixLinear => "Mix picked-up colors as light mixes",
-                CommandId::ColorMixClassic => "Mix picked-up colors like Clip Studio Paint",
-                CommandId::TransformWarp => "Bend the content with a mesh",
-                CommandId::WarpGridThree => "Warp with 3 × 3 patches",
-                CommandId::WarpGridFour => "Warp with 4 × 4 patches",
-                CommandId::WarpGridFive => "Warp with 5 × 5 patches",
-                CommandId::NewDocument => "Create a drawing",
-                CommandId::OpenDocument => "Open an editable drawing",
-                CommandId::SaveDocument => "Save the current drawing",
-                CommandId::SaveDocumentAs => "Save an editable copy",
-                CommandId::ExportDocument => "Export the canvas as an image copy",
-                CommandId::CloseDocument => "Close the current drawing",
-                CommandId::KeyboardShortcuts => "Customize application shortcuts",
-                CommandId::About => "Application information and links",
-                CommandId::Website => "Visit the Capy Canvas website",
-                CommandId::SourceCode => "View the source code on GitHub",
-                CommandId::ZoomIn | CommandId::ZoomOut => "Change the canvas viewing scale",
+                CommandId::Fullscreen => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FULLSCREEN).to_string(),
+                CommandId::NewWindow => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_NEW_WINDOW).to_string(),
+                CommandId::Drawings => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_DRAWINGS).to_string(),
+                CommandId::ShowCanvasActionBar => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SHOW_CANVAS_ACTION_BAR).to_string(),
+                CommandId::TransformFlipHorizontal => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_FLIP_HORIZONTAL).to_string(),
+                CommandId::TransformFlipVertical => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_FLIP_VERTICAL).to_string(),
+                CommandId::TransformRotateLeft => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_ROTATE_LEFT).to_string(),
+                CommandId::TransformRotateRight => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_ROTATE_RIGHT).to_string(),
+                CommandId::ResetTransform => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_RESET_TRANSFORM).to_string(),
+                CommandId::RemoveSelectionPoint => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_REMOVE_SELECTION_POINT).to_string(),
+                CommandId::MaskSelection => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MASK_SELECTION).to_string(),
+                CommandId::UseReferenceBelow => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_USE_REFERENCE_BELOW).to_string(),
+                CommandId::LoadSelectionLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_LOAD_SELECTION_LAYER).to_string(),
+                CommandId::InvertSelectionLayer => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_INVERT_SELECTION_LAYER).to_string(),
+                CommandId::InvertLayerMask => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_INVERT_LAYER_MASK).to_string(),
+                CommandId::LayerMaskEnabled => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_LAYER_MASK_ENABLED).to_string(),
+                CommandId::ApplyLayerMask => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_APPLY_LAYER_MASK).to_string(),
+                CommandId::EditLayerMask => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_EDIT_LAYER_MASK).to_string(),
+                CommandId::EditLayerContent => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_EDIT_LAYER_CONTENT).to_string(),
+                CommandId::TransformFree => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_FREE).to_string(),
+                CommandId::TransformUniform => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_UNIFORM).to_string(),
+                CommandId::TransformDistort => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_DISTORT).to_string(),
+                CommandId::TransformPerspective => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_PERSPECTIVE).to_string(),
+                CommandId::TransformNearest => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_NEAREST).to_string(),
+                CommandId::TransformBilinear => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_BILINEAR).to_string(),
+                CommandId::TransformBicubic => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_BICUBIC).to_string(),
+                CommandId::TransformLanczos => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_LANCZOS).to_string(),
+                CommandId::ColorMixOklab => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COLOR_MIX_OKLAB).to_string(),
+                CommandId::ColorMixLinear => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COLOR_MIX_LINEAR).to_string(),
+                CommandId::ColorMixClassic => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COLOR_MIX_CLASSIC).to_string(),
+                CommandId::TransformWarp => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TRANSFORM_WARP).to_string(),
+                CommandId::WarpGridThree => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_WARP_GRID_THREE).to_string(),
+                CommandId::WarpGridFour => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_WARP_GRID_FOUR).to_string(),
+                CommandId::WarpGridFive => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_WARP_GRID_FIVE).to_string(),
+                CommandId::NewDocument => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_NEW_DOCUMENT).to_string(),
+                CommandId::OpenDocument => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_OPEN_DOCUMENT).to_string(),
+                CommandId::SaveDocument => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SAVE_DOCUMENT).to_string(),
+                CommandId::SaveDocumentAs => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SAVE_DOCUMENT_AS).to_string(),
+                CommandId::ExportDocument => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_EXPORT_DOCUMENT).to_string(),
+                CommandId::CloseDocument => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLOSE_DOCUMENT).to_string(),
+                CommandId::KeyboardShortcuts => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_KEYBOARD_SHORTCUTS).to_string(),
+                CommandId::About => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ABOUT).to_string(),
+                CommandId::Website => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_WEBSITE).to_string(),
+                CommandId::SourceCode => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SOURCE_CODE).to_string(),
+                CommandId::ZoomIn | CommandId::ZoomOut => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ZOOM_IN).to_string(),
                 CommandId::RotateLeft | CommandId::RotateRight => {
-                    "Rotate the view without changing the image"
+                    localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ROTATE_LEFT).to_string()
                 }
                 CommandId::FlipHorizontal | CommandId::FlipVertical => {
-                    "Mirror the view without changing the image"
+                    localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FLIP_HORIZONTAL).to_string()
                 }
             }
             .into(),
-            command.icon().unwrap_or(match command {
-                CommandId::ToggleTheme => "appearance",
-                CommandId::KeyboardShortcuts => "keyboard",
-                CommandId::About => "info",
-                _ => "menu",
-            }),
-        ),
+            control.icon(),
+            )
+        },
         ToolbarControl::Brush { id } => {
-            let choice = brush_catalog().find(|b| b.id == id);
+            let choice = crate::tools::brush_catalog_localized(localization).find(|b| b.id == id);
             (
-                choice.map(|b| b.label).unwrap_or("Unknown brush").into(),
-                format!(
-                    "{} brush preset",
-                    choice.map(|b| b.category).unwrap_or("Paint")
-                ),
-                choice.map_or("brush", |b| crate::tools::group(b.id).icon()),
+                choice.as_ref().map(|b| b.label.to_string()).unwrap_or_else(|| localization.text(MessageId::WORKSPACE_TOOL_UNKNOWN_BRUSH).to_string()),
+                customization_text(localization, MessageId::WORKSPACE_TOOL_BRUSH_PRESET, &[("category", choice.as_ref().map(|b| b.category.to_string()).unwrap_or_else(|| localization.text(MessageId::WORKSPACE_TOOL_BRUSH_CATEGORY).to_string()))]),
+                control.icon(),
             )
         }
         ToolbarControl::Size { pixels } => (
-            format!("{pixels} px"),
-            "Set the brush diameter".into(),
-            "size",
+            { let mut args = FluentArgs::new(); args.set("pixels", pixels); localization.format(MessageId::WORKSPACE_TOOL_BRUSH_SIZE, &args) },
+            localization.text(MessageId::WORKSPACE_TOOL_SIZE_DESCRIPTION).to_string(),
+            control.icon(),
         ),
         ToolbarControl::Color => (
-            "Brush color".into(),
-            "Choose the current paint color".into(),
-            "colors",
+            localization.text(MessageId::WORKSPACE_TOOL_COLOR).to_string(),
+            localization.text(MessageId::WORKSPACE_TOOL_COLOR_DESCRIPTION).to_string(),
+            control.icon(),
         ),
         ToolbarControl::ColorPicker => (
-            "Color Picker".into(),
-            "Pick a canvas color with the magnifying ring".into(),
-            "color-picker",
+            localization.text(MessageId::WORKSPACE_TOOL_COLOR_PICKER).to_string(),
+            localization.text(MessageId::WORKSPACE_TOOL_COLOR_PICKER_DESCRIPTION).to_string(),
+            control.icon(),
         ),
         ToolbarControl::Opacity => (
-            "Brush opacity".into(),
-            "Adjust the strength of the current brush".into(),
-            "opacity",
+            localization.text(MessageId::WORKSPACE_TOOL_OPACITY).to_string(),
+            localization.text(MessageId::WORKSPACE_TOOL_OPACITY_DESCRIPTION).to_string(),
+            control.icon(),
         ),
         ToolbarControl::BrushSizeSlider => (
-            "Brush size slider".into(), "Adjust brush size directly in the toolbar".into(), "size",
+            localization.text(MessageId::WORKSPACE_TOOL_SIZE_SLIDER).to_string(), localization.text(MessageId::WORKSPACE_TOOL_SIZE_SLIDER_DESCRIPTION).to_string(), control.icon(),
         ),
         ToolbarControl::BrushOpacitySlider => (
-            "Brush opacity slider".into(), "Adjust brush opacity directly in the toolbar".into(), "opacity",
+            localization.text(MessageId::WORKSPACE_TOOL_OPACITY_SLIDER).to_string(), localization.text(MessageId::WORKSPACE_TOOL_OPACITY_SLIDER_DESCRIPTION).to_string(), control.icon(),
         ),
         ToolbarControl::ToolOptions { .. } => (
-            "Tool Options".into(), "Settings for the current tool; fills the remaining toolbar width".into(), "settings",
+            localization.text(MessageId::WORKSPACE_TOOL_OPTIONS).to_string(), localization.text(MessageId::WORKSPACE_TOOL_OPTIONS_DESCRIPTION).to_string(), control.icon(),
         ),
         ToolbarControl::Panel { panel } => (
-            format!("{} panel", panel.label()),
-            "Open this panel in a drawer".into(),
-            panel.icon(),
+            customization_text(localization, MessageId::WORKSPACE_HISTORY_PANEL, &[("name", panel.localized_label(localization).to_string())]),
+            localization.text(MessageId::WORKSPACE_TOOL_PANEL_DESCRIPTION).to_string(),
+            control.icon(),
         ),
         ToolbarControl::Divider => (
-            "Divider".into(),
-            "Separate groups of toolbar items".into(),
-            "minus",
+            localization.text(MessageId::WORKSPACE_TOOL_DIVIDER).to_string(),
+            localization.text(MessageId::WORKSPACE_TOOL_DIVIDER_DESCRIPTION).to_string(),
+            control.icon(),
         ),
     };
     ToolChoice {
@@ -1246,7 +1322,19 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         selected: false,
     }
 }
+fn tool_available(control: ToolbarControl, platform: Platform) -> bool {
+    match control {
+        ToolbarControl::Command { command } => command.available_on(platform),
+        ToolbarControl::Brush { id } => preset(id).is_ok(),
+        ToolbarControl::Size { pixels } => BRUSH_SIZES.iter().any(|size| *size as u16 == pixels),
+        ToolbarControl::Panel { panel } => Panel::ALL.contains(&panel) && panel.kind() == PanelKind::Content,
+        _ => true,
+    }
+}
 pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
+    tool_catalog_localized(platform, &Localizer::shared(UiLanguage::English))
+}
+pub(crate) fn tool_catalog_localized(platform: Platform, localization: &Localizer) -> Vec<ToolChoice> {
     CommandId::ALL
         .into_iter()
         .filter(|id| id.available_on(platform))
@@ -1260,17 +1348,17 @@ pub(crate) fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
                 .filter(move |p| p.kind() == PanelKind::Content)
                 .map(|panel| ToolbarControl::Panel { panel }),
         )
-        .chain(brush_catalog().map(|b| ToolbarControl::Brush { id: b.id }))
+        .chain(crate::tools::brush_catalog_localized(localization).map(|b| ToolbarControl::Brush { id: b.id }))
         .chain(
             BRUSH_SIZES
                 .iter()
                 .map(|s| ToolbarControl::Size { pixels: *s as u16 }),
         )
-        .map(tool_choice)
+        .map(|control| tool_choice_localized(control, localization))
         .collect()
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolDestination {
     NewToolbar {
@@ -1286,7 +1374,7 @@ pub enum ToolDestination {
         before: Option<u32>,
     },
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ToolPicker {
     pub destination: ToolDestination,
     pub query: String,
@@ -1295,11 +1383,11 @@ pub struct ToolPicker {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolPickerView {
-    pub title: &'static str,
-    pub confirm_label: &'static str,
+    pub title: std::sync::Arc<str>,
+    pub confirm_label: std::sync::Arc<str>,
     pub name: Option<String>,
-    pub name_label: &'static str,
-    pub search_hint: &'static str,
+    pub name_label: std::sync::Arc<str>,
+    pub search_hint: std::sync::Arc<str>,
     pub query: String,
     pub choices: Vec<ToolChoice>,
     pub selected_count: usize,
@@ -1310,7 +1398,7 @@ pub struct ToolPickerView {
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelControlView {
     pub control: PanelControl,
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub visible_in_panel: bool,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -1334,19 +1422,53 @@ pub struct PanelView {
     pub toolbar_options: Vec<Vec<ContextMenuItem>>,
     pub expanded: bool,
     pub configuration_title: String,
-    pub configuration_hint: &'static str,
+    pub configuration_hint: std::sync::Arc<str>,
     pub controls: Vec<PanelControlView>,
     pub tiles: Vec<TileView>,
 }
 
-pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, String> {
+pub(crate) struct PanelCopy {
+    pub content: PanelContent,
+    pub tile_style: TileStyle,
+    pub title: std::sync::Arc<str>,
+    pub configuration_title: std::sync::Arc<str>,
+    toolbar_options: Vec<Vec<ContextMenuItem>>,
+    tiles: Vec<(u32, ToolChoice, std::sync::Arc<str>)>,
+}
+impl PanelCopy {
+    pub fn new(state: &UiState, config: &PanelConfig) -> Self {
+        let localization = &state.localization;
+        let toolbar_options = if config.id.kind() == PanelKind::Tiles {
+            let mut options = state.workspace.layout.toolbar_options_localized(config.id, localization).expect("validated toolbar");
+            options[0].remove(0);
+            ContextMenu { title: String::new(), sections: options }
+                .with_shortcuts_localized(&state.settings, state.platform, localization).sections
+        } else { Vec::new() };
+        let tiles = config.tiles().iter().map(|tile| {
+            let choice = tool_choice_localized(tile.control, localization);
+            let tooltip = if matches!(tile.control, ToolbarControl::Command { .. }) { choice.label.clone() }
+                else { tile.control.action().map_or_else(|| choice.label.clone(), |action|
+                    state.settings.action_tooltip_localized(&choice.label, &action, state.platform, localization)) };
+            (tile.id, choice, std::sync::Arc::from(tooltip))
+        }).collect();
+        Self {
+            content: config.content.clone(), tile_style: config.tile_style,
+            title: config.title_localized(localization).into(),
+            configuration_title: customization_text(localization, MessageId::WORKSPACE_CONFIGURE_TITLE, &[("name", config.menu_name(localization))]).into(),
+            toolbar_options, tiles,
+        }
+    }
+}
+
+pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Result<PanelView, String> {
+    let localization = &state.localization;
     let config = state.workspace.layout.panel(panel)?;
     let expanded = state.customization.expanded == Some(panel);
     let controls = PanelControl::available(panel)
         .iter()
         .map(|&control| PanelControlView {
             control,
-            label: control.label(),
+            label: control.localized_label(localization),
             visible_in_panel: config.shows(control),
         })
         .collect();
@@ -1354,7 +1476,8 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
         .tiles()
         .iter()
         .map(|tile| {
-            let mut choice = tool_choice(tile.control);
+            let (_, choice, tooltip) = copy.tiles.iter().find(|(id, choice, _)| *id == tile.id && choice.control == tile.control).ok_or("The tool no longer exists")?;
+            let mut choice = choice.clone();
             let mut enabled = true;
             choice.selected = match tile.control {
                 ToolbarControl::ColorPicker => {
@@ -1365,6 +1488,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                 ToolbarControl::Command { command } => {
                     if let Some(command) = state.commands.iter().find(|c| c.id == command) {
                         enabled = command.enabled;
+                        choice.label = command.label.to_string();
                         choice.icon = command.icon.unwrap_or(choice.icon);
                         command.selected
                     } else {
@@ -1379,56 +1503,39 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                 }
                 _ => false,
             };
-            TileView {
+            Ok(TileView {
                 id: tile.id,
                 component: state.toolbar_component(tile.control),
-                tooltip: tile.control.action().map_or_else(
-                    || choice.label.clone(),
-                    |action| {
-                        state
-                            .settings
-                            .action_tooltip(&choice.label, &action, state.platform)
-                    },
-                ),
+                tooltip: match tile.control {
+                    ToolbarControl::Command { command } => state.commands.iter().find(|entry| entry.id == command)
+                        .map_or_else(|| tooltip.to_string(), |entry| entry.tooltip.clone()),
+                    _ => tooltip.to_string(),
+                },
                 choice,
                 enabled,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, &str>>()?;
     Ok(PanelView {
         id: panel,
-        title: config.title().into(),
+        title: copy.title.to_string(),
         icon: config.icon(),
         tab: state.workspace.layout.tab_presentation(panel),
         tile: config.tile_style.into(),
-        toolbar_options: if panel.kind() == PanelKind::Tiles {
-            let mut options = state
-                .workspace
-                .layout
-                .toolbar_options(panel)?;
-            options[0].remove(0); // The configuration column is already open.
-            ContextMenu {
-                title: String::new(),
-                sections: options,
-            }
-            .with_shortcuts(&state.settings, state.platform)
-            .sections
-        } else {
-            Vec::new()
-        },
+        toolbar_options: copy.toolbar_options.clone(),
         expanded,
-        configuration_title: format!("Configure {}", config.menu_name()),
+        configuration_title: copy.configuration_title.to_string(),
         configuration_hint: if panel.kind() == crate::PanelKind::Tiles {
-            "Add buttons here; drag buttons in the preview to reorder them."
+            localization.text(MessageId::WORKSPACE_TOOLBAR_CONFIGURATION_HINT)
         } else {
-            "Choose the controls shown in the panel."
+            localization.text(MessageId::WORKSPACE_PANEL_CONFIGURATION_HINT)
         },
         controls,
         tiles,
     })
 }
 impl ToolPicker {
-    fn validate(&self, layout: &DockLayout) -> Result<(), String> {
+    pub(crate) fn validate(&self, layout: &DockLayout) -> Result<(), String> {
         match &self.destination {
             ToolDestination::NewToolbar { group, name } => {
                 if let Some(group) = group {
@@ -1461,17 +1568,21 @@ impl ToolPicker {
         Ok(())
     }
     pub fn view(&self, layout: &DockLayout, platform: Platform) -> ToolPickerView {
+        self.view_localized(layout, platform, &Localizer::shared(UiLanguage::English))
+    }
+    pub fn view_localized(&self, layout: &DockLayout, platform: Platform, localization: &Localizer) -> ToolPickerView {
         let name = match &self.destination {
             ToolDestination::NewToolbar { name, .. } => Some(name.clone()),
             _ => None,
         };
-        let words = self.query.to_lowercase();
-        let choices = tool_catalog(platform)
+        let words = crate::search::normalize(&self.query);
+        let choices = tool_catalog_localized(platform, localization)
             .into_iter()
             .filter(|c| !matches!(self.destination, ToolDestination::Header { .. }) || !c.control.is_component())
             .filter_map(|mut choice| {
                 choice.selected = self.selected.contains(&choice.control);
-                let text = format!("{} {}", choice.label, choice.description).to_lowercase();
+                let english = tool_choice(choice.control);
+                let text = crate::search::normalize(&format!("{} {} {} {}", choice.label, choice.description, english.label, english.description));
                 words
                     .split_whitespace()
                     .all(|w| text.contains(w))
@@ -1480,20 +1591,20 @@ impl ToolPicker {
             .collect();
         ToolPickerView {
             title: if matches!(self.destination, ToolDestination::Header { .. }) {
-                "Add Tools to Title Bar"
+                localization.text(MessageId::WORKSPACE_PICKER_HEADER_TITLE)
             } else if name.is_some() {
-                "New Toolbar"
+                localization.text(MessageId::WORKSPACE_PICKER_NEW_TOOLBAR_TITLE)
             } else {
-                "Add Tools"
+                localization.text(MessageId::WORKSPACE_PICKER_ADD_TOOLS)
             },
             confirm_label: if name.is_some() {
-                "Create Toolbar"
+                localization.text(MessageId::WORKSPACE_PICKER_CREATE_TOOLBAR)
             } else {
-                "Add Tools"
+                localization.text(MessageId::WORKSPACE_PICKER_ADD_TOOLS)
             },
             name,
-            name_label: "Toolbar name",
-            search_hint: "Search tools",
+            name_label: localization.text(MessageId::WORKSPACE_TOOLBAR_NAME),
+            search_hint: localization.text(MessageId::WORKSPACE_PICKER_SEARCH_HINT),
             query: self.query.clone(),
             choices,
             selected_count: self.selected.len(),
@@ -1509,7 +1620,7 @@ impl ToolPicker {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum ToolbarOperation {
     Rename,
@@ -1517,7 +1628,7 @@ enum ToolbarOperation {
     Delete,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ToolbarPrompt {
     panel: Panel,
     operation: ToolbarOperation,
@@ -1526,12 +1637,12 @@ pub struct ToolbarPrompt {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolbarPromptView {
-    pub title: &'static str,
+    pub title: std::sync::Arc<str>,
     pub message: String,
     pub name: Option<String>,
-    pub name_label: &'static str,
-    pub confirm_label: &'static str,
-    pub cancel_label: &'static str,
+    pub name_label: std::sync::Arc<str>,
+    pub confirm_label: std::sync::Arc<str>,
+    pub cancel_label: std::sync::Arc<str>,
     pub destructive: bool,
     pub can_confirm: bool,
     pub error: Option<String>,
@@ -1549,27 +1660,24 @@ impl ToolbarPrompt {
         }
     }
     pub fn view(&self, layout: &DockLayout, undo_shortcut: &str) -> ToolbarPromptView {
+        self.view_localized(layout, undo_shortcut, &Localizer::shared(UiLanguage::English))
+    }
+    pub fn view_localized(&self, layout: &DockLayout, undo_shortcut: &str, localization: &Localizer) -> ToolbarPromptView {
         let (title, confirm_label, destructive) = match self.operation {
-            ToolbarOperation::Rename => ("Rename Toolbar", "Rename", false),
-            ToolbarOperation::Duplicate => ("Duplicate Toolbar", "Duplicate", false),
-            ToolbarOperation::Delete => ("Delete Toolbar?", "Delete Toolbar", true),
-        };
-        let shortcut = if undo_shortcut.is_empty() {
-            String::new()
-        } else {
-            format!(" ({undo_shortcut})")
+            ToolbarOperation::Rename => (localization.text(MessageId::WORKSPACE_TOOLBAR_RENAME_TITLE), localization.text(MessageId::WORKSPACE_TOOLBAR_RENAME_CONFIRM), false),
+            ToolbarOperation::Duplicate => (localization.text(MessageId::WORKSPACE_TOOLBAR_DUPLICATE_TITLE), localization.text(MessageId::WORKSPACE_TOOLBAR_DUPLICATE_CONFIRM), false),
+            ToolbarOperation::Delete => (localization.text(MessageId::WORKSPACE_TOOLBAR_DELETE_TITLE), localization.text(MessageId::WORKSPACE_TOOLBAR_DELETE_CONFIRM), true),
         };
         ToolbarPromptView {
             title,
             confirm_label,
             destructive,
-            cancel_label: "Cancel",
-            name_label: "Toolbar name",
+            cancel_label: localization.text(MessageId::COMMON_CANCEL),
+            name_label: localization.text(MessageId::WORKSPACE_TOOLBAR_NAME),
             message: if destructive {
-                format!(
-                    "Delete “{}” and its tools? You can restore it with Undo Layout Change{shortcut}.",
-                    self.name
-                )
+                customization_text(localization,
+                    if undo_shortcut.is_empty() { MessageId::WORKSPACE_TOOLBAR_DELETE_MESSAGE } else { MessageId::WORKSPACE_TOOLBAR_DELETE_SHORTCUT_MESSAGE },
+                    &[("name", self.name.clone()), ("shortcut", undo_shortcut.to_owned())])
             } else {
                 String::new()
             },
@@ -1580,7 +1688,7 @@ impl ToolbarPrompt {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct ToolbarManager {
     selected: Option<Panel>,
 }
@@ -1595,33 +1703,32 @@ pub struct ManagedToolbar {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolbarManagerView {
-    pub title: &'static str,
-    pub close_label: &'static str,
-    pub description: &'static str,
-    pub empty_label: &'static str,
+    pub title: std::sync::Arc<str>,
+    pub close_label: std::sync::Arc<str>,
+    pub description: std::sync::Arc<str>,
+    pub empty_label: std::sync::Arc<str>,
     pub toolbars: Vec<ManagedToolbar>,
     pub selected: Option<Panel>,
-    pub delete_label: &'static str,
+    pub delete_label: std::sync::Arc<str>,
     pub delete_action: Option<CustomizationAction>,
 }
 impl ToolbarManager {
     pub fn view(&self, layout: &DockLayout) -> ToolbarManagerView {
+        self.view_localized(layout, &Localizer::shared(UiLanguage::English))
+    }
+    pub fn view_localized(&self, layout: &DockLayout, localization: &Localizer) -> ToolbarManagerView {
         let toolbars: Vec<_> = layout
             .panels
             .iter()
             .filter(|p| p.id.kind() == PanelKind::Tiles)
             .map(|p| {
                 let count = p.tiles().len();
-                let unit = if count == 1 { "tool" } else { "tools" };
-                let visibility = if layout.panel_group(p.id).is_some() {
-                    "Visible"
-                } else {
-                    "Hidden"
-                };
+                let mut args = FluentArgs::new(); args.set("count", count);
+                let summary = localization.format(if layout.panel_group(p.id).is_some() { MessageId::WORKSPACE_TOOLBAR_SUMMARY_VISIBLE } else { MessageId::WORKSPACE_TOOLBAR_SUMMARY_HIDDEN }, &args);
                 ManagedToolbar {
                     panel: p.id,
-                    title: p.title().into(),
-                    subtitle: format!("{count} {unit} · {visibility}"),
+                    title: p.title_localized(localization),
+                    subtitle: summary,
                     icon: p.icon(),
                 }
             })
@@ -1630,13 +1737,13 @@ impl ToolbarManager {
             .selected
             .filter(|id| toolbars.iter().any(|p| p.panel == *id));
         ToolbarManagerView {
-            title: "Manage Toolbars",
-            close_label: "Close",
-            description: "Select a toolbar to delete.",
-            empty_label: "No toolbars",
+            title: localization.text(MessageId::WORKSPACE_TOOLBAR_MANAGER_TITLE),
+            close_label: localization.text(MessageId::WORKSPACE_TOOLBAR_MANAGER_CLOSE),
+            description: localization.text(MessageId::WORKSPACE_TOOLBAR_MANAGER_DESCRIPTION),
+            empty_label: localization.text(MessageId::WORKSPACE_TOOLBAR_MANAGER_EMPTY),
             toolbars,
             selected,
-            delete_label: "Delete Toolbar…",
+            delete_label: localization.text(MessageId::WORKSPACE_TOOLBAR_MANAGER_DELETE),
             delete_action: selected.map(|panel| CustomizationAction::DeleteToolbar { panel }),
         }
     }
@@ -1712,6 +1819,9 @@ impl CustomizationState {
         platform: Platform,
         viewport: [f32; 2],
     ) -> Result<u32, String> {
+        self.edit_localized(layout, action, platform, viewport, &Localizer::shared(UiLanguage::English))
+    }
+    pub(crate) fn edit_localized(&mut self, layout: &mut DockLayout, action: CustomizationAction, platform: Platform, viewport: [f32; 2], localization: &Localizer) -> Result<u32, String> {
         use CustomizationAction::*;
         let mut changed = regions::CUSTOMIZATION;
         let header_picker_action = self
@@ -1772,7 +1882,7 @@ impl CustomizationState {
                             H::SetSize { size } => layout.header.size = size,
                             H::Add { zone, before, item } => {
                                 if let HeaderItem::Tool { control } = item
-                                    && !tool_catalog(platform).iter().any(|c| c.control == control)
+                                    && !tool_available(control, platform)
                                 {
                                     return Err("This tool is not available".into());
                                 }
@@ -1846,14 +1956,12 @@ impl CustomizationState {
                     DuplicateToolbar { .. } => ToolbarOperation::Duplicate,
                     _ => ToolbarOperation::Delete,
                 };
-                let title = layout.panel(panel)?.title();
+                let title = layout.panel(panel)?.title_localized(localization);
                 let name = if matches!(operation, ToolbarOperation::Duplicate) {
-                    layout.unused_toolbar_name(&format!(
-                        "{} Copy",
-                        title.chars().take(59).collect::<String>()
-                    ))
+                    layout.unused_toolbar_name(&customization_text(localization, MessageId::WORKSPACE_COPY_NAME,
+                        &[("name", title.chars().take(59).collect())]).chars().take(64).collect::<String>())
                 } else {
-                    title.into()
+                    title
                 };
                 self.picker = None;
                 self.control = None;
@@ -2087,7 +2195,8 @@ impl CustomizationState {
                 }
                 let mut suffix = 1u32;
                 let name = loop {
-                    let name = format!("Toolbar {suffix}");
+                    let mut args = FluentArgs::new(); args.set("number", suffix);
+                    let name = localization.format(MessageId::WORKSPACE_TOOLBAR_NUMBERED, &args);
                     if layout.validate_toolbar_name(&name).is_ok() {
                         break name;
                     }
@@ -2140,7 +2249,7 @@ impl CustomizationState {
                     .query = query;
             }
             PickerSelect { control, selected } => {
-                if !tool_catalog(platform).iter().any(|c| c.control == control) {
+                if !tool_available(control, platform) {
                     return Err("This tool is not available".into());
                 }
                 let p = self.picker.as_mut().ok_or("The tool picker is closed")?;
@@ -2197,6 +2306,67 @@ mod tests {
     const ERASE: ToolbarControl = ToolbarControl::Command {
         command: CommandId::Eraser,
     };
+
+    #[test]
+    fn localized_customization_views_preserve_literal_titles_and_layout_data() {
+        let mut layout = DockLayout::default();
+        layout.rename_toolbar(Panel::Toolbar, "Tools").unwrap();
+        let custom = layout.add_toolbar(None, "日本語 한글 {draft} 🎨", &[PEN]).unwrap();
+        let before = serde_json::to_string(&layout).unwrap();
+        for language in UiLanguage::ALL {
+            let localization = Localizer::shared(language);
+            let config = layout.panel(Panel::Toolbar).unwrap();
+            assert_eq!(config.custom_name(), Some("Tools"));
+            assert_eq!(config.title_localized(&localization), "Tools");
+            let manager = ToolbarManager::default().view_localized(&layout, &localization);
+            assert!(manager.toolbars.iter().any(|toolbar| toolbar.title == "日本語 한글 {draft} 🎨"));
+            let options = layout.toolbar_options_localized(custom, &localization).unwrap();
+            assert!(options.iter().flatten().any(|item| item.label.contains("日本語 한글 {draft} 🎨")));
+            assert!(std::sync::Arc::ptr_eq(&manager.title, &localization.text(MessageId::WORKSPACE_TOOLBAR_MANAGER_TITLE)));
+            assert_eq!(serde_json::to_string(&layout).unwrap(), before);
+        }
+        let default = PanelConfig::defaults().into_iter().find(|panel| panel.id == Panel::Toolbar).unwrap();
+        assert!(default.custom_name().is_none());
+        let localization = Localizer::shared(UiLanguage::English);
+        assert_eq!(default.title_localized(&localization), localization.text(MessageId::WORKSPACE_PANEL_TOOLBAR).to_string());
+    }
+
+    #[test]
+    fn localized_picker_search_normalizes_display_and_english_aliases() {
+        let layout = DockLayout::default();
+        let picker = ToolPicker {
+            destination: ToolDestination::Insert { panel: Panel::Toolbar, before: None },
+            query: "ＢＲＵＳＨ ＳＩＺＥ".into(), selected: vec![PEN], error: None,
+        };
+        for language in UiLanguage::ALL {
+            let localization = Localizer::shared(language);
+            let view = picker.view_localized(&layout, Platform::Gtk, &localization);
+            assert!(view.choices.iter().any(|choice| choice.control == ToolbarControl::BrushSizeSlider));
+            assert_eq!(view.selected_count, 1);
+            assert!(std::sync::Arc::ptr_eq(&view.search_hint, &localization.text(MessageId::WORKSPACE_PICKER_SEARCH_HINT)));
+        }
+    }
+
+    #[test]
+    fn toolbar_creation_localizes_proposal_then_keeps_it_as_literal_data() {
+        for language in UiLanguage::ALL {
+            let localization = Localizer::shared(language);
+            let mut layout = DockLayout::default();
+            let mut state = CustomizationState::default();
+            state.edit_localized(&mut layout, CustomizationAction::NewToolbar { group: None }, Platform::Gtk, VIEWPORT, &localization).unwrap();
+            let ToolDestination::NewToolbar { name, .. } = &state.picker.as_ref().unwrap().destination else { panic!() };
+            let saved_name = name.clone();
+            assert!(!saved_name.contains(['\u{2068}', '\u{2069}']));
+            state.edit_localized(&mut layout, CustomizationAction::PickerSelect { control: PEN, selected: true }, Platform::Gtk, VIEWPORT, &localization).unwrap();
+            state.edit_localized(&mut layout, CustomizationAction::ConfirmTools, Platform::Gtk, VIEWPORT, &localization).unwrap();
+            let config = layout.panels.last().unwrap();
+            assert_eq!(config.custom_name(), Some(saved_name.as_str()));
+            for display_language in UiLanguage::ALL {
+                assert_eq!(config.title_localized(&Localizer::shared(display_language)), saved_name);
+            }
+            layout.validate().unwrap();
+        }
+    }
 
     #[test]
     fn medium_tiles_follow_shared_docking_and_roundtrip() {
@@ -2325,7 +2495,7 @@ mod tests {
         layout
             .add_toolbar(Some(8), "  Favorites  ", &[PEN])
             .unwrap();
-        for name in ["favorites", "FAVORITES", " ", "Layers", "a\nb"] {
+        for name in ["favorites", "FAVORITES", " ", "a\nb"] {
             let before = layout.clone();
             assert!(
                 layout.add_toolbar(Some(8), name, &[PEN]).is_err(),
@@ -2449,6 +2619,7 @@ mod tests {
     #[test]
     fn picker_is_transactional_search_preserves_selection_and_creation_is_named() {
         let mut layout = DockLayout::default();
+        layout.add_toolbar(None, "Tools", &[]).unwrap();
         let mut state = CustomizationState::default();
         let edit = |state: &mut CustomizationState, layout: &mut DockLayout, action| {
             state
@@ -2812,4 +2983,10 @@ mod tests {
             }
         }
     }
+}
+
+fn customization_text(localization: &Localizer, id: MessageId, values: &[(&str, String)]) -> String {
+    let mut args = FluentArgs::new();
+    for (key, value) in values { args.set(*key, value.as_str()); }
+    localization.format(id, &args)
 }

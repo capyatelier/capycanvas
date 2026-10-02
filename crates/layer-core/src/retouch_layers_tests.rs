@@ -4,7 +4,7 @@ use color::{DocumentColor, RgbSpace, SampleDepth};
 /// Top to bottom: the named paint layers, then the paper, blending
 /// perceptually.
 fn document(names: &[&str]) -> Document {
-    let mut doc = Document::new("retouch", 600, 400);
+    let mut doc = Document::new("retouch", 600, 400, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.blend_space = BlendSpace::Perceptual;
     doc.layers.remove(0);
     for (i, name) in names.iter().enumerate() {
@@ -59,7 +59,7 @@ fn a_dodge_and_burn_layer_goes_above_the_active_clipping_stack_filled_with_the_n
     let mut doc = document(&["Clipped", "Base", "Under"]);
     layer_mut(&mut doc, "Clipped").properties.clipped = true;
     doc.active_layer = id(&doc, "Base");
-    let plan = doc.dodge_burn_plan([LayerId(100), LayerId(101)]).unwrap();
+    let plan = doc.dodge_burn_plan([LayerId(100), LayerId(101)], "Dodge & Burn").unwrap();
     assert_eq!(plan.active, LayerId(100));
     let [(target, fill)] = &plan.operations[..] else { panic!("one fill") };
     assert_eq!(*target, LayerId(100));
@@ -81,13 +81,13 @@ fn a_dodge_and_burn_layer_stays_in_the_active_layer_group_unless_it_is_locked() 
     layer_mut(&mut doc, "Group").kind = LayerKind::Group;
     layer_mut(&mut doc, "Inside").properties.parent = Some(group);
     doc.active_layer = id(&doc, "Inside");
-    let plan = doc.dodge_burn_plan([LayerId(100), LayerId(101)]).unwrap();
+    let plan = doc.dodge_burn_plan([LayerId(100), LayerId(101)], "Dodge & Burn").unwrap();
     let mut applied = doc.clone();
     applied.apply(Edit::Batch(plan.edits)).unwrap();
     assert_eq!(names(&applied), ["Group", "Dodge & Burn", "Inside", "Under", "Paper"]);
     assert_eq!(applied.layer(LayerId(100)).unwrap().properties.parent, Some(group));
     layer_mut(&mut doc, "Group").properties.locked = true;
-    assert_eq!(doc.dodge_burn_plan([LayerId(100), LayerId(101)]).unwrap_err(), RetouchLayerRefusal::GroupLocked);
+    assert_eq!(doc.dodge_burn_plan([LayerId(100), LayerId(101)], "Dodge & Burn").unwrap_err(), RetouchLayerRefusal::GroupLocked);
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn frequency_separation_needs_a_visible_normal_paint_layer_in_a_perceptual_docum
     assert_eq!(doc.separation_refusal(id(&doc, "Tint")), Some(R::NotNormal));
     layer_mut(&mut doc, "Photo").visible = false;
     assert_eq!(doc.separation_refusal(photo), Some(R::Hidden));
-    assert!(doc.separation_plan(photo, &filters(), ids()).is_err());
+    assert!(doc.separation_plan(photo, &filters(), ids(), ["Frequency Separation", "Low", "High"].map(Arc::from)).is_err());
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn frequency_separation_bakes_low_and_high_in_an_isolated_group_above_the_hidden
     layer_mut(&mut doc, "Photo").properties.offset = Point { x: 4., y: 5. };
     doc.active_layer = photo;
     let filters = filters();
-    let plan = doc.separation_plan(photo, &filters, ids()).unwrap();
+    let plan = doc.separation_plan(photo, &filters, ids(), ["Frequency Separation", "Low", "High"].map(Arc::from)).unwrap();
     let [separation, low, high, blur, low_coverage, high_coverage] = ids();
     assert_eq!(plan.active, high);
     assert_eq!(plan.operations.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [low, high]);
@@ -172,3 +172,29 @@ fn separation_filters_come_from_the_catalog_and_the_radius_follows_the_blur() {
     assert!(SeparationFilters::new(&EffectCatalog::default(), 4.).is_err());
 }
 
+
+#[test]
+fn retouch_creation_names_round_trip_literally_and_undo_preserves_the_source_name() {
+    let source_name = "私の写真 { $name } \u{2068}صورة\u{2069} 🎨";
+    let mut doc = document(&[source_name]);
+    let before = doc.layers.clone();
+    let dodge_name = "보정 { $name } \u{2068}لون\u{2069}";
+    let plan = doc.dodge_burn_plan([LayerId(100), LayerId(101)], dodge_name).unwrap();
+    let inverse = doc.apply(Edit::Batch(plan.edits)).unwrap();
+    assert_eq!(doc.layer(LayerId(100)).unwrap().name.as_ref(), dodge_name);
+    let restored: Document = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+    assert_eq!(restored.layers, doc.layers);
+    doc.apply(inverse).unwrap();
+    assert_eq!(doc.layers, before);
+    let names = ["分離 { $name }", "低频 \u{2068}منخفض\u{2069}", "높음 🎨"];
+    let plan = doc.separation_plan(doc.active_layer, &filters(), ids(), names.map(Arc::from)).unwrap();
+    let inverse = doc.apply(Edit::Batch(plan.edits)).unwrap();
+    assert_eq!(doc.layer(ids()[0]).unwrap().name.as_ref(), names[0]);
+    assert_eq!(doc.layer(ids()[1]).unwrap().name.as_ref(), names[1]);
+    assert_eq!(doc.layer(ids()[2]).unwrap().name.as_ref(), names[2]);
+    assert!(doc.layers.iter().any(|layer| layer.name.as_ref() == source_name));
+    let restored: Document = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+    assert_eq!(restored.layers, doc.layers);
+    doc.apply(inverse).unwrap();
+    assert_eq!(doc.layers, before);
+}

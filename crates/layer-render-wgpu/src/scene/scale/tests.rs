@@ -44,7 +44,7 @@ fn document() -> Document {
     document_at([517, 259])
 }
 fn document_at(extent: [u32; 2]) -> Document {
-    let mut doc = Document::new("display composition oracle", extent[0], extent[1]);
+    let mut doc = Document::new("display composition oracle", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.layers[0].source = Some(rgba8_source(extent, |x, y| [(x / 3) as u8, (y / 2) as u8, 80, 255]));
     doc
 }
@@ -145,7 +145,7 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
 
 #[test]
 fn clipped_contacts_do_not_require_unmaterialized_source_levels() {
-    let doc = Document::new("clipped contact", 517, 259);
+    let doc = Document::new("clipped contact", 517, 259, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut frame = packet(&doc.layers, [doc.width, doc.height]);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
@@ -915,7 +915,7 @@ fn placed_compact_prediction_keeps_the_most_magnified_source_axis() {
 #[test]
 fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
     let extent = [33, 19];
-    let mut doc = Document::new("nested composition", extent[0], extent[1]);
+    let mut doc = Document::new("nested composition", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let solid = |id, color: [u8; 4]| {
         let mut layer = Layer::paint(LayerId(id), "solid");
         layer.source = Some(rgba8_source(extent, |_, _| color));
@@ -1608,7 +1608,7 @@ fn photographic_preview_and_committed_display_quality() {
     for row in bytes.chunks_exact(extent[0] as usize * 4) {
         builder.push_row(row).unwrap();
     }
-    let mut doc = Document::new("photographic display oracle", extent[0], extent[1]);
+    let mut doc = Document::new("photographic display oracle", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let mut photo = doc.layers[0].clone();
     photo.id = LayerId(50);
     photo.source = Some(Arc::new(builder.finish().unwrap()));

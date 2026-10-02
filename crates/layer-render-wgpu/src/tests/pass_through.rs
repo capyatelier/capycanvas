@@ -42,7 +42,7 @@ fn source(seed: u32, alpha: impl Fn(u32, u32) -> u16) -> Arc<SourceImage> {
 struct Builder(Document);
 impl Builder {
     fn new() -> Self {
-        let mut document = Document::new("Pass Through oracle", EXTENT[0], EXTENT[1]);
+        let mut document = Document::new("Pass Through oracle", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color = COLOR;
         document.layers.remove(0);
         Self(document)

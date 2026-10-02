@@ -18,7 +18,7 @@ fn pointwise_baseline() -> [&'static layer_core::EffectDefinition; 10] {
 }
 
 fn effect(id: u64, kind: &layer_core::EffectDefinition) -> Layer {
-    let mut l = Layer::paint(LayerId(id), kind.label());
+    let mut l = Layer::paint(LayerId(id), kind.id());
     l.kind = LayerKind::Effect;
     l.effect = Some(Arc::new(EffectInstance::new(kind.program())));
     l

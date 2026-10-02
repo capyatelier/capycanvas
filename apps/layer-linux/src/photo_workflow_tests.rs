@@ -155,7 +155,7 @@ fn native_large_photo_placement_workflow() {
     std::fs::create_dir_all(&output).unwrap();
     let output = output.canonicalize().unwrap();
     let app = native_test_app("art.capycanvas.LargePhotoPlacement");
-    let w = Workspace::with_project(&app, Some((new_drawing(2000, 1500).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(2000, 1500, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.maximize();
     w.window.present();
     ready(&w);

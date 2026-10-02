@@ -28,11 +28,37 @@ pub fn bundled_effect_catalog() -> &'static EffectCatalog {
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum ResourceLabel {
+    Literal(Arc<str>),
+    Message { message: Arc<str> },
+}
+impl ResourceLabel {
+    pub fn valid(&self, limit: usize) -> bool {
+        match self {
+            Self::Literal(text) => !text.is_empty() && text.len() <= limit,
+            Self::Message { message } => !message.is_empty() && message.len() <= 128
+                && message.as_bytes()[0].is_ascii_lowercase()
+                && message.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-'),
+        }
+    }
+}
+impl From<&str> for ResourceLabel {
+    fn from(text: &str) -> Self { Self::Literal(text.into()) }
+}
+impl From<String> for ResourceLabel {
+    fn from(text: String) -> Self { Self::Literal(text.into()) }
+}
+impl From<Arc<str>> for ResourceLabel {
+    fn from(text: Arc<str>) -> Self { Self::Literal(text) }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EffectCategory {
     pub id: Arc<str>,
-    pub label: Arc<str>,
+    pub label: ResourceLabel,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,7 +73,7 @@ impl EffectDefinition {
     pub fn id(&self) -> &str {
         &self.program.id
     }
-    pub fn label(&self) -> &str {
+    pub fn label(&self) -> &ResourceLabel {
         &self.program.label
     }
     pub fn program(&self) -> Arc<EffectProgram> {
@@ -76,7 +102,7 @@ impl EffectPackage {
         }
         let package: Self =
             serde_json::from_str(json).map_err(|e| format!("Invalid filter manifest: {e}"))?;
-        if package.format != 1 || package.filters.len() > 1024 || package.categories.len() > 64 {
+        if package.format != 2 || package.filters.len() > 1024 || package.categories.len() > 64 {
             return Err("Unsupported or oversized filter package".into());
         }
         package.module_names()?;
@@ -120,7 +146,7 @@ impl EffectPackage {
         mut self,
         mut read: impl FnMut(&str) -> Result<Arc<str>, String>,
     ) -> Result<EffectCatalog, String> {
-        if self.format != 1 {
+        if self.format != 2 {
             return Err("Unsupported filter package format".into());
         }
         let mut modules = BTreeMap::new();
@@ -227,7 +253,7 @@ impl EffectCatalog {
         }
         let mut categories = HashSet::new();
         for c in &self.categories {
-            if !id(&c.id) || c.label.is_empty() || c.label.len() > 160 || !categories.insert(&c.id)
+            if !id(&c.id) || !c.label.valid(160) || !categories.insert(&c.id)
             {
                 return Err("Invalid or duplicate filter category".into());
             }
@@ -235,8 +261,7 @@ impl EffectCatalog {
         let mut filters = HashSet::new();
         for f in &self.filters {
             if !id(f.id())
-                || f.label().is_empty()
-                || f.label().len() > 160
+                || !f.label().valid(160)
                 || !id(&f.icon)
                 || !categories.contains(&f.category)
                 || !filters.insert(f.id())
@@ -323,9 +348,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             replaced.get("user:custom").unwrap().label(),
-            "Updated kernel"
+            &ResourceLabel::from("Updated kernel")
         );
-        assert_eq!(added.get("user:custom").unwrap().label(), "Custom kernel");
+        assert_eq!(added.get("user:custom").unwrap().label(), &ResourceLabel::from("Custom kernel"));
         Arc::make_mut(&mut custom.filters[0].program).abi = 999;
         assert!(added.stage(custom, EffectInstallMode::Replace).is_err());
         assert_eq!(
@@ -344,10 +369,57 @@ mod tests {
         let merged = original.stage(resources, EffectInstallMode::Merge).unwrap();
         assert_eq!(merged.filters().len(), 43);
         assert!(merged.get("user:new_kernel").is_some());
-        assert_eq!(merged.filters()[0].label(), "Updated filter");
+        assert_eq!(merged.filters()[0].label(), &ResourceLabel::from("Updated filter"));
         assert_eq!(original.filters().len(), 42);
-        assert_ne!(original.filters()[0].label(), "Updated filter");
+        assert_ne!(original.filters()[0].label(), &ResourceLabel::from("Updated filter"));
     }
+    #[test]
+    fn builtin_id_replacement_preserves_literal_metadata_and_round_trips() {
+        let original = disk_catalog();
+        let mut replacement = original.clone();
+        replacement.filters.retain(|f| f.id() == "curves");
+        let label = "自作 \"曲線\" { 名前 } 🎨";
+        let program = Arc::make_mut(&mut replacement.filters[0].program);
+        program.label = label.into();
+        let parameter = &mut Arc::make_mut(&mut program.parameters)[0];
+        parameter.label = "사용자 설정".into();
+        parameter.section = Some("我的分组".into());
+        let candidate = original.stage(replacement, EffectInstallMode::Replace).unwrap();
+        let definition = candidate.get("curves").unwrap();
+        assert_eq!(definition.label(), &ResourceLabel::from(label));
+        let instance = EffectInstance::new(definition.program());
+        let copy: EffectInstance = serde_json::from_str(&serde_json::to_string(&instance).unwrap()).unwrap();
+        assert_eq!(copy, instance);
+        assert!(matches!(original.get("curves").unwrap().label(), ResourceLabel::Message { .. }));
+    }
+
+    #[test]
+    fn resource_message_references_are_explicit_and_structurally_bounded() {
+        for value in [r#"{"message":"resources-filter-curves"}"#, r#""literal { text }""#] {
+            let label: ResourceLabel = serde_json::from_str(value).unwrap();
+            assert!(label.valid(256));
+            assert_eq!(serde_json::to_string(&label).unwrap(), value);
+        }
+        assert!(serde_json::from_str::<ResourceLabel>(r#"{"message":"common-save","extra":true}"#).is_err());
+        for message in ["", "Invalid key", "common-save.attribute", "-term"] {
+            let label = ResourceLabel::Message { message: message.into() };
+            assert!(!label.valid(256), "{message}");
+        }
+    }
+
+    #[test]
+    fn obsolete_and_unknown_package_formats_are_rejected_before_module_loading() {
+        let manifest = FILTER_RESOURCES.iter().find(|(name, _)| *name == "manifest.json").unwrap().1;
+        for format in [0, 1, 3] {
+            let mut value: serde_json::Value = serde_json::from_str(manifest).unwrap();
+            value["format"] = format.into();
+            assert!(EffectPackage::parse(&serde_json::to_string(&value).unwrap()).is_err());
+            let mut package = EffectPackage::parse(manifest).unwrap();
+            package.format = format;
+            assert!(package.resolve(|_| panic!("unsupported package must not request modules")).is_err());
+        }
+    }
+
     #[test]
     fn modules_cannot_escape_the_package_or_silently_go_missing() {
         let manifest = FILTER_RESOURCES

@@ -36,7 +36,7 @@ fn gradient(engine: &mut Engine, name: &str, colors: [[f32; 4]; 2], vertical: bo
 }
 
 fn document(names: &[&str], space: BlendSpace) -> Document {
-    let mut doc = Document::new("merge", SIZE[0], SIZE[1]);
+    let mut doc = Document::new("merge", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.blend_space = space;
     doc.layers.remove(0);
     for (i, name) in names.iter().enumerate() {
@@ -306,7 +306,7 @@ fn bakes_of_blurs_save_and_reopen() {
                 steps.push(("Frequency Separation", Box::new(move |engine: &mut Engine| {
                     let filters = SeparationFilters::new(bundled_effect_catalog(), 6.).unwrap();
                     let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-                    let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+                    let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
                     engine.insert_with_operations(plan.edits, plan.operations, None).unwrap();
                 })));
             }

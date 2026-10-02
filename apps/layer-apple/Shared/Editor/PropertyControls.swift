@@ -26,7 +26,7 @@ struct LayerPropertiesPanel: View {
             ForEach(controls.indices, id: \.self) { index in
                 let control = controls[index]
                 if control["kind"]["kind"].string != "curve" {
-                    if index == 0 || control["section"].string != controls[index - 1]["section"].string {
+                    if index == 0 || control["section_id"].stableKey != controls[index - 1]["section_id"].stableKey {
                         if index > 0 { Divider().padding(.vertical, 3) }
                         if !control["section"].isNull { Text(control["section"].string).fontWeight(.bold).padding(.leading, 6) }
                     }

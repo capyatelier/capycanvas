@@ -122,7 +122,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
             path
         });
     let original = std::fs::read(&input).unwrap();
-    let w = Workspace::with_project(&app, Some((new_drawing(256, 256).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     let opened = Rc::new(RefCell::new(None));
     let result = opened.clone();
     *w.open_document.borrow_mut() = Some(Rc::new(move |p, l, _| {
@@ -419,7 +419,7 @@ fn native_hdr_export_preflight_rejects_range_and_allows_explicit_clipping() {
 #[ignore = "Wayland display and hardware GPU; optional LAYER_EXPECT_HDR=1 physical qualification"]
 fn native_hdr_display_negotiation_and_export_navigation() {
     let app = native_test_app("art.capycanvas.HdrDisplayNavigation");
-    let w = Workspace::with_project(&app, Some((new_drawing(192, 128).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(192, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present(); ready(&w);
     // Promote the existing window, so HDR cannot depend on reopening the file.
     invoke(&w, CommandId::ChangeBitDepth);
@@ -827,7 +827,7 @@ fn native_float32_new_open_edit_save_and_exr_export() {
     let app = native_test_app("art.capycanvas.Float32Journey");
     let directory = std::env::temp_dir().join(format!("capy-float32-{}",std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
-    let w = Workspace::with_project(&app, Some((new_drawing(64,64).unwrap(),None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
     let opened = Rc::new(RefCell::new(None)); let result = opened.clone();
     *w.open_document.borrow_mut() = Some(Rc::new(move |p,l,_| { result.replace(Some((p,l))); }));
     w.window.present(); ready(&w);

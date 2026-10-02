@@ -402,10 +402,10 @@ impl Field {
             ),
             (Field::Menu(_, image, text), ToolOption::Choice { items, .. }) => {
                 if let Some(selected) = items.iter().find(|i| i.selected)
-                    && text.text() != selected.label
+                    && text.text().as_str() != selected.label.as_ref()
                 {
                     crate::icons::set(image, Some(&format!("layer-{}-symbolic", selected.icon)));
-                    text.set_text(selected.label);
+                    text.set_text(&selected.label);
                 }
             }
             (Field::Segments(buttons), ToolOption::Choice { items, .. }) => {
@@ -460,9 +460,9 @@ pub(crate) fn action_button(
     match (caption, icon) {
         (Some(caption), icon) => button.set_child(Some(&captioned(icon, caption))),
         (None, Some(icon)) => button.set_child(Some(&icon)),
-        (None, None) => button.set_label(state.label),
+        (None, None) => button.set_label(&state.label),
     }
-    button.update_property(&[gtk::accessible::Property::Label(state.label)]);
+    button.update_property(&[gtk::accessible::Property::Label(&state.label)]);
     button.set_tooltip_text(Some(&state.tooltip));
     let command = state.id;
     button.connect_clicked(move |button| {
@@ -487,12 +487,12 @@ pub(crate) fn segment_buttons(
         let button = gtk::ToggleButton::new();
         let icon = crate::icons::image(&format!("layer-{}-symbolic", item.icon));
         if captions {
-            button.set_child(Some(&captioned(Some(icon), item.label)));
+            button.set_child(Some(&captioned(Some(icon), &item.label)));
         } else {
             button.set_child(Some(&icon));
         }
-        button.set_tooltip_text(Some(item.label));
-        button.update_property(&[gtk::accessible::Property::Label(item.label)]);
+        button.set_tooltip_text(Some(&item.label));
+        button.update_property(&[gtk::accessible::Property::Label(&item.label)]);
         button.set_group(buttons.first());
         let (action, send) = (item.action.clone(), send.clone());
         button.connect_toggled(move |button| {
@@ -1184,16 +1184,16 @@ impl Component {
                 Field::Range(range)
             }
             ToolOption::Numeric(f) => {
-                let label = gtk::Label::new(Some(f.label));
+                let label = gtk::Label::new(Some(&f.label));
                 label.add_css_class("option-label");
-                row.set_tooltip_text(Some(f.tooltip()));
+                row.set_tooltip_text(Some(&f.tooltip()));
                 row.append(&label);
                 let icon =
                     crate::icons::image(&format!("layer-{}-symbolic", tool_setting_icon(f.id)));
                 icon.add_css_class("option-icon");
                 icon.set_visible(false);
                 row.append(&icon);
-                let number = NumberControl::compact(f.numeric.clone(), f.label);
+                let number = NumberControl::compact(f.numeric.clone(), &f.label);
                 number.set_icon(tool_setting_icon(f.id));
                 number.add_css_class("toolbar-number");
                 number.set_widget_name(&format!("toolbar-setting-{}", f.id));

@@ -44,8 +44,8 @@ fn blend_menu_groups_every_mode_by_code_and_sets_it_in_one_step() {
         .collect();
     assert_eq!(blend_items(&menu.sections), expected);
     assert_eq!(
-        ui_catalog().layer_blends,
-        layer_core::LayerBlend::ALL.map(|b| b.label()).to_vec(),
+        ui_catalog().layer_blends.into_iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        layer_core::LayerBlend::ALL.map(|b| b.label().to_string()).to_vec(),
         "Apple and Windows index the flat list by code"
     );
     for item in menu.sections.iter().flatten() {
@@ -73,7 +73,7 @@ fn blend_menu_groups_every_mode_by_code_and_sets_it_in_one_step() {
 #[test]
 fn float_documents_offer_only_modes_defined_above_one() {
     use layer_core::color::SampleDepth;
-    let mut document = Document::new("HDR", 32, 32);
+    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color.depth = SampleDepth::F32;
     let renderer = Recorder { color: document.color, ..Default::default() };
     let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
@@ -180,4 +180,20 @@ fn the_pass_through_setting_picks_the_blend_of_every_new_group() {
         let grouped = s.engine.document().layer(first).unwrap().properties.parent.unwrap();
         assert_eq!(blend_of(&s, grouped), expected, "Group Selected, setting {on}");
     }
+}
+
+#[test]
+fn localized_layer_blend_description_preserves_literal_title_and_code() {
+    let localization = Localizer::shared(UiLanguage::Japanese);
+    let mut session = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, localization).unwrap();
+    let id = session.engine().document().active_layer.0;
+    let name = "Multiply 日本語 한글 {literal} 🎨";
+    layer(&mut session, LayerAction::Rename { id, name: name.into() });
+    layer(&mut session, LayerAction::Blend { id, value: layer_core::LayerBlend::Multiply.code() });
+    let row = session.state().layers.iter().find(|row| row.id == id).unwrap();
+    assert_eq!(row.label, name);
+    assert_eq!(row.description, "乗算");
+    assert_eq!(session.engine().document().layer(LayerId(id)).unwrap().properties.blend, layer_core::LayerBlend::Multiply);
+    invoke(&mut session, CommandId::Undo);
+    assert_eq!(session.engine().document().layer(LayerId(id)).unwrap().name.as_ref(), name);
 }

@@ -76,13 +76,13 @@ mod merge_checks {
     #[test]
     fn merge_down_names_what_it_does() {
         let mut s = stacked();
-        assert_eq!(s.command(CommandId::MergeDown).label, "Merge Down");
+        assert_eq!(s.command(CommandId::MergeDown).label.as_ref(), "Merge Down");
         let upper = s.engine.document().active_layer;
         let mut clip = Layer::paint(s.engine.allocate_layer_id(), "Shade");
         clip.properties.clipped = true;
         s.layer_edit(Edit::InsertLayer { index: 0, layer: clip }).unwrap();
         s.frame(3, 3).unwrap();
-        assert_eq!(s.command(CommandId::MergeDown).label, "Merge Clipped Layers");
+        assert_eq!(s.command(CommandId::MergeDown).label.as_ref(), "Merge Clipped Layers");
         let mut effect = s.engine.document().layer(upper).unwrap().clone();
         effect.id = s.engine.allocate_layer_id();
         effect.kind = LayerKind::Effect;
@@ -94,7 +94,7 @@ mod merge_checks {
         s.layer_edit(Edit::SetActiveLayer { id }).unwrap();
         s.frame(4, 4).unwrap();
         let state = s.state.commands.iter().find(|c| c.id == CommandId::MergeDown).unwrap();
-        assert_eq!(state.label, "Apply Effect to Layer Below");
+        assert_eq!(state.label.as_ref(), "Apply Effect to Layer Below");
         assert!(state.tooltip.starts_with("Apply Effect to Layer Below"));
     }
 

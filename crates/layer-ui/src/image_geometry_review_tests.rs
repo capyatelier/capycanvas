@@ -71,7 +71,7 @@ fn smaller_transparent_imports_keep_original_photo_frames_and_original_size_hand
         layer_core::color::source::rgba8_source(extent, |_, _| [0; 4]));
     for batch in [false, true] {
         let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-            Document::new("small transparent imports", 200, 150), [800, 600], Platform::Gtk).unwrap();
+            Document::new("small transparent imports", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
         let mut sources = vec![("Small transparent photo".into(), transparent([20, 10]))];
         if batch { sources.push(("Tall transparent photo".into(), transparent([8, 30]))); }
         s.place_layer_sources(sources, Some(Point { x: 75., y: 55. }), None).unwrap();
@@ -100,7 +100,7 @@ fn smaller_transparent_imports_keep_original_photo_frames_and_original_size_hand
 #[test]
 fn cached_empty_photo_bounds_keep_repeated_transform_refused_without_history() {
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new("accepted transparent photo", 200, 150), [800, 600], Platform::Gtk).unwrap();
+        Document::new("accepted transparent photo", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
     let original_layers = s.engine.document().layers.clone();
     let source = layer_core::color::source::rgba8_source([20, 10], |_, _| [0; 4]);
     s.place_layer_source("Transparent photo", std::sync::Arc::unwrap_or_clone(source), None).unwrap();
@@ -127,7 +127,7 @@ fn cached_empty_photo_bounds_keep_repeated_transform_refused_without_history() {
 
 fn linked_bounds_session(primary_mask: bool) -> UiSession<Recorder> {
     use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey, TILE_SIZE};
-    let mut document = Document::new("paired bounds", 200, 150);
+    let mut document = Document::new("paired bounds", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let mut bytes = vec![0; (TILE_SIZE * TILE_SIZE * 4) as usize];
     for y in 20..40 { for x in 20..40 {
         bytes[((y * TILE_SIZE + x) * 4) as usize..][..4].copy_from_slice(&[255; 4]);
@@ -188,7 +188,7 @@ fn linked_transform_waits_for_both_actual_bounds_and_warp_covers_the_registered_
 
 #[test]
 fn retained_whole_photo_bounds_do_not_query_a_linked_destructive_companion() {
-    let mut document = Document::new("retained photo bounds", 200, 150);
+    let mut document = Document::new("retained photo bounds", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let photo = document.layers[0].id;
     let mask = layer_core::LayerMask::reveal_all(document.allocate_layer_id(), Point::default());
     let mask_id = mask.id;

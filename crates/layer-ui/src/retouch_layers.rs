@@ -44,23 +44,24 @@ impl SeparationDraft {
     }
 }
 
-fn refusal_text(refusal: RetouchLayerRefusal) -> &'static str {
+fn refusal_text(refusal: RetouchLayerRefusal, l: &Localizer) -> std::sync::Arc<str> {
     use RetouchLayerRefusal as R;
     match refusal {
-        R::NoLayer => "Select a layer first",
-        R::NotPaint => "Select a paint layer first",
-        R::Hidden => "Show the layer first",
-        R::NotNormal => "Set the layer to Normal first",
-        R::Linear => "Frequency Separation needs Perceptual blending. Change it in Edit ▸ Blending.",
-        R::GroupLocked => "The destination group is locked",
-        R::TooLarge => "The separated layers would exceed the 1 GiB limit for one edit",
+        R::NoLayer => l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_A_LAYER_FIRST),
+        R::NotPaint => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_SELECT_A_PAINT_LAYER_FIRST),
+        R::Hidden => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_SHOW_THE_LAYER_FIRST),
+        R::NotNormal => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_SET_THE_LAYER_TO_NORMAL_FIRST),
+        R::Linear => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_FREQUENCY_SEPARATION_NEEDS_PERCEPTUAL_BLENDING_CHANGE_IT_IN_EDIT_BLENDING),
+        R::GroupLocked => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_THE_DESTINATION_GROUP_IS_LOCKED),
+        R::TooLarge => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_THE_SEPARATED_LAYERS_WOULD_EXCEED_THE_1_GIB_LIMIT_FOR_ONE_EDIT),
     }
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    fn retouch_layer_refusal(&self) -> Option<&'static str> {
+    fn retouch_layer_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         if self.selection_masks.target().is_some() {
-            Some("Return to the artwork first")
+            Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST))
         } else if self.operation.active() {
             Some(self.operation_refusal())
         } else {
@@ -68,15 +69,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    pub(super) fn dodge_burn_refusal(&self) -> Option<&'static str> {
-        self.retouch_layer_refusal().or_else(|| self.engine.document().dodge_burn_refusal().map(refusal_text))
+    pub(super) fn dodge_burn_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
+        self.retouch_layer_refusal().or_else(|| self.engine.document().dodge_burn_refusal().map(|refusal| refusal_text(refusal, l)))
     }
 
     pub(super) fn new_dodge_burn_layer(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
         refused(self.dodge_burn_refusal())?;
         let ids = std::array::from_fn(|_| self.engine.allocate_layer_id());
-        let plan = self.engine.document().dodge_burn_plan(ids).map_err(refusal_text)?;
+        let plan = self.engine.document().dodge_burn_plan(ids, self.localization().text(MessageId::RESOURCES_LAYER_DODGE_BURN)).map_err(|refusal| refusal_text(refusal, self.localization()).to_string())?;
         self.insert_retouch_layers(plan)
     }
 
@@ -88,9 +90,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
-    pub(super) fn separation_refusal(&self) -> Option<&'static str> {
+    pub(super) fn separation_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         let doc = self.engine.document();
-        self.retouch_layer_refusal().or_else(|| doc.separation_refusal(doc.active_layer).map(refusal_text))
+        self.retouch_layer_refusal().or_else(|| doc.separation_refusal(doc.active_layer).map(|refusal| refusal_text(refusal, l)))
     }
 
     pub fn frequency_separation_view(&self) -> Option<FrequencySeparationView> {
@@ -99,10 +102,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn show_separation(&mut self) {
         if let Some(draft) = &self.frequency_separation {
-            self.engine.set_layer_preview(Some(LayerPreview {
-                above: draft.target,
-                layer: SeparationFilters::clipped(draft.preview, &draft.filters.blur),
-            }));
+            let name = effects::resource_label(&draft.filters.blur.program.label, self.localization());
+            let layer = SeparationFilters::clipped(draft.preview, &draft.filters.blur, name);
+            self.engine.set_layer_preview(Some(LayerPreview { above: draft.target, layer }));
         }
         self.state.layer_tools.frequency_separation = self.frequency_separation_view();
     }
@@ -146,7 +148,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 refused(self.retouch_layer_refusal())?;
                 let draft = self.close_frequency_separation().ok_or("Frequency Separation is not open")?;
                 let ids = std::array::from_fn(|_| self.engine.allocate_layer_id());
-                let plan = self.engine.document().separation_plan(draft.target, &draft.filters, ids).map_err(refusal_text)?;
+                let plan = self.engine.document().separation_plan(draft.target, &draft.filters, ids,
+                    [MessageId::RESOURCES_LAYER_FREQUENCY_SEPARATION, MessageId::RESOURCES_LAYER_LOW, MessageId::RESOURCES_LAYER_HIGH]
+                        .map(|id| self.localization().text(id))).map_err(|refusal| refusal_text(refusal, self.localization()).to_string())?;
                 self.insert_retouch_layers(plan)
             }
             FrequencySeparationAction::Cancel => {

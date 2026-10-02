@@ -11,8 +11,8 @@ pub(super) fn blend_space(command: CommandId) -> Option<BlendSpace> {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    pub(super) fn blending_refusal(&self) -> Option<&'static str> {
-        BlendSpace::unavailable_reason(self.engine.document().color.depth)
+    pub(super) fn blending_refusal(&self) -> Option<std::sync::Arc<str>> {
+        BlendSpace::unavailable_reason(self.engine.document().color.depth).map(|_| self.localization().text(MessageId::COMMANDS_REFUSAL_BLENDING_FLOAT_DOCUMENTS_BLEND_IN_LINEAR_LIGHT))
     }
     pub(super) fn set_blend_space(&mut self, space: BlendSpace) -> Result<(), String> {
         self.require_document_idle()?;

@@ -2,11 +2,13 @@
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::glib;
-use layer_core::{BlendSpace, color::{DocumentColor, SampleDepth, RgbSpace}};
+use layer_core::{BlendSpace, color::DocumentColor};
 use layer_ui::*;
-use std::{cell::Cell, rc::Rc};
+use std::{cell::{Cell, RefCell}, rc::Rc, sync::Arc};
 
 struct Form {
+    localization: Arc<Localizer>,
+    view: RefCell<NewDocumentForm>,
     dialog: adw::AlertDialog,
     preset: adw::ComboRow,
     width: adw::SpinRow,
@@ -23,17 +25,14 @@ struct Form {
 }
 impl Form {
     fn options(&self) -> NewDocumentOptions {
+        let view = self.view.borrow();
         NewDocumentOptions {
             extent: [self.width.value() as u32, self.height.value() as u32],
             color: DocumentColor {
-                space: RgbSpace::ALL[self.space.selected().min(3) as usize],
-                depth: [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32][self.depth.selected().min(3) as usize],
+                space: view.spaces.get(self.space.selected() as usize).map_or(view.options.color.space, |choice| choice.0),
+                depth: view.depths.get(self.depth.selected() as usize).map_or(view.options.color.depth, |choice| choice.0),
             },
-            background: if self.background.selected() == 0 {
-                DocumentBackground::White
-            } else {
-                DocumentBackground::Transparent
-            },
+            background: view.backgrounds.get(self.background.selected() as usize).map_or(view.options.background, |choice| choice.0),
             blend_space: self.blend_space.get(),
         }
     }
@@ -41,47 +40,32 @@ impl Form {
         self.updating.set(true);
         self.width.set_value(f64::from(options.extent[0]));
         self.height.set_value(f64::from(options.extent[1]));
-        self.space.set_selected(
-            RgbSpace::ALL
-                .iter()
-                .position(|s| *s == options.color.space)
-                .unwrap() as u32,
-        );
-        self.depth
-            .set_selected(match options.color.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2, SampleDepth::F32 => 3 });
-        self.background.set_selected(u32::from(
-            options.background == DocumentBackground::Transparent,
-        ));
+        let view = self.view.borrow();
+        self.space.set_selected(view.spaces.iter().position(|choice| choice.0 == options.color.space).unwrap() as u32);
+        self.depth.set_selected(view.depths.iter().position(|choice| choice.0 == options.color.depth).unwrap() as u32);
+        self.background.set_selected(view.backgrounds.iter().position(|choice| choice.0 == options.background).unwrap() as u32);
+        drop(view);
         self.blend_space.set(options.blend_space);
         self.updating.set(false);
         self.describe();
     }
+    fn selected_preset(&self) -> Option<NewDocumentPresetView> {
+        let index = self.preset.selected().checked_sub(1)? as usize;
+        self.view.borrow().presets.get(index).cloned()
+    }
     fn describe(&self) {
         let options = self.options();
-        let blending = options.blend_space.for_depth(options.color.depth);
+        let appearance = options.appearance(&self.localization);
         let updating = self.updating.replace(true);
-        self.blending.set_selected(BlendSpace::ALL.iter().position(|b| *b == blending).unwrap() as u32);
+        self.blending.set_selected(self.view.borrow().blending.choices.iter().position(|choice| choice.id == appearance.blending).unwrap() as u32);
         self.updating.set(updating);
-        self.blending.set_sensitive(!options.color.depth.is_float());
-        self.blending.set_subtitle(
-            BlendSpace::unavailable_reason(options.color.depth).unwrap_or(blending.description()),
-        );
-        self.color.set_subtitle(&format!(
-            "{} · {} · {}",
-            options.color.space.name(),
-            options.color.depth.label(),
-            blending.label()
-        ));
-        self.note
-            .set_text("16-bit SDR is recommended for ProPhoto gradients and photo adjustments.");
-        self.note.set_visible(
-            options.color.space == RgbSpace::ProPhoto && options.color.depth == SampleDepth::U8,
-        );
-        self.dialog
-            .set_response_enabled("create", options.validate().is_ok());
-        self.remove.set_sensitive(
-            self.preset.selected() >= 5 && self.preset.selected() != gtk::INVALID_LIST_POSITION,
-        );
+        self.blending.set_sensitive(appearance.blending_editable);
+        self.blending.set_subtitle(&appearance.blending_help);
+        self.color.set_subtitle(&appearance.summary);
+        self.note.set_text(appearance.note.as_deref().unwrap_or(""));
+        self.note.set_visible(appearance.note.is_some());
+        self.dialog.set_response_enabled("create", options.validate().is_ok());
+        self.remove.set_sensitive(self.selected_preset().is_some_and(|preset| preset.remove.is_some()));
     }
     fn edited(&self) {
         if !self.updating.get() {
@@ -91,19 +75,20 @@ impl Form {
     }
     fn blending_edited(&self) {
         if !self.updating.get() && self.blending.is_sensitive() {
-            self.blend_space.set(BlendSpace::ALL[self.blending.selected().min(1) as usize]);
+            if let Some(choice) = self.view.borrow().blending.choices.get(self.blending.selected() as usize) {
+                self.blend_space.set(choice.id);
+            }
             self.edited();
         }
     }
-    fn presets(&self, settings: &NewDocumentSettings, selected: u32) {
+    fn presets(&self, settings: &NewDocumentSettings, selected: Option<NewDocumentPresetId>) {
         self.updating.set(true);
-        let mut names = vec!["Custom".to_string()];
-        names.extend(NewDocumentPreset::builtins().into_iter().map(|p| p.name));
-        names.extend(settings.presets.iter().map(|p| p.name.clone()));
-        self.preset.set_model(Some(&gtk::StringList::new(
-            &names.iter().map(String::as_str).collect::<Vec<_>>(),
-        )));
-        self.preset.set_selected(selected);
+        self.view.replace(settings.form(&self.localization));
+        let view = self.view.borrow();
+        let names: Vec<_> = std::iter::once(view.text.custom.as_ref()).chain(view.presets.iter().map(|preset| preset.name.as_str())).collect();
+        self.preset.set_model(Some(&gtk::StringList::new(&names)));
+        self.preset.set_selected(selected.and_then(|id| view.presets.iter().position(|preset| preset.id == id)).map_or(0, |index| index as u32 + 1));
+        drop(view);
         self.updating.set(false);
         self.describe();
     }
@@ -114,18 +99,14 @@ pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<layer_core::Project>
 }
 
 pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<Option<layer_core::Project>, String> {
-    let settings = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .ok_or("Canvas unavailable")?
-        .session
-        .state()
-        .settings
-        .new_document
-        .clone();
+    let (settings, localization) = {
+        let gpu = w.gpu.borrow();
+        let session = &gpu.as_ref().ok_or_else(|| NewDocumentError::CanvasUnavailable.message(&w.localization))?.session;
+        (session.state().settings.new_document.clone(), session.localization().clone())
+    };
+    let projection = settings.form(&localization);
     let dialog = adw::AlertDialog::builder()
-        .heading(if defaults_only { "Drawing defaults and presets" } else { "New drawing" })
+        .heading(if defaults_only { projection.text.defaults_title.as_ref() } else { projection.text.new_title.as_ref() })
         .content_width(400)
         .build();
     dialog.set_widget_name(if defaults_only { "drawing-defaults-dialog" } else { "new-document-dialog" });
@@ -139,7 +120,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         group.add(&row);
         row
     };
-    let preset = combo("Preset", "new-document-preset", &["Custom"]);
+    let preset = combo(&projection.text.preset, "new-document-preset", &[&projection.text.custom]);
     let dimension = |title: &str, name: &str| {
         let row = adw::SpinRow::with_range(1., f64::from(MAX_NEW_DOCUMENT_DIMENSION), 1.);
         row.set_title(title);
@@ -149,34 +130,33 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         group.add(&row);
         row
     };
-    let width = dimension(DOCUMENT_WIDTH_LABEL, "new-document-width");
-    let height = dimension(DOCUMENT_HEIGHT_LABEL, "new-document-height");
+    let width = dimension(&projection.text.width, "new-document-width");
+    let height = dimension(&projection.text.height, "new-document-height");
     let background = combo(
-        "Background",
+        &projection.text.background,
         "new-document-background",
-        &["White", "Transparent"],
+        &projection.backgrounds.iter().map(|choice| choice.1.as_ref()).collect::<Vec<_>>(),
     );
     let space = combo(
-        "Color space",
+        &projection.text.space,
         "new-document-space",
-        &RgbSpace::ALL.map(|s| s.name()),
+        &projection.spaces.iter().map(|choice| choice.1).collect::<Vec<_>>(),
     );
     let depth = combo(
-        "Bit depth",
+        &projection.text.depth,
         "new-document-depth",
-        &["8-bit SDR", "16-bit SDR", "16-bit float HDR", "32-bit float HDR"],
+        &projection.depths.iter().map(|choice| choice.1.as_ref()).collect::<Vec<_>>(),
     );
-    let choices = NewDocumentBlending::new();
     let blending = combo(
-        choices.label,
+        &projection.blending.label,
         "new-document-blending",
-        &choices.choices.iter().map(|c| c.label).collect::<Vec<_>>(),
+        &projection.blending.choices.iter().map(|choice| choice.label.as_ref()).collect::<Vec<_>>(),
     );
     blending.set_subtitle_lines(2);
     group.remove(&space);
     group.remove(&depth);
     group.remove(&blending);
-    let color = adw::ExpanderRow::builder().title("Color").build();
+    let color = adw::ExpanderRow::builder().title(projection.text.color.as_ref()).build();
     color.set_widget_name("new-document-color");
     color.add_row(&space);
     color.add_row(&depth);
@@ -188,17 +168,17 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         .margin_top(8)
         .build();
     note.add_css_class("dim-label");
-    let save = gtk::Button::with_label("Save Preset…");
+    let save = gtk::Button::with_label(&projection.text.save_preset);
     save.set_widget_name("new-document-save-preset");
     let remove = gtk::Button::from_icon_name("user-trash-symbolic");
-    remove.set_tooltip_text(Some("Remove saved preset"));
-    remove.update_property(&[gtk::accessible::Property::Label("Remove saved preset")]);
+    remove.set_tooltip_text(Some(&projection.text.remove_preset));
+    remove.update_property(&[gtk::accessible::Property::Label(&projection.text.remove_preset)]);
     remove.set_widget_name("new-document-remove-preset");
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     buttons.set_margin_top(8);
     buttons.append(&save);
     buttons.append(&remove);
-    let remember = gtk::CheckButton::with_label("Use these settings for new drawings");
+    let remember = gtk::CheckButton::with_label(&projection.text.remember);
     remember.set_widget_name("new-document-remember");
     if defaults_only { remember.set_active(true); remember.set_visible(false); }
     remember.set_margin_top(8);
@@ -217,11 +197,14 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
     body.append(&buttons);
     body.append(&remember);
     dialog.set_extra_child(Some(&body));
-    dialog.add_responses(&[("cancel", CANCEL_DOCUMENT_LABEL), ("create", if defaults_only { "Use Defaults" } else { "Create" })]);
+    dialog.add_responses(&[("cancel", &projection.text.cancel), ("create", if defaults_only { &projection.text.use_defaults } else { &projection.text.create })]);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("create"));
     dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);
+    let selected = projection.selected;
     let form = Rc::new(Form {
+        localization,
+        view: RefCell::new(projection),
         dialog: dialog.clone(),
         preset,
         width,
@@ -236,11 +219,6 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         remove,
         updating: Cell::new(false),
     });
-    let selected = NewDocumentPreset::builtins()
-        .iter()
-        .chain(settings.presets.iter())
-        .position(|p| p.options == settings.defaults)
-        .map_or(0, |i| i as u32 + 1);
     form.presets(&settings, selected);
     form.populate(settings.defaults);
     for row in [&form.width, &form.height] {
@@ -265,33 +243,10 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
     form.preset.connect_selected_notify(glib::clone!(
         #[weak]
         form,
-        #[weak]
-        w,
-        move |row| {
-            if form.updating.get() {
-                return;
-            }
-            let selected = row.selected();
-            let settings = w
-                .gpu
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .session
-                .state()
-                .settings
-                .new_document
-                .clone();
-            if selected > 0 {
-                if let Some(preset) = NewDocumentPreset::builtins()
-                    .iter()
-                    .chain(settings.presets.iter())
-                    .nth(selected as usize - 1)
-                {
-                    form.populate(preset.options);
-                }
-            }
-            form.describe();
+        move |_| {
+            if form.updating.get() { return; }
+            if let Some(preset) = form.selected_preset() { form.populate(preset.options); }
+            else { form.describe(); }
         }
     ));
     save.connect_clicked(glib::clone!(
@@ -306,7 +261,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                 #[strong]
                 w,
                 async move {
-                    let name = adw::EntryRow::builder().title("Preset name").build();
+                    let name = adw::EntryRow::builder().title(form.view.borrow().text.preset_name.as_ref()).build();
                     name.set_widget_name("new-document-preset-name");
                     let group = adw::PreferencesGroup::new();
                     group.add(&name);
@@ -315,16 +270,18 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                     content.append(&group);
                     content.append(&note);
                     let dialog = adw::AlertDialog::builder()
-                        .heading("Save Drawing Preset")
+                        .heading(form.view.borrow().text.save_preset_title.as_ref())
                         .extra_child(&content)
                         .build();
-                    dialog.add_responses(&[("cancel", "Cancel"), ("save", "Save")]);
+                    dialog.add_responses(&[("cancel", &form.view.borrow().text.cancel), ("save", &form.view.borrow().text.save)]);
                     dialog.set_close_response("cancel");
                     dialog.set_default_response(Some("save"));
                     dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
                     dialog.set_response_enabled("save", false);
                     let options = form.options();
                     name.connect_changed(glib::clone!(
+                        #[weak]
+                        form,
                         #[weak]
                         w,
                         #[weak]
@@ -344,7 +301,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                                 .clone();
                             let result = settings.save(&name.text(), options);
                             dialog.set_response_enabled("save", result.is_ok());
-                            note.set_text(result.as_ref().err().map_or("", String::as_str));
+                            note.set_text(&result.err().map(|error| error.message(&form.localization)).unwrap_or_default());
                         }
                     ));
                     if crate::alert::choose(dialog, &w.window).await == "save" {
@@ -359,7 +316,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                             .new_document
                             .clone();
                         if settings.save(&name.text(), options).is_ok() {
-                            let selected = settings.presets.len() as u32 + 4;
+                            let selected = settings.form(&form.localization).presets.last().map(|preset| preset.id);
                             w.dispatch(UiAction::NewDocumentPreferences {
                                 action: NewDocumentAction::Remember { options, name: name.text().into(), defaults: false },
                             });
@@ -393,18 +350,10 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                         .settings
                         .new_document
                         .clone();
-                    if let Some(index) = form
-                        .preset
-                        .selected()
-                        .checked_sub(5)
-                        .map(|v| v as usize)
-                        .filter(|i| *i < settings.presets.len())
-                    {
-                        settings.apply(NewDocumentAction::Remove { index }).unwrap();
-                        w.dispatch(UiAction::NewDocumentPreferences {
-                            action: NewDocumentAction::Remove { index },
-                        });
-                        form.presets(&settings, 0);
+                    if let Some(action) = form.selected_preset().and_then(|preset| preset.remove) {
+                        settings.apply(action.clone()).unwrap();
+                        w.dispatch(UiAction::NewDocumentPreferences { action });
+                        form.presets(&settings, None);
                     }
                 }
             ));
@@ -414,7 +363,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         return Ok(None);
     }
     let options = form.options();
-    let project = options.project()?;
+    let project = options.project(&form.localization)?;
     if remember.is_active() {
         w.dispatch(UiAction::NewDocumentPreferences {
             action: NewDocumentAction::Remember { options, name: String::new(), defaults: true },

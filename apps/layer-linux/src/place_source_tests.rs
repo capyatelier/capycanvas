@@ -107,7 +107,7 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
     let directory = std::path::PathBuf::from(std::env::var_os("LAYER_RASTER_FIXTURES").expect("codec fixtures"));
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.CommonRaster");
-    let w = Workspace::with_project(&app, Some((new_drawing(256, 128).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     let opened = Rc::new(RefCell::new(None));
     let result = opened.clone();
     *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
@@ -190,7 +190,7 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
 fn native_profiled_place_paste_and_source_history() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.PlaceSource");
-    let w = Workspace::with_project(&app, Some((new_drawing(256, 128).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     ready(&w);
     let source = source();
@@ -364,7 +364,7 @@ fn native_profiled_place_paste_and_source_history() {
 fn native_unsupported_hdr_and_multiple_picture_inputs_preserve_the_document() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.SdrInputPolicy");
-    let w = Workspace::with_project(&app, Some((new_drawing(96, 64).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(96, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     ready(&w);
     let before = snapshot(&w);

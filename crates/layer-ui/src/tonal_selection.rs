@@ -1,4 +1,5 @@
 //! Direct tonal selection: visible artwork in, current selection or mask out.
+use crate::localization::{Localizer, MessageId, UiLanguage};
 use super::*;
 use layer_core::{
     Affine, Point, Selection, SelectionTarget,
@@ -31,16 +32,16 @@ impl Default for TonalOptions {
 }
 impl TonalOptions {
     // Keep stored preset identities stable when changing the visible choices.
-    pub const CHOICES: [(usize, &'static str, &'static str); 7] = [
-        (0, "Shadows · below −5 stops", "tonal-shadows"),
-        (1, "Mid-shadows · −5 to −3.5 stops", "tonal-mid-shadows"),
-        (2, "Midtones · −3.5 to −1.5 stops", "tonal-midtones"),
-        (3, "Mid-highlights · −1.5 to −0.5 stops", "tonal-mid-highlights"),
-        (4, "Highlights · above −0.5 stops", "tonal-highlights"),
-        (6, "Bright HDR · above +1 stop", "tonal-bright-hdr"),
-        (7, "Custom · set or sample a range in stops", "tonal-custom"),
+    pub const CHOICES: [(usize, MessageId, &'static str); 7] = [
+        (0, MessageId::TOOL_TONAL_SHADOWS, "tonal-shadows"),
+        (1, MessageId::TOOL_TONAL_MID_SHADOWS, "tonal-mid-shadows"),
+        (2, MessageId::TOOL_TONAL_MIDTONES, "tonal-midtones"),
+        (3, MessageId::TOOL_TONAL_MID_HIGHLIGHTS, "tonal-mid-highlights"),
+        (4, MessageId::TOOL_TONAL_HIGHLIGHTS, "tonal-highlights"),
+        (6, MessageId::TOOL_TONAL_BRIGHT_HDR, "tonal-bright-hdr"),
+        (7, MessageId::TOOL_TONAL_CUSTOM, "tonal-custom"),
     ];
-    fn choices(hdr: bool) -> impl Iterator<Item = (usize, &'static str, &'static str)> {
+    fn choices(hdr: bool) -> impl Iterator<Item = (usize, MessageId, &'static str)> {
         Self::CHOICES.into_iter().filter(move |(index, ..)| *index != 6 || hdr)
     }
     pub(super) fn adapt_to_document(&mut self, hdr: bool) {
@@ -53,7 +54,7 @@ impl TonalOptions {
         if !Self::CHOICES.iter().any(|(index, ..)| self.tone == *index) {
             return Err("Unknown tone".into());
         }
-        self.softness_control()
+        self.softness_control(&Localizer::shared(UiLanguage::English))
             .numeric
             .validate(self.softness, "Softness")?;
         if self
@@ -80,11 +81,11 @@ impl TonalOptions {
         band.falloff = [self.softness * 0.5; 2];
         band
     }
-    pub fn softness_control(&self) -> ToolSetting {
+    pub fn softness_control(&self, localizer: &Localizer) -> ToolSetting {
         ToolSetting {
             id: "tonal_softness",
-            label: "Softness",
-            group: "",
+            label: localizer.text(MessageId::TOOL_CONTROL_TONAL_SELECTION_SOFTNESS),
+            group: std::sync::Arc::from(""),
             value: self.softness,
             numeric: NumericControl {
                 max: 2.,
@@ -95,7 +96,7 @@ impl TonalOptions {
             },
         }
     }
-    pub fn controls(&self) -> Vec<ToolSetting> {
+    pub fn controls(&self, localizer: &Localizer) -> Vec<ToolSetting> {
         let mut controls = Vec::new();
         if self.tone == 7 {
             let numeric = NumericControl {
@@ -104,19 +105,19 @@ impl TonalOptions {
                 ..NumericControl::number(MIN_STOP as f64, MAX_STOP as f64, 0.1, 1)
             };
             for (id, label, value) in [
-                ("tonal_lower", "From", self.custom[0]),
-                ("tonal_upper", "To", self.custom[1]),
+                ("tonal_lower", MessageId::TOOL_CONTROL_TONAL_LOWER, self.custom[0]),
+                ("tonal_upper", MessageId::TOOL_CONTROL_TONAL_UPPER, self.custom[1]),
             ] {
                 controls.push(ToolSetting {
                     id,
-                    label,
+                    label: localizer.text(label),
                     value,
-                    group: "",
+                    group: std::sync::Arc::from(""),
                     numeric: numeric.clone(),
                 });
             }
         }
-        controls.push(self.softness_control());
+        controls.push(self.softness_control(localizer));
         controls
     }
     pub fn reset_value(&self, id: &str) -> Result<f32, String> {
@@ -365,11 +366,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         vec![ToolOption::Choice {
             id: "tonal-tones",
-            label: "Tones · stops relative to reference white",
+            label: self.localization().text(MessageId::TOOL_TONAL_TONES),
             segmented: true,
             items: TonalOptions::choices(self.engine.document().color.depth.is_float())
                 .map(|(index, label, icon)| ToolSetItem {
-                    label,
+                    label: self.localization().text(label),
                     icon,
                     action: UiAction::Tonal {
                         action: TonalAction::Preset { index },

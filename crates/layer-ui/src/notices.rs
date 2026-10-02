@@ -36,37 +36,37 @@ impl Notices {
     }
 }
 
-pub(super) fn drawing_refusal_text(refusal: DrawingRefusal) -> &'static str {
+pub(super) fn drawing_refusal_text(refusal: DrawingRefusal, l: &Localizer) -> std::sync::Arc<str> {
     match refusal {
-        DrawingRefusal::NoLayer => "Select a layer to draw on",
-        DrawingRefusal::Locked => "The active layer is locked",
-        DrawingRefusal::BaseLocked => "The layer below this effect is locked",
-        DrawingRefusal::Group => "A group has no pixels of its own. Select a layer inside it.",
-        DrawingRefusal::Paper => "The paper can't be drawn on. Add a layer above it.",
-        DrawingRefusal::SelectionLayer => "A selection layer holds a selection, not paint",
-        DrawingRefusal::EffectWithoutBase => "This effect layer has no layer below it to draw on",
-        DrawingRefusal::Mask => "Return to the layer's artwork first",
-        DrawingRefusal::EffectMask => "This tool draws on artwork, not on an effect layer's mask",
+        DrawingRefusal::NoLayer => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_SELECT_A_LAYER_TO_DRAW_ON),
+        DrawingRefusal::Locked => l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED),
+        DrawingRefusal::BaseLocked => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THE_LAYER_BELOW_THIS_EFFECT_IS_LOCKED),
+        DrawingRefusal::Group => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_A_GROUP_HAS_NO_PIXELS_OF_ITS_OWN_SELECT_A_LAYER_INSIDE_IT),
+        DrawingRefusal::Paper => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THE_PAPER_CAN_T_BE_DRAWN_ON_ADD_A_LAYER_ABOVE_IT),
+        DrawingRefusal::SelectionLayer => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_A_SELECTION_LAYER_HOLDS_A_SELECTION_NOT_PAINT),
+        DrawingRefusal::EffectWithoutBase => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THIS_EFFECT_LAYER_HAS_NO_LAYER_BELOW_IT_TO_DRAW_ON),
+        DrawingRefusal::Mask => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
+        DrawingRefusal::EffectMask => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THIS_TOOL_DRAWS_ON_ARTWORK_NOT_ON_AN_EFFECT_LAYER_S_MASK),
     }
 }
 
-fn stroke_refusal_text(refusal: StrokeRefusal) -> &'static str {
+fn stroke_refusal_text(refusal: StrokeRefusal, l: &Localizer) -> std::sync::Arc<str> {
     match refusal {
-        StrokeRefusal::Target(refusal) => drawing_refusal_text(refusal),
-        StrokeRefusal::AlphaLocked => "Alpha lock keeps this layer's transparency, so erasing has no effect",
-        StrokeRefusal::DryMask => "Masks take dry coverage, so this brush paints without its wet or blending behavior",
-        StrokeRefusal::EmptySource(RetouchSource::Editing) => "This layer is empty, so there's nothing to copy",
+        StrokeRefusal::Target(refusal) => drawing_refusal_text(refusal, l),
+        StrokeRefusal::AlphaLocked => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_ALPHA_LOCK_KEEPS_THIS_LAYER_S_TRANSPARENCY_SO_ERASING_HAS_NO_EFFECT),
+        StrokeRefusal::DryMask => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_MASKS_TAKE_DRY_COVERAGE_SO_THIS_BRUSH_PAINTS_WITHOUT_ITS_WET_OR_BLENDING_BEHAVIOR),
+        StrokeRefusal::EmptySource(RetouchSource::Editing) => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THIS_LAYER_IS_EMPTY_SO_THERE_S_NOTHING_TO_COPY),
         StrokeRefusal::EmptySource(RetouchSource::References) => {
-            "This layer is empty, and there's no layer below it to copy from"
+            l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THIS_LAYER_IS_EMPTY_AND_THERE_S_NO_LAYER_BELOW_IT_TO_COPY_FROM)
         }
-        StrokeRefusal::NoCloneSource => "Choose where to copy from first",
+        StrokeRefusal::NoCloneSource => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_CHOOSE_WHERE_TO_COPY_FROM_FIRST),
         StrokeRefusal::TransformedLayer => {
-            "This layer is scaled or rotated, so it can't be retouched directly. Retouch on a new layer above it."
+            l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THIS_LAYER_IS_SCALED_OR_ROTATED_SO_IT_CAN_T_BE_RETOUCHED_DIRECTLY_RETOUCH_ON_A_NEW_LAYER_ABOVE_IT)
         }
     }
 }
 
-pub(super) const NO_REFERENCE_BELOW: &str = "No visible photo or paint layer below";
+pub(super) const NO_REFERENCE_BELOW: MessageId = MessageId::COMMANDS_REFUSAL_NOTICES_NO_VISIBLE_PHOTO_OR_PAINT_LAYER_BELOW;
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn notify(&mut self, text: impl Into<String>) {
@@ -148,10 +148,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             Some(StrokeRefusal::EmptySource(RetouchSource::References)) if self.reference_below().is_some() => self
                 .offer_reference_below("This layer is empty, and no reference layer below it is marked"),
             Some(StrokeRefusal::NoCloneSource) => self.raise_notice(
-                stroke_refusal_text(StrokeRefusal::NoCloneSource).into(),
-                Some((CommandId::CloneSourceArm.label().into(), UiAction::Invoke { command: CommandId::CloneSourceArm })),
+                stroke_refusal_text(StrokeRefusal::NoCloneSource, self.localization()).to_string(),
+                Some((CommandId::CloneSourceArm.localized_label(self.localization()).to_string(), UiAction::Invoke { command: CommandId::CloneSourceArm })),
             ),
-            Some(refusal) => self.notify(stroke_refusal_text(refusal)),
+            Some(refusal) => self.notify(stroke_refusal_text(refusal, self.localization()).to_string()),
             None => {}
         }
     }
@@ -167,7 +167,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// has nothing to act on.
     pub(super) fn notify_drawing_refusal(&mut self) {
         if let Some(refusal) = self.engine.document().drawing_refusal() {
-            self.notify(drawing_refusal_text(refusal));
+            self.notify(drawing_refusal_text(refusal, self.localization()).to_string());
         }
     }
 
@@ -181,11 +181,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             .find(|l| l.kind == LayerKind::Paint && doc.layer_is_visible(l.id))
     }
 
-    pub(super) fn use_reference_below_reason(&self) -> Option<&'static str> {
+    pub(super) fn use_reference_below_reason(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         match self.reference_below() {
-            None => Some(NO_REFERENCE_BELOW),
+            None => Some(l.text(MessageId::COMMANDS_REFUSAL_NOTICES_NO_VISIBLE_PHOTO_OR_PAINT_LAYER_BELOW)),
             Some(layer) if self.engine.document().reference_layers.contains(&layer.id) => {
-                Some("The layer below is already a reference")
+                Some(l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THE_LAYER_BELOW_IS_ALREADY_A_REFERENCE))
             }
             Some(_) => None,
         }
@@ -193,7 +194,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn use_reference_below(&mut self) -> Result<(), String> {
         refused(self.use_reference_below_reason())?;
-        let id = self.reference_below().ok_or(NO_REFERENCE_BELOW)?.id;
+        let id = self.reference_below().ok_or_else(|| self.localization().text(NO_REFERENCE_BELOW).to_string())?.id;
         let mut references = self.engine.document().reference_layers.clone();
         references.insert(id);
         self.set_references(references)

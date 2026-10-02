@@ -902,6 +902,7 @@ pub(crate) fn system_appearance() -> (Theme, Option<HexColor>) {
 }
 
 pub struct Workspace {
+    pub(crate) localization: std::sync::Arc<layer_ui::Localizer>,
     pub window: adw::ApplicationWindow,
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
@@ -1005,12 +1006,27 @@ impl Workspace {
         self.status.set_text(error); self.status.set_visible(true);
         self.restart_canvas.set_visible(true);
     }
+    #[cfg(test)]
     pub fn new(app: &adw::Application) -> Rc<Self> {
-        Self::with_project(app, None)
+        Self::new_localized(app, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
     }
+    pub(crate) fn new_localized(
+        app: &adw::Application,
+        localization: std::sync::Arc<layer_ui::Localizer>,
+    ) -> Rc<Self> {
+        Self::with_project_localized(app, None, localization)
+    }
+    #[cfg(test)]
     pub(crate) fn with_project(
         app: &adw::Application,
         project: Option<(layer_core::Project, Option<DocumentLocation>)>,
+    ) -> Rc<Self> {
+        Self::with_project_localized(app, project, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+    }
+    pub(crate) fn with_project_localized(
+        app: &adw::Application,
+        project: Option<(layer_core::Project, Option<DocumentLocation>)>,
+        localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Rc<Self> {
         static ICONS: std::sync::Once = std::sync::Once::new();
         ICONS.call_once(|| {
@@ -1149,6 +1165,7 @@ impl Workspace {
         content.add_overlay(&image_drop_label);
         window.set_content(Some(&crate::squircle::Squircles::new(&content)));
         let this = Rc::new(Self {
+            localization: localization.clone(),
             window,
             area,
             gpu: RefCell::new(None),
@@ -1159,7 +1176,7 @@ impl Workspace {
             local_tone,
             screen,
             recovery: RefCell::new(Rc::new(crate::recovery::Recovery::default())),
-            documents: crate::documents::Documents::new(),
+            documents: crate::documents::Documents::new_localized(&localization),
             surface,
             palette_css,
             palette: Cell::new(None),
@@ -1611,9 +1628,10 @@ impl Workspace {
     }
 
     fn chrome_menu(self: &Rc<Self>, id: ApplicationMenu) -> gtk::MenuButton {
+        let label = id.localized_label(&self.localization);
         let menu = gtk::MenuButton::builder()
-            .label(id.label())
-            .tooltip_text(id.label())
+            .label(label.as_ref())
+            .tooltip_text(label.as_ref())
             .build();
         menu.add_css_class("flat");
         menu.add_css_class("chrome-control");
@@ -2446,7 +2464,7 @@ impl Workspace {
                     this.wake();
                     return;
                 }
-                match GpuCanvas::with_project(area, this.initial_project.borrow_mut().take()) {
+                match GpuCanvas::with_project_localized(area, this.initial_project.borrow_mut().take(), this.localization.clone()) {
                     Ok(mut gpu) => {
                         if this.recovery().recovered.get() {
                             gpu.session.mark_recovered();
@@ -3005,8 +3023,10 @@ impl Workspace {
                 let mut tabs = Vec::new();
                 if group.tabs_visible {
                     for &panel in &group.panels {
+                        let title = layout.panel(panel).expect("validated panel")
+                            .title_localized(&self.localization);
                         let tab = self.action_button(
-                            panel.label(),
+                            &title,
                             UiAction::SelectPanelTab {
                                 group: group.id,
                                 panel,
@@ -3210,21 +3230,22 @@ impl Workspace {
             }
             for (panel, button) in &view.tabs {
                 let config = layout.panel(*panel).expect("validated panel");
+                let title = config.title_localized(&self.localization);
                 let tab = layout.tab_presentation(*panel);
                 let content = button.child().unwrap();
                 let icon = content.first_child().and_downcast::<gtk::Image>().unwrap();
                 let label = content.last_child().and_downcast::<gtk::Label>().unwrap();
                 crate::icons::set(&icon, Some(&format!("layer-{}-symbolic", config.icon())));
                 icon.set_visible(tab.show_icon);
-                label.set_label(config.title());
+                label.set_label(&title);
                 label.set_visible(tab.show_name);
                 if tab.show_name {
                     button.remove_css_class("icon-only-tab");
                 } else {
                     button.add_css_class("icon-only-tab");
                 }
-                button.set_tooltip_text(Some(config.title()));
-                button.update_property(&[gtk::accessible::Property::Label(config.title())]);
+                button.set_tooltip_text(Some(&title));
+                button.update_property(&[gtk::accessible::Property::Label(&title)]);
                 selected(button, *panel == group.active);
             }
             view.tab_strip

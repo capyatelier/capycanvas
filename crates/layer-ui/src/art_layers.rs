@@ -98,12 +98,12 @@ pub struct LayerControls {
     pub fill: bool,
 }
 /// Only a paint layer's mask can be baked into its pixels.
-pub(super) fn apply_mask_refusal(kind: LayerKind) -> Option<&'static str> {
+pub(super) fn apply_mask_refusal(kind: LayerKind, l: &Localizer) -> Option<std::sync::Arc<str>> {
     match kind {
         LayerKind::Paint => None,
-        LayerKind::Group => Some("A group's mask can't be applied on its own; Merge Group applies it"),
-        LayerKind::Effect => Some("An effect layer's mask sets where the effect shows; it can't be applied"),
-        LayerKind::Background | LayerKind::Selection => Some("Only a paint layer's mask can be applied"),
+        LayerKind::Group => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_A_GROUP_S_MASK_CAN_T_BE_APPLIED_ON_ITS_OWN_MERGE_GROUP_APPLIES_IT)),
+        LayerKind::Effect => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_AN_EFFECT_LAYER_S_MASK_SETS_WHERE_THE_EFFECT_SHOWS_IT_CAN_T_BE_APPLIED)),
+        LayerKind::Background | LayerKind::Selection => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_ONLY_A_PAINT_LAYER_S_MASK_CAN_BE_APPLIED)),
     }
 }
 impl LayerControls {
@@ -610,8 +610,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut ids = Vec::with_capacity(sources.len());
         for (offset, (name, source)) in sources.into_iter().enumerate() {
             source.validate()?;
-            let name = name.trim();
-            if name.is_empty() || name.chars().count() > 128 || name.chars().any(char::is_control) {
+            if name.trim().is_empty() || name.chars().count() > 128 || name.chars().any(char::is_control) {
                 return Err("Use an image name with 1 to 128 characters".into());
             }
             let id = probe.allocate_layer_id();
@@ -800,7 +799,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let edit = self
                     .engine
                     .document()
-                    .group_layers_edit(&roots, id, self.new_group_blend())
+                    .group_layers_edit(&roots, id, self.new_group_blend(),
+                        self.numbered_document_name(MessageId::DOCUMENTS_GROUP_NAME, id.0))
                     .map_err(error)?;
                 self.layer_edit(edit)?;
                 self.layer_interaction.selected = BTreeSet::from([id]);
@@ -895,8 +895,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let index = active.map_or(0, |active| doc.layers.iter().position(|l| l.id == active.id).unwrap()
                     + usize::from(active.kind == LayerKind::Group));
                 let id = self.engine.allocate_layer_id();
-                let mut layer = Layer::paint(id, if group { "Group" } else { "Layer" });
-                layer.name = format!("{} {}", if group { "Group" } else { "Layer" }, id.0).into();
+                let mut layer = Layer::paint(id, self.numbered_document_name(
+                    if group { MessageId::DOCUMENTS_GROUP_NAME } else { MessageId::DOCUMENTS_LAYER_NAME }, id.0,
+                ));
                 if group {
                     layer.kind = LayerKind::Group;
                     layer.properties.blend = self.new_group_blend();
@@ -1108,7 +1109,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let mut copy = source.clone();
                     copy.id = new_id;
                     if roots.contains(&source.id) {
-                        copy.name = format!("{} copy", source.name).into();
+                        let mut args = FluentArgs::new();
+                        args.set("name", source.name.as_ref());
+                        copy.name = self.localization().format(MessageId::DOCUMENTS_COPY_NAME, &args).into();
                     }
                     copy.properties.parent = copy
                         .properties
@@ -1169,8 +1172,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 match other {
                     LayerAction::Rename { name, .. } => {
-                        let name = name.trim();
-                        if name.is_empty() || name.chars().count() > 128 {
+                        if name.trim().is_empty() || name.chars().count() > 128 {
                             return Err("Use a name of 1–128 characters".into());
                         }
                         layer.name = name.into();
@@ -1237,8 +1239,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                         layer.mask = None;
                     }
                     LayerAction::ApplyMask { .. } => {
-                        if let Some(reason) = apply_mask_refusal(layer.kind) {
-                            return Err(reason.into());
+                        if let Some(reason) = apply_mask_refusal(layer.kind, self.localization()) {
+                            return Err(reason.to_string());
                         }
                         let mut mask = layer.mask.take().ok_or("No mask")?;
                         if !mask.enabled {
@@ -1325,7 +1327,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         selected: Some(*b == current),
                         enabled,
                         ..ContextMenuItem::command(
-                            b.label(),
+                            super::effects::blend_label(*b, self.localization()).as_ref(),
                             UiAction::Layer { action: LayerAction::Blend { id: layer.id.0, value: b.code() } },
                         )
                     })
@@ -1359,7 +1361,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let item = |label: &str, action: A| {
             let enabled = match &action {
                 A::RepairSourceProfile { .. } | A::RasterizeSource { .. } => self.can_edit_original(l.id) && !self.state.document_file.busy,
-                A::GroupSelected => doc.group_layers_edit(&roots, LayerId(0), LayerBlend::Normal).is_ok(),
+                A::GroupSelected => doc.group_layers_edit(&roots, LayerId(0), LayerBlend::Normal, "").is_ok(),
                 A::Ungroup { .. } => doc.ungroup_layer_edit(l.id).is_ok(),
                 A::DeleteSelected => doc.can_delete_layers(&roots),
                 A::Delete { .. } => doc.can_delete_layers(&[l.id]),
@@ -1633,7 +1635,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ]);
             if l.id == doc.active_layer {
                 let state = self.command(CommandId::UseReferenceBelow);
-                let mut below = ContextMenuItem::command(state.label, UiAction::Invoke { command: state.id });
+                let mut below = ContextMenuItem::command(state.label.as_ref(), UiAction::Invoke { command: state.id });
                 below.enabled = state.enabled;
                 protection.push(below);
             }
@@ -1642,14 +1644,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 protection.push(item("Rasterize Source…", A::RasterizeSource { id }));
                 if l.id == doc.active_layer {
                     let state = self.command(CommandId::RevertToOriginal);
-                    let mut revert = ContextMenuItem::command(state.label, UiAction::Invoke { command: state.id });
+                    let mut revert = ContextMenuItem::command(state.label.as_ref(), UiAction::Invoke { command: state.id });
                     revert.enabled = state.enabled;
                     protection.push(revert);
                 }
             }
             let mut destructive = Vec::new();
             if paint {
-                destructive.push(item(CommandId::ClearLayer.label(), A::Clear { id }));
+                destructive.push(item(CommandId::ClearLayer.localized_label(self.localization()).as_ref(), A::Clear { id }));
             }
             destructive.push(item(
                 if multiple {
@@ -1694,7 +1696,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer]
                         .map(|command| {
                             let state = self.command(command);
-                            let mut item = ContextMenuItem::command(state.label, UiAction::Invoke { command });
+                            let mut item = ContextMenuItem::command(state.label.as_ref(), UiAction::Invoke { command });
                             item.enabled = state.enabled;
                             item
                         })

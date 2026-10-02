@@ -46,12 +46,6 @@ impl GpuCanvas {
         self.needs_present = true;
         true
     }
-    pub fn with_project(
-        area: &gtk::Picture,
-        project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
-    ) -> Result<Self, String> {
-        Self::with_project_localized(area, project, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
-    }
     pub fn with_project_localized(
         area: &gtk::Picture,
         project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
@@ -72,7 +66,7 @@ impl GpuCanvas {
         };
         let (project, location) = match project {
             Some(project) => project,
-            None => (settings.new_document.defaults.project()?, None),
+            None => (settings.new_document.defaults.project(&localization)?, None),
         };
         let color = project.document.color;
         let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into(), color)?;

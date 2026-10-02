@@ -37,7 +37,7 @@ export async function checkBlending({call,evaluate,settle}) {
     const clip={x:Math.max(0,r.x-8),y:Math.max(0,r.y-8),width:r.width+16,height:r.height+16,scale:1};
     await writeFile(`${directory}/${file}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png',clip})).data,'base64'));
   };
-  const field=label=>`document.querySelector('${dialog} [aria-label=${JSON.stringify(label)}]')`;
+  const field=id=>`document.querySelector('${dialog} [data-document-field=${JSON.stringify(id)}]')`;
   const note=`document.querySelector('${dialog} .document-note').textContent`;
   const choice=async(label,value)=>{await evaluate(`(n=>{n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('change'));})(${field(label)})`);await settle();};
   const theme=await evaluate('layerApp.state().settings.theme ?? null');
@@ -61,23 +61,23 @@ export async function checkBlending({call,evaluate,settle}) {
     for(const name of ['light','dark']) {
       await send({type:'set_theme',theme:name});
       await invoke('new_document');
-      await wait(`!!${field('Blending')}`);
-      assert.equal(await evaluate(`${field('Blending')}.value`),'Perceptual');
+      await wait(`!!${field('blending')}`);
+      assert.equal(await evaluate(`${field('blending')}.value`),'Perceptual');
       assert.equal(await evaluate(note),'Like Photoshop and Clip Studio Paint');
       await capture(`new-document-${name}`,`document.querySelector('${dialog}')`);
-      await choice('Bit depth','F16');
-      assert.deepEqual(await evaluate(`[${field('Blending')}.disabled,${field('Blending')}.value,${note}]`),[true,'Linear','Float documents blend in linear light']);
+      await choice('depth','F16');
+      assert.deepEqual(await evaluate(`[${field('blending')}.disabled,${field('blending')}.value,${note}]`),[true,'Linear','Float documents blend in linear light']);
       await capture(`new-document-float-${name}`,`document.querySelector('${dialog}')`);
-      await choice('Bit depth','U8');
-      assert.deepEqual(await evaluate(`[${field('Blending')}.disabled,${field('Blending')}.value]`),[false,'Perceptual'],'the choice returns with an 8-bit depth');
-      await evaluate(`[...document.querySelectorAll('${dialog} button')].find(b=>b.textContent==='Cancel').click()`);
+      await choice('depth','U8');
+      assert.deepEqual(await evaluate(`[${field('blending')}.disabled,${field('blending')}.value]`),[false,'Perceptual'],'the choice returns with an 8-bit depth');
+      await evaluate(`document.querySelector('${dialog} [data-document-action=cancel]').click()`);
       await wait(`!document.querySelector('${dialog}')`);
     }
     await invoke('new_document');
-    await wait(`!!${field('Blending')}`);
-    await choice('Blending','Linear');
+    await wait(`!!${field('blending')}`);
+    await choice('blending','Linear');
     assert.equal(await evaluate(note),'Physically based');
-    await evaluate(`[...document.querySelectorAll('${dialog} button')].find(b=>b.textContent==='Create').click()`);
+    await evaluate(`document.querySelector('${dialog} [data-document-action=create]').click()`);
     await wait(`!document.querySelector('${dialog}')&&${selected('blend_linear')}`);
   } finally {
     if(theme)await send({type:'set_theme',theme});

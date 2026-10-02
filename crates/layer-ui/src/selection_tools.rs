@@ -1,5 +1,6 @@
 //! Selection construction and settings. Hosts only supply native contacts/keys;
 //! geometry, completion, cancellation, and the single history edit live here.
+use crate::localization::{Localizer, MessageId};
 use super::*;
 pub use layer_core::SelectionMode;
 use layer_core::{Edit, Point, Selection};
@@ -124,27 +125,27 @@ impl SelectionOptions {
         }
         Ok(())
     }
-    pub fn edge_controls(&self) -> Vec<ToolSetting> {
+    pub fn edge_controls(&self, localizer: &Localizer) -> Vec<ToolSetting> {
         vec![ToolSetting {
             id: "selection_feather",
-            label: "Feather radius",
-            group: "Edges",
+            label: localizer.text(MessageId::TOOL_CONTROL_SELECTION_TOOLS_FEATHER_RADIUS),
+            group: localizer.text(MessageId::TOOL_CONTROL_GROUP_EDGES),
             value: self.feather,
             numeric: feather_control(),
         }]
     }
-    pub fn controls(&self) -> Vec<ToolSetting> {
+    pub fn controls(&self, localizer: &Localizer) -> Vec<ToolSetting> {
         let (ids, labels, values, numeric) = match self.constraint {
             SelectionConstraint::Free => return Vec::new(),
             SelectionConstraint::Ratio => (
                 ["selection_ratio_width", "selection_ratio_height"],
-                ["Ratio width", "Ratio height"],
+                [MessageId::TOOL_CONTROL_SELECTION_RATIO_WIDTH, MessageId::TOOL_CONTROL_SELECTION_RATIO_HEIGHT],
                 self.ratio,
                 ratio_control(),
             ),
             SelectionConstraint::Size => (
                 ["selection_width", "selection_height"],
-                ["Width", "Height"],
+                [MessageId::TOOL_CONTROL_SELECTION_WIDTH, MessageId::TOOL_CONTROL_SELECTION_HEIGHT],
                 self.size,
                 size_control(),
             ),
@@ -152,8 +153,8 @@ impl SelectionOptions {
         (0..2)
             .map(|i| ToolSetting {
                 id: ids[i],
-                label: labels[i],
-                group: "",
+                label: localizer.text(labels[i]),
+                group: std::sync::Arc::from(""),
                 value: values[i],
                 numeric: numeric.clone(),
             })
@@ -244,11 +245,11 @@ impl SelectionTools {
     }
 }
 
-pub(crate) fn tool_set(active: SelectionTool) -> ToolSetView {
+pub(crate) fn tool_set(active: SelectionTool, localizer: &crate::localization::Localizer) -> ToolSetView {
     let item = |tool: SelectionTool| {
         let command = tool.command();
         ToolSetItem {
-            label: command.label(),
+            label: command.localized_label(localizer),
             icon: command.icon().unwrap(),
             action: UiAction::Invoke { command },
             selected: tool == active,
@@ -257,7 +258,7 @@ pub(crate) fn tool_set(active: SelectionTool) -> ToolSetView {
     };
     ToolSetView {
         groups: vec![ToolSetItem {
-            label: "Select",
+            label: CommandId::Select.localized_label(localizer),
             icon: "select",
             action: UiAction::Invoke {
                 command: CommandId::Select,

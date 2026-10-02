@@ -3,6 +3,44 @@
 use super::*;
 use layer_core::Project;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FileFailure { InvalidLocation, EditedLocation, Busy, UnknownRequest, SaveNotCaptured, NotExportRequest, InvalidSaveRequest, RespondClose, NoSavedSnapshot, NotCloseRequest, SelectionCapture, CanvasOperation }
+impl FileFailure {
+    fn message(self, localization: &Localizer) -> String {
+        localization.text(match self {
+            Self::InvalidLocation => MessageId::DOCUMENTS_ERROR_INVALID_LOCATION,
+            Self::EditedLocation => MessageId::DOCUMENTS_ERROR_EDITED_LOCATION,
+            Self::Busy => MessageId::DOCUMENTS_ERROR_BUSY,
+            Self::UnknownRequest => MessageId::DOCUMENTS_ERROR_UNKNOWN_REQUEST,
+            Self::SaveNotCaptured => MessageId::DOCUMENTS_ERROR_SAVE_NOT_CAPTURED,
+            Self::NotExportRequest => MessageId::DOCUMENTS_ERROR_NOT_EXPORT_REQUEST,
+            Self::InvalidSaveRequest => MessageId::DOCUMENTS_ERROR_INVALID_SAVE_REQUEST,
+            Self::RespondClose => MessageId::DOCUMENTS_ERROR_RESPOND_CLOSE,
+            Self::NoSavedSnapshot => MessageId::DOCUMENTS_ERROR_NO_SAVED_SNAPSHOT,
+            Self::NotCloseRequest => MessageId::DOCUMENTS_ERROR_NOT_CLOSE_REQUEST,
+            Self::SelectionCapture => MessageId::DOCUMENTS_ERROR_SELECTION_CAPTURE,
+            Self::CanvasOperation => MessageId::DOCUMENTS_ERROR_CANVAS_OPERATION,
+        }).to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentHostError {
+    NewWindowUnavailable, DrawingTabsUnavailable, ChooseDeviceFile, ChooseFilename, ProjectWriterFailed, NoDrawingToOpen,
+}
+impl DocumentHostError {
+    pub fn message(self, localization: &Localizer) -> String {
+        localization.text(match self {
+            Self::NewWindowUnavailable => MessageId::DOCUMENTS_ERROR_NEW_WINDOW_UNAVAILABLE,
+            Self::DrawingTabsUnavailable => MessageId::DOCUMENTS_ERROR_TABS_UNAVAILABLE,
+            Self::ChooseDeviceFile => MessageId::DOCUMENTS_ERROR_DEVICE_FILE,
+            Self::ChooseFilename => MessageId::DOCUMENTS_ERROR_FILENAME,
+            Self::ProjectWriterFailed => MessageId::DOCUMENTS_ERROR_PROJECT_WRITER,
+            Self::NoDrawingToOpen => MessageId::DOCUMENTS_ERROR_NO_DRAWING,
+        }).to_string()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentLocation {
     /// Opaque host handle/URI. Never serialized into the project itself.
@@ -10,7 +48,7 @@ pub struct DocumentLocation {
     pub name: String,
 }
 impl DocumentLocation {
-    pub(super) fn validate(&self) -> Result<(), String> {
+    pub(super) fn validate(&self) -> Result<(), FileFailure> {
         if self.uri.is_empty()
             || self.uri.len() > 16_384
             || self.uri.contains('\0')
@@ -18,14 +56,14 @@ impl DocumentLocation {
             || self.name.len() > 1024
             || self.name.chars().any(char::is_control)
         {
-            Err("Invalid document location".into())
+            Err(FileFailure::InvalidLocation)
         } else {
             Ok(())
         }
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DocumentFileState {
     pub epoch: u64,
     pub revision: u64,
@@ -36,11 +74,20 @@ pub struct DocumentFileState {
     pub busy: bool,
     /// The host closes only after this authorization, not on an initial request.
     pub close_ready: bool,
+    #[serde(skip)]
+    untitled: std::sync::Arc<str>,
+}
+impl Default for DocumentFileState {
+    fn default() -> Self { Self::localized(&Localizer::shared(UiLanguage::English)) }
 }
 impl DocumentFileState {
+    pub fn localized(localization: &Localizer) -> Self {
+        Self { epoch: 0, revision: 0, location: None, unsaved_name: None, modified: false,
+            busy: false, close_ready: false, untitled: localization.text(MessageId::DOCUMENTS_UNTITLED) }
+    }
     pub fn title(&self) -> &str {
         self.location.as_ref().map_or_else(
-            || self.unsaved_name.as_deref().unwrap_or("Untitled"),
+            || self.unsaved_name.as_deref().unwrap_or(&self.untitled),
             |location| location.name.as_str(),
         )
     }
@@ -77,49 +124,49 @@ pub enum DocumentRequest {
     },
 }
 impl DocumentRequest {
-    pub fn title(&self) -> &str {
-        match self {
-            Self::ChangeColor { operation: DocumentColorOperation::Assign } => "Assign Profile",
-            Self::ChangeColor { operation: DocumentColorOperation::Convert } => "Convert Color Space",
-            Self::ChangeColor { operation: DocumentColorOperation::Depth } => "Change Bit Depth",
-            Self::ColorHistory { redo: false } => "Undo Color Change",
-            Self::ColorHistory { redo: true } => "Redo Color Change",
-            Self::Place => "Import image as layer",
-            Self::Paste { mode: PasteMode::Paste } => "Paste",
-            Self::Paste { mode: PasteMode::InPlace } => "Paste in Place",
-            Self::Paste { mode: PasteMode::Into } => "Paste Into",
-            Self::Copy { cut: true, .. } => "Cut",
-            Self::Copy { merged: true, .. } => "Copy Merged",
-            Self::Copy { .. } => "Copy",
-            Self::Properties => "Document Properties",
-            Self::RepairSourceProfile { .. } => "Repair Source Profile",
-            Self::RasterizeSource { .. } => "Rasterize Retained Source",
-            Self::New => "New drawing",
-            Self::Open => "Open drawing or photo",
-            Self::Save { .. } => "Save drawing",
-            Self::Export { .. } => "Export image",
-            Self::ConfirmClose { title } => title,
-        }
+    pub fn title(&self, localization: &Localizer) -> std::sync::Arc<str> {
+        let id = match self {
+            Self::ChangeColor { operation: DocumentColorOperation::Assign } => MessageId::DOCUMENTS_ASSIGN_PROFILE,
+            Self::ChangeColor { operation: DocumentColorOperation::Convert } => MessageId::DOCUMENTS_CONVERT_COLOR,
+            Self::ChangeColor { operation: DocumentColorOperation::Depth } => MessageId::DOCUMENTS_CHANGE_DEPTH,
+            Self::ColorHistory { redo: false } => MessageId::DOCUMENTS_UNDO_COLOR,
+            Self::ColorHistory { redo: true } => MessageId::DOCUMENTS_REDO_COLOR,
+            Self::Place => MessageId::DOCUMENTS_PLACE,
+            Self::Paste { mode: PasteMode::Paste } => MessageId::COMMAND_PASTE_IMAGE,
+            Self::Paste { mode: PasteMode::InPlace } => MessageId::COMMAND_PASTE_IN_PLACE,
+            Self::Paste { mode: PasteMode::Into } => MessageId::COMMAND_PASTE_INTO,
+            Self::Copy { cut: true, .. } => MessageId::COMMAND_CUT,
+            Self::Copy { merged: true, .. } => MessageId::COMMAND_COPY_MERGED,
+            Self::Copy { .. } => MessageId::COMMAND_COPY,
+            Self::Properties => MessageId::DOCUMENTS_PROPERTIES,
+            Self::RepairSourceProfile { .. } => MessageId::DOCUMENTS_REPAIR_SOURCE,
+            Self::RasterizeSource { .. } => MessageId::DOCUMENTS_RASTERIZE_SOURCE,
+            Self::New => MessageId::DOCUMENTS_NEW,
+            Self::Open => MessageId::DOCUMENTS_OPEN,
+            Self::Save { .. } => MessageId::DOCUMENTS_SAVE,
+            Self::Export { .. } => MessageId::DOCUMENTS_EXPORT,
+            Self::ConfirmClose { title } => return title.as_str().into(),
+        };
+        localization.text(id)
     }
-    pub fn accept_label(&self) -> &'static str {
-        match self {
-            Self::ChangeColor { .. } | Self::ColorHistory { .. } => "Apply",
-            Self::Place => "Import",
-            Self::Paste { .. } => "Paste",
-            Self::Copy { .. } => "Copy",
-            Self::Properties => "Done",
-            Self::RepairSourceProfile { .. } => "Apply",
-            Self::RasterizeSource { .. } => "Rasterize",
-            Self::New => "Create",
-            Self::Open => "Open",
-            Self::Export { .. } => "Export",
-            _ => "Save",
-        }
+    pub fn accept_label(&self, localization: &Localizer) -> std::sync::Arc<str> {
+        localization.text(match self {
+            Self::ChangeColor { .. } | Self::ColorHistory { .. } | Self::RepairSourceProfile { .. } => MessageId::COMMON_APPLY,
+            Self::Place => MessageId::DOCUMENTS_IMPORT_ACCEPT,
+            Self::Paste { .. } => MessageId::COMMAND_PASTE_IMAGE,
+            Self::Copy { .. } => MessageId::COMMAND_COPY,
+            Self::Properties => MessageId::COMMON_DONE,
+            Self::RasterizeSource { .. } => MessageId::DOCUMENTS_RASTERIZE,
+            Self::New => MessageId::DOCUMENTS_CREATE,
+            Self::Open => MessageId::DOCUMENTS_OPEN_ACCEPT,
+            Self::Export { .. } => MessageId::DOCUMENTS_EXPORT_ACCEPT,
+            _ => MessageId::COMMON_SAVE,
+        })
     }
-    pub fn filter(&self) -> (&'static str, &'static str) {
+    pub fn filter(&self, localization: &Localizer) -> (std::sync::Arc<str>, &'static str) {
         match self {
-            Self::Export { .. } => ("PNG image", "png"),
-            _ => ("Capy Canvas drawing", "capy"),
+            Self::Export { .. } => (localization.text(MessageId::DOCUMENTS_PNG), "png"),
+            _ => (localization.text(MessageId::DOCUMENTS_CAPY), "capy"),
         }
     }
 }
@@ -132,29 +179,26 @@ pub enum CloseDecision {
     Cancel,
 }
 
-pub const UNSAVED_DESCRIPTION: &str = "Changes will be lost if you close without saving.";
-pub const DISCARD_DOCUMENT_LABEL: &str = "Discard Changes";
-pub const CANCEL_DOCUMENT_LABEL: &str = "Cancel";
-pub const DOCUMENT_WIDTH_LABEL: &str = "Width (px)";
-pub const DOCUMENT_HEIGHT_LABEL: &str = "Height (px)";
 pub const DEFAULT_DOCUMENT_EXTENT: [u32; 2] = [2048, 1536];
 pub const MAX_NEW_DOCUMENT_DIMENSION: u32 = 8192;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct NewDocumentSpec {
-    pub title: &'static str,
-    pub labels: [&'static str; 2],
+    pub title: std::sync::Arc<str>,
+    pub labels: [std::sync::Arc<str>; 2],
     pub extent: [u32; 2],
     pub numeric: NumericControl,
     pub minimum: u32,
     pub maximum: u32,
-    pub accept: &'static str,
-    pub cancel: &'static str,
+    pub accept: std::sync::Arc<str>,
+    pub cancel: std::sync::Arc<str>,
+    pub discard: std::sync::Arc<str>,
+    pub unsaved_description: std::sync::Arc<str>,
 }
-pub fn new_document_spec() -> NewDocumentSpec {
+pub fn new_document_spec(localization: &Localizer) -> NewDocumentSpec {
     NewDocumentSpec {
-        title: "New drawing",
-        labels: [DOCUMENT_WIDTH_LABEL, DOCUMENT_HEIGHT_LABEL],
+        title: localization.text(MessageId::DOCUMENTS_NEW),
+        labels: [localization.text(MessageId::DOCUMENTS_WIDTH), localization.text(MessageId::DOCUMENTS_HEIGHT)],
         extent: DEFAULT_DOCUMENT_EXTENT,
         numeric: NumericControl {
             kind: NumericKind::Number,
@@ -162,19 +206,21 @@ pub fn new_document_spec() -> NewDocumentSpec {
         },
         minimum: 1,
         maximum: MAX_NEW_DOCUMENT_DIMENSION,
-        accept: "Create",
-        cancel: CANCEL_DOCUMENT_LABEL,
+        accept: localization.text(MessageId::DOCUMENTS_CREATE),
+        cancel: localization.text(MessageId::COMMON_CANCEL),
+        discard: localization.text(MessageId::DOCUMENTS_DISCARD),
+        unsaved_description: localization.text(MessageId::DOCUMENTS_UNSAVED_DESCRIPTION),
     }
 }
 
 /// Shared new-document constraints; creation is a host operation so native
 /// windows and future tabbed/mobile hosts can use different presentation.
-pub fn new_drawing(width: u32, height: u32) -> Result<Project, String> {
+pub fn new_drawing(width: u32, height: u32, localization: &Localizer) -> Result<Project, String> {
     NewDocumentOptions {
         extent: [width, height],
         ..Default::default()
     }
-    .project()
+    .project(localization)
 }
 
 #[derive(Clone)]
@@ -197,6 +243,11 @@ pub(super) struct DocumentFiles {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn numbered_document_name(&self, id: MessageId, number: u64) -> String {
+        let mut args = FluentArgs::new();
+        args.set("number", number.to_string());
+        self.localization().format(id, &args)
+    }
     /// Hosts validate/decode projects off-thread first. A fresh session avoids
     /// replacing a working document or colliding with its live GPU resources.
     pub fn from_project(
@@ -218,7 +269,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         localization: std::sync::Arc<Localizer>,
     ) -> Result<Self, String> {
         if let Some(location) = &location {
-            location.validate()?;
+            location.validate().map_err(|error| error.message(&localization))?;
         }
         let photo_name = location
             .is_none()
@@ -253,9 +304,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// a window's drawing collection. This is not a Save and cannot clear edits.
     pub fn initialize_document_location(&mut self, location: Option<DocumentLocation>) -> Result<(), String> {
         if self.state.document_file.busy || self.engine.checkpoint() != self.files.saved_checkpoint {
-            return Err("Only an unedited prepared drawing can receive its initial location".into());
+            return Err(FileFailure::EditedLocation.message(self.localization()));
         }
-        if let Some(location) = &location { location.validate()?; }
+        if let Some(location) = &location { location.validate().map_err(|error| error.message(self.localization()))?; }
         if location.is_some() {
             self.files.unpublished = false;
             self.state.document_file.unsaved_name = None;
@@ -284,7 +335,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.require_document_idle()?;
         }
         if self.files.pending.is_some() {
-            return Err("A file operation is already in progress".into());
+            return Err(FileFailure::Busy.message(self.localization()));
         }
         let id = self.next_request;
         self.request(HostRequestKind::Document { request })?;
@@ -296,7 +347,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn document_request(&self, id: u32) -> Result<&DocumentRequest, String> {
         if self.files.pending.as_ref().map(|p| p.0) != Some(id) {
-            return Err("Unknown document request".into());
+            return Err(FileFailure::UnknownRequest.message(self.localization()));
         }
         self.state
             .requests
@@ -305,7 +356,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 HostRequestKind::Document { request } if r.id == id => Some(request),
                 _ => None,
             })
-            .ok_or("Unknown document request".into())
+            .ok_or_else(|| FileFailure::UnknownRequest.message(self.localization()))
     }
 
     pub fn set_document_replacement(&mut self, enabled: bool) {
@@ -315,7 +366,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.files.replace_in_place {
             self.require_document_idle()?;
             if self.files.pending.is_some() {
-                return Err("A file operation is already in progress".into());
+                return Err(FileFailure::Busy.message(self.localization()));
             }
             self.files.replace_after = Some(opening);
             self.request_document_close()?;
@@ -352,10 +403,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         id: u32,
         location: DocumentLocation,
     ) -> Result<(), String> {
-        location.validate()?;
+        location.validate().map_err(|error| error.message(self.localization()))?;
         self.document_request(id)?;
+        let localization = self.localization().clone();
         let (_, snapshot) = self.files.pending.as_mut().unwrap();
-        snapshot.as_mut().ok_or("Save has not been captured")?.1 = location;
+        snapshot.as_mut().ok_or_else(|| FileFailure::SaveNotCaptured.message(&localization))?.1 = location;
         Ok(())
     }
 
@@ -391,7 +443,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// worker. This never reserves or acknowledges a saved-project checkpoint.
     pub fn capture_project_export(&self, id: u32) -> Result<DocumentExport, String> {
         if !matches!(self.document_request(id)?, DocumentRequest::Export { .. }) {
-            return Err("This is not an export request".into());
+            return Err(FileFailure::NotExportRequest.message(self.localization()));
         }
         self.require_document_idle()?;
         Ok(DocumentExport {
@@ -409,11 +461,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         location: DocumentLocation,
     ) -> Result<Project, String> {
         self.require_raster_snapshot()?;
-        location.validate()?;
+        location.validate().map_err(|error| error.message(self.localization()))?;
         if !matches!(self.document_request(id)?, DocumentRequest::Save { .. })
             || self.files.pending.as_ref().is_some_and(|p| p.1.is_some())
         {
-            return Err("This save was already captured or is not a save request".into());
+            return Err(FileFailure::InvalidSaveRequest.message(self.localization()));
         }
         self.files.pending.as_mut().unwrap().1 = Some((self.engine.checkpoint(), location));
         self.capture_project_recovery()
@@ -428,12 +480,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<UiChange, String> {
         let request = self.document_request(id)?;
         if matches!(request, DocumentRequest::ConfirmClose { .. }) {
-            return Err("Respond to the unsaved changes dialog".into());
+            return Err(FileFailure::RespondClose.message(self.localization()));
         }
         let save = matches!(request, DocumentRequest::Save { .. });
         let cutting = matches!(request, DocumentRequest::Copy { cut: true, .. });
         if save && result == Ok(true) && self.files.pending.as_ref().unwrap().1.is_none() {
-            return Err("No project snapshot was saved".into());
+            return Err(FileFailure::NoSavedSnapshot.message(self.localization()));
         }
         let (_, snapshot) = self.files.pending.take().unwrap();
         self.state.requests.retain(|r| r.id != id);
@@ -489,7 +541,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.files.close_after = true;
         } else if self.state.document_file.modified {
             self.request_document(DocumentRequest::ConfirmClose {
-                title: format!("Save changes to “{}”?", self.state.document_file.title()),
+                title: {
+                    let mut args = FluentArgs::new();
+                    args.set("name", self.state.document_file.title());
+                    self.localization().format(MessageId::DOCUMENTS_CLOSE_CONFIRM, &args)
+                },
             })?;
         } else {
             self.finish_close_or_replace()?;
@@ -507,7 +563,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.document_request(id)?,
             DocumentRequest::ConfirmClose { .. }
         ) {
-            return Err("Not an unsaved changes request".into());
+            return Err(FileFailure::NotCloseRequest.message(self.localization()));
         }
         self.files.pending = None;
         self.files.close_after = false;
@@ -526,7 +582,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(crate) fn require_raster_snapshot(&self) -> Result<(), String> {
-        if self.painted_selections.busy() { return Err("Wait for selection capture to finish".into()); }
+        if self.painted_selections.busy() { return Err(FileFailure::SelectionCapture.message(self.localization())); }
         if self.sdr_gesture.is_some()
             || self.operation.active()
             || (self.region_tools.busy() && !self.refine_previewing())
@@ -536,7 +592,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .as_ref()
                 .is_some_and(|p| !p.library_only())
         {
-            Err("Finish the current canvas operation first".into())
+            Err(FileFailure::CanvasOperation.message(self.localization()))
         } else {
             Ok(())
         }
@@ -545,9 +601,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn require_document_interaction_idle(&self) -> Result<(), String> {
         self.require_idle()?;
         if self.operation.active() {
-            Err(self.operation_refusal().into())
+            Err(self.operation_refusal().to_string())
         } else if self.region_tools.busy() && !self.refine_previewing() {
-            Err("Finish the current canvas operation first".into())
+            Err(FileFailure::CanvasOperation.message(self.localization()))
         } else {
             Ok(())
         }
@@ -557,14 +613,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// or workspace values. Closing and immutable saves may proceed, including
     /// their unsaved-changes decisions. Replacing the document still waits.
     pub fn require_document_snapshot_idle(&self) -> Result<(), String> {
-        if self.painted_selections.busy() { return Err("Wait for selection capture to finish".into()); }
+        if self.painted_selections.busy() { return Err(FileFailure::SelectionCapture.message(self.localization())); }
         self.require_document_interaction_idle()?;
         if self
             .pending_filters
             .as_ref()
             .is_some_and(|p| !p.library_only())
         {
-            Err("Finish the current canvas operation first".into())
+            Err(FileFailure::CanvasOperation.message(self.localization()))
         } else {
             Ok(())
         }
@@ -573,9 +629,34 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn require_document_idle(&self) -> Result<(), String> {
         self.require_document_interaction_idle()?;
         if self.pending_filters.is_some() {
-            Err("Finish the current canvas operation first".into())
+            Err(FileFailure::CanvasOperation.message(self.localization()))
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use super::*;
+    use crate::session::test_support::{Recorder, layer};
+
+    #[test]
+    fn untitled_is_presentation_and_literal_close_names_are_whole_message_arguments() {
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        let mut session = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, japanese.clone()).unwrap();
+        assert_eq!(session.state().document_file.title(), "無題");
+        assert!(session.state().document_file.unsaved_name.is_none());
+        assert!(!session.state().document_file.modified);
+        let name = "Untitled { $name }「絵」🖌️\u{2068}literal\u{2069}.capy";
+        session.initialize_document_location(Some(DocumentLocation { uri: "private:literal".into(), name: name.into() })).unwrap();
+        layer(&mut session, LayerAction::New { group: false, clipped: false });
+        session.request_document_close().unwrap();
+        let HostRequestKind::Document { request: DocumentRequest::ConfirmClose { title } } = &session.state().requests.last().unwrap().kind else { panic!("close request"); };
+        assert_eq!(title, &format!("「{name}」への変更を保存しますか？"));
+        assert_eq!(session.state().document_file.title(), name);
+        let snapshot = serde_json::to_value(&session.state().document_file).unwrap();
+        assert!(snapshot.get("untitled").is_none());
+        assert_eq!(snapshot["location"]["name"], name);
     }
 }

@@ -22,7 +22,7 @@ impl Fixture {
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session = UiSession::from_project(
             renderer,
-            layer_ui::new_drawing(64, 48).unwrap(),
+            layer_ui::new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
             None,
             [64, 48],
             Platform::Windows,

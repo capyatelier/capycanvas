@@ -57,7 +57,7 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
     }
     // An in-sRGB patch cannot detect an accidental sRGB8 intermediate in GSK.
     let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0.1, 0.02, 1.]).unwrap();
-    let mut project = new_drawing(64, 64).unwrap();
+    let mut project = new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: color.space,
         depth: SampleDepth::U16,

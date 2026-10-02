@@ -11,12 +11,12 @@ pub enum ManagerPage {
     ToolbarLibrary,
 }
 impl ManagerPage {
-    pub fn label(self) -> &'static str {
+    pub fn label(self, localization: &layer_ui::Localizer) -> String {
         match self {
-            Self::Workspaces => "Workspaces",
-            Self::History => "Layout History",
-            Self::ThisWorkspace => "This Workspace",
-            Self::ToolbarLibrary => "Saved Toolbars",
+            Self::Workspaces => localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES).to_string(),
+            Self::History => localization.text(layer_ui::MessageId::WORKSPACE_LAYOUT_HISTORY).to_string(),
+            Self::ThisWorkspace => localization.text(layer_ui::MessageId::WORKSPACE_THIS_WORKSPACE).to_string(),
+            Self::ToolbarLibrary => localization.text(layer_ui::MessageId::WORKSPACE_SAVED_TOOLBARS).to_string(),
         }
     }
 }
@@ -45,28 +45,28 @@ pub enum ManagerAction {
     DeleteToolbar(Panel),
 }
 impl ManagerAction {
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self, localization: &layer_ui::Localizer) -> String {
         match self {
-            Self::New => "New Workspace…",
-            Self::SaveAsNew => "Save as New Workspace…",
-            Self::RetryStorage => "Retry Storage",
-            Self::RecoverInterrupted => "Recover Interrupted Changes…",
-            Self::Switch(_) => "Switch",
-            Self::SwitchToWindow(_) => "Switch to Window",
-            Self::Rename(_) | Self::RenameToolbar(_) => "Rename…",
-            Self::DuplicateToolbar(_) => "Duplicate…",
-            Self::ResetBrushes => "Reset All Brushes…",
-            Self::Reset(_) => "Restore Starting Layout…",
-            Self::History(_) => "Layout History…",
-            Self::Delete(_) => "Delete…",
-            Self::AddToolbar(_) => "Add to Workspace",
-            Self::UpdateToolbar(_) => "Update from Workspace…",
-            Self::NewToolbar(_) => "New Toolbar…",
-            Self::ShowToolbar(_, true) => "Show",
-            Self::ShowToolbar(_, false) => "Hide",
-            Self::SaveToolbar(_) => "Save to Toolbar Library…",
-            Self::ReplaceToolbar(_) => "Replace from Library…",
-            Self::DeleteToolbar(_) => "Delete Toolbar…",
+            Self::New => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_NEW_WORKSPACE).to_string(),
+            Self::SaveAsNew => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SAVE_AS_NEW_WORKSPACE).to_string(),
+            Self::RetryStorage => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_RETRY_STORAGE).to_string(),
+            Self::RecoverInterrupted => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_RECOVER_INTERRUPTED_CHANGES).to_string(),
+            Self::Switch(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SWITCH).to_string(),
+            Self::SwitchToWindow(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SWITCH_TO_WINDOW).to_string(),
+            Self::Rename(_) | Self::RenameToolbar(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_RENAME).to_string(),
+            Self::DuplicateToolbar(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_DUPLICATE).to_string(),
+            Self::ResetBrushes => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_RESET_ALL_BRUSHES).to_string(),
+            Self::Reset(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_RESTORE_STARTING_LAYOUT).to_string(),
+            Self::History(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_LAYOUT_HISTORY).to_string(),
+            Self::Delete(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_DELETE).to_string(),
+            Self::AddToolbar(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_ADD_TO_WORKSPACE).to_string(),
+            Self::UpdateToolbar(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_UPDATE_FROM_WORKSPACE).to_string(),
+            Self::NewToolbar(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_NEW_TOOLBAR).to_string(),
+            Self::ShowToolbar(_, true) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SHOW).to_string(),
+            Self::ShowToolbar(_, false) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_HIDE).to_string(),
+            Self::SaveToolbar(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SAVE_TO_TOOLBAR_LIBRARY).to_string(),
+            Self::ReplaceToolbar(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_REPLACE_FROM_LIBRARY).to_string(),
+            Self::DeleteToolbar(_) => localization.text(layer_ui::MessageId::WORKSPACE_ACTION_DELETE_TOOLBAR).to_string(),
         }
     }
     pub fn destructive(&self) -> bool {
@@ -81,9 +81,9 @@ pub struct ManagerButton {
     pub primary: bool,
 }
 impl ManagerButton {
-    fn new(action: ManagerAction, enabled: bool, primary: bool) -> Self {
+    fn new(localization: &layer_ui::Localizer, action: ManagerAction, enabled: bool, primary: bool) -> Self {
         Self {
-            label: action.label().into(),
+            label: action.label(localization),
             action,
             enabled,
             primary,
@@ -121,13 +121,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .map_err(StoreError::invalid)?;
         let visible = capture.history.layout().panel_group(panel).is_some();
         Ok(ManagerDetails {
-            title: config.title().into(),
-            description: format!(
-                "Toolbar in {}. Changes are saved with this workspace and can be recovered in Layout History.",
-                current.metadata.name
-            ),
+            title: config.title_localized(&self.localization),
+            description: message(&self.localization, layer_ui::MessageId::WORKSPACE_TOOLBAR_IN, &[("name", self.display_name(&current.id, &current.metadata))]),
             preview: None,
-            actions: toolbar_actions(panel, visible, idle),
+            actions: toolbar_actions(&self.localization, panel, visible, idle),
         })
     }
     pub fn rows(&self, page: ManagerPage, query: &str, now: u64) -> Vec<WorkspaceRow> {
@@ -147,14 +144,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .panels
                 .iter()
                 .filter(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
-                .filter(|p| name_key(p.title()).contains(&name_key(query)))
+                .filter(|p| layer_ui::normalize_search(&p.title_localized(&self.localization)).contains(&layer_ui::normalize_search(query)))
                 .map(|p| WorkspaceRow {
                     id: serde_json::to_string(&p.id).unwrap(),
-                    title: p.title().into(),
+                    title: p.title_localized(&self.localization),
                     subtitle: if capture.history.layout().panel_group(p.id).is_some() {
-                        "Visible"
+                        self.localization.text(layer_ui::MessageId::WORKSPACE_VISIBLE).to_string()
                     } else {
-                        "Hidden"
+                        self.localization.text(layer_ui::MessageId::WORKSPACE_HIDDEN).to_string()
                     }
                     .into(),
                     current: false,
@@ -188,30 +185,29 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     }
             })
             .filter(|i| {
-                format!("{} {}", i.metadata.name, i.metadata.description)
-                    .to_lowercase()
-                    .contains(&name_key(query))
+                layer_ui::normalize_search(&format!("{} {} {}", self.display_name(&i.id, &i.metadata), i.metadata.name, i.metadata.description))
+                    .contains(&layer_ui::normalize_search(query))
             })
             .map(|i| {
-                let subtitle = if let Some(error) = i.error {
-                    format!("Unavailable: {error}")
+                let subtitle = if let Some(error) = &i.error {
+                    message(&self.localization, layer_ui::MessageId::WORKSPACE_UNAVAILABLE, &[("error", error.to_string())])
                 } else if active.as_ref() == Some(&i.id) {
-                    "Current workspace".into()
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_CURRENT_WORKSPACE).to_string()
                 } else if i
                     .claim
-                    .is_some_and(|c| c.owner != self.owner && c.expires_at_ms > now)
+                    .as_ref().is_some_and(|c| c.owner != self.owner && c.expires_at_ms > now)
                 {
-                    "Open in another window".into()
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_OPEN_IN_ANOTHER_WINDOW).to_string()
                 } else if i.metadata.builtin {
-                    "Included with CapyCanvas".into()
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_INCLUDED_WITH_CAPYCANVAS).to_string()
                 } else if i.metadata.kind == ItemKind::Workspace {
                     String::new()
                 } else {
                     i.metadata.description.clone()
                 };
                 WorkspaceRow {
-                    id: i.id,
-                    title: i.metadata.name,
+                    id: i.id.clone(),
+                    title: self.display_name(&i.id, &i.metadata),
                     subtitle,
                     current: false,
                     actions: Vec::new(),
@@ -237,7 +233,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let available = !elsewhere;
         let mut actions = Vec::new();
         let mut add =
-            |action, enabled, primary| actions.push(ManagerButton::new(action, enabled, primary));
+            |action, enabled, primary| actions.push(ManagerButton::new(&self.localization, action, enabled, primary));
         match metadata.kind {
             ItemKind::Workspace => {
                 add(
@@ -272,7 +268,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             }
         }
         if current && let Some(primary) = actions.first_mut() {
-            primary.label = "Current workspace".into();
+            primary.label = self.localization.text(layer_ui::MessageId::WORKSPACE_CURRENT_WORKSPACE).to_string();
         }
         actions
     }
@@ -284,10 +280,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         };
         let mut description = entity.metadata.description.clone();
         if entity.metadata.builtin {
-            description.push_str("\nIncluded with CapyCanvas.");
+            description = message(&self.localization, layer_ui::MessageId::WORKSPACE_INCLUDED_DESCRIPTION, &[("description", description)]);
         }
         ManagerDetails {
-            title: entity.metadata.name.clone(),
+            title: self.display_name(&entity.id, &entity.metadata),
             description: description.trim().into(),
             preview,
             actions: self.metadata_actions(
@@ -300,7 +296,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
     }
 }
-pub fn toolbar_actions(panel: Panel, visible: bool, idle: bool) -> Vec<ManagerButton> {
+pub fn toolbar_actions(localization: &layer_ui::Localizer, panel: Panel, visible: bool, idle: bool) -> Vec<ManagerButton> {
     [
         ManagerAction::ShowToolbar(panel, !visible),
         ManagerAction::RenameToolbar(panel),
@@ -311,7 +307,7 @@ pub fn toolbar_actions(panel: Panel, visible: bool, idle: bool) -> Vec<ManagerBu
     ]
     .into_iter()
     .enumerate()
-    .map(|(index, action)| ManagerButton::new(action, idle, index == 0))
+    .map(|(index, action)| ManagerButton::new(localization, action, idle, index == 0))
     .collect()
 }
 /// Calendar dates are presentation only, never conflict/ownership ordering.
@@ -328,4 +324,22 @@ pub fn date(timestamp_ms: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = mp + if mp < 10 { 3 } else { -9 };
     format!("{:04}-{:02}-{:02}", y + i64::from(m <= 2), m, d)
+}
+
+pub(crate) fn message(localization: &layer_ui::Localizer, id: layer_ui::MessageId, values: &[(&str, String)]) -> String {
+    let mut args = layer_ui::FluentArgs::new();
+    for (name, value) in values { args.set(*name, value.as_str()); }
+    localization.format(id, &args)
+}
+
+pub(crate) fn name_list(localization: &layer_ui::Localizer, names: &[String]) -> String {
+    let mut args = layer_ui::FluentArgs::new();
+    for (key, name) in ["first", "second", "third"].into_iter().zip(names) { args.set(key, name.as_str()); }
+    args.set("others", names.len().saturating_sub(3));
+    localization.format(match names.len() {
+        1 => layer_ui::MessageId::WORKSPACE_HISTORY_LIST_ONE,
+        2 => layer_ui::MessageId::WORKSPACE_HISTORY_LIST_TWO,
+        3 => layer_ui::MessageId::WORKSPACE_HISTORY_LIST_THREE,
+        _ => layer_ui::MessageId::WORKSPACE_HISTORY_LIST_MORE,
+    }, &args)
 }

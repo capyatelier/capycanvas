@@ -68,18 +68,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     write
                         .metadata
                         .as_ref()
-                        .map(|m| m.name.clone())
+                        .map(|m| self.display_name(&write.id, m))
                         .or_else(|| {
                             self.items()
                                 .iter()
                                 .find(|i| i.id == write.id)
-                                .map(|i| i.metadata.name.clone())
+                                .map(|i| self.display_name(&i.id, &i.metadata))
                         })
-                        .unwrap_or_else(|| "Workspace changes".into())
+                        .unwrap_or_else(|| self.localization.text(layer_ui::MessageId::WORKSPACE_CHANGES).to_string())
                 })
                 .collect();
             if !names.is_empty() {
-                choices.push((batch.operation_id, names.join(", ")));
+                choices.push((batch.operation_id, name_list(&self.localization, &names)));
             }
         }
         Ok(choices)
@@ -116,12 +116,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 } else {base.as_ref().ok_or_else(||StoreError::invalid("The interrupted item is missing its layout."))?.content.clone()},
                 working:if let Some(working)=&write.working_json {Some(serde_json::from_str(working)?)} else {base.as_ref().and_then(|e|e.working.clone())},
             };
-            if !entity.metadata.name.ends_with(" Recovered") {
-                entity.metadata.name = format!(
-                    "{} Recovered",
-                    entity.metadata.name.chars().take(90).collect::<String>()
-                );
-            }
+            entity.metadata.name = message(&self.localization, layer_ui::MessageId::WORKSPACE_RECOVERED_NAME,
+                &[("name", self.display_name(&write.id, &entity.metadata).chars().take(90).collect())])
+                .chars().take(100).collect();
             entity.metadata.builtin = false;
             entity.metadata.created_at_ms = now;
             entity.metadata.last_used_ms = now;

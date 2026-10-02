@@ -8,6 +8,9 @@ a `SurfaceView`. The canvas needs Vulkan shared-demand presentation with
 swapchain-maintenance present fences; a driver without them shows a canvas
 initialization error instead of a canvas.
 
+The native Gradle build tracks shared Rust, filter assets and Fluent catalogs as
+inputs. Catalog-only changes rebuild the embedded native UI text.
+
 JNI result handling lives in `native/src/android.rs`: `or_throw` reports
 `IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
 pixels for Kotlin.

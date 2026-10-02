@@ -51,7 +51,7 @@ fn proof_choice(w:&Rc<Workspace>,name:&str)->gtk::DropDown{
 fn native_proof_cancellation_supersession_and_failed_profile() {
     use layer_core::color::ProofRecipe;
     let app = native_test_app("art.capycanvas.ProofCancellation");
-    let mut project = new_drawing(128, 64).unwrap();
+    let mut project = new_drawing(128, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U8,
@@ -206,7 +206,7 @@ fn toggle(w: &Rc<Workspace>, name: &str) -> gtk::CheckButton {
 fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     use super::new_photo::{profile_action, profile_name};
     let app = native_test_app("art.capycanvas.ProfilePicker");
-    let w = Workspace::with_project(&app, Some((new_drawing(128, 64).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(128, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     ready(&w);
     let output = std::path::Path::new("../../artifacts/color-m3/profile-review-2");
@@ -432,7 +432,7 @@ fn native_embedded_proof_replacement_preserves_local_copy_and_saves_one_profile(
         "{}.icc",
         glib::compute_checksum_for_data(glib::ChecksumType::Sha256, &a).unwrap()
     ));
-    let mut project = new_drawing(128, 64).unwrap();
+    let mut project = new_drawing(128, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.proof = Some(ProofRecipe::new(a_name.clone(), a_profile.clone()));
     let original_file = output.join("embedded-original.capy");
     project
@@ -530,7 +530,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let icc = std::env::var_os("LAYER_PROOF_PROFILE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "/usr/share/color/icc/krita/cmyk.icm".into());
-    let mut project = new_drawing(128, 64).unwrap();
+    let mut project = new_drawing(128, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
@@ -781,7 +781,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
 fn native_open_and_profile_pickers_remember_separate_folders() {
     use super::new_photo::profile_action;
     let app = native_test_app("art.capycanvas.FileFolders");
-    let w = Workspace::with_project(&app, Some((new_drawing(64, 64).unwrap(), None)));
+    let w = Workspace::with_project(&app, Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     *w.open_document.borrow_mut() = Some(Rc::new(|_, _, _| {}));
     w.window.present();
     ready(&w);
@@ -833,7 +833,7 @@ fn native_open_and_profile_pickers_remember_separate_folders() {
     file.response(gtk::ResponseType::Cancel);
     finish(&w);
     // A second window reloads the saved locations; cancellation does not replace them.
-    let other = Workspace::with_project(&app, Some((new_drawing(64, 64).unwrap(), None)));
+    let other = Workspace::with_project(&app, Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     other.window.present();
     ready(&other);
     invoke(&other, CommandId::OpenDocument);

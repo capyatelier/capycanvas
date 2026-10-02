@@ -350,7 +350,7 @@ fn large_photo_transform_latency() {
 /// photo in a native document, alone or with painted strokes above it and a
 /// second photo below.
 fn native_photo_document(layered: bool) -> layer_core::Document {
-    let mut document = layer_core::Document::new("photo", EXTENT[0], EXTENT[1]);
+    let mut document = layer_core::Document::new("photo", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = layer_core::color::DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,

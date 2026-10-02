@@ -49,6 +49,21 @@ import Foundation
             let roundTrip = try JSON.decode(edited.encoded())
             precondition(roundTrip.stableKey == edited.stableKey)
         }
+        let controls = JSON([
+            ["key": "domain", "section": "同じ", "section_id": ["message": "common-cancel"],
+             "kind": ["kind": "choice", "options": ["同じ", "同じ"]],
+             "value": ["kind": "choice", "value": 1]],
+            ["key": "literal", "section": "同じ", "section_id": "同じ"],
+            ["key": "object_text", "section": "同じ", "section_id": "{\"message\":\"common-cancel\"}"],
+            ["key": "other", "section": "同じ", "section_id": ["message": "common-error"]]
+        ] as [[String: Any]])
+        for value in [controls, try JSON.decode(controls.encoded()), JSON(controls.raw as! NSArray)] {
+            precondition(Set(value.array.map { $0["section_id"].stableKey }).count == 4)
+            let changedCaption = value[0].replacing("section", with: JSON("別の表示"))
+            precondition(value[0]["section_id"].stableKey == changedCaption["section_id"].stableKey)
+            precondition(value[0]["key"].string == "domain" && value[0]["value"]["value"].uint == 1)
+            precondition(value[0]["kind"]["options"].array.map(\.string) == ["同じ", "同じ"])
+        }
         for path in CommandLine.arguments.dropFirst() {
             let value = try JSON.decode(String(contentsOfFile: path, encoding: .utf8))
             count += try verify(value, against: value.raw)

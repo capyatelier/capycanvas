@@ -549,7 +549,7 @@ mod tests {
     }
     #[test]
     fn shader_document_reuses_raster_and_parameter_edits_but_tracks_new_dependencies() {
-        let mut doc = Document::new("readiness", 128, 128);
+        let mut doc = Document::new("readiness", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let key = ShaderDocument::new(&doc);
         doc.layers[0].opacity = 0.5;
         doc.revision += 1;
@@ -631,7 +631,7 @@ mod gpu_tests {
                 .all(|p| !p.ready())
         );
         assert!(renderer.pipelines.dry_material.kernels.iter().all(|p| !p.ready()));
-        let document = Document::new("native staged startup", 128, 128);
+        let document = Document::new("native staged startup", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         renderer.prepare_startup(&document, &brush, false).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
@@ -683,7 +683,7 @@ mod gpu_tests {
         let color = layer_core::color::DocumentColor::default();
         let reference = WgpuRasterizer::new_native_headless(color).unwrap();
         let mut renderer = crate::test_support::staged_renderer(&reference, color);
-        let mut document = Document::new("perceptual startup", 128, 128);
+        let mut document = Document::new("perceptual startup", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.blend_space = layer_core::BlendSpace::Perceptual;
         let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Airbrush);
         brush.rendering.accumulation = BrushAccumulation::Flow;
@@ -704,7 +704,7 @@ mod gpu_tests {
         let color = layer_core::color::DocumentColor::default();
         let reference = WgpuRasterizer::new_native_headless(color).unwrap();
         let mut renderer = crate::test_support::staged_renderer(&reference, color);
-        let document = Document::new("retouching startup", 128, 128);
+        let document = Document::new("retouching startup", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         for preset in [layer_core::DefaultBrushPreset::CloneStamp, layer_core::DefaultBrushPreset::HealingBrush] {
             let brush = layer_core::default_brush(preset);
             renderer.prepare_startup(&document, &brush, false).unwrap();

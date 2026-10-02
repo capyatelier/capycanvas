@@ -30,7 +30,7 @@ fn samples(depth: SampleDepth, channels: usize) -> Vec<u8> {
 }
 
 fn fixture(color: DocumentColor) -> Project {
-    let mut document = Document::new("document-color", TILE_SIZE, TILE_SIZE);
+    let mut document = Document::new("document-color", TILE_SIZE, TILE_SIZE, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = color;
     let rgba = Arc::new(
         TileBlob::encode(color.paint_descriptor(), &samples(color.depth, 4)).unwrap(),
@@ -567,7 +567,7 @@ fn cancellation_limits_and_invalid_candidates_leave_document_and_history_intact(
 #[test]
 fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };
-    let mut document = Document::new("precision", 256, 256); document.color = color;
+    let mut document = Document::new("precision", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }); document.color = color;
     let half: Vec<_> = (0..65536u32).flat_map(|i| {
         let v = layer_core::color::f16::from_bits(i as u16).to_f32();
         let v = if v.is_finite() { v } else { 0. };

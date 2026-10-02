@@ -12,7 +12,7 @@ mod clipboard_checks {
     fn clip_session() -> UiSession<Recorder> {
         let mut s = UiSession::new(
             Recorder { tiled_sources: true, ..Default::default() },
-            Document::new("clipboard", 400, 300),
+            Document::new("clipboard", 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [800, 600],
             Platform::Gtk,
         )
@@ -305,7 +305,7 @@ mod clipboard_checks {
         ] {
             assert_eq!(s.command(command).shortcut, chord, "{command:?}");
         }
-        assert_eq!(CommandId::PasteImage.label(), "Paste");
+        assert_eq!(CommandId::PasteImage.label().as_ref(), "Paste");
         assert_eq!(serde_json::to_value(CommandId::PasteImage).unwrap(), "paste_image", "the persisted id is kept");
         assert!(KeyChord::new("c", Modifiers { command: true, shift: true, alt: false }).available(Platform::Web));
         let edit = s.application_menu(ApplicationMenu::Edit);
@@ -342,7 +342,7 @@ mod clipboard_checks {
 
     #[test]
     fn the_mac_selection_bar_omits_the_pixel_clipboard_menu() {
-        let mut mac = UiSession::new(Recorder::default(), Document::new("mac", 400, 300), [800, 600], Platform::Mac).unwrap();
+        let mut mac = UiSession::new(Recorder::default(), Document::new("mac", 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Mac).unwrap();
         invoke(&mut mac, CommandId::SelectAll);
         invoke(&mut mac, CommandId::Move);
         assert!(!mac.state.canvas_bar.unwrap().items.iter().any(|i| i.menu == Some(CanvasBarMenu::Copy)));

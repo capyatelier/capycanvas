@@ -40,7 +40,7 @@ impl ManagerPrompt {
     }
     fn choices(
         mut self,
-        label: &str,
+        label: impl Into<String>,
         choices: Vec<ManagerChoice>,
         selected: Option<String>,
     ) -> Self {
@@ -50,7 +50,7 @@ impl ManagerPrompt {
         self
     }
 }
-pub fn recover_prompt(changes: Vec<(String, String)>) -> Result<ManagerPrompt, StoreError> {
+pub fn recover_prompt(localization: &layer_ui::Localizer, changes: Vec<(String, String)>) -> Result<ManagerPrompt, StoreError> {
     let choices = changes
         .into_iter()
         .map(|(id, label)| ManagerChoice { id, label })
@@ -61,11 +61,11 @@ pub fn recover_prompt(changes: Vec<(String, String)>) -> Result<ManagerPrompt, S
         ));
     }
     Ok(ManagerPrompt::confirm(
-        "Recover Interrupted Changes",
-        "Recover the selected changes into independent copies with unique names. Existing items stay as they are.",
-        "Recover Copies",
+        localization.text(layer_ui::MessageId::WORKSPACE_RECOVER_INTERRUPTED_CHANGES).to_string(),
+        localization.text(layer_ui::MessageId::WORKSPACE_RECOVER_CONFIRM).to_string(),
+        localization.text(layer_ui::MessageId::WORKSPACE_RECOVER_COPIES).to_string(),
     )
-    .choices("Interrupted changes", choices, None))
+    .choices(localization.text(layer_ui::MessageId::WORKSPACE_INTERRUPTED_CHANGES).to_string(), choices, None))
 }
 impl<S: WorkspaceStore> WorkspaceManager<S> {
 
@@ -74,8 +74,8 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .into_iter()
             .filter(|i| i.metadata.kind == kind)
             .map(|i| ManagerChoice {
-                id: i.id,
-                label: i.metadata.name,
+                id: i.id.clone(),
+                label: self.display_name(&i.id, &i.metadata),
             })
             .collect()
     }
@@ -92,23 +92,23 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .filter(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
             .map(|p| ManagerChoice {
                 id: serde_json::to_string(&p.id).unwrap(),
-                label: p.title().into(),
+                label: p.title_localized(&self.localization),
             })
             .collect())
     }
     pub fn new_toolbar_prompt(&self) -> ManagerPrompt {
         let mut choices = vec![ManagerChoice {
             id: String::new(),
-            label: "Empty toolbar".into(),
+            label: self.localization.text(layer_ui::MessageId::WORKSPACE_EMPTY_TOOLBAR).to_string(),
         }];
         choices.extend(self.choices_for(ItemKind::Toolbar));
         let mut p = ManagerPrompt::confirm(
-            "New Toolbar",
-            "Start with an empty toolbar or an independent copy from the Toolbar Library.",
-            "Add to Workspace",
+            self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR).to_string(),
+            self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR_CONFIRM).to_string(),
+            self.localization.text(layer_ui::MessageId::WORKSPACE_ADD_TO_WORKSPACE).to_string(),
         )
-        .choices("Start with", choices, None);
-        p.name = Some("New Toolbar".into());
+        .choices(self.localization.text(layer_ui::MessageId::WORKSPACE_START_WITH).to_string(), choices, None);
+        p.name = Some(self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR).to_string());
         p
     }
 
@@ -122,18 +122,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Ok(match action {
             A::New => {
                 let mut p = ManagerPrompt::confirm(
-                    "New Workspace",
-                    "Copy your current tool settings and layout into a new workspace.",
-                    "Create and Switch",
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE).to_string(),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_CONFIRM).to_string(),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_CREATE_AND_SWITCH).to_string(),
                 );
-                p.name = Some("New Workspace".into());
+                p.name = Some(self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE).to_string());
                 p
             }
             A::ResetBrushes => {
                 let mut p = ManagerPrompt::confirm(
-                    "Reset All Brushes?",
-                    "Restore every brush’s settings in this workspace to their defaults.",
-                    "Reset Brushes",
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESET_ALL_BRUSHES).to_string(),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESET_BRUSHES_CONFIRM).to_string(),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESET_BRUSHES).to_string(),
                 );
                 p.destructive = true;
                 p
@@ -142,13 +142,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let s = source()?;
                 let reusable = s.kind == ItemKind::Toolbar;
                 let mut p = ManagerPrompt::confirm(
-                    "Rename",
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_RENAME).to_string(),
                     if reusable {
-                        "Choose a name and optional description."
+                        self.localization.text(layer_ui::MessageId::WORKSPACE_RENAME_TOOLBAR_MESSAGE).to_string()
                     } else {
-                        ""
+                        String::new()
                     },
-                    "Rename",
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_RENAME).to_string(),
                 );
                 p.name = Some(s.name.clone());
                 p.description = reusable.then(|| s.description.clone());
@@ -164,13 +164,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .layout()
                     .panel(*panel)
                     .map_err(StoreError::invalid)?;
-                ToolbarDefinition::capture(toolbar)?;
+                ToolbarDefinition::capture(toolbar, &self.localization)?;
                 let mut p = ManagerPrompt::confirm(
-                    "Save to Toolbar Library",
-                    "Create a reusable copy of this toolbar. Its placement belongs to each receiving workspace.",
-                    "Save to Library",
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_TO_TOOLBAR_LIBRARY).to_string(),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_TOOLBAR_CONFIRM).to_string(),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_TO_LIBRARY).to_string(),
                 );
-                p.name = Some(toolbar.title().into());
+                p.name = Some(toolbar.title_localized(&self.localization));
                 p
             }
             A::Reset(id) => {
@@ -179,30 +179,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     return Err(StoreError::invalid("Choose a workspace."));
                 }
                 ManagerPrompt::confirm(
-                    "Restore Starting Layout",
-                    format!(
-                        "{} The arrangement shown behind this dialog is a preview. You can undo restoring it with {} → Undo Workspace.",
-                        if s.builtin && is_default_item(id) {
-                            "Restore the latest default layout for this workspace."
-                        } else {
-                            "Restore this workspace’s saved starting layout."
-                        },
-                        layer_ui::WORKSPACE_MENU_LABEL
-                    ),
-                    "Restore",
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESTORE_STARTING_LAYOUT).to_string(),
+                    message(&self.localization, if s.builtin && is_default_item(id) { layer_ui::MessageId::WORKSPACE_RESET_DEFAULT_CONFIRM } else { layer_ui::MessageId::WORKSPACE_RESET_SAVED_CONFIRM }, &[("menu", self.localization.text(layer_ui::MessageId::WORKSPACE_MENU).to_string())]),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESTORE).to_string(),
                 )
             }
             A::Delete(id) => {
                 let s = source()?;
                 let mut p = ManagerPrompt::confirm(
-                    "Delete",
-                    format!("Delete “{}”? This is permanent.", s.name),
-                    "Delete",
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_DELETE).to_string(),
+                    message(&self.localization, if self.active_id().as_deref() == Some(id) { layer_ui::MessageId::WORKSPACE_DELETE_ACTIVE_CONFIRM } else { layer_ui::MessageId::WORKSPACE_DELETE_CONFIRM }, &[("name", self.display_name(id, s))]),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_DELETE).to_string(),
                 );
-                if self.active_id().as_deref() == Some(id) {
-                    p.message
-                        .push_str(" This window will switch to an available default workspace.");
-                }
                 p.destructive = true;
                 p
             }
@@ -211,24 +199,24 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 if choices.is_empty() {
                     return Err(StoreError::invalid("Save a toolbar to the Library first."));
                 }
-                ManagerPrompt::confirm("Replace from Library","Replace this toolbar’s contents and display options while preserving its placement. Undo Layout Change can restore it.","Replace Toolbar")
-                    .choices("Saved toolbar",choices,None)
+                ManagerPrompt::confirm(self.localization.text(layer_ui::MessageId::WORKSPACE_REPLACE_FROM_LIBRARY).to_string(),self.localization.text(layer_ui::MessageId::WORKSPACE_REPLACE_TOOLBAR_CONFIRM).to_string(),self.localization.text(layer_ui::MessageId::WORKSPACE_REPLACE_TOOLBAR).to_string())
+                    .choices(self.localization.text(layer_ui::MessageId::WORKSPACE_SAVED_TOOLBAR).to_string(),choices,None)
             }
             A::UpdateToolbar(_) => {
                 let current = self
                     .current()
                     .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
-                ManagerPrompt::confirm("Update Saved Toolbar",format!("Choose a toolbar from {} to replace the saved {}. Existing workspace copies stay as they are.",current.metadata.name,source()?.name),"Update")
-                    .choices("Toolbar",self.current_toolbar_choices()?,None)
+                ManagerPrompt::confirm(self.localization.text(layer_ui::MessageId::WORKSPACE_UPDATE_SAVED_TOOLBAR).to_string(),message(&self.localization, layer_ui::MessageId::WORKSPACE_UPDATE_TOOLBAR_CONFIRM, &[("workspace", self.display_name(&current.id, &current.metadata)), ("toolbar", source()?.name.clone())]),self.localization.text(layer_ui::MessageId::WORKSPACE_UPDATE).to_string())
+                    .choices(self.localization.text(layer_ui::MessageId::WORKSPACE_TOOLBAR).to_string(),self.current_toolbar_choices()?,None)
             }
             A::NewToolbar(_) => self.new_toolbar_prompt(),
             A::SaveAsNew => {
                 let mut p = ManagerPrompt::confirm(
-                    "Save as New Workspace",
-                    "Preserve the current in-memory layout, history, original reset target and latest tool values in an independent workspace.",
-                    "Save and Switch",
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_AS_NEW_WORKSPACE).to_string(),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_AS_NEW_CONFIRM).to_string(),
+                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_AND_SWITCH).to_string(),
                 );
-                p.name = Some("Recovered Workspace".into());
+                p.name = Some(self.localization.text(layer_ui::MessageId::WORKSPACE_RECOVERED_WORKSPACE).to_string());
                 p
             }
             _ => {

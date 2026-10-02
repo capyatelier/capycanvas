@@ -6,7 +6,7 @@ use layer_core::{
 };
 
 fn fixture() -> Project {
-    let mut p = new_drawing(64, 16).unwrap();
+    let mut p = new_drawing(64, 16, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     p.document.color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,

@@ -17,7 +17,7 @@ fn capture(project: Project) -> Result<SnapshotRenderer, GpuRasterError> {
 
 #[test]
 fn read_only_capture_does_not_compile_paint_publication_pipelines() {
-    let document = Document::new("Read-only capture", 33, 17);
+    let document = Document::new("Read-only capture", 33, 17, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let color = [0.25, 0.5, 0.75, 1.];
     let mut capture = gpu().capture(Project { document }, color, 0., Default::default()).unwrap();
     assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
@@ -27,7 +27,7 @@ fn read_only_capture_does_not_compile_paint_publication_pipelines() {
 
 #[test]
 fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
-    let mut doc = Document::new("Animation phase", 32, 32);
+    let mut doc = Document::new("Animation phase", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let program = crate::tests::fixture("domain_warp").program();
     let mut program = (*program).clone();
     // A uniform time signal makes this independent of the filter's appearance.
@@ -70,7 +70,7 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
 
 #[test]
 fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
-    let mut document = Document::new("Float32 delivery", 3, 1);
+    let mut document = Document::new("Float32 delivery", 3, 1, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color.depth = SampleDepth::F32;
     document.layers[1].visible = false;
     let target = SourceInterpretation { channels: SourceChannels::Rgba,
@@ -105,7 +105,7 @@ fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
 #[test]
 fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
     let extent = [1027, 33];
-    let mut document = Document::new("Float32 shared capture", extent[0], extent[1]);
+    let mut document = Document::new("Float32 shared capture", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::F32 };
     document.layers[1].visible = false;
     let target = SourceInterpretation {
@@ -154,7 +154,7 @@ fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
 #[test]
 fn hdr_flattened_storage_ignores_sdr_rendition() {
     use layer_core::color::hdr;
-    let mut document = Document::new("HDR flattened copy", 3, 1);
+    let mut document = Document::new("HDR flattened copy", 3, 1, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color.depth = SampleDepth::F16;
     document.layers[1].visible = false;
     let target = SourceInterpretation { channels: SourceChannels::Rgba,
@@ -200,7 +200,7 @@ fn hdr_flattened_storage_ignores_sdr_rendition() {
 }
 
 fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {
-    let mut document = Document::new("snapshot fixture", extent[0], extent[1]);
+    let mut document = Document::new("snapshot fixture", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = color;
     document.layers[1].visible = false;
     let mut builder = SourceBuilder::new(

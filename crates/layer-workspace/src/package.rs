@@ -43,8 +43,12 @@ struct Package {
     components: BTreeMap<String, String>,
 }
 pub fn export_package(entity: &Entity) -> Result<Vec<u8>, StoreError> {
+    export_package_localized(entity, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+}
+pub fn export_package_localized(entity: &Entity, localization: &layer_ui::Localizer) -> Result<Vec<u8>, StoreError> {
     entity.validate()?;
     let mut metadata = entity.metadata.clone();
+    metadata.name = workspace_display_name(&entity.id, &metadata, localization);
     metadata.builtin = false;
     let mut components = BTreeMap::new();
     let mut value = serde_json::to_value(&entity.content)?;
@@ -55,7 +59,7 @@ pub fn export_package(entity: &Entity) -> Result<Vec<u8>, StoreError> {
     let content = protocol::pack(value, &mut components)?;
     let bytes = serde_json::to_vec(&Package {
         format: "capycanvas-workspace".into(),
-        version: 2,
+        version: 3,
         kind: PackageKind::for_entity(entity),
         metadata,
         content,
@@ -77,7 +81,7 @@ pub fn import_package(bytes: &[u8], expected: PackageKind, now: u64) -> Result<E
     }
     let header: serde_json::Value = serde_json::from_slice(bytes)?;
     if header.get("format").and_then(|v| v.as_str()) != Some("capycanvas-workspace")
-        || header.get("version").and_then(|v| v.as_u64()) != Some(2)
+        || header.get("version").and_then(|v| v.as_u64()) != Some(3)
     {
         return Err(StoreError::new(
             ErrorKind::UnsupportedSchema,

@@ -272,16 +272,16 @@ fn build(
         widget.set_can_focus(false);
     };
     if let Some(menu) = item.menu {
-        let (button, image, text) = menu_button(workspace, context, menu.id(), menu.label());
+        let (button, image, text) = menu_button(workspace, context, menu.id(), &item.label);
         button.set_widget_name(&format!("canvas-bar-menu-{}", menu.id()));
         unfocused(button.upcast_ref());
         crate::icons::set(&image, Some(&format!("layer-{}-symbolic", menu.icon())));
-        text.set_text(item.label);
+        text.set_text(&item.label);
         return (button.clone().upcast(), Some(Field::Menu(button, image, text)));
     }
     match &item.option {
         ToolOption::Action { state, checkable } => {
-            let button = action_button(state, *checkable, Some(item.label), send);
+            let button = action_button(state, *checkable, Some(&item.label), send);
             button.set_widget_name(&format!("canvas-bar-{:?}", state.id));
             unfocused(button.upcast_ref());
             button.add_css_class(if item.accent { "suggested-action" } else { "flat" });

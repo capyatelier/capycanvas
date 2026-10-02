@@ -303,7 +303,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
             let mut edited = old.clone();
             edited.header.size = layer_ui::HeaderSize::Small;
             let mut history = layer_ui::LayoutHistory::new(&old);
-            history.append(&edited, "Customize old default");
+            history.append(&edited, layer_ui::LayoutChange::Automatic);
             assert!(history.undo());
             let mut database: serde_json::Value = serde_json::from_str(&f.backend.database.borrow().encoded().unwrap()).unwrap();
             database["items"][id]["entity"]["content"] = serde_json::to_value(ItemContent::Workspace {
@@ -928,13 +928,15 @@ fn saved_toolbar(f: &Fixture, name: &str) -> Option<ItemSummary> {
 #[test]
 fn toolbar_install_is_one_undo_step_and_retry_flushes_without_reinstalling() {
     let mut f = Fixture::new();
+    f.input(serde_json::json!({"type":"form","action":{"type":"new_toolbar","value":null}}));
+    f.input(serde_json::json!({"type":"submit","name":"Taken"}));
+    f.save();
     let before = f.host.session.state().workspace.layout.clone();
     f.input(serde_json::json!({"type":"form","action":{"type":"new_toolbar","value":null}}));
     let prompt = f.controller.view.prompt.clone().unwrap();
     assert_eq!(prompt.name.as_deref(), Some("New Toolbar"));
     assert_eq!(prompt.selected.as_deref(), Some(""));
-    let existing = toolbar_names(&f)[0].clone();
-    f.input(serde_json::json!({"type":"submit","name":existing}));
+    f.input(serde_json::json!({"type":"submit","name":"Taken"}));
     assert!(
         f.controller.view.error.is_some(),
         "typed toolbar names must not collide"
@@ -1485,4 +1487,32 @@ fn sqlite_startup_keeps_a_newer_store_and_runs_in_memory() {
     assert_eq!(version, SCHEMA_VERSION + 1);
     assert_eq!(rows(), before);
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn workspace_projection_uses_one_identity_without_publishing_or_dirtying() {
+    for language in layer_ui::UiLanguage::ALL {
+        let backend = Rc::new(Backend::default());
+        backend.now.set(1000);
+        let localization = layer_ui::Localizer::shared(language);
+        let manager = WorkspaceManager::new_localized(Store(backend.clone()), Platform::Gtk, localization.clone());
+        let mut stored = pollster::block_on(manager.initialize(1000)).unwrap();
+        stored.entity.metadata.name = "stored name suffix 2".into();
+        let id = stored.entity.id.clone();
+        manager.activate(stored.clone());
+        let before = serde_json::to_string(&manager.current().unwrap()).unwrap();
+        let publications = backend.deliveries.borrow().len();
+        let expected = workspace_display_name(&id, &stored.entity.metadata, &localization);
+        assert_eq!(manager.active_name().as_deref(), Some(expected.as_str()));
+        assert_eq!(manager.binding().unwrap().name, expected);
+        assert_eq!(manager.details(&stored, true, 1000).title, expected);
+        let rows = manager.rows(ManagerPage::Workspaces, "Ｐａｉｎｔ", 1000);
+        assert_eq!(rows[0].title, expected);
+        let prompt = manager.form_prompt(&ManagerAction::Delete(id), Some(&stored.entity.metadata)).unwrap();
+        assert!(prompt.message.contains(&expected));
+        assert!(!prompt.message.contains("stored name suffix 2"));
+        assert!(!manager.dirty());
+        assert_eq!(serde_json::to_string(&manager.current().unwrap()).unwrap(), before);
+        assert_eq!(backend.deliveries.borrow().len(), publications);
+    }
 }

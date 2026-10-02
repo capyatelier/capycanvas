@@ -247,7 +247,7 @@ mod selection_refine_checks {
         assert_eq!(
             quick,
             RefineKind::ALL
-                .map(|kind| (canvas_bar::short_label(kind.command()).to_string(), Some(UiAction::Invoke { command: kind.command() }), true))
+                .map(|kind| (canvas_bar::short_label(kind.command(), s.localization()).to_string(), Some(UiAction::Invoke { command: kind.command() }), true))
                 .to_vec()
         );
         invoke(&mut s, CommandId::FeatherSelection);
@@ -283,7 +283,7 @@ mod selection_refine_checks {
             layer_menu,
             RefineKind::ALL
                 .map(|kind| (
-                    canvas_bar::short_label(kind.command()).to_string(),
+                    canvas_bar::short_label(kind.command(), s.localization()).to_string(),
                     Some(UiAction::Selection { action: SelectionAction::BeginRefine { kind, layer: Some(id.0) } }),
                     true,
                 ))
@@ -318,7 +318,7 @@ mod selection_refine_checks {
         let labels: Vec<_> = menu.sections.iter().flatten().map(|i| i.label.as_str()).collect();
         for command in RefineKind::ALL.map(RefineKind::command).into_iter().chain([CommandId::TransformSelectionOutline]) {
             assert!(s.command(command).enabled, "{command:?}");
-            assert!(labels.contains(&command.label()), "{command:?} is in the Select menu");
+            assert!(labels.contains(&command.label().as_ref()), "{command:?} is in the Select menu");
         }
         assert!(!labels.contains(&"Grow…"), "the old items are replaced");
     }
@@ -368,9 +368,9 @@ mod selection_refine_checks {
                 CommandId::TransformRotateRight, CommandId::ResetTransform, CommandId::CancelTransform, CommandId::ApplyTransform,
             ]);
             for command in [CommandId::TransformDistort, CommandId::TransformWarp] {
-                assert_eq!(s.command_disabled_reason(command).as_deref(), Some(operation::OUTLINE_AFFINE));
+                assert_eq!(s.command_disabled_reason(command).as_deref(), Some(s.localization().text(operation::OUTLINE_AFFINE).as_ref()));
             }
-            assert_eq!(s.command_disabled_reason(CommandId::TransformBicubic).as_deref(), Some(operation::OUTLINE_PIXELS));
+            assert_eq!(s.command_disabled_reason(CommandId::TransformBicubic).as_deref(), Some(s.localization().text(operation::OUTLINE_PIXELS).as_ref()));
             assert!(!s.state.tool_actions.iter().any(|a| a.command == CommandId::TransformBicubic));
             assert!(s.set_transform_mode(operation::TransformMode::Warp, false).is_err());
 

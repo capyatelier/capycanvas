@@ -390,8 +390,13 @@ fn toolbar_components_customize_and_restore_as_atomic_items() {
 
 #[test]
 fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders() {
-    let mut s = session(Platform::Gtk);
+    for (language, source) in [(UiLanguage::English, "Source"), (UiLanguage::Japanese, "ソース")] {
+    let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk,
+        Localizer::shared(language)).unwrap();
     invoke(&mut s, CommandId::Eyedropper);
+    let choices = s.state().tool_options();
+    assert!(choices.iter().any(|o| matches!(o, ToolOption::Choice { id: "variant", label, .. } if label.as_ref() == source)));
+    assert!(choices.iter().any(|o| matches!(o, ToolOption::Choice { id: "sample-size", label, .. } if label.as_ref() == "Sample size")));
     s.dispatch(UiAction::SetColorSampleSize { width: 101 })
         .unwrap();
     for id in ["variant", "sample-size"] {
@@ -417,7 +422,10 @@ fn toolbar_choices_keep_independent_selections_and_disable_unavailable_sliders()
         }
     )));
     invoke(&mut s, CommandId::Brush);
-    assert!(ToolbarNumericBinding::BrushSize.field(s.state()).is_some());
+    let size = ToolbarNumericBinding::BrushSize.field(s.state()).unwrap();
+    assert_eq!(size.id, "size");
+    assert_eq!(size.numeric, NumericControl::brush_size());
+    }
 }
 
 #[test]
@@ -738,13 +746,14 @@ fn toolbar_number_width_samples_cover_ranges_and_units() {
 
 #[test]
 fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
+    let localizer = Localizer::shared(UiLanguage::English);
     let mut fields = Vec::new();
     for brush in brush_catalog() {
         fields.extend(tool_settings::controls(&layer_core::default_brush(
             tools::preset(brush.id).unwrap(),
-        )));
+        ), &localizer));
     }
-    fields.extend(region_tools::RegionTools::default().controls());
+    fields.extend(region_tools::RegionTools::default().controls(&localizer));
     for constraint in [
         SelectionConstraint::Free,
         SelectionConstraint::Ratio,
@@ -754,8 +763,8 @@ fn toolbar_field_icons_cover_published_settings_and_exist_in_the_bank() {
             constraint,
             ..Default::default()
         };
-        fields.extend(options.controls());
-        fields.extend(options.edge_controls());
+        fields.extend(options.controls(&localizer));
+        fields.extend(options.edge_controls(&localizer));
     }
     for id in fields.iter().map(|f| f.id).chain([
         "transform_x",

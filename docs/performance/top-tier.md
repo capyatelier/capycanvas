@@ -221,3 +221,10 @@ helper. These input-paced desktop checks do not qualify the reference tablet or
 | Floating group presentation, touch median | 99.645 fps | 99.643 fps |
 | Largest dispatch p95 in alternating repeat | 0.0730 ms | 0.0740 ms |
 | Largest placement p95 in alternating repeat | 0.00966 ms | 0.00982 ms |
+
+## Localization measurement coverage
+
+The reference tablet was reserved by another owner during the 2026-10-01 PDT
+localization comparison. No commands were issued to it and no localization
+brush, numeric, header or toolbar row is qualified on this tier. Low/mid
+results and nonreference functional checks cannot fill this gap.

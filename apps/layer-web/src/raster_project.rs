@@ -390,7 +390,7 @@ pub(super) async fn save(project: Project) -> Result<JsValue, JsValue> {
 pub(super) struct OpenOptions {
     pub dimension: u32,
     pub photo_policy: layer_ui::PhotoOpenPolicy,
-    pub name: String,
+    pub names: layer_core::DocumentNames,
     pub intent: layer_ui::ImportIntent,
     #[serde(default)]
     pub source_bytes: Option<usize>,
@@ -414,7 +414,7 @@ pub async fn raster_worker_read(options: &str, bytes: Vec<u8>) -> Result<JsValue
     let mut photo_limits = layer_color::photo::DecodeLimits::from_memory_budget(photo_memory_budget());
     if let Some(remaining) = options.source_bytes { photo_limits.source_bytes = photo_limits.source_bytes.min(remaining); }
     let imported = layer_ui::read_import(std::io::Cursor::new(&bytes), options.intent, options.photo_policy,
-        &options.name, limits(options.dimension), photo_limits, &Default::default()).map_err(js)?;
+        options.names, limits(options.dimension), photo_limits, &Default::default()).map_err(js)?;
     hdr::admit_document(&imported.project.document)?;
     drop(bytes);
     let wire = pack(imported.project).await?;

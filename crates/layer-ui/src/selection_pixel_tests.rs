@@ -29,7 +29,7 @@ mod selection_pixel_checks {
     fn photo_session() -> UiSession<Recorder> {
         let source = layer_core::color::source::rgba8_source([40, 30], |_, _| [200; 4]);
         let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-            Document::new("photo", 200, 150), [800, 600], Platform::Gtk).unwrap();
+            Document::new("photo", 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
         s.place_layer_source("Photo", Arc::unwrap_or_clone(source), None).unwrap();
         invoke(&mut s, CommandId::ApplyTransform);
         s.frame(1, 1).unwrap();
@@ -96,7 +96,7 @@ mod selection_pixel_checks {
         assert_eq!(reason(&s).as_deref(), Some("The active layer is locked"));
         s.dispatch(UiAction::Layer { action: LayerAction::Lock { id, value: false } }).unwrap();
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
-        assert_eq!(reason(&s).as_deref(), Some(super::notices::drawing_refusal_text(layer_core::DrawingRefusal::Paper)));
+        assert_eq!(reason(&s).as_deref(), Some(super::notices::drawing_refusal_text(layer_core::DrawingRefusal::Paper, s.localization()).as_ref()));
         s.dispatch(UiAction::SelectLayer { id }).unwrap();
         let selection = s.engine.document().selection.clone();
         s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id, replace: false } }).unwrap();
@@ -126,7 +126,7 @@ mod selection_pixel_checks {
         assert!(Arc::ptr_eq(cleared.source.as_ref().unwrap(), &source), "the raster clears over the original");
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.engine.document().layers, before);
-        assert_eq!(CommandId::ClearLayer.label(), "Clear Entire Layer");
+        assert_eq!(CommandId::ClearLayer.label().as_ref(), "Clear Entire Layer");
         assert!(crate::customization::tool_choice(ToolbarControl::Command { command: CommandId::ClearLayer })
             .description
             .contains("placed photo"));
@@ -286,7 +286,7 @@ mod selection_pixel_checks {
         s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
         assert_eq!(
             reasons(&s)[0].as_deref(),
-            Some(super::notices::drawing_refusal_text(layer_core::DrawingRefusal::Group))
+            Some(super::notices::drawing_refusal_text(layer_core::DrawingRefusal::Group, s.localization()).as_ref())
         );
         s.dispatch(UiAction::SelectLayer { id: paint }).unwrap();
         s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: paint, value: true } }).unwrap();

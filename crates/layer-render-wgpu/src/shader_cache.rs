@@ -326,7 +326,7 @@ mod tests {
         .unwrap();
         let color = layer_core::color::DocumentColor::default();
         let mut reference = WgpuRasterizer::new_native_headless(color).unwrap();
-        let doc = layer_core::Document::new("cached", 64, 64);
+        let doc = layer_core::Document::new("cached", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         let dabs = [layer_render::Dab {
             center: layer_core::Point { x: 32., y: 32. },

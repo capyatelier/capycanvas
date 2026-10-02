@@ -92,7 +92,7 @@ mod workspace_session;
 pub use application_menu::{ApplicationLink, ApplicationMenu};
 pub use workspace_session::PreparedWorkspace;
 #[path = "effects.rs"]
-mod effects;
+pub(crate) mod effects;
 #[path = "filter_previews.rs"]
 mod filter_previews;
 pub use filter_previews::{FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
@@ -137,10 +137,47 @@ struct FloatingResize {
     press: [f32; 2],
 }
 
+#[derive(Clone, PartialEq)]
+struct CustomizationLayoutKey {
+    panels: Vec<(Panel, customization::PanelContent, bool)>,
+    header_entries: Option<[Vec<u32>; 3]>,
+    target_validity: Option<Result<(), String>>,
+}
+impl CustomizationLayoutKey {
+    fn matches(&self, layout: &DockLayout) -> bool {
+        self.panels.len() == layout.panels.len()
+            && self.panels.iter().zip(&layout.panels).all(|((id, content, visible), panel)|
+                *id == panel.id && content == &panel.content && *visible == layout.panel_group(panel.id).is_some())
+            && self.header_entries.as_ref().is_none_or(|zones| zones.iter().zip(&layout.header.zones).all(|(ids, entries)|
+                ids.len() == entries.len() && ids.iter().zip(entries).all(|(id, entry)| *id == entry.id)))
+    }
+    fn new(layout: &DockLayout) -> Self {
+        Self {
+            panels: layout.panels.iter().map(|p| (p.id, p.content.clone(), layout.panel_group(p.id).is_some())).collect(),
+            header_entries: Default::default(),
+            target_validity: None,
+        }
+    }
+}
+struct WorkspaceMenuCopy {
+    panels: Vec<(Panel, customization::PanelContent)>,
+    managed: bool,
+    labels: Vec<(Panel, String)>,
+    restored: [String; 2],
+}
+#[derive(Default)]
+struct CustomizationCopy {
+    picker: Option<(customization::ToolPicker, CustomizationLayoutKey, std::sync::Arc<ToolPickerView>)>,
+    prompt: Option<(customization::ToolbarPrompt, CustomizationLayoutKey, String, Option<String>, std::sync::Arc<customization::ToolbarPromptView>)>,
+    manager: Option<(customization::ToolbarManager, CustomizationLayoutKey, std::sync::Arc<customization::ToolbarManagerView>)>,
+    header_tools: Vec<(ToolbarControl, String)>,
+    workspace_labels: Option<std::sync::Arc<WorkspaceMenuCopy>>,
+}
 /// A host-owned session: call inline or put the entire owner behind a host
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
-    localization: std::sync::Arc<Localizer>,
+    panel_copy: Vec<(Panel, std::sync::Arc<customization::PanelCopy>)>,
+    customization_copy: std::cell::RefCell<CustomizationCopy>,
     command_search: command_catalog::CommandSearch,
     engine: CanvasEngine<R>,
     state: UiState,
@@ -230,7 +267,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn blank_localized(renderer: R, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
-        Self::new_localized(renderer, NewDocumentOptions::default().project()?.document, viewport, platform, localization)
+        Self::new_localized(renderer, NewDocumentOptions::default().project(&localization)?.document, viewport, platform, localization)
     }
 
     pub fn new(renderer: R, document: Document, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
@@ -238,10 +275,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn localization(&self) -> &std::sync::Arc<Localizer> {
-        &self.localization
+        &self.state.localization
     }
 
     pub fn new_localized(renderer: R, document: Document, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
+        effects::validate_document_labels(&document, &localization)?;
         if document.layers.iter().any(|l| l.source.is_some()) && !renderer.supports_tiled_sources() {
             return Err("This renderer does not support tiled photo documents".into());
         }
@@ -262,8 +300,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         engine.set_brush(brush.clone()).map_err(error)?;
         engine.set_paint_color(colors.definition());
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
+        effects::validate_catalog_labels(&effect_catalog, &localization)?;
         let mut session = Self {
-            localization,
+            panel_copy: Default::default(),
+            customization_copy: Default::default(),
             command_search: Default::default(),
             engine,
             pen,
@@ -315,6 +355,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             tools: tools::WorkspaceToolMemory::default(),
             files: document_files::DocumentFiles::default(),
             state: UiState {
+                localization: localization.clone(),
                 soft_proof: false,
                 preview_sdr: false,
                 hdr_display_available: false,
@@ -341,14 +382,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 canvas_bar: None,
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
-                adjustments: effects::catalog(&effect_catalog, &Default::default()),
-                filter_picker: Default::default(),
-                filter_categories: effects::categories(&effect_catalog),
+                adjustments: effects::catalog(&effect_catalog, &Default::default(), &localization),
+                filter_picker: effects::FilterPickerState::new(&localization),
+                filter_categories: effects::categories(&effect_catalog, &localization),
                 filter_catalog_revision: 0,
                 filter_load: FilterLoadState::default(),
                 layer_properties: LayerPropertiesView::default(),
                 tabs: Vec::new(),
-                document_file: DocumentFileState::default(),
+                document_file: DocumentFileState::localized(&localization),
                 commands: Vec::new(),
                 settings: Settings::default(),
                 theme: Theme::Light,
@@ -374,7 +415,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         session.apply_brush()?;
         session.refresh_document();
         session.refresh_commands();
-        session.refresh_shortcuts();
+        session.refresh_shortcuts(true);
         session.update_toolbar_context();
         Ok(session)
     }
@@ -414,6 +455,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.platform,
                 self.platform_prediction_available(),
                 self.system_accent,
+                &self.state.localization,
             )
         })
     }
@@ -446,7 +488,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
         let mut menu = match target {
-            ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform),
+            ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform, &self.state.localization),
             ContextTarget::Header { id } => self
                 .state
                 .workspace
@@ -458,7 +500,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .state
                 .workspace
                 .layout
-                .context_menu_on(target, self.state.platform),
+                .context_menu_localized_on(target, self.state.platform, self.localization()),
         }?;
         if self.managed_workspace.is_some() {
             fn route(items: &mut [Vec<ContextMenuItem>]) {
@@ -507,100 +549,132 @@ impl<R: CanvasRenderer> UiSession<R> {
                 )]);
             }
         }
-        Ok(menu.with_shortcuts(&self.state.settings, self.state.platform))
+        Ok(menu.with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization()))
     }
     pub fn workspace_menu(&self) -> ContextMenu {
         let command = |id: CommandId| {
             let state = self.command(id);
-            let mut item = ContextMenuItem::command(state.label, UiAction::Invoke { command: id });
+            let mut item = ContextMenuItem::command(state.label.to_string(), UiAction::Invoke { command: id });
             item.enabled = state.enabled;
             item.hint = state.shortcut;
             item
         };
         let mut menu = ContextMenu {
-            title: WORKSPACE_MENU_LABEL.into(),
+            title: self.localization().text(MessageId::WORKSPACE_MENU).to_string(),
             sections: vec![
                 vec![
                     command(CommandId::UndoWorkspace),
                     command(CommandId::RedoWorkspace),
                 ],
-                self.state.workspace.layout.panel_items(PanelKind::Content, None),
-                self.state.workspace.layout.panel_items(PanelKind::Tiles, None),
+                self.workspace_panel_items(PanelKind::Content),
+                self.workspace_panel_items(PanelKind::Tiles),
                 vec![
                     command(CommandId::NewToolbar),
                     command(CommandId::ManageToolbars),
                 ],
+                if CommandId::Drawings.available_on(self.state.platform) { vec![command(CommandId::Drawings)] } else { Vec::new() },
             ],
         };
         if let Some(workspace) = &self.managed_workspace {
             let undo = menu.sections.remove(0);
-            let mut panels = menu.sections.remove(0);
-            let mut toolbars = menu.sections.remove(0);
+            let panels = menu.sections.remove(0);
+            let toolbars = menu.sections.remove(0);
             let toolbar_actions = menu.sections.remove(0);
-            for item in panels.iter_mut().chain(toolbars.iter_mut()) {
-                match item.action {
-                    Some(UiAction::Customize {
-                        action: CustomizationAction::SetPanelVisible { panel, .. },
-                    }) => {
-                        if let Ok(config) = self.state.workspace.layout.panel(panel) {
-                            item.label = config.title().into();
-                        }
-                    }
-                    Some(UiAction::Customize {
-                        action: CustomizationAction::RestoreBuiltinToolbar { panel, .. },
-                    }) => {
-                        item.label = format!("Restore {}", panel.label());
-                    }
-                    _ => (),
-                }
-            }
+            let drawings = menu.sections.remove(0);
             let workspaces = workspace.menu(
                 self.require_workspace_idle().is_ok(),
                 durable_layout(&self.state.workspace.layout) != workspace.baseline,
             );
             let toolbars =
-                ContextMenuItem::submenu("Quick Access Toolbars", vec![toolbars, toolbar_actions]);
-            menu.sections = vec![undo, vec![workspaces, toolbars], panels];
+                ContextMenuItem::submenu(&self.localization().text(MessageId::WORKSPACE_QUICK_ACCESS_TOOLBARS), vec![toolbars, toolbar_actions]);
+            menu.sections = vec![undo, vec![workspaces, toolbars], panels, drawings];
         }
         // Keep the editor entry reachable above the long panel list, also
         // in the recovery menu on a short tablet-sized window.
         menu.sections
             .insert(0, vec![command(CommandId::CustomizeWorkspaceUi)]);
-        menu.with_shortcuts(&self.state.settings, self.state.platform)
+        menu.with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization())
+    }
+    fn workspace_panel_items(&self, kind: PanelKind) -> Vec<ContextMenuItem> {
+        let layout = &self.state.workspace.layout;
+        let managed = self.managed_workspace.is_some();
+        let mut copy = self.customization_copy.borrow_mut();
+        if copy.workspace_labels.as_ref().is_none_or(|previous| previous.managed != managed || previous.panels.len() != layout.panels.len() || !previous.panels.iter().zip(&layout.panels).all(|((id, content), panel)| *id == panel.id && content == &panel.content)) {
+            let panels = layout.panels.iter().map(|panel| (panel.id, panel.content.clone())).collect();
+            let labels = layout.panels.iter().map(|panel| (panel.id, if managed { panel.title_localized(self.localization()) } else { panel.menu_name(self.localization()) })).collect();
+            let restored = [Panel::Toolbar, Panel::Commands].map(|panel| {
+                let mut args = FluentArgs::new(); args.set("name", panel.localized_label(self.localization()).to_string());
+                self.localization().format(if managed { MessageId::WORKSPACE_RESTORE_NAMED_TOOLBAR_MENU } else { MessageId::WORKSPACE_RESTORE_TOOLBAR_MENU }, &args)
+            });
+            copy.workspace_labels = Some(std::sync::Arc::new(WorkspaceMenuCopy { panels, managed, labels, restored }));
+        }
+        let labels = &copy.workspace_labels.as_ref().unwrap().labels;
+        let restored = &copy.workspace_labels.as_ref().unwrap().restored;
+        let mut items: Vec<_> = labels.iter().filter(|(panel, _)| panel.kind() == kind).map(|(panel, label)| {
+            let selected = layout.panel_group(*panel).is_some();
+            let mut item = ContextMenuItem::edit(label, CustomizationAction::SetPanelVisible { panel: *panel, visible: !selected });
+            item.selected = Some(selected);
+            item
+        }).collect();
+        if kind == PanelKind::Tiles {
+            items.extend([Panel::Toolbar, Panel::Commands].into_iter().zip(restored).filter(|(panel, _)| layout.panel(*panel).is_err()).map(|(panel, label)|
+                ContextMenuItem::edit(label, CustomizationAction::RestoreBuiltinToolbar { panel, group: None })));
+        }
+        items
     }
     pub fn toolbar_prompt(&self) -> Option<crate::customization::ToolbarPromptView> {
-        self.state.customization.toolbar_prompt.as_ref().map(|p| {
-            let mut view = p.view(
-                &self.state.workspace.layout,
-                &self.command(CommandId::UndoWorkspace).shortcut,
-            );
-            if view.destructive
-                && let Some(workspace) = &self.managed_workspace
-            {
-                view.message.push_str(&format!(
-                    " This removes the toolbar from {}.",
-                    workspace.name
-                ));
+        let p = self.state.customization.toolbar_prompt.as_ref()?;
+        let shortcut = &self.state.commands.iter().find(|c| c.id == CommandId::UndoWorkspace).expect("workspace command").shortcut;
+        let workspace = self.managed_workspace.as_ref().map(|w| w.name.clone());
+        let mut copy = self.customization_copy.borrow_mut();
+        if copy.prompt.as_ref().is_none_or(|(previous, layout, undo, name, _)| previous != p || !layout.matches(&self.state.workspace.layout) || undo != shortcut || name != &workspace) {
+            let mut view = p.view_localized(&self.state.workspace.layout, shortcut, self.localization());
+            if view.destructive && let Some(name) = &workspace {
+                let mut args = FluentArgs::new(); args.set("message", view.message.as_str()); args.set("workspace", name.as_str());
+                view.message = self.localization().format(MessageId::WORKSPACE_TOOLBAR_DELETE_IN_WORKSPACE, &args);
             }
-            view
-        })
+            copy.prompt = Some((p.clone(), CustomizationLayoutKey::new(&self.state.workspace.layout), shortcut.clone(), workspace, std::sync::Arc::new(view)));
+        }
+        Some(copy.prompt.as_ref().unwrap().4.as_ref().clone())
     }
     pub fn toolbar_manager(&self) -> Option<crate::customization::ToolbarManagerView> {
-        self.state
-            .customization
-            .toolbar_manager
-            .as_ref()
-            .map(|m| m.view(&self.state.workspace.layout))
+        let manager = self.state.customization.toolbar_manager.as_ref()?;
+        let mut copy = self.customization_copy.borrow_mut();
+        if copy.manager.as_ref().is_none_or(|(previous, layout, _)| previous != manager || !layout.matches(&self.state.workspace.layout)) {
+            copy.manager = Some((manager.clone(), CustomizationLayoutKey::new(&self.state.workspace.layout), std::sync::Arc::new(manager.view_localized(&self.state.workspace.layout, self.localization()))));
+        }
+        Some(copy.manager.as_ref().unwrap().2.as_ref().clone())
     }
     pub fn panel_view(&self, panel: Panel) -> Result<PanelView, String> {
-        customization::panel_view(&self.state, panel)
+        let copy = self.panel_copy.iter().find(|(id, _)| *id == panel).map(|(_, copy)| copy).ok_or("Unknown panel")?;
+        customization::panel_view(&self.state, panel, copy)
     }
     pub fn tool_picker(&self) -> Option<ToolPickerView> {
-        self.state
-            .customization
-            .picker
-            .as_ref()
-            .map(|p| p.view(&self.state.workspace.layout, self.state.platform))
+        let picker = self.state.customization.picker.as_ref()?;
+        let validity = picker.validate(&self.state.workspace.layout);
+        let mut copy = self.customization_copy.borrow_mut();
+        if copy.picker.as_ref().is_none_or(|(previous, layout, _)| previous != picker || !layout.matches(&self.state.workspace.layout) || layout.target_validity.as_ref() != Some(&validity)) {
+            let mut key = CustomizationLayoutKey::new(&self.state.workspace.layout);
+            key.target_validity = Some(validity);
+            if matches!(picker.destination, customization::ToolDestination::Header { .. }) {
+                key.header_entries = Some(self.state.workspace.layout.header.zones.each_ref().map(|zone| zone.iter().map(|entry| entry.id).collect()));
+            }
+            copy.picker = Some((picker.clone(), key, std::sync::Arc::new(picker.view_localized(&self.state.workspace.layout, self.state.platform, self.localization()))));
+        }
+        Some(copy.picker.as_ref().unwrap().2.as_ref().clone())
+    }
+    pub(crate) fn retain_header_tool_labels(&self, model: &crate::HeaderLayout) {
+        self.customization_copy.borrow_mut().header_tools.retain(|(control, _)| model.entries().any(|entry| entry.item == crate::HeaderItem::Tool { control: *control }));
+    }
+    pub(crate) fn header_tool_label(&self, control: ToolbarControl) -> String {
+        if let ToolbarControl::Command { command } = control {
+            return self.command_label(command).to_string();
+        }
+        let mut copy = self.customization_copy.borrow_mut();
+        if let Some((_, label)) = copy.header_tools.iter().find(|(id, _)| *id == control) { return label.clone(); }
+        let label = customization::tool_choice_localized(control, self.localization()).label;
+        copy.header_tools.push((control, label.clone()));
+        label
     }
 
     /// Hover is presentation input, separate from the paint queue and UI state.
@@ -1099,6 +1173,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 &self.state.settings,
                                 KeyChord::new(&key, modifiers),
                                 self.state.platform,
+                                &self.state.localization,
                             );
                         }
                         reply.change = self.changed(regions::SETTINGS, false);
@@ -1578,10 +1653,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .ok_or("Unknown collapsed column")?;
                 self.workspace_history.begin_named(
                     &self.state.workspace,
-                    format!(
-                        "Moved {}",
-                        workspace::description::item_name(&self.state.workspace.layout, item)
-                    ),
+                    LayoutChange::panels(LayoutPanelAction::Moved, workspace::description::item_name(&self.state.workspace.layout, item)),
                 );
                 self.workspace_drag = Some(WorkspaceDrag {
                     original: item,
@@ -1651,10 +1723,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let whole = matches!(normalized, DockItem::Group { .. });
             self.workspace_history.begin_named(
                 &self.state.workspace,
-                format!(
-                    "Moved {}",
-                    workspace::description::item_name(&self.state.workspace.layout, item)
-                ),
+                LayoutChange::panels(LayoutPanelAction::Moved, workspace::description::item_name(&self.state.workspace.layout, item)),
             );
             self.workspace_drag = Some(WorkspaceDrag {
                 position,
@@ -1998,41 +2067,39 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
         let label = self.command_label(id);
+        let retained = self.state.commands.iter().find(|command| command.id == id);
+        let tooltip = retained.filter(|command| command.label == label).map_or_else(
+            || self.state.settings.action_tooltip_localized(&label, &UiAction::Invoke { command: id }, self.state.platform, &self.state.localization),
+            |command| command.tooltip.clone(),
+        );
         CommandState {
             checkable: id.is_toggle(),
             icon: self.command_icon(id),
             id,
             label,
-            tooltip: self.state.settings.action_tooltip(
-                label,
-                &UiAction::Invoke { command: id },
-                self.state.platform,
-            ),
+            tooltip,
             enabled,
             disabled_reason: (!enabled).then(|| self.disabled_reason_unchecked(id)),
             selected,
-            bindings: self.state.settings.command_keys(id),
-            shortcut: self
-                .state
-                .settings
-                .action_shortcut(&UiAction::Invoke { command: id }, self.state.platform),
+            bindings: retained.map_or_else(|| self.state.settings.command_keys(id), |command| command.bindings.clone()),
+            shortcut: retained.map_or_else(|| self.state.settings.action_shortcut_localized(&UiAction::Invoke { command: id }, self.state.platform, &self.state.localization), |command| command.shortcut.clone()),
         }
     }
-    fn command_label(&self, id: CommandId) -> &'static str {
+    fn command_label(&self, id: CommandId) -> std::sync::Arc<str> {
         if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
-            "Restore Starting Layout…"
+            self.state.localization.text(MessageId::COMMAND_RESTORE_STARTING_LAYOUT)
         } else if self.cropping() && matches!(id, CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::ResetTransform) {
             match id {
-                CommandId::ApplyTransform => "Apply crop",
-                CommandId::CancelTransform => "Cancel crop",
-                _ => "Reset crop",
+                CommandId::ApplyTransform => self.state.localization.text(MessageId::COMMAND_APPLY_CROP),
+                CommandId::CancelTransform => self.state.localization.text(MessageId::COMMAND_CANCEL_CROP),
+                _ => self.state.localization.text(MessageId::COMMAND_RESET_CROP),
             }
         } else if id == CommandId::SoftProof {
-            "Proof"
+            self.state.localization.text(MessageId::COMMAND_SOFT_PROOF_TOGGLE)
         } else if id == CommandId::MergeDown {
-            self.merge_down_label()
+            self.merge_down_label().into()
         } else {
-            id.label()
+            id.localized_label(&self.state.localization)
         }
     }
     fn command_icon(&self, id: CommandId) -> Option<&'static str> {
@@ -2108,7 +2175,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !document.is_locked(document.active_layer)
                     && document.layer(document.active_layer).is_some_and(|l| {
                         l.mask.as_ref().is_some_and(|m| {
-                            id != CommandId::ApplyLayerMask || (m.enabled && art_layers::apply_mask_refusal(l.kind).is_none())
+                            id != CommandId::ApplyLayerMask || (m.enabled && art_layers::apply_mask_refusal(l.kind, self.localization()).is_none())
                         })
                     })
             }
@@ -2547,10 +2614,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => None,
         };
         let workspace_description = move_item.map(|item| {
-            format!(
-                "Moved {}",
-                workspace::description::item_name(&self.state.workspace.layout, item)
-            )
+            LayoutChange::panels(LayoutPanelAction::Moved, workspace::description::item_name(&self.state.workspace.layout, item))
         });
         let previous_mask_mode = self.state.settings.selection_painting;
         let restores_settings = matches!(
@@ -2682,7 +2746,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::FilterPicker { action } => {
                 self.state.filter_picker.apply(action);
                 self.state.adjustments =
-                    effects::catalog(&self.effect_catalog, &self.state.filter_picker);
+                    effects::catalog(&self.effect_catalog, &self.state.filter_picker, self.localization());
                 (DOCUMENT, false)
             }
             UiAction::Effect { action } => {
@@ -2825,13 +2889,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .bounds;
                     self.workspace_history.begin_named(
                         &self.state.workspace,
-                        format!(
-                            "Resized {}",
-                            workspace::description::item_name(
-                                &self.state.workspace.layout,
-                                DockItem::Group { group }
-                            )
-                        ),
+                        LayoutChange::panels(LayoutPanelAction::Resized, workspace::description::item_name(&self.state.workspace.layout, DockItem::Group { group })),
                     );
                     self.floating_resize = Some(FloatingResize {
                         group,
@@ -2894,11 +2952,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .logical_viewport
                     .or(self.interaction.viewport)
                     .unwrap_or(self.state.camera.viewport.map(|v| v as f32));
-                let mut changed = self.state.customization.edit(
+                let mut changed = self.state.customization.edit_localized(
                     &mut self.state.workspace.layout,
                     action,
                     self.state.platform,
                     viewport,
+                &self.state.localization,
                 )?;
                 if editing_header && self.state.workspace.zen_mode {
                     self.state.workspace.zen_mode = false;
@@ -3123,13 +3182,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                         constraint: self.selection_tools.options.constraint,
                         ..Default::default()
                     };
-                    let mut fields = options.controls();
-                    fields.extend(options.edge_controls());
+                    let mut fields = options.controls(&self.state.localization);
+                    fields.extend(options.edge_controls(&self.state.localization));
                     fields
                 } else if self.layer_interaction.tool.region().is_some() && id != "opacity" {
-                    region_tools::RegionTools::default().controls()
+                    region_tools::RegionTools::default().controls(&self.state.localization)
                 } else {
-                    tool_settings::controls(&layer_core::default_brush(tools::preset(self.state.brush.preset)?))
+                    tool_settings::controls(&layer_core::default_brush(tools::preset(self.state.brush.preset)?), &self.state.localization)
                 };
                 let value = defaults.iter().find(|f| f.id == id)
                     .ok_or("This setting has no default")?.value;
@@ -3252,14 +3311,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                     } else {
                         CustomizationAction::ShowAllControls { panel }
                     };
-                    self.state.customization.edit(
+                    self.state.customization.edit_localized(
                         &mut self.state.workspace.layout,
                         action,
                         self.state.platform,
                         self.logical_viewport
                             .or(self.interaction.viewport)
                             .unwrap_or(self.state.camera.viewport.map(|v| v as f32)),
-                    )?;
+                    &self.state.localization,
+                )?;
                 } else if let Some(previous) = self.state.customization.expanded {
                     self.state.customization.expanded =
                         (self.state.workspace.layout.panel_group(previous) == Some(group))
@@ -3373,7 +3433,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::NewDocumentPreferences { action } => {
                 let mut settings = self.state.settings.new_document.clone();
-                settings.apply(action)?;
+                settings.apply(action).map_err(|error| error.message(self.localization()))?;
                 save_settings = settings != self.state.settings.new_document;
                 self.state.settings.new_document = settings;
                 (SETTINGS | COMMANDS, save_settings)
@@ -3402,7 +3462,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             | PreferenceAction::Reveal { .. }
                     )
                 {
-                    return Err("Settings are not open".into());
+                    return Err(self.localization().text(MessageId::SETTINGS_NOT_OPEN).to_string());
                 }
                 // Validate edits atomically. Search, navigation and recording
                 // change only view state and never trigger storage or rendering.
@@ -3420,7 +3480,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 {
                     self.state.preferences.error =
-                        Some("Native stroke prediction isn't available on this device.".into());
+                        Some(self.localization().text(MessageId::SETTINGS_NATIVE_PREDICTION_UNAVAILABLE).to_string());
                 } else if self.platform_prediction_available()
                     && self.state.settings.platform_prediction
                     && matches!(
@@ -3434,11 +3494,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                 {
                     self.state.preferences.error =
-                        Some("Turn off native stroke prediction to change this setting.".into());
+                        Some(self.localization().text(MessageId::SETTINGS_NATIVE_PREDICTION_DISABLE).to_string());
                 } else {
                     self.state
                         .preferences
-                        .edit(&mut settings, action, self.state.platform);
+                        .edit(&mut settings, action, self.state.platform, &self.state.localization);
                 }
                 if reveal && self.state.preferences.error.is_none() {
                     self.state.settings_open = true;
@@ -3446,13 +3506,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 save_settings =
                     self.state.preferences.error.is_none() && settings != self.state.settings;
                 if save_settings {
-                    settings.validate()?;
+                    settings.validate_localized(self.localization())?;
                     self.apply_settings(settings)?;
                 }
                 (SETTINGS, save_settings)
             }
             UiAction::RestoreSettings { settings } => {
-                settings.validate()?;
+                settings.validate_localized(self.localization())?;
                 self.apply_settings(settings)?;
                 (SETTINGS | COMMANDS, true)
             }
@@ -3488,7 +3548,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.customization.committed_header(&mut after.layout);
             if let Some(description) = workspace_description {
                 self.workspace_history
-                    .record_named(before, &after, &description);
+                    .record_named(before, &after, description);
             } else {
                 self.workspace_history.record(before, &after);
             }
@@ -4852,7 +4912,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     })?;
                     return Ok((HOST, false));
                 }
-                let changed = self.state.customization.edit(
+                let changed = self.state.customization.edit_localized(
                     &mut self.state.workspace.layout,
                     if command == CommandId::ManageToolbars {
                         CustomizationAction::ManageToolbars
@@ -4863,6 +4923,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.logical_viewport
                         .or(self.interaction.viewport)
                         .unwrap_or(self.state.camera.viewport.map(|v| v as f32)),
+                &self.state.localization,
                 )?;
                 Ok((changed, false))
             }
@@ -4906,6 +4967,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             &mut self.state.settings,
             PreferenceAction::Page { page },
             self.state.platform,
+            &self.state.localization,
         );
     }
     fn apply_settings(&mut self, settings: Settings) -> Result<(), String> {
@@ -4918,9 +4980,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             gamma: settings.pressure_gamma,
         });
         let mask_mode_changed = self.state.settings.selection_painting != settings.selection_painting;
+        let bindings_changed = self.state.settings.shortcuts != settings.shortcuts || self.state.settings.keymap != settings.keymap;
         self.state.settings = settings;
         if mask_mode_changed { self.refresh_document(); }
-        self.refresh_shortcuts();
+        self.refresh_shortcuts(bindings_changed);
         Ok(())
     }
 
@@ -5026,8 +5089,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.sync_retouch();
         self.state.tool_set = if let Some(tool) = self.layer_interaction.tool.selection_tool() {
-            selection_tools::tool_set(tool)
-        } else { tools::view(&self.state.brush, self.layer_interaction.tool) };
+            selection_tools::tool_set(tool, &self.state.localization)
+        } else { tools::view(&self.state.brush, self.layer_interaction.tool, &self.state.localization) };
         self.state.tool_set.subtools.retain(|i| !matches!(i.action,UiAction::Invoke {command} if !command.available_on(self.state.platform)));
         if let Some(tool) = self.layer_interaction.tool.selection_tool() {
             let commands: &[CommandId] = if tool==SelectionTool::Tonal { &[]
@@ -5050,45 +5113,45 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.layer_interaction.tool.picks_color() {
             self.state.tool_set.groups.clear();
             self.state.tool_set.subtools = [
-                ("Color Picker", "color-picker", ColorPickerStyle::Glass),
-                ("Eyedropper", "eyedropper", ColorPickerStyle::Eyedropper),
+                (MessageId::TOOL_COLOR_PICKER, "color-picker", ColorPickerStyle::Glass),
+                (MessageId::COMMAND_EYEDROPPER, "eyedropper", ColorPickerStyle::Eyedropper),
             ].into_iter().map(|(label, icon, style)| ToolSetItem {
-                label, icon, selected: self.state.color_picker.style == style,
+                label: self.state.localization.text(label), icon, selected: self.state.color_picker.style == style,
                 action: UiAction::ColorPicker { action: ColorPickerAction::Style { style } }, preview: None,
             }).collect();
         }
         self.state.color_picker.layer = self.eyedropper.layer;
         self.state.color_picker.sample_width = self.eyedropper.area.width();
         self.state.color_picker.can_sample_layer = self.picker_layer_available();
-        self.state.tool_panels = ToolPanels::new(&self.state.brush, self.layer_interaction.tool, &self.state.tool_set);
+        self.state.tool_panels = ToolPanels::new(&self.state.brush, self.layer_interaction.tool, &self.state.tool_set, &self.state.localization);
         self.state.tool_settings = if self.cropping() {
             self.crop_controls()
         } else if self.operation.active() {
             self.transform_controls()
         } else if self.layer_interaction.tool == LayerCanvasTool::Paint {
-            tool_settings::controls(self.engine.configured_brush())
+            tool_settings::controls(self.engine.configured_brush(), &self.state.localization)
         } else if let LayerCanvasTool::Figure { paint, .. } = self.layer_interaction.tool {
-            tool_settings::controls(self.engine.configured_brush())
+            tool_settings::controls(self.engine.configured_brush(), &self.state.localization)
                 .into_iter()
                 .filter(|c| c.id == "opacity" || (c.id == "size" && paint != FigurePaint::Fill))
                 .map(|mut c| {
                     if c.id == "size" {
-                        c.label = "Line width";
+                        c.label = self.state.localization.text(MessageId::TOOL_CONTROL_LINE_WIDTH);
                     }
                     c
                 })
                 .collect()
         } else if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
-            if kind == SelectionTool::Tonal {self.selection_tools.options.tonal.controls()}
-            else if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls() }
-            else if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
+            if kind == SelectionTool::Tonal {self.selection_tools.options.tonal.controls(&self.state.localization)}
+            else if kind == SelectionTool::Brush { self.selection_tools.options.brush.controls(&self.state.localization) }
+            else if kind.geometric() { self.selection_tools.options.controls(&self.state.localization) } else { Vec::new() }
         } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
-            let mut controls = self.region_tools.controls();
+            let mut controls = self.region_tools.controls(&self.state.localization);
             if !contiguous { controls.retain(|c| c.id != "gap_closing"); }
             if !fill && !self.selection_tools.options.antialias { controls.retain(|c| c.id != "smoothing"); }
             if fill {
                 controls.extend(
-                    tool_settings::controls(self.engine.configured_brush())
+                    tool_settings::controls(self.engine.configured_brush(), &self.state.localization)
                         .into_iter()
                         .filter(|c| c.id == "opacity"),
                 );
@@ -5098,7 +5161,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.layer_interaction.tool,
             LayerCanvasTool::Gradient { .. }
         ) {
-            tool_settings::controls(self.engine.configured_brush())
+            tool_settings::controls(self.engine.configured_brush(), &self.state.localization)
                 .into_iter()
                 .filter(|c| c.id == "opacity")
                 .collect()
@@ -5106,10 +5169,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             Vec::new()
         };
         if self.layer_interaction.tool.selection_tool().is_some() && !self.selection_brush_active() {
-            let mut edges=self.selection_tools.options.edge_controls();
+            let mut edges=self.selection_tools.options.edge_controls(&self.state.localization);
             for field in &mut edges {
-                field.group="";
-                if self.tonal_active() {field.label="Feather";}
+                field.group="".into();
+                if self.tonal_active() {field.label=self.state.localization.text(MessageId::TOOL_CONTROL_FEATHER);}
             }
             self.state.tool_settings.extend(edges);
         }
@@ -5199,6 +5262,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.canvas_bar_camera_moved();
         }
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
+            self.refresh_panel_copy(false);
             self.sync_renderer_telemetry();
         }
         self.state.theme = self.state.settings.theme.unwrap_or(self.system_theme);
@@ -5264,10 +5328,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || previous.label != label
                 {
                     if previous.label != label {
-                        previous.tooltip = self.state.settings.action_tooltip(
-                            label,
+                        previous.tooltip = self.state.settings.action_tooltip_localized(
+                            &label,
                             &UiAction::Invoke { command: id },
                             self.state.platform,
+                            &self.state.localization,
                         );
                     }
                     previous.enabled = enabled;
@@ -5283,24 +5348,41 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         changed
     }
-    fn refresh_shortcuts(&mut self) {
+    fn refresh_shortcuts(&mut self, bindings_changed: bool) {
         // Static presentation data changes with the applied keymap/platform,
         // not every pen event or frame's command-availability update.
-        for command in &mut self.state.commands {
-            command.tooltip = self.state.settings.action_tooltip(
-                command.label,
-                &UiAction::Invoke {
-                    command: command.id,
-                },
-                self.state.platform,
-            );
-            command.bindings = self.state.settings.command_keys(command.id);
-            command.shortcut = self.state.settings.action_shortcut(
-                &UiAction::Invoke {
-                    command: command.id,
-                },
-                self.state.platform,
-            );
+        if bindings_changed {
+            for command in &mut self.state.commands {
+                command.tooltip = self.state.settings.action_tooltip_localized(
+                    &command.label,
+                    &UiAction::Invoke {
+                        command: command.id,
+                    },
+                    self.state.platform,
+                    &self.state.localization,
+                );
+                command.bindings = self.state.settings.command_keys(command.id);
+                command.shortcut = self.state.settings.action_shortcut_localized(
+                    &UiAction::Invoke {
+                        command: command.id,
+                    },
+                    self.state.platform,
+                    &self.state.localization,
+                );
+            }
+        }
+        self.refresh_panel_copy(bindings_changed);
+    }
+    fn refresh_panel_copy(&mut self, bindings_changed: bool) {
+        let panels = &self.state.workspace.layout.panels;
+        self.panel_copy.retain(|(id, _)| panels.iter().any(|panel| panel.id == *id));
+        for panel in panels {
+            if !bindings_changed && self.panel_copy.iter().find(|(id, _)| *id == panel.id).is_some_and(|(_, copy)|
+                copy.content == panel.content && copy.tile_style == panel.tile_style)
+            { continue; }
+            let next = std::sync::Arc::new(customization::PanelCopy::new(&self.state, panel));
+            if let Some((_, copy)) = self.panel_copy.iter_mut().find(|(id, _)| *id == panel.id) { *copy = next; }
+            else { self.panel_copy.push((panel.id, next)); }
         }
     }
     fn refresh_document(&mut self) {
@@ -5357,7 +5439,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             label: l.name.to_string(),
             description: {
                 let mut parts = Vec::new();
-                if l.properties.blend != layer_core::LayerBlend::Normal { parts.push(l.properties.blend.label().to_string()); }
+                if l.properties.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.properties.blend, &self.state.localization).to_string()); }
                 if l.opacity < 1. { parts.push(format!("{}%", (l.opacity * 100.).round() as u32)); }
                 parts.join(" · ")
             },
@@ -5394,7 +5476,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             depth: self.layer_interaction.depth(doc, l),
             collapsed: self.layer_interaction.collapsed.contains(&l.id),
             blend: l.properties.blend.code(),
-            blend_label: l.properties.blend.label().into(),
+            blend_label: effects::blend_label(l.properties.blend, &self.state.localization).to_string(),
             paint_revision: l
                 .raster
                 .identity()
@@ -5428,7 +5510,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             mask_id: l.mask.as_ref().map(|m| m.id.0),
         };
         self.state.layer_tools.editing_layer = doc.layer(doc.active_layer).map(&layer_state);
-        self.state.layer_properties = effects::properties(doc, self.state.settings.selection_painting);
+        self.state.layer_properties = effects::properties(doc, self.state.settings.selection_painting, self.localization());
         self.state.layer_tools.controls = doc
             .layer(doc.active_layer)
             .map(|l| art_layers::LayerControls::for_layer(doc, l))
@@ -5451,7 +5533,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.layer_tools.editing_layer = Some(row.clone());
             self.state.layers.insert(0, row);
             self.state.layer_tools.controls = LayerControls::default();
-            self.state.layer_properties = selection_properties::properties(0, "Quick Mask", &self.selection_masks.quick_properties, self.state.settings.selection_painting, true);
+            self.state.layer_properties = selection_properties::properties(0, &self.localization().text(MessageId::COMMAND_QUICK_MASK), &self.selection_masks.quick_properties, self.state.settings.selection_painting, true, self.localization());
         }
         self.state.layer_tools.has_selection = self.current_selection().is_some();
         self.state.layer_tools.quick_mask = self.selection_masks.quick();
@@ -5481,8 +5563,8 @@ impl<R: CanvasRenderer> UiSession<R> {
 }
 
 #[inline(always)]
-fn refused(reason: Option<&'static str>) -> Result<(), String> {
-    reason.map_or(Ok(()), |reason| Err(reason.into()))
+fn refused(reason: Option<impl AsRef<str>>) -> Result<(), String> {
+    reason.map_or(Ok(()), |reason| Err(reason.as_ref().to_owned()))
 }
 fn error(value: impl std::fmt::Display) -> String {
     value.to_string()
@@ -5537,6 +5619,161 @@ mod tests {
     use layer_engine::{SampleFlags, ToolKind};
 
     #[test]
+    fn retained_panel_copy_rejects_stale_tile_identity() {
+        let mut s = session(Platform::Gtk);
+        let old = s.panel_copy.iter().find(|(id, _)| *id == Panel::Toolbar).unwrap().1.clone();
+        customize(&mut s, CustomizationAction::InsertTools { panel: Panel::Toolbar, before: None });
+        customize(&mut s, CustomizationAction::PickerSelect { control: ToolbarControl::Size { pixels: 64 }, selected: true });
+        customize(&mut s, CustomizationAction::ConfirmTools);
+        assert_eq!(customization::panel_view(s.state(), Panel::Toolbar, &old).unwrap_err(), "The tool no longer exists");
+        assert_eq!(s.panel_view(Panel::Toolbar).unwrap().tiles.last().unwrap().choice.control, ToolbarControl::Size { pixels: 64 });
+        let mut workspace = s.state.workspace.clone();
+        workspace.layout.panel_mut(Panel::Toolbar).unwrap().tiles_mut().unwrap()[0].control = ToolbarControl::Size { pixels: 32 };
+        s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) }).unwrap();
+        assert_eq!(customization::panel_view(s.state(), Panel::Toolbar, &old).unwrap_err(), "The tool no longer exists");
+        assert_eq!(s.panel_view(Panel::Toolbar).unwrap().tiles[0].choice.control, ToolbarControl::Size { pixels: 32 });
+    }
+
+    #[test]
+    fn retained_panel_copy_covers_initial_restore_preview_history_and_settings() {
+        let assert_panels = |s: &UiSession<Recorder>| {
+            for panel in &s.state.workspace.layout.panels {
+                let view = s.panel_view(panel.id).unwrap();
+                assert_eq!(view.tiles.iter().map(|tile| (tile.id, tile.choice.control)).collect::<Vec<_>>(), panel.tiles().iter().map(|tile| (tile.id, tile.control)).collect::<Vec<_>>());
+                assert_eq!(view.title, panel.title_localized(s.localization()));
+            }
+        };
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            assert_panels(&s);
+            for preset in WorkspacePreset::ALL {
+                s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState { layout: preset.layout(platform), ..WorkspaceState::default() }) }).unwrap();
+                assert_panels(&s);
+                s.begin_workspace_transition().unwrap();
+                s.begin_workspace_layout_preview().unwrap();
+                s.preview_workspace_layout(&WorkspacePreset::Painter.layout(platform)).unwrap();
+                assert_panels(&s);
+                s.cancel_workspace_layout_preview();
+                s.end_workspace_transition();
+                assert_panels(&s);
+            }
+            customize(&mut s, CustomizationAction::InsertTools { panel: Panel::Toolbar, before: None });
+            customize(&mut s, CustomizationAction::PickerSelect { control: ToolbarControl::Size { pixels: 64 }, selected: true });
+            customize(&mut s, CustomizationAction::ConfirmTools);
+            assert_panels(&s);
+            invoke(&mut s, CommandId::UndoWorkspace);
+            assert_panels(&s);
+            invoke(&mut s, CommandId::RedoWorkspace);
+            assert_panels(&s);
+            let mut settings = s.state.settings.clone();
+            settings.shortcuts.insert("size.64".into(), vec![KeyChord::new("k", Modifiers::default())]);
+            s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
+            assert_panels(&s);
+            assert!(s.panel_view(Panel::Toolbar).unwrap().tiles.last().unwrap().tooltip.contains("K"));
+        }
+    }
+
+    #[test]
+    fn retained_customization_copy_survives_brush_camera_and_geometry_updates() {
+        use std::sync::Arc;
+        let mut s = session(Platform::Gtk);
+        let brush = s.state.brush.preset;
+        s.state.workspace.layout.panel_mut(Panel::Toolbar).unwrap().content = customization::PanelContent::Toolbar {
+            name: None,
+            tiles: vec![
+                customization::ToolbarTile { id: 901, control: ToolbarControl::Brush { id: brush } },
+                customization::ToolbarTile { id: 902, control: ToolbarControl::Size { pixels: 8 } },
+                customization::ToolbarTile { id: 903, control: ToolbarControl::Panel { panel: Panel::Brushes } },
+            ],
+        };
+        s.refresh_panel_copy(false);
+        s.workspace_menu();
+        let copies: Vec<_> = s.panel_copy.iter().map(|(panel, copy)| (*panel, copy.clone())).collect();
+        let labels = s.customization_copy.borrow().workspace_labels.as_ref().unwrap().clone();
+        for size in [8., 17., 8.] {
+            s.dispatch(UiAction::SetBrushSize { value: size }).unwrap();
+            s.dispatch(UiAction::SetZoom { zoom: size / 8. }).unwrap();
+            s.set_viewport([640. + size, 480.], [640 + size as u32, 480]).unwrap();
+            s.header_view();
+            s.workspace_menu();
+            for (panel, before) in &copies {
+                let after = &s.panel_copy.iter().find(|(id, _)| id == panel).unwrap().1;
+                assert!(Arc::ptr_eq(before, after));
+                s.panel_view(*panel).unwrap();
+            }
+            let toolbar = s.panel_view(Panel::Toolbar).unwrap();
+            assert_eq!(toolbar.tiles[1].choice.selected, size == 8.);
+            assert!(Arc::ptr_eq(&labels, s.customization_copy.borrow().workspace_labels.as_ref().unwrap()));
+        }
+        s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
+        s.pen(event(&s, 2, PenPhase::Move, 0.7)).unwrap();
+        s.pen(event(&s, 3, PenPhase::Up, 0.7)).unwrap();
+        s.frame(4, 4).unwrap();
+        s.header_view();
+        for (panel, before) in &copies { assert!(Arc::ptr_eq(before, &s.panel_copy.iter().find(|(id, _)| id == panel).unwrap().1)); }
+        customize(&mut s, CustomizationAction::SetTabHidden { panel: Panel::Sizes, hidden: true });
+        assert!(Arc::ptr_eq(&copies.iter().find(|(id, _)| *id == Panel::Toolbar).unwrap().1, &s.panel_copy.iter().find(|(id, _)| *id == Panel::Toolbar).unwrap().1));
+        let before = s.panel_copy.iter().find(|(id, _)| *id == Panel::Toolbar).unwrap().1.clone();
+        customize(&mut s, CustomizationAction::SetTileStyle { panel: Panel::Toolbar, style: TileStyle::Labeled });
+        assert!(!Arc::ptr_eq(&before, &s.panel_copy.iter().find(|(id, _)| *id == Panel::Toolbar).unwrap().1));
+        customize(&mut s, CustomizationAction::RenameToolbar { panel: Panel::Toolbar });
+        customize(&mut s, CustomizationAction::ToolbarName { name: "Literal {toolbar}".into() });
+        customize(&mut s, CustomizationAction::ConfirmToolbar);
+        assert_eq!(s.panel_view(Panel::Toolbar).unwrap().title, "Literal {toolbar}");
+        let before = s.panel_copy.iter().find(|(id, _)| *id == Panel::Toolbar).unwrap().1.clone();
+        let mut settings = s.state.settings.clone();
+        settings.shortcuts.insert("size.8".into(), vec![KeyChord::new("k", Modifiers::default())]);
+        s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
+        assert!(!Arc::ptr_eq(&before, &s.panel_copy.iter().find(|(id, _)| *id == Panel::Toolbar).unwrap().1));
+        assert!(s.panel_view(Panel::Toolbar).unwrap().tiles[1].tooltip.contains("K"));
+    }
+
+    #[test]
+    fn retained_optional_customization_views_follow_semantic_changes() {
+        use std::sync::Arc;
+        let mut s = session(Platform::Gtk);
+        customize(&mut s, CustomizationAction::ManageToolbars);
+        customize(&mut s, CustomizationAction::DeleteToolbar { panel: Panel::Toolbar });
+        s.state.customization.picker = Some(customization::ToolPicker {
+            destination: customization::ToolDestination::Insert { panel: Panel::Toolbar, before: None },
+            query: String::new(), selected: vec![ToolbarControl::Size { pixels: 8 }], error: None,
+        });
+        s.tool_picker(); s.toolbar_prompt(); s.toolbar_manager();
+        let retained = {
+            let copy = s.customization_copy.borrow();
+            (copy.picker.as_ref().unwrap().2.clone(), copy.prompt.as_ref().unwrap().4.clone(), copy.manager.as_ref().unwrap().2.clone())
+        };
+        s.set_viewport([900., 600.], [900, 600]).unwrap();
+        s.dispatch(UiAction::SetZoom { zoom: 1.25 }).unwrap();
+        s.tool_picker(); s.toolbar_prompt(); s.toolbar_manager();
+        {
+            let copy = s.customization_copy.borrow();
+            assert!(Arc::ptr_eq(&retained.0, &copy.picker.as_ref().unwrap().2));
+            assert!(Arc::ptr_eq(&retained.1, &copy.prompt.as_ref().unwrap().4));
+            assert!(Arc::ptr_eq(&retained.2, &copy.manager.as_ref().unwrap().2));
+        }
+        s.state.customization.picker.as_mut().unwrap().query = "size".into();
+        assert_eq!(s.tool_picker().unwrap().query, "size");
+        assert!(!Arc::ptr_eq(&retained.0, &s.customization_copy.borrow().picker.as_ref().unwrap().2));
+        let mut settings = s.state.settings.clone();
+        settings.shortcuts.insert(CommandId::UndoWorkspace.shortcut_id(), vec![KeyChord::new("k", Modifiers::default())]);
+        s.apply_settings(settings).unwrap();
+        assert!(s.toolbar_prompt().unwrap().message.contains("K"));
+        assert!(!Arc::ptr_eq(&retained.1, &s.customization_copy.borrow().prompt.as_ref().unwrap().4));
+        customize(&mut s, CustomizationAction::SetPanelVisible { panel: Panel::Toolbar, visible: false });
+        assert!(s.toolbar_manager().unwrap().toolbars.iter().find(|entry| entry.panel == Panel::Toolbar).unwrap().subtitle.contains("Hidden"));
+        assert!(!Arc::ptr_eq(&retained.2, &s.customization_copy.borrow().manager.as_ref().unwrap().2));
+    }
+
+    #[test]
+    fn workspace_drawings_entry_uses_command_identity_and_live_availability() {
+        let s = session(Platform::Gtk);
+        let item = s.workspace_menu().sections.into_iter().flatten().find(|item| item.action == Some(UiAction::Invoke { command: CommandId::Drawings })).unwrap();
+        assert_eq!(item.enabled, s.command(CommandId::Drawings).enabled);
+        assert_eq!(item.label, s.command(CommandId::Drawings).label.as_ref());
+    }
+
+    #[test]
     fn sessions_preserve_independent_launch_languages() {
         use std::sync::Arc;
         let japanese = Localizer::shared(UiLanguage::Japanese);
@@ -5548,9 +5785,66 @@ mod tests {
         assert!(Arc::ptr_eq(second.localization(), &korean));
         assert_eq!(first.localization().language(), UiLanguage::Japanese);
         assert_eq!(second.localization().language(), UiLanguage::Korean);
-        let reopened = UiSession::from_project_localized(Recorder::default(), NewDocumentOptions::default().project().unwrap(), None, [256, 256], Platform::Gtk, first.localization().clone()).unwrap();
+        let cloned = first.state().clone();
+        assert!(Arc::ptr_eq(&cloned.localization, first.localization()));
+        assert!(serde_json::to_value(&cloned).unwrap().get("localization").is_none());
+        first.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(1) } }).unwrap();
+        assert_eq!(first.state().settings.language, crate::LanguagePreference::Explicit(UiLanguage::English));
+        assert!(Arc::ptr_eq(first.localization(), &japanese));
+        let saved = serde_json::to_string(&first.state().settings).unwrap();
+        first.dispatch(UiAction::Preferences { action: PreferenceAction::Reset { id: PreferenceId::Language } }).unwrap();
+        first.dispatch(UiAction::RestoreSavedSettings { saved }).unwrap();
+        assert!(Arc::ptr_eq(first.localization(), &japanese));
+        let reopened = UiSession::from_project_localized(Recorder::default(), NewDocumentOptions::default().project(first.localization()).unwrap(), None, [256, 256], Platform::Gtk, first.localization().clone()).unwrap();
         assert!(Arc::ptr_eq(reopened.localization(), first.localization()));
         assert_eq!(reopened.engine().document().layers[0].name, first.engine().document().layers[0].name);
+    }
+
+    #[test]
+    fn resource_references_are_rejected_at_session_and_package_admission() {
+        use layer_core::{EffectInstallMode, EffectOption, EffectParameterKind, ResourceLabel};
+        use std::sync::Arc;
+        let localization = Localizer::shared(UiLanguage::Japanese);
+        for key in ["resources-missing", MessageId::RESOURCES_ANIMATED_TOOLTIP.key()] {
+            for field in 0..5 {
+                let mut definition = layer_core::bundled_effect_catalog().get("curves").unwrap().clone();
+                let mut categories = layer_core::bundled_effect_catalog().categories().to_vec();
+                let invalid = ResourceLabel::Message { message: key.into() };
+                if field == 0 { categories[0].label = invalid; }
+                else {
+                    let program = Arc::make_mut(&mut definition.program);
+                    match field {
+                        1 => program.label = invalid,
+                        2 => Arc::make_mut(&mut program.parameters)[0].label = invalid,
+                        3 => Arc::make_mut(&mut program.parameters)[0].section = Some(invalid),
+                        _ => {
+                            let EffectParameterKind::Choice { options } = &mut Arc::make_mut(&mut program.parameters)[4].kind else { panic!() };
+                            let option = &mut Arc::make_mut(options)[0];
+                            *option = EffectOption::Labeled { value: option.value().into(), label: invalid };
+                        }
+                    }
+                }
+                if field != 0 {
+                    let mut project = NewDocumentOptions::default().project(&localization).unwrap();
+                    project.document.layers[0].effect = Some(Arc::new(layer_core::EffectInstance::new(definition.program.clone())));
+                    let result = UiSession::from_project_localized(Recorder::default(), project, None, [256, 256], Platform::Gtk, localization.clone());
+                    assert!(matches!(result, Err(error) if error == localization.text(MessageId::RESOURCES_INVALID_MESSAGE).as_ref()), "embedded field {field}: {key}");
+                }
+                for library in [false, true] {
+                    let mut session = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, localization.clone()).unwrap();
+                    let document = session.engine().document().clone();
+                    let catalog_revision = session.state().filter_catalog_revision;
+                    let package = package_json(categories.clone(), vec![definition.clone()]);
+                    let result = if library { session.load_effect_library(&package, |_| panic!("inline program"), EffectInstallMode::Replace) }
+                        else { session.load_effect_package(&package, |_| panic!("inline program"), EffectInstallMode::Replace) };
+                    assert!(matches!(result, Err(error) if error == localization.text(MessageId::RESOURCES_INVALID_MESSAGE).as_ref()), "package field {field}, library {library}: {key}");
+                    assert_eq!(session.engine().document(), &document);
+                    assert_eq!(session.state().filter_catalog_revision, catalog_revision);
+                    assert!(!session.state().filter_load.pending);
+                    assert!(session.renderer_mut().validation.is_none());
+                }
+            }
+        }
     }
 
     include!("session_color_tests.rs");
@@ -5627,7 +5921,7 @@ mod tests {
     #[test]
     fn source_document_adoption_requires_renderer_support() {
         use layer_core::color::{SampleDepth, source::*};
-        let mut document = Document::new("photo", 1, 1);
+        let mut document = Document::new("photo", 1, 1, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut source = SourceBuilder::new([1, 1], SourceInterpretation {
             channels: SourceChannels::Rgba,
             depth: SampleDepth::U16,
@@ -6152,7 +6446,7 @@ mod tests {
         .unwrap();
         let history = s.capture_workspace().unwrap().history;
         assert_eq!(
-            history.revisions[&history.current].description,
+            history.revisions[&history.current].description.display(s.localization()),
             "Moved Layers panel"
         );
         customize(&mut s, CustomizationAction::SetPanelVisible {
@@ -6161,7 +6455,7 @@ mod tests {
         });
         let history = s.capture_workspace().unwrap().history;
         assert_eq!(
-            history.revisions[&history.current].description,
+            history.revisions[&history.current].description.display(s.localization()),
             "Hid Layers panel"
         );
         let mut toolbar = s
@@ -6172,18 +6466,18 @@ mod tests {
             .unwrap()
             .clone();
         if let PanelContent::Toolbar { name, .. } = &mut toolbar.content {
-            *name = "Inking".into();
+            *name = Some("Inking".into());
         }
         let (panel, _) = s.install_workspace_toolbar(toolbar, None, None, false).unwrap();
         let history = s.capture_workspace().unwrap().history;
         assert_eq!(
-            history.revisions[&history.current].description,
+            history.revisions[&history.current].description.display(s.localization()),
             "Added Inking toolbar"
         );
         let mut after = history.layout().clone();
         after.panels.retain(|p| p.id != panel);
         assert_eq!(
-            layout_change_description(history.layout(), &after),
+            layout_change_description(history.layout(), &after).display(s.localization()),
             "Deleted Inking toolbar"
         );
         let before_settings = s.capture_workspace().unwrap().history;
@@ -6228,7 +6522,8 @@ mod tests {
                 .iter()
                 .all(|i| !i.label.ends_with(" panel"))
         );
-        assert_eq!(menu.sections.len(), 4);
+        assert_eq!(menu.sections.len(), 5);
+        assert!(matches!(menu.sections[4][0].action, Some(UiAction::Invoke { command: CommandId::Drawings })));
         let workspaces = &menu.sections[2][0];
         assert_eq!(
             workspaces
@@ -6322,7 +6617,7 @@ mod tests {
         s.set_workspace_read_only(true);
         assert!(!s.command_flags(CommandId::OpenDocument).0);
         assert!(!s.state.commands.iter().find(|c| c.id == CommandId::OpenDocument).unwrap().enabled);
-        assert_eq!(s.disabled_reason_unchecked(CommandId::OpenDocument), "The workspace is still loading");
+        assert_eq!(s.disabled_reason_unchecked(CommandId::OpenDocument).as_ref(), "The workspace is still loading");
         assert_eq!(
             s.dispatch(UiAction::Invoke { command: CommandId::OpenDocument }).unwrap_err(),
             "The workspace is still loading. Try again when it is ready."
@@ -6407,7 +6702,7 @@ mod tests {
             .clone();
         let mut library = source.clone();
         if let PanelContent::Toolbar { name, tiles } = &mut library.content {
-            *name = "Library Tools".into();
+            *name = Some("Library Tools".into());
             tiles[0].control = ToolbarControl::Size { pixels: 20 };
         }
         s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
@@ -6494,7 +6789,7 @@ mod tests {
         let placement = s.state.workspace.layout.panel_group(source.id);
         let mut empty = source.clone();
         if let PanelContent::Toolbar { name, tiles } = &mut empty.content {
-            *name = "Empty Library Toolbar".into();
+            *name = Some("Empty Library Toolbar".into());
             tiles.clear();
         }
         let artwork = s.engine.document().clone();
@@ -6695,7 +6990,7 @@ mod tests {
     fn document_save_keeps_sources_and_tracks_the_saved_undo_state() {
         let mut s = UiSession::new(
             Recorder { tiled_sources: true, ..Default::default() },
-            Document::new("test", 1000, 1000),
+            Document::new("test", 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [1000, 1000],
             Platform::Gtk,
         )
@@ -6761,7 +7056,7 @@ mod tests {
 
     #[test]
     fn prepared_drawings_take_their_location_or_recovery_protection() {
-        let project = crate::new_drawing(64, 48).unwrap();
+        let project = crate::new_drawing(64, 48, &Localizer::shared(UiLanguage::English)).unwrap();
         let mut s = UiSession::from_project(Recorder::default(), project, None, [800, 600], Platform::Gtk).unwrap();
         let location = |uri: &str, name: &str| DocumentLocation { uri: uri.into(), name: name.into() };
         for (uri, name) in [("", "a.capy"), ("file:///a.capy", ""), ("file:///a\0.capy", "a.capy"), ("file:///a.capy", "a\n")] {
@@ -7051,9 +7346,9 @@ mod tests {
             .unwrap();
         assert!(s.state.document_file.close_ready);
         assert_eq!(s.engine.document(), &document);
-        assert!(new_drawing(0, 10).is_err());
-        assert!(new_drawing(10, 8193).is_err());
-        assert_eq!(new_drawing(512, 128).unwrap().document.width, 512);
+        assert!(new_drawing(0, 10, &Localizer::shared(UiLanguage::English)).is_err());
+        assert!(new_drawing(10, 8193, &Localizer::shared(UiLanguage::English)).is_err());
+        assert_eq!(new_drawing(512, 128, &Localizer::shared(UiLanguage::English)).unwrap().document.width, 512);
     }
 
     #[test]
@@ -7091,7 +7386,7 @@ mod tests {
     fn navigator_drags_without_jump_and_outside_click_recenters() {
         let mut s = UiSession::new(
             Recorder::default(),
-            Document::new("test", 2048, 1536),
+            Document::new("test", 2048, 1536, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [1000, 1000],
             Platform::Gtk,
         )
@@ -7530,7 +7825,7 @@ mod tests {
             s.state
                 .tool_settings
                 .iter()
-                .map(|c| c.label)
+                .map(|c| c.label.as_ref())
                 .collect::<Vec<_>>(),
             ["Line width", "Opacity"]
         );
@@ -8161,7 +8456,7 @@ mod tests {
             assert_eq!(drawer.column_widths(), [160., 272., 320.]);
             let sets = s.state.tool_panels.brush_sets.groups.clone();
             assert_eq!(sets.len(), 10);
-            assert!(sets.iter().all(|set| !matches!(set.label, "Eraser" | "Blend" | "Liquify")));
+            assert!(sets.iter().all(|set| !matches!(set.label.as_ref(), "Eraser" | "Blend" | "Liquify")));
             let mut remembered = Vec::new();
             for set in sets {
                 s.dispatch(set.action).unwrap();
@@ -8221,7 +8516,7 @@ mod tests {
             s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
             let drawer = s.state.customization.drawer.clone().unwrap();
             assert_eq!(drawer.columns, [vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]);
-            assert_eq!(s.state.tool_panels.sculpt_sets.groups.iter().map(|s| s.label).collect::<Vec<_>>(), ["Blend", "Liquify", "Clone", "Heal", "Spot Heal"]);
+            assert_eq!(s.state.tool_panels.sculpt_sets.groups.iter().map(|s| s.label.as_ref()).collect::<Vec<_>>(), ["Blend", "Liquify", "Clone", "Heal", "Spot Heal"]);
             for set in s.state.tool_panels.sculpt_sets.groups.clone() {
                 s.dispatch(set.action).unwrap();
                 assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
@@ -8657,7 +8952,7 @@ mod tests {
             .effect
             .clone()
             .unwrap();
-        assert_eq!(current.program.label.as_ref(), "Runtime sharpness");
+        assert_eq!(current.program.label, layer_core::ResourceLabel::from("Runtime sharpness"));
         assert_eq!(current.value("amount"), Some(&EffectValue::Number(175.)));
         assert_eq!(s.state.layer_properties.controls[0].label, "Runtime radius");
         assert_eq!(s.filter_preview_revision().2, 1);
@@ -8671,7 +8966,7 @@ mod tests {
             result: Err("Invalid WGSL".into()),
         });
         s.frame(5, 5).unwrap();
-        assert_eq!(s.state.filter_load.error.as_deref(), Some("Invalid WGSL"));
+        assert_eq!(s.state.filter_load.error.as_deref(), Some(s.localization().text(MessageId::RESOURCES_PACKAGE_VALIDATION_FAILED).as_ref()));
         assert_eq!(s.state.filter_catalog_revision, 1);
         assert_eq!(
             s.engine
@@ -8751,7 +9046,7 @@ mod tests {
                 EffectInstallMode::Add,
             )
             .unwrap_err();
-        assert!(error.contains("document program"));
+        assert_eq!(error, s.localization().text(MessageId::RESOURCES_DOCUMENT_FILTER_CONFLICT).as_ref());
         assert!(s.renderer_mut().validation.is_none());
         assert_eq!(s.engine.document().layer(id).unwrap().effect, original);
         assert!(s.effect_catalog.get("document:custom").is_none());
@@ -8916,7 +9211,7 @@ mod tests {
         assert_eq!(s.engine.checkpoint(), checkpoint);
         assert_eq!(
             s.effect_catalog.get("unsharp_mask").unwrap().label(),
-            "New library version"
+            &layer_core::ResourceLabel::from("New library version")
         );
     }
 
@@ -9201,7 +9496,7 @@ mod tests {
         // Paper opacity remains supported despite its protected stack position.
         let mut s = UiSession::from_project(
             Recorder::default(),
-            new_drawing(64, 64).unwrap(),
+            new_drawing(64, 64, &Localizer::shared(UiLanguage::English)).unwrap(),
             None,
             [128, 128],
             Platform::Gtk,
@@ -9709,7 +10004,7 @@ mod tests {
         edit(
             &mut s,
             CustomizationAction::ToolbarName {
-                name: "Layers".into(),
+                name: " ".into(),
             },
         );
         assert!(!s.toolbar_prompt().unwrap().can_confirm);
@@ -10939,7 +11234,7 @@ mod tests {
     fn application_menus_reuse_live_models_and_selection_commands_are_undoable() {
         let mut app = session(Platform::Gtk);
         assert_eq!(
-            ApplicationMenu::ALL.map(|m| m.label()),
+            ApplicationMenu::ALL.map(|m| m.label().to_string()),
             [
                 "File", "Edit", "Layer", "Select", "Filter", "View", "Window", "Help"
             ]
@@ -13422,7 +13717,7 @@ mod tests {
         let valid = serde_json::to_value(&app.state.workspace).unwrap();
         let mut invalid = Vec::new();
         let mut value = valid.clone();
-        value["version"] = 2.into();
+        value["version"] = 3.into();
         invalid.push(value);
         let mut value = valid.clone();
         value["layout"]["next_id"] = 1.into();
@@ -15139,20 +15434,10 @@ mod tests {
     #[test]
     fn tile_activation_uses_live_core_commands_and_stale_drag_ids_are_rejected() {
         let mut app = session(Platform::Gtk);
-        app.state
-            .workspace
-            .layout
-            .insert_tools(
-                Panel::Toolbar,
-                None,
-                &[
-                    ToolbarControl::Size { pixels: 64 },
-                    ToolbarControl::Command {
-                        command: CommandId::ToggleTheme,
-                    },
-                ],
-            )
-            .unwrap();
+        customize(&mut app, CustomizationAction::InsertTools { panel: Panel::Toolbar, before: None });
+        customize(&mut app, CustomizationAction::PickerSelect { control: ToolbarControl::Size { pixels: 64 }, selected: true });
+        customize(&mut app, CustomizationAction::PickerSelect { control: ToolbarControl::Command { command: CommandId::ToggleTheme }, selected: true });
+        customize(&mut app, CustomizationAction::ConfirmTools);
         let tiles = app
             .state
             .workspace
@@ -15249,7 +15534,7 @@ mod tests {
                 .iter()
                 .find(|c| c.id == CommandId::ToggleTheme)
                 .unwrap();
-            assert_eq!(command.label, "Dark Mode");
+            assert_eq!(command.label.as_ref(), "Dark Mode");
             assert_eq!(command.selected, state.theme == Theme::Dark);
         };
         assert_eq!(app.state.settings.theme, None);
@@ -15877,7 +16162,7 @@ mod tests {
                             .unwrap();
                         let mut s = UiSession::from_project(
                             Recorder::default(),
-                            new_drawing(1024, 768).unwrap(),
+                            new_drawing(1024, 768, &Localizer::shared(UiLanguage::English)).unwrap(),
                             None,
                             window.state.camera.viewport,
                             Platform::Gtk,
@@ -16661,17 +16946,9 @@ mod tests {
     #[test]
     fn pen_uses_camera_and_pressure_without_ui_updates_per_move() {
         let mut app = session(Platform::Gtk);
-        app.state
-            .workspace
-            .layout
-            .insert_tools(
-                Panel::Toolbar,
-                None,
-                &[ToolbarControl::Command {
-                    command: CommandId::Hand,
-                }],
-            )
-            .unwrap();
+        customize(&mut app, CustomizationAction::InsertTools { panel: Panel::Toolbar, before: None });
+        customize(&mut app, CustomizationAction::PickerSelect { control: ToolbarControl::Command { command: CommandId::Hand }, selected: true });
+        customize(&mut app, CustomizationAction::ConfirmTools);
         let commands = app.state.commands.clone();
         let tiles = serde_json::to_value(app.panel_view(Panel::Toolbar).unwrap()).unwrap();
         assert!(

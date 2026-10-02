@@ -306,7 +306,7 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
     let extent = [1100, 700];
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         for space in BlendSpace::ALL {
-            let mut doc = Document::new("windows", extent[0], extent[1]);
+            let mut doc = Document::new("windows", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             doc.color = DocumentColor { space: RgbSpace::Srgb, depth };
             doc.blend_space = space;
             doc.layers[0].source = Some(layer_core::color::source::rgba8_source(extent, |x, y| {
@@ -337,7 +337,7 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
                 let baked: Vec<_> = if separate {
                     let filters = SeparationFilters::new(layer_core::bundled_effect_catalog(), 7.5).unwrap();
                     let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-                    let plan = engine.document().separation_plan(photo, &filters, ids).unwrap();
+                    let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
                     let baked = plan.operations.iter().map(|(id, _)| *id).collect();
                     engine.insert_with_operations(plan.edits, plan.operations, None).unwrap();
                     baked

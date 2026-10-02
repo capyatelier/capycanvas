@@ -4,7 +4,7 @@ use color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 #[test]
 fn selection_history_charges_shared_coverage_once_and_rejects_oversized_edits() {
     let mask = Selection::pixels(Arc::new(SelectionPixels::bytes([1024, 1], [0, 0, 1024, 1], vec![u32::MAX; 256]).unwrap()));
-    let mut document = Document::new("selection budget", 1024, 1);
+    let mut document = Document::new("selection budget", 1024, 1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.selection = Some(mask.clone());
     let entry = HistoryEntry::new(Edit::SetSelection(Some(mask.clone())), 0);
     assert!(entry.metadata_bytes < 1024, "coverage is not serialized into history metadata");
@@ -12,7 +12,7 @@ fn selection_history_charges_shared_coverage_once_and_rejects_oversized_edits() 
     let mut accounting = Accounting::default();
     assert_eq!(accounting.charge(&entry), entry.metadata_bytes + 1024);
     assert_eq!(accounting.charge(&entry), entry.metadata_bytes);
-    let mut editor = Editor::new(Document::new("bounded history", 1024, 1));
+    let mut editor = Editor::new(Document::new("bounded history", 1024, 1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
     let before = editor.document.clone();
     assert!(editor.perform_with_history_budget(Edit::SetSelection(Some(mask)), 1023).is_err());
     assert_eq!(editor.document, before);
@@ -24,7 +24,7 @@ fn retained_selection_inventory_counts_binary_ownership_across_history_and_masks
     let extent=[9504,6336];
     let bytes=extent[0] as usize*extent[1] as usize;
     let selection=Selection::pixels(Arc::new(SelectionPixels::bytes(extent,[0,0,extent[0],extent[1]],vec![u32::MAX;bytes/4]).unwrap()));
-    let mut document=Document::new("Photo inventory",extent[0],extent[1]);
+    let mut document=Document::new("Photo inventory",extent[0],extent[1], crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.selection=Some(selection.clone());
     let id=document.allocate_layer_id();
     document.layers.insert(0,Layer::selection(id,"Saved",selection.clone()));
@@ -47,7 +47,7 @@ fn retained_selection_inventory_counts_binary_ownership_across_history_and_masks
 
 #[test]
 fn admitted_native_output_reservation_is_shared_until_tile_publication() {
-    let document = Document::new("pending native output", 256, 256);
+    let document = Document::new("pending native output", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let revision = raster::RasterRevision::pending();
     let mut layer = document.layers[0].clone();
     layer.raster = revision.clone();
@@ -83,7 +83,7 @@ fn over_budget_source_changes_reject_atomically_in_both_directions() {
     // Small explicit limits exercise the real admission path without allocating
     // a half-gigabyte image. ICC contents are immaterial to ownership accounting.
     for remove in [false, true] {
-        let mut document = Document::new("admission", 256, 256);
+        let mut document = Document::new("admission", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let original = source();
         if remove {
             document.layers[0].source = Some(original.clone());
@@ -124,7 +124,7 @@ fn over_budget_source_changes_reject_atomically_in_both_directions() {
 
 #[test]
 fn reinterpretation_charges_shared_tiles_once_and_new_profile_ownership() {
-    let mut document = Document::new("source repair", 256, 256);
+    let mut document = Document::new("source repair", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let original = source();
     document.layers[0].source = Some(original.clone());
     let mut layer = document.layers[0].clone();

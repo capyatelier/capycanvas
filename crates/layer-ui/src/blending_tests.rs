@@ -32,7 +32,7 @@ fn edit_blending_changes_how_layers_combine_in_one_undo_step() {
 
 #[test]
 fn float_documents_blend_in_linear_light() {
-    let mut document = Document::new("float", 256, 256);
+    let mut document = Document::new("float", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color.depth = layer_core::color::SampleDepth::F16;
     let renderer = Recorder { color: document.color, ..Default::default() };
     let mut s = UiSession::new(renderer, document, [1000, 1000], Platform::Gtk).unwrap();

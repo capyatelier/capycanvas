@@ -128,14 +128,15 @@ impl Workspace {
                     match request.kind {
                         HostRequestKind::Document { request: document } => {
                             if let DocumentRequest::ConfirmClose { .. } = document {
+                                let spec = layer_ui::new_document_spec(&w.localization);
                                 let dialog = adw::AlertDialog::builder()
-                                    .heading(document.title())
-                                    .body(UNSAVED_DESCRIPTION)
+                                    .heading(document.title(&w.localization).as_ref())
+                                    .body(spec.unsaved_description.as_ref())
                                     .build();
                                 dialog.add_responses(&[
-                                    ("cancel", CANCEL_DOCUMENT_LABEL),
-                                    ("discard", DISCARD_DOCUMENT_LABEL),
-                                    ("save", "Save"),
+                                    ("cancel", spec.cancel.as_ref()),
+                                    ("discard", spec.discard.as_ref()),
+                                    ("save", w.localization.text(MessageId::COMMON_SAVE).as_ref()),
                                 ]);
                                 dialog.set_close_response("cancel");
                                 dialog.set_default_response(Some("save"));
@@ -190,7 +191,7 @@ impl Workspace {
                                     .window
                                     .application()
                                     .and_then(|app| app.lookup_action("new-window"))
-                                    .ok_or("New Window is unavailable".into())
+                                    .ok_or_else(|| DocumentHostError::NewWindowUnavailable.message(&w.localization))
                                     .map(|action| action.activate(None)),
                                 HostRequestKind::SaveSettings { settings } => {
                                     crate::preferences::persist(&w, settings).await
@@ -257,7 +258,7 @@ async fn document_request(
         w.open_document
             .borrow()
             .as_ref()
-            .ok_or("Drawing tabs are unavailable")?(project, None, None);
+            .ok_or_else(|| DocumentHostError::DrawingTabsUnavailable.message(&w.localization))?(project, None, None);
         return Ok(true);
     }
     if let DocumentRequest::Export { name } = request {
@@ -266,12 +267,12 @@ async fn document_request(
     let Some(file) = choose_file(w, request).await? else {
         return Ok(false);
     };
-    let path = file.path().ok_or("Choose a file on this device")?;
+    let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization))?;
     let location = DocumentLocation {
         uri: file.uri().into(),
         name: path
             .file_name()
-            .ok_or("Choose a filename")?
+            .ok_or_else(|| DocumentHostError::ChooseFilename.message(&w.localization))?
             .to_string_lossy()
             .into_owned(),
     };
@@ -279,16 +280,16 @@ async fn document_request(
         DocumentRequest::Open => {
             let (policy, working) = {
                 let gpu = w.gpu.borrow();
-                let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
+                let session = &gpu.as_ref().ok_or_else(|| w.localization.text(MessageId::DOCUMENTS_ERROR_CANVAS_UNAVAILABLE).to_string())?.session;
                 (session.state().settings.photo_open, session.engine().document().color.space)
             };
-            let Some((project, location)) = open::prepare(&w.window, file, policy, working).await? else {
+            let Some((project, location)) = open::prepare(&w.window, file, policy, working, photo_document_names(&location.name, &w.localization)).await? else {
                 return Ok(false);
             };
             w.open_document
                 .borrow()
                 .as_ref()
-                .ok_or("Drawing tabs are unavailable")?(
+                .ok_or_else(|| DocumentHostError::DrawingTabsUnavailable.message(&w.localization))?(
                 project, location, None
             );
         }
@@ -297,12 +298,12 @@ async fn document_request(
                 .gpu
                 .borrow_mut()
                 .as_mut()
-                .ok_or("Canvas unavailable")?
+                .ok_or_else(|| w.localization.text(MessageId::DOCUMENTS_ERROR_CANVAS_UNAVAILABLE).to_string())?
                 .session
                 .capture_project_save(id, location)?;
             gio::spawn_blocking(move || atomic_write(&path, |file| project.write(file)))
                 .await
-                .map_err(|_| "Project writer failed")??;
+                .map_err(|_| DocumentHostError::ProjectWriterFailed.message(&w.localization))??;
         }
         _ => unreachable!(),
     }
@@ -323,11 +324,11 @@ async fn choose_file(
     if matches!(request, DocumentRequest::Open)
         && let Some(incoming) = w.image_drop.borrow_mut().take()
     {
-        return Ok(Some(incoming.files.into_iter().next().ok_or("No drawing to open")?));
+        return Ok(Some(incoming.files.into_iter().next().ok_or_else(|| DocumentHostError::NoDrawingToOpen.message(&w.localization))?));
     }
     let dialog = gtk::FileDialog::builder()
-        .title(request.title())
-        .accept_label(request.accept_label())
+        .title(request.title(&w.localization).as_ref())
+        .accept_label(request.accept_label(&w.localization).as_ref())
         .modal(true)
         .build();
     if let Some(location) = w
@@ -339,12 +340,12 @@ async fn choose_file(
     {
         dialog.set_initial_folder(Some(&folder));
     }
-    let (label, extension) = request.filter();
+    let (label, extension) = request.filter(&w.localization);
     let filter = gtk::FileFilter::new();
-    filter.set_name(Some(label));
+    filter.set_name(Some(&label));
     filter.add_suffix(extension);
     if matches!(request, DocumentRequest::Open) {
-        filter.set_name(Some("Drawings and photos"));
+        filter.set_name(Some(&w.localization.text(MessageId::DOCUMENTS_OPEN_PHOTOS_FILTER)));
         for suffix in layer_color::photo::extensions() { filter.add_suffix(suffix); }
     }
     let filters = gio::ListStore::new::<gtk::FileFilter>();

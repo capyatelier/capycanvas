@@ -96,7 +96,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     gpu.finish_startup_cache();
     assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
     assert!(gpu.adapter().get_info().device_type != wgpu::DeviceType::Cpu || layer_render_wgpu::software_adapter_tests());
-    let mut project = layer_ui::new_drawing(32, 24).unwrap();
+    let mut project = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let mut source = SourceBuilder::new(
         [32, 24],
         SourceInterpretation {

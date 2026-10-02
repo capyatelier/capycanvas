@@ -37,8 +37,8 @@ impl SeparationFilters {
     }
 
     /// An effect layer that applies `effect` to the layer it is clipped to.
-    pub fn clipped(id: LayerId, effect: &Arc<EffectInstance>) -> Layer {
-        let mut layer = Layer::paint(id, effect.program.label.clone());
+    pub fn clipped(id: LayerId, effect: &Arc<EffectInstance>, name: impl Into<Arc<str>>) -> Layer {
+        let mut layer = Layer::paint(id, name);
         layer.kind = LayerKind::Effect;
         layer.effect = Some(effect.clone());
         layer.properties.clipped = true;
@@ -89,12 +89,12 @@ impl Document {
 
     /// A Soft Light layer filled with `soft_light_neutral`, above the active
     /// layer and its clipping stack, made active.
-    pub fn dodge_burn_plan(&self, [id, coverage]: [LayerId; 2]) -> Result<RetouchLayerPlan, RetouchLayerRefusal> {
+    pub fn dodge_burn_plan(&self, [id, coverage]: [LayerId; 2], name: impl Into<Arc<str>>) -> Result<RetouchLayerPlan, RetouchLayerRefusal> {
         if let Some(refusal) = self.dodge_burn_refusal() {
             return Err(refusal);
         }
         let (index, parent) = self.above_clipping_stack(self.active_layer);
-        let mut layer = Layer::paint(id, "Dodge & Burn");
+        let mut layer = Layer::paint(id, name);
         layer.properties.parent = parent;
         layer.properties.blend = LayerBlend::SoftLight;
         let gray = self.soft_light_neutral();
@@ -142,6 +142,7 @@ impl Document {
         target: LayerId,
         filters: &SeparationFilters,
         ids: [LayerId; SEPARATION_IDS],
+        [group_name, low_name, high_name]: [Arc<str>; 3],
     ) -> Result<RetouchLayerPlan, RetouchLayerRefusal> {
         if let Some(refusal) = self.separation_refusal(target) {
             return Err(refusal);
@@ -168,18 +169,18 @@ impl Document {
         };
         let operations = vec![
             (low, operation(LayerOperationKind::Bake {
-                members: [SeparationFilters::clipped(blur, &filters.blur), source.clone()].into(), offset: parent_offset,
+                members: [SeparationFilters::clipped(blur, &filters.blur, filters.blur.program.id.clone()), source.clone()].into(), offset: parent_offset,
             }, low_coverage)?),
             (high, operation(LayerOperationKind::FrequencyDetail {
                 members: [source].into(), offset: parent_offset, low,
             }, high_coverage)?),
         ];
-        let mut group = Layer::paint(group_id, "Frequency Separation");
+        let mut group = Layer::paint(group_id, group_name);
         group.kind = LayerKind::Group;
         group.opacity = layer.opacity;
         group.properties.parent = layer.properties.parent;
         group.properties.clipped = layer.properties.clipped;
-        let part = |id, name: &str, blend| {
+        let part = |id, name: Arc<str>, blend| {
             let mut part = Layer::paint(id, name);
             part.properties.parent = Some(group_id);
             part.properties.offset = Point { x: -parent_offset.x, y: -parent_offset.y };
@@ -189,8 +190,8 @@ impl Document {
         Ok(RetouchLayerPlan {
             edits: vec![
                 Edit::InsertLayer { index, layer: group },
-                Edit::InsertLayer { index: index + 1, layer: part(high, "High", LayerBlend::LinearLight) },
-                Edit::InsertLayer { index: index + 2, layer: part(low, "Low", LayerBlend::Normal) },
+                Edit::InsertLayer { index: index + 1, layer: part(high, high_name, LayerBlend::LinearLight) },
+                Edit::InsertLayer { index: index + 2, layer: part(low, low_name, LayerBlend::Normal) },
                 Edit::SetLayerVisibility { id: target, visible: false },
                 Edit::SetActiveLayer { id: high },
             ],

@@ -236,24 +236,26 @@ impl CanvasSizeDraft {
 
 impl<R: CanvasRenderer> UiSession<R> {
     /// Why no geometry command can change the canvas right now.
-    pub(super) fn canvas_geometry_refusal(&self) -> Option<&'static str> {
+    pub(super) fn canvas_geometry_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         if self.operation.active() {
             Some(self.operation_refusal())
         } else if self.selection_masks.target().is_some() {
-            Some("Return to the artwork first")
+            Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST))
         } else if self.state.document_file.busy {
-            Some("Wait for the current file operation")
+            Some(l.text(MessageId::COMMANDS_WAIT_FOR_THE_CURRENT_FILE_OPERATION))
         } else if self.painted_selections.busy() {
-            Some("Wait for selection capture to finish")
+            Some(l.text(MessageId::COMMANDS_REFUSAL_CANVAS_SIZE_WAIT_FOR_SELECTION_CAPTURE_TO_FINISH))
         } else {
             None
         }
     }
 
-    pub(super) fn crop_to_selection_refusal(&self) -> Option<&'static str> {
+    pub(super) fn crop_to_selection_refusal(&self) -> Option<std::sync::Arc<str>> {
+        let l = self.localization();
         self.canvas_geometry_refusal().or(match &self.engine.document().selection {
-            None => Some("Make a selection first"),
-            Some(selection) if selection.inverted => Some("An inverted selection has no bounds to crop to"),
+            None => Some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST)),
+            Some(selection) if selection.inverted => Some(l.text(MessageId::COMMANDS_REFUSAL_CANVAS_SIZE_AN_INVERTED_SELECTION_HAS_NO_BOUNDS_TO_CROP_TO)),
             Some(_) => None,
         })
     }
