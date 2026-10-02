@@ -50,6 +50,13 @@ impl GpuCanvas {
         area: &gtk::Picture,
         project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
     ) -> Result<Self, String> {
+        Self::with_project_localized(area, project, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+    }
+    pub fn with_project_localized(
+        area: &gtk::Picture,
+        project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
+        localization: std::sync::Arc<layer_ui::Localizer>,
+    ) -> Result<Self, String> {
         let parent = area
             .native()
             .and_then(|native| native.surface())
@@ -70,7 +77,7 @@ impl GpuCanvas {
         let color = project.document.color;
         let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into(), color)?;
         let mut session =
-            UiSession::from_project(renderer, project, location, extent(area), layer_ui::Platform::Gtk)?;
+            UiSession::from_project_localized(renderer, project, location, extent(area), layer_ui::Platform::Gtk, localization)?;
         session.dispatch(layer_ui::UiAction::RestoreWorkspace {
             workspace: Box::new(layer_ui::WorkspaceState::for_platform(
                 layer_ui::Platform::Gtk,

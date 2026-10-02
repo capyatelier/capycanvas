@@ -210,6 +210,7 @@ impl Startup {
 }
 type Selection = (Option<ManagerDetails>, Option<DockLayout>);
 pub struct WorkspaceController<S: WorkspaceStore + 'static> {
+    localization: Arc<layer_ui::Localizer>,
     pub manager: Rc<WorkspaceManager<S>>,
     pub view: WorkspaceView,
     wake: WakeSlot,
@@ -248,12 +249,22 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
 }
 impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     pub fn new(store: S, platform: Platform, now: u64) -> Self {
-        Self::new_owned(store, platform, Owner::fresh(), now)
+        Self::new_localized(store, platform, now, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+    }
+    pub fn new_localized(store: S, platform: Platform, now: u64, localization: Arc<layer_ui::Localizer>) -> Self {
+        Self::new_owned_localized(store, platform, Owner::fresh(), now, localization)
     }
     pub fn new_owned(store: S, platform: Platform, owner: Owner, now: u64) -> Self {
+        Self::new_owned_localized(store, platform, owner, now, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+    }
+    pub fn localization(&self) -> &Arc<layer_ui::Localizer> {
+        &self.localization
+    }
+    pub fn new_owned_localized(store: S, platform: Platform, owner: Owner, now: u64, localization: Arc<layer_ui::Localizer>) -> Self {
         let mut manager = WorkspaceManager::new(store, platform);
         manager.owner = owner;
         let mut c = Self {
+            localization,
             manager: Rc::new(manager),
             view: Default::default(),
             wake: Default::default(),

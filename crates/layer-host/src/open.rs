@@ -13,6 +13,7 @@ pub const PREPARE_DEADLINE: Duration = Duration::from_secs(120);
 pub struct OpenEnvironment {
     pub admission: layer_ui::DocumentAdmission,
     pub platform: layer_ui::Platform,
+    pub localization: std::sync::Arc<layer_ui::Localizer>,
     pub gpu: GpuContext,
     pub options: RendererOptions,
     pub viewport: [u32; 2],
@@ -36,6 +37,7 @@ impl OpenEnvironment {
         Ok(Self {
             admission,
             platform: session.state().platform,
+            localization: session.localization().clone(),
             gpu: GpuContext::of(gpu),
             options,
             viewport: session.state().camera.viewport,
@@ -138,7 +140,7 @@ impl OpenEnvironment {
             std::thread::sleep(Duration::from_millis(2));
         }
         let mut candidate =
-            UiSession::from_project(Renderer(Some(gpu.into())), project, None, self.viewport, self.platform)?;
+            UiSession::from_project_localized(Renderer(Some(gpu.into())), project, None, self.viewport, self.platform, self.localization.clone())?;
         candidate.frame(0, 0)?;
         check()?;
         Ok(Box::new(candidate))
@@ -154,20 +156,24 @@ mod tests {
     fn open_prepares_a_ready_candidate_and_honours_cancellation() {
         let project = layer_ui::NewDocumentOptions::default().project().unwrap();
         let gpu = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
-        let session = UiSession::from_project(
+        let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+        let session = UiSession::from_project_localized(
             Renderer(Some(gpu.into())),
             layer_ui::new_drawing(64, 48).unwrap(),
             None,
             [640, 480],
             layer_ui::Platform::Mac,
+            localization.clone(),
         )
         .unwrap();
         let admission = layer_ui::DocumentSessions::<()>::default()
             .admission(&session.retained_document_tiles());
         let environment =
             OpenEnvironment::capture(&session, admission, RendererOptions::default()).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&environment.localization, &localization));
         assert_eq!(environment.viewport, session.state().camera.viewport);
         let mut candidate = environment.prepare(project.clone(), || false).unwrap();
+        assert!(std::sync::Arc::ptr_eq(candidate.localization(), &localization));
         let gpu = candidate.renderer_mut().0.as_mut().unwrap();
         assert!(gpu.device() == &environment.gpu.device);
         let ready = gpu.poll_startup().unwrap();
@@ -176,5 +182,7 @@ mod tests {
             environment.prepare(project, || true).err().as_deref(),
             Some("Document operation cancelled")
         );
+        drop((candidate, environment, session));
+        layer_render_wgpu::finish_shader_compiler_shutdown();
     }
 }

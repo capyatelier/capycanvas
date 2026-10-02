@@ -968,7 +968,7 @@ impl Documents {
             self.finish_switch(w, error);
             return Err("Opening was cancelled because the window is closing".into());
         }
-        let candidate = GpuCanvas::with_project(&w.area, Some((project, location)));
+        let candidate = GpuCanvas::with_project_localized(&w.area, Some((project, location)), previous.session.localization().clone());
         let mut next = match candidate {
             Ok(next) => next,
             Err(error) => {

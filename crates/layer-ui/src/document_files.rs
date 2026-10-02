@@ -206,6 +206,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         viewport: [u32; 2],
         platform: Platform,
     ) -> Result<Self, String> {
+        Self::from_project_localized(renderer, project, location, viewport, platform, Localizer::shared(UiLanguage::English))
+    }
+
+    pub fn from_project_localized(
+        renderer: R,
+        project: Project,
+        location: Option<DocumentLocation>,
+        viewport: [u32; 2],
+        platform: Platform,
+        localization: std::sync::Arc<Localizer>,
+    ) -> Result<Self, String> {
         if let Some(location) = &location {
             location.validate()?;
         }
@@ -220,7 +231,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .map(|l| l.name.to_string())
             })
             .flatten();
-        let mut session = Self::new(renderer, project.document, viewport, platform)?;
+        let mut session = Self::new_localized(renderer, project.document, viewport, platform, localization)?;
         session.state.document_file.location = location;
         if let Some(name) = photo_name {
             session.state.document_file.unsaved_name = Some(name);

@@ -177,6 +177,7 @@ impl WebApp {
         );
         let lost = self.gpu_owner().ok_or_else(|| js("Wait for the canvas"))?;
         let viewport = self.session.state().camera.viewport;
+        let localization = self.session.localization().clone();
         let brush = self.session.engine().configured_brush().clone();
         let photo_policy = self.session.state().settings.photo_open;
         let admission = self.documents.admission(&self.session.retained_document_tiles());
@@ -323,12 +324,13 @@ impl WebApp {
                     }
                 }
             }
-            let mut candidate = UiSession::from_project(
+            let mut candidate = UiSession::from_project_localized(
                 AttachedRenderer(Some(Box::new(renderer))),
                 project,
                 None,
                 viewport,
                 layer_ui::Platform::Web,
+                localization,
             )
             .map_err(js)?;
             candidate.frame(0, 0).map_err(js)?;

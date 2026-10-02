@@ -140,6 +140,7 @@ struct FloatingResize {
 /// A host-owned session: call inline or put the entire owner behind a host
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
+    localization: std::sync::Arc<Localizer>,
     command_search: command_catalog::CommandSearch,
     engine: CanvasEngine<R>,
     state: UiState,
@@ -225,10 +226,22 @@ fn transform_choice(command: CommandId) -> Option<TransformChoice> {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn blank(renderer: R, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
-        Self::new(renderer, NewDocumentOptions::default().project()?.document, viewport, platform)
+        Self::blank_localized(renderer, viewport, platform, Localizer::shared(UiLanguage::English))
+    }
+
+    pub fn blank_localized(renderer: R, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
+        Self::new_localized(renderer, NewDocumentOptions::default().project()?.document, viewport, platform, localization)
     }
 
     pub fn new(renderer: R, document: Document, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
+        Self::new_localized(renderer, document, viewport, platform, Localizer::shared(UiLanguage::English))
+    }
+
+    pub fn localization(&self) -> &std::sync::Arc<Localizer> {
+        &self.localization
+    }
+
+    pub fn new_localized(renderer: R, document: Document, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
         if document.layers.iter().any(|l| l.source.is_some()) && !renderer.supports_tiled_sources() {
             return Err("This renderer does not support tiled photo documents".into());
         }
@@ -250,6 +263,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         engine.set_paint_color(colors.definition());
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         let mut session = Self {
+            localization,
             command_search: Default::default(),
             engine,
             pen,
@@ -5520,6 +5534,23 @@ mod tests {
     use super::*;
     use layer_core::{AssetId, Point};
     use layer_engine::{SampleFlags, ToolKind};
+
+    #[test]
+    fn sessions_preserve_independent_launch_languages() {
+        use std::sync::Arc;
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        let korean = Localizer::shared(UiLanguage::Korean);
+        let mut first = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, japanese.clone()).unwrap();
+        let second = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, korean.clone()).unwrap();
+        first.frame(0, 0).unwrap();
+        assert!(Arc::ptr_eq(first.localization(), &japanese));
+        assert!(Arc::ptr_eq(second.localization(), &korean));
+        assert_eq!(first.localization().language(), UiLanguage::Japanese);
+        assert_eq!(second.localization().language(), UiLanguage::Korean);
+        let reopened = UiSession::from_project_localized(Recorder::default(), NewDocumentOptions::default().project().unwrap(), None, [256, 256], Platform::Gtk, first.localization().clone()).unwrap();
+        assert!(Arc::ptr_eq(reopened.localization(), first.localization()));
+        assert_eq!(reopened.engine().document().layers[0].name, first.engine().document().layers[0].name);
+    }
 
     include!("session_color_tests.rs");
     include!("screen_status_tests.rs");

@@ -111,7 +111,13 @@ impl NativeHost {
         self.filter_preview_image.take()
     }
     pub fn new(platform: layer_ui::Platform) -> Result<Self, String> {
-        let session = UiSession::blank(Renderer::default(), [1, 1], platform)?;
+        Self::new_localized(platform, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+    }
+    pub fn new_localized(
+        platform: layer_ui::Platform,
+        localization: std::sync::Arc<layer_ui::Localizer>,
+    ) -> Result<Self, String> {
+        let session = UiSession::blank_localized(Renderer::default(), [1, 1], platform, localization)?;
         Ok(Self {
             session,
             ui_color: UiColor::Mapped,
@@ -1032,6 +1038,17 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hosts_keep_independent_launch_localization() {
+        let japanese = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+        let korean = layer_ui::Localizer::shared(layer_ui::UiLanguage::Korean);
+        let first = NativeHost::new_localized(layer_ui::Platform::Android, japanese.clone()).unwrap();
+        let second = NativeHost::new_localized(layer_ui::Platform::Android, korean.clone()).unwrap();
+        assert!(std::sync::Arc::ptr_eq(first.session.localization(), &japanese));
+        assert!(std::sync::Arc::ptr_eq(second.session.localization(), &korean));
+        assert!(!std::sync::Arc::ptr_eq(first.session.localization(), second.session.localization()));
+    }
 
     fn gpu_host(platform: layer_ui::Platform, size: [u32; 2]) -> (layer_render_wgpu::WgpuRasterizer, NativeHost) {
         let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();

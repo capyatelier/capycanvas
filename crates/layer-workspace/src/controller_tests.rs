@@ -65,6 +65,20 @@ impl WorkspaceStore for Store {
         result
     }
 }
+#[test]
+fn controllers_preserve_independent_launch_languages() {
+    use layer_ui::{Localizer, UiLanguage};
+    use std::sync::Arc;
+    let japanese = Localizer::shared(UiLanguage::Japanese);
+    let korean = Localizer::shared(UiLanguage::Korean);
+    let first = WorkspaceController::new_localized(Store(Rc::new(Backend::default())), Platform::Gtk, 0, japanese.clone());
+    let second = WorkspaceController::new_owned_localized(Store(Rc::new(Backend::default())), Platform::Gtk, Owner::fresh(), 0, korean.clone());
+    assert!(Arc::ptr_eq(first.localization(), &japanese));
+    assert!(Arc::ptr_eq(second.localization(), &korean));
+    assert_eq!(first.localization().language(), UiLanguage::Japanese);
+    assert_eq!(second.localization().language(), UiLanguage::Korean);
+}
+
 struct Fixture {
     backend: Rc<Backend>,
     controller: WorkspaceController<Store>,

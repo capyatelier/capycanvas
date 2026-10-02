@@ -62,7 +62,10 @@ Write for a painter, not an engineer, and for every platform.
   behaviour would solve.
 
 Menu labels, command names and availability text are defined in shared Rust, so
-every host shows the same words.
+every host shows the same words. Catalog messages use semantic identities and
+complete sentences with named arguments; keep user text literal. Follow the
+[localization guide](../ui/localization.md) when adding or translating shared
+copy.
 
 ## Handoffs
 

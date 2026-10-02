@@ -46,6 +46,7 @@ substitute for the platform build scripts.
 | Stroke placement, pressure or brush dynamics | [Brushes](../internals/brushes.md), then `layer-engine`. |
 | Pixel operations, blend behaviour or GPU performance | [Rendering](../internals/rendering.md), then `layer-render-wgpu`. |
 | Tools, commands, docking or customization | [Workspace and UI](../ui/README.md), then `layer-ui` and the affected client. |
+| UI languages or message catalogs | [Localization](../ui/localization.md), then `layer-ui`. |
 | Preferences or shortcut rules | [Settings](../ui/settings.md), then the shared definitions. |
 | Native widgets, input collection, surfaces or file pickers | [Platform integration](../platforms/README.md), then the client under `apps/`. |
 | A runtime filter | The [JSON/WGSL contract](../reference/runtime-filters.md) and the [Tent Blur example](../../examples/filters/tent-blur). |

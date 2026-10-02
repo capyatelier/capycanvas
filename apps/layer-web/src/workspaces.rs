@@ -140,11 +140,12 @@ impl WebApp {
             return Ok(());
         }
         self.session.set_workspace_read_only(true);
-        self.workspaces = Some(WorkspaceController::new_owned(
+        self.workspaces = Some(WorkspaceController::new_owned_localized(
             BrowserStore(execute),
             layer_ui::Platform::Web,
             serde_json::from_str(&owner).map_err(js)?,
             js_sys::Date::now() as u64,
+            self.session.localization().clone(),
         ));
         Ok(())
     }

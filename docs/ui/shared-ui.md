@@ -595,3 +595,11 @@ its GPU worker; web and Android use the same renderer interface.
   pointer identity, pressure, history, capture, and cancellation.
 - [wasm-bindgen](https://wasm-bindgen.github.io/wasm-bindgen/) provides the web
   bridge without imposing OS threads or a native ABI.
+
+## Localization context
+
+`UiSession` and `WorkspaceController` receive an immutable, shared
+`Arc<Localizer>` for the application launch. Prepared and replacement drawings
+retain that context. Embedded Fluent catalogs and cached parameterless labels
+live in `layer-ui`; see [localization](localization.md) for the message and
+argument contract. Hosts receive resolved text through feature views.

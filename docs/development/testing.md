@@ -80,6 +80,25 @@ adapter when `LAYER_TEST_SOFTWARE_GPU=1` is set. Those runs check numbers only;
 they are never performance evidence, and production hosts always require a
 hardware GPU.
 
+## Localization
+
+Run `cargo test --locked -p layer-ui localization_catalog_tests` for catalog
+changes, then the shared Rust and consumer checks above when Rust changes.
+These window-free tests reject malformed Fluent, duplicate identities across
+files, missing English identities in shipped languages, undeclared translated
+variables, missing
+message/term/attribute references and formatting errors. They exercise complete
+dynamic messages with zero, one and many counts and literal CJK, emoji, quotes,
+braces and long filenames. Direct Fluent formatting checks expose errors before
+runtime English fallback can hide them.
+
+Catalog tests do not prove host coverage or linguistic quality. For an advertised
+language, walk every affected host in both themes, including search, rename with
+IME, Unicode save/reopen, export, unsaved close, validation errors, workspace
+history and accessibility. Check narrow windows and increased system text size.
+Preserve user names and document contents across language changes. Follow the
+[localization guide](../ui/localization.md) for catalog and release rules.
+
 ## UI and input
 
 - **Both themes.** Check changed UI in light and dark themes, and brush changes in

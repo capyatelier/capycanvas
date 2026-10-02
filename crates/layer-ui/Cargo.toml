@@ -6,6 +6,8 @@ license.workspace = true
 description = "Portable workspace layout, UI state, actions, and canvas interaction"
 
 [dependencies]
+fluent-bundle = "0.16"
+unic-langid = "0.9"
 sha2 = "0.10"
 layer-color = { path = "../layer-color" }
 layer-core = { path = "../layer-core" }
@@ -17,5 +19,9 @@ fasteval = { version = "0.2.4", default-features = false }
 flate2 = "1"
 quick-xml = "=0.41.0"
 
+[build-dependencies]
+fluent-syntax = "0.12"
+
 [dev-dependencies]
+fluent-syntax = "0.12"
 layer-core = { path = "../layer-core", features = ["test-support"] }

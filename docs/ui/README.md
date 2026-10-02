@@ -29,6 +29,8 @@ while file dialogs, focus and accessibility follow the platform.
 
 ## Guides
 
+- [Localization](localization.md): shared Fluent catalogs, message identities and
+  translation checks.
 - [Shared UI](shared-ui.md): the Rust/host boundary, docking, window chrome,
   Zen mode, actions, input and settings flows.
 - [Default workspaces](default-workspaces.md): Sketch, Paint and Photo, the

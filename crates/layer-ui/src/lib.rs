@@ -14,6 +14,11 @@ macro_rules! variants {
 }
 pub(crate) use variants;
 
+pub mod localization;
+pub use localization::{LanguagePreference, Localizer, MessageId, UiLanguage, resolve_language};
+#[cfg(test)]
+mod localization_catalog_tests;
+
 mod camera;
 mod document_tabs;
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
