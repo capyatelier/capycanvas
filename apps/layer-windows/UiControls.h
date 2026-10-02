@@ -31,27 +31,10 @@ using V=IJsonValue;
 }
 namespace CapyUi {
 struct StrokeRecording;
-inline void captureTextComposition(TextBox const& entry) {
-    auto key=box_value(L"CapyTextComposition");
-    if(entry.Resources().HasKey(key))return;
-    entry.Resources().Insert(key,box_value(false));
-    entry.TextCompositionStarted([](TextBox const& entry,auto&&){entry.Resources().Insert(box_value(L"CapyTextComposition"),box_value(true));});
-    entry.TextCompositionEnded([](TextBox const& entry,auto&&){entry.Resources().Insert(box_value(L"CapyTextComposition"),box_value(false));});
-    entry.LostFocus([](auto&& sender,auto&&){sender.template as<TextBox>().Resources().Insert(box_value(L"CapyTextComposition"),box_value(false));});
-}
-inline bool textComposing(DependencyObject element) {
-    for(;element;element=VisualTreeHelper::GetParent(element))if(auto entry=element.try_as<TextBox>()){
-        auto key=box_value(L"CapyTextComposition");
-        return entry.Resources().HasKey(key)&&unbox_value<bool>(entry.Resources().Lookup(key));
-    }
-    return false;
-}
-inline bool focusedTextComposing(XamlRoot const& root) {
-    return root&&textComposing(FocusManager::GetFocusedElement(root).try_as<DependencyObject>());
-}
-inline bool composingKey(KeyRoutedEventArgs const& event) {
-    return event.Key()==static_cast<Windows::System::VirtualKey>(VK_PROCESSKEY)||textComposing(event.OriginalSource().try_as<DependencyObject>());
-}
+void captureTextComposition(TextBox const& entry);
+bool textComposing(DependencyObject element);
+bool focusedTextComposing(XamlRoot const& root);
+bool composingKey(KeyRoutedEventArgs const& event);
 inline V S(hstring const& value){return JsonValue::CreateStringValue(value);}
 inline V N(double value){return JsonValue::CreateNumberValue(value);}
 inline V B(bool value){return JsonValue::CreateBooleanValue(value);}

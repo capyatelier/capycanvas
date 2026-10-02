@@ -153,8 +153,15 @@ workspace tests cover native snapshot insets and the JSON/CPU packet boundary.
 | Windows desktop | The `exercise-*.ps1` fixtures for the changed area. On Linux: `tools/windows-vm/windows-vm.py fixtures <name>`. |
 | Hardware D3D12 | `cargo test --locked -p layer-windows --lib d3d12_ -- --ignored --test-threads=1`, which adds the HDR and color round-trip tests; [GPU reconstruction](#gpu-reconstruction); renderer tests with `LAYER_GPU_INDEX`; performance. |
 
-`scripts/test-input.ps1` compiles the C++ input queue test with `cl` and needs a
-Visual Studio developer shell. The `d3d12_` tests read `CAPY_SETTINGS_DIRECTORY`;
+`scripts/test-input.ps1` compiles the C++ input queue and composition-key tests
+with `cl` and needs a Visual Studio developer shell. `TextInput.cpp` observes the
+focused TextBox's public TSF edit notifications so overlapping syllables and a
+composition ending before routed KeyDown keep the same native key owner. The
+key tests include nested message timestamps, release before the confirming key,
+unrelated releases and clock wraparound. Real
+IME checks must distinguish candidate Enter/Escape from the next ordinary press,
+and include selected names, numeric refusal, pointer confirmation and focus
+changes. The `d3d12_` tests read `CAPY_SETTINGS_DIRECTORY`;
 point it at a fresh absolute directory. In Debug builds the HDR test needs
 `RUST_MIN_STACK=8388608`, the native document worker's stack size.
 

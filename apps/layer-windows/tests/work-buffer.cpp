@@ -1,4 +1,5 @@
 #include "../CanvasWorkBuffer.h"
+#include "../TextCompositionKeys.h"
 #include "../CanvasPointerSample.h"
 #include <limits>
 #include "../CanvasQueryQueue.h"
@@ -8,6 +9,62 @@
 #include <iostream>
 
 int main() {
+
+    for(uint32_t key:{13u,27u,40u}) {
+        TextCompositionKeys input;
+        input.Update(true,10);
+        input.Update(true,20);
+        input.Update(false,30);
+        assert(input.Owns(key,30,false,false));
+        assert(input.Owns(key,30,false,false));
+        assert(input.Owns(key,40,false,true));
+        assert(input.Owns(key,50,true,true));
+        assert(input.Owns(key,50,true,true));
+        assert(!input.Owns(key,60,false,false));
+        input.Update(true,70);input.Update(false,80);
+        assert(!input.Owns(key,90,false,false));
+        input.Update(true,100);input.Update(false,110);
+        assert(input.Owns(key,110,false,false));
+        assert(!input.Owns(key,120,false,false));
+        input.Update(true,130);input.Update(false,140);
+        assert(input.Owns(key,140,false,false));input.Pointer();
+        assert(!input.Owns(key,150,false,false));
+        input.Update(true,160);assert(input.Active());input.Clear();
+        assert(!input.Active()&&!input.Owns(key,170,false,false));
+        input.Update(true,180);input.Pointer();assert(input.Active());
+        input.Update(false,190);assert(!input.Owns(key,200,false,false));
+        input.Update(true,210);input.Update(false,220);
+        assert(input.Owns(key,220,false,false));
+        assert(input.Owns(key,220,true,true));
+        assert(!input.Owns(key,220,false,false));
+        TextCompositionKeys nested;
+        nested.Update(true,3000);nested.Update(false,3031);
+        assert(nested.Owns(key,3015,false,false));
+        assert(nested.Owns(key,3015,true,true));
+        assert(!nested.Owns(key,3015,false,false));
+        nested.Clear();nested.Update(true,0xffffffe0);nested.Update(false,0x10);
+        assert(nested.Owns(key,0xfffffff0,false,false));
+        assert(nested.Owns(key,0x11,true,true));
+        assert(!nested.Owns(key,0x20,false,false));
+        nested.Update(true,0x30);nested.Update(false,0x40);
+        assert(nested.Owns(key,0x3f,false,false));
+        TextCompositionKeys delayed;
+        delayed.Update(true,230);delayed.Update(false,240);
+        assert(delayed.Owns(key,240,true,true));
+        assert(delayed.Owns(key,240,false,false));
+        assert(delayed.Owns(key,240,false,false));
+        assert(!delayed.Owns(key,250,false,false));
+        delayed.Clear();delayed.Update(true,260);delayed.Update(false,270);
+        assert(!delayed.Owns(16,280,true,true));
+        assert(delayed.Owns(key,270,false,false));
+        delayed.Clear();delayed.Update(true,290);
+        assert(delayed.Owns(16,300,false,false));
+        delayed.Update(false,310);
+        assert(delayed.Owns(16,320,true,true));
+        assert(delayed.Owns(key,310,false,false));
+    }
+    std::cout<<"Composition retains confirming keys through release, without consuming pointer confirmation or the next press\n";
+
     for(uint32_t phase=0;phase<=4;++phase) {
         assert(CanvasPointerPhase(phase,false)==phase);
         assert(CanvasPointerPhase(phase,true)==4);
