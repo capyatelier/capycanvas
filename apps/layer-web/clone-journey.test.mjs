@@ -313,16 +313,16 @@ export async function checkClone({call,evaluate,settle,device=false}) {
   }
 }
 
-function png(width,height,pixel) {
-  const stride=width*3+1,rows=Buffer.alloc(stride*height);
-  for(let y=0;y<height;y++)for(let x=0;x<width;x++)rows.set(pixel(x,y),y*stride+1+x*3);
+export function png(width,height,pixel,channels=3) {
+  const stride=width*channels+1,rows=Buffer.alloc(stride*height);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++)rows.set(pixel(x,y),y*stride+1+x*channels);
   const chunk=(type,data)=>{
     const block=Buffer.alloc(data.length+12);
     block.writeUInt32BE(data.length,0);block.write(type,4,'latin1');data.copy(block,8);
     block.writeUInt32BE(crc32(block.subarray(4,data.length+8)),data.length+8);
     return block;
   };
-  const header=Buffer.alloc(13);header.writeUInt32BE(width,0);header.writeUInt32BE(height,4);header[8]=8;header[9]=2;
+  const header=Buffer.alloc(13);header.writeUInt32BE(width,0);header.writeUInt32BE(height,4);header[8]=8;header[9]=channels===4?6:2;
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(rows)),chunk('IEND',Buffer.alloc(0))]);
 }
 

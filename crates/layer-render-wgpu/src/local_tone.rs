@@ -577,7 +577,7 @@ pub(crate) fn wait(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), Str
     });
     crate::raster::wait_mapping(device, &rx)
 }
-async fn read_buffer_async(
+pub(crate) async fn read_buffer_async(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     source: &wgpu::Buffer,

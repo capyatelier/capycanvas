@@ -47,7 +47,7 @@ mod project;
 mod canvas_geometry;
 pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits, ImageOrientation};
 mod content_bounds;
-pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope, ScanBudget};
+pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope};
 mod merge;
 pub use merge::{MergeDown, MergeKind, MergePlan, MergeRefusal, bake_layers};
 mod retouch_layers;

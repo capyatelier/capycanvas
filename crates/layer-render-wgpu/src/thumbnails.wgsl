@@ -13,11 +13,13 @@ fn measure(@builtin(local_invocation_index) i: u32, @builtin(global_invocation_i
     for (var y = 0u; y < 4u; y++) { for (var x = 0u; x < 4u; x++) {
         let p = gid.xy * 4u + vec2<u32>(x, y);
         let world = p + record.tile.xy;
-        if all(p < vec2<u32>(256u)) && all(world < record.tile.zw) {
+        if (all(p < textureDimensions(pixels)) || (record.options.x == 3u && all(p < vec2<u32>(256u)))) && all(world < record.tile.zw) {
             let raw = textureLoad(pixels, vec2<i32>(p), 0);
             var a = raw.a;
             if record.options.x == 1u { a = select(raw.r, 1. - raw.r, record.options.y == 1u); }
-            if a > 0.0001 { b = vec4<u32>(min(b.xy, world), max(b.zw, world + 1u)); }
+            if record.options.x == 3u { a = select(record.color.x, 1. - record.color.x, record.options.y == 1u); }
+            a *= brush_selection_at(vec2<f32>(world) + .5);
+            if a > 0. { b = vec4<u32>(min(b.xy, world), max(b.zw, world + 1u)); }
         }
     }}
     partial[i] = b;

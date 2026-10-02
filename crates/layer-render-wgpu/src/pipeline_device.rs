@@ -31,6 +31,8 @@ pub(crate) struct PipelineDevice {
     pub source_samples: std::sync::Arc<layer_core::raster::DecodedTileCache>,
     pub blend_pipelines: std::sync::Arc<std::sync::Mutex<std::sync::Weak<super::portable_blend::Pipelines>>>,
     pub tone_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::local_tone::Pipelines>>>,
+    pub bounds_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::thumbnails::BoundsPipeline>>>,
+    pub native_transfers: std::sync::Arc<std::sync::Mutex<super::native_tiles::transfer::Tables>>,
     #[cfg(not(target_arch = "wasm32"))]
     cache: Option<std::sync::Arc<super::shader_cache::Cache>>,
 }
@@ -39,6 +41,8 @@ impl From<wgpu::Device> for PipelineDevice {
         Self {
             device,
             tone_pipelines: Default::default(),
+            bounds_pipeline: Default::default(),
+            native_transfers: Default::default(),
             blend_pipelines: Default::default(),
             working_space: Default::default(),
             hdr: false,

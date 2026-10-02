@@ -1,17 +1,10 @@
-//! Whole-image commands: flips and quarter turns, and Trim, Reveal All and the
-//! crop's Fit Content, which need the content's pixel-tight bounds. A bounds
-//! scan decodes a few tiles on the UI thread and moves the rest to a worker,
-//! or, without threads, to later frames. Each command is one undo step.
 use super::crop::{CropFrame, CropRatio};
 use super::*;
 use layer_core::{
     Affine, CanvasGeometry, CanvasGeometryError, CanvasRect, ContentBoundsCache, ContentBoundsRequest, ContentScope, Edit,
-    ImageOrientation, Point, Rect, ScanBudget,
+    ImageOrientation, Point, Rect,
 };
-use std::sync::Arc;
 
-/// Tiles a bounds scan may decode on the UI thread in one go.
-const UI_TILES: usize = 4;
 /// Float noise in bounds must not add a pixel of canvas.
 const TOLERANCE: f32 = 1e-3;
 
@@ -21,49 +14,42 @@ pub(super) enum ContentUse {
     Trim,
     RevealAll,
     FitContent,
+    Transform,
+    Move,
+    PrepareMove,
 }
 impl ContentUse {
-    fn scope(self) -> ContentScope {
+    fn scope(self, target: layer_core::LayerId) -> ContentScope {
         match self {
             Self::Trim => ContentScope::Canvas,
             Self::FitContent => ContentScope::Visible,
             Self::RevealAll => ContentScope::All,
-        }
-    }
-    fn command(self) -> CommandId {
-        match self {
-            Self::Trim => CommandId::Trim,
-            Self::RevealAll => CommandId::RevealAll,
-            Self::FitContent => CommandId::CropFitContent,
+            Self::Transform | Self::Move | Self::PrepareMove => ContentScope::Target(target),
         }
     }
 }
 
-/// Where the rest of a scan runs: a worker thread, or, without threads, a few
-/// tiles in each later frame.
-enum ContentWork {
-    #[cfg(not(target_arch = "wasm32"))]
-    Worker(std::sync::mpsc::Receiver<Result<Option<Rect>, String>>),
-    #[cfg(target_arch = "wasm32")]
-    Frames(ContentBoundsRequest),
+pub(super) struct PendingMove {
+    pub press: Point,
+    pub latest: Option<(layer_engine::PenEvent, Point)>,
+    pub keep_source: bool,
 }
-
 struct ContentJob {
     purpose: ContentUse,
     revision: u64,
-    work: ContentWork,
+    target: layer_core::LayerId,
+    request: ContentBoundsRequest,
+    submitted: bool,
 }
 
-/// The scan in flight, and decoded tiles kept by content for the next one.
 #[derive(Default)]
 pub(super) struct ContentBounds {
-    cache: Arc<ContentBoundsCache>,
+    cache: ContentBoundsCache,
     job: Option<ContentJob>,
+    pub(super) moving: Option<PendingMove>,
 }
 impl ContentBounds {
-    pub(super) fn busy(&self) -> bool {
-        self.job.is_some()
-    }
+    pub(super) fn busy(&self) -> bool { self.job.is_some() }
 }
 
 pub(super) fn orientation(command: CommandId) -> Option<ImageOrientation> {
@@ -132,84 +118,118 @@ impl<R: CanvasRenderer> UiSession<R> {
         match purpose {
             ContentUse::FitContent => (!self.cropping()).then_some("Choose the Crop tool first"),
             ContentUse::Trim | ContentUse::RevealAll => self.canvas_geometry_refusal(),
+            ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove => (!self.can_transform()).then_some("Select unlocked paint content or a layer mask"),
         }
     }
 
     /// Fit Content edits the open crop; Trim and Reveal All edit the document.
     fn require_content_idle(&self, purpose: ContentUse) -> Result<(), String> {
         match purpose {
-            ContentUse::FitContent => self.require_idle(),
+            ContentUse::FitContent | ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove => self.require_idle(),
             ContentUse::Trim | ContentUse::RevealAll => self.require_document_idle(),
         }
     }
 
-    /// Find the content's bounds, then trim, reveal or fit to them. Small
-    /// documents finish at once; larger ones finish on a later frame. Either
-    /// way, a result that changes nothing is explained by a notice.
     pub(super) fn request_content_bounds(&mut self, purpose: ContentUse) -> Result<(), String> {
         self.require_content_idle(purpose)?;
         refused(self.content_bounds_refusal(purpose))?;
         let doc = self.engine.document();
-        let request = ContentBoundsRequest::new(doc, purpose.scope());
-        let revision = doc.revision;
-        let cache = self.content_bounds.cache.clone();
-        if let Some(bounds) = request.scan(&cache, ScanBudget::Tiles(UI_TILES))? {
-            self.content_bounds.job = None;
-            if let Err(message) = self.use_content_bounds(purpose, bounds) {
-                self.notify(message);
+        let mut request = ContentBoundsRequest::new(doc, purpose.scope(doc.active_target()));
+        if !matches!(request.scope, ContentScope::Target(_)) && doc.has_animated_effects() {
+            request.time = self.engine.animation_time();
+        }
+        if matches!(request.scope, ContentScope::Target(_)) {
+            if let Some(bounds) = self.measured_target_bounds() { return self.use_content_bounds(purpose, bounds); }
+            if self.content_bounds.cache.get(&request).or_else(|| request.known_bounds()).is_some()
+                && let Some(companion) = self.bounds_companion()
+            {
+                request = ContentBoundsRequest::new(doc, ContentScope::Target(companion));
             }
+        } else if let Some(bounds) = self.content_bounds.cache.get(&request) {
+            return self.use_content_bounds(purpose, bounds);
+        }
+        let revision = doc.revision;
+        let target = doc.active_target();
+        if let Some(job) = &mut self.content_bounds.job && job.request == request {
+            job.purpose = purpose;
             return Ok(());
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let work = {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            std::thread::Builder::new()
-                .name("capy-content-bounds".into())
-                .spawn(move || {
-                    let _ = sender.send(request.scan(&cache, ScanBudget::Worker));
-                })
-                .map_err(|e| e.to_string())?;
-            ContentWork::Worker(receiver)
-        };
-        #[cfg(target_arch = "wasm32")]
-        let work = ContentWork::Frames(request);
-        self.content_bounds.job = Some(ContentJob { purpose, revision, work });
+        self.engine.backend_mut().cancel_content_bounds();
+        let submitted = self.engine.backend_mut().request_content_bounds(request.clone()).map_err(error)?;
+        self.content_bounds.job = Some(ContentJob { purpose, revision, target, request, submitted });
         Ok(())
     }
 
-    /// Finish a content bounds scan that has its result.
+    pub(super) fn measured_target_bounds(&self) -> Option<Rect> {
+        let doc = self.engine.document();
+        let measured = |id| {
+            let request = ContentBoundsRequest::new(doc, ContentScope::Target(id));
+            self.content_bounds.cache.get(&request).or_else(|| request.known_bounds())
+        };
+        let bounds = measured(doc.active_target())?;
+        if bounds.is_empty() { return Some(bounds); }
+        let Some(companion) = self.bounds_companion() else { return Some(bounds); };
+        let to = doc.layer_transform(companion).then(doc.layer_transform(doc.active_target()).inverse()?);
+        let other = measured(companion)?;
+        Some(if other.is_empty() { bounds } else { bounds.union(to.bounds(other)) })
+    }
+
+    fn bounds_companion(&self) -> Option<layer_core::LayerId> {
+        let doc = self.engine.document();
+        let owner = doc.target_owner(doc.active_target())?;
+        if owner.kind != layer_core::LayerKind::Paint
+            || (!doc.active_mask && owner.source.is_some() && doc.selection.is_none()) { return None; }
+        let mask = owner.mask.as_ref().filter(|mask| mask.linked)?;
+        Some(if doc.active_target() == owner.id { mask.id } else { owner.id })
+    }
+
+    pub(super) fn cancel_content_bounds(&mut self) -> bool {
+        self.content_bounds.moving = None;
+        if self.content_bounds.job.take().is_none() { return false; }
+        self.engine.backend_mut().cancel_content_bounds();
+        true
+    }
+
     pub(super) fn poll_content_bounds(&mut self) -> u32 {
+        self.content_bounds.cache.discard_changed(self.engine.document());
         let Some(job) = &mut self.content_bounds.job else { return 0 };
-        let result = match &mut job.work {
-            #[cfg(not(target_arch = "wasm32"))]
-            ContentWork::Worker(receiver) => match receiver.try_recv() {
-                Ok(result) => result,
-                Err(std::sync::mpsc::TryRecvError::Empty) => return 0,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("The content bounds scan stopped".into()),
-            },
-            #[cfg(target_arch = "wasm32")]
-            ContentWork::Frames(request) => match request.scan(&self.content_bounds.cache, ScanBudget::Tiles(UI_TILES)) {
-                Ok(None) => return 0,
-                result => result,
-            },
+        let doc = self.engine.document();
+        let changed = doc.revision != job.revision || doc.id != job.request.document.id
+            || (matches!(job.purpose, ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove) && (doc.active_target() != job.target
+                || doc.selection != job.request.document.selection));
+        let cancelled = (job.purpose == ContentUse::FitContent && self.operation.crop.is_none()) || changed;
+        let result = if cancelled {
+            self.engine.backend_mut().cancel_content_bounds();
+            Err("The content bounds scan stopped because the drawing changed".into())
+        } else {
+            if !job.submitted {
+                match self.engine.backend_mut().request_content_bounds(job.request.clone()).map_err(error) {
+                    Ok(accepted) => { job.submitted = accepted; return 0; }
+                    Err(message) => {
+                        let notify = job.purpose != ContentUse::PrepareMove;
+                        self.content_bounds.job = None;
+                        self.content_bounds.moving = None;
+                        if notify { self.notify(message); }
+                        return regions::HOST;
+                    }
+                }
+            }
+            match self.engine.backend_mut().take_content_bounds() {
+                None => return 0,
+                Some(result) => result.map_err(error),
+            }
         };
         let job = self.content_bounds.job.take().unwrap();
-        if job.purpose == ContentUse::FitContent && !self.cropping() {
-            return 0;
-        }
-        let label = job.purpose.command().label();
-        let outcome = if self.engine.document().revision != job.revision {
-            Err(format!("{label} stopped because the drawing changed"))
-        } else if let Some(reason) = self.content_bounds_refusal(job.purpose) {
-            Err(reason.into())
-        } else {
-            self.require_content_idle(job.purpose)
-                .and(result)
-                .and_then(|bounds| bounds.ok_or_else(|| "The content bounds scan stopped".into()))
-                .and_then(|bounds| self.use_content_bounds(job.purpose, bounds))
-        };
+        let outcome = result.and_then(|bounds| {
+            refused(self.content_bounds_refusal(job.purpose))?;
+            self.require_content_idle(job.purpose)?;
+            let paired = matches!(job.request.scope, ContentScope::Target(_));
+            self.content_bounds.cache.insert(job.request, bounds);
+            if paired { self.request_content_bounds(job.purpose) } else { self.use_content_bounds(job.purpose, bounds) }
+        });
         if let Err(message) = outcome {
-            self.notify(message);
+            self.content_bounds.moving = None;
+            if job.purpose != ContentUse::PrepareMove { self.notify(message); }
         }
         self.refresh_tools();
         regions::DOCUMENT | regions::BRUSH | regions::COMMANDS | regions::CAMERA | regions::HOST
@@ -220,6 +240,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         let canvas = Rect { min: Point::default(), max: Point { x: doc.width as f32, y: doc.height as f32 } };
         let whole = CanvasRect { origin: [0; 2], size: [doc.width, doc.height] };
         match purpose {
+            ContentUse::PrepareMove => Ok(()),
+            ContentUse::Move => {
+                let Some(moving) = self.content_bounds.moving.take() else { return Ok(()); };
+                if bounds.is_empty() { return Err("The selection does not overlap this layer".into()); }
+                self.begin_move_transform(moving.press, moving.keep_source)?;
+                if let Some((event, point)) = moving.latest { self.transform_pen(event, point)?; }
+                Ok(())
+            }
+            ContentUse::Transform => {
+                if bounds.is_empty() { return Err("The selection does not overlap this layer".into()); }
+                self.begin_transform()
+            }
             ContentUse::Trim => {
                 if bounds.is_empty() {
                     return Err("There are no visible pixels to trim to".into());

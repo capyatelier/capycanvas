@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {png} from './clone-journey.test.mjs';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -43,6 +44,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
   const save=placementSave({evaluate,invoke,idle});
   let files;
   try {
+    await evaluate(`window.placementTestBounds=[];window.placementTestOriginalWorker=Worker;const OriginalWorker=Worker;window.Worker=class extends OriginalWorker{constructor(...args){super(...args);this.boundsIds=new Set();this.addEventListener('message',({data})=>{if(this.boundsIds.has(data.id))placementTestBounds.push(data);});}postMessage(message,...args){if(message.request?.operation==='content-bounds')this.boundsIds.add(message.id);return super.postMessage(message,...args);}};`);
     await call('Page.setInterceptFileChooserDialog',{enabled:true});
     await evaluate(`window.placementTest={open:window.showOpenFilePicker,save:window.showSaveFilePicker};window.showOpenFilePicker=undefined;
       window.showSaveFilePicker=async o=>({name:o.suggestedName,async createWritable(){return{async write(b){placementTest.saved=new Uint8Array(b instanceof Blob?await b.arrayBuffer():b)},async close(){},async abort(){}}}});
@@ -51,7 +53,8 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     else {
       files=[];
       for(const [i,w,h] of [[0,3000,2400],[1,800,600]]){
-        const bytes=await evaluate(`(async()=>{const c=new OffscreenCanvas(${w},${h}),x=c.getContext('2d');const g=x.createLinearGradient(0,0,c.width,c.height);g.addColorStop(0,'red');g.addColorStop(1,'blue');x.fillStyle=g;x.fillRect(0,0,c.width,c.height);return Array.from(new Uint8Array(await(await c.convertToBlob()).arrayBuffer()))})()`);
+        const bytes=png(w,h,(x,y)=>{const t=(x/w+y/h)/2;return [Math.round(255*(1-t)),0,Math.round(255*t),x===0||y===0||x===w-1||y===h-1?0:255];},4);
+        assert.equal(bytes[25],6,'Photo fixture retains transparent RGBA edges');
         const path=join(root,`photo-${i}.png`);await writeFile(path,new Uint8Array(bytes));files.push(path);
       }
     }
@@ -61,6 +64,12 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await wait('document.querySelector("dialog[open] input[type=number]")');
     await evaluate(`{const fields=document.querySelectorAll('dialog[open] input[type=number]');fields[0].value=2000;fields[1].value=1500;[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create').click();}`);
     await idle();await wait('layerApp.app.brush_ready()');
+    await invoke('select_all');await invoke('fill_selection');
+    const linkedPaint=await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
+    await evaluate(`layerApp.dispatch({type:'layer',action:{op:'add_mask',id:${linkedPaint},replace:false}});layerApp.dispatch({type:'layer',action:{op:'select',id:${linkedPaint},mask:false}})`);await settle();
+    await invoke('scale_rotate');await wait("layerApp.state().canvas_bar?.context.kind==='transform'");
+    await invoke('transform_warp');await invoke('cancel_transform');
+    await invoke('undo');await invoke('undo');await invoke('deselect');
     const base=await state(),baseCount=base.layers.length;
     assert.deepEqual(await evaluate('layerApp.app.photo_formats().map(f=>f.name)'),['OpenEXR','TIFF','PNG','WebP','BMP','JPEG','GIF','HEIF','AVIF']);
     await importFiles(files);
@@ -86,7 +95,25 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     assert.deepEqual(sourceIdentity(await save()),sources);
     await evaluate('layerApp.restartGpu()');await wait('layerApp.app.brush_ready()');
     assert.deepEqual(sourceIdentity(await save()),sources,'GPU replacement retains placed source samples');
-    await invoke('scale_rotate');await placed();
+    if(!process.env.LAYER_PHOTO_FILES) {
+    const photoPoint=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(400*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(300*c.zoom+c.translation[1])*r.height/c.viewport[1]};})()`);
+    const photoShot=await call('Page.captureScreenshot',{format:'png',clip:{...photoPoint,width:1,height:1,scale:1}});
+    const photoPixel=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${photoShot.data}';await image.decode();const canvas=new OffscreenCanvas(1,1),context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);return Array.from(context.getImageData(0,0,1,1).data);})()`);
+    assert.ok(photoPixel[0]>20&&photoPixel[1]<60&&photoPixel[2]>10,'Retained photo is visible after GPU restart: '+photoPixel);
+    }
+    const cancelledBounds=await call('Runtime.evaluate',{expression:`(async()=>{layerApp.dispatch({type:'invoke',command:'scale_rotate'});await new Promise(requestAnimationFrame);layerApp.dispatch({type:'invoke',command:'cancel_transform'});await new Promise(resolve=>setTimeout(resolve,300));if(layerApp.state().commands.find(c=>c.id==='placement_original_size').enabled)throw Error('Cancelled bounds opened a late placement');})()`,userGesture:true,awaitPromise:true});
+    assert.equal(cancelledBounds.exceptionDetails,undefined);
+    const timedTransform=async()=>{
+      const reply=await call('Runtime.evaluate',{expression:`(async()=>{const started=performance.now();let callbacks=0;layerApp.dispatch({type:'invoke',command:'scale_rotate'});while(!layerApp.state().commands.find(c=>c.id==='placement_original_size').enabled){if(performance.now()-started>180000)throw Error('Transform did not finish');await new Promise(requestAnimationFrame);callbacks++;}return {ms:performance.now()-started,callbacks};})()`,userGesture:true,awaitPromise:true,returnByValue:true});
+      assert.equal(reply.exceptionDetails,undefined);return reply.result.value;
+    };
+    console.log('Retained-photo cold Transform:',JSON.stringify(await timedTransform()));
+    if(!process.env.LAYER_PHOTO_FILES) {
+    const measured=await evaluate('placementTestBounds.at(-1)');
+    assert.ok(measured?.result?.max.x>measured?.result?.min.x&&measured.result.max.y>measured.result.min.y,'RGBA retained photo returns nonempty worker bounds after GPU restart');
+    }
+    await invoke('cancel_transform');
+    console.log('Retained-photo cached Transform:',JSON.stringify(await timedTransform()));
     await click('.canvas-action-bar [data-command=placement_original_size]');
     await click('.canvas-action-bar [data-command=apply_transform]');
     const native=await save();assert.equal(native.document.layers[0].properties.placement[0],1);assert.deepEqual(sourceIdentity(native),sources);
@@ -162,7 +189,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
   } finally {
     await call('Page.setInterceptFileChooserDialog',{enabled:false});
     await evaluate('if(placementTest.read)File.prototype.arrayBuffer=placementTest.read');
-    await evaluate('window.showOpenFilePicker=placementTest.open;window.showSaveFilePicker=placementTest.save;delete window.placementTest');
+    await evaluate('window.Worker=placementTestOriginalWorker;delete window.placementTestBounds;delete window.placementTestOriginalWorker;window.showOpenFilePicker=placementTest.open;window.showSaveFilePicker=placementTest.save;delete window.placementTest');
     await rm(root,{recursive:true,force:true});
   }
 }

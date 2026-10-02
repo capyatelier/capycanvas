@@ -56,6 +56,25 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
     // Browser capacity-based admission is documented separately from native
     // measured headroom. Filters and display share this bounded allowance.
     renderer.set_complete_display_allowance(raster_project::photo_memory_budget().encode_bytes as u64);
+    renderer.set_content_bounds_worker(Rc::new(|request, control| Box::pin(async move {
+        if control.is_cancelled() { return Err("Content bounds cancelled".into()); }
+        let scope = request.scope;
+        let time = request.time;
+        let effect_times = request.effect_times;
+        let mut packing = std::pin::pin!(raster_project::pack(layer_core::Project { document: (*request.document).clone() }));
+        let packed = std::future::poll_fn(|cx| {
+            if control.is_cancelled() { return std::task::Poll::Ready(Err(js("Content bounds cancelled"))); }
+            std::future::Future::poll(packing.as_mut(), cx)
+        }).await.map_err(|e| format!("{e:?}"))?;
+        if control.is_cancelled() { return Err("Content bounds cancelled".into()); }
+        let metadata = js_sys::Reflect::get(&packed, &js("metadata")).map_err(|e| format!("{e:?}"))?
+            .as_string().ok_or("Missing bounds metadata")?;
+        let buffers = js_sys::Reflect::get(&packed, &js("buffers")).map_err(|e| format!("{e:?}"))?
+            .dyn_into::<js_sys::Array>().map_err(|e| format!("{e:?}"))?;
+        let metadata = serde_json::to_string(&(metadata, scope, time, effect_times)).map_err(|e| e.to_string())?;
+        let result = call_cancellable("content-bounds", &metadata, &buffers, control).await.map_err(|e| format!("{e:?}"))?;
+        serde_wasm_bindgen::from_value(result).map_err(|e| e.to_string())
+    })));
     renderer.set_browser_raster_encoder(Rc::new(|bytes, descriptors| {
         Box::pin(async move {
             let metadata = serde_json::to_string(&descriptors).map_err(|e| e.to_string())?;
@@ -119,4 +138,20 @@ pub fn raster_worker_encode(metadata: &str, bytes: &[u8]) -> Result<Vec<u8>, JsV
         return Err(js("Trailing raster worker input"));
     }
     Ok(result)
+}
+
+#[wasm_bindgen]
+pub async fn raster_worker_content_bounds(metadata: &str, buffers: js_sys::Array) -> Result<JsValue, JsValue> {
+    let (metadata, scope, time, effect_times): (String, layer_core::ContentScope, f32, Vec<(layer_core::LayerId, f32)>) = serde_json::from_str(metadata).map_err(js)?;
+    let project = raster_project::unpack(&metadata, buffers, true).await?;
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
+    let instance = wgpu::Instance::new(descriptor);
+    let (adapter, device, queue) = request_device(&instance, None).await?;
+    let renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, project.document.color).map_err(js)?;
+    let mut request = layer_core::ContentBoundsRequest::new(&project.document, scope);
+    request.time = time;
+    request.effect_times = effect_times;
+    let bounds = renderer.snapshot_gpu().content_bounds(request, Default::default()).await.map_err(js)?;
+    serialize(&bounds)
 }

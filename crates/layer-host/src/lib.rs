@@ -1535,11 +1535,16 @@ mod tests {
     #[test]
     fn canvas_bar_queries_answer_for_the_current_bar() {
         use layer_ui::CommandId;
-        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        let (_reference, mut app) = gpu_host(layer_ui::Platform::Android, [256, 192]);
         app.resize(2560, 1600, 2.0).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let clock = std::cell::Cell::new(0);
+        while !app.startup.complete { frame_step(&mut app, &clock, deadline); }
         for command in [CommandId::RectangleSelect, CommandId::SelectAll, CommandId::FillSelection, CommandId::ScaleRotate] {
             app.dispatch(UiAction::Invoke { command }).unwrap();
+            frame_step(&mut app, &clock, deadline);
         }
+        while app.session.engine().transform_preview().is_none() { frame_step(&mut app, &clock, deadline); }
         let bar = app.session.state().canvas_bar.clone().expect("transform bar");
         let measure = json!({"context": bar.context, "label": 0, "items": vec![90.; bar.items.len()],
             "completion": vec![70.; bar.completion.len()], "more": 32, "height": 44, "gap": 4, "padding": 6});
@@ -1682,6 +1687,9 @@ mod tests {
             layer_ui::CommandId::TransformWarp,
         ] {
             host.dispatch(UiAction::Invoke { command }).unwrap();
+            if command == layer_ui::CommandId::ScaleRotate {
+                while host.session.engine().transform_preview().is_none() { frame(&mut host); }
+            }
             for _ in 0..8 {
                 frame(&mut host);
             }
@@ -1705,9 +1713,9 @@ mod tests {
             host.dispatch(UiAction::Invoke { command }).unwrap();
             frame(&mut host);
         }
-        for command in [layer_ui::CommandId::ScaleRotate, layer_ui::CommandId::TransformDistort] {
-            host.dispatch(UiAction::Invoke { command }).unwrap();
-        }
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::ScaleRotate }).unwrap();
+        while host.session.engine().transform_preview().is_none() { frame(&mut host); }
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::TransformDistort }).unwrap();
         let surface = layer_core::Affine(host.session.state().camera.document_to_surface());
         let view_revision = host.session.state().camera.revision;
         let [corner, target] = [Point { x: 256., y: 0. }, Point { x: 216., y: 30. }].map(|p| surface.map(p));

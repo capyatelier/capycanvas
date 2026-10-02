@@ -79,6 +79,7 @@ pub struct SnapshotGpu {
     #[cfg(target_arch = "wasm32")]
     encoder: Option<raster::BrowserRasterEncoder>,
     effect_clocks: effects::Clocks,
+    scene_pipelines: scene::Pipelines,
     adapter: wgpu::Adapter,
     device: PipelineDevice,
     queue: wgpu::Queue,
@@ -97,6 +98,7 @@ impl WgpuRasterizer {
     pub fn snapshot_gpu(&self) -> SnapshotGpu {
         SnapshotGpu {
             effect_clocks: self.effect_clocks.clone(),
+            scene_pipelines: self.scene_pipelines.clone(),
             #[cfg(target_arch = "wasm32")]
             encoder: self.browser_raster_encoder(),
             adapter: self.adapter.clone(),
@@ -126,6 +128,7 @@ impl SnapshotGpu {
         time: f32,
         control: CaptureControl,
     ) -> Result<SnapshotRenderer, GpuRasterError> {
+        project.validate(ProjectLimits::default()).map_err(GpuRasterError::Color)?;
         SnapshotRenderer::construct(project, background, time, control, self)
     }
 }
@@ -158,9 +161,6 @@ impl SnapshotRenderer {
         gpu: &SnapshotGpu,
     ) -> Result<Self, GpuRasterError> {
         control.check()?;
-        project
-            .validate(ProjectLimits::default())
-            .map_err(GpuRasterError::Color)?;
         if background.iter().any(|v| !v.is_finite())
             || !(0.0..=1.).contains(&background[3])
             || !time.is_finite()
@@ -192,6 +192,12 @@ impl SnapshotRenderer {
             gpu.queue.clone(),
             project.document.color,
         )?;
+        if gpu.device.working_space() == project.document.color.space
+            && gpu.device.hdr() == project.document.color.depth.is_float()
+        {
+            renderer.scene_pipelines = gpu.scene_pipelines.clone();
+            renderer.scene = None;
+        }
         #[cfg(target_arch = "wasm32")]
         if let Some(encoder) = gpu.encoder.clone() {
             renderer.set_browser_raster_encoder(encoder);
@@ -402,6 +408,20 @@ impl SnapshotRenderer {
         reserved_bytes: u64,
         consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
     ) -> Result<T, GpuRasterError> {
+        self.with_region_gpu([x, y, width, height], reserved_bytes, |r, packet, region, encoder| {
+            let (target, _) = create_color_target(&r.device, [width, height], "snapshot region");
+            let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
+            let captured = scene.capture_region(r, packet, &target, region, scene::Output::Artwork(None), encoder);
+            r.scene = Some(scene);
+            captured?;
+            Ok(consume(&r.device, &target, encoder))
+        })
+    }
+
+    fn with_region_gpu<T>(
+        &mut self, [x, y, width, height]: [u32; 4], reserved_bytes: u64,
+        consume: impl FnOnce(&mut WgpuRasterizer, FramePacket<'_>, PixelRect, &mut submission::CommandEncoder) -> Result<T, GpuRasterError>,
+    ) -> Result<T, GpuRasterError> {
         self.check_cancelled()?;
         let region = PixelRect::new(
             x,
@@ -442,8 +462,9 @@ impl SnapshotRenderer {
                 if mask {
                     masks.insert(id, local);
                     if layer.mask.as_ref().is_some_and(|m| m.initial.is_some()) {
-                        planned =
-                            planned.saturating_add(extent[0] as u64 * extent[1] as u64 / 2 + 64);
+                        let prepared = page_coordinates(local).fold(PixelRect::EMPTY, |r, c| r.union(page_rect(c)))
+                            .intersect(PixelRect::full(extent));
+                        planned = planned.saturating_add(prepared.area() / 2 + 64);
                         planned = planned
                             .saturating_add(page_coordinates(local).count() as u64 * 256 * 256 * 5);
                     }
@@ -560,12 +581,7 @@ impl SnapshotRenderer {
             &mut r.selection_clip,
             Some(&masks),
         )?;
-        let (target, _) = create_color_target(&r.device, [width, height], "snapshot region");
-        let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
-        let captured = scene.capture_region(r, packet, &target, region, scene::Output::Artwork(None), &mut encoder);
-        r.scene = Some(scene);
-        captured?;
-        let result = consume(&r.device, &target, &mut encoder);
+        let result = consume(r, packet, region, &mut encoder)?;
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
         self.control.observe_allocations(&r.device);
@@ -862,3 +878,8 @@ impl SnapshotPreview {
         Ok(bytes)
     }
 }
+
+mod bounds;
+pub use bounds::ContentBoundsJob;
+#[cfg(target_arch = "wasm32")]
+pub use bounds::BrowserContentBounds;

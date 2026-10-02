@@ -95,6 +95,10 @@ fn native_canvas_bar_input() {
     w.dispatch(UiAction::SetColor {
         rgba: [0.12, 0.38, 0.72, 1.],
     });
+    let id = ui_session(&w).engine().document().active_layer.0;
+    w.dispatch(UiAction::Layer { action: LayerAction::AddMask { id, replace: false } });
+    w.dispatch(UiAction::Layer { action: LayerAction::Select { id, mask: false } });
+    pump(200);
     w.dispatch(UiAction::Invoke {
         command: CommandId::Lasso,
     });
@@ -123,6 +127,13 @@ fn native_canvas_bar_input() {
         || kind(&w) == Some(layer_ui::CanvasBarKind::Transform) && shown(&w),
         "Transform on the selection bar opens the transform bar",
     );
+    w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
+    until(|| kind(&w) == Some(layer_ui::CanvasBarKind::Selection), "Cancel keeps the linked selection");
+    let cached_started = std::time::Instant::now();
+    w.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate });
+    until(|| kind(&w) == Some(layer_ui::CanvasBarKind::Transform), "Cached linked Transform is ready");
+    println!("Linked cached Transform dispatch-to-shared-ready ms={:.3}", cached_started.elapsed().as_secs_f64() * 1000.);
+    pump(200);
     let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
     let anchor = anchor_in_window(&w);
     assert!(bar.y() > anchor[3], "the bar sits below the transform box");

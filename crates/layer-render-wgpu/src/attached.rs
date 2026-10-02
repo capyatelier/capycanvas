@@ -82,6 +82,15 @@ impl CanvasRenderer for AttachedRenderer {
     ) -> Result<(), Self::Error> {
         self.gpu()?.set_transform_preview(preview)
     }
+    fn request_content_bounds(&mut self, request: layer_core::ContentBoundsRequest) -> Result<bool, Self::Error> {
+        self.gpu()?.request_content_bounds(request)
+    }
+    fn take_content_bounds(&mut self) -> Option<Result<layer_core::Rect, Self::Error>> {
+        self.0.as_mut()?.take_content_bounds()
+    }
+    fn cancel_content_bounds(&mut self) {
+        if let Some(gpu) = self.0.as_mut() { gpu.cancel_content_bounds(); }
+    }
     fn request_color_sample(
         &mut self,
         request: layer_render::ColorSampleRequest,

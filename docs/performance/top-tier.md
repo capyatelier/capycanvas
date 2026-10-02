@@ -44,6 +44,49 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | List scrolling: layers, brushes, filters | 120 | | |
 | Menu open and close | 120 | Menu open adds no canvas frames; UI frame p50/p95 11.5/26.6 ms | Canvas-bar `selection-bar-menu-open`, 2026-09-27 |
 
+## Exact content bounds
+
+Measured on 2026-10-01 on Wacom MovinkPad Pro 14 (DTHA140), Android 15,
+thermal status 0, with a release build and a 9504 × 6336 synthetic RGBA source
+with a ten-pixel transparent border. These are worker query completion times,
+without the UI result cache. All four queries per scope return the exact expected
+rectangle. They do not measure command publication, first motion or presentation.
+
+| Query | First run | Three repeated runs | Completion within 100 ms |
+| --- | ---: | ---: | --- |
+| Transform target | 134.9 ms | 94.6–103.5 ms | Not consistently |
+| Visible content, used by Fit Content | 214.7 ms | 120.2–142.6 ms | No |
+
+Boundary-first reduction and tile-aligned snapshot origins reduce target queries
+from 804.1 ms first / 657.4–703.2 ms repeated, and visible queries from 4895.4 ms
+first / 4564.9–6190.1 ms repeated. Subsequent readback batching, exact copy
+footprints and shared immutable pipelines and transfer tables remove repeated
+work. Visible scans use 122 pages and 16 readbacks instead of 186 of each on this
+fixture. Combining page submissions regressed target completion in adjacent A/B
+runs and is not used. Comparisons are against preceding GPU implementations,
+not the former CPU scan.
+
+Cached results avoid another query; opaque unedited RGB sources use their proved
+extent. The remaining completion times are not evidence of a hardware limit.
+Low and mid tiers remain unmeasured, and these timings qualify no moving-frame
+target. Android debug-build command diagnostics are also not release performance
+qualification.
+
+The nondebuggable Android benchmark build (release Rust, R8 disabled for the
+instrumentation ABI) reopens a cancelled linked Transform from its cached paint
+and mask bounds. Mouse/touch/pen dispatch reaches shared state in
+38.4/41.5/41.5 ms and the composed Apply button in 63.5/69.0/67.1 ms. These three
+command-readiness observations are below 100 ms; the test polls every 16 ms and
+does not measure first-motion presentation or sustained frame rate. A shared
+regression verifies that reopening submits no new bounds query.
+
+Base `271918681` plus the bounds change; release test executable SHA-256
+`c1222ba05dfcd5058e70b89f1de53c205a5536ee17147f354a8ca002d97b9985`.
+Records: `artifacts/testing/profiling/bounds-final-release-timing.log` and
+`bounds-alternating-phases.log`, plus
+`artifacts/testing/android-benchmark-publication-split.log` and
+`android-benchmark-cache-apk.sha256` in the photo-editing worktree.
+
 ## Brushes
 
 Target: **120 completed updates/s** at the guaranteed size, on the 61 MP canvas.

@@ -1470,7 +1470,17 @@ impl Scene {
         }
         self.upload.resize(self.jobs.len() * self.stride, 0);
         for (i, job) in self.jobs.iter().enumerate() {
+            let mut captured;
             let data: Option<&[f32]> = match job {
+                Job::Effect { data, .. } if r.capture_frame.is_some() => {
+                    let (origin, extent) = r.capture_frame.unwrap();
+                    captured = *data;
+                    captured[12] += origin[0];
+                    captured[13] += origin[1];
+                    captured[14..16].copy_from_slice(&extent.map(|n| n as f32));
+                    captured[30..32].copy_from_slice(&origin);
+                    Some(&captured)
+                }
                 Job::Draw { data, .. } | Job::Effect { data, .. } => Some(data.as_slice()),
                 Job::DecodedTile(pending) => pending.data.as_ref().map(|data| data.as_slice()),
                 _ => None,

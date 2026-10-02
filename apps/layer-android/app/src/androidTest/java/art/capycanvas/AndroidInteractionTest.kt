@@ -2240,7 +2240,13 @@ class AndroidInteractionTest {
         try {
             for (device in devices) {
                 restore()
-                clear(); invoke("fit_canvas"); invoke("rectangle_select")
+                clear()
+                val linkedPaint = state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+                if (!state().getJSONObject("layer_tools").getJSONObject("editing_layer").getBoolean("has_mask")) {
+                    layerAction(obj("op" to "add_mask", "id" to linkedPaint, "replace" to false))
+                    layerAction(obj("op" to "select", "id" to linkedPaint, "mask" to false))
+                }
+                invoke("fit_canvas"); invoke("rectangle_select")
                 waitFor("no bar without a selection") { canvasBar() == null && !shown("canvas-action-bar") }
                 val glassBefore = glassBoxes()
                 val work = bounds("workspace")
@@ -2265,6 +2271,20 @@ class AndroidInteractionTest {
 
                 tap(bounds("canvas-bar-action-scale_rotate").center)
                 waitFor("$device transform bar", 5_000) { barKind() == "transform" && shown("canvas-bar-action-apply_transform") }
+                invoke("cancel_transform")
+                waitFor("$device cached transform cancelled", 5_000) { barKind() == "selection" }
+                val catalogBaselineStarted = android.os.SystemClock.elapsedRealtimeNanos()
+                host.drain(seconds = 10)
+                val catalogBaselineMs = (android.os.SystemClock.elapsedRealtimeNanos() - catalogBaselineStarted) / 1_000_000.0
+                instrumentation.sendStatus(0, android.os.Bundle().apply { putString("stream", "No-action Catalog host round-trip device=$device ms=$catalogBaselineMs\n") })
+                val cachedTransformStarted = android.os.SystemClock.elapsedRealtimeNanos()
+                instrumentation.runOnMainSync { host.dispatch(obj("type" to "invoke", "command" to "scale_rotate")) }
+                waitFor("$device cached transform shared state", 5_000) { barKind() == "transform" }
+                val cachedSharedMs = (android.os.SystemClock.elapsedRealtimeNanos() - cachedTransformStarted) / 1_000_000.0
+                instrumentation.sendStatus(0, android.os.Bundle().apply { putString("stream", "Linked cached Transform dispatch-to-shared-state device=$device ms=$cachedSharedMs\n") })
+                waitFor("$device cached transform ready", 5_000) { shown("canvas-bar-action-apply_transform") }
+                val cachedTransformMs = (android.os.SystemClock.elapsedRealtimeNanos() - cachedTransformStarted) / 1_000_000.0
+                instrumentation.sendStatus(0, android.os.Bundle().apply { putString("stream", "Linked cached Transform dispatch-to-composed-ready device=$device ms=$cachedTransformMs\n") })
                 assertTrue("$device bar tap keeps window focus", owner.view.hasWindowFocus())
                 settle()
                 bar = bounds("canvas-action-bar")

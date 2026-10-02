@@ -13,6 +13,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn discard_render_requests(&mut self) {
+        self.cancel_content_bounds();
+        self.content_bounds = Default::default();
         self.cancel_picker();
         self.eyedropper.renderer_replaced();
         self.cancel_tonal();

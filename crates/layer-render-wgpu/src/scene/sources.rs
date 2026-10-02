@@ -165,7 +165,7 @@ impl DecodedTiles {
     }
     pub fn prepare_transfer(
         &mut self,
-        device: &wgpu::Device,
+        device: &PipelineDevice,
         space: RgbSpace,
     ) -> Result<crate::native_tiles::NativeTransfer, GpuRasterError> {
         self.transfer.prepare(device, space).cloned()

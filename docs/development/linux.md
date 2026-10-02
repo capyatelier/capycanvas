@@ -81,6 +81,7 @@ prerequisites. Useful settings:
 | `--tablet` | Adds tablet-v2 pen input through a Wayland proxy. |
 | `--native-storage` | Gives the test the run's SQLite workspace directory instead of in-memory workspaces. |
 | `LAYER_NATIVE_TEST_EXECUTABLE` | Absolute path of an already built test executable; skips the rebuild. |
+| `CAPY_NATIVE_TEST_THEME` | Sets fixture windows to `light` or `dark`; run affected journeys once with each. |
 | `LAYER_MOTION_VIEWPORT`, `LAYER_MOTION_SCALE` | Private monitor size (default `1600x1000`) and scale, for example `3200x2000` and `2`. |
 | `LAYER_TEST_ARTIFACTS` | Absolute directory for captures and reports, where a test writes them. |
 

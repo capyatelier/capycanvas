@@ -635,11 +635,11 @@ fn fx_grid_sample(image:texture_2d<f32>,point:vec2<f32>,grid:vec4<f32>,step:f32)
     return textureSampleLevel(image,sampling,clamp(adjusted,vec2(.5),last+.5)/vec2<f32>(textureDimensions(image)),0.);
 }
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
-    let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
+    let point=p-settings.operation_offset.zw;
     return fx_grid_sample(front,point,settings.source_over,settings.operation_linear.x);
 }
 fn fx_original(p:vec2<f32>)->vec4<f32> {
-    let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
+    let point=p-settings.operation_offset.zw;
     return fx_grid_sample(back,point,settings.backdrop,settings.operation_linear.y);
 }
 @fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {

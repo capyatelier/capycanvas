@@ -6,11 +6,18 @@ Status: **open** (2026-09-28). Milestones M0 to M4 of the [research record's seq
 
 Each milestone gets its own implementation plan, as M2–M4 had: decisions first, then steps with tests and an exit test, then host journeys in light and dark. Delete the plan when its work lands.
 
+Transform, selected-pixel Move, Trim, Reveal All and Crop Fit Content now share
+asynchronous GPU bounds in their existing GTK, Web and Android controls.
+Transparent source padding, erased overrides, masks and selection coverage use
+actual pixels; pending work is cancellable. See [image commands](../ui/image-commands.md).
+Retained geometry and its additional bounds consumers remain in
+the [M5–M6 specification](photo-editing-m5-m6.md).
+
 ## Milestones
 
 | Milestone | Contents | Journeys |
 | --- | --- | --- |
-| **M5 Lossless transforms** | P-8, P-10 with lossless Distort and Warp on placed photos, the rest of XF-4 (groups and several layers, pivot, snapping, nudge, Transform Again), split lines, XF-5, XF-6. | Opens 27 for placed photos; improves 17, 25 |
+| **M5 Lossless transforms** | Remaining P-8 retained-geometry consumers, P-10 with lossless Distort and Warp on placed photos, the rest of XF-4 (groups and several layers, pivot, snapping, nudge, Transform Again), split lines, XF-6. | Opens 27 for placed photos; improves 17, 25 |
 | **M6 Tone and color** | P-6, P-7, ADJ-1 with ADJ-4 and the picker bar modes (BAR-5), ADJ-2, ADJ-3, ADJ-5, ADJ-6, ADJ-10, VIEW-2 with its bar mode, VIEW-3 with sampler bars, IO-3, T-3, T-7, T-14. | Improves 5–10, 13, 29 |
 | **M7 Masking and compositing** | SEL-6 as an on-canvas session, SEL-7, SEL-8, LYR-3, LYR-4, ADJ-7, ADJ-8, T-10. | Opens 15; improves 11, 12, 14, 16, 17, 19 |
 | **M8 Advanced** | RET-5 (Content-Aware on the selection bar), RET-6, RET-8, RET-9 history brush, LYR-6 to LYR-9, IO-4 to IO-6, ADJ-11 remainder, ADJ-12, SEL-9, VIEW-4, VIEW-5, T-12, T-19, and the BAR-8 decision. | Opens 9; completes 21, 28 |
@@ -18,6 +25,7 @@ Each milestone gets its own implementation plan, as M2–M4 had: decisions first
 Order: M5 to M8 as listed. Gradient interpolation in Oklab (T-14, in M6) is a per-gradient choice, as decision 4 of the M2–M4 record planned.
 
 **Later, by decision:** per-layer linear blending for non-Normal layers in Perceptual documents; constant-colour pages, so a Dodge & Burn layer and other fill layers stop costing a full layer of GPU memory.
+Live Liquify (XF-5) is deferred to a future effect; existing baked Liquify remains supported.
 
 ## Apple and Windows
 

@@ -2,7 +2,7 @@
 //! render ordinary tool controls; no platform owns transform math or history.
 use super::{error, refused};
 use crate::*;
-use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerId, LayerKind, LayerOperationKind, MeshMap, Point, Projective, Rect, Selection, TransformMap};
+use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerId, LayerKind, MeshMap, Point, Projective, Rect, Selection, TransformMap};
 use std::sync::Arc;
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::{CanvasRenderer, CursorSegment, TransformPreview};
@@ -259,61 +259,9 @@ pub(crate) fn tool_set(transform: bool) -> ToolSetView {
     }
 }
 
-// Conservative allocated tile geometry avoids a readback at interaction start. Erased
-// regions may leave extra transparent room; operations remain bounded
-// by the finite local editing area. Selecting an area uses that area's bounds instead.
-fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
-    let layer = doc.target_owner(target).unwrap();
-    let operations = layer.target_operations(target).unwrap();
-    let extent = doc.target_extent(target);
-    let canvas = Rect::from_extent(extent);
-    let mut bounds = if doc
-        .target_raster(target)
-        .is_some_and(|r| r.try_data().is_none())
-    {
-        canvas
-    } else if target != layer.id {
-        layer
-            .mask
-            .as_ref()
-            .and_then(|m| m.initial.as_ref())
-            .map_or(Rect::EMPTY, |s| s.bounds())
-    } else {
-        layer.source.as_ref().map_or(Rect::EMPTY, |source| Rect::from_extent(source.extent))
-    };
-    if let Some(Ok(data)) = doc.target_raster(target).and_then(|r| r.try_data()) {
-        for key in data.tiles.keys() {
-            let [x, y] = key
-                .coordinate
-                .map(|v| (v * layer_core::raster::TILE_SIZE) as f32);
-            bounds = bounds.union(Rect {
-                min: Point { x, y },
-                max: Point {
-                    x: x + 256.,
-                    y: y + 256.,
-                },
-            });
-        }
-    }
-    for op in operations {
-        bounds = match &op.kind {
-            LayerOperationKind::Transform(t) if op.coverage.initial.is_none() => {
-                t.forward_bounds(bounds)
-            }
-            LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. } => bounds,
-            _ => bounds.union(op.bounds(extent)),
-        };
-    }
-    Rect {
-        min: Point {
-            x: bounds.min.x.max(0.),
-            y: bounds.min.y.max(0.),
-        },
-        max: Point {
-            x: bounds.max.x.min(canvas.max.x),
-            y: bounds.max.y.min(canvas.max.y),
-        },
-    }
+fn source_frame(doc: &Document, target: layer_core::LayerId) -> Rect {
+    Rect::from_extent(doc.layer(target).and_then(|layer| layer.source.as_ref())
+        .map_or_else(|| doc.target_extent(target), |source| source.extent))
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -343,6 +291,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         self.cancel_layer_gesture()?;
+        if self.measured_target_bounds().is_none() {
+            return self.request_content_bounds(super::image_geometry::ContentUse::Transform);
+        }
         if !self.engine.document().active_mask
             && self.engine.document().selection.is_none()
             && self.engine.document().layer(self.engine.document().active_layer).is_some_and(|l| l.source.is_some())
@@ -381,6 +332,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// pixels: a translation by whole layer pixels that keeps the Move tool,
     /// and with `keep_source` leaves the originals in place.
     pub(super) fn begin_move_transform(&mut self, p: Point, keep_source: bool) -> Result<(), String> {
+        if self.measured_target_bounds().is_none() {
+            self.content_bounds.moving = Some(super::image_geometry::PendingMove { press: p, latest: None, keep_source });
+            let result = self.request_content_bounds(super::image_geometry::ContentUse::Move);
+            if result.is_err() { self.content_bounds.moving = None; }
+            return result;
+        }
         let mut t = self.pixel_transaction()?;
         let press = t.basis.inverse().ok_or("Invalid layer placement")?.map(p);
         t.pixel_move = true;
@@ -399,30 +356,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let inverse = basis.inverse().ok_or("Invalid layer placement")?;
         let selection = doc.selection.as_ref().map(|s| s.transformed(inverse)).transpose().map_err(error)?;
         let serial = self.operation.serial.wrapping_add(1);
-        let mut t = Transaction::new(serial, target, selection, doc.revision, basis, content_bounds(doc, target), Pose::identity());
+        let mut t = Transaction::new(serial, target, selection, doc.revision, basis, self.measured_target_bounds().ok_or("The content bounds are still being measured")?, Pose::identity());
         let bounds = &mut t.bounds;
-        if let Some(companion) = t.request.companion(&doc.layers) {
-            let other = content_bounds(doc, companion.layer);
-            if !other.is_empty() {
-                *bounds = bounds.union(doc.layer_transform(companion.layer).then(inverse).bounds(other));
-            }
-        }
-        if bounds.is_empty() && doc.active_mask {
-            *bounds = Rect {
-                min: Point::default(),
-                max: Point {
-                    x: doc.target_extent(target)[0] as f32,
-                    y: doc.target_extent(target)[1] as f32,
-                },
-            };
-        }
-        if let Some(s) = t.request.selection.as_ref().filter(|s| !s.inverted) {
-            let b = s.bounds();
-            bounds.min.x = bounds.min.x.max(b.min.x);
-            bounds.min.y = bounds.min.y.max(b.min.y);
-            bounds.max.x = bounds.max.x.min(b.max.x);
-            bounds.max.y = bounds.max.y.min(b.max.y);
-        }
         if bounds.is_empty() {
             return Err("The selection does not overlap this layer".into());
         }
@@ -473,6 +408,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn finish_transform(&mut self, apply: bool) -> Result<(), String> {
         self.require_idle()?;
+        if !apply && self.cancel_content_bounds() { return Ok(()); }
         if self.cropping() {
             return self.finish_crop(apply);
         }
@@ -507,6 +443,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn cancel_transform(&mut self) -> Result<bool, String> {
+        if self.cancel_content_bounds() { return Ok(true); }
         if self.cropping() {
             self.finish_crop(false)?;
             return Ok(true);
@@ -798,6 +735,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_transform()
     }
     pub(super) fn cancel_transform_drag(&mut self) -> Result<bool, String> {
+        if self.cancel_content_bounds() { return Ok(true); }
         if self.cancel_crop_drag() {
             return Ok(true);
         }
@@ -844,6 +782,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.operation.moving_pixels != next {
             self.engine.backend_mut().prepare_moving_pixels(next.clone());
             self.operation.moving_pixels = next;
+            if self.operation.moving_pixels.is_some() && self.measured_target_bounds().is_none()
+                && !self.content_bounds.busy() {
+                let _ = self.request_content_bounds(super::image_geometry::ContentUse::PrepareMove);
+            }
         }
     }
     /// Move drags the selected pixels rather than the whole layer.

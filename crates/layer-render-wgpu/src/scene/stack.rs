@@ -127,7 +127,22 @@ impl Compositor for Tile<'_> {
     type Image = usize;
     fn clear(&mut self, paper: bool) -> usize {
         let c = if paper { self.packet.view.background_rgba_linear } else { [0.; 4] };
-        self.scene.alloc(self.r, composite_color(self.r, self.packet, c))
+        let color = composite_color(self.r, self.packet, c);
+        if c[3] > 0. && let Some((origin, extent)) = self.r.capture_frame {
+            let start = std::array::from_fn::<_, 2, _>(|i| -origin[i] - (self.coordinate[i] * PAGE_SIZE) as f32);
+            let min = start.map(|v| v.max(0.));
+            let max = std::array::from_fn::<_, 2, _>(|i| (start[i] + extent[i] as f32).min(PAGE_SIZE as f32));
+            let out = self.scene.alloc(self.r, wgpu::Color::TRANSPARENT);
+            if min[0] < max[0] && min[1] < max[1] {
+                let mut data = [0.; 32];
+                data[..6].copy_from_slice(&[min[0], min[1], max[0] - min[0], max[1] - min[1], PAGE_SIZE as f32, PAGE_SIZE as f32]);
+                data[12..16].copy_from_slice(&[color.r as f32, color.g as f32, color.b as f32, color.a as f32]);
+                self.scene.jobs.push(Job::Draw { target: self.scene.pool[out].view.clone(),
+                    sources: std::array::from_fn(|_| self.r.empty_view.clone()), data, over: false, clip: None });
+            }
+            return out;
+        }
+        self.scene.alloc(self.r, color)
     }
     fn discard(&mut self, image: usize) { self.scene.free(image); }
     fn duplicate(&mut self, image: &usize) -> usize {

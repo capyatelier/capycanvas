@@ -65,7 +65,7 @@ export function createRasterWorker() {
         if(op==='output-close'||(op==='output-encode'&&(cancelled?.()||metadata.preview||metadata.flatten||metadata.clip))){outputs.delete(token);state.fail(new DOMException('Output finished','AbortError'));}
       }
     }
-    if(op==='tone'){const state=owner(`analysis:${++next}`);try{return await send(state,request,cancelled);}finally{state.fail(new DOMException('Analysis finished','AbortError'));}}
+    if(op==='tone'||op==='content-bounds'){const state=owner(`analysis:${++next}`);try{return await send(state,request,cancelled);}finally{state.fail(new DOMException('Analysis finished','AbortError'));}}
     return send(owner(op==='color-field'?'color-preview':op==='encode'?'codec':'files'),request,cancelled);
   };
 }

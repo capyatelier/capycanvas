@@ -2177,7 +2177,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ApplyTransform => {
                 idle && self.operation.active() && !self.region_tools.applying_transform()
             }
-            CommandId::CancelTransform | CommandId::ResetTransform => idle && self.operation.active(),
+            CommandId::CancelTransform => idle && (self.operation.active() || self.content_bounds.busy()),
+            CommandId::ResetTransform => idle && self.operation.active(),
             CommandId::TransformFlipHorizontal
             | CommandId::TransformFlipVertical
             | CommandId::TransformRotateLeft
@@ -7000,8 +7001,8 @@ mod tests {
     fn export_snapshot_freezes_the_master_without_acknowledging_save() {
         let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
-        s.engine.render_frame_at(0).unwrap();
-        s.engine.render_frame_at(1_500_000_000).unwrap();
+        s.engine.render_frame_at(1_000_000_000).unwrap();
+        s.engine.render_frame_at(2_500_000_000).unwrap();
         let checkpoint = s.engine.checkpoint();
         assert!(s.capture_project_export(123).is_err());
         invoke(&mut s, CommandId::ExportDocument);

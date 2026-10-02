@@ -23,12 +23,16 @@ impl Tables {
     }
     pub fn prepare(
         &mut self,
-        device: &wgpu::Device,
+        device: &crate::PipelineDevice,
         space: RgbSpace,
     ) -> Result<&NativeTransfer, GpuRasterError> {
         let index = Self::index(space);
         if self.0[index].is_none() {
-            self.0[index] = Some(NativeTransfer::new(device, space)?);
+            let mut shared = device.native_transfers.lock().unwrap();
+            if shared.0[index].is_none() {
+                shared.0[index] = Some(NativeTransfer::new(device, space)?);
+            }
+            self.0[index] = shared.0[index].clone();
         }
         Ok(self.0[index].as_ref().unwrap())
     }

@@ -822,6 +822,7 @@ pub struct WgpuRasterizer {
     device: PipelineDevice,
     queue: wgpu::Queue,
     document_extent: [u32; 2],
+    capture_frame: Option<([f32; 2], [u32; 2])>,
     target_geometry: target_geometry::TargetGeometry,
     paint_layers: Vec<PaintLayer>,
     raster: Option<raster::RasterRuntime>,
@@ -921,6 +922,9 @@ pub struct WgpuRasterizer {
     target_capacity: usize,
     target_upload: Vec<u8>,
     uploads: Uploads,
+    bounds_job: Option<snapshot::ContentBoundsJob>,
+    #[cfg(target_arch = "wasm32")]
+    bounds_worker: Option<snapshot::BrowserContentBounds>,
     _empty_texture: wgpu::Texture,
     empty_view: wgpu::TextureView,
     _empty_scalar_texture: wgpu::Texture,
@@ -1153,6 +1157,7 @@ impl WgpuRasterizer {
             device,
             queue,
             document_extent: [0, 0],
+            capture_frame: None,
             target_geometry: Default::default(),
             layer_masks,
             selection_clip,
@@ -1246,6 +1251,9 @@ impl WgpuRasterizer {
             target_capacity,
             target_upload: Vec::with_capacity(target_stride as usize * target_capacity),
             uploads,
+            bounds_job: None,
+            #[cfg(target_arch = "wasm32")]
+            bounds_worker: None,
             _empty_texture: empty_texture,
             empty_view,
             _empty_scalar_texture: empty_scalar_texture,
@@ -1510,10 +1518,6 @@ impl WgpuRasterizer {
         if let Some(regions) = &mut self.regions { regions.raw.clear_bindings(); }
         if extent[0] == 0 || extent[1] == 0 {
             return Err(GpuRasterError::InvalidExtent);
-        }
-        let limit = self.device.limits().max_texture_dimension_2d;
-        if extent[0] > limit || extent[1] > limit {
-            return Err(GpuRasterError::ExtentUnsupported);
         }
         let resized = extent != self.document_extent;
         if resized || self.artwork_frame.as_ref().is_some_and(|frame| frame.layers.iter().any(|old| {
@@ -3211,6 +3215,27 @@ impl CanvasRenderer for WgpuRasterizer {
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.take()
     }
+    fn request_content_bounds(&mut self, request: layer_core::ContentBoundsRequest) -> Result<bool, Self::Error> {
+        if self.bounds_job.is_some() { return Ok(false); }
+        #[cfg(not(target_arch = "wasm32"))]
+        let job = snapshot::ContentBoundsJob::start(self.snapshot_gpu(), request);
+        #[cfg(target_arch = "wasm32")]
+        let job = {
+            let mut request = request;
+            request.effect_times = request.document.layers.iter().filter(|l| l.effect.is_some())
+                .map(|l| (l.id, effects::Gpu::effect_time(self, l, request.time))).collect();
+            snapshot::ContentBoundsJob::start(self.bounds_worker.clone()
+                .ok_or_else(|| GpuRasterError::Color("Content bounds worker unavailable".into()))?, request)
+        };
+        self.bounds_job = Some(job.map_err(GpuRasterError::Color)?);
+        Ok(true)
+    }
+    fn take_content_bounds(&mut self) -> Option<Result<layer_core::Rect, Self::Error>> {
+        let result = self.bounds_job.as_mut()?.take()?;
+        self.bounds_job = None;
+        Some(result.map_err(GpuRasterError::Color))
+    }
+    fn cancel_content_bounds(&mut self) { self.bounds_job = None; }
     fn request_color_sample(
         &mut self,
         request: layer_render::ColorSampleRequest,
@@ -3298,6 +3323,9 @@ impl CanvasRenderer for WgpuRasterizer {
 }
 impl WgpuRasterizer {
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
+        if packet.document_extent.iter().any(|n| *n > self.max_document_dimension()) {
+            return Err(GpuRasterError::ExtentUnsupported);
+        }
         if !self.background_ready.load(std::sync::atomic::Ordering::Acquire) && !self.navigator.pending()
             && packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
             && packet.dabs.is_empty() && packet.dab_batches.is_empty()
@@ -5877,4 +5905,11 @@ mod tests {
                 .all(|piece| piece.intersect(overlap).is_empty())
         );
     }
+}
+
+#[cfg(test)]
+mod content_bounds_tests;
+#[cfg(target_arch = "wasm32")]
+impl WgpuRasterizer {
+    pub fn set_content_bounds_worker(&mut self, worker: snapshot::BrowserContentBounds) { self.bounds_worker = Some(worker); }
 }

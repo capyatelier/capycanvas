@@ -49,8 +49,8 @@ on the crop bar drops them instead ([crop](canvas-action-bar.md#crop)).
   turn their placement, and the selection, Selection Layers and guides follow.
   The view's own rotation and flips (View menu) never change pixels.
 - **Trim** shrinks the canvas to the visible pixels on it, cutting away transparent
-  edges. Only visible layers count, limited by their masks; the paper covers the
-  whole canvas, so hide it to trim to the artwork. Pixels outside stay hidden on
+  edges. Visible layers, masks, filters and paper contribute their rendered
+  coverage. Hide opaque paper to trim to the artwork. Pixels outside stay hidden on
   their layers. When nothing would change, a notice says so.
 - **Reveal All** grows the canvas to hold every layer's pixels, including hidden
   layers, pixels hidden by masks, and placed photos. When every pixel is already on
@@ -67,19 +67,34 @@ on the crop bar drops them instead ([crop](canvas-action-bar.md#crop)).
   against the limits first. `Edit::SetResolution` changes only the resolution.
   How the renderer resamples and drops emptied tiles is in
   [rendering](../internals/rendering.md).
-- **Content bounds:** `crates/layer-core/src/content_bounds.rs` finds pixel-tight
-  bounds on the CPU. Each side of a layer decodes only its outermost column or row
-  of tiles and moves inward only past transparent ones; within the canvas it also
-  scans the tiles the canvas edges cross. Photos count by their placement, and
-  masks limit what is visible. Results are cached by tile content, so asking again
-  decodes nothing. A `ContentScope` picks what counts: the canvas (Trim), visible
-  layers (Fit Content) or everything (Reveal All).
+- **Content bounds:** `crates/layer-core/src/content_bounds.rs` freezes the query
+  and caches its result. `crates/layer-render-wgpu/src/snapshot/bounds.rs` uses
+  bounded snapshot rendering and the thumbnail GPU reduction to measure actual
+  positive alpha or mask coverage. Only four bounds coordinates return from the
+  GPU. Transparent source padding and erased overrides do not count; visible
+  queries evaluate the actual mask products and interpolation fringes. Sparse
+  candidate pages avoid scanning empty gaps between distant layers. Effect
+  coordinates and accumulated animation phases stay fixed for the query.
+  Boundary pages run first; pages wholly inside already measured bounds need
+  no further work. Virtual capture origins preserve the document's tile grid.
+  Up to eight pages share a readback within the snapshot memory allowance;
+  larger regions run alone. Captures reuse immutable scene pipelines,
+  transfer tables and the bounds reducer on their device.
+  `ContentScope` selects the canvas
+  (Trim), visible layers (Fit Content), every layer (Reveal All), or the editable
+  target intersected with the selection (Transform and Move). An unedited source
+  whose channel format proves opacity needs no scan.
+  A destructive linked paint/mask pair measures both targets before opening
+  Transform, so its Warp domain preserves the companion's pixels too. Whole-photo
+  placement uses the photo's own coverage.
 - **Commands:** `crates/layer-ui/src/image_geometry.rs` runs the turns, flips, Trim,
-  Reveal All and Fit Content. A bounds scan decodes at most four tiles on the UI
-  thread, then continues on a worker thread; Web, without threads, continues a few
-  tiles per frame, and its frame loop keeps running while the scan is busy
-  (`wants_continuous_frames`). `image_size.rs` and `canvas_size.rs` hold the dialog
-  models, and hosts only present them.
+  Reveal All and Fit Content. Bounds preparation and rendering run on a worker,
+  including a dedicated Web worker. The frame loop keeps running while the query
+  is pending. Target changes, cancellation and renderer replacement discard stale
+  results. Move remembers motion and release while preparing; Escape cancels a
+  pending Transform. Initial photo placement and Original Size use the original
+  image frame; later transforms use measured coverage. `image_size.rs` and
+  `canvas_size.rs` hold the dialog models, and hosts only present them.
 - **Hosts:** each host presents Image Size beside Canvas Size.
   - GTK: `apps/layer-linux/src/image_size.rs` and `canvas_size.rs`.
   - Web: `apps/layer-web/image-size.js` and `canvas-size.js`, modal dialogs built
@@ -92,9 +107,10 @@ on the crop bar drops them instead ([crop](canvas-action-bar.md#crop)).
     Resample as a windowless menu. Back cancels it.
 - **Tests:**
   - shared: `crates/layer-core/src/canvas_geometry_tests.rs` (exact turns and flips,
-    Image Size, resolution, tile predictions) and `content_bounds_tests.rs`;
+    Image Size, resolution, tile predictions);
     `crates/layer-ui/src/image_size_tests.rs` and `image_geometry_tests.rs`; the
-    pixels in `crates/layer-render-wgpu/tests/canvas_geometry.rs`;
+    pixels in `crates/layer-render-wgpu/tests/canvas_geometry.rs` and
+    `crates/layer-render-wgpu/src/content_bounds_tests.rs`;
   - GTK native, in `apps/layer-linux/src/image_tests.rs`:
     `native_image_size_down_with_constrain_then_undo`,
     `native_rotate_image_right_on_a_non_square_canvas`,

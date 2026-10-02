@@ -306,10 +306,10 @@ impl UiImageTarget {
 }
 
 struct PreviewPipeline {
+    bounds: Arc<BoundsPipeline>,
     records: wgpu::BindGroupLayout,
     write_bounds: wgpu::BindGroupLayout,
     read_bounds: wgpu::BindGroupLayout,
-    measure: wgpu::ComputePipeline,
     draw: wgpu::RenderPipeline,
     prepared: std::collections::VecDeque<PreparedPreview>,
 }
@@ -340,30 +340,13 @@ impl PreviewPipeline {
                 NonZeroU64::new(16),
             )])
         };
-        let write_bounds = bounds_layout(false);
+        let bounds = BoundsPipeline::new(&r.device);
+        let write_bounds = bounds.write.clone();
         let read_bounds = bounds_layout(true);
-        let records = crate::bindings::layout(device, "thumbnail page", &[
-            crate::bindings::buffer(
-                0,
-                wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Uniform,
-                true,
-                NonZeroU64::new(80),
-            ),
-            crate::bindings::texture(
-                1,
-                wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                true,
-            ),
-            crate::bindings::sampler(
-                2,
-                wgpu::ShaderStages::FRAGMENT,
-                wgpu::SamplerBindingType::Filtering,
-            ),
-        ]);
+        let records = bounds.records.clone();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("content-framed thumbnails"),
-            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", crate::view_color::hdr_shader(device.working_space(), layer_core::color::RgbSpace::Srgb), include_str!("thumbnails.wgsl")).into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", crate::view_color::hdr_shader(device.working_space(), layer_core::color::RgbSpace::Srgb), BoundsPipeline::shader()).into()),
         });
         let layout = |bounds| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -372,14 +355,6 @@ impl PreviewPipeline {
                 immediate_size: 0,
             })
         };
-        let measure = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("thumbnail alpha bounds"),
-            layout: Some(&layout(&write_bounds)),
-            module: &shader,
-            entry_point: Some("measure"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
         let draw = fullscreen_pipeline(
             device,
             &layout(&read_bounds),
@@ -393,7 +368,7 @@ impl PreviewPipeline {
             records,
             write_bounds,
             read_bounds,
-            measure,
+            bounds,
             draw,
             prepared: Default::default(),
         }
@@ -532,6 +507,7 @@ impl PreviewPipeline {
                         wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &prepared.records, offset: 0, size: NonZeroU64::new(80), }),
                         wgpu::BindingResource::TextureView(&view),
                         wgpu::BindingResource::Sampler(&r.sampler),
+                        self.bounds.empty_selection.as_entire_binding(),
                     ]))
                 })
                 .collect()
@@ -544,7 +520,7 @@ impl PreviewPipeline {
                 label: Some("thumbnail bounds scan"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.measure);
+            pass.set_pipeline(&self.bounds.measure);
             pass.set_bind_group(0, &prepared.write, &[]);
             for (i, source) in bindings.iter().enumerate() {
                 pass.set_bind_group(
@@ -598,5 +574,87 @@ impl PreviewPipeline {
     ) -> Result<PageSurface, GpuRasterError> {
         self.prepare(r, id, encoder, usize::MAX)?;
         Ok(self.prepared.pop_back().unwrap().result)
+    }
+}
+
+
+pub(super) struct BoundsPipeline {
+    pub records: wgpu::BindGroupLayout,
+    pub write: wgpu::BindGroupLayout,
+    pub measure: wgpu::ComputePipeline,
+    empty_selection: wgpu::Buffer,
+    sampler: wgpu::Sampler,
+}
+impl BoundsPipeline {
+    fn shader() -> String {
+        format!("{}\n{}", include_str!("selection_clip.wgsl").replace("@binding(1)", "@binding(3)"), include_str!("thumbnails.wgsl"))
+    }
+    pub fn new(device: &PipelineDevice) -> Arc<Self> {
+        device.bounds_pipeline.get_or_init(|| Arc::new(Self::build(device))).clone()
+    }
+    fn build(device: &PipelineDevice) -> Self {
+        let write = crate::bindings::layout(device, "content bounds", &[crate::bindings::buffer(
+            0, wgpu::ShaderStages::COMPUTE,
+            wgpu::BufferBindingType::Storage { read_only: false }, false, NonZeroU64::new(16),
+        )]);
+        let records = crate::bindings::layout(device, "content bounds page", &[
+            crate::bindings::buffer(0, wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform, true, NonZeroU64::new(80)),
+            crate::bindings::texture(1, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, true),
+            crate::bindings::sampler(2, wgpu::ShaderStages::FRAGMENT, wgpu::SamplerBindingType::Filtering),
+            crate::bindings::buffer(3, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Storage { read_only: true }, false, NonZeroU64::new(48)),
+        ]);
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("content bounds reduction"),
+            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}",
+                crate::view_color::hdr_shader(device.working_space(), layer_core::color::RgbSpace::Srgb),
+                BoundsPipeline::shader()).into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("content bounds reduction"), bind_group_layouts: &[Some(&write), Some(&records)], immediate_size: 0,
+        });
+        let measure = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("content bounds reduction"), layout: Some(&layout), module: &shader,
+            entry_point: Some("measure"), compilation_options: Default::default(), cache: None,
+        });
+        let empty_selection = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bounds without selection"), contents: &[0; 48], usage: wgpu::BufferUsages::STORAGE,
+        });
+        Self { records, write, measure, empty_selection, sampler: device.create_sampler(&Default::default()) }
+    }
+    pub fn buffer(device: &PipelineDevice) -> wgpu::Buffer {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("content bounds"),
+            contents: &[u32::MAX, u32::MAX, 0, 0].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>(),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        })
+    }
+    pub fn reduce(&self, device: &PipelineDevice, encoder: &mut crate::submission::CommandEncoder,
+        output: &wgpu::Buffer, texture: &wgpu::Texture, origin: [u32; 2], extent: [u32; 2],
+        mask: Option<(bool, Option<f32>)>, selection: Option<&wgpu::Buffer>,
+    ) {
+        let mut values = [0u32; 20];
+        values[..4].copy_from_slice(&[origin[0], origin[1], extent[0], extent[1]]);
+        if let Some((inverted, constant)) = mask {
+            values[4] = if constant.is_some() { 3 } else { 1 };
+            values[5] = u32::from(inverted);
+            values[8] = constant.unwrap_or(0.).to_bits();
+        }
+        let record = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("content bounds page"),
+            contents: &values.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>(),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let view = texture.create_view(&Default::default());
+        let record = crate::bindings::group(device, "content bounds page", &self.records, [
+            record.as_entire_binding(), wgpu::BindingResource::TextureView(&view), wgpu::BindingResource::Sampler(&self.sampler),
+            selection.unwrap_or(&self.empty_selection).as_entire_binding(),
+        ]);
+        let output = crate::bindings::group(device, "content bounds result", &self.write, [output.as_entire_binding()]);
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+        pass.set_pipeline(&self.measure);
+        pass.set_bind_group(0, &output, &[]);
+        pass.set_bind_group(1, &record, &[0]);
+        pass.dispatch_workgroups(extent[0].saturating_sub(origin[0]).min(256).div_ceil(32), extent[1].saturating_sub(origin[1]).min(256).div_ceil(32), 1);
     }
 }

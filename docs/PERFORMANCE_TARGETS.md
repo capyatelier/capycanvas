@@ -126,6 +126,11 @@ measured on low and mid tiers:
   completion time remains above the 2–5-second engineering aim.
 
 The tier tables identify the exact frozen builds and measurement conditions.
+Exact GPU bounds queries on the top-tier 61 MP canvas take 95–135 ms for a
+transform target and 120–215 ms for visible content. They run asynchronously and
+cache results. These [query measurements](performance/top-tier.md#exact-content-bounds)
+do not qualify command response or moving-frame rates, and do not establish a
+hardware-limit waiver.
 Other brush, navigation, transform and UI rows retain their previous measurements
 or remain unmeasured; improvements above do not qualify them. Exact refinement,
 startup and host presentation still need their complete qualification matrices.

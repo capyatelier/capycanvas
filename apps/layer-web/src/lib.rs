@@ -465,35 +465,10 @@ impl WebGpu {
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|error| gpu_error("renderer", error))?;
-        let options = wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::None,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        };
-        // Chrome can return null while its hardware GPU process initializes.
-        // Retry once; an unavailable GPU still becomes an explicit startup error.
-        let adapter = match instance.request_adapter(&options).await {
-            Ok(adapter) => adapter,
-            Err(_) => instance
-                .request_adapter(&options)
-                .await
-                .map_err(|error| gpu_error("adapter", error))?,
-        };
+        let (adapter, device, queue) = request_device(&instance, Some(&surface)).await?;
         let config = surface
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| gpu_error("renderer", "WebGPU canvas format unavailable"))?;
-        let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("web canvas GPU"),
-                required_features: adapter.features() & (wgpu::Features::TIMESTAMP_QUERY
-                    | wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE),
-                required_limits: limits,
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| gpu_error("device", error))?;
         let lost = std::sync::Arc::new(std::sync::Mutex::new(None));
         let failure = lost.clone();
         device.set_device_lost_callback(move |reason, message| {
@@ -1154,4 +1129,35 @@ impl WebApp {
         self.screen_presented_ms = now_ms;
         serialize(&change)
     }
+}
+
+async fn request_device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>)
+    -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), JsValue> {
+        let options = wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::None,
+            compatible_surface: surface,
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        };
+        // Chrome can return null while its hardware GPU process initializes.
+        // Retry once; an unavailable GPU still becomes an explicit startup error.
+        let adapter = match instance.request_adapter(&options).await {
+            Ok(adapter) => adapter,
+            Err(_) => instance
+                .request_adapter(&options)
+                .await
+                .map_err(|error| gpu_error("adapter", error))?,
+        };
+        let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("web canvas GPU"),
+                required_features: adapter.features() & (wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE),
+                required_limits: limits,
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| gpu_error("device", error))?;
+        Ok((adapter, device, queue))
 }

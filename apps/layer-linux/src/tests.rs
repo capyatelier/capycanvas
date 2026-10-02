@@ -212,6 +212,14 @@ fn drag_divider(w: &Rc<Workspace>, id: u32, to: [f32; 2]) {
 // The default-workspace integration test uses the actual startup path.
 fn fixture_workspace(app: &adw::Application) -> Rc<Workspace> {
     let w = Workspace::new(app);
+    if let Ok(theme) = std::env::var("CAPY_NATIVE_TEST_THEME") {
+        let theme = match theme.as_str() {
+            "light" => layer_ui::Theme::Light,
+            "dark" => layer_ui::Theme::Dark,
+            _ => panic!("CAPY_NATIVE_TEST_THEME must be light or dark"),
+        };
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+    }
     w.area.connect_realize(glib::clone!(
         #[weak]
         w,

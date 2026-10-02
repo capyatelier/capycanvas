@@ -1072,6 +1072,7 @@ impl App {
     }
     fn invoke(&self, command: &str) {
         self.action(json!({"type": "invoke", "command": command}));
+        if command == "scale_rotate" { self.draw_until_transform(); }
     }
     fn state(&self) -> Value {
         serde_json::to_value(unsafe { &*self.0 }.host.session.state()).unwrap()
@@ -1081,6 +1082,14 @@ impl App {
         app.host
             .prepare_canvas_frame(2_000_000_000, 2_000_000_000, true)
             .unwrap();
+    }
+    fn draw_until_transform(&self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !self.state()["tool_settings"].as_array().unwrap().iter().any(|setting| setting["id"] == "transform_x") {
+            self.draw_frame();
+            assert!(std::time::Instant::now() < deadline, "Transform bounds did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
     }
     fn draw_until_idle(&self) {
         self.draw_until_prepared(false);

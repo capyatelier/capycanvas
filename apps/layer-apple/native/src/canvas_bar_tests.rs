@@ -50,6 +50,7 @@ fn canvas_bar_places_edits_and_hides_during_contacts_through_the_apple_abi() {
         app.draw_until_idle();
         let selection = app.state()["canvas_bar"].clone();
         edit(&app, &selection, "scale_rotate").unwrap();
+        app.draw_until_transform();
         let transform = app.state()["canvas_bar"].clone();
         assert_eq!(transform["context"]["kind"], "transform", "{platform}: {transform}");
         assert_eq!(transform["placement"], "near_object");

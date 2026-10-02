@@ -1759,6 +1759,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         if event.phase != PenPhase::Cancel && (!p.x.is_finite() || !p.y.is_finite()) {
             return Err("Invalid canvas point".into());
         }
+        if let Some(moving) = &mut self.content_bounds.moving {
+            match event.phase {
+                PenPhase::Move | PenPhase::Up => { moving.latest = Some((event, p)); return Ok(()); }
+                PenPhase::Cancel => { self.cancel_content_bounds(); return Ok(()); }
+                PenPhase::Down => { self.cancel_content_bounds(); }
+                PenPhase::Hover => return Ok(()),
+            }
+        }
         if self.tonal_active() {return self.tonal_pen(event,p);}
         if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
             return self.selection_pen(event, p, kind);

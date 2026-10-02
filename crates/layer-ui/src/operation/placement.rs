@@ -39,7 +39,7 @@ fn batch_bounds(doc: &Document, members: &[Layer]) -> Rect {
     members.iter().fold(Rect::EMPTY, |bounds, layer| {
         bounds.union(layer.properties.placement
             .then(Affine::translation(doc.layer_offset(layer.id)))
-            .bounds(content_bounds(doc, layer.id)))
+            .bounds(source_frame(doc, layer.id)))
     })
 }
 
@@ -54,8 +54,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             .layer(doc.active_layer)
             .ok_or("Select a photo layer")?
             .clone();
+        if doc.is_locked(layer.id) { return Err("The active layer is locked".into()); }
         if layer.source.is_none() { return Err("Select a retained photo layer".into()); }
-        let mut bounds = content_bounds(doc, layer.id);
+        let mut bounds = if imported.is_some() { source_frame(doc, layer.id) }
+            else { self.measured_target_bounds().ok_or("The content bounds are still being measured")? };
+        if bounds.is_empty() { return Err("The layer has no pixels to transform".into()); }
         let mut pose = Pose::from_affine(layer.properties.placement, center(bounds))
             .ok_or("This layer has invalid placement geometry")?;
         let (insertion, rollback, ids, selected) = imported.map_or_else(
@@ -166,7 +169,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let mut members = Vec::with_capacity(placement.members.len());
             for original in &placement.members {
                 let mut layer = self.engine.document().layer(original.id).cloned().ok_or("The placed layer was removed")?;
-                let local = content_bounds(self.engine.document(), layer.id);
+                let local = source_frame(self.engine.document(), layer.id);
                 let pivot = center(local);
                 let position = layer.properties.placement.map(pivot);
                 let [a, b, c, d, _, _] = layer.properties.placement.0;

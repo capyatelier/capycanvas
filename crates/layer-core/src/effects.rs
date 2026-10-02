@@ -260,6 +260,9 @@ pub struct EffectClock {
     phase: f32,
 }
 impl EffectClock {
+    pub fn at(effect: &EffectInstance, elapsed: f32, phase: f32) -> Self {
+        Self { previous: Some((elapsed, effect.playback_rate(), effect.animated())), phase }
+    }
     pub fn advance(&mut self, effect: &EffectInstance, elapsed: f32) -> f32 {
         let animated = effect.animated();
         let rate = effect.playback_rate();
