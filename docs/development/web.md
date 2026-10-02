@@ -50,8 +50,13 @@ their extent and sRGB pixel array.
 Pure unit tests need no browser or GPU:
 
 ```bash
-node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog}.test.mjs
+node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input}.test.mjs
 ```
+
+The text-input tests cover composition key ownership through native key release,
+including a keydown delivered after composition ends and engines that consume the
+release. Real IME checks must also distinguish candidate confirmation from the
+next ordinary Enter or Escape, and replace selected text in names and numbers.
 
 The other `*.test.mjs` files are Chrome journeys that
 [`test.mjs`](../../apps/layer-web/test.mjs) imports; do not run them with
