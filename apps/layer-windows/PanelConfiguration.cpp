@@ -75,12 +75,12 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         bindings.emplace_back([data=data,choice,key]{
             A identity;auto layers=array(data->state,L"layers");
             for(auto value:layers){auto row=value.GetObject();identity.Append(O({
-                {L"id",row.GetNamedValue(L"id")},{L"label",S(str(row,L"label"))},{L"editable",B(flag(row,L"editable"))}}));}
+                {L"id",row.GetNamedValue(L"id")},{L"label",S(str(row,L"label"))}}));}
             auto next=epoch(data)+identity.Stringify();
             if(next!=*key){
                 *key=next;choice.Items().Clear();
                 for(auto value:layers){auto row=value.GetObject();ComboBoxItem item;
-                    item.Content(box_value(str(row,L"label")));item.IsEnabled(flag(row,L"editable"));
+                    item.Content(box_value(str(row,L"label")));
                     item.Tag(O({{L"epoch",S(epoch(data))},{L"id",row.GetNamedValue(L"id")}}));choice.Items().Append(item);}
             }
             int selected=-1;

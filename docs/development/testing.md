@@ -191,6 +191,22 @@ are your task, and remove an entry when you fix it.
   finishes. Mouse passes.
 - Windows `exercise-multiwindow.ps1`: "Pin preferences did not refresh in the
   inactive window".
+- `layer-ui` `localization::tests::preparation_chunks_preserve_all_message_values_and_attributes`
+  fails in Windows checkouts with `core.autocrlf`: three multi-line English messages
+  parse into differently split text elements with the same formatted text.
+- Windows `exercise-selection.ps1` exits with an access violation in roughly a third
+  of runs, on untouched upstream as well, after it closes the Select drawer and
+  switches workspaces. The fault is in WinUI's `ScrollView::OnHideIndicatorsTimerTick`
+  (Microsoft.UI.Xaml.Controls.dll), which reads released scroll-controller tracker
+  references of a panel or drawer `ScrollView` that left the tree.
+- Windows fixtures that also fail on the unported upstream build: `exercise-color-picker.ps1`
+  ("Pen hover did not preview the paper"), `exercise-canvas-bar.ps1` ("A finger drag
+  did not move the transform body"), `exercise-pen-buttons.ps1` (Transform is
+  enabled on the empty starting layer), `exercise-tab-drag.ps1` ("Attached native
+  tab preview did not cross the shared insertion threshold"), `exercise-column-stacks.ps1`
+  ("Open column 12 did not match native panels, selected tiles and connector
+  geometry") and `exercise-persistence.ps1` (the unreadable database writes a
+  storage diagnostic to stderr).
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
 - Apple Rust `apple_photo_corrections_masks_and_original_samples_remain_revisable_after_worker_reopen`

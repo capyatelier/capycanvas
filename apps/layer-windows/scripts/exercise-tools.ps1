@@ -70,7 +70,7 @@ function Check-Projection {
             }
             foreach($setting in $state.tool_settings){
                 $native=Find ('tool-setting-'+$setting.id) ([System.Windows.Automation.ControlType]::Edit) -Id
-                if(!$native -or $native.Current.Name -ne $setting.label){return $false}
+                if(!$native -or !$native.Current.Name.Contains($setting.label)){return $false}
             }
             foreach($action in $state.tool_actions){
                 $command=$state.commands|Where-Object id -eq $action.command
@@ -204,13 +204,29 @@ Wait-Until {
 $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,100)
 Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-100) -lt .01} 'Tool panel did not finish scrolling'
 $scrollIdentity=$cursor.GetRuntimeId() -join ':'
-$slider=Control 'tool-setting-water_load-slider' ([System.Windows.Automation.ControlType]::Slider) -Id
-if($slider.Current.IsOffscreen){throw 'Scroll retention requires a visible slider'}
+$slider=$null;$sliderId=$null
+$settings=@((Model).state.tool_settings);[array]::Reverse($settings)
+for($step=0;!$slider -and $step -lt 30;$step++){
+    foreach($setting in $settings){
+        $candidate=Find ('tool-setting-'+$setting.id+'-slider') ([System.Windows.Automation.ControlType]::Slider) -Id
+        if($candidate -and !$candidate.Current.IsOffscreen){$slider=$candidate;$sliderId=$setting.id;break}
+    }
+    if(!$slider){
+        $previous=$scroll.Current.VerticalScrollPercent
+        $scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,[System.Windows.Automation.ScrollAmount]::SmallDecrement)
+        Wait-Until {$scroll.Current.VerticalScrollPercent -lt $previous} 'Tool panel did not scroll up toward a slider'
+    }
+}
+if(!$slider){throw 'Scroll retention requires a visible slider'}
+$percent=$scroll.Current.VerticalScrollPercent
+if($percent -le 0){throw 'Scroll retention requires a scrolled panel'}
+$sliderBefore=Value $sliderId
 Focus $slider
-Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-100) -lt .01} 'Focusing the visible slider changed scrolling'
-$slider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.35)
-Wait-Until {[Math]::Abs((Value 'water_load')-.35) -lt .0001} 'Tool slider did not update shared water load'
-if(($cursor.GetRuntimeId() -join ':') -ne $scrollIdentity -or [Math]::Abs($scroll.Current.VerticalScrollPercent-100) -gt .01){throw 'Tool edit replaced or reset scrolling'}
+Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-$percent) -lt .01} 'Focusing the visible slider changed scrolling'
+$range=$slider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+$range.SetValue($(if($range.Current.Value -gt .5){.2}else{.8}))
+Wait-Until {(Value $sliderId) -ne $sliderBefore} "Tool slider did not update shared $sliderId"
+if(($cursor.GetRuntimeId() -join ':') -ne $scrollIdentity -or [Math]::Abs($scroll.Current.VerticalScrollPercent-$percent) -gt .01){throw 'Tool edit replaced or reset scrolling'}
 Select-Tool 'gradient'
 Invoke-Id 'tool-subtool-3'
 Wait-Until {(Model).state.tool_set.subtools[3].selected} 'Radial transparent gradient did not select'

@@ -5,8 +5,16 @@
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 
 namespace CapyUi {
+struct NoticeAnchor{double x,y,width;};
+inline NoticeAnchor noticeAnchor(J const& work,J const& status,J const& bar){
+    constexpr double Margin=12,BarReach=72,MaxWidth=720;
+    double areaBottom=num(work,L"y")+num(work,L"height");
+    double floor=num(status,L"height")>0?std::min(areaBottom,num(status,L"y")):areaBottom;
+    double y=bar.Size()&&num(bar,L"y")+num(bar,L"height")>floor-BarReach?num(bar,L"y")-Margin:floor-Margin;
+    return {num(work,L"x")+num(work,L"width")/2,y,std::min(MaxWidth,std::max(0.,num(work,L"width")-2*Margin))};
+}
 struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
-    static constexpr double Margin=12,BarReach=72,MaxWidth=720,Offscreen=-100000;
+    static constexpr double Offscreen=-100000;
     static constexpr uint32_t TimeoutMs=4000;
     std::shared_ptr<WorkspaceData> data;
     Canvas host{nullptr};
@@ -84,10 +92,7 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
             shadow.Layout({float(Offscreen),0,1,1},899,false);
             return;
         }
-        double areaBottom=num(work,L"y")+num(work,L"height");
-        double floor=num(status,L"height")>0?std::min(areaBottom,num(status,L"y")):areaBottom;
-        double y=bar.Size()&&num(bar,L"y")+num(bar,L"height")>floor-BarReach?num(bar,L"y")-Margin:floor-Margin;
-        double limit=std::min(MaxWidth,std::max(0.,num(work,L"width")-2*Margin));
+        auto anchor=noticeAnchor(work,status,bar);double limit=anchor.width;
         frame.MaxWidth(limit);frame.Width(std::numeric_limits<double>::quiet_NaN());frame.Height(std::numeric_limits<double>::quiet_NaN());
         frame.Measure({float(limit),INFINITY});
         auto size=frame.DesiredSize();
@@ -95,7 +100,7 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
         frame.Measure({width,INFINITY});
         float height=std::ceil(frame.DesiredSize().Height);
         frame.Width(width);frame.Height(height);
-        double left=std::round(num(work,L"x")+num(work,L"width")/2-width/2),top=std::round(y-height);
+        double left=std::round(anchor.x-width/2),top=std::round(anchor.y-height);
         Canvas::SetLeft(frame,left);Canvas::SetTop(frame,top);
         std::array<float,4> radii{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
         surface.Data(squircleRectangle(width,height,radii));

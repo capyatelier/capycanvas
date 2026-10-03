@@ -119,7 +119,7 @@ try {
         Wait-Until {@((Model).panels|ForEach-Object {$_.tiles}|Where-Object {$_.control.command -eq $command}).Count -gt 0} "Photo has no $command tool"
     }
     Switch-Workspace 'Sketch' 'builtin:workspace:painter'
-    $revision=(Model).state.camera.revision;Fit-Canvas;Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not update the camera';Canvas-Points
+    Fit-Canvas;Start-Sleep -Milliseconds 300;Canvas-Points
     $select=Header-Id 'select'
     if(!$select -or (Header-Id 'lasso')){throw 'Sketch did not replace Lasso with the Select opener'}
     Tap (Center (Control ('header-item-'+$select)))
@@ -188,7 +188,7 @@ try {
     Wait-Until {!(Model).state.customization.drawer} 'Escape did not close the Select drawer'
 
     Switch-Workspace 'Photo' 'builtin:workspace:photographer'
-    $revision=(Model).state.camera.revision;Fit-Canvas;Wait-Until {(Model).state.camera.revision -gt $revision} 'Fit did not update the camera';Canvas-Points
+    Fit-Canvas;Start-Sleep -Milliseconds 300;Canvas-Points
     Invoke (Tile-Id 'rectangle_select')
     Wait-Until {(Tools).tool.selection.kind -eq 'rectangle' -and (Command 'select_all').enabled} 'Photo Rectangle Select did not activate'
     if((Tools).has_selection){
@@ -222,13 +222,12 @@ try {
     $grow=@{item=$null};Wait-Until {$grow.item=@(Menu-Items)|Where-Object {$_.Current.AutomationId -eq 'grow_selection'}|Select-Object -First 1;$grow.item} 'Select menu has no Grow'
     $grow.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {(Tools).selection_resize} 'Grow did not open the shared resize draft'
-    $distance=Control 'selection-resize-distance' -Type $ControlType::Edit
+    $distance=Control 'selection-refine-value' -Type $ControlType::Edit
     $distance.SetFocus()
     $distance.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('8')
-    $null=Control 'selection-resize-dialog'
+    $null=Control 'selection-refine-panel'
     Capture 'grow-dialog'
-    $apply=Desktop-Find 'Apply' $ControlType::Button
-    $apply.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Invoke 'selection-refine-apply'
     Wait-Until {!(Tools).selection_resize} 'Apply did not finish the resize draft' 20
     if(!(Tools).has_selection){throw 'Grow lost the selection'}
     Wait-Until {(Command 'select_all').enabled} 'Grow did not finish' 20

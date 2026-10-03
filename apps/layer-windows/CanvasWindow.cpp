@@ -451,10 +451,9 @@ bool CanvasWindow::StartPrepared(CapyLaunch* prepared) {
         action.Insert(L"screen",CapyUi::O({{L"x",CapyUi::N(point.X*scale)},{L"y",CapyUi::N(point.Y*scale)}}));
         CapyUi::receiveImageDrop(event,action,[weak](std::string json){if(auto self=weak.lock();self&&!self->closing)self->Send(std::move(json),CanvasCommandKind::Document);});
     }});
-    selectionDialog=std::make_unique<SelectionDialog>(send,model,localization,root.XamlRoot(),
-        [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
-    canvasSizeDialog=std::make_unique<CanvasSizeDialog>(send,model,localization,root.XamlRoot(),
-        [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
+    for(auto [dialog,kind]:{std::pair{&canvasSize,SizeDialog::Kind::Canvas},std::pair{&imageSize,SizeDialog::Kind::Image}})
+        *dialog=std::make_unique<SizeDialog>(kind,send,model,localization,root.XamlRoot(),
+            [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
     workspaceDialogs=std::make_unique<WorkspaceDialogs>(send,model,localization,root.XamlRoot(),
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
@@ -743,10 +742,10 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
         for(auto node=focused.try_as<DependencyObject>();node&&!ownedKeys;node=VisualTreeHelper::GetParent(node))
             if(auto element=node.try_as<FrameworkElement>())if(auto tag=element.Tag().try_as<Windows::Data::Json::JsonObject>())ownedKeys=CapyUi::flag(tag,L"native_keys");
     bool navigation=key==VirtualKey::Space||key==VirtualKey::Enter||key==VirtualKey::Tab||
-        key==VirtualKey::Escape||key==VirtualKey::Left||key==VirtualKey::Right||
+        key==VirtualKey::Left||key==VirtualKey::Right||
         key==VirtualKey::Up||key==VirtualKey::Down||key==VirtualKey::Home||key==VirtualKey::End||
         key==VirtualKey::PageUp||key==VirtualKey::PageDown||key==VirtualKey::F2||key==VirtualKey::F10||
-        key==VirtualKey::Menu||((GetKeyState(VK_MENU)&0x8000)&&!(GetKeyState(VK_CONTROL)&0x8000));
+        (key!=VirtualKey::Menu&&(GetKeyState(VK_MENU)&0x8000)&&!(GetKeyState(VK_CONTROL)&0x8000));
     // F11 remains a window action while a toolbar button or native field has focus.
     bool arrow=key==VirtualKey::Left||key==VirtualKey::Right||key==VirtualKey::Up||key==VirtualKey::Down;
     bool editing=key!=VirtualKey::F11&&(ownedKeys||menuOpen.load()||(divider?navigation&&!arrow:!canvas&&(!button||navigation)));
@@ -1110,8 +1109,8 @@ void CanvasWindow::RequestClose() {
     if(settings)settings->CommitEdits();
     Send(R"({"type":"close_settings"})");
     if(workspaceDialogs)workspaceDialogs->CancelAll();
-    if(selectionDialog)selectionDialog->CancelAll();
-    if(canvasSizeDialog)canvasSizeDialog->CancelAll();
+    if(workspace)workspace->CancelPreviews();
+    for(auto const& dialog:{&canvasSize,&imageSize})if(*dialog)(*dialog)->CancelAll();
     if(workspaceManager)workspaceManager->CancelAll();
     CapyLifecycle("close_requested");
     Send(R"({"operation":"close"})",CanvasCommandKind::Document);
@@ -1124,8 +1123,7 @@ void CanvasWindow::Stop() {
     if(settings)settings->Hide();
     if(documents)documents->Hide();
     if(workspaceDialogs)workspaceDialogs->Hide();
-    if(selectionDialog)selectionDialog->Hide();
-    if(canvasSizeDialog)canvasSizeDialog->Hide();
+    for(auto const& dialog:{&canvasSize,&imageSize})if(*dialog)(*dialog)->Hide();
     if(workspaceStorage)workspaceStorage->Hide();
     if(workspaceManager)workspaceManager->Hide();
     wake.notify_all();space.notify_all();
@@ -1159,7 +1157,7 @@ void CanvasWindow::Finish() {
     CapyLifecycle("host_destroyed");
     // XAML controls and their retained bindings must be released while this
     // window still owns a live XAML context, not later from App destruction.
-    settings.reset();documents.reset();workspaceDialogs.reset();selectionDialog.reset();canvasSizeDialog.reset();workspaceStorage.reset();workspaceManager.reset();header.reset();workspace.reset();
+    settings.reset();documents.reset();workspaceDialogs.reset();canvasSize.reset();imageSize.reset();workspaceStorage.reset();workspaceManager.reset();header.reset();workspace.reset();
     textFocus.revoke();localization.reset();
     root.Children().Clear();toolbar.Children().Clear();canvasFocus.Content(nullptr);
     window.Content(nullptr);
@@ -1226,13 +1224,12 @@ void CanvasWindow::ApplyDialogs() {
         dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->Finish();});
         return;
     }
-    if(applyingDialogs||!settings||!documents||!workspaceDialogs||!selectionDialog||!canvasSizeDialog||!workspaceStorage||!workspaceManager||!lastModel.Size())return;
+    if(applyingDialogs||!settings||!documents||!workspaceDialogs||!canvasSize||!imageSize||!workspaceStorage||!workspaceManager||!lastModel.Size())return;
     applyingDialogs=true;
     struct Reset{bool& flag;~Reset(){flag=false;}}reset{applyingDialogs};
     if(settings->IsOpen()||!ModalOpen())settings->Apply(lastModel);
     workspaceDialogs->Apply(lastModel,!workspaceDialogs->IsOpen()&&ModalOpen());
-    selectionDialog->Apply(lastModel,!selectionDialog->IsOpen()&&ModalOpen());
-    canvasSizeDialog->Apply(lastModel,!canvasSizeDialog->IsOpen()&&ModalOpen());
+    for(auto const& dialog:{&canvasSize,&imageSize})(*dialog)->Apply(lastModel,!(*dialog)->IsOpen()&&ModalOpen());
     documents->Apply(lastModel,!documents->IsOpen()&&ModalOpen());
     workspaceStorage->Apply(lastModel,!workspaceStorage->IsOpen()&&ModalOpen());
     workspaceManager->Apply(lastModel,!workspaceManager->IsOpen()&&ModalOpen());
@@ -1240,7 +1237,7 @@ void CanvasWindow::ApplyDialogs() {
 }
 bool CanvasWindow::ModalOpen()const {
     return (settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||
-        (selectionDialog&&selectionDialog->IsOpen())||(canvasSizeDialog&&canvasSizeDialog->IsOpen())||
+        (canvasSize&&canvasSize->IsOpen())||(imageSize&&imageSize->IsOpen())||
         (workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen());
 }
 void CanvasWindow::Popup(bool open) {

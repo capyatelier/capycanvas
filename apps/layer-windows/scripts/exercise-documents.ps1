@@ -112,9 +112,9 @@ function File-Command([string]$Id) {
     (Find-Id $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     if($Id -eq 'export_document') {
         Wait-Until {(Model).windows_document.stage -eq 'options'} 'Export options did not open' 45
-        Invoke-Control 'Preview export'
+        Invoke-Control 'Preview Output'
         Wait-Until {(Model).windows_document.stage -eq 'preview'} 'Export preview did not finish' 60
-        Invoke-Control 'Export…'
+        Invoke-Control 'Export'
     }
 }
 function New-Dialog {

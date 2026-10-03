@@ -3,7 +3,7 @@
 #include "StrokeRecording.h"
 #include "CommandSearch.h"
 #include "CanvasActionBar.h"
-#include "CanvasNotice.h"
+#include "PreviewPanel.h"
 #include "ZoomReadout.h"
 #include "PanelBody.h"
 #include "PanelConfiguration.h"
@@ -100,6 +100,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<CommandSearchPopup> commandSearch=std::make_shared<CommandSearchPopup>();
     std::shared_ptr<CanvasActionBar> canvasBar=std::make_shared<CanvasActionBar>();
     std::shared_ptr<CanvasNotice> notice=std::make_shared<CanvasNotice>();
+    std::array<std::shared_ptr<PreviewPanel>,2> previewPanels{std::make_shared<PreviewPanel>(),std::make_shared<PreviewPanel>()};
     double cameraRevision=-1;
     hstring previousTheme,previousPalette;
     Flyout popup{nullptr};
@@ -132,9 +133,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetAutomationId(zenCapy,L"zen-capy");tooltip(zenCapy,L"Exit Zen mode");
         root.Children().Append(zenCapy);
         canvasBar->data=data;
-        canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();self->notice->Bar(object(self->data->chrome,L"canvas_bar"));if(self->glassChanged)self->glassChanged();}};
+        canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();self->placePreviews();if(self->glassChanged)self->glassChanged();}};
         canvasBar->init(root);
         notice->data=data;notice->init(root);
+        for(auto [panel,kind]:{std::pair{previewPanels[0],PreviewPanel::SelectionRefine},std::pair{previewPanels[1],PreviewPanel::FrequencySeparation}}){
+            panel->data=data;panel->kind=kind;panel->moved=[weak=weak_from_this()]{if(auto self=weak.lock())self->placeNotice();};panel->init(root);
+        }
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         commandSearch->data=data;commandSearch->changed=[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->glassChanged)self->glassChanged();};commandSearch->init(root);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
@@ -309,7 +313,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
-            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);root.Children().Append(zenCapy);canvasBar->attach();notice->attach();
+            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);root.Children().Append(zenCapy);canvasBar->attach();notice->attach();for(auto const& panel:previewPanels)panel->attach();
             measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureHost);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
@@ -382,6 +386,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         updateConfiguration();
         commandSearch->Apply(data->state);
         canvasBar->Dragging(object(update,L"drag").Size()!=0);canvasBar->Apply(data->state);
+        for(auto const& panel:previewPanels){panel->Place(layout);panel->Publish(data->state);}
         notice->Place(layout);notice->Publish(data->state);
         expansion->Apply(configurationHeight());present();
         collapsed->Apply();drawers->Apply();gestures->Refresh();
@@ -776,6 +781,15 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         canvasBar->AppendGlass(regions,reference);commandSearch->AppendGlass(regions,reference);
         return regions;
     }
+    void placePreviews(){
+        auto bar=object(data->chrome,L"canvas_bar");
+        for(auto const& panel:previewPanels)panel->Bar(bar);
+        placeNotice();
+    }
+    void placeNotice(){
+        for(auto const& panel:previewPanels)if(auto bounds=panel->Bounds();bounds.Size()){notice->Bar(bounds);return;}
+        notice->Bar(object(data->chrome,L"canvas_bar"));
+    }
     void updateCamera(J const& view){
         if(double revision=num(view,L"revision",-1);revision!=cameraRevision){cameraRevision=revision;canvasBar->Defer();}
         zoom->Update(view);
@@ -786,6 +800,7 @@ WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
 bool WorkspaceView::Apply(Json const& snapshot){return impl->apply(snapshot);}
 WorkspaceView::Json WorkspaceView::ChromeFacts(bool popupOpen){impl->data->externalPopup=popupOpen;return J::Parse(impl->data->chrome.Stringify());}
+void WorkspaceView::CancelPreviews(){for(auto const& panel:impl->previewPanels)panel->Cancel();}
 bool WorkspaceView::CancelGesture(){
     bool closed=impl->data->dismissTransients();
     return impl->gestures->Cancel()||closed;

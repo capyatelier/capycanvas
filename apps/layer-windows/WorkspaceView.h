@@ -16,6 +16,7 @@ public:
     bool Apply(Json const& snapshot);
     Json ChromeFacts(bool popupOpen);
     bool CancelGesture();
+    void CancelPreviews();
     void SetTitlebarInsets(float left,float right,float height);
     void SetWindowId(uint64_t id);
     void SetGlassChanged(std::function<void()> changed);

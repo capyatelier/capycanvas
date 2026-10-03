@@ -134,6 +134,10 @@ photo's local pixels while retaining its placement.
     A panel sits over the undimmed canvas at the top of the work area and above the
     keyboard, takes window focus only while a number field is edited, and opens
     Resample as a windowless menu. Back cancels it.
+  - Windows: `SizeDialog.cpp`, one content dialog for both, built from the
+    published view. A field is rebuilt only when its numeric spec changes, and
+    sends from a replaced field are ignored; typed text reaches the draft before
+    any other choice, and Apply stays disabled while the view can't apply.
 - **Tests:**
   - shared: `crates/layer-core/src/canvas_geometry_tests.rs` (exact turns and flips,
     Image Size, resolution, tile predictions);
@@ -154,3 +158,6 @@ photo's local pixels while retaining its placement.
     bar, plus a bounds scan that finishes over several frames;
   - Android: `AndroidInteractionTest#imageCommandsAcrossDevices`, the same journeys
     with mouse, finger and stylus.
+  - Windows: `apps/layer-windows/scripts/exercise-size-dialogs.ps1`: Canvas Size
+    (typed width, anchor, Relative, units, Apply with Undo and Redo, Escape) and
+    Image Size (resampling choice, constrained width, Apply with Undo, Escape).

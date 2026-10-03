@@ -70,9 +70,9 @@ function Path-In-Picker([string]$Path){
  [CapyProofPicker]::Type([IntPtr]$entry.Current.NativeWindowHandle,$Path);Picker-Button '1'
 }
 function Export([string]$Name){
- Command 'export_document' 'File';Button 'Preview export'
+ Command 'export_document' 'File';Button 'Preview Output'
  Wait-Until {(Model).windows_document.stage -eq 'preview'} 'Export preparation did not finish' 60
- Button 'Export…';Picker 'Save As';$path=Join-Path $run $Name;Path-In-Picker $path;Idle
+ Button 'Export';Picker 'Save As';$path=Join-Path $run $Name;Path-In-Picker $path;Idle
  Wait-Until {Test-Path -LiteralPath $path} 'Export file missing'
  (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
 }

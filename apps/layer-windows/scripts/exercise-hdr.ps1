@@ -132,7 +132,7 @@ function Delivery([string]$Name,[string]$Format){
  $serial=(Model).windows_document.serial
  $reset=@{item=$null};Wait-Until {
   $reset.item=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
-   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Remove / reset'),
+   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Reset'),
    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
   $null -ne $reset.item
  } 'Export destination reset is missing'
@@ -140,9 +140,9 @@ function Delivery([string]$Name,[string]$Format){
  Wait-Until {$document=(Model).windows_document;$document.serial -gt $serial -and $document.stage -eq 'options'} 'Export destination did not reset' 30
  Select-Choice 'export-format' $Format
  if($Format.StartsWith('HDR JPEG')){Select-Choice 'export-background' 'White'}
- Button 'Preview export'
+ Button 'Preview Output'
  Wait-Until {(Model).windows_document.stage -eq 'preview'} 'HDR export preparation failed' 60
- Button 'Export…';Picker 'Save As';$path=Join-Path $run $Name;Path-In-Picker $path;Idle
+ Button 'Export';Picker 'Save As';$path=Join-Path $run $Name;Path-In-Picker $path;Idle
  Wait-Until {Test-Path -LiteralPath $path} 'HDR export missing'
  (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
 }

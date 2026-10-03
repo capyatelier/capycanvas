@@ -4,12 +4,13 @@
 #include <functional>
 #include <memory>
 
-class SelectionDialog {
+class SizeDialog {
 public:
     using Json=winrt::Windows::Data::Json::JsonObject;
     using Dispatch=std::function<void(std::string)>;
-    SelectionDialog(Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,winrt::Microsoft::UI::Xaml::XamlRoot root,std::function<void()> changed);
-    ~SelectionDialog();
+    enum class Kind{Canvas,Image};
+    SizeDialog(Kind kind,Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,winrt::Microsoft::UI::Xaml::XamlRoot root,std::function<void()> changed);
+    ~SizeDialog();
     void Apply(Json const& snapshot,bool blocked);
     bool IsOpen()const;
     void CancelAll();

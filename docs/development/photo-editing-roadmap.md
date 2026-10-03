@@ -56,12 +56,9 @@ M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_POR
   - draw a `checkable: false` action unpressed even when its command is selected.
 - **M2** (*Windows*):
   - mode and guide bar labels;
-  - the Refine dialog;
-  - the zoom readout control (the `zoom_menu` query and `UiCatalog.zoom`);
-  - WebP in the export lists and file types (the edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested);
-  - the labelled Color row with a "use current colour" bucket (`color_action`).
+  - WebP in the export lists and file types (the edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested).
 - **M3:**
-  - the Canvas Size (*Windows*) and Image Size dialogs, with the anchor picker (`layer_tools.canvas_size`);
+  - the Image Size dialog (Windows has it);
   - the Edit ▸ Image submenu;
   - the crop tool icon (the overlay is shared renderer code);
   - clipboard image writers;
@@ -72,7 +69,7 @@ M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_POR
   - the New Document Blending field (Edit ▸ Blending and the Properties row are shared);
   - the Color mixing brush choice;
   - the Use Pass Through for new groups setting;
-  - the Frequency Separation dialog (`frequency_separation`, shaped like Refine) and the Dodge & Burn and Frequency Separation icons.
+  - the Frequency Separation dialog (`frequency_separation`, shaped like Refine; Windows has it) and the Dodge & Burn and Frequency Separation icons.
 - **Tests:**
   - `CanvasToolChecks.swift` must expect the new preset count;
   - the Swift ruler fixtures now check the `CAPYRASTER` signature and have not run on a Mac.

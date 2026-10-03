@@ -58,6 +58,16 @@ try{
   if($language.Current.Name -ne $row.title){throw 'Language accessibility name differs from the shared current copy'}
   $seen+=$tag
  }
+ Invoke (@((Model).preferences.pages|Where-Object id -eq 'shortcuts')[0].title) -Name
+ Wait-Until {(Model).preferences.page -eq 'shortcuts' -and (Find 'shortcuts-search')} 'Keyboard Shortcuts did not open'
+ foreach($pair in @(@('shortcuts-search','Search shortcuts'),@('keymap-menu','Keymap options'))){
+  $named=(Control $pair[0]).Current.Name
+  if(!$named -or $named -eq $pair[1]){throw "$($pair[0]) kept its English name after the language changed"}
+ }
+ Use-Window $first
+ $zoom=(Control 'canvas-view-info').Current.Name
+ if(!$zoom -or $zoom -eq 'Zoom'){throw 'The zoom readout kept its English name after the language changed'}
+ Use-Window $second
  foreach($scene in @(@{window=$first;name='new-drawing'},@{window=$second;name='preferences'})){
   Use-Window $scene.window
   Start-Sleep -Milliseconds 250
