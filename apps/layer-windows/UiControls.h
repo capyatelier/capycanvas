@@ -293,8 +293,11 @@ inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,s
 template<typename T=Button>
 inline T button(std::shared_ptr<WorkspaceData> const& data,LocalizedCopy const& text,std::function<void()> action){
     auto result=button<T>(data,static_cast<hstring const&>(text),std::move(action));
-    data->copyView([weak=make_weak(result),resolve=text.current]{
-        if(auto view=weak.get()){auto text=resolve();view.Content(box_value(text));AutomationProperties::SetName(view,text);return true;}return false;
+    data->copyView([weak=make_weak(result),resolve=text.current,shown=static_cast<hstring const&>(text)]() mutable {
+        auto view=weak.get();if(!view)return false;
+        auto next=resolve();
+        if(auto content=view.Content().try_as<Windows::Foundation::IReference<hstring>>();content&&content.Value()==shown)view.Content(box_value(next));
+        AutomationProperties::SetName(view,next);shown=next;return true;
     });
     return result;
 }

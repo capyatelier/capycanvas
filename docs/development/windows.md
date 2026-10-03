@@ -63,7 +63,9 @@ document history, HWNDs and swap chains stay with their existing owners. The
 delivery and bootstrap copy; stateless native helpers borrow that same immutable
 context. Controls that outlive a language change, such as the canvas bar, bind
 their names with `copyName`; panel bodies rebuild when their localized tab titles
-change.
+change. A button made from localized copy relabels its text and accessible name
+but keeps an icon or panel given as its content, because copy callbacks also run
+when the window prunes them.
 
 `exercise-localization.ps1 -Executable <path> -Theme dark` checks actual preference
 choices for all five languages, retained numeric drafts and preference controls,

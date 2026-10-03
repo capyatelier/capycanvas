@@ -106,7 +106,7 @@ void LayerRow::init(){
     actionTooltip(data,mask,[weak]{auto self=weak.lock();if(!self)return J{};
         return O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(true)}})}});});
     link.Content(icon(L"link",data->theme(),12));
-    name=button(data,data->copyCaption(L"layers",L"layer"),[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));});
+    name=button(data,data->caption(L"layers",L"layer"),[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));});
     name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.Padding({0});name.Margin({6,0,2,0});
     StackPanel caption;title=label(data,L"");title.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(title);

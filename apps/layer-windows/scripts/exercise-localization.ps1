@@ -72,6 +72,10 @@ try{
   if(!$named -or $named -eq $pair[1]){throw "$($pair[0]) kept its English name after the language changed"}
  }
  foreach($english in @('Move panel group','Resize panel','Drawing workspace')){if(Find $english -Name){throw "$english kept its English name after the language changed"}}
+ foreach($layer in @((Model $first).state.layers)){
+  $label=Find "layer-$($layer.id)-label"
+  if(!$label -or $label.Current.Name -ne $layer.label){throw "Layer row $($layer.id) lost its name after the language changed"}
+ }
  Use-Window $second
  foreach($scene in @(@{window=$first;name='new-drawing'},@{window=$second;name='preferences'})){
   Use-Window $scene.window
