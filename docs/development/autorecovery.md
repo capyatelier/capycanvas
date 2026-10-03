@@ -2,11 +2,12 @@
 
 [Developer guide](README.md)
 
-**Status: deferred until the `.capy` redesign is complete.** The
-[file format and authored graph plan](capy-format.md) owns that work. Resume
-automatic recovery only after its implementation lands and its storage contracts
-can be checked in code. This plan does not change that design or start recovery
-implementation alongside it.
+**Status: deferred until the qualified `.capy` cutover lands.**
+[M3 of the file format and authored graph plan](capy-format.md#m3-switch-the-application-once-and-remove-superseded-paths)
+is the prerequisite. Its [recovery extension boundary](capy-format.md#recovery-extension-boundary)
+defines the shared capture, resource and checkpoint interfaces to recheck in code.
+Optional M4 lazy-loading or execution-plan work is not a prerequisite. This plan
+does not start recovery implementation alongside the format cutover.
 
 ## Intended behavior
 

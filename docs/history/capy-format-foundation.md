@@ -1292,11 +1292,13 @@ formulas require compatibility implementations or demonstrably equivalent
 translation. A preview protects access to appearance when evaluation is
 unavailable; it does not satisfy the full old-file editing commitment.
 
-This does **not** require maintaining today's pre-reset v14 reader: that can be
-removed at the authorized compatibility break. The maintenance commitment begins
-with the new baseline. Do not promise lossless writing to arbitrary older
-versions; omitting defaults already writes the smallest representation of a
-document, while lossy conversion should be explicit.
+This does **not** require maintaining the pre-reset reader, currently v15. Remove
+it with the writer at the integrated application cutover in the
+[implementation plan](../development/capy-format.md#milestones-and-acceptance).
+The earlier v14 inventory is scoped to this research's original baseline. The
+maintenance commitment begins with the new baseline. Do not promise lossless
+writing to arbitrary older versions; omitting defaults already writes the
+smallest representation of a document, while lossy conversion should be explicit.
 
 ### Clean degradation without silent loss
 
@@ -1456,8 +1458,12 @@ published save. Atomic replacement guarantees depend on the host/provider; the
 container must not claim guarantees a mobile provider or browser download does
 not offer.
 
-No runtime change or performance measurement accompanies this report. Before
-committing to the format implementation, require evidence for:
+No runtime change or performance measurement accompanies this report. The
+[implementation milestones](../development/capy-format.md#milestones-and-acceptance)
+assign the following evidence to codec preparation, the qualified application
+cutover and optional lazy loading. The first cutover can use bounded eager
+preparation through the final resource interface; do not claim lazy opening until
+its demand/readiness gates pass.
 
 1. **Today's artwork round-trips:** all existing layer/group/clipping modes,
    linked/unlinked masks, transforms/meshes, out-of-canvas data, saved selections,
@@ -1483,8 +1489,9 @@ committing to the format implementation, require evidence for:
    outputs, bounded spooling, classic/ZIP64 boundaries and C2PA's zero-CRC
    manifest exception before claiming interoperability.
 4. **Measured cost:** file size, save/open time, peak RAM, preview cost, unchanged
-   save/recompression behavior, opening a large document without decoding every
-   tile, large resource access and animation-shaped resource counts. Compare ZIP
+   save/recompression behavior and large resource access; later lazy qualification
+   adds opening without decoding every tile. Use animation-shaped resource counts
+   as a storage stress test, without requiring animation editing. Compare ZIP
    against the existing container on representative artwork. Measure any affected
    frame paths under the [performance rules](../performance/measuring.md); do not
    infer tier compliance from a container choice.
