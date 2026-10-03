@@ -217,7 +217,7 @@ internal class LayerSwipe {
                 LayerButton(host,"image",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("import_image"), action=obj("type" to "invoke", "command" to "import_image"))
                 LayerButton(host,"delete",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("delete_selected"),enabled=view.getBoolean("can_delete"),action=obj("type" to "layer","action" to obj("op" to "delete_selected")))
                 Spacer(Modifier.weight(1f))
-                LayerButton(host,"more",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("actions")) { active?.let { contextMenu(it,it.getBoolean("mask_selected"),panelOrigin+Offset(0f,40f)) } }
+                LayerButton(host,"more-small",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("actions")) { active?.let { contextMenu(it,it.getBoolean("mask_selected"),panelOrigin+Offset(0f,40f)) } }
             }
         }
         drag?.let { d -> layers.find { it.getLong("id")==d.id }?.let { layer ->
@@ -440,7 +440,7 @@ internal class LayerSwipe {
             if(meta.isNotEmpty())Text(meta,color=colors.secondary,maxLines=1,overflow=TextOverflow.Ellipsis)
         }
         SharedIcon(if(layer.getBoolean("locked"))"lock" else "alpha-lock",null,Modifier.size(12.dp).alpha(if(layer.getBoolean("locked") || layer.getBoolean("alpha_locked"))1f else 0f))
-        SharedIcon("grip",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("move_layer"),Modifier.size(12.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))
+        SharedIcon("grip",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("move_layer"),Modifier.size(16.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))
         }
     }
 }

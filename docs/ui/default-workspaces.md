@@ -228,8 +228,10 @@ document title; Sketch centers it, and the title-bar editor can move it.
 
 On GTK, Web, Android and Windows, a vertical **⋮** at the end of the switcher
 well opens **Workspace options**. The button stays fixed while the choices scroll.
-Its **Show in top bar** checklist includes every workspace in the saved order;
-checking a row changes its saved visibility without switching or previewing a workspace.
+The options button is 20px wide, matches the 26px workspace pill height, and uses
+the same 2px gap as the pills. Its menu starts directly with the checklist,
+which includes every workspace in the saved order; checking a row changes its
+saved visibility without switching or previewing a workspace.
 **Manage Workspaces…** is the last entry and opens the full editor. Reordering
 stays in that editor. The compact workspace menu includes the same checklist
 under Show in top bar and ends with Manage Workspaces….

@@ -58,6 +58,9 @@ export async function checkLayers({ call, evaluate, settle }) {
     await writeFile(`artifacts/ui/layers-web/${name}.png`, Buffer.from(shot.data,"base64"));
   };
   await mkdir("artifacts/ui/layers-web", {recursive:true});
+  assert.equal(await evaluate("document.querySelector('.layer-more svg').dataset.asset"),"more-small");
+  const gripSize=await evaluate("(()=>{const n=document.querySelector('.layer-grip'),r=n.getBoundingClientRect(),s=n.querySelector('svg').getBoundingClientRect();return{width:r.width,iconWidth:s.width,iconHeight:s.height}})()");
+  assert.deepEqual(gripSize,{width:16,iconWidth:16,iconHeight:16},"layer-row grip retains the shared icon canvas");
   const initialCount = await evaluate("layerApp.state().layers.length");
   await send({op:"new",group:false,clipped:false});
   await evaluate(`document.querySelector('.layer-footer [aria-label="Delete selected layers"]').click()`);

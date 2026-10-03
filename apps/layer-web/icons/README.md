@@ -30,6 +30,12 @@ directly by GTK and Web.
 
 Draw new icons on a 16×16 viewBox. A few older icons use 24×24, and the capybara
 marks keep their own square viewBoxes.
+The shared `more-small` and `grip` icons use 2px dots centered at y=3, 8 and 13,
+for 12px-tall artwork within their 16px boxes. Their integer coordinates align
+the dots' bounds to pixels: one column at x=8 for `more-small`, two at x=5 and 11
+for `grip`. The workspace switcher and Layers footer share `more-small`;
+full-height controls use `more`, with 4px dots and 16px-tall artwork. Render all
+grab handles in a 16px box so their dots retain the same size in every context.
 Keep ordinary SVG fill/stroke attributes authoritative. Existing symbolic classes
 remain for compatibility, but GTK's production renderer reads the vectors through
 [GtkSvg](https://docs.gtk.org/gtk4/class.Svg.html), without traditional symbolic

@@ -123,7 +123,7 @@ void LayersView::init(){
     });
     auto remove=footerButton(L"delete",data->copyCaption(L"layers",L"delete_selected"),L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
     controls.emplace_back([weak,remove](J,J){if(auto self=weak.lock()){remove.IsEnabled(flag(self->view(),L"can_delete"));remove.Opacity(remove.IsEnabled()?1.:.36);}});
-    auto more=footerButton(L"more",data->copyCaption(L"layers",L"actions"),L"layer-actions",[weak]{if(auto self=weak.lock()){
+    auto more=footerButton(L"more-small",data->copyCaption(L"layers",L"actions"),L"layer-actions",[weak]{if(auto self=weak.lock()){
         auto editing=self->editing();
         bool maskRow=flag(self->view(),L"quick_mask")||flag(editing,L"selection_layer");
         self->context(maskRow?num(editing,L"id",-1):-1,false,self->footer);

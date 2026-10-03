@@ -232,9 +232,7 @@ are your task, and remove an entry when you fix it.
   cannot find its Window menu on MovinkPad 11.
 - Android `AndroidRasterTest#profileLibraryKeepsExactCopiesAndPresetOwnership`
   intermittently times out waiting for profile-library buttons.
-- Android `AndroidIconTest#allIconsRenderAtToolbarSizesWithThemeAndFixedPaints`
-  reads below its clipped grid screenshot on MovinkPad Pro 14.
-  `AndroidIconEditorTest#allToolCategoriesModesFiltersAndToolbarIconsRender`
+- Android `AndroidIconEditorTest#allToolCategoriesModesFiltersAndToolbarIconsRender`
   expects 13 brush categories where the current catalog supplies 16.
 - Windows `exercise-tab-pickup.ps1 -Device touch`: after the Layers group is torn
   off, the injected contact reaches neither XAML nor the canvas, so the drag never

@@ -64,7 +64,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   const deleteAction = () => ({ op: "delete_selected" });
   const deleteButton = glyphButton("delete", ()=>copy.delete_selected, () => send(deleteAction()), "", deleteAction);
   footer.append(deleteButton);
-  const more = glyphButton("more", ()=>copy.actions, () => more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true,
+  const more = glyphButton("more-small", ()=>copy.actions, () => more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true,
     clientX: more.getBoundingClientRect().left, clientY: more.getBoundingClientRect().top })));
   more.classList.add("layer-more"); menu(more, active, () => active()?.mask_selected ?? false); footer.append(more);
   panel.append(header, rows, footer);

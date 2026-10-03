@@ -50,7 +50,6 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     container.classList.add("workspace-menu-items");
     container.setAttribute("aria-label", model.title);
     container.replaceChildren();
-    if (container === context && context.menuOwner?.dataset.workspaceOptions && !parents.length) container.append(element("div", "menu-section-label", model.title));
     if (parents.length) {
       const back = button(model.title, () => {
         const {close,parents,path}=container.menuView, previous=parents.at(-1);

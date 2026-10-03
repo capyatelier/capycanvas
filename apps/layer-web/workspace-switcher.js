@@ -7,7 +7,7 @@ export function createWorkspaceSwitcher({app,dialog, list, element, button, icon
   document.querySelector("#document-title").after(root);
   const choices = element("div", "workspace-switcher-choices");
   const options = button("", () => root.openOptions?.(options), "workspace-switcher-options");
-  options.append(icon("more")); options.setAttribute("aria-haspopup", "menu");
+  options.append(icon("more-small")); options.setAttribute("aria-haspopup", "menu");
   root.append(choices, options);
   const buttons = new Map();
   const menu = element("div", "workspace-row-menu");

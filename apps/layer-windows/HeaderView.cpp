@@ -276,12 +276,13 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         switcherWell=Grid();switcherWell.Height(36);switcherWell.UseLayoutRounding(false);switcherWell.Background(data->glass(L"switcher"));
         switcherWell.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});
         ColumnDefinition choices;choices.Width({1,GridUnitType::Star});switcherWell.ColumnDefinitions().Append(choices);
-        ColumnDefinition options;options.Width({30,GridUnitType::Pixel});switcherWell.ColumnDefinitions().Append(options);
+        ColumnDefinition options;options.Width({27,GridUnitType::Pixel});switcherWell.ColumnDefinitions().Append(options);
         switcherWell.Children().Append(switcher);
         workspaceOptions=button(data,L"",[weak=weak_from_this()]{if(auto self=weak.lock())self->input->WorkspaceOptions(self->workspaceOptions);});
-        style(workspaceOptions,data,false);workspaceOptions.Padding({0});workspaceOptions.MinWidth(0);workspaceOptions.Width(30);
-        workspaceOptions.BorderThickness({0});workspaceOptions.CornerRadius({0,18*CornerFit,18*CornerFit,0});
-        auto moreIcon=icon(L"more",data->theme(),16);moreIcon.Opacity(.65);workspaceOptions.Content(moreIcon);
+        style(workspaceOptions,data,false);workspaceOptions.Padding({0});workspaceOptions.MinWidth(0);workspaceOptions.MinHeight(0);workspaceOptions.Width(20);workspaceOptions.Height(26);
+        workspaceOptions.Margin({2,0,5,0});workspaceOptions.HorizontalAlignment(HorizontalAlignment::Left);workspaceOptions.VerticalAlignment(VerticalAlignment::Center);
+        workspaceOptions.BorderThickness({0});workspaceOptions.CornerRadius({10*CornerFit,10*CornerFit,10*CornerFit,10*CornerFit});
+        auto moreIcon=icon(L"more-small",data->theme(),16);moreIcon.Opacity(.65);workspaceOptions.Content(moreIcon);
         AutomationProperties::SetAutomationId(workspaceOptions,L"workspace-switcher-options");
         Grid::SetColumn(workspaceOptions,1);switcherWell.Children().Append(workspaceOptions);
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");AutomationProperties::SetName(switcher,data->caption(L"header",L"task_workspaces"));
@@ -450,7 +451,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             if(exists)continue;
             auto kind=str(item,L"kind"),labelText=str(component,L"label");Border chip;chip.Background(buttonBackground(data));chip.CornerRadius({6,6,6,6});chip.Height(36);
             StackPanel content;content.Orientation(Orientation::Horizontal);content.Padding({0,0,8,0});content.VerticalAlignment(VerticalAlignment::Center);
-            auto grip=panelGrip(data->theme());grip.Width(20);content.Children().Append(grip);content.Children().Append(label(data,labelText));
+            Border grip;grip.Width(20);grip.Child(panelGrip(data->theme()));content.Children().Append(grip);content.Children().Append(label(data,labelText));
             chip.Child(content);chip.Width(textWidth(labelText)+28);
             input->Source(chip,kind==L"tools"?O({{L"kind",S(L"tools")}}):O({{L"kind",S(L"component")},{L"value",item}}),labelText);
             AutomationProperties::SetAutomationId(chip,L"header-component-"+kind);bankContent.Children().Append(chip);bankParts.push_back(chip);
@@ -643,7 +644,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         drawings->refresh();
         applyWorkspaces();
         if(workspaceMenuOpen)fillMenu(workspaceOverflow.Flyout().as<MenuFlyout>().Items(),object(object(snapshot,L"windows_workspace"),L"switcher_menu"));
-        switchWidth=35+2*std::max(0,int(workspaces.size())-1);
+        switchWidth=32+2*std::max(0,int(workspaces.size())-1);
         for(auto const& [item,id]:workspaces){item.Width(std::min(130.,unbox_value<double>(item.Tag())+20));switchWidth+=item.Width();}
         switchWidth=std::clamp(switchWidth,tile,480.);
         for(auto const& item:overflow)item.Content(icon(L"menu",theme,iconSize));

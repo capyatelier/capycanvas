@@ -157,7 +157,7 @@ class AndroidWorkspaceSwitcherTest {
         instrumentation.runOnMainSync {
             val popup = checkNotNull(node("workspace-menu")).second
             val options = view().getJSONObject("switcher_options")
-            assertEquals(listOf(options.getString("title")) + options.array("sections").values().flatMap {
+            assertEquals(options.array("sections").values().flatMap {
                 (it as JSONArray).objects().map { row -> row.getString("label") }
             }, texts(popup))
             menuRows().forEach { row ->
@@ -188,6 +188,9 @@ class AndroidWorkspaceSwitcherTest {
         val savedLayout = layout(); val savedOrder = order(); val durable = capture()
         for (theme in listOf("light", "dark")) {
             host.drain(obj("type" to "set_theme", "theme" to theme)); idle()
+            assertEquals(bounds("workspace-switch-$current").height, bounds("workspace-switcher-options").height, 1f)
+            assertEquals(20 * density, bounds("workspace-switcher-options").width, 1f)
+            assertEquals(5 * density, bounds("workspace-switcher").right - bounds("workspace-switcher-options").right, 1f)
             for (tag in listOf("workspace-switch-$current", "workspace-switch-$inactive", "workspace-switcher-options", "workspace-switcher")) {
                 tool = MotionEvent.TOOL_TYPE_MOUSE; button = MotionEvent.BUTTON_SECONDARY
                 if (tag == "workspace-switcher") {

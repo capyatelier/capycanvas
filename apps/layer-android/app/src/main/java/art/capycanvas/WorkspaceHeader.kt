@@ -81,7 +81,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
     val tab = state.array("tabs").optJSONObject(0)
     val title = tab?.let { "${it.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${it.optInt("width")} × ${it.optInt("height")}" } ?: ""
     val choices = host.workspaceManager?.array("switcher_display")?.objects() ?: emptyList()
-    val workspaceWidth = (36f + choices.sumOf { (measure(it.getString("title")) + 18f).coerceAtMost(130f).toDouble() }).toFloat().coerceAtMost(480f)
+    val workspaceWidth = (30f + choices.sumOf { (measure(it.getString("title")) + 18f).coerceAtMost(130f).toDouble() }).toFloat().coerceAtMost(480f)
     val metrics = JSONArray(entries.map { entry ->
         val kind = entry.getJSONObject("item").getString("kind")
         val natural = when (kind) {
@@ -215,7 +215,8 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         input.context?.let { menu ->
             Box(Modifier.placed(input.contextBounds.headerBounds(), density)) {
                 WorkspaceMenu(host, input.contextProvider?.invoke() ?: menu, preserveContact = input.contact,
-                    copy = if (input.contextProvider == null) ({ input.contextRequest?.let { host.menuCopy(it) } }) else null, dismiss = input::closeMenu)
+                    copy = if (input.contextProvider == null) ({ input.contextRequest?.let { host.menuCopy(it) } }) else null,
+                    showTitle = input.contextProvider == null, dismiss = input::closeMenu)
             }
         }
         PopupOwner(overflowMenu != null)

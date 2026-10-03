@@ -404,7 +404,6 @@ impl ManagerUi {
         handle.set_widget_name(&format!("workspace-reorder-handle-{}", item.id));
         handle.add_css_class("workspace-reorder-handle");
         handle.add_css_class("dim-label");
-        handle.set_pixel_size(12);
         handle.set_size_request(16, 44);
         handle.set_cursor_from_name(Some("grab"));
         handle.set_tooltip_text(Some(&w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM)));

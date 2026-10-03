@@ -99,7 +99,7 @@ inline void orientGrip(FrameworkElement const& grip,bool vertical){
     auto transform=grip.RenderTransform().try_as<CompositeTransform>();
     if(!transform){transform=CompositeTransform();grip.RenderTransform(transform);}
     transform.Rotation(vertical?90.:0.);
-    transform.TranslateX(vertical?0.:-1.6);transform.TranslateY(vertical?-1.6:0.);
+    transform.TranslateX(vertical?0.:-2.);transform.TranslateY(vertical?-2.:0.);
 }
 inline Image panelGrip(hstring const& theme,bool vertical=false){
     auto result=icon(L"grip",theme);result.Opacity(.65);

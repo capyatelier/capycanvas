@@ -113,7 +113,8 @@ internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject = view?.optJSO
         if (choices.firstOrNull()?.optString("id") == view.optString("id")) scroll.scrollTo(0)
     }
     Row(modifier.height(36.dp).clip(SquircleShape(50)).glass(SquircleShape(50), colors.switcher)
-        .testTag("workspace-switcher"), verticalAlignment = Alignment.CenterVertically) {
+        .testTag("workspace-switcher").padding(end = 5.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(Modifier.weight(1f).horizontalScroll(scroll).padding(start = 5.dp, top = 5.dp, bottom = 5.dp)
             .testTag("workspace-switcher-choices"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             choices.forEach { row ->
@@ -129,8 +130,8 @@ internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject = view?.optJSO
             }
         }
         HeaderButton(view.getString("switcher_options_label"), false, true, false,
-            Modifier.width(28.dp).fillMaxHeight().testTag("workspace-switcher-options"), surface = false, shape = SquircleShape(50), onClick = options) {
-            SharedIcon("more", view.getString("switcher_options_label"), Modifier.size(16.dp), tint = colors.secondary)
+            Modifier.size(20.dp, 26.dp).testTag("workspace-switcher-options"), surface = false, shape = SquircleShape(50), onClick = options) {
+            SharedIcon("more-small", view.getString("switcher_options_label"), Modifier.size(16.dp), tint = colors.secondary)
         }
     }
     if (!view.isNull("error")) TextButton({ host.workspaceInput(obj("type" to "retry")) }, enabled = !view.optBoolean("busy")) { Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("retry")) }

@@ -510,7 +510,6 @@ impl LayerPanel {
                 lock.set_size_request(12, -1);
                 root.append(&lock);
                 let grip = crate::icons::image("layer-grip-symbolic");
-                grip.set_pixel_size(12);
                 grip.add_css_class("dim-label");
                 grip.add_css_class("drag-immediate");
                 root.append(&grip);
@@ -1130,7 +1129,7 @@ impl LayerPanel {
             move |_| action(&w, A::DeleteSelected)
         ));
         self.footer.append(&self.delete);
-        let more = button("layer-more-symbolic", copy.layer.actions.as_ref());
+        let more = button("layer-more-small-symbolic", copy.layer.actions.as_ref());
         more.set_widget_name("layer-actions");
         more.set_hexpand(true);
         more.set_halign(gtk::Align::End);

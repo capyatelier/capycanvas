@@ -12,7 +12,7 @@ export async function checkIconControls({call,evaluate,settle}, output) {
   await wait("JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && layerApp.app.brush_ready()");
   const saved = await evaluate("({theme:layerApp.state().settings.theme,preset:layerApp.state().brush.preset,group:layerApp.state().tool_set.groups.find(g=>g.selected)?.action})");
   console.log("Icon control audit: workspace ready");
-  const catalog = await evaluate("layerApp.app.catalog()");
+  const catalog = await evaluate("(()=>{const {brush_categories,tool_commands}=layerApp.app.catalog();return{brush_categories,tool_commands};})()");
   assert.equal(new Set(catalog.brush_categories.map(c=>c.icon)).size, catalog.brush_categories.length, "Every medium has its own icon");
   const records=[];
   const cancelTransform=async()=>{if(await evaluate("layerApp.state().commands.some(c=>c.id==='cancel_transform'&&c.enabled)"))await dispatch({type:"invoke",command:"cancel_transform"});};

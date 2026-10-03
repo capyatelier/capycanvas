@@ -69,7 +69,7 @@ void LayerRow::init(){
     }});
     // Include the two-DIP gaps only beside visible flex items. Empty mask and
     // indentation columns must not add their own gaps.
-    for(auto width:{26.,26.,0.,5.,32.,0.,14.,32.,-1.,14.,12.}){
+    for(auto width:{26.,26.,0.,5.,32.,0.,14.,32.,-1.,14.,16.}){
         ColumnDefinition column;column.Width({width<0?1:width,width<0?GridUnitType::Star:GridUnitType::Pixel});
         body.ColumnDefinitions().Append(column);
     }
@@ -77,7 +77,7 @@ void LayerRow::init(){
         auto control=button(data,title,[weak,action=std::move(action)]{
             auto self=weak.lock();auto view=self?self->owner.lock():nullptr;
             if(view&&(!view->pickup||!view->pickup->SuppressClick()))action();
-        });control.Width(column==4||column==5||column==7?30:column==6||column==10?12:24);
+        });control.Width(column==4||column==5||column==7?30:column==6?12:column==10?16:24);
         control.Height(30);control.HorizontalAlignment(HorizontalAlignment::Left);Grid::SetColumn(control,column);body.Children().Append(control);return control;
     };
     eye=pick(data->caption(L"layers",L"visibility"),0,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"visibility")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"visible"))}}));});
@@ -144,7 +144,7 @@ void LayerRow::init(){
         }
     });
     lockImage.Width(12);lockImage.Height(12);lockImage.HorizontalAlignment(HorizontalAlignment::Left);lockImage.IsHitTestVisible(false);Grid::SetColumn(lockImage,9);body.Children().Append(lockImage);
-    grip=pick(L"",10,[]{});grip.Height(12);grip.Content(icon(L"grip",data->theme(),12));grip.Opacity(.6);
+    grip=pick(L"",10,[]{});grip.Height(16);grip.Content(icon(L"grip",data->theme()));grip.Opacity(.6);
     copyName(data,grip,data->copyCaption(L"layers",L"move_layer"));
     for(auto item:{std::pair{eye,L"visibility"},std::pair{check,L"selection"},std::pair{content,L"content"},
         std::pair{load,L"load"},std::pair{mask,L"mask"},std::pair{link,L"link"},std::pair{name,L"name"},std::pair{grip,L"drag"}})
@@ -224,7 +224,7 @@ void LayerRow::refresh(){
     AutomationProperties::SetName(lockImage,flag(layer,L"locked")?data->caption(L"layers",L"locked"):flag(layer,L"alpha_locked")?data->caption(L"layers",L"alpha_locked"):L"");
     AutomationProperties::SetAccessibilityView(lockImage,flag(layer,L"locked")||flag(layer,L"alpha_locked")?Automation::Peers::AccessibilityView::Content:Automation::Peers::AccessibilityView::Raw);
     body.ColumnDefinitions().GetAt(9).Width({flag(layer,L"can_drop_below")?14.:12.,GridUnitType::Pixel});
-    body.ColumnDefinitions().GetAt(10).Width({flag(layer,L"can_drop_below")?12.:0.,GridUnitType::Pixel});
+    body.ColumnDefinitions().GetAt(10).Width({flag(layer,L"can_drop_below")?16.:0.,GridUnitType::Pixel});
     grip.Visibility(flag(layer,L"can_drop_below")?Visibility::Visible:Visibility::Collapsed);
     grip.Opacity(flag(layer,L"can_drop_below")?.6:0);grip.IsEnabled(flag(layer,L"can_drop_below")&&!flag(layer,L"locked"));
     hstring details=str(layer,L"description");

@@ -223,7 +223,7 @@ private data class ChromeFocusIndication(val color: Color) : IndicationNodeFacto
 
 @Composable internal fun PanelGrip(description: String, vertical: Boolean = false) {
     SharedIcon("grip", description, Modifier.alpha(.65f)
-        .offset(x = if (vertical) 0.dp else (-1.6).dp, y = if (vertical) (-1.6).dp else 0.dp)
+        .offset(x = if (vertical) 0.dp else (-2).dp, y = if (vertical) (-2).dp else 0.dp)
         .rotate(if (vertical) 90f else 0f))
 }
 

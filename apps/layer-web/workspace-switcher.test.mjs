@@ -95,7 +95,7 @@ export async function checkWorkspaceOptions({call, evaluate, settle}) {
     const current=await view();
     const rows=await evaluate(`Array.from(document.querySelectorAll('${menu} button'),b=>({label:b.querySelector('.menu-label').textContent,selected:b.hasAttribute('aria-checked')?b.getAttribute('aria-checked')==='true':null,enabled:!b.disabled}))`);
     assert.deepEqual(rows,current.switcher_options.sections.flat().map(row=>({label:row.label,selected:row.selected,enabled:row.enabled})));
-    assert.equal(await evaluate(`document.querySelector('${menu} .menu-section-label').textContent`),current.switcher_options.title);
+    assert.equal(await evaluate(`document.querySelector('${menu}').firstElementChild.matches('button[aria-checked]')`),true,"options start with the workspace checklist");
     assert.equal(current.page,null);
   };
   const dir=process.env.LAYER_TEST_ARTIFACTS||"artifacts/workspace-options/web";
@@ -116,6 +116,8 @@ export async function checkWorkspaceOptions({call, evaluate, settle}) {
       await shot(`${theme}-closed-header`);
       const before=await evaluate("layerApp.app.workspace_capture()"), active=(await view()).id, inactive=(await view()).switcher_display.find(row=>row.id!==active).id;
       assert.equal(await evaluate(`document.querySelector('${dots}').getAttribute('aria-label')`),(await view()).switcher_options_label);
+      assert.equal(await evaluate(`document.querySelector('${dots} svg').dataset.asset`),"more-small");
+      assert.deepEqual(await evaluate(`(()=>{const p=document.querySelector('.workspace-switcher').getBoundingClientRect(),b=document.querySelector('${dots}').getBoundingClientRect();return{width:b.width,height:b.height,gap:b.left-document.querySelector('.workspace-switcher-choices').getBoundingClientRect().right,top:b.top-p.top,bottom:p.bottom-b.bottom}})()`),{width:20,height:26,gap:2,top:5,bottom:5},"options match workspace pill height within the well");
       for (const kind of ["mouse","touch","pen"]) {
         device=kind;await click(dots);await check();await shot(`${theme}-${kind}`);await key("Escape");
         assert.equal(await evaluate(`document.activeElement.matches('${dots}')`),true,"Escape returns focus to dots");
@@ -143,9 +145,14 @@ export async function checkWorkspaceOptions({call, evaluate, settle}) {
       for (const row of original.switcher)await toggle(row.id);
       assert.equal(await evaluate("layerApp.app.workspace_capture()"),before,"pin changes preserve workspace and history");
       await click(dots);await click(`${menu} button:last-of-type`);assert.equal((await view()).page,"workspaces");
+      assert.equal(await evaluate("document.querySelector('.workspace-options svg').dataset.asset"),"more","full-height editor options retain the full icon");
+      assert.ok(await evaluate("Array.from(document.querySelectorAll('.workspace-grip svg'),n=>n.getBoundingClientRect()).every(r=>r.width===16&&r.height===16)"),"editor grips retain the shared icon canvas");
+      await shot(`${theme}-manage-workspaces`);
       await click(".workspace-manager footer button");assert.equal((await view()).page,null);
       await send({type:"customize",action:{type:"header",action:{type:"edit",editing:true}}});
       const header=await evaluate("layerApp.state().workspace.layout.header");
+      const grips=await evaluate("Array.from(document.querySelectorAll('.header-item-grip svg,.header-component-grip svg'),n=>({width:n.getBoundingClientRect().width,height:n.getBoundingClientRect().height})).filter(r=>r.width&&r.height)");
+      assert.ok(grips.length&&grips.every(r=>r.width===16&&r.height===16),"title-bar grips retain the shared icon canvas");
       await click(dots);await check();await shot(`${theme}-title-bar-edit`);await key("Escape");
       for (const selector of [choice(active),choice(inactive),dots]) {
         const p=await center(selector);await pointer("down",p,"right");await pointer("up",p,"right");await check();await key("Escape");

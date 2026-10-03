@@ -657,7 +657,7 @@ fn native_workspace_switcher_options() {
     let checklist = |popup: &gtk::PopoverMenu| {
         let model = popup.menu_model().unwrap();
         assert_eq!(model.n_items(), 2);
-        assert_eq!(model.item_attribute_value(0, "label", None).unwrap().get::<String>().as_deref(), Some("Show in top bar"));
+        assert!(model.item_attribute_value(0, "label", None).is_none());
         let rows = model.item_link(0, gtk::gio::MENU_LINK_SECTION).unwrap();
         assert_eq!(rows.n_items() as usize, manager.items().len());
         assert_eq!(manager.active_id().as_ref(), Some(&active));
@@ -668,7 +668,16 @@ fn native_workspace_switcher_options() {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(200);
         assert!(options().is_mapped());
-        assert!(options().width() >= 26);
+        assert_eq!((options().width(), options().height()), (20, 26));
+        let choices = w.workspaces.switcher.first_child().unwrap().compute_bounds(&w.window).unwrap();
+        let more = options().compute_bounds(&w.window).unwrap();
+        assert!((more.x() - choices.x() - choices.width() - 2.).abs() < 0.1);
+        let entry = state(&w).workspace.layout.header.entries().find(|entry| entry.item == HeaderItem::Workspaces).unwrap().id;
+        assert!(!find_named(w.window.upcast_ref(), &format!("header-item-{entry}")).unwrap().has_css_class("in-bar"));
+        let grips: Vec<_> = descendants::<gtk::Image>(w.layer_panel.root.upcast_ref()).into_iter()
+            .filter(|image| crate::icons::name(image).as_deref() == Some("layer-grip-symbolic")).collect();
+        assert!(!grips.is_empty());
+        assert!(grips.iter().all(|image| image.pixel_size() == 16));
         assert_eq!(w.workspaces.switcher.measure(gtk::Orientation::Vertical, -1).1, 36);
         assert_eq!(options().measure(gtk::Orientation::Vertical, -1).1, 26);
         until(|| !ui_session(&w).engine().backend().stats.lock().unwrap().presented.is_empty(), "first canvas presentation");
@@ -751,7 +760,18 @@ fn native_workspace_switcher_options() {
         let manage = mapped_label(popup.upcast_ref(), "Manage Workspaces…").unwrap();
         click(&w, &mut input, &manage);
         assert!(!popup.is_visible());
-        assert!(w.window.visible_dialog().is_some());
+        let dialog = w.window.visible_dialog().unwrap();
+        until(|| !w.workspaces.busy() && !w.workspaces.view().rows.is_empty(), "workspace manager rows");
+        pump(200);
+        let grips: Vec<_> = descendants::<gtk::Image>(dialog.upcast_ref()).into_iter()
+            .filter(|image| image.has_css_class("workspace-reorder-handle")).collect();
+        assert!(!grips.is_empty());
+        assert!(grips.iter().all(|image| image.pixel_size() == 16));
+        let full_more: Vec<_> = descendants::<gtk::Image>(dialog.upcast_ref()).into_iter()
+            .filter(|image| crate::icons::name(image).as_deref() == Some("layer-more-symbolic")).collect();
+        assert!(!full_more.is_empty());
+        assert!(full_more.iter().all(|image| image.pixel_size() == 16));
+        crate::capture(&w, input.dir.join(format!("workspace-manager-{theme:?}.png")).to_str().unwrap());
         w.workspaces.ui.close(&w);
         pump(200);
     }

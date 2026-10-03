@@ -55,15 +55,22 @@ class AndroidIconTest {
         var opacity by mutableStateOf(1f)
         var foreground by mutableStateOf(Color(0xff292a2d))
         var background by mutableStateOf(Color(0xfffafafa))
+        var page by mutableStateOf(0)
+        var columns = 12
+        var rows = 1
         compose.setContent {
-            Column(Modifier.width(576.dp).background(background).testTag("icon-grid")) {
-                icons.chunked(12).forEach { row ->
-                    Row(Modifier.height(48.dp)) {
-                        row.forEach { file ->
-                            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                                val name = file.removePrefix("layer-").removeSuffix("-symbolic.svg")
-                                SharedIcon(name, name, Modifier.size(size.dp).alpha(opacity), tint = foreground,
-                                    fill = if (name == "color") Color(0xff33d17a) else null)
+            BoxWithConstraints {
+                columns = (maxWidth.value / 48).toInt().coerceIn(1, 12)
+                rows = (maxHeight.value / 48).toInt().coerceAtLeast(1)
+                Column(Modifier.width((columns * 48).dp).background(background).testTag("icon-grid")) {
+                    icons.drop(page * columns * rows).take(columns * rows).chunked(columns).forEach { row ->
+                        Row(Modifier.height(48.dp)) {
+                            row.forEach { file ->
+                                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                                    val name = file.removePrefix("layer-").removeSuffix("-symbolic.svg")
+                                    SharedIcon(name, name, Modifier.size(size.dp).alpha(opacity), tint = foreground,
+                                        fill = if (name == "color") Color(0xff33d17a) else null)
+                                }
                             }
                         }
                     }
@@ -80,42 +87,48 @@ class AndroidIconTest {
                     opacity = if (state == "disabled") .35f else 1f
                 }
                 compose.waitForIdle()
-                val image = compose.onNodeWithTag("icon-grid").captureToImage()
-                val pixels = image.toPixelMap()
-                val scale = image.width / 576f
-                fun pixel(index: Int, x: Float, y: Float): Color {
-                    val left = index % 12 * 48 + 24 - size / 2f
-                    val top = index / 12 * 48 + 24 - size / 2f
-                    return pixels[((left + x * size / 16) * scale).toInt(), ((top + y * size / 16) * scale).toInt()]
-                }
-                fun differs(a: Color, b: Color) = maxOf(abs(a.red-b.red), abs(a.green-b.green), abs(a.blue-b.blue)) > .025f
-                for ((index, name) in icons.withIndex()) {
-                    val left = ((index % 12 * 48 + 24 - size / 2f) * scale).roundToInt()
-                    val top = ((index / 12 * 48 + 24 - size / 2f) * scale).roundToInt()
-                    val extent = (size * scale).toInt()
-                    var ink = 0
-                    for (y in top until top + extent) for (x in left until left + extent) {
-                        if (differs(pixels[x, y], background)) ink++
+                for ((pageIndex, pageIcons) in icons.chunked(columns * rows).withIndex()) {
+                    compose.runOnIdle { page = pageIndex }
+                    compose.waitForIdle()
+                    val image = compose.onNodeWithTag("icon-grid").captureToImage()
+                    val pixels = image.toPixelMap()
+                    val scale = image.width / (columns * 48f)
+                    fun pixel(index: Int, x: Float, y: Float): Color {
+                        val left = index % columns * 48 + 24 - size / 2f
+                        val top = index / columns * 48 + 24 - size / 2f
+                        return pixels[((left + x * size / 16) * scale).toInt(), ((top + y * size / 16) * scale).toInt()]
                     }
-                    assertTrue("$name $mode $size $state is visible", ink > 1)
+                    fun differs(a: Color, b: Color) = maxOf(abs(a.red-b.red), abs(a.green-b.green), abs(a.blue-b.blue)) > .025f
+                    for ((index, name) in pageIcons.withIndex()) {
+                        val left = ((index % columns * 48 + 24 - size / 2f) * scale).roundToInt()
+                        val top = ((index / columns * 48 + 24 - size / 2f) * scale).roundToInt()
+                        val extent = (size * scale).toInt()
+                        var ink = 0
+                        for (y in top until top + extent) for (x in left until left + extent) {
+                            if (differs(pixels[x, y], background)) ink++
+                        }
+                        assertTrue("$name $mode $size $state is visible", ink > 1)
+                    }
+                    val clear = pageIcons.indexOf("layer-clear-symbolic.svg")
+                    if (clear >= 0) assertFalse("Clear has an empty center", differs(pixel(clear, 8f, 8f), background))
+                    val swatches = pageIcons.indexOf("layer-colors-symbolic.svg")
+                    fun composite(value: Float, channel: Float) = value * opacity + channel * (1-opacity)
+                    if (swatches >= 0) {
+                        val black = pixel(swatches, 4f, 4f)
+                        val white = pixel(swatches, 12f, 12f)
+                        assertEquals("Fixed black is not foreground tinted", composite(0f, background.red), black.red, .025f)
+                        assertEquals("Fixed white is not foreground tinted", composite(1f, background.red), white.red, .025f)
+                    }
+                    val name = "$mode-$size-$state-$pageIndex"
+                    File(directory, "native-$name.png").outputStream().use {
+                        image.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                    fun rgb(color: Color) = "#%02x%02x%02x".format((color.red*255).roundToInt(), (color.green*255).roundToInt(), (color.blue*255).roundToInt())
+                    fixtures.put(JSONObject().put("name", name).put("theme", theme).put("size", size)
+                        .put("width", columns*48).put("height", (pageIcons.size+columns-1)/columns*48).put("scale", scale)
+                        .put("foreground", rgb(foreground)).put("background", rgb(background)).put("opacity", opacity)
+                        .put("icons", JSONArray(pageIcons.map { it.removeSuffix(".svg") })))
                 }
-                val clear = icons.indexOf("layer-clear-symbolic.svg")
-                assertFalse("Clear has an empty center", differs(pixel(clear, 8f, 8f), background))
-                val swatches = icons.indexOf("layer-colors-symbolic.svg")
-                fun composite(value: Float, channel: Float) = value * opacity + channel * (1-opacity)
-                val black = pixel(swatches, 4f, 4f)
-                val white = pixel(swatches, 12f, 12f)
-                assertEquals("Fixed black is not foreground tinted", composite(0f, background.red), black.red, .025f)
-                assertEquals("Fixed white is not foreground tinted", composite(1f, background.red), white.red, .025f)
-                val name = "$mode-$size-$state"
-                File(directory, "native-$name.png").outputStream().use {
-                    image.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
-                }
-                fun rgb(color: Color) = "#%02x%02x%02x".format((color.red*255).roundToInt(), (color.green*255).roundToInt(), (color.blue*255).roundToInt())
-                fixtures.put(JSONObject().put("name", name).put("theme", theme).put("size", size)
-                    .put("width", 576).put("height", (icons.size+11)/12*48).put("scale", scale)
-                    .put("foreground", rgb(foreground)).put("background", rgb(background)).put("opacity", opacity)
-                    .put("icons", JSONArray(icons.map { it.removeSuffix(".svg") })))
             }
         }
         File(directory, "fixtures.json").writeText(JSONObject().put("schema", 1).put("fixtures", fixtures).toString(2))

@@ -14,7 +14,8 @@ inline hstring menuSlug(hstring const& text){
     return hstring(L"menu-"+slug);
 }
 inline void NativeMenuItems(Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> const& target,
-    A const& sections,std::shared_ptr<WorkspaceData> const& data,std::function<void(J)> const& dispatch,uint32_t at=0){
+    A const& sections,std::shared_ptr<WorkspaceData> const& data,std::function<void(J)> const& dispatch){
+    uint32_t at=0;
     auto retain=[&](auto fresh){
         using T=decltype(fresh);T item{nullptr};
         if(at<target.Size())item=target.GetAt(at).try_as<T>();

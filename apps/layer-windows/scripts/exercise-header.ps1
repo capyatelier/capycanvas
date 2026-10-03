@@ -99,6 +99,8 @@ function Check-WorkspaceOptions {
     $before=HeaderJson;$active=(Model).windows_workspace.id
     [CapyRowPointer]::RightClick($at.x,$at.y)
     Wait-Until {$null -ne (Find ('workspace-switcher-show-'+$active))} 'Titlebar editor workspace context did not open visibility options'
+    $menu=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent((Control ('workspace-switcher-show-'+$active)))
+    if(Find 'Show in top bar' -Name -Within $menu -Type ([System.Windows.Automation.ControlType]::MenuItem)){throw 'Editor visibility checklist has a redundant heading'}
     if(Find 'Customize Title Bar' -Name -Visible -Type ([System.Windows.Automation.ControlType]::MenuItem)){throw 'Workspace context opened titlebar customization commands'}
     Capture 'customize-workspace-options' -Composed
     [CapyRowPointer]::Key([uint32]$review.Id,0x1b)

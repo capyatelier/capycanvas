@@ -34,8 +34,8 @@ function At([string]$Id){
     $box=(Control $Id -Arranged).Current.BoundingRectangle
     @{x=[int]($box.X+$box.Width/2);y=[int]($box.Y+$box.Height/2)}
 }
-function Options {
-    Wait-Until {$null -ne (Find 'Show in top bar' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Visibility checklist did not open'
+function Options([switch]$Compact) {
+    Wait-Until {$null -ne (Find ('workspace-switcher-show-'+(Storage).order[0]))} 'Visibility checklist did not open'
     foreach($id in @((Storage).order)){
         $row=Control ('workspace-switcher-show-'+$id)
         $checked=$row.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
@@ -43,6 +43,9 @@ function Options {
     }
     $first=Control ('workspace-switcher-show-'+(Storage).order[0])
     $menu=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($first)
+    $items=@($menu.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem)))
+    if($items.Count -ne (@((Storage).order).Count+$(if($Compact){0}else{1}))){throw 'Visibility checklist has unexpected native rows'}
+    if($items[0].Current.AutomationId -ne ('workspace-switcher-show-'+(Storage).order[0])){throw 'Visibility checklist does not begin with its first workspace'}
     $rows=@($menu.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -like 'workspace-switcher-show-*'})
     $nativeOrder=@($rows|ForEach-Object {$_.Current.AutomationId.Substring('workspace-switcher-show-'.Length)})
     if(($nativeOrder -join '|') -ne ((Storage).order -join '|')){throw 'Visibility menu does not contain every workspace in saved order'}
@@ -56,6 +59,10 @@ function Dismiss([string]$Focus=''){
 }
 function Check-Options {
     $active=(Storage).id;$layout=Layout;$order=(Storage).order -join '|'
+    $options=(Control 'workspace-switcher-options' -Arranged).Current.BoundingRectangle
+    $pill=(Control ('workspace-switch-'+$active) -Arranged).Current.BoundingRectangle
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    if([Math]::Abs($options.Width/$scale-20) -gt 1 -or [Math]::Abs($options.Height-$pill.Height) -gt 1 -or [Math]::Abs($options.Y-$pill.Y) -gt 1){throw 'Switcher options dimensions differ from the workspace pills'}
     $inactive=@((Storage).switcher_display.id|Where-Object {$_ -ne $active})[0]
     Invoke 'workspace-switcher-options';Options;Capture 'visibility-checklist' -Composed;Dismiss 'workspace-switcher-options'
     foreach($source in @(('workspace-switch-'+$active),('workspace-switch-'+$inactive),'workspace-switcher-options','workspace-switcher')){
@@ -126,7 +133,7 @@ function Check-Compact {
     Invoke 'header-workspace-menu'
     $submenu=Control 'Show in top bar' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
     $submenu.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    Options;Capture 'compact-visibility' -Composed
+    Options -Compact;Capture 'compact-visibility' -Composed
     $revision=(Storage).switcher_revision
     Invoke ('workspace-switcher-show-'+$active)
     Wait-Until {(Storage).switcher_revision -gt $revision -and !(Storage).switcher_busy} 'Compact visibility toggle was not acknowledged'

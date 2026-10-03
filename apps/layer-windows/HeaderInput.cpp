@@ -174,15 +174,14 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
     void refreshWorkspaceMenu(){
         if(!menu||!workspaceMenu)return;
         auto presentation=object(object(data->model,L"windows_workspace"),L"switcher_options");
-        menu.Items().GetAt(0).as<MenuFlyoutItem>().Text(str(presentation,L"title"));
         NativeMenuItems(menu.Items(),array(presentation,L"sections"),data,[weak=weak_from_this()](J action){
             if(auto self=weak.lock()){self->cancel();self->data->dispatch(action);}
-        },1);
+        });
     }
-    void showMenu(J const& presentation,Point at,bool holding,FrameworkElement const& invoking,bool titled=false){
+    void showMenu(J const& presentation,Point at,bool holding,FrameworkElement const& invoking,bool workspaceOptions=false){
         if(!array(presentation,L"sections").Size())return;
         if(menu)menu.Hide();
-        menu=MenuFlyout();workspaceMenu=titled;TrackPopup(menu,data);
+        menu=MenuFlyout();workspaceMenu=workspaceOptions;TrackPopup(menu,data);
         auto weak=weak_from_this();auto control=invoking.try_as<Control>();
         if(!control)control=FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>();
         auto focus=make_weak(control);
@@ -191,11 +190,9 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
             self->menuOpen=false;self->workspaceMenu=false;self->notify();
             if(auto element=focus.get();element&&element.IsLoaded())element.Focus(FocusState::Keyboard);
         }});
-        auto title=str(presentation,L"title");
-        if(titled&&!title.empty()){MenuFlyoutItem heading;heading.Text(title);heading.IsEnabled(false);menu.Items().Append(heading);}
         NativeMenuItems(menu.Items(),array(presentation,L"sections"),data,[weak](J action){
             if(auto self=weak.lock()){self->cancel();self->data->dispatch(action);}
-        },titled?1:0);
+        });
         Primitives::FlyoutShowOptions options;options.Position(at);
         options.ShowMode(holding?Primitives::FlyoutShowMode::Transient:Primitives::FlyoutShowMode::Standard);
         menu.ShowAt(root,options);

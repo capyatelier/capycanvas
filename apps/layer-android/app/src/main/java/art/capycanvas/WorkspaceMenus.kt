@@ -62,7 +62,7 @@ internal suspend fun CanvasHost.menuCopy(request: JSONObject): JSONObject? = sus
  * items. They never reconstruct eligibility, naming, defaults or commands. */
 @Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, preserveContact: Boolean = false,
     focusable: Boolean = !preserveContact, command: ((JSONObject) -> Unit)? = null,
-    copy: (suspend () -> JSONObject?)? = null, dismiss: () -> Unit) {
+    copy: (suspend () -> JSONObject?)? = null, showTitle: Boolean = true, dismiss: () -> Unit) {
     var projected by remember(menu) { mutableStateOf(menu) }
     val currentCopy by rememberUpdatedState(copy)
     LaunchedEffect(host, host.languageTag, menu) {
@@ -80,7 +80,7 @@ internal suspend fun CanvasHost.menuCopy(request: JSONObject): JSONObject? = sus
         },
         properties = if (focusable) PopupProperties(focusable = true) else WindowlessMenu,
         shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
-        WorkspaceMenuItems(host, current.array("sections"), dismiss, if (current.has("title")) current.getString("title") else null, command)
+        WorkspaceMenuItems(host, current.array("sections"), dismiss, if (showTitle && current.has("title")) current.getString("title") else null, command)
     }
 }
 

@@ -176,7 +176,7 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                     verticalAlignment = Alignment.CenterVertically) {
                     if (workspaces) Box(Modifier.width(24.dp).height(56.dp).rowBounds(drag.grips, id)
                         .testTag("workspace-grip-$id"), contentAlignment = Alignment.Center) {
-                        SharedIcon("grip", host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("drag_to_reorder"), Modifier.size(12.dp).alpha(.45f))
+                        SharedIcon("grip", host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("drag_to_reorder"), Modifier.size(16.dp).alpha(.45f))
                     }
                     Column(Modifier.weight(1f).onPreviewKeyEvent { event ->
                         val key = event.nativeKeyEvent

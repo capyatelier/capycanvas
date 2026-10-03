@@ -51,7 +51,7 @@ fn menu_rows(widget: &gtk::Widget, rows: &mut Vec<(gtk::Widget, glib::GString)>)
 }
 
 pub(super) fn build() -> (gtk::Box, gtk::Box, gtk::MenuButton) {
-    let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     root.set_widget_name("workspace-switcher");
     root.add_css_class("workspace-switcher");
     root.set_valign(gtk::Align::Center);
@@ -67,7 +67,7 @@ pub(super) fn build() -> (gtk::Box, gtk::Box, gtk::MenuButton) {
     );
     root.append(&scroll);
     let options = gtk::MenuButton::builder()
-        .child(&crate::icons::image("layer-more-symbolic"))
+        .child(&crate::icons::image("layer-more-small-symbolic"))
         .build();
     options.set_widget_name("workspace-switcher-options");
     options.add_css_class("workspace-options");
@@ -97,7 +97,6 @@ impl NativeWorkspaces {
     fn populate_switcher_menu(&self, w: &Rc<Workspace>, popup: &gtk::PopoverMenu, compact: bool, layout: bool) {
         let view = self.view();
         let menu = if compact { view.switcher_menu } else { view.switcher_options };
-        let title = menu.title.clone();
         let page = popup.visible_submenu();
         let focused = gtk::prelude::GtkWindowExt::focus(&w.window).filter(|widget| widget.is_ancestor(popup));
         let mut rows = Vec::new();
@@ -109,19 +108,8 @@ impl NativeWorkspaces {
             if let Some(focused) = focused.filter(|widget| widget.is_sensitive()) { focused.grab_focus(); }
             return;
         }
-        if compact {
-            popup.set_menu_model(Some(&model));
-            popup.set_visible_submenu(page.as_deref());
-        } else {
-            let labeled = gtk::gio::Menu::new();
-            if let Some(checklist) = model.item_link(0, gtk::gio::MENU_LINK_SECTION) {
-                labeled.append_section(Some(&title), &checklist);
-            }
-            for index in 1..model.n_items() {
-                labeled.append_item(&gtk::gio::MenuItem::from_model(&model, index));
-            }
-            popup.set_menu_model(Some(&labeled));
-        }
+        popup.set_menu_model(Some(&model));
+        if compact { popup.set_visible_submenu(page.as_deref()); }
         if let Some((index, label)) = focus_row {
             rows.clear();
             menu_rows(popup.upcast_ref(), &mut rows);
