@@ -364,6 +364,16 @@ if($png.Length -lt 45 -or [Convert]::ToHexString($png[0..7]) -ne '89504E470D0A1A
 if(!(Model).state.document_file.modified -or (Model).state.document_file.location.uri -ne $first){
     throw 'PNG export incorrectly acknowledged a project save'
 }
+$webp=Join-Path $run 'Export.webp'
+File-Command 'export_document' {
+    Combo-Select (Find-Id 'export-format') {$_.Current.Name -like 'WebP*'}
+    Wait-Until {$format=Find-Id 'export-format';$format -and (Combo-Value $format) -like 'WebP*'} 'Export did not choose WebP'
+}
+Picker 'Save As';Choose-Path $webp;Idle
+Wait-Until {Test-Path -LiteralPath $webp} 'Export did not create the chosen WebP'
+$bytes=[IO.File]::ReadAllBytes($webp);$text=[Text.Encoding]::ASCII.GetString($bytes)
+if($bytes.Length -lt 30 -or $text.Substring(0,4) -ne 'RIFF' -or $text.Substring(8,8) -ne 'WEBPVP8X' -or !$text.Contains('VP8L') -or
+    ($bytes[24]+256*$bytes[25]+65536*$bytes[26]+1) -ne 128 -or ($bytes[27]+256*$bytes[28]+65536*$bytes[29]+1) -ne 96){throw 'Export must be a lossless WebP of the 128 by 96 document'}
 $photo=Join-Path $run 'Metadata photo.jpg';$photoExport=Join-Path $run 'Metadata export.jpg'
 $bitmap=[Drawing.Bitmap]::new(64,48)
 try{
@@ -382,7 +392,7 @@ File-Command 'open_document';Picker 'Open';Choose-Path $photo;Idle
 Wait-Until {(Model).state.document_file.epoch -gt $documentEpoch} 'Open did not select the photo'
 File-Command 'export_document' {
     $format=Find-Id 'export-format';Combo-Select $format {$_.Current.Name -eq 'JPEG image'}
-    Wait-Until {(Combo-Value (Find-Id 'export-format')) -eq 'JPEG image'} 'Export did not choose JPEG'
+    Wait-Until {$format=Find-Id 'export-format';$format -and (Combo-Value $format) -eq 'JPEG image'} 'Export did not choose JPEG'
     Wait-Until {$script:metadata=Find-Id 'export-metadata';$script:metadata -and !$script:metadata.Current.IsOffscreen} 'Export did not offer Metadata for a photo'
     $remove=Find-Id 'export-remove-location'
     if(!$remove){throw "Keeping $(Combo-Value $script:metadata) metadata did not offer Remove location"}
@@ -560,6 +570,7 @@ if($FailGpu){
     image_layer_thumbnail_undo_redo_and_embedded_reopen='passed'
     save_cancel_and_unicode_path='passed'
     png_export_cancel_dimensions_and_checkpoint='passed'
+    lossless_webp_export='passed'
     photo_metadata_copyright_without_location='passed'
     gpu_recovery=if($RecoverGpu){'two replacements, queued and active pen strokes, identical exported pixels, thumbnails and Undo/Redo passed'}else{'not requested'}
     save_existing_and_save_as='passed'

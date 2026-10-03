@@ -52,25 +52,9 @@ The M5 transform controls and shared Properties pages/precise Curves also need
 native presentation and device verification on Apple; Windows presents them.
 Shared Rust support and bridge compilation do not establish native UI parity.
 
-M1 shipped on every host, and Apple presents M2 to M4. Windows still needs the following, through the [Windows porting guide](../WINDOWS_PORTING_GUIDE.md); shared Rust already provides the behaviour:
-
-- **Shared UI state:**
-  - present `UiState.notice` and answer `UiAction::Notice`;
-  - read `CommandState.disabled_reason`;
-  - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
-  - draw a `checkable: false` action unpressed even when its command is selected.
-- **M2:**
-  - mode and guide bar labels;
-  - WebP in the export lists and file types (the edits to `ExportForm.h` are untested).
-- **M3:**
-  - the Edit ▸ Image submenu;
-  - the crop tool icon (the overlay is shared renderer code);
-  - clipboard image writers, which `Platform::pixel_clipboard` enables.
-- **M4:**
-  - the retouch tool icons (the source disc and its bar are shared);
-  - the Color mixing brush choice;
-  - the Use Pass Through for new groups setting;
-  - the Dodge & Burn and Frequency Separation icons.
+M1 shipped on every host, and Apple presents M2 to M4. Windows presents them too,
+except the clipboard image writers that `Platform::pixel_clipboard` enables; see the
+[Windows porting guide](../WINDOWS_PORTING_GUIDE.md).
 
 ## Open items from M2–M4
 
