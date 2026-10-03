@@ -220,6 +220,60 @@ try{
   Invoke 'Undo' -Name;Wait-Until {!(Model).state.layer_tools.has_selection} 'Selection Undo did not clear the lasso'
   Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'Figure Undo did not return to a clean drawing';Pass 'selection and seed Undo return clean'
  }
+ $device='mouse'
+ Select-Tool 'figure';Invoke 'tool-group-1';Invoke 'tool-subtool-1'
+ Drag $device @(@(($cx-120),($cy-80)),@(($cx+120),($cy+80)))
+ Wait-Until {(Model).state.document_file.modified -and (Pixels) -ne $empty} 'Filled rectangle did not appear'
+ Select-Tool 'scale_rotate';Origin;Wait-Until {$a=(Model).state.canvas_bar.anchor;$a -and [Math]::Abs((Value 'transform_x')-($a[0]+$a[2])/2) -lt .5} 'The transform bounds did not match the centred position';$bounds=(Model).state.canvas_bar.anchor
+ $scale=[CapyEditingCapture]::GetDpiForWindow($handle)/96;$grid=Control 'tool-choice-transform-reference'
+ $cells=@(0..8|ForEach-Object {Control "tool-choice-transform-reference-$_"})
+ if(@($cells|Where-Object {[Math]::Abs($_.Current.BoundingRectangle.Width-18*$scale) -gt 1.5}).Count){throw 'Position anchor cells are not 18 pixels'}
+ $field=(Control 'tool-setting-transform_x').Current.BoundingRectangle;$area=$grid.Current.BoundingRectangle
+ if($field.Left -le $area.Right -or $field.Top -gt $area.Bottom -or $field.Bottom -lt $area.Top){throw 'X is not beside the position anchor'}
+ foreach($corner in @(@(0,0,1),@(8,2,3))){
+  Invoke "tool-choice-transform-reference-$($corner[0])"
+  Wait-Until {[Math]::Abs((Value 'transform_x')-$bounds[$corner[1]]) -lt .5 -and [Math]::Abs((Value 'transform_y')-$bounds[$corner[2]]) -lt .5 -and $cells[$corner[0]].Current.ItemStatus} "Anchor $($corner[0]) did not report its corner"
+  if(((Model).state.canvas_bar.anchor -join ',') -ne ($bounds -join ',')){throw 'Choosing an anchor moved the transform'}
+ }
+ $target=[Math]::Round($bounds[2]+300/$camera.zoom);$x=Control 'tool-setting-transform_x';$x.SetFocus();$x.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$target);(Control 'tool-setting-transform_y').SetFocus()
+ Wait-Until {[Math]::Abs((Value 'transform_x')-$target) -lt .01 -and [Math]::Abs((Model).state.canvas_bar.anchor[2]-$target) -lt .5} 'Typed X did not move the anchor point exactly'
+ Pass 'position anchor and exact X'
+ Invoke 'canvas-bar-transform_snapping';Wait-Until {((Model).state.commands|Where-Object id -eq 'transform_snapping').selected} 'Snap did not turn on'
+ Invoke 'canvas-bar-transform_snapping';Wait-Until {!((Model).state.commands|Where-Object id -eq 'transform_snapping').selected} 'Snap did not turn off'
+ $moved=(Model).state.canvas_bar.anchor;$c=(Model).state.camera;$r=(Control 'drawing-canvas').Current.BoundingRectangle
+ $pivot=@([int]($r.X+$c.translation[0]+$c.zoom*($moved[0]+$moved[2])/2),[int]($r.Y+$c.translation[1]+$c.zoom*($moved[1]+$moved[3])/2));$x1=Value 'transform_x'
+ Drag $device @($pivot,@(($pivot[0]+60),($pivot[1]+30)))
+ Start-Sleep -Milliseconds 300
+ if(((Model).state.canvas_bar.anchor -join ',') -ne ($moved -join ',') -or [Math]::Abs((Value 'transform_x')-$x1) -gt .01){throw 'Dragging the pivot moved the artwork'}
+ Pass 'snap toggle and pivot drag'
+ Capture 'transform-controls-dark'
+ $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
+ Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} 'The anchored move did not apply'
+ $once=Stable-Pixels;$revision=(Model).state.document_file.revision
+ Wait-Until {((Model).state.commands|Where-Object id -eq 'transform_again').enabled} 'Transform Again stayed disabled after a transform'
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit';Invoke 'transform_again'
+ Wait-Until {(Model).state.document_file.revision -gt $revision -and (Pixels) -ne $once} 'Transform Again did not repeat the move'
+ Invoke 'Undo' -Name;Wait-Until {(Pixels) -eq $once} 'Transform Again was not one Undo'
+ Pass 'Transform Again'
+ $theme=(Model).state.theme;Invoke 'settings-button'
+ (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+ (Control $(if($theme -eq 'dark'){'Light'}else{'Dark'}) -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+ Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
+ Invoke 'CloseButton';Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
+ Select-Tool 'scale_rotate';Wait-Until {Find 'tool-choice-transform-reference'} 'The position anchor did not return'
+ Capture 'transform-controls-alternate';Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
+ $switch=@{item=$null};Wait-Until {$switch.item=Find 'workspace-switch-builtin:workspace:photographer';$switch.item} 'No Photo workspace switch'
+ $switch.item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+ Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:photographer' -and !(Model).windows_workspace.busy} 'Photo did not open' 20
+ Select-Tool 'scale_rotate';Origin
+ $options=@{tile=$null};Wait-Until {$options.tile=@((Model).panels|ForEach-Object {$_.tiles}|Where-Object {@($_.component.options|Where-Object {$_.Choice.id -eq 'transform-reference'}).Count})[0];$options.tile} 'Tool Options did not offer the position anchor'
+ if(!(Find 'toolbar-segment-transform-reference')){Invoke "toolbar-more-$($options.tile.id)"}
+ $cell=@{id=$null};Wait-Until {$cell.id=@('toolbar-segment-transform-reference-0','tool-choice-transform-reference-0')|Where-Object {Find $_}|Select-Object -First 1;$cell.id} 'Tool Options did not present the position anchor'
+ Write-Output "Tool Options anchor cell=$($cell.id)";Invoke $cell.id
+ Wait-Until {$a=(Model).state.canvas_bar.anchor;[Math]::Abs((Value 'transform_x')-$a[0]) -lt .5 -and [Math]::Abs((Value 'transform_y')-$a[1]) -lt .5} 'The Tool Options anchor did not set the reference'
+ Capture 'transform-tool-options';Pass 'Tool Options position anchor'
+ Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
+ Invoke 'Undo' -Name;Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'The transform journey did not undo to a clean drawing'
  [CapyRowPointer]::Dispose();$review.CloseMainWindow()|Out-Null
  if(!$review.WaitForExit(5000) -or $review.ExitCode -ne 0){throw 'Editing review did not close within five seconds'}
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Native editing stderr needs inspection'}

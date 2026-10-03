@@ -75,7 +75,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         std::function<void()> orient;
         std::function<winrt::Windows::Foundation::Size()> natural;
         std::function<void()> dispose;
-        int segmented=0;bool action=false,interval=false;
+        int segmented=0;bool action=false,intrinsic=false;
     };
     struct Contact {uint32_t id;Point start;bool moved=false;};
     std::shared_ptr<WorkspaceData> data;
@@ -234,7 +234,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             if(f.segmented){
                 bool stacked=vertical&&width<tileW*f.segmented;
                 pair.Append(N(vertical?width:tileW*f.segmented));pair.Append(N(vertical?tileH*(stacked?f.segmented:1):24));
-            }else if(!f.interval&&(vertical||f.action)){pair.Append(N(tileW));pair.Append(N(tileH));}
+            }else if(!f.intrinsic&&(vertical||f.action)){pair.Append(N(tileW));pair.Append(N(tileH));}
             else{auto extent=f.natural();pair.Append(N(extent.Width));pair.Append(N(extent.Height));}
             sizes.Append(pair);
         }
@@ -614,7 +614,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         auto range=RangeControl::Create(data,bounds.GetObjectAt(0),bounds.GetObjectAt(1),str(interval,L"label"),L"toolbar",sliders,
             [weak,ids](int index,double value){if(auto self=weak.lock())
                 self->send(O({{L"type",S(L"set_tool_setting")},{L"id",S(ids[index])},{L"value",N(value)}}));});
-        Field result;result.row=range->root;result.interval=true;
+        Field result;result.row=range->root;result.intrinsic=true;
         result.update=[range](J const& option){
             auto current=array(object(option,L"Range"),L"bounds");
             range->Update(num(current.GetObjectAt(0),L"value"),num(current.GetObjectAt(1),L"value"));
@@ -632,6 +632,13 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         auto weak=weak_from_this();
         bool segmented=flag(choice,L"segmented");auto id=str(choice,L"id");auto items=array(choice,L"items");
         Field result;
+        if(auto columns=uint32_t(num(choice,L"columns"));columns>0){
+            auto grid=choiceGrid(data,choice,L"toolbar-segment-"+id,[weak](J action){if(auto self=weak.lock())self->send(action);});
+            auto extent=winrt::Windows::Foundation::Size{float(18*columns),float(18*((items.Size()+columns-1)/columns))};
+            result.row=grid.grid;result.intrinsic=true;result.natural=[extent]{return extent;};
+            result.update=[grid,data=data](J const& option){grid.update(data,object(option,L"Choice"));};
+            return result;
+        }
         if(segmented){
             Grid row;row.Background(data->brush(L"input"));row.CornerRadius({6,6,6,6});
             AutomationProperties::SetName(row,str(choice,L"label"));AutomationProperties::SetAutomationId(row,L"toolbar-choice-"+id);

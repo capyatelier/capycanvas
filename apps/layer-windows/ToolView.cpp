@@ -251,8 +251,11 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 else{Border frame;frame.BorderThickness({1,1,1,1});frame.BorderBrush(data->tint(L"text",51));frame.CornerRadius({6,6,6,6});
                     frame.Child(modes);root.Children().Append(frame);}
             }
+            std::map<std::wstring,J> beside;
+            for(auto value:extra){auto spec=object(value.GetObject(),L"Choice");if(auto target=str(spec,L"beside");!target.empty())beside.emplace(target.c_str(),spec);}
             for(auto value:extra){
                 auto spec=object(value.GetObject(),L"Choice");auto items=array(spec,L"items");auto specId=str(spec,L"id");
+                if(!str(spec,L"beside").empty())continue;
                 auto bar=segmented(true,items.Size());AutomationProperties::SetName(bar,str(spec,L"label"));
                 AutomationProperties::SetAutomationId(bar,L"tool-choice-"+specId);
                 for(uint32_t i=0;i<items.Size();i++){
@@ -269,7 +272,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 }
                 root.Children().Append(bar);
             }
-            auto settings=array(data->state,L"tool_settings");
+            auto settings=array(data->state,L"tool_settings");StackPanel numbers{nullptr};
             for(auto value:settings){
                 auto item=value.GetObject();auto id=str(item,L"id");
                 if(compact&&id==L"tonal_upper")continue;
@@ -286,16 +289,33 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     continue;
                 }
                 if(group!=str(item,L"group")){
-                    group=str(item,L"group");if(!group.empty()){
-                        auto heading=label(data,group,true);heading.Opacity(.55);heading.Margin({0,6,0,0});root.Children().Append(heading);
+                    group=str(item,L"group");numbers=nullptr;auto anchor=beside.find(id.c_str());
+                    if(!group.empty()||anchor!=beside.end()){
+                        auto heading=label(data,anchor!=beside.end()?str(anchor->second,L"label"):group,true);heading.Opacity(.55);heading.Margin({0,6,0,0});root.Children().Append(heading);
+                    }
+                    if(anchor!=beside.end()){
+                        auto specId=str(anchor->second,L"id");
+                        auto grid=choiceGrid(data,anchor->second,L"tool-choice-"+specId,[weak,context](J action){
+                            if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)self->data->dispatch(action);});
+                        Grid row;row.ColumnSpacing(12);
+                        for(auto width:{GridUnitType::Auto,GridUnitType::Star}){ColumnDefinition column;column.Width({1,width});row.ColumnDefinitions().Append(column);}
+                        grid.grid.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(grid.grid);
+                        numbers=StackPanel();numbers.Spacing(6);Grid::SetColumn(numbers,1);row.Children().Append(numbers);root.Children().Append(row);
+                        fields.emplace_back([weak,grid,specId]{if(auto self=weak.lock())for(auto option:array(self->data->state,L"tool_extra"))
+                            if(auto spec=object(option.GetObject(),L"Choice");str(spec,L"id")==specId)grid.update(self->data,spec);});
                     }
                 }
                 auto control=number(data,str(item,L"label"),object(item,L"numeric"),
                     [weak,id]{if(auto self=weak.lock())return num(find(array(self->data->state,L"tool_settings"),L"id",id),L"value");return 0.;},
                     [weak,id,context](double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
-                        self->data->dispatch(O({{L"type",S(L"set_tool_setting")},{L"id",S(id)},{L"value",N(value)}}));},fields,nullptr,false,L"tool-setting-"+id,compact);
+                        self->data->dispatch(O({{L"type",S(L"set_tool_setting")},{L"id",S(id)},{L"value",N(value)}}));},fields,nullptr,bool(numbers),L"tool-setting-"+id,compact);
                 AutomationProperties::SetAutomationId(control,L"number-root-tool-setting-"+id);
-                if(compact){
+                if(numbers){
+                    Grid line;line.ColumnSpacing(6);
+                    for(auto width:{GridUnitType::Auto,GridUnitType::Star}){ColumnDefinition column;column.Width({1,width});line.ColumnDefinitions().Append(column);}
+                    auto text=label(data,str(item,L"label"));text.MinWidth(16);text.VerticalAlignment(VerticalAlignment::Center);line.Children().Append(text);
+                    Grid::SetColumn(control,1);line.Children().Append(control);numbers.Children().Append(line);
+                }else if(compact){
                     Grid row;row.ColumnSpacing(6);row.Height(28);
                     ColumnDefinition caption;caption.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(caption);
                     ColumnDefinition body;body.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(body);

@@ -339,6 +339,32 @@ inline void revealTooltip(FrameworkElement const& target){
     }
     reveal.timer.Start();
 }
+struct ChoiceGrid {
+    Grid grid;std::vector<Button> cells;
+    void update(std::shared_ptr<WorkspaceData> const& data,J const& spec)const{
+        auto items=array(spec,L"items");
+        for(uint32_t i=0;i<std::min<uint32_t>(items.Size(),uint32_t(cells.size()));++i){
+            auto item=items.GetObjectAt(i);bool chosen=flag(item,L"selected");
+            cells[i].Background(chosen?selected(data):clear());cells[i].Content().as<UIElement>().Opacity(chosen?1.:.45);
+            AutomationProperties::SetName(cells[i],str(item,L"label"));tooltip(cells[i],str(item,L"label"));
+            AutomationProperties::SetItemStatus(cells[i],chosen?data->caption(L"search",L"selected"):L"");
+        }
+    }
+};
+inline ChoiceGrid choiceGrid(std::shared_ptr<WorkspaceData> const& data,J const& spec,hstring const& id,std::function<void(J)> const& send){
+    ChoiceGrid result;auto items=array(spec,L"items");auto columns=std::max<uint32_t>(1,uint32_t(num(spec,L"columns")));
+    for(uint32_t i=0;i<columns;++i){ColumnDefinition column;column.Width({18,GridUnitType::Pixel});result.grid.ColumnDefinitions().Append(column);}
+    for(uint32_t i=0;i<(items.Size()+columns-1)/columns;++i){RowDefinition row;row.Height({18,GridUnitType::Pixel});result.grid.RowDefinitions().Append(row);}
+    AutomationProperties::SetName(result.grid,str(spec,L"label"));AutomationProperties::SetAutomationId(result.grid,id);tooltip(result.grid,str(spec,L"label"));
+    for(uint32_t i=0;i<items.Size();++i){
+        auto action=object(items.GetObjectAt(i),L"action");
+        auto cell=button(data,L"",[send,action]{send(action);});cell.Width(18);cell.Height(18);
+        cell.Content(icon(str(items.GetObjectAt(i),L"icon"),data->theme(),6));
+        Grid::SetColumn(cell,int(i%columns));Grid::SetRow(cell,int(i/columns));AutomationProperties::SetAutomationId(cell,id+L"-"+to_hstring(i));
+        result.grid.Children().Append(cell);result.cells.push_back(cell);
+    }
+    result.update(data,spec);return result;
+}
 inline Grid explainable(Control const& control){
     Grid host;host.Background(clear());host.Children().Append(control);
     control.HorizontalAlignment(HorizontalAlignment::Stretch);control.VerticalAlignment(VerticalAlignment::Stretch);
