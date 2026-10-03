@@ -2,33 +2,41 @@
 
 [Design history](README.md)
 
-Research date: 2026-10-02. Code baseline: `2e574cb20`. This is a design
-recommendation, not an adopted format specification or an implementation plan
-for the future features discussed below. Current-format findings come from the
+Research date: 2026-10-02, including the adversarial review in section 5. Code
+baseline: `2e574cb20`. This is a design recommendation, not an adopted format
+specification or an implementation plan for the future features discussed below. Current-format findings come from the
 reader, writer, model types and a checked-in file, rather than earlier plans.
 External sources are primary specifications, developer documentation and product
 manuals. Tradeoffs and recommendations are our analysis of those sources.
 
 **Recommendation:** keep `.capy` as one self-contained artwork file, using a
-restricted ZIP container with ZIP64 support, a small JSON manifest, independently
-versioned artwork types, binary resources and a mandatory portable preview.
-Keep today's sparse, lossless tile storage and reuse of compressed data. Replace
-serialization of the runtime `Document` with an explicit file model. Separate
-reusable content, placed instances, evaluation relationships and output views.
-Describe today's layer stack as one composition type, so later timelines and
-graphs can compose with existing content without changing the package foundation.
+restricted ZIP container with ZIP64 support, a small JSON manifest, a flat table
+of typed objects with globally unique IDs, binary resources and a mandatory
+portable preview. Keep today's sparse, lossless tile storage and reuse of
+compressed data, but check each stored block with a CRC-32 instead of decoding
+every tile on open. Replace serialization of the runtime `Document` with an
+explicit file model. Write every reference in one form that a reader can find
+without understanding the referring type. Give each composition its own frame,
+units and working color, and give each output its delivery intent. Signal
+compatibility through the content itself rather than through capability lists.
+Describe today's layer stack as one composition type, so later timelines, graphs
+and page collections can compose with existing content without changing the
+package foundation.
 
 The lasting commitment is **new readers preserve the meaning of old files**.
 Old readers cannot edit arbitrary future features correctly. They should show a
 saved representation, preserve the source, and avoid silently saving a damaged
 document. No container or capability list can replace the ongoing work of
 maintaining old semantics and testing them. The five feature stress tests in
-section 3 refine the initial proposal; section 4 incorporates their conclusions.
+section 3 refine the initial proposal. The adversarial review in section 5
+simplifies its compatibility mechanism and closes gaps found by comparing more
+artist tools. Section 4 incorporates both.
 
 Read the [current-format audit](#1-current-format-and-problems-to-correct),
 [external research](#2-what-other-formats-teach-us),
-[future feature analysis](#3-future-features-and-their-implications) and
-[final recommendation](#4-minimal-recommended-foundation).
+[future feature analysis](#3-future-features-and-their-implications),
+[final recommendation](#4-minimal-recommended-foundation) and
+[adversarial review](#5-adversarial-review).
 Focused assessments cover [animation workflows](#animation-workflows-the-foundation-must-accommodate),
 [five feature stress tests](#five-iterative-feature-stress-tests) and
 [whether to adopt a general node graph now](#should-the-file-already-be-a-general-node-graph).
@@ -75,13 +83,15 @@ result or qualification of every host's save workflow.
 
 | Area | Persisted today |
 | --- | --- |
-| Document | Identity, dimensions, color space/depth, blend space, print resolution, SDR rendition, proof recipe and descriptive photo metadata. |
-| Composition | Ordered flat layer array with parent references; paint, paper, group, effect and selection kinds; visibility, opacity, blend, clipping, transforms, extents and masks. |
+| Document | Identity, dimensions, color space/depth, blend space, print resolution, SDR rendition, proof recipe (stored inside the source index) and descriptive photo metadata. |
+| Composition | Ordered flat layer array with parent references; paint, paper, group, effect and selection kinds; names, visibility, opacity, blend, clipping, paper color, offsets, placement with interpolation, extents and masks. |
+| Masks | Enabled, linked, inverted, placement, extent, offset, an initial selection and a default coverage for tiles that were never painted. |
 | Paint | Committed sparse color and coverage tiles; wetness planes and live watercolor edge settings. No saved stroke replay or undo history. |
 | Imported images | Tiled source samples, independent interpretation/profile, resolution and Original/Rasterized role; painted tiles override source regions. These are retained decoded samples, not necessarily the original imported file bytes. |
-| Effects | Embedded resolved WGSL, ABI, entry points, passes, sampling declarations, parameters, values and supporting definition metadata. |
-| Editing aids | Rulers, reference-layer flags, saved selections, current selection, layer locks and alpha locks. |
+| Effects | Embedded resolved WGSL, ABI, entry points, passes, lookups, sampling declarations, parameters, constraints, localized label IDs and values. Each instance serializes its own copy of the program. |
+| Editing aids | Rulers, reference-layer flags, saved selections (contours or packed coverage), current selection, layer locks and alpha locks. |
 | Runtime/editor details | Document revision, next layer/stroke IDs, active layer/mask, mask inspection flag, and selection display settings. |
+| Not in the document | Custom brush textures, pending operations and stroke data. Palettes, swatches and tool memory belong to the workspace. |
 
 These fields are visible in
 [`Document` and `Layer`](../../crates/layer-core/src/lib.rs),
@@ -115,16 +125,20 @@ not a sufficient inventory. Check the
    invalid `active_layer`, `active_mask`, allocator values and an exhausted
    revision counter. None is necessary to interpret the picture. Remove these
    from the artwork contract, derive allocation state after reading, and keep
-   active targets and inspection state in local session persistence. An optional
-   transferable editing-state attachment can preserve convenience without making
-   it a condition of opening artwork.
+   active targets, inspection state and the current selection in local session
+   state keyed by the document ID. A later ancillary record can carry them
+   between devices without making them a condition of opening artwork.
 
 4. **The outer format assumes the current layer implementation.** Every layer
    and mask needs a raster target record, even kinds without raster content.
    Sources bind specifically to `LayerId`; selections have `Current`, `Layer`
-   and `Mask` target variants; paper must occupy the last array position. These
-   can be valid rules of today's layer-stack type, but should not be rules of
-   the container or of every future document.
+   and `Mask` target variants; paper must occupy the last array position. Most
+   relationships are array positions: z-order, the clipping base found by
+   scanning down the array, tiles to blobs, sources to images, embedded profiles,
+   selection pixels, effect values matched to parameters by position and Choice
+   values stored as option indexes. These can be valid rules of today's
+   layer-stack type, but should not be rules of the container or of every future
+   document.
 
 5. **Binary resources are special-purpose sections.** Tiles, profiles and photo
    metadata each have their own indexing machinery. Adding fonts, movie clips,
@@ -143,10 +157,13 @@ not a sufficient inventory. Check the
    Embedded source protects against catalog replacement, but does not preserve
    the shader's host interface, language behavior or color semantics forever.
    Parameter values are positional, and the program includes labels and rendering
-   hints. Version the durable evaluation contract independently, use stable
-   parameter identities in files, and keep UI labels from determining whether an
-   effect can be evaluated. Replacing a built-in implementation must not silently
-   change a saved picture.
+   hints. Each instance serializes its own copy of the program, including linked
+   WGSL of up to 1 MiB, and sharing is not restored on load. A parameter's unit
+   is a display string: Image Size rescales a value only when its unit label is
+   exactly `px`. Version the durable evaluation contract independently, use stable
+   parameter identities and declared dimensions in files, and keep UI labels from
+   determining whether or how an effect is evaluated. Replacing a built-in
+   implementation must not silently change a saved picture.
 
 8. **Storage conventions need a written, stable meaning.** The tile digest
    currently incorporates `serde_json::to_vec(descriptor)`: changing serialization
@@ -154,7 +171,10 @@ not a sufficient inventory. Check the
    Fixed tiles and packed selection words are not inherently wrong, but belong
    to a named storage encoding, independent of GPU pages and in-memory packing.
    Hash inputs, endianness, padding, channel order and missing-tile behavior must
-   be defined independently of Rust serialization details.
+   be defined independently of Rust serialization details. The digest is the
+   only check, and it covers decoded pixels: the reader decompresses, unshuffles,
+   hashes and validates every tile before opening, and no checksum covers the
+   stored bytes. That rules out verifying or copying a block without decoding it.
 
 9. **Application limits and format limits are entangled.** Default admission
    limits include 64 MiB metadata, 512 MiB source ownership, 1 GiB raster data,
@@ -162,6 +182,17 @@ not a sufficient inventory. Check the
    defenses, not a suitable permanent ceiling for animation and video. Distinguish
    structural validity from a particular device's editable working set. Do not
    remove resource limits to claim extensibility.
+
+10. **Color and geometry are canvas-global.** The reader rejects any tile whose
+    descriptor differs from the document color, so no layer, group or resource
+    can have its own space or depth; the roadmap's per-layer linear blending
+    already conflicts with a single blend space. Root offsets carry the canvas
+    origin, crop rewrites them, effects are evaluated over the canvas, and effect
+    lengths are canvas pixels. Layer pixels are already independent of canvas
+    pixels through placement. These are valid rules of today's layer stack, but
+    they belong to that composition rather than to the document.
+    See [`canvas_geometry.rs`](../../crates/layer-core/src/canvas_geometry.rs) and
+    the [photo-editing roadmap](../development/photo-editing-roadmap.md).
 
 ### What should stay
 
@@ -178,8 +209,8 @@ as versioned paint-material state. Similarly, named selections, authored rulers,
 reference designations, locks, proof intent and print resolution are useful
 document information even when they do not directly contribute visible pixels.
 Separate authored aids from temporary inspection. The current active selection
-can move to optional editing state; saved selection objects and mask coverage
-must remain portable.
+moves to session state; saved selection objects and mask coverage must remain
+portable.
 
 The existing
 [atomic file writer](../../crates/layer-core/src/atomic_file.rs) and
@@ -246,7 +277,7 @@ Relevant boundary cases include:
 | Unknown hidden object | It may contain editable work or become visible later. Visibility is not permission to discard it. |
 | Missing font, shader ABI, ICC support or video decoder | The package may be valid even when the reader cannot evaluate it. Report unsupported content separately from corruption. |
 | Corrupt payload, duplicate IDs, dangling references or cyclic hierarchy | Reject invalid native content; offer a separately verified preview or explicit recovery, never silently manufacture a successful load. |
-| Cropped canvas, negative placement or sparse empty area | Canvas size is a view/output boundary; it does not define the full stored content extent. Absence must have type-defined meaning. |
+| Cropped canvas, negative placement or sparse empty area | The canvas is the layer stack's frame: offsets, effects and paper are defined relative to it, but it does not bound the stored content. Outputs frame a composition without redefining it. Absence must have type-defined meaning. |
 | Huge or adversarial file | Check arithmetic, decoded budgets, nesting, counts and codec output sizes. Deduplicated bytes can still describe an enormous decoded working set. |
 | Reordered or deleted objects with unknown metadata | Stable IDs help, but do not prove that unknown relationships remain valid after edits. |
 | Damaged thumbnail only | Artwork validity is independent; a supported reader can regenerate a preview from intact content. |
@@ -389,6 +420,30 @@ frame. For temporal effects and motion blur, the feature declares its required
 time interval and sampling behavior, not only a spatial damage radius. Reversed
 time for video, audio and stateful simulation needs separately defined behavior.
 
+**Give each composition a time base and keep clips apart from what they animate.**
+After Effects stores frame rate, duration, start time and shutter on each
+composition and decides per composition whether nested frame rates are preserved;
+Clip Studio Paint creates each timeline with its own rate and length.
+[CompItem](https://ae-scripting.docsforadobe.dev/item/compitem/),
+[CSP timelines](https://help.clip-studio.com/en-us/manual_en/600_animation/Timeline_Palette.htm).
+Spine, Rive, Live2D and Moho keep many named animations beside one rig. A clip
+therefore targets properties through paths relative to the content it is applied
+to, so one clip can drive several occurrences or rigs. Some animation is keyed
+on a parameter rather than on time: Live2D keyforms, Moho smart-bone actions and
+Rive joysticks. Curves are functions of an evaluation-context input, of which
+time is one. [Spine skins](https://esotericsoftware.com/spine-skins),
+[Live2D parameters](https://docs.live2d.com/en/cubism-editor-manual/parameter/),
+[Rive joysticks](https://rive.app/docs/editor/manipulating-shapes/joysticks).
+
+**Interactive output depends on history, not only on time.** Rive state machines
+and listeners, dotLottie state machines and Spine's animation mixing produce
+frames from the inputs received so far. An interactive output declares an initial
+state and its inputs, and its preview shows that initial state. The arbitrary-time
+rule above applies to time-sampled outputs.
+[Rive states](https://rive.app/docs/editor/state-machine/states),
+[dotLottie](https://dotlottie.io/spec/),
+[Spine mixing](https://esotericsoftware.com/spine-applying-animations).
+
 **Retain authored work that is not currently played.** Unassigned cels, unused
 takes, disabled tracks, off-range keys and alternate poses are still artwork.
 The root's authored ownership must include them; tracing references only from
@@ -426,7 +481,7 @@ results for the current editor:
 
 The required foundation is content/occurrence identity, stable property keys,
 typed relationships, binary resources and output contexts. The timeline later
-supplies timing/binding semantics through capabilities. Adding an empty timeline
+supplies timing/binding semantics through its own types. Adding an empty timeline
 or universal `frame` field to today's files would provide little of that support.
 
 ### Vector and stroke content should retain intent
@@ -727,6 +782,11 @@ unknown effect's input cannot be made safe by retaining the old effect bytes.
 Extensibility permits a future feature to define new semantics; it does not make
 undefined semantics executable or unknown semantics safely editable.
 
+The [adversarial review](#5-adversarial-review) later tested the model against
+more tools and found changes these five scenarios did not exercise: references
+that type-blind readers can find, ID paths into shared content, per-composition
+frames and color, declared channel layouts and stricter container rules.
+
 ## 4. Minimal recommended foundation
 
 ### Choose a restricted standard container
@@ -734,38 +794,81 @@ undefined semantics executable or unknown semantics safely editable.
 | Candidate | Advantages | Costs and conclusion |
 | --- | --- | --- |
 | Evolve the current custom container | Reuses the compact index, streaming writer, tile checks and compressed backing. A generic resource directory could make it extensible. | We own every inspection/recovery tool and directory rule. A sound alternative if measured ZIP integration costs prove material; capabilities do not inherently require ZIP. |
-| ZIP with ZIP64 support | Standard directory and offsets, independent resources, ordinary inspection tools, preview extraction and a single transferable file. | Central directory is normally read from the end; safe updates generally rewrite the package. Restrict the ZIP feature set and pack tiny blocks. **Recommended default.** |
-| SQLite | Transactions, partial updates, indexes and a mature application-file story. [SQLite application files](https://www.sqlite.org/appfileformat.html). | A database runtime, page/journal behavior and host-specific storage integration are more than the current transport needs. Attractive for a working/recovery store if incremental saves become essential; not the initial interchange package. SQLite archives also have overhead relative to ZIP. [SQLite archives](https://www.sqlite.org/sqlar.html). |
-| Directory bundle, tar or whole-file compression | A directory is convenient for development; sequential containers are easy to stream. | A directory is awkward to transfer through mobile providers; tar needs another index for efficient random access; whole-file compression couples unrelated media. None is the default user-facing file. |
+| ZIP with ZIP64 support | Standard directory and offsets, independent resources, preview extraction and a single transferable file. Krita, Sketch, Penpot, Procreate and dotLottie use ZIP. | Central directory is normally read from the end; safe updates generally rewrite the package. Restrict the ZIP feature set and pack tiny blocks. **Recommended default.** |
+| SQLite | Transactions, partial updates, indexes and a mature application-file story. [SQLite application files](https://www.sqlite.org/appfileformat.html). A [reverse-engineered parser](https://pypi.org/project/clipparse/) shows Clip Studio Paint keeping metadata in an embedded SQLite database beside offset-addressed pixel blocks. | Copying a database mid-transaction or separating it from its journal corrupts it, and deleted content stays in free pages unless `secure_delete` is on. [Corruption](https://www.sqlite.org/howtocorrupt.html), [pragmas](https://www.sqlite.org/pragma.html). Blobs above about 100 KB read faster from files. [Blob speed](https://sqlite.org/fasterthanfs.html). Sketch [moved from SQLite](https://blog.icons8.com/articles/what-is-inside-of-a-sketch-file/) to ZIP and JSON. Attractive for a working/recovery store if incremental saves become essential; not the interchange package. |
+| Directory bundle, tar or whole-file compression | A directory is convenient for development and large projects; Toon Boom Harmony and OpenToonz keep scenes as folders. Sequential containers are easy to stream. | A directory is awkward to transfer through mobile providers, and Apple warns that iWork packages can be damaged by browser uploads or email. [Apple](https://support.apple.com/en-us/HT202887). Tar needs another index for random access; whole-file compression couples unrelated media. None is the default user-facing file. |
 
 ZIP64 must be supported from the first reader, including large entry counts and
 large offsets; this is support for ZIP's large-file records, not a demand to use
 them in every tiny archive. The
 [PKWARE specification](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)
 defines the transport. Use a maintained implementation and a deliberately small
-accepted subset. Initially use **STORED archive members**, with lossless LZ4
-inside raster packs and existing compression inside PNG/video/etc. This avoids
-double compression and preserves seekability within a pack. The tradeoff is
-uncompressed JSON and text resources; measure that cost before adding another
-mandatory codec.
+accepted subset. Do not promise that operating-system archive tools open every
+package: macOS Archive Utility has written invalid archives above 4 GiB or 65,535
+entries. [yauzl-mac](https://github.com/overlookmotel/yauzl-mac). ZIP parsers
+disagree about almost every ambiguous archive, so strictness is what keeps every
+Capy reader seeing the same members.
+[ZipDiff](https://www.usenix.org/conference/usenixsecurity25/presentation/you).
+
+- **STORED members only**, with lossless LZ4 inside raster packs and existing
+  compression inside PNG, video and similar media. This avoids double
+  compression and preserves seekability within a pack. The tradeoff is
+  uncompressed JSON and text resources; measure that cost before adding another
+  mandatory codec.
+- **Sizes and CRC-32 in every local header; no data descriptors.** APPNOTE allows
+  descriptors with any method, but Java's `ZipInputStream` still rejects them on
+  STORED entries. [JDK-8143613](https://bugs.openjdk.org/browse/JDK-8143613).
+  Block checksums are CRC-32s ([raster storage](#retain-efficient-raster-storage-normalize-its-contract)),
+  so a writer combines them into each member's CRC without rereading data, and a
+  non-seekable Android or browser stream still receives complete headers.
+  [zlib `crc32_combine`](https://www.zlib.net/manual.html).
+- **One canonical ZIP64 encoding**, members without gaps or overlaps, no duplicate
+  names and a single end record.
+- **Canonical relative ASCII member names that stay distinct when case is
+  ignored.** Treat the package as an abstract set of members with ZIP as its
+  exchange form, as EPUB defines its container separately from the ZIP mapping.
+  [EPUB OCF](https://w3.org/publishing/epub32/epub-ocf.html). A folder form for
+  development, very large projects or a working store then remains lossless on
+  case-insensitive file systems, without being promised now.
+- **`META-INF/` is reserved for signatures.** C2PA content credentials store a
+  STORED manifest at `META-INF/content_credential.c2pa` whose hashes cover the
+  other members and the central directory.
+  [C2PA specification](https://spec.c2pa.org/specifications/specifications/2.2/specs/C2PA_Specification.html),
+  [c2pa-rs ZIP handler](https://github.com/contentauth/c2pa-rs/blob/main/sdk/src/asset_handlers/zip_io.rs).
+  Readers accept and ignore members there. An edited save drops them, because a
+  signature describes one exported snapshot.
 
 An illustrative package, not final member names or a byte-level specification:
 
 ```text
 artwork.capy
   mimetype             package identity, first and small
-  manifest.json        schema, capabilities, objects, resources and output inventory
+  manifest.json        envelope, objects, resources and outputs
   preview.png          portable saved view of the default output
-  data/tiles.bin       indexed independent LZ4 blocks, when raster data exists
+  data/tiles-1.bin     indexed independent LZ4 blocks, when raster data exists
   data/<resource-id>   profiles, metadata, shader definitions and other assets
+  META-INF/            optional signatures, never needed to open the artwork
 ```
 
-Use one tile pack initially; allow resource references to name a pack and range
-so later partitioning does not change artwork identity. The ZIP directory locates
-members; the tile index locates blocks *inside* a member. Do not also duplicate
-ZIP's absolute file offsets in JSON. Avoid one member per tile, stroke, vertex or
-animation sample. A future type can put large arrays or time indexes in a binary
-resource without extending the container grammar.
+Write one tile pack initially, but let the resource table list several and
+locate each block by pack and range, so later partitioning does not change
+artwork identity. The ZIP directory locates members; the pack index locates
+blocks *inside* a member. Do not also duplicate ZIP's absolute file offsets in
+JSON. Avoid one member per tile, stroke, vertex or animation sample. A future type
+can put large arrays or time indexes in a binary resource without extending the
+container grammar.
+
+The pack index is authoritative. Readers accept byte ranges inside a pack that
+no index entry refers to; first-format writers never leave any. That tolerance
+keeps a later clone-and-append save possible without old readers rejecting its
+files. Substance 3D Painter's incremental saves fragment its project archive
+until the artist chooses Save and Compact.
+[Adobe](https://experienceleague.adobe.com/en/docs/substance-3d-painter/using/technical-support/workflow-issues/project-issues/projects-are-really-big).
+Whether an ordinary save may ever keep deleted bytes is a privacy decision for
+that feature: Word's fast save and PDF incremental updates both exposed deleted
+content. [Office Watch](https://office-watch.com/2003/sources-of-embarrassing-information/),
+[recovering PDF versions](https://eclecticlight.co/2019/03/11/pdf-without-adobe-17-unredacting-manaforts-documents-and-recovering-pdf-versions/).
+Shared and exported copies are always compacted.
 
 ZIP makes no promise of zero-copy access through every host. A non-seekable
 provider may need a bounded stream to private disk storage before random access;
@@ -773,39 +876,69 @@ the web host needs a suitable Blob/range or private-storage path. Saving must
 write a complete replacement off the input thread and publish it through the
 host's supported mechanism. Reuse compressed blocks, but acknowledge that a ZIP
 rewrite still copies bytes. Large-video incremental editing may eventually need
-a separate working store or explicit linked media.
+a separate working store or explicit linked media. Recovery and autosave write
+ordinary packages to private storage; only their publication and retention differ.
 
 ### Keep the file model small and independent
 
 The revised durable model needs five concepts:
 
-1. **Document envelope:** format identity/version, an authored root reference,
-   capability declarations and portable metadata. The root describes the work's
-   organization and retained authored content, including work not used by any
-   current output; today it is a layer stack, including hidden layers.
-2. **Typed objects with stable IDs:** each has a namespaced type/version and
-   type-owned data/references. Distinguish editable content, placed instances and
-   effect applications; an instance's transform/mask is not a property of its
-   shared source. Paint, images, groups, paper, masks, effects and saved coverage
-   retain their existing meanings. Object identity is independent of array
-   position, display name, runtime allocator and content hash. Type schemas own
-   the stable keys for addressable properties and the meaning of relationships.
-   Later animation bindings refer to these identities without making every
-   baseline field a predesigned animated-value union.
-3. **Resources:** binary or textual payloads addressed through one mechanism,
-   with declared encoding, length and integrity information. Multiple objects
-   can reference the same immutable content. Pixel interpretation belongs to the
-   image/plane description, not to a guessed filename or GPU texture format.
-4. **Identified outputs:** a small inventory names renderable views and a default
-   output, independently of layer/page order. Each refers to its source and
-   authored view/settings; today there is one canvas output. Later types can
-   express page framing, camera, time or delivery intent without adding those
-   fields to every document. Settings have one authoritative owner and are
-   referenced where shared, not copied into conflicting document/output records.
-5. **Saved representations:** a baseline preview and, where useful, explicitly
-   scoped richer fallbacks. Source data remains authoritative unless the artist
-   explicitly converts it. Each representation identifies its output or object
-   scope, applicable context and source snapshot.
+1. **Document envelope:** format identity and envelope version, a document ID, a
+   reference to the authored root, the outputs and portable metadata. The root is
+   what the editor opens: today the layer stack, later perhaps a page collection
+   or a project bin.
+2. **A flat table of typed objects:** every addressable record is a top-level
+   object with a globally unique ID and a namespaced type. Relationships are
+   references, never array positions or records nested inside another object's
+   data. Types own their fields, the stable keys of addressable properties and the
+   meaning of their references. Identity is independent of array position,
+   display name, runtime allocator and content hash. Every object in the table is
+   retained authored work, including hidden layers and, later, unassigned cels and
+   unused takes. Deletion is explicit, and validation rejects objects that
+   neither the root nor an output reaches.
+3. **Resources:** immutable binary or text payloads in one resource table. Objects
+   reference resource IDs; the table gives each payload's location (today a
+   member, or a pack and range), encoding, length and checksum. Several objects
+   can reference the same payload. Pixel interpretation belongs to the resource's
+   declared layout, not to a filename, a GPU texture format or a document-wide
+   setting.
+4. **Outputs:** a small inventory of renderable views and a default, independent
+   of layer or page order. Each names a source composition, its evaluation
+   context, its delivery intent and its saved representations. Today there is one
+   canvas output, which owns the SDR rendition and proof recipe. Later outputs can
+   add page framing, cameras, time ranges, parameter values or an interactive
+   initial state without adding those fields to every document. Settings have one
+   owner and are referenced where shared.
+5. **Saved representations:** a baseline preview and, later, optional richer
+   fallbacks, each belonging to an output. Every save regenerates every
+   representation from the same snapshot, so the first format needs no staleness
+   bookkeeping. Source data remains authoritative unless the artist explicitly
+   converts it.
+
+**A composition owns its frame.** The layer stack's frame is today's canvas: its
+size and origin, physical resolution, working color space and depth, and blend
+space. Offsets, effects and paper are defined relative to it, and content may
+extend beyond it. A nested composition later brings its own frame, and a timeline
+adds a time base and duration to it, as After Effects compositions do. Outputs
+frame and scale a composition rather than redefining it. Authored lengths are in
+composition units, today canvas pixels, and every parameter declares its
+dimension in the schema. Rendering at another scale, a half-resolution proxy and
+Image Size then rescale lengths without consulting display labels. Color belongs
+to the composition that blends and to each resource that stores samples, so the
+roadmap's per-layer linear blending becomes an override of the stack's default
+rather than a conflict with a document setting.
+
+**Separate content from occurrences only where content is shared.** Today's
+layers own their pixels, sources and masks exclusively, so a first-format layer
+is an occurrence that references its resources and masks directly. The first
+feature that shares editable
+content, such as Smart Objects, held cels or symbols, introduces separate content
+objects: the layer keeps its ID as the occurrence and the content receives a new
+one. Nothing binds to content identity yet, so deferring the split loses nothing
+and avoids doubling today's objects and validation rules. Effect definitions
+differ because one program serves many instances: store each program once as a
+resource, and let effect applications reference it with values keyed by stable
+parameter keys.
 
 Store ordered children in the layer-stack type, not both child lists and an
 independent authoritative parent/order table. Distinguish composition membership
@@ -824,18 +957,106 @@ implementation supports today's effect layers and embedded filter programs;
 layer FX and other application types arrive with their features.
 
 Use dedicated wire types in shared Rust, with validated conversion to runtime
-types. Keep semantic rules and capability evaluation shared across hosts. JSON
+types. Keep semantic rules and compatibility checks shared across hosts. JSON
 is adequate for the small structural description; avoid large numeric/byte arrays,
-base64 media, serialized pointers and runtime enum ordinals. IDs should be opaque
+base64 media, serialized pointers and runtime enum ordinals. IDs are opaque
 strings. Define lossless handling of large integers so JavaScript tooling cannot
 round offsets or future time values above its exact-integer range. Binary offsets
 remain 64-bit; JSON representations must not rely on an imprecise number parser.
 
 Freeze the meaning of coordinate systems, child order, transforms, interpolation,
 blend spaces, blend formulas, clipping and pass-through behavior for the baseline
-type. Keep existing projective/mesh placement as semantic geometry, not a snapshot
-of GPU control buffers. This is the unavoidable specification work for today's
+type. That includes rules that today live only in code: the clipping base is the
+next lower sibling that is neither clipped nor a selection layer and must be
+paint; a clipped pass-through group composites as an isolated Normal group;
+linked mask geometry applies on top of the owner's placement; mask coverage
+combines the initial selection or default coverage with painted overrides before
+inversion. See [groups and clipping](../internals/documents.md#groups-and-pass-through).
+Keep existing projective/mesh placement as semantic geometry, not a snapshot of
+GPU control buffers. This is the unavoidable specification work for today's
 features; generic extensibility is not a substitute for defining them.
+
+### References, paths and evaluation context
+
+**References are visible without knowing the type.** Every reference to an object
+or resource uses one reserved JSON form, such as `{"ref": "<id>"}`, wherever it
+appears. A reader can then find the dependencies of a type it does not
+understand: check reachability, keep the resources it needs, copy it to another
+document and, later, edit around it. glTF hides references inside extension data,
+so glTF Transform does not write unregistered extensions and proposes passthrough
+only for extensions without references.
+[Writer](https://app.unpkg.com/@gltf-transform/core@4.2.0/files/src/io/writer.ts),
+[issue 1856](https://github.com/donmccurdy/glTF-Transform/issues/1856).
+OPC keeps references in separate relationship parts, and USD makes paths a
+data-model type that namespace editing repairs without knowing the schema.
+[OPC relationships](https://python-pptx.readthedocs.io/en/latest/dev/resources/about_relationships.html),
+[USD namespace editing](https://openusd.org/release/user_guides/namespace_editing.html).
+Without a visible form, the rule that old readers must not collect resources
+they cannot see could never be relaxed.
+
+**IDs are globally unique and never reused.** Writers generate random 128-bit IDs
+for the document and its objects and keep no allocator state in the file. Paste
+between documents, linked libraries, branching and collaboration then need no
+remapping. Figma puts a per-client ID into every object ID so offline creation
+never collides; Sketch, Penpot and Krita use UUIDs; Aseprite added layer UUIDs
+later behind a header flag.
+[Figma multiplayer](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/),
+[Sketch format](https://developer.sketch.com/file-format/),
+[Penpot format](https://help.penpot.app/technical-guide/developer/data-model/penpot-file-format/),
+[Aseprite specification](https://github.com/aseprite/aseprite/blob/main/docs/ase-file-specs.md).
+Today's `LayerId(u64)` is a JSON number that can exceed JavaScript's exact range.
+
+**An ID names a definition; a path names an occurrence.** When content is shared,
+each of its objects appears in every occurrence. A key, override or mask aimed at
+one occurrence's part addresses it by the path of IDs from its scope through each
+occurrence, and a one-element path means the local object. Figma's override
+`GUIDPath`, Sketch's UUID-path override names and Rive's `dataBindPathIds` work
+this way, while USD's expanded prototype paths are documented as unstable.
+[Figma instances](https://developers.figma.com/docs/plugins/api/InstanceNode/),
+[Sketch overrides](https://developer.sketch.com/reference/api/symbol-override.txt),
+[USD instancing](https://openusd.org/release/api/_usd__page__scenegraph_instancing.html).
+Paths survive reordering and renaming; names and indexes do not.
+
+**Context, not copies, makes occurrences differ.** An occurrence references content
+and supplies a context: placement and local effect applications today, and later
+a time mapping and parameter values. Content may later declare an interface of
+named, typed parameters with defaults; occurrences override by parameter, and
+outputs supply a context of their own. One mechanism then covers Smart Object
+and component variants, After Effects Essential Properties, Cavalry pre-comp
+overrides, Rive inputs and data binding, Live2D parameters, Figma variable modes
+such as theme or language, Photoshop data sets and layer comps.
+[Figma modes](https://help.figma.com/hc/en-us/articles/15343816063383),
+[Cavalry referencing](https://cavalry.studio/docs/user-interface/menus/window-menu/assets-window/referencing/),
+[Rive stateful components](https://rive.app/docs/editor/data-binding/stateful-components),
+[Photoshop data-driven graphics](https://helpx.adobe.com/photoshop/using/creating-data-driven-graphics.html).
+Prefer declared interfaces to arbitrary deep overrides: Rive makes each nesting
+level re-bind, and Blender's library overrides need a resync when the library's
+hierarchy changes.
+[Blender library overrides](https://docs.blender.org/manual/en/latest/files/linked_libraries/library_overrides.html).
+
+**Bindings are separate records.** Base values stay literal. A binding record
+targets a path and property key and supplies the value from a swatch, variable,
+curve, expression or rig driver under a defined combination rule. An older reader
+sees an unknown binding type and stops editing, rather than editing a literal
+that is no longer authoritative. This keeps first-format property schemas free of
+value unions and still allows palette recoloring as in Toon Boom Harmony, where
+a cloned palette keeps its color IDs so a scene can switch to a night palette.
+[Harmony palettes](https://docs.toonboom.com/help/harmony-24/paint/colour/clone-palette.html).
+A raster encoding can likewise refer to a palette, as OpenToonz's ink, paint and
+tone pixels do. [OpenToonz styles](https://opentoonz.readthedocs.io/en/latest/managing_palettes_and_styles.html).
+
+**Resources can later live elsewhere.** A resource-table entry, not the reference
+to it, says where a payload lives. A later linked-media or library feature adds
+an external location with a document ID, object path, expected hash and an
+embedded cached copy, without changing any reference. A missing link then shows
+the cache and stays editable instead of forcing preview mode. Clip Studio Paint
+keeps a comic as a management file plus one file per page, InDesign books
+reference separate documents, Harmony and OpenToonz share project folders across
+scenes, and Sketch caches the library symbols a document uses.
+[CSP page files](https://help.clip-studio.com/en-us/manual_en/570_pages/Management_Files_and_Page_Files.htm),
+[InDesign books](https://helpx.adobe.com/indesign/using/creating-book-files.html),
+[OpenToonz projects](https://opentoonz.readthedocs.io/en/latest/managing_projects.html).
+Self-contained remains the default; one file need not mean one project.
 
 ### Should the file already be a general node graph?
 
@@ -896,7 +1117,7 @@ It is possible to define that graph correctly now. The strongest reason to do
 so would be a committed near-term node engine: the wire schema could then be
 tested against real evaluation, sharing, input validation and layer operations.
 It is not necessary merely to allow future graphs. A future `composition-graph/1`
-object can use the same IDs, resources, outputs and capability mechanism, and
+object can use the same IDs, resources, outputs and compatibility rules, and
 nest a `layer-stack/1` object as a semantic operation. Alternatively, proven
 conversion can expand old stacks into graph operations. Keep the old meaning
 supported either way; do not save both a layer tree and a graph as competing
@@ -915,43 +1136,64 @@ updates the graph without losing authored data. Validate pixel equivalence and
 bounded incremental rendering. This is an acceptance condition for that larger
 design decision, not extra implementation proposed by this report.
 
-### Capabilities and versioning
+### Compatibility signalled by content
 
-Use **two levels of versioning**, not a minimum application release as the primary
-compatibility mechanism:
+Use **two levels of versioning**, not a minimum application release:
 
 - A rarely changed envelope version defines how to locate and parse the package.
-- Namespaced capability/type versions define artwork interpretation. Illustrative
-  names are `capy.layer-stack/1`, `capy.raster-tiles/1`, `capy.paint-material/1` and
-  `capy.effect-wgsl/1`. The actual registry and spelling can be decided later.
+- Type names carry a major version, such as `capy.layer-stack/1`,
+  `capy.raster-tiles/1`, `capy.paint-material/1` and `capy.effect-wgsl/1`. The
+  registry and spelling can be decided later. A major version changes only when
+  an existing meaning changes; additive features need no version number.
 
-Include `used` and `required` inventories, with `required` a subset of `used`.
-Types imply capabilities; the inventories are a derived preflight summary that
-validation checks against the contents, not a second hand-maintained truth.
-Declare only features the file actually contains. A plain raster drawing saved
-by a future animation release should not require animation support. Compute the
-closure of requirements across nested content, effect definitions and resource
-encodings: a supported 3D object does not imply a supported rig or material.
-Readers verify the dependencies of understood types and treat unknown required
-types conservatively; they cannot validate semantics inside an opaque future type.
+Three rules make additions visible without capability lists:
 
-For Capy's initial policy, **required means necessary for faithful native
-interpretation and safe editing**, including hidden authored content. This is
-deliberately stricter than only asking whether a flattened appearance can be
-displayed. Capabilities for authoring data must remain required even when a
-preview exists. Optional capabilities are genuinely ancillary, such as disposable
-view settings; they must not secretly affect rendering or future edits.
+- **Writers omit every field at its default.** A new field appears in a file only
+  when the artwork uses its feature, so a plain raster drawing saved by a future
+  animation release contains nothing an older reader lacks. Defaults are part of
+  a type's frozen meaning.
+- **Unknown is not invalid.** An unknown type, field, enumeration value, resource
+  encoding or location kind in a record the reader must interpret makes the
+  document *unsupported*, not corrupt; malformed known data is invalid.
+  Requirements close over nested content, effect definitions and resource
+  encodings because each of those is its own record: a supported 3D object does
+  not imply a supported rig or material.
+- **Records say whether they can be ignored.** Following PNG's chunk properties,
+  a record may be `ancillary`, so a reader that does not understand it can still
+  display and edit the document, and `copy_safe`, so that reader may keep it
+  unchanged after edits. An unknown ancillary record that is not copy-safe is
+  dropped on an edited save, and so is a kept one whose references no longer
+  resolve. Records that must be interpreted never reference ancillary ones.
+  [PNG chunk naming](https://www.w3.org/TR/png-3/#5Chunk-naming-conventions).
 
-Additive optional fields must have a defined omission meaning and preservation
-rule. Any addition that changes artwork interpretation requires a capability;
-incompatible semantics require a new version. Keep the known core schema strict
-against typos, but provide explicit extension locations that retain opaque data.
-Do not globally turn off validation to accept future files.
+The flat object and resource tables are the capability inventory. A reader checks
+each record's type and encoding without walking type-specific data. There is no
+separate `used`/`required` list to keep consistent with the contents, and no
+table of which feature needs which minimum version. OpenTimelineIO shows the cost
+of the alternative: its per-schema versions advance with each change, so a newer
+writer must downgrade through registered functions and version targets before an
+older reader can open its files.
+[OTIO versioning](https://opentimelineio.readthedocs.io/en/latest/tutorials/versioning-schemas.html).
+Protobuf's open enumerations similarly treat an unknown value as one from a
+newer schema rather than as a parse error. [Enum behavior](https://protobuf.dev/programming-guides/enum). Rive's
+runtime format skips unknown properties as no-ops, which suits a player but not
+an editor that would then save a damaged document; adding state machines still
+needed an incompatible major version.
+[Rive format](https://rive.app/docs/runtimes/advanced-topic/format).
+
+**Interpreting a record means faithful native rendering and safe editing**,
+including hidden authored content, not only displaying a flattened appearance.
+A preview never makes authoring data ancillary. Ancillary records are genuinely
+disposable or independent, such as view settings, tags or review comments; they
+must not secretly affect rendering or future edits. Keep the known schema strict
+against typos: a misspelled field from a faulty writer is reported as
+unsupported content, and the preview path still applies. Do not globally turn
+off validation to accept future files.
 
 After the compatibility reset, new code must continue to understand the baseline
-and every subsequently supported capability version, directly or through
-lossless conversion. A converter that changes appearance or removes editability
-is not backward compatibility. Changed shader helpers, brush evaluators or blend
+and every subsequently supported type version, directly or through lossless
+conversion. A converter that changes appearance or removes editability is not
+backward compatibility. Changed shader helpers, brush evaluators or blend
 formulas require compatibility implementations or demonstrably equivalent
 translation. A preview protects access to appearance when evaluation is
 unavailable; it does not satisfy the full old-file editing commitment.
@@ -959,54 +1201,61 @@ unavailable; it does not satisfy the full old-file editing commitment.
 This does **not** require maintaining today's pre-reset v14 reader: that can be
 removed at the authorized compatibility break. The maintenance commitment begins
 with the new baseline. Do not promise lossless writing to arbitrary older
-versions; writing the lowest capability set that actually represents a document
-is useful, while lossy conversion should be explicit.
+versions; omitting defaults already writes the smallest representation of a
+document, while lossy conversion should be explicit.
 
 ### Clean degradation without silent loss
 
 | What the reader encounters | Initial behavior |
 | --- | --- |
-| Supported envelope and all required capabilities | Validate and open for native editing. |
-| Unknown optional, independent attachment | Preserve its raw payload and attachment identity; ignore its presentation. |
-| Unknown required type, evaluation version or codec | List identified outputs and show their available saved representations; retain the source, with native editing disabled. |
+| Supported envelope and every non-ancillary record understood | Validate and open for native editing. |
+| Unknown ancillary record | Ignore it for display and editing. Keep it unchanged when it is copy-safe; otherwise drop it on an edited save. A no-edit copy keeps everything. |
+| Unknown type, field, value, codec or location in a record that must be interpreted | List identified outputs and show their available saved representations; retain the source, with native editing disabled. |
 | Known format exceeding the device's resources | Offer the same preview path; distinguish resource limits from invalid artwork. |
 | Unsupported envelope | Try only the fixed baseline preview convention within a safely parsed package; otherwise give a clear unsupported-format result. |
 | Corrupt native content | Refuse normal editing; show a verified preview only as a recovered view. |
 
-The minimum safe first policy is **whole-document preview mode when a required
-capability is unsupported**. Do not build a speculative partial-edit dependency
-system now. It should allow exporting the available representation to a new file
-and keeping/copying the original package, without overwriting the source with
-the fallback.
+The minimum safe first policy is **whole-document preview mode when any record
+that must be interpreted is unsupported**. Do not build a speculative partial-edit
+dependency system now. It should allow exporting the available representation to
+a new file and keeping/copying the original package, without overwriting the
+source with the fallback.
 
-Opaque preservation must include payloads, IDs and every resource they may refer
-to. A no-edit copy can preserve the original package byte-for-byte. Unknown
-attachments may survive edits only under an explicit contract that makes them
-independent of those edits. Otherwise keep the document read-only; do not garbage
-collect resources merely because the old reader cannot see their references.
-Generic retention is not proof of semantic validity after mutation.
+Opaque preservation must include payloads, IDs and every resource they refer to;
+visible references identify those resources without understanding the type. A
+no-edit copy can preserve the original package byte-for-byte. Generic retention
+is not proof of semantic validity after mutation, so unknown non-ancillary
+content leaves the document read-only, and unknown ancillary content survives an
+edit only when it declares itself copy-safe. Office never used its mechanism for
+preserving unknown markup inside known elements, and the standard dropped it as
+very hard to implement; refusing to edit around unknown fields avoids that trap.
+[Markup compatibility](https://www.ericwhite.com/blog/?p=2936).
 
-Later, partial editing can be introduced for well-defined isolated scopes.
-A vector object may have a raster fallback; an unsupported effect that reads
-its backdrop may require a fallback for an entire composition. Unknown blend
-semantics cannot be replaced by Normal. Future fallbacks must identify scope,
-resolution, bounds, color/alpha interpretation and, for animation, time/range.
-Their validity is tied to the exact source snapshot and dependencies. Never
-silently keep a stale fallback after changing an input.
+Later, partial editing can be introduced for well-defined isolated scopes, and
+visible references give a future reader the dependencies it needs without a
+format change. A vector object may have a raster fallback; an unsupported effect
+that reads its backdrop may require a fallback for an entire composition. Unknown
+blend semantics cannot be replaced by Normal. Future fallbacks must identify
+scope, resolution, bounds, color/alpha interpretation and, for animation,
+time/range. Their validity is tied to the exact source snapshot and dependencies.
+Never silently keep a stale fallback after changing an input.
 
-Require one bounded, standard sRGB PNG preview of the default output at an
-explicit representative time when relevant. For HDR, use the authored SDR
-rendition and identify the preview as SDR. It should contain no checkerboard,
-selection overlay or editor chrome. Exact size is a later tuning decision;
-readers must expose when only reduced resolution or one frame is available.
-This small baseline does not promise full-resolution recovery or playback.
-Additional full-resolution composites, object fallbacks or animation proxies
-are optional resources, avoiding compulsory duplication of every layer/frame.
-The output inventory permits discovery of future pages/views even without their
-native capability. A missing representation is reported for that output; the
-default preview must not imply that it represents the entire multi-output work.
-For an unsupported envelope, only the fixed default-preview convention is safe
-to rely on, not an unfamiliar output inventory.
+Require one bounded, standard sRGB PNG preview of the default output in its
+default context: a representative time for a timeline, the initial state for an
+interactive output. For HDR, use the authored SDR rendition and identify the
+preview as SDR. It should contain no checkerboard, selection overlay or editor
+chrome. When an output is not one color image, such as a texture channel set,
+spot plates or an interactive scene, the preview identifies it and does not
+stand in for it. Exact size is a later tuning decision; readers must expose when
+only reduced resolution or one frame is available. This small baseline does not
+promise full-resolution recovery or playback. Additional full-resolution
+composites, object fallbacks or animation proxies are optional resources,
+avoiding compulsory duplication of every layer/frame. The output inventory
+permits discovery of future pages/views even without their native types. A
+missing representation is reported for that output; the default preview must not
+imply that it represents the entire multi-output work. For an unsupported
+envelope, only the fixed default-preview convention is safe to rely on, not an
+unfamiliar output inventory.
 
 Generate the preview from the same committed snapshot as the artwork, using
 asynchronous GPU work and worker encoding. It must not add UI-thread readback or
@@ -1019,23 +1268,46 @@ package.
 
 Keep 256-pixel tiles and LZ4 as the first raster encoding. That is a deliberately
 small baseline, not a rule that all future content has 256-pixel tiles. A later
-encoding can change tile sizes, codecs or layouts through a capability without
+encoding can change tile sizes, codecs or layouts as a new encoding type without
 changing the resource mechanism. Do not add several mandatory codecs now.
 
-Retain U8/U16/F16/F32, source profiles and HDR interpretation. Specify channel
-order, byte order, transfer function, alpha association, finite-value rules,
-coverage and default values. Prefer one portable straight-color representation
-for ordinary saved paint; host attachment formats should not create alternate
-artwork meanings. A tile's default is context-dependent: absent paint may be
-transparent, an absent override may reveal source pixels, and an absent mask
-tile may mean the mask's declared coverage. Preserve those distinctions.
+Retain U8/U16/F16/F32, source profiles and HDR interpretation. Each raster
+resource declares its planes, and each plane its channel names, sample type,
+byte order, transfer function, color encoding, alpha association, finite-value
+rules and default value; the owning type says what the planes mean, such as
+color, coverage or wetness. Today's layers use four-channel color and
+one-channel coverage, and `layer-stack/1` may still require them to match its
+working format, but the container no longer compares every tile with a
+document-wide color. Substance 3D Painter paints base color, roughness,
+metallic, normal and height in one layer with a blend mode per channel,
+Photoshop has spot channels, OpenEXR names arbitrary typed channels, and
+OpenToonz stores ink, paint and tone indexes in one pixel.
+[Substance blending](https://experienceleague.adobe.com/en/docs/substance-3d-painter/using/interface/layer-stack/blending-modes),
+[OpenEXR](https://openexr.com/en/latest/TechnicalIntroduction.html),
+[OpenToonz CM32](https://github.com/opentoonz/opentoonz/blob/master/toonz/sources/include/tpixelcm.h).
+Those need new plane layouts and composition types, not a new resource
+mechanism. Prefer one portable straight-color representation for ordinary saved
+paint; host attachment formats should not create alternate artwork meanings.
+A tile's default is context-dependent: absent paint may be transparent, an
+absent override may reveal source pixels, and an absent mask tile may mean the
+mask's declared coverage. Preserve those distinctions.
 
-Use a stable hash preimage for tile identity instead of incidental Serde output.
-Keep integrity checking per independently accessed block; a whole-file checksum
-alone would require scanning huge media to verify one frame. ZIP CRCs help detect
-transport corruption; hashes used for deduplication and verification do not
-authenticate an untrusted file. Do not confuse resource hashes with authored
-object IDs or require rewriting references after every edit.
+Check each stored block with a CRC-32 of its stored bytes, kept in the pack
+index. A reader can then verify a block, or copy it into a new save, without
+decompressing it; LZ4 decoding is deterministic, so the check also covers the
+decoded samples. Zarr checksums encoded chunks and Parquet checksums each
+compressed page for the same reason.
+[Zarr crc32c](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/crc32c/),
+[Parquet checksums](https://parquet.apache.org/docs/file-format/data-pages/checksumming/).
+Use CRC-32 rather than CRC-32C or xxHash because block values combine into the
+ZIP member's CRC. Validate sample values such as finite floats when a block is
+decoded for use, not as a condition of opening. Content hashes for deduplication
+are runtime identity; if a later format records them, define their input bytes
+explicitly rather than as Serde output. Keep integrity checking per independently
+accessed block; a whole-file checksum alone would require scanning huge media to
+verify one frame. Neither CRCs nor hashes authenticate an untrusted file. Do not
+confuse resource checksums with authored object IDs or require rewriting
+references after every edit.
 
 Named selection coverage can share the same resource system. Its on-disk packing
 must be a defined coverage encoding, not whatever word packing the runtime happens
@@ -1044,19 +1316,20 @@ semantics rather than baking them merely to simplify storage.
 
 ### Admission, publication and the evidence needed before landing
 
-Use canonical relative member names and reject duplicates, ambiguous path
-spellings, traversal, symlinks, encrypted/multipart archives and unsupported ZIP
-methods. Read members through an archive abstraction rather than extracting
-arbitrary paths. Check the central directory against local headers, ranges and
-lengths; bound metadata, nesting, counts and all decoded resources. Unknown
-payloads still need bounded retention and transport-integrity checks. Do not
-execute code, access the network or compile every shader merely to show a preview.
+Accept only the ZIP subset above: reject duplicates, ambiguous path spellings,
+names that collide when case is ignored, traversal, symlinks, encrypted/multipart
+archives, data descriptors and unsupported methods. Read members through an
+archive abstraction rather than extracting arbitrary paths. Check the central
+directory against local headers, ranges and lengths; bound metadata, nesting,
+counts and all decoded resources. Unknown payloads still need bounded retention
+and transport-integrity checks. Do not execute code, access the network or
+compile every shader merely to show a preview.
 
 Save a consistent snapshot to a new package; validate completion before durable
-publication. Keep recovery, autosave and temporary working storage separate from
-the exchange contract. Atomic replacement guarantees depend on the host/provider;
-the container must not claim guarantees a mobile provider or browser download
-does not offer.
+publication. Recovery and autosave reuse the package but never claim to be a
+published save. Atomic replacement guarantees depend on the host/provider; the
+container must not claim guarantees a mobile provider or browser download does
+not offer.
 
 No runtime change or performance measurement accompanies this report. Before
 committing to the format implementation, require evidence for:
@@ -1065,28 +1338,122 @@ committing to the format implementation, require evidence for:
    linked/unlinked masks, transforms/meshes, out-of-canvas data, saved selections,
    sources/profiles, HDR, proof/rendition, material state and embedded effects.
    Compare semantic data and rendered output, not just successful parsing.
-2. **Compatibility and preservation:** a permanent baseline fixture corpus;
-   old capability versions opened by new code; synthetic unknown objects and
-   attachments; unsupported shader/codec; no-edit copying and no silent lossy
+2. **Compatibility and preservation:** a permanent baseline fixture corpus; old
+   type versions opened by new code; synthetic unknown types, fields and
+   enumeration values reported as unsupported; unknown ancillary records kept or
+   dropped by their copy-safe mark; references from unknown records keeping their
+   resources; unsupported shader/codec; no-edit copying and no silent lossy
    overwrite. Test missing dependencies and stale previews explicitly.
 3. **Transport failures:** truncated or conflicting directories, duplicate
-   IDs/member names, corrupt blocks, overflow, oversized decode claims, failed
-   writes, cancelled saves and provider failure during publication.
+   IDs/member names, case-colliding names, data descriptors, unreferenced pack
+   ranges, corrupt blocks, overflow, oversized decode claims, failed writes,
+   cancelled saves, provider failure during publication, and signature members
+   removed by an edited save.
 4. **Measured cost:** file size, save/open time, peak RAM, preview cost, unchanged
-   save/recompression behavior, large resource access and animation-shaped
-   resource counts. Compare ZIP against the existing container on representative
-   artwork. Measure any affected frame paths under the
-   [performance rules](../performance/measuring.md); do not infer tier compliance
-   from a container choice.
+   save/recompression behavior, opening a large document without decoding every
+   tile, large resource access and animation-shaped resource counts. Compare ZIP
+   against the existing container on representative artwork. Measure any affected
+   frame paths under the [performance rules](../performance/measuring.md); do not
+   infer tier compliance from a container choice.
 5. **Host journeys:** save/open/save-as, recovery, continued painting during save
    and preview-only opening on GTK, Web, Android, Apple and Windows. Exercise
-   provider streams and large offsets, not only local seekable files, with the
-   [checks appropriate to the implementation](../development/testing.md).
+   non-seekable provider streams and large offsets, not only local seekable
+   files, with the [checks appropriate to the implementation](../development/testing.md).
 
-The first format should contain today's artwork types with explicit content and
-occurrence identities, versioning, resource references, a one-entry output
-inventory, extension preservation and preview behavior. Leave timeline schemas,
-vector geometry, 3D scenes, rigs, a universal node evaluation schema, incremental
-archive updates and collaboration protocols to their respective features. The
-foundation is successful when adding one of those types no longer requires
-replacing the container or reinterpreting the meaning of existing artwork.
+The first format should contain today's artwork types in a flat object table with
+random IDs and visible references, a resource table with declared plane layouts
+and per-block CRC-32s, the layer stack's frame and color on the stack, one output
+that owns delivery intent, content-signalled compatibility with ancillary and
+copy-safe records, and preview behavior. Leave content/occurrence splits,
+composition interfaces, bindings, timeline schemas, vector geometry, 3D scenes,
+rigs, a universal node evaluation schema, linked resources, incremental archive
+updates and collaboration protocols to their respective features. The foundation
+is successful when adding one of those types no longer requires replacing the
+container or reinterpreting the meaning of existing artwork.
+
+## 5. Adversarial review
+
+The review challenged the recommendation two ways: what the first format can
+drop, and which features of established tools its abstractions cannot express.
+A change was accepted only if it makes today's model simpler or more robust, or
+if leaving it out would be hard to correct once files exist. Sources are product
+manuals and specifications; Clip Studio Paint, Procreate and Figma file internals
+come from reverse-engineered descriptions. Section 4 already incorporates the
+accepted changes.
+
+### Simplifications adopted
+
+| Change | Replaces | Reason |
+| --- | --- | --- |
+| Omit defaults; unknown means unsupported | `used`/`required` inventories and per-type minor versions | One source of truth. Older readers keep editing newer files that use no new feature, and writers track no minimum versions; OTIO needs downgrade functions for that. |
+| `ancillary` and `copy_safe` marks | Preserved optional attachments, and read-only mode when one might depend on edits | PNG's long-tested rule. An older reader can still edit and knows what to keep. |
+| Layers own their content in the first format | A content object and an occurrence object per layer | No current feature shares editable content; the split can happen later without changing any saved meaning. |
+| No editing-state record | An optional transferable editing-state attachment | Active layer, mask inspection, the current selection and selection display stay in local session state keyed by document ID; an ancillary record can carry them later. |
+| Representations regenerated on every save | Snapshot identifiers, staleness checks and object-scoped fallbacks | The first format has one preview, always written from the saved snapshot. |
+| CRC-32 per stored block | SHA-256 over decoded pixels, a specified preimage, and decoding every tile on open | Lazy verification, copying without decoding and ZIP CRCs from one value; no Serde-defined preimage to specify. |
+| Retention by table membership | Retention traced from the root | Unassigned cels and unused takes stay because they exist; deletion is explicit and orphans are invalid. |
+| One package for recovery and saves | A separate recovery contract | One writer and reader; only publication differs. |
+
+### Gaps found
+
+| Use case and evidence | Gap | Change | When it must be decided |
+| --- | --- | --- | --- |
+| Keeping unknown data with its dependencies: glTF Transform drops unregistered extensions; OPC and USD make references visible. | References hidden in type-specific data. | One reserved reference form. | Now: old readers must recognize it. |
+| Paste, libraries, branching and collaboration: Figma, Sketch, Penpot and Krita IDs; Aseprite's late UUID flag. | ID form unspecified; allocators in the file. | Random 128-bit string IDs. | Now. |
+| Overrides and keys on parts of shared content: Figma `GUIDPath`, Sketch override paths, Rive `dataBindPathIds`, USD instancing. | Targets were single object IDs. | ID paths through occurrences. | The rule now; the schema with the first sharing feature. |
+| Variants, layer comps, data sets, poses, theme and language: After Effects Essential Properties, Cavalry, Rive, Live2D, Figma modes, Photoshop data sets. | Occurrence-specific state named, with no common mechanism. | Occurrence context, declared interfaces and outputs with a context. | The principle now; schemas are additive. |
+| Palette recoloring and global swatches: Harmony, OpenToonz, Illustrator. | No place for value references. | Binding records; raster encodings may refer to palettes. | Additive. |
+| Parameter-keyed animation and clips reused across rigs: Live2D, Moho, Rive joysticks, Spine. | Curves assumed to be time-only; clip ownership unspecified. | Curves over context inputs; clips separate from what they animate. | With the animation feature. |
+| Interactive output: Rive and dotLottie state machines, Spine mixing. | Evaluation assumed to be a function of time. | Outputs declare how they are evaluated; previews show the initial state. | Additive; current outputs are stills. |
+| Per-composition frames and time bases: After Effects, Clip Studio timelines, and today's canvas-relative offsets and effects. | Canvas described as a view boundary; frame unowned. | Composition owns frame, units, physical resolution and color; outputs frame it. | Now: it decides where today's fields live. |
+| Units that survive rescaling: Image Size rescales only parameters labelled `px`. | Units carried by display strings. | Parameters declare dimensions in composition units. | Now. |
+| Mixed color: Krita per-layer profiles, InDesign RGB with CMYK, the roadmap's per-layer linear blending. | Color document-global; tiles must match it. | Color on compositions and resources; delivery intent on outputs. | Now. |
+| Channels beyond RGBA: Substance channels, spot channels, OpenEXR, OpenToonz CM32. | Fixed plane vocabulary. | Declared plane layouts per resource. | Now for the encoding; multi-channel stacks later. |
+| Multi-file projects and libraries: Clip Studio page files, InDesign books, Harmony and OpenToonz projects, Sketch's cached library symbols. | "One file" could be read as "one project". | Locations in the resource table; external entries with expected hashes and cached copies later. | The indirection now; links later. |
+| Large, frequent saves: Substance's fragmentation and Save and Compact; Procreate Dreams advertises no save times. | One pack; pack internals implicitly strict. | Several packs; readers tolerate unreferenced pack ranges; folder-safe member names. | Reader rules now; incremental saving later. |
+| Non-seekable outputs: Android provider streams may be pipes; Java rejects descriptors on STORED members. | ZIP options unspecified. | No data descriptors; member CRCs combined from block CRC-32s. | Now. |
+| Content Credentials: C2PA's ZIP embedding; Photoshop attaches credentials at export. | A strict reader would reject the signature member. | Reserve `META-INF/`. | Now. |
+
+Sources not linked in section 4:
+[Krita KRA source](https://github.com/KDE/krita/tree/master/plugins/impex/libkra),
+[InDesign color settings](https://community.adobe.com/t5/indesign-discussions/how-to-set-default-color-mode-in-indesign/m-p/9206530),
+[Illustrator global swatches](https://helpx.adobe.com/illustrator/how-to/global-color-swatch.html),
+[Procreate Dreams announcement](https://www.malaymail.com/news/money/mediaoutreach/2023/09/09/procreate-announces-its-revolutionary-new-ipad-app-procreate-dreams-featuring-groundbreaking-new-animation-tools-made-for-everyone/241537),
+[Android `ContentResolver`](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/main/core/java/android/content/ContentResolver.java),
+[Photoshop Content Credentials](https://www.adobe.com/learn/photoshop/web/apply-content-credentials-photoshop),
+[Moho switch layers](https://www.lostmarble.com/moho/manual/switch_layers.html).
+
+### Challenges considered and rejected
+
+| Proposal | Decision |
+| --- | --- |
+| SQLite as the package, as in Clip Studio Paint | Rejected for exchange: copy and journal hazards, retained deleted data, slower large blobs, and Sketch's move away from it. It remains a candidate working store. |
+| Incremental or append saves now | Deferred. Only reader tolerance is decided now. ZipDiff shows how stale ZIP structures confuse parsers, and retained deleted bytes are a privacy hazard. |
+| Editing around unknown types now, as Rive's runtime does | Deferred. Visible references supply what a future reader needs; the first reader uses preview mode. |
+| A literal-or-reference union in every property, as Figma stores a variable beside a fallback color | Rejected. The fallback literal is a second source of truth that an older editor would change without the binding. Binding records keep fields literal. |
+| Preserving unknown fields inside known records while editing | Rejected. Office dropped its preservation mechanism as very hard; unknown fields make the document unsupported. |
+| A mandatory full-resolution merged image, like Krita's `mergedimage.png` | Rejected as mandatory, since Krita's KRZ omits it to save space. Allowed as an optional saved representation. |
+| Fractional order keys on disk, as [Figma](https://www.figma.com/blog/realtime-editing-of-ordered-sequences/) and [Excalidraw](https://plus.excalidraw.com/docs/api/scene-content-schema) use for sync | Not needed. Child arrays are the saved order; a sync layer derives keys. |
+| A general executable node graph now | The section 4 recommendation stands. Harmony keeps a [node view and timeline](https://docs.toonboom.com/help/harmony-24/premium/rigging/order-layer-node-view.html) synchronized over one scene, which is consistent with a graph type added later beside the stack. |
+| Opening `.capy` files in operating-system archive tools | Not promised; their ZIP64 support is unreliable. |
+
+### Capy Canvas's own planned features
+
+| Planned feature | Where it fits |
+| --- | --- |
+| [Document palettes](color-palettes-research.md) and [document color samplers](../development/photo-editing-m5-m6.md) | Palette and sampler objects; swatches become bindable later. |
+| [Color Lookup with imported `.cube` files](../development/photo-editing-m5-m6-execution.md) | Resources referenced by effect applications, kept after the source file is deleted. |
+| [Per-layer linear blending](../development/photo-editing-roadmap.md), Blend If, mask density and feather ([research](photo-editing-research.md)) | Layer-stack fields omitted at their defaults; a per-layer blend space overrides the stack's. |
+| [Layer comps and tags](layers-research.md) | Comps are outputs with a context; tags are fields or copy-safe ancillary records. |
+| [Persisted history snapshots](photo-editing-research.md) | Retained raster content outside the stack, reachable from the root, with its own budget. |
+| [Vector strokes](vector-layers-research.md) with binary samples, embedded brushes and sub-path IDs | A typed content object with binary resources; sub-path IDs are local and addressed by path. Whether to keep an outline fallback is that feature's decision; the foundation requires only the output preview. |
+| [Paper surface and dry-media material](dry-media-brush-design.md) | Paint-material fields. |
+
+### Not verified
+
+Adobe help pages for After Effects Essential Properties and Photoshop data sets
+were read only through search excerpts. The internals of Procreate Dreams,
+TVPaint, Affinity and Substance project files are unpublished. Whether C2PA's
+central-directory hash covers the ZIP64 end records is ambiguous in the
+specification text. No prototype or measurement tests the recommendations; the
+evidence list in section 4 still applies.
