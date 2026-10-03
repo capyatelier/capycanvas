@@ -1,6 +1,67 @@
 import assert from "node:assert/strict";
 import {mkdir, writeFile} from "node:fs/promises";
 
+export async function checkWorkspaceMenuRefresh({call,evaluate,settle}) {
+  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const view=()=>evaluate('JSON.parse(layerApp.app.workspace_view())');
+  const wait=async condition=>{for(let i=0;i<200;i++){if(await evaluate(condition)){await settle();return;}await pause(25);}throw Error(`Menu refresh timeout: ${condition}`);};
+  const idle=()=>wait('JSON.parse(layerApp.app.workspace_view())?.ready&&!JSON.parse(layerApp.app.workspace_view()).busy&&!JSON.parse(layerApp.app.workspace_view()).switcher_busy&&!JSON.parse(layerApp.app.workspace_view()).dirty');
+  const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await idle();};
+  const click=async selector=>{
+    const p=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect();if(!r?.width||!r.height)throw Error('Hidden '+${JSON.stringify(selector)});return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1,pointerType:'mouse'});
+    await settle();
+  };
+  const begin=()=>evaluate(`(()=>{const app=layerApp.app,tick=app.workspace_tick;window.pendingMenuRefresh={tick};app.workspace_input(JSON.stringify({type:'refresh_switcher'}));tick.call(app);app.workspace_tick=()=>({regions:0,canvas_wake:false});return JSON.parse(app.workspace_view()).switcher_busy})()`);
+  const release=async()=>{await evaluate('layerApp.app.workspace_tick=pendingMenuRefresh.tick');await idle();};
+  const pinAction=id=>evaluate(`(()=>{const v=JSON.parse(layerApp.app.workspace_view()),row=v.switcher_options.sections[0].find(r=>r.action.command.id===${JSON.stringify(id)});layerApp.dispatch(row.action)})()`);
+  await idle();
+  const saved=await evaluate('layerApp.app.workspace_persistence()'),original=await view();
+  const fixture=structuredClone(saved);fixture.layout.header={size:'small',zones:[[],[{id:1,item:{kind:'workspaces'}}],[]],next_id:2};
+  try {
+    await send({type:'restore_workspace',workspace:fixture});
+    assert.equal(await begin(),true);await pause(150);
+    await click('.workspace-switcher-options');
+    assert.ok(await evaluate("Array.from(document.querySelectorAll('.panel-context-menu button[aria-checked]')).every(b=>b.disabled)"));
+    await evaluate("window.retainedMenuRows=[...document.querySelectorAll('.panel-context-menu button')];retainedMenuRows.at(-1).focus()");
+    await release();
+    assert.equal(await evaluate("retainedMenuRows.every((n,i)=>document.querySelectorAll('.panel-context-menu button')[i]===n)&&document.activeElement===retainedMenuRows.at(-1)"),true,'availability refresh retains options rows and focus');
+    assert.ok(await evaluate("Array.from(document.querySelectorAll('.panel-context-menu button[aria-checked]')).every(b=>!b.disabled)"));
+    const target=original.switcher_options.sections[0].find(row=>row.action.command.id!==original.id),id=target.action.command.id;
+    await pinAction(id);await idle();
+    const index=(await view()).switcher_options.sections[0].findIndex(row=>row.action.command.id===id);
+    assert.equal(await evaluate(`document.querySelectorAll('.panel-context-menu button[aria-checked]')[${index}].getAttribute('aria-checked')`),String(!target.selected));
+    await click(`.panel-context-menu button:nth-of-type(${index+1})`);await idle();
+    assert.equal((await view()).switcher_options.sections[0][index].selected,target.selected,'refreshed row invokes its current toggle action');
+    for(const overflow of [false,true]) {
+      let next=1;const item=kind=>({id:next++,item:{kind}});
+      fixture.layout.header={size:'small',zones:[['capy','menu','settings',...Array(8).fill('space')].map(item),[item('workspaces')],Array.from({length:8},()=>item('space'))],next_id:next};
+      const workspaceId=fixture.layout.header.zones[1][0].id;
+      if(overflow)fixture.layout.header.zones[0].push(fixture.layout.header.zones[1].pop());
+      await call('Emulation.setDeviceMetricsOverride',{width:480,height:870,deviceScaleFactor:1,mobile:false});
+      await send({type:'restore_workspace',workspace:fixture});
+      const menu=overflow?'#header-overflow-0 .popover':'#header-workspace-selector .popover';
+      await click(overflow?'#header-overflow-0 > summary':'#header-workspace-selector > summary');
+      if(overflow)await click(`[data-header-overflow-item="${workspaceId}"]`);
+      const submenu=(await view()).switcher_display.length+1;
+      await click(`${menu} button:nth-of-type(${submenu})`);
+      await evaluate(`window.retainedMenuRows=[...document.querySelectorAll('${menu} button')];retainedMenuRows[0].focus()`);
+      assert.equal(await begin(),true);
+      await wait(`Array.from(document.querySelectorAll('${menu} button[aria-checked]')).every(b=>b.disabled)`);
+      await release();
+      assert.equal(await evaluate(`retainedMenuRows.every((n,i)=>document.querySelectorAll('${menu} button')[i]===n)&&document.activeElement===retainedMenuRows[0]`),true,'compact/overflow refresh retains submenu rows and focused Back');
+      assert.ok(await evaluate(`Array.from(document.querySelectorAll('${menu} button[aria-checked]')).every(b=>!b.disabled)`));
+      await click(`${menu} .submenu-back`);
+      assert.ok(await evaluate(`document.querySelectorAll('${menu} button').length===JSON.parse(layerApp.app.workspace_view()).switcher_menu.sections.flat().length`));
+      await evaluate(`document.querySelector('${overflow?'#header-overflow-0':'#header-workspace-selector'}').open=false`);
+    }
+    console.log('PASS: Web workspace menus reenable after same-binding preference refresh, retain rows/focus/submenu, and dispatch current checkbox actions in options, compact and overflow');
+  } finally {
+    await evaluate('if(window.pendingMenuRefresh)layerApp.app.workspace_tick=pendingMenuRefresh.tick');
+    await call('Emulation.clearDeviceMetricsOverride');await send({type:'restore_workspace',workspace:saved});
+  }
+}
+
 export async function checkWorkspaceOptions({call, evaluate, settle}) {
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const view = () => evaluate("JSON.parse(layerApp.app.workspace_view())");

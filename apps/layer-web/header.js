@@ -76,14 +76,20 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   }
   workspaceOptions(switcher);
   switcher.openOptions = node => customization.openMenu(switcher, null, node);
+  switcher.addEventListener('workspace-view-changed', () => {
+    customization.refreshContextMenu();
+    for(const node of root.querySelectorAll('details[open]'))node.refreshMenu?.();
+  });
   const recoveryMenu = menu(primary, 'Title bar recovery: menus and customization', 'menu');
   recoveryMenu.id = 'header-recovery'; root.append(recoveryMenu);
   const overflow = zones.map((_, index) => {
     const node = menu(() => ({title:'Title Bar',sections:[]}), `More ${['left','center','right'][index]} title-bar items`, 'menu', 'header-overflow');
     node.id = `header-overflow-${index}`;
     const rows=new Map();
-    node.refreshMenu = () => {
+    node.refreshMenu = (reset=false) => {
       const contents=node.querySelector('.popover');
+      if(reset)delete contents.menuModel;
+      if(contents.menuModel&&!editing){customization.refreshMenu(contents,contents.menuModel(),()=>{node.open=false;});return;}
       for(const [id,row] of rows)if(!geometry.hidden[index].includes(id)){row.remove();rows.delete(id);}
       for(const [order,id] of geometry.hidden[index].entries()) {
         const spec=view.items.find(i=>i.id===id);
@@ -93,12 +99,15 @@ export function createHeader({app, state, workspace, element, button, icon, plac
             const entry=entries().find(e=>e.id===id);if(!entry)return;
             if(editing){node.open=false;select(id,true);}
             else if(['menu','menu_labels','workspaces'].includes(entry.item.kind)) {
-              customization.renderMenu(contents, entry.item.kind==='workspaces'?workspaceChoices():primary(),()=>{node.open=false;});
+              contents.menuModel=entry.item.kind==='workspaces'?workspaceChoices:primary;
+              customization.renderMenu(contents, contents.menuModel(),()=>{node.open=false;});
             } else {node.open=false;activate(entry);}
           });
           const grip=element('span','header-item-grip');grip.setAttribute('aria-hidden','true');grip.append(icon('grip'));
           row.append(grip,element('span','header-overflow-label'));row.dataset.headerOverflowItem=id;
-          customization.target(row,{kind:'header',id});rows.set(id,row);
+          customization.target(row,{kind:'header',id});
+          if(entries().find(e=>e.id===id)?.item.kind==='workspaces')workspaceOptions(row);
+          rows.set(id,row);
         }
         row.querySelector('.header-overflow-label').textContent=spec.label;
         row.querySelector('.header-item-grip').hidden=!editing;row.disabled=!editing&&!spec.enabled;

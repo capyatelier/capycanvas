@@ -41,7 +41,10 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   const menuKey = model => JSON.stringify(model, (_, value) => typeof value === "bigint" ? String(value) : value);
   // The same recursive Rust menu drives both the header and contextual menus.
   // Submenus replace their parent page, as in GTK's sliding popover menus.
+  const menuStructure = (model, depth) => JSON.stringify([depth,model], (key,value) => ["enabled","selected","action","command"].includes(key) ? undefined : value);
   function renderMenu(container, model, close, parents = [], path = []) {
+    container.menuView={model,close,parents,path};
+    container.menuStructureKey=menuStructure(model,parents.length);
     container.menuPath=path;
     container.menuModelKey=menuKey(parents[0]||model);
     container.classList.add("workspace-menu-items");
@@ -50,7 +53,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (container === context && context.menuOwner?.dataset.workspaceOptions && !parents.length) container.append(element("div", "menu-section-label", model.title));
     if (parents.length) {
       const back = button(model.title, () => {
-        const previous = parents.at(-1);
+        const {close,parents,path}=container.menuView, previous=parents.at(-1);
         renderMenu(container, previous, close, parents.slice(0, -1), path.slice(0,-1));
       }, "submenu-back");
       back.prepend(icon("down")); container.append(back, element("hr"));
@@ -61,9 +64,11 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       for (const [itemIndex,item] of section.entries()) {
         const submenu = item.sections?.some(section => section.length);
         const row = button("", () => {
-          if (submenu) renderMenu(container, { title: item.label, sections: item.sections }, close, [...parents, model], [...path,[index,itemIndex]]);
+          const item=row.menuItem, {model,close,parents,path}=container.menuView;
+          if (item.sections?.some(section => section.length)) renderMenu(container, { title: item.label, sections: item.sections }, close, [...parents, model], [...path,[index,itemIndex]]);
           else { close(); if (item.action) dispatch(item.action); else if (item.command) menuCommand?.(item.command, item); }
         });
+        row.menuItem=item;
         row.disabled = !item.enabled;
         row.setAttribute("role", item.selected == null ? "menuitem" : "menuitemcheckbox");
         if (item.selected != null) row.setAttribute("aria-checked", item.selected);
@@ -78,14 +83,38 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (container === context && context.matches(":popover-open")) positionPopup(context);
   }
   function refreshMenu(container,model,close) {
-    if(container.menuModelKey===menuKey(model))return;
+    const rootKey=menuKey(model);
+    if(container.menuModelKey===rootKey)return;
     const parents=[];
     for(const [section,index] of container.menuPath||[]) {
       const item=model.sections[section]?.[index];
       if(!item)break;
       parents.push(model);model={title:item.label,sections:item.sections};
     }
-    renderMenu(container,model,close,parents,container.menuPath?.slice(0,parents.length)??[]);
+    const path=container.menuPath?.slice(0,parents.length)??[];
+    const rows=[...container.querySelectorAll(':scope > button:not(.submenu-back)')], items=model.sections.flat();
+    if(container.menuStructureKey===menuStructure(model,parents.length) && rows.length===items.length) {
+      container.menuView={model,close,parents,path};container.menuModelKey=rootKey;container.menuPath=path;
+      for(const [index,item] of items.entries()) {
+        const row=rows[index];row.menuItem=item;row.disabled=!item.enabled;
+        row.setAttribute('role',item.selected==null?'menuitem':'menuitemcheckbox');
+        const checked=item.selected==null?null:String(item.selected);
+        if(row.getAttribute('aria-checked')!==checked) {
+          if(checked==null)row.removeAttribute('aria-checked');else row.setAttribute('aria-checked',checked);
+          const mark=row.querySelector('.menu-check');mark.replaceChildren();if(item.selected)mark.append(icon('check'));
+        }
+      }
+    } else {
+      const focused=[...container.querySelectorAll(':scope > button')].indexOf(document.activeElement);
+      renderMenu(container,model,close,parents,path);
+      if(focused>=0)container.querySelectorAll(':scope > button')[focused]?.focus({preventScroll:true});
+    }
+  }
+  function refreshContextMenu() {
+    if(!context.matches(':popover-open') || !context.menuOwner)return;
+    const owner=context.menuOwner;
+    const model=owner.menuModel?owner.menuModel():owner.layerMenu?owner.layerMenu():app.context_menu(JSON.parse(owner.dataset.context));
+    refreshMenu(context,model,()=>context.hidePopover());
   }
   function showContext(node, point, focus = node) {
     const claimed = new Event("workspace-context-claimed", { bubbles: true, cancelable: true });
@@ -531,11 +560,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       const options = expanded.body.querySelector(".toolbar-options");
       if (options) renderToolbarOptions(options, views.get(expanded.panel)?.toolbar_options || []);
     }
-    if(context.matches(":popover-open") && context.menuOwner) {
-      const owner=context.menuOwner;
-      const model=owner.menuModel?owner.menuModel():owner.layerMenu?owner.layerMenu():app.context_menu(JSON.parse(owner.dataset.context));
-      refreshMenu(context,model,()=>context.hidePopover());
-    }
+    refreshContextMenu();
     const control = state().customization.control;
     if (popupControl !== control) {
       popupControl = control; discardFields(popup); popup.replaceChildren();
@@ -573,7 +598,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, refreshMenu, dismissContext, openMenu, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }
 

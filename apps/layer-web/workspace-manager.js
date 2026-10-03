@@ -102,6 +102,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     if (form) { formError.textContent = view.error || ""; formSubmit.disabled = view.busy || view.switcher_busy; formSubmit.textContent = view.retry && view.prompt_action?.type !== "save_as_new" ? "Retry" : form.confirm; }
     show(dialog, !!view.page); show(formDialog, !!form);
     if (!view.page && !form && view.error) showRecovery(view.error);
+    switcher.root.dispatchEvent(new Event("workspace-view-changed"));
   }
   let recovery, recoveryText, dismissedError;
   function showRecovery(text) {

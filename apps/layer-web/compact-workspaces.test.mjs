@@ -67,7 +67,16 @@ export async function checkCompactWorkspaces({call,evaluate,settle}) {
   fixture.layout.header.zones[0].push(fixture.layout.header.zones[1].pop());
   await send({type:'restore_workspace',workspace:fixture});
   await click('#header-overflow-0 > summary');
-  await click(`[data-header-overflow-item="${workspaceId}"]`);
+  const overflowChoice=`[data-header-overflow-item="${workspaceId}"]`;
+  const overflowPoint=await evaluate(`(()=>{const r=document.querySelector('${overflowChoice}').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+  for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...overflowPoint,button:'right',buttons:type==='mousePressed'?2:0,clickCount:1,pointerType:'mouse'});
+  await settle();
+  const overflowOptions=await evaluate("Array.from(document.querySelectorAll('.panel-context-menu:popover-open button'),b=>({label:b.querySelector('.menu-label').textContent,checked:b.getAttribute('aria-checked')}))");
+  assert.deepEqual(overflowOptions,(await view()).switcher_options.sections.flat().map(row=>({label:row.label,checked:row.selected==null?null:String(row.selected)})));
+  for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+  await settle();
+  assert.equal(await evaluate(`document.activeElement.matches('${overflowChoice}')`),true);
+  await click(overflowChoice);
   const current=await view(),target=current.switcher_display.find(row=>row.id!==current.id);
   const index=current.switcher_display.indexOf(target)+1;
   const selector=`#header-overflow-0 .popover button:nth-child(${index})`;

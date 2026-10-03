@@ -30,7 +30,7 @@ import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnStacks} from "./column-stacks.test.mjs";
 import {checkLayoutDrops} from "./layout-drops.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
-import {checkWorkspaceFocus,checkWorkspaceSwitcher,checkWorkspaceOptions} from "./workspace-switcher.test.mjs";
+import {checkWorkspaceFocus,checkWorkspaceSwitcher,checkWorkspaceOptions,checkWorkspaceMenuRefresh} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManagerVisual} from "./workspace-manager-visual.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
 import {checkTitleBarState} from "./title-bar-state.test.mjs";
@@ -261,6 +261,7 @@ try {
     [process.argv.includes("--drag-cursors"), () => checkDragCursors({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--workspace-windows"), () => checkWorkspaceWindows({call,evaluate}), checkErrors],
     [process.argv.includes("--workspace-focus"), () => checkWorkspaceFocus({evaluate,settle}), checkErrors],
+    [process.argv.includes("--workspace-options-refresh"), () => checkWorkspaceMenuRefresh({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--workspace-options"), () => checkWorkspaceOptions({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--workspace-switcher"), () => checkWorkspaceSwitcher({call,evaluate,settle,reload}), checkErrors],
     [process.argv.includes("--workspace-manager-visual"), () => checkWorkspaceManagerVisual({call,evaluate,settle}), checkErrors],
