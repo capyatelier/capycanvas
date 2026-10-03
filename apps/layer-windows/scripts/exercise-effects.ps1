@@ -341,6 +341,23 @@ try {
     foreach($id in @('property-color-color','property-density','property-preserve_luminance')){$null=Control $id}
     Select-Filter 'threshold' 'Threshold';$null=Control 'property-threshold'
     foreach($filter in @(@('invert','Invert'),@('desaturate','Desaturate'))){Select-Filter $filter[0] $filter[1];if(@((Model).state.layer_properties.controls).Count){throw "$($filter[1]) offered controls"}}
+    Select-Filter 'selective_color' 'Selective Color'
+    $pages=@((Model).state.layer_properties.pages)
+    if($pages.Count -ne 9){throw 'Selective Color did not offer nine color pages'}
+    Choose 'properties-page' $pages[7].label
+    Wait-Until {(Model).state.layer_properties.page -eq 'neutrals' -and (Find 'property-neutrals_cyan') -and !(Find 'property-reds_cyan') -and (Find 'property-mode')} 'Selective Color did not present Neutrals beside the shared method'
+    Edit 'property-neutrals_cyan' '-20';(Control 'property-neutrals_magenta').SetFocus()
+    Wait-Until {[Math]::Abs((Property 'neutrals_cyan').value.value+20) -lt 1e-6} 'Neutrals Cyan did not commit'
+    Choose 'property-mode' (Property 'mode').kind.options[1]
+    Wait-Until {(Property 'mode').value.value -eq 1 -and [Math]::Abs((Property 'neutrals_cyan').value.value+20) -lt 1e-6} 'Selective Color did not switch to Absolute and keep Neutrals'
+    Capture 'selective-color'
+    Select-Filter 'channel_mixer' 'Channel Mixer'
+    Wait-Until {(@((Model).state.layer_properties.pages)|ForEach-Object id) -join ',' -eq 'red,green,blue'} 'Channel Mixer did not offer red, green and blue rows'
+    $monochrome=Control 'property-monochrome';$identity=$monochrome.GetRuntimeId() -join ':'
+    $monochrome.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {(Property 'monochrome').value.value -and (Find 'property-gray_red') -and !(Find 'property-red_red') -and !(Find 'properties-page')} 'Monochrome did not replace the color rows with the gray row'
+    if(((Control 'property-monochrome').GetRuntimeId() -join ':') -ne $identity){throw 'Monochrome replaced its own toggle'}
+    Capture 'channel-mixer'
 
     Select-Filter 'gradient_map' 'Gradient Map'
     Invoke 'property-gradient-add';Wait-Until {(Property 'gradient').value.value.Count -eq 3} 'Gradient stop not added'

@@ -36,7 +36,7 @@ Hue / Saturation now has six editable hue ranges and Colorize. Invert, luminance
 Threshold, Desaturate and Photo Filter use the existing shared Properties controls
 on GTK, Web, Android and Windows. Selective Color adds nine CMYK pages with Relative and
 Absolute methods; Channel Mixer adds RGB output rows and an independent
-Monochrome row through the same controls on GTK, Web and Android.
+Monochrome row through the same controls on GTK, Web, Android and Windows.
 
 ## Milestones
 
