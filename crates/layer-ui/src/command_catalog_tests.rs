@@ -584,6 +584,35 @@ fn command_search_matches_active_and_canonical_labels_with_stable_ids() {
 }
 
 #[test]
+fn command_search_normalizes_german_turkish_and_vietnamese_queries() {
+    use unicode_normalization::UnicodeNormalization;
+    for language in [UiLanguage::German, UiLanguage::Turkish, UiLanguage::Vietnamese] {
+        let localizer = Localizer::shared(language);
+        let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, localizer.clone()).unwrap();
+        invoke(&mut s, CommandId::SearchCommands);
+        for command in [CommandId::ImageSize, CommandId::ImportImage, CommandId::InvertSelection, CommandId::WarpResetGrid] {
+            let label = command.localized_label(&localizer).to_string();
+            let upper: String = label.chars().map(|character| if language == UiLanguage::Turkish {
+                match character { 'i' => 'İ', 'ı' => 'I', other => other }
+            } else { character }).flat_map(char::to_uppercase).collect();
+            let english = command.localized_label(&Localizer::shared(UiLanguage::English)).to_uppercase();
+            let mut queries = vec![label.clone(), upper, label.nfd().collect(), english];
+            if language == UiLanguage::German && command == CommandId::ImageSize {
+                queries.extend(["Bildgröße", "BILDGRÖSSE", "BILDGRÖẞE", "IMAGE SIZE"].map(str::to_owned));
+            }
+            for query in queries {
+                search_action(&mut s, CommandSearchAction::Query { text: query.clone() });
+                let view = s.state.command_search.as_ref().unwrap();
+                assert_eq!(view.query, query);
+                let row = view.results.iter().find(|row| row.id == command_catalog::identity(&UiAction::Invoke { command }))
+                    .unwrap_or_else(|| panic!("{} {command:?} {query:?}", language.tag()));
+                assert_eq!(row.label, label);
+            }
+        }
+    }
+}
+
+#[test]
 fn disabled_command_reasons_retain_cached_labels_across_refreshes() {
     let mut s = session(Platform::Gtk);
     let cached = s.localization().text(MessageId::COMMANDS_NOTHING_TO_UNDO);
@@ -672,8 +701,7 @@ fn numeric_parameters_match_active_and_canonical_labels_with_stable_targets() {
     canonical.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "exposure".into() } }).unwrap();
     canonical.dispatch(UiAction::Layer { action: LayerAction::Rename { id: canonical.engine.document().active_layer.0, name: "Literal { $name }".into() } }).unwrap();
     let english = canonical.command_catalog();
-    for language in [UiLanguage::Japanese, UiLanguage::SimplifiedChinese,
-        UiLanguage::TraditionalChinese, UiLanguage::Korean] {
+    for language in UiLanguage::ALL {
         let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk,
             Localizer::shared(language)).unwrap();
         invoke(&mut s, CommandId::AddLayer);
@@ -702,8 +730,7 @@ fn numeric_parameters_match_active_and_canonical_labels_with_stable_targets() {
 #[test]
 fn filter_insertions_match_active_and_canonical_labels_with_stable_targets() {
     let english = Localizer::shared(UiLanguage::English);
-    for language in [UiLanguage::Japanese, UiLanguage::SimplifiedChinese,
-        UiLanguage::TraditionalChinese, UiLanguage::Korean]
+    for language in UiLanguage::ALL
     {
         let localization = Localizer::shared(language);
         let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Windows,
@@ -741,8 +768,7 @@ fn filter_insertion_search_keeps_admitted_literal_replacements_and_custom_labels
     use layer_core::EffectInstallMode;
     let replacement_label = "私の明るさ { $label } 한글 \u{2068}mix\u{2069}";
     let custom_label = "My literal filter { $label } 한글 🎨";
-    for language in [UiLanguage::Japanese, UiLanguage::SimplifiedChinese,
-        UiLanguage::TraditionalChinese, UiLanguage::Korean]
+    for language in UiLanguage::ALL
     {
         let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Windows,
             Localizer::shared(language)).unwrap();

@@ -3,7 +3,23 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleLocalizations</key>
-	<array><string>en</string><string>ja</string><string>zh-Hans</string><string>zh-Hant</string><string>ko</string></array>
+	<array>
+        <string>en</string>
+        <string>ja</string>
+        <string>zh-Hans</string>
+        <string>zh-Hant</string>
+        <string>ko</string>
+        <string>es</string>
+        <string>pt-BR</string>
+        <string>id</string>
+        <string>fr</string>
+        <string>de</string>
+        <string>ru</string>
+        <string>th</string>
+        <string>vi</string>
+        <string>tr</string>
+        <string>it</string>
+    </array>
 	<key>CFBundleDisplayName</key>
 	<string>Capy Canvas</string>
 	<key>CFBundleIdentifier</key>

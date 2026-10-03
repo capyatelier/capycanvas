@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use fluent_bundle::{concurrent::FluentBundle, FluentArgs, FluentResource};
-use crate::localization::{CATALOGS, MessageId, SHIPPED_LANGUAGES};
+use crate::localization::{CATALOGS, MessageId};
 
 use crate::localization_inventory::{inventory, requirements, Inventory};
 
@@ -39,15 +39,14 @@ fn catalogs_have_canonical_identities_and_format_without_errors() {
     let english_files = CATALOGS.iter().find(|(locale, _)| *locale == "en").unwrap().1;
     let english = inventory(english_files).unwrap();
     for id in MessageId::ALL { assert!(english.contains_key(id.key())); }
-    let long_name = "作品🎨{draft}\"".repeat(128);
+    let long_name = "作品🎨{draft}\"İı ไทย Tiếng Việt".repeat(128);
     for (locale, files) in CATALOGS {
-        let require_complete = SHIPPED_LANGUAGES.iter().any(|language| language.tag() == *locale);
-        let translated = validate(&english, files, require_complete).unwrap_or_else(|error| panic!("{locale}: {error}"));
+        let translated = validate(&english, files, true).unwrap_or_else(|error| panic!("{locale}: {error}"));
         let bundle = bundle(locale, files);
         for key in translated.keys().filter(|key| !key.starts_with('-')) {
             let variables = requirements(key, &english, &mut BTreeSet::new()).unwrap();
-            for count in [0, 1, 37] {
-                for literal in ["画布 한글 日本語 🎨 {draft} \"quoted\"", long_name.as_str()] {
+            for count in [0, 1, 2, 5, 11, 21, 22, 37] {
+                for literal in ["画布 한글 日本語 🎨 {draft} \"quoted\"", "İı Tiếng Việt Tiếng Việt ไทย", long_name.as_str()] {
                     let mut args = FluentArgs::new();
                     for variable in &variables { args.set(variable, literal); }
                     args.set("count", count);
@@ -58,6 +57,28 @@ fn catalogs_have_canonical_identities_and_format_without_errors() {
                 assert_formats(&bundle, key, &args);
             }
         }
+    }
+}
+
+#[test]
+fn russian_counted_tools_follow_one_few_and_many_forms() {
+    let files = CATALOGS.iter().find(|(locale, _)| *locale == "ru").unwrap().1;
+    let bundle = bundle("ru", files);
+    for (key, status) in [("workspace-toolbar-summary-visible", "Видна"), ("workspace-toolbar-summary-hidden", "Скрыта")] {
+        for (count, suffix) in [(0, "инструментов"), (1, "инструмент"), (2, "инструмента"), (5, "инструментов"), (11, "инструментов"), (21, "инструмент"), (22, "инструмента")] {
+            let mut args = FluentArgs::new();
+            args.set("count", count);
+            assert_eq!(assert_formats(&bundle, key, &args), format!("{count} {suffix} · {status}"));
+        }
+    }
+    let names = ["İı {draft}", "Tiếng Việt 🎨", "ไทย\"цитата\""];
+    for (count, layer, item) in [(0, "слоёв", "элементов"), (1, "слой", "элемент"), (2, "слоя", "элемента"), (5, "слоёв", "элементов"), (11, "слоёв", "элементов"), (21, "слой", "элемент"), (22, "слоя", "элемента")] {
+        let mut args = FluentArgs::new();
+        args.set("count", count);
+        assert_eq!(assert_formats(&bundle, "toolbar-layer-count", &args), format!("{count} {layer}"));
+        args.set("others", count);
+        for (variable, name) in ["first", "second", "third"].into_iter().zip(names) { args.set(variable, name); }
+        assert_eq!(assert_formats(&bundle, "workspace-history-list-more", &args), format!("{}, {}, {} и ещё {count} {item}", names[0], names[1], names[2]));
     }
 }
 

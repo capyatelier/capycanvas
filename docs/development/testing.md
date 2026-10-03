@@ -120,11 +120,11 @@ hardware GPU.
 Run `cargo test --locked -p layer-ui localization_catalog_tests` for catalog
 changes, then the shared Rust and consumer checks above when Rust changes.
 These window-free tests reject malformed Fluent, duplicate identities across
-files, missing English identities in shipped languages, undeclared translated
+files, missing English identities in every registered language, undeclared translated
 variables, missing
 message/term/attribute references and formatting errors. They exercise complete
-dynamic messages with zero, one and many counts and literal CJK, emoji, quotes,
-braces and long filenames. Direct Fluent formatting checks expose errors before
+dynamic messages with Russian plural counts and literal Unicode, combining marks,
+emoji, quotes, braces and long filenames. Direct Fluent formatting checks expose errors before
 runtime English fallback can hide them.
 
 Live language changes use `cargo test --locked -p layer-ui language_`, followed

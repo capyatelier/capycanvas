@@ -15,7 +15,7 @@ fn android_launch_uses_supplied_preferences_before_first_view_without_gpu() {
         let expected = layer_ui::launch_localization(saved, &["ja-JP", "zh-Hant", "en-US"]);
         assert!(std::sync::Arc::ptr_eq(host.session.localization(), &expected));
         assert_eq!(host.bootstrap_view().active_tag, tag);
-        assert_eq!(host.bootstrap_view().shipped_tags, vec!["en", "ja", "zh-Hans", "zh-Hant", "ko"]);
+        assert_eq!(host.bootstrap_view().shipped_tags, layer_ui::localization::SHIPPED_LANGUAGES.iter().map(|language| language.tag()).collect::<Vec<_>>());
         assert!(host.session.engine().backend().0.is_none());
     }
 }

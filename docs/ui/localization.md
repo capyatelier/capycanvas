@@ -3,13 +3,48 @@
 [Workspace and UI](README.md)
 
 Shared localization lives in `layer-ui::localization`. Embedded Fluent
-catalogs in `assets/locales/<tag>/` supply shared UI text. Catalogs exist for English, Japanese, Simplified Chinese, Traditional Chinese
-and Korean. Catalog presence does not establish complete translated host
+catalogs in `assets/locales/<tag>/` supply shared UI text. Catalogs exist for English,
+Japanese, Korean, Simplified Chinese, Traditional Chinese and the languages below.
+Catalog presence does not establish complete translated host
 interfaces.
-`SHIPPED_LANGUAGES` identifies languages enabled for release. Draft catalogs may
-omit English messages while shared text is migrated; present entries still need
-valid identities, arguments, references and formatting. Shipped catalogs must be
-complete.
+`SHIPPED_LANGUAGES` identifies languages enabled for release. Every registered
+catalog must have complete English identities and valid arguments, references
+and formatting.
+
+| Language | Tag | Preferences name |
+| --- | --- | --- |
+| Spanish | `es` | Español |
+| Brazilian Portuguese | `pt-BR` | Português (Brasil) |
+| Indonesian | `id` | Bahasa Indonesia |
+| French | `fr` | Français |
+| German | `de` | Deutsch |
+| Russian | `ru` | Русский |
+| Thai | `th` | ไทย |
+| Vietnamese | `vi` | Tiếng Việt |
+| Turkish | `tr` | Türkçe |
+| Italian | `it` | Italiano |
+
+`localization_languages.rs` defines canonical tags, native names and scripts.
+The build script derives the enum, serialization, cache indexes and embedded
+catalogs from that registry, and discovers domains from `assets/locales/en`.
+This selection is a product prioritization estimate, not measured audience data.
+
+## Adding UI text
+
+1. Add or update a complete English message in the feature's existing domain.
+   Reuse a key only when its meaning and arguments match.
+2. Update the same identities in every registered locale in the same change.
+   Use translated painting terminology, numeric counts and correct plural forms;
+   preserve variables, references, literal names, units and formatting. Do not
+   fill missing translations with English placeholders.
+3. Run `cargo test --locked -p layer-ui localization_catalog_tests`. This checks
+   complete catalogs, duplicate identities, arguments, references and formatting
+   directly, before English fallback can hide a missing translation. A new domain
+   needs a file in every locale; the build discovers it automatically.
+
+The existing suite covers ordinary message additions; add a focused regression
+only when introducing new formatting or localization behavior. Host controls use
+shared copy and existing live switching, so a new language needs no host policy.
 
 ## Shared text
 
@@ -87,8 +122,16 @@ and animation callbacks. Hosts present resolved strings from shared views and
 retain stable action identities. Hosts must not duplicate translation or fallback
 policy. Canvas Size and Image Size retain resolved labels and complete status messages in their existing dialog drafts; opening, editing or publishing a language formats status copy. Layer, mask and saved-selection menus resolve complete captions when opened, preserving typed actions and literal document names. Commands, shortcut sections, tool families and brush presets retain
 semantic identities when their display labels change. Search normalizes text with
-NFKC and Unicode lowercase, checks active and English labels, and scores character
-distance. Shortcut key queries accept one ASCII graphic character.
+NFKC and Unicode case expansion, checks active and English labels, and scores
+character distance. Turkish dotted and dotless I match in translated and English
+alias search; Vietnamese combining sequences match without removing accents.
+Shortcut key queries accept one ASCII graphic character.
+
+System matching normalizes case, underscores, POSIX encodings and script
+modifiers. Spanish regions resolve to `es`, `fr-CA` to `fr`, and `de-AT` to `de`.
+`pt`, `pt-BR` and `pt-PT` use the Brazilian Portuguese catalog; this does not
+represent a European Portuguese translation. Chinese matching keeps its existing
+script and regional policy. Saved preferences use canonical tags.
 
 ## Catalogs and arguments
 
@@ -105,7 +148,7 @@ When translating, add matching identities to the same domain under the locale
 folder. Preserve named arguments, reference structure, units and literal brand
 names; use selectors for counts and the painting terminology used elsewhere in
 the app. Adding a locale requires registering its tag and embedded domains in
-`UiLanguage` and the catalog build, without adding it to `SHIPPED_LANGUAGES`
+`localization_languages.rs`, without adding it to `SHIPPED_LANGUAGES`
 until its release gates pass.
 
 Catalog structure and formatting checks run in the ordinary `layer-ui` test

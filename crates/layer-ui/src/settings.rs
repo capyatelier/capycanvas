@@ -2967,9 +2967,14 @@ mod launch_language_tests {
             assert_eq!(Settings::language_preference(saved), LanguagePreference::Explicit(UiLanguage::English));
         }
         for language in UiLanguage::ALL {
-            let saved = serde_json::json!({"language": LanguagePreference::Explicit(language)}).to_string();
             let expected = if crate::localization::SHIPPED_LANGUAGES.contains(&language) { LanguagePreference::Explicit(language) } else { LanguagePreference::System };
-            assert_eq!(Settings::language_preference(&saved), expected);
+            for other_fields in [serde_json::json!({}), serde_json::json!({"pressure_gamma": "broken", "pan_speed": -1, "new_document": null, "version": 999})] {
+                let mut fields = other_fields;
+                fields["language"] = serde_json::to_value(LanguagePreference::Explicit(language)).unwrap();
+                let saved = fields.to_string();
+                assert_eq!(Settings::language_preference(&saved), expected);
+                assert_eq!(Settings::restore(&saved).language, expected);
+            }
         }
     }
 }

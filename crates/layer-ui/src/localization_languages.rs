@@ -1,0 +1,17 @@
+pub const LANGUAGES: &[(&str, &str, &str, &str)] = &[
+    ("English", "en", "English", "Latn"),
+    ("Japanese", "ja", "日本語", "Jpan"),
+    ("SimplifiedChinese", "zh-Hans", "简体中文", "Hans"),
+    ("TraditionalChinese", "zh-Hant", "繁體中文", "Hant"),
+    ("Korean", "ko", "한국어", "Kore"),
+    ("Spanish", "es", "Español", "Latn"),
+    ("BrazilianPortuguese", "pt-BR", "Português (Brasil)", "Latn"),
+    ("Indonesian", "id", "Bahasa Indonesia", "Latn"),
+    ("French", "fr", "Français", "Latn"),
+    ("German", "de", "Deutsch", "Latn"),
+    ("Russian", "ru", "Русский", "Cyrl"),
+    ("Thai", "th", "ไทย", "Thai"),
+    ("Vietnamese", "vi", "Tiếng Việt", "Latn"),
+    ("Turkish", "tr", "Türkçe", "Latn"),
+    ("Italian", "it", "Italiano", "Latn"),
+];

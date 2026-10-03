@@ -69,7 +69,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Tool Options or panel content change | 60 | **Not met.** UI frame p50/p95 25.4/35.3 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 60 | | |
 | Menu open and close | 60 | | |
-| Interface language change | 60 | Preparation only: maximum Web batch 3.14 ms; UI publication and frame cadence unmeasured | Language preparation below; no tier qualification |
+| Interface language change | 60 | Single samples: cold preparation 18.240–27.400 ms; maximum isolated batch 2.355 ms; German publication 190.340 ms | Fifteen-language diagnostic below; no tier qualification |
 
 ## Language preparation
 
@@ -97,6 +97,31 @@ JavaScript serialization. It has no canvas workload and establishes neither
 UI frame rate nor input-to-paint latency. Raw results and source/catalog hashes
 are under `artifacts/localization-live-switching/production-preparation-*`;
 the comparison and limits are in `preparation-quantum.local.md` there.
+
+## Fifteen-language diagnostic
+
+Measured 2026-10-03 on the TCL reference tablet with release Wasm based on
+`155c7e1c0`, Chrome 154 and English initialized. Each of the ten added languages
+was prepared once, verifying all 2,972 static labels; German was then reused.
+
+| Interval | Measured |
+| --- | ---: |
+| Ten cold preparations, summed calls | 18.240–27.400 ms |
+| Maximum isolated production batch | 2.355 ms |
+| Cached German preparation | 0.030 ms |
+| Stock cached English publication / first associated GPU completion | 293.590 / 255.655 ms |
+| Candidate cold German publication / first associated GPU completion | 190.340 / 354.650 ms |
+| Maximum preparation call during application switching, stock / candidate | 7.220 / 12.805 ms |
+
+Preparation totals exclude waits between tasks and module fetch/instantiation.
+Each publication sample precedes one five-second CDP pen motion on the 12 MP
+photo. Publication includes host apply; GPU completion is associated with input
+at the JavaScript boundary, not physical ink or scanout. Different language/cache
+states and single samples establish no improvement or frame-target result.
+Desktop native preparation was 3.010–4.329 ms, a supporting diagnostic rather
+than tier hardware. [Raw records and exact binary/source hashes](../../artifacts/localization-expansion/preparation/current155/focused-summary.local.json)
+and the [unchanged build/deployment guard](../../artifacts/localization-expansion/preparation/current155/final-focused-sourceguard.local.json)
+identify this minimal candidate; earlier broad measurements are excluded.
 
 ## Current drag comparison
 

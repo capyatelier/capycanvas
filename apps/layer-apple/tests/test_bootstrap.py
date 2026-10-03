@@ -12,11 +12,11 @@ class BootstrapMetadataTests(unittest.TestCase):
     def test_bundle_languages_match_shared_shipping_inventory(self):
         source = (ROOT / "crates/layer-ui/src/localization.rs").read_text()
         inventory = re.search(r"pub const SHIPPED_LANGUAGES[^;]+;", source).group()
-        tags = dict(re.findall(r'Self::(\w+) => "([^"\n]+)"', source.split("pub const fn native_name")[0]))
+        registry = (ROOT / "crates/layer-ui/src/localization_languages.rs").read_text()
+        tags = dict(re.findall(r'\("(\w+)", "([^"\n]+)",', registry))
         names = re.findall(r"UiLanguage::(\w+)", inventory)
         if names == ["ALL"]:
-            inventory = re.search(r"pub const ALL[^=]+=\s*\[([^\]]+)\]", source).group(1)
-            names = re.findall(r"Self::(\w+)", inventory)
+            names = list(tags)
         shipped = [tags[name] for name in names]
         self.assertTrue(shipped)
         for platform in ("iOS", "macOS"):

@@ -644,6 +644,13 @@ export async function checkLiveLanguage({call,evaluate,settle}) {
     if(session){const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true},session);if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description);}
     else await evaluate(expression);
   };
+  const tags=await evaluate('layerApp.app.bootstrap_view().shipped_tags');
+  const numbered={};
+  for(const tag of tags){
+    const source=await readFile(`assets/locales/${tag}/documents.ftl`,'utf8');
+    const value=source.match(/^documents-untitled-numbered = (.+)$/m)[1];
+    numbered[tag]=id=>value.replace(/\{\s*\$number\s*\}/g,String(id));
+  }
   const choice=async(index,tag)=>{await evaluate(`document.querySelector('[data-preference=language] summary').click();document.querySelector('[data-preference=language] [data-choice="${index}"]').click()`);await ready(tag);await settle();};
   await send({type:'invoke',command:'new_document'});
   await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function poll(){const create=document.querySelector('[data-document-action=create]');if(create){for(const entry of document.querySelectorAll('[data-document-field=width],[data-document-field=height]')){entry.value='96';entry.dispatchEvent(new Event('input',{bubbles:true}));}create.click();resolve();}else if(performance.now()>end)reject(Error('New drawing'));else setTimeout(poll,20);}poll();})`);
@@ -652,11 +659,10 @@ export async function checkLiveLanguage({call,evaluate,settle}) {
     await send({type:'set_theme',theme});
     await send({type:'open_settings',page:'appearance'});
     await evaluate('window.languageOwner={app:layerApp.app,canvas:layerApp.canvas,settings:document.querySelector("#settings"),language:document.querySelector("#setting-language"),time:performance.timeOrigin};');
-    for(const [index,tag] of [[1,'en'],[2,'ja'],[3,'zh-Hans'],[4,'zh-Hant'],[5,'ko'],[1,'en']]) {
+    for(const [index,tag] of [...tags.map((tag,i)=>[i+1,tag]),[tags.indexOf('en')+1,'en']]) {
       await choice(index,tag);
       assert.equal(await evaluate('languageOwner.app===layerApp.app&&languageOwner.canvas===layerApp.canvas&&languageOwner.settings===document.querySelector("#settings")&&languageOwner.language===document.querySelector("#setting-language")&&languageOwner.time===performance.timeOrigin'),true);
       assert.equal(await evaluate('document.querySelector("#settings-title").textContent===layerApp.app.preferences().pages.find(p=>p.id==="appearance").title'),true);
-      const numbered={en:id=>`Untitled ${id}`,ja:id=>`無題 ${id}`,'zh-Hans':id=>`未命名${id}`,'zh-Hant':id=>`未命名${id}`,ko:id=>`제목 없음 ${id}`};
       const tabs=await evaluate('layerApp.app.document_tabs(0).tabs.map(t=>({id:String(t.id),title:t.title}))');
       assert.deepEqual(tabs.map(t=>t.title),tabs.map(t=>numbered[tag](t.id)),'active and parked generated captions use the published language');
 
@@ -697,9 +703,9 @@ export async function checkLiveLanguage({call,evaluate,settle}) {
     await ready(latest);await ready(latest,sessionId);
     await call('Page.bringToFront',{},sessionId);await call('Page.bringToFront');
     await ready(latest);await ready(latest,sessionId);
-    await evaluate('Object.defineProperty(navigator,"languages",{configurable:true,value:["fr","ja-JP","ko"]});window.dispatchEvent(new Event("languagechange"));');
-    await call('Runtime.evaluate',{expression:'Object.defineProperty(navigator,"languages",{configurable:true,value:["fr","ja-JP","ko"]});window.dispatchEvent(new Event("languagechange"));'},sessionId);
-    await choice(0,'ja');await ready('ja',sessionId);
+    await evaluate('Object.defineProperty(navigator,"languages",{configurable:true,value:["fr-CA","ja-JP","ko"]});window.dispatchEvent(new Event("languagechange"));');
+    await call('Runtime.evaluate',{expression:'Object.defineProperty(navigator,"languages",{configurable:true,value:["fr-CA","ja-JP","ko"]});window.dispatchEvent(new Event("languagechange"));'},sessionId);
+    await choice(0,'fr');await ready('fr',sessionId);
     await choice(1,'en');await ready('en',sessionId);
   } finally {await call('Target.closeTarget',{targetId},null);}
   await send({type:'close_settings'});

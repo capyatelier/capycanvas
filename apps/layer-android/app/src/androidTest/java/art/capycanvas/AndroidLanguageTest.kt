@@ -76,7 +76,8 @@ class AndroidLanguageTest {
                     host.drain(obj("type" to "set_theme", "theme" to theme))
                     host.drain(obj("type" to "open_settings", "page" to "appearance"))
                     val unchanged = file()
-                    for ((index, tag) in listOf(2 to "ja", 3 to "zh-Hans", 4 to "zh-Hant", 5 to "ko", 1 to "en", 0 to "en")) {
+                    val tags = host.bootstrap!!.array("shipped_tags").values().map { it as String }
+                    for ((index, tag) in tags.mapIndexed { offset, tag -> offset + 1 to tag } + (0 to "en")) {
                         select(index, tag, theme)
                         assertEquals(unchanged, file())
                     }

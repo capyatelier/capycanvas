@@ -1739,7 +1739,7 @@ fn apple_launch_resolves_saved_preference_before_native_session() {
         assert_eq!(localization.language(), layer_ui::UiLanguage::English);
         let bootstrap = app.request(2, json!({"type": "bootstrap"})).unwrap();
         assert_eq!(bootstrap["active_tag"], "en");
-        assert_eq!(bootstrap["shipped_tags"], json!(["en", "ja", "zh-Hans", "zh-Hant", "ko"]));
+        assert_eq!(bootstrap["shipped_tags"], json!(layer_ui::localization::SHIPPED_LANGUAGES.iter().map(|language| language.tag()).collect::<Vec<_>>()));
         assert_eq!(bootstrap["preparing_canvas"], localization.text(layer_ui::MessageId::COMMON_PREPARING_CANVAS).as_ref());
         app.action(json!({"type": "restore_saved_settings", "saved": "{\"language\":{\"Explicit\":\"ja\"}}"}));
         assert!(std::sync::Arc::ptr_eq(&localization, unsafe { (*app.0).host.session.localization() }));

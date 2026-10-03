@@ -6,25 +6,6 @@ use unic_langid::LanguageIdentifier;
 
 include!(concat!(env!("OUT_DIR"), "/localization_catalogs.rs"));
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum UiLanguage {
-    #[serde(rename = "en")] English,
-    #[serde(rename = "ja")] Japanese,
-    #[serde(rename = "zh-Hans")] SimplifiedChinese,
-    #[serde(rename = "zh-Hant")] TraditionalChinese,
-    #[serde(rename = "ko")] Korean,
-}
-
-impl UiLanguage {
-    pub const ALL: [Self; 5] = [Self::English, Self::Japanese, Self::SimplifiedChinese, Self::TraditionalChinese, Self::Korean];
-    pub const fn tag(self) -> &'static str {
-        match self { Self::English => "en", Self::Japanese => "ja", Self::SimplifiedChinese => "zh-Hans", Self::TraditionalChinese => "zh-Hant", Self::Korean => "ko" }
-    }
-    pub const fn native_name(self) -> &'static str {
-        match self { Self::English => "English", Self::Japanese => "日本語", Self::SimplifiedChinese => "简体中文", Self::TraditionalChinese => "繁體中文", Self::Korean => "한국어" }
-    }
-}
-
 pub const SHIPPED_LANGUAGES: &[UiLanguage] = &UiLanguage::ALL;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -39,18 +20,14 @@ pub fn normalize_language_tag(tag: &str) -> String {
     let (base, modifier) = tag.split_once('@').unwrap_or((tag, ""));
     let base = base.split('.').next().unwrap_or("");
     if base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX") { return "en".to_owned(); }
-    let mut normalized = base.replace('_', "-");
-    if base.eq_ignore_ascii_case("zh") || base.to_ascii_lowercase().starts_with("zh_") {
-        let script = match modifier.to_ascii_lowercase().as_str() { "hans" => Some("Hans"), "hant" => Some("Hant"), _ => None };
-        if let Some(script) = script {
-            let mut parts = normalized.split('-');
-            let language = parts.next().unwrap();
-            let tail = parts.map(str::to_owned).collect::<Vec<_>>();
-            normalized = format!("{language}-{script}");
-            for part in tail { normalized.push('-'); normalized.push_str(&part); }
-        }
-    }
-    normalized
+    let normalized = base.replace('_', "-");
+    let script = match modifier.to_ascii_lowercase().as_str() {
+        "latin" | "latn" => Some("Latn"), "cyrillic" | "cyrl" => Some("Cyrl"),
+        "hans" => Some("Hans"), "hant" => Some("Hant"), "thai" => Some("Thai"), _ => None,
+    };
+    let Ok(mut id) = normalized.parse::<LanguageIdentifier>() else { return normalized; };
+    if let Some(script) = script { id.script = Some(script.parse().unwrap()); }
+    id.to_string()
 }
 
 pub fn resolve_language(preference: LanguagePreference, preferred_tags: &[&str]) -> UiLanguage {
@@ -72,18 +49,18 @@ fn resolve_available_language(preference: LanguagePreference, preferred_tags: &[
 fn matching_language(tag: &str) -> Option<UiLanguage> {
     let id = normalize_language_tag(tag).parse::<LanguageIdentifier>().ok()?;
     let script = id.script.map(|s| s.to_string());
-    match id.language.as_str() {
-        "en" if script.as_deref().is_none_or(|s| s == "Latn") => Some(UiLanguage::English),
-        "ja" if script.as_deref().is_none_or(|s| s == "Jpan") => Some(UiLanguage::Japanese),
-        "ko" if script.as_deref().is_none_or(|s| s == "Kore") => Some(UiLanguage::Korean),
-        "zh" => match script.as_deref() {
+    if id.language.as_str() == "zh" {
+        return match script.as_deref() {
         Some("Hans") => Some(UiLanguage::SimplifiedChinese),
         Some("Hant") => Some(UiLanguage::TraditionalChinese),
         Some(_) => None,
         None => Some(if id.region.is_some_and(|r| matches!(r.as_str(), "TW" | "HK" | "MO")) { UiLanguage::TraditionalChinese } else { UiLanguage::SimplifiedChinese }),
-        },
-        _ => None,
+        };
     }
+    UiLanguage::ALL.into_iter().find(|language| {
+        language.tag().split('-').next() == Some(id.language.as_str())
+            && script.as_deref().is_none_or(|script| script == language.script())
+    })
 }
 
 pub fn launch_localization(saved: &str, preferred_tags: &[&str]) -> Arc<Localizer> {
@@ -202,12 +179,8 @@ impl std::fmt::Debug for Localizer {
 
 impl Localizer {
     fn cache(language: UiLanguage) -> &'static OnceLock<Arc<Self>> {
-        static EN: OnceLock<Arc<Localizer>> = OnceLock::new();
-        static JA: OnceLock<Arc<Localizer>> = OnceLock::new();
-        static HANS: OnceLock<Arc<Localizer>> = OnceLock::new();
-        static HANT: OnceLock<Arc<Localizer>> = OnceLock::new();
-        static KO: OnceLock<Arc<Localizer>> = OnceLock::new();
-        match language { UiLanguage::English => &EN, UiLanguage::Japanese => &JA, UiLanguage::SimplifiedChinese => &HANS, UiLanguage::TraditionalChinese => &HANT, UiLanguage::Korean => &KO }
+        static CONTEXTS: [OnceLock<Arc<Localizer>>; UiLanguage::ALL.len()] = [const { OnceLock::new() }; UiLanguage::ALL.len()];
+        &CONTEXTS[language.index()]
     }
     pub fn shared(language: UiLanguage) -> Arc<Self> {
         if language != UiLanguage::English { Self::shared(UiLanguage::English); }
@@ -390,7 +363,7 @@ mod tests {
         assert!(transition.request(LanguagePreference::System, &["en-US"]).is_none());
         let first = transition.request(LanguagePreference::Explicit(UiLanguage::Japanese), &[]).unwrap();
         assert!(transition.request(LanguagePreference::Explicit(UiLanguage::Japanese), &[]).is_none());
-        let latest = transition.request(LanguagePreference::System, &["fr", "ko-KR"]).unwrap();
+        let latest = transition.request(LanguagePreference::System, &["ar", "ko-KR"]).unwrap();
         assert!(!transition.prepared(first, ja.clone()));
         assert!(!transition.prepared(latest, ja.clone()));
         assert!(transition.prepared(latest, ko.clone()));
@@ -417,7 +390,8 @@ mod tests {
             assert!(!preparation.step(0));
             let mut quanta = 0;
             while !preparation.step(1) { quanta += 1; }
-            assert!(quanta >= MessageId::STATIC.len());
+            let chunks = |tag| CATALOG_CHUNKS.iter().find(|(language, _)| *language == tag).unwrap().1.len();
+            assert_eq!(quanta + 1, chunks(language.tag()) + chunks("en") + MessageId::STATIC.len());
             let complete = preparation.localizer.as_ref().unwrap();
             let baseline = Localizer::from_bundles(language, bundle(language), bundle(UiLanguage::English));
             for &id in MessageId::STATIC { assert_eq!(complete.text(id), baseline.text(id), "{} {}", language.tag(), id.key()); }
@@ -460,7 +434,7 @@ mod tests {
             let baseline = bundle(language);
             for key in patterns.keys().filter(|key| !key.starts_with('-')) {
                 let variables = requirements(key, &patterns, &mut BTreeSet::new()).unwrap();
-                for count in [0, 1, 37] {
+                for count in [0, 1, 2, 5, 11, 21, 22, 37] {
                     let mut args = FluentArgs::new();
                     for variable in &variables { args.set(variable, "作品🎨{draft}\" 한글 日本語"); }
                     args.set("count", count);
@@ -492,7 +466,7 @@ mod tests {
         let second = bootstrap_view(&localization);
         assert!(Arc::ptr_eq(&first.preparing_canvas, &second.preparing_canvas));
         assert_eq!(first.active_tag, "en");
-        assert_eq!(first.shipped_tags, UiLanguage::ALL.map(UiLanguage::tag));
+        assert_eq!(first.shipped_tags, SHIPPED_LANGUAGES.iter().map(|language| language.tag()).collect::<Vec<_>>());
         let name = "作品{draft}\"🎨\u{2068}literal\u{2069}";
         assert_eq!(file_open_failure(&localization, name), format!("Could not open “{name}”."));
     }
@@ -503,9 +477,9 @@ mod tests {
         for (tag, expected) in [("ja-JP", Japanese), ("ko-KR", Korean), ("zh-CN", SimplifiedChinese), ("zh-SG", SimplifiedChinese), ("zh-TW", TraditionalChinese), ("zh-HK", TraditionalChinese), ("zh-Hant-CN", TraditionalChinese), ("zh-Hans-TW", SimplifiedChinese), ("zh", SimplifiedChinese), ("ja_JP.UTF-8", Japanese), ("zh_TW.UTF-8@hans", SimplifiedChinese)] {
             assert_eq!(resolve_language(LanguagePreference::System, &[tag]), expected, "{tag}");
         }
-        assert_eq!(resolve_language(LanguagePreference::System, &["fr", "zh-Latn", "ko", "ja"]), Korean);
+        assert_eq!(resolve_language(LanguagePreference::System, &["ar", "zh-Latn", "ko", "ja"]), Korean);
         assert_eq!(resolve_language(LanguagePreference::System, &["en-Cyrl", "ja"]), Japanese);
-        assert_eq!(resolve_language(LanguagePreference::System, &["fr", "invalid!"]), English);
+        assert_eq!(resolve_language(LanguagePreference::System, &["ar", "invalid!"]), English);
         assert_eq!(resolve_language(LanguagePreference::Explicit(Japanese), &["ko"]), Japanese);
         assert_eq!(resolve_language(LanguagePreference::System, &["en", "ja"]), English);
         for tag in ["C", "POSIX", "C.UTF-8"] {
@@ -514,10 +488,35 @@ mod tests {
     }
 
     #[test]
+    fn language_regions_and_normalized_platform_spellings_use_shared_catalogs() {
+        use UiLanguage::*;
+        for (tag, expected) in [
+            ("es-ES", Spanish), ("es-MX", Spanish), ("es-AR", Spanish),
+            ("pt", BrazilianPortuguese), ("pt-BR", BrazilianPortuguese), ("pt-PT", BrazilianPortuguese),
+            ("fr-CA", French), ("de-AT", German), ("id-ID", Indonesian), ("ru-RU", Russian),
+            ("th-TH", Thai), ("vi-VN", Vietnamese), ("tr-TR", Turkish), ("it-IT", Italian),
+            ("ES_mx.UTF-8", Spanish), ("pt_PT.utf8@latin", BrazilianPortuguese),
+            ("fr_ca.UTF-8", French), ("de_AT.UTF-8@Latn", German), ("ru_RU.UTF-8@cyrillic", Russian),
+            ("th_Thai_TH.UTF-8", Thai), ("VI_latn_vn", Vietnamese), ("tr_TR.utf8", Turkish),
+            ("zh-TW.UTF-8@hans", SimplifiedChinese), ("zh_Hans_CN.UTF-8@hant", TraditionalChinese),
+        ] {
+            assert_eq!(resolve_language(LanguagePreference::System, &[tag]), expected, "{tag}");
+            assert_eq!(resolve_available_language(LanguagePreference::System, &[tag], &UiLanguage::ALL), expected, "{tag}");
+        }
+        for tag in ["es-Cyrl", "pt-Cyrl", "fr-Cyrl", "de-Cyrl", "id-Arab", "ru-Latn", "th-Latn", "vi-Cyrl", "tr-Arab", "it-Cyrl"] {
+            assert_eq!(resolve_language(LanguagePreference::System, &[tag, "ja"]), Japanese, "{tag}");
+        }
+        assert_eq!(normalize_language_tag(" VI_latn_vn.UTF-8 "), "vi-Latn-VN");
+        assert_eq!(normalize_language_tag("ru_RU.UTF-8@cyrillic"), "ru-Cyrl-RU");
+        assert_eq!(resolve_language(LanguagePreference::System, &["invalid!", "de-AT", "fr-CA"]), German);
+    }
+
+    #[test]
     fn launch_negotiation_never_selects_an_unshipped_catalog() {
         for language in UiLanguage::ALL {
-            let expected = if SHIPPED_LANGUAGES.contains(&language) { language } else { UiLanguage::English };
+            let expected = if SHIPPED_LANGUAGES.contains(&language) { language } else { UiLanguage::Japanese };
             assert_eq!(resolve_launch_language(LanguagePreference::Explicit(language), &["ja"]), expected);
+            let expected = if SHIPPED_LANGUAGES.contains(&language) { language } else { UiLanguage::English };
             assert_eq!(resolve_launch_language(LanguagePreference::System, &[language.tag()]), expected);
         }
         assert_eq!(resolve_available_language(LanguagePreference::System, &["fr", "ko", "ja"], &[UiLanguage::English, UiLanguage::Japanese]), UiLanguage::Japanese);
@@ -618,7 +617,7 @@ mod tests {
     #[test]
     fn named_user_arguments_remain_literal() {
         let bundle = fixture("common-save = Save { $name }\n");
-        for name in ["日本語 한글 繁體 😀", "a{b} \"quoted\".capy", "\u{2068}user\u{2069}"] {
+        for name in ["日本語 한글 繁體 😀", "a{b} \"quoted\".capy", "\u{2068}user\u{2069}", "İı Tiếng Việt Tiếng Việt ไทย"] {
             let mut args = FluentArgs::new();
             args.set("name", name);
             assert_eq!(render(&bundle, MessageId::COMMON_SAVE, Some(&args)).unwrap(), format!("Save {name}"));

@@ -2,17 +2,24 @@ use std::{collections::{BTreeMap, BTreeSet}, env, fs, path::PathBuf};
 use fluent_syntax::{ast::{Entry, Resource}, parser, serializer};
 #[path = "src/localization_inventory.rs"]
 mod localization_inventory;
+#[path = "src/localization_languages.rs"]
+mod localization_languages;
 
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../assets/locales");
-    let languages = ["en", "ja", "zh-Hans", "zh-Hant", "ko"];
-    let domains = ["common", "commands", "settings", "tools", "documents", "workspace", "shortcuts", "toolbar", "resources", "creation", "color-features"];
+    println!("cargo:rerun-if-changed=src/localization_languages.rs");
+    let languages: Vec<_> = localization_languages::LANGUAGES.iter().map(|(_, tag, _, _)| *tag).collect();
+    println!("cargo:rerun-if-changed={}", root.join("en").display());
+    let mut domains: Vec<_> = fs::read_dir(root.join("en")).unwrap().map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ftl"))
+        .map(|path| path.file_stem().unwrap().to_str().unwrap().to_owned()).collect();
+    domains.sort();
     let mut english_sources = Vec::new();
     let mut chunks = BTreeMap::new();
     let mut keys = BTreeSet::new();
     let mut constants = BTreeSet::new();
-    for language in languages {
-        for domain in domains {
+    for &language in &languages {
+        for domain in domains.iter().map(String::as_str) {
             let path = root.join(language).join(format!("{domain}.ftl"));
             println!("cargo:rerun-if-changed={}", path.display());
             let source = fs::read_to_string(&path).expect("Catalog must exist");
@@ -50,16 +57,30 @@ fn main() {
     let files: Vec<_> = english_sources.iter().map(|(domain, source)| (*domain, source.as_str())).collect();
     let inventory = localization_inventory::inventory(&files).expect("Valid canonical catalog inventory");
     let static_keys: Vec<_> = keys.iter().filter(|key| localization_inventory::requirements(key, &inventory, &mut BTreeSet::new()).expect("Valid canonical message references").is_empty()).collect();
-    let mut generated = String::from("#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]\npub struct MessageId(&'static str);\nimpl MessageId {\npub const fn key(self) -> &'static str { self.0 }\n");
+    let mut generated = String::from("#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]\npub enum UiLanguage {\n");
+    for (variant, tag, _, _) in localization_languages::LANGUAGES {
+        generated.push_str(&format!("#[serde(rename = {tag:?})] {variant},\n"));
+    }
+    generated.push_str(&format!("}}\nimpl UiLanguage {{\npub const ALL: [Self; {}] = [", languages.len()));
+    for (variant, _, _, _) in localization_languages::LANGUAGES { generated.push_str(&format!("Self::{variant},")); }
+    generated.push_str("];\npub const fn tag(self) -> &'static str { match self {\n");
+    for (variant, tag, _, _) in localization_languages::LANGUAGES { generated.push_str(&format!("Self::{variant} => {tag:?},\n")); }
+    generated.push_str("}}\npub const fn native_name(self) -> &'static str { match self {\n");
+    for (variant, _, name, _) in localization_languages::LANGUAGES { generated.push_str(&format!("Self::{variant} => {name:?},\n")); }
+    generated.push_str("}}\nconst fn script(self) -> &'static str { match self {\n");
+    for (variant, _, _, script) in localization_languages::LANGUAGES { generated.push_str(&format!("Self::{variant} => {script:?},\n")); }
+    generated.push_str("}}\nconst fn index(self) -> usize { match self {\n");
+    for (index, (variant, _, _, _)) in localization_languages::LANGUAGES.iter().enumerate() { generated.push_str(&format!("Self::{variant} => {index},\n")); }
+    generated.push_str("}}\n}\n#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]\npub struct MessageId(&'static str);\nimpl MessageId {\npub const fn key(self) -> &'static str { self.0 }\n");
     for key in &keys { generated.push_str(&format!("pub const {}: Self = Self({key:?});\n", key.replace('-', "_").to_ascii_uppercase())); }
     generated.push_str("pub const ALL: &'static [Self] = &[\n");
     for key in &keys { generated.push_str(&format!("Self({key:?}),\n")); }
     generated.push_str("];\npub const STATIC: &'static [Self] = &[\n");
     for key in static_keys { generated.push_str(&format!("Self({key:?}),\n")); }
     generated.push_str("];\n}\nimpl std::borrow::Borrow<str> for MessageId { fn borrow(&self) -> &str { self.0 } }\n#[cfg(test)]\npub(crate) const CATALOGS: &[(&str, &[(&str, &str)])] = &[\n");
-    for language in languages {
+    for &language in &languages {
         generated.push_str(&format!("({language:?}, &[\n"));
-        for domain in domains {
+        for domain in domains.iter().map(String::as_str) {
             let path = root.join(language).join(format!("{domain}.ftl")).canonicalize().unwrap();
             generated.push_str(&format!("({domain:?}, include_str!({:?})),\n", path.to_str().unwrap()));
         }
@@ -67,9 +88,9 @@ fn main() {
     }
     generated.push_str("];\n");
     generated.push_str("pub(crate) const CATALOG_CHUNKS: &[(&str, &[(&str, &str)])] = &[\n");
-    for language in languages {
+    for &language in &languages {
         generated.push_str(&format!("({language:?}, &[\n"));
-        for domain in domains {
+        for domain in domains.iter().map(String::as_str) {
             for chunk in &chunks[&(language, domain)] { generated.push_str(&format!("({domain:?}, {chunk:?}),\n")); }
         }
         generated.push_str("]),\n");

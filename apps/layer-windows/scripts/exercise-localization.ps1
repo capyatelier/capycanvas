@@ -3,6 +3,9 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+$registry=[IO.File]::ReadAllText((Join-Path $repo 'crates/layer-ui/src/localization_languages.rs'))
+$languages=@([Text.RegularExpressions.Regex]::Matches($registry,'\("[^"\r\n]+", "([^"\r\n]+)", "([^"\r\n]+)", "[^"\r\n]+"\)')|ForEach-Object {[pscustomobject]@{tag=$_.Groups[1].Value;name=$_.Groups[2].Value}})
+if(!$languages.Count){throw 'Shared language registry is empty'}
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $run=Join-Path $repo ('artifacts/windows/localization/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $run 'profile'))|Out-Null
@@ -16,7 +19,10 @@ function Use-Window($Window){
 function Ready($Window){Wait-Until {(Model $Window).brush_ready -and (Model $Window).windows_workspace.ready} 'Window did not prepare' 120}
 function Language-Choice([string]$Tag){
  $row=@((Model).preferences.pages.groups.rows|Where-Object id -eq 'language')[0]
- $index=@{system=0;en=1;ja=2;'zh-Hans'=3;'zh-Hant'=4;ko=5}[$Tag]
+ $name=if($Tag -eq 'system'){$row.kind.options[0]}else{(@($languages|Where-Object tag -eq $Tag)[0]).name}
+ if(!$name){throw "Shared language registry has no tag: $Tag"}
+ $index=[Array]::IndexOf([object[]]$row.kind.options,$name)
+ if($index -lt 0){throw "Native language choices have no tag: $Tag"}
  $choice=$row.kind.options[$index]
  (Control 'preference-choice-language').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -46,7 +52,7 @@ try{
  }
  $language=Control 'preference-choice-language';$choiceIdentity=$language.GetRuntimeId() -join ':'
  $seen=@()
- foreach($tag in @('ja','zh-Hans','zh-Hant','ko','en','system','ja')){
+ foreach($tag in @($languages.tag)+@('en','system','ja')){
   Language-Choice $tag
   $expected=if($tag -eq 'system'){'en'}else{$tag}
   Wait-Until {(Model $first).windows_active_tag -eq $expected} "Inactive window did not adopt $tag" 30
