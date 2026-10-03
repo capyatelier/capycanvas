@@ -79,6 +79,8 @@ struct LayerMenuQuery {
     epoch: String,
     id: Option<String>,
     mask: Option<bool>,
+    #[serde(default)]
+    blend: bool,
 }
 
 pub fn layer_menu(host: &mut NativeHost, json: &str) -> Result<CapyPreview, String> {
@@ -100,7 +102,9 @@ pub fn layer_menu(host: &mut NativeHost, json: &str) -> Result<CapyPreview, Stri
             .document()
             .layer(layer_core::LayerId(id))
             .is_some_and(|layer| !mask || layer.mask.is_some());
-    let menu = if epoch_matches && exists {
+    let menu = if epoch_matches && exists && query.blend {
+        serde_json::to_value(host.session.layer_blend_menu(id)?).map_err(|e| e.to_string())?
+    } else if epoch_matches && exists {
         serde_json::to_value(host.session.layer_menu(id, mask)?).map_err(|e| e.to_string())?
     } else {
         serde_json::Value::Null
@@ -236,6 +240,13 @@ mod tests {
             serde_json::to_value(host.session.layer_menu(id, false).unwrap()).unwrap()
         );
         assert_eq!(before, host.session.engine().document().revision);
+        let blend = serde_json::json!({"epoch":epoch.to_string(),"id":id.to_string(),"blend":true}).to_string();
+        let metadata: serde_json::Value =
+            serde_json::from_str(layer_menu(&mut host, &blend).unwrap().metadata.to_str().unwrap()).unwrap();
+        assert_eq!(
+            metadata["menu"],
+            serde_json::to_value(host.session.layer_blend_menu(id).unwrap()).unwrap()
+        );
         for json in [
             query(epoch + 1, id, false),
             query(epoch, u64::MAX, false),

@@ -41,7 +41,13 @@ void LayersView::init(){
     }
     header.Padding({6,4,6,4});header.Spacing(2);values.ColumnSpacing(6);
     for(int i=0;i<2;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});values.ColumnDefinitions().Append(column);}
-    blend.MinWidth(0);blend.MinHeight(24);blend.Height(24);blend.Padding({6,0,6,0});
+    blend=button(data,L"",[weak]{if(auto self=weak.lock();self&&!self->data->updating){auto layer=self->editing();if(layer.Size())self->context(num(layer,L"id"),false,self->blend,{},false,true);}});
+    blendLabel=label(data,L"",true);blendLabel.TextTrimming(TextTrimming::CharacterEllipsis);blendLabel.VerticalAlignment(VerticalAlignment::Center);
+    {Grid content;ColumnDefinition text;text.Width({1,GridUnitType::Star});ColumnDefinition arrow;arrow.Width({1,GridUnitType::Auto});
+        content.ColumnDefinitions().Append(text);content.ColumnDefinitions().Append(arrow);content.ColumnSpacing(4);content.Children().Append(blendLabel);
+        ContentControl chevron;chevron.IsTabStop(false);chevron.IsHitTestVisible(false);Grid::SetColumn(chevron,1);content.Children().Append(chevron);
+        controls.emplace_back([data=data,chevron,theme=std::make_shared<hstring>()](J,J){if(*theme!=data->theme()){*theme=data->theme();chevron.Content(icon(L"chevron-down",*theme,12));}});blend.Content(content);}
+    blend.MinWidth(0);blend.MinHeight(24);blend.Height(24);blend.Padding({6,0,6,0});blend.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     AutomationProperties::SetName(header,data->caption(L"layers",L"controls"));AutomationProperties::SetName(values,data->caption(L"layers",L"blend_opacity"));
     AutomationProperties::SetName(tools,data->caption(L"layers",L"flags"));AutomationProperties::SetName(footerFrame,data->caption(L"layers",L"actions"));
     AutomationProperties::SetAutomationId(header,L"layer-controls");
@@ -52,16 +58,6 @@ void LayersView::init(){
     blend.Background(data->brush(L"input"));blend.BorderThickness({0,0,0,0});blend.CornerRadius({6,6,6,6});
     blend.HorizontalAlignment(HorizontalAlignment::Stretch);
     AutomationProperties::SetName(blend,data->caption(L"layers",L"blend"));AutomationProperties::SetAutomationId(blend,L"layer-blend");
-    for(auto value:array(data->catalog,L"layer_blends"))blend.Items().Append(box_value(value.GetString()));
-    blend.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating){
-        int index=self->blend.SelectedIndex();auto layer=self->editing();
-        if(index>=0&&layer.Size()&&flag(object(self->view(),L"controls"),L"blend"))
-            self->action(O({{L"op",S(L"blend")},{L"id",layer.GetNamedValue(L"id")},{L"value",N(index)}}));
-    }});
-    auto blendOpen=std::make_shared<bool>(false);
-    blend.DropDownOpened([data=data,blendOpen](auto&&,auto&&){if(!std::exchange(*blendOpen,true))data->popup(true);});
-    blend.DropDownClosed([data=data,blendOpen](auto&&,auto&&){if(std::exchange(*blendOpen,false))data->popup(false);});
-    blend.Unloaded([data=data,blendOpen](auto&&,auto&&){if(std::exchange(*blendOpen,false))data->popup(false);});
     opacityGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     values.Children().Append(blend);Grid::SetColumn(opacityGate,1);values.Children().Append(opacityGate);header.Children().Append(values);
     tools.Orientation(Orientation::Horizontal);tools.Spacing(2);
@@ -160,7 +156,8 @@ void LayersView::refresh(){
         epoch=nextEpoch;++menuGeneration;if(menu)menu.Hide();if(pickup)pickup->Cancel();source.Clear();
     }
     auto active=editing(),capabilities=object(view(),L"controls");
-    blend.IsEnabled(flag(capabilities,L"blend"));blend.SelectedIndex(int(num(active,L"blend")));
+    blend.IsEnabled(flag(capabilities,L"blend"));
+    if(auto text=str(active,L"blend_label");blendLabel.Text()!=text){blendLabel.Text(text);AutomationProperties::SetItemStatus(blend,text);}
     auto activeId=num(active,L"id",-1);auto nextKey=epoch+L":"+to_hstring(activeId);
     if(opacityKey!=nextKey){
         opacityKey=nextKey;opacityLayer=activeId;opacityBindings.clear();
@@ -209,15 +206,15 @@ void LayersView::preview(){
     }
     RefreshLayerThumbnails(data->thumbnails,epoch,visible);
 }
-void LayersView::context(double id,bool mask,UIElement const& anchor,std::optional<Windows::Foundation::Point> at,bool holding){
+void LayersView::context(double id,bool mask,UIElement const& anchor,std::optional<Windows::Foundation::Point> at,bool holding,bool blendMenu){
     if(data->updating||!anchor.XamlRoot())return;
     if(!holding&&pickup)pickup->Cancel();
-    if(id>=0)action(O({{L"op",S(L"context")},{L"id",N(id)},{L"mask",B(mask)}}));
+    if(id>=0&&!blendMenu)action(O({{L"op",S(L"context")},{L"id",N(id)},{L"mask",B(mask)}}));
     auto generation=++menuGeneration;auto document=epoch;
     if(menu)menu.Hide();menuOpen=false;menuPending=true;menuTarget=id>=0?std::optional<double>(id):std::nullopt;
     auto weak=weak_from_this();auto target=make_weak(anchor);auto queue=root.DispatcherQueue();
     auto query=O({{L"epoch",S(document)},{L"id",id>=0?S(to_hstring(uint64_t(id))):JsonValue::CreateNullValue()},
-        {L"mask",id>=0?B(mask):JsonValue::CreateNullValue()}});
+        {L"mask",id>=0?B(mask):JsonValue::CreateNullValue()},{L"blend",B(blendMenu)}});
     bool queued=data->query(CanvasQueryKind::LayerMenu,to_string(query.Stringify()),[weak,target,queue,generation,document,id,at,holding](PreviewPacket packet){
         queue.TryEnqueue([weak,target,generation,document,id,at,holding,packet=std::move(packet)]{
             auto self=weak.lock();auto anchor=target.get();

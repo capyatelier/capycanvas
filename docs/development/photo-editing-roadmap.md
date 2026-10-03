@@ -62,11 +62,11 @@ M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_POR
   - the Edit ▸ Image submenu;
   - the crop tool icon (the overlay is shared renderer code);
   - clipboard image writers;
-  - the export metadata row.
+  - the export metadata row (Windows has it).
 - **M4:**
   - the retouch tool icons (the source disc and its bar are shared);
-  - the grouped blend menu instead of the flat `layer_blends` picker, which lists Pass Through for every layer;
-  - the New Document Blending field (Edit ▸ Blending and the Properties row are shared);
+  - the grouped blend menu instead of the flat `layer_blends` picker, which lists Pass Through for every layer (Windows has it);
+  - the New Document Blending field (Edit ▸ Blending and the Properties row are shared; Windows has it);
   - the Color mixing brush choice;
   - the Use Pass Through for new groups setting;
   - the Frequency Separation dialog (`frequency_separation`, shaped like Refine; Windows has it) and the Dodge & Burn and Frequency Separation icons.

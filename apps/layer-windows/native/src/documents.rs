@@ -82,7 +82,7 @@ enum Job {
     Workflow { task: Box<crate::document_workflows::Task>, action: crate::document_workflows::Action },
     DiscardOpening(Box<Opening>),
     Save {
-        project: Project,
+        project: Box<Project>,
         path: PathBuf,
     },
     Prepare {
@@ -640,7 +640,7 @@ impl DocumentService {
                     let project = host.session.capture_project_save(id, selected.clone())?;
                     (
                         Job::Save {
-                            project,
+                            project: Box::new(project),
                             path: PathBuf::from(path),
                         },
                         Some(selected),

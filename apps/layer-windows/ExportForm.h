@@ -6,15 +6,15 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
     std::shared_ptr<CapyLocalization> localization;
     explicit ExportFormView(std::shared_ptr<CapyLocalization> context):localization(std::move(context)){}
     StackPanel root;
-    ComboBox format,profile,depth,background,dither,intent,resolution;
+    ComboBox format,profile,depth,background,dither,intent,resolution,metadata;
     NumberBox quality,width,height,ppi;
-    CheckBox resize,enlarge;
-    TextBlock validation;
+    CheckBox resize,enlarge,removeLocation;
+    TextBlock validation,metadataNote;
     A extent;
     J recipe,draft,color;
     A profiles;
-    hstring profileId;
-    bool updating=false;
+    hstring profileId,metadataChoices;
+    bool updating=false,photoMetadata=false;
     J copy;
     hstring text(wchar_t const* key) const {return str(copy,key);}
     void choices(ComboBox const& box,A const& values,hstring const& selected){box.Items().Clear();for(uint32_t i=0;i<values.Size();++i){auto choice=values.GetObjectAt(i);box.Items().Append(box_value(str(choice,L"label")));if(str(choice,L"value")==selected)box.SelectedIndex(i);}}
@@ -25,7 +25,27 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         if(draft.HasKey(L"error"))throw hresult_invalid_argument(str(draft,L"error"));recipe=object(draft,L"recipe");
         updating=true;choices(format,array(object(draft,L"choices"),L"formats"),str(recipe,L"format"));choices(depth,array(object(draft,L"choices"),L"depths"),str(recipe,L"depth"));
         choices(background,array(object(draft,L"choices"),L"backgrounds"),str(recipe,L"background"));choices(dither,array(object(draft,L"choices"),L"dithers"),str(object(recipe,L"encoding"),L"dither"));auto hdr=flag(draft,L"hdr");if(hdr){profileId=L"";auto wanted=object(object(recipe,L"profile"),L"profile").Stringify();for(uint32_t i=0;i<profiles.Size();++i)if(object(profiles.GetObjectAt(i),L"profile").Stringify()==wanted)profile.SelectedIndex(i);}
-        profile.IsEnabled(!hdr);intent.IsEnabled(!hdr);quality.IsEnabled(str(recipe,L"format")==L"Jpeg"||str(recipe,L"format")==L"JpegHdr"||str(recipe,L"format")==L"JpegHdrMapped"||str(recipe,L"format")==L"AvifHdr"||str(recipe,L"format")==L"AvifHdrMapped");updating=false;
+        profile.IsEnabled(!hdr);intent.IsEnabled(!hdr);quality.IsEnabled(str(recipe,L"format")==L"Jpeg"||str(recipe,L"format")==L"JpegHdr"||str(recipe,L"format")==L"JpegHdrMapped"||str(recipe,L"format")==L"AvifHdr"||str(recipe,L"format")==L"AvifHdrMapped");
+        presentMetadata();updating=false;
+    }
+    void presentMetadata(){
+        auto view=object(draft,L"metadata");auto choices=array(view,L"choices");auto kept=object(recipe,L"metadata");
+        metadata.Header(box_value(str(view,L"label")));AutomationProperties::SetName(metadata,str(view,L"label"));
+        if(auto key=choices.Stringify();key!=metadataChoices){
+            metadataChoices=key;metadata.Items().Clear();
+            for(auto choice:choices)metadata.Items().Append(box_value(str(choice.GetObject(),L"label")));
+        }
+        for(uint32_t i=0;i<choices.Size();++i)if(str(choices.GetObjectAt(i),L"value")==str(kept,L"keep")&&metadata.SelectedIndex()!=int32_t(i))metadata.SelectedIndex(i);
+        removeLocation.Content(box_value(str(view,L"remove_location")));removeLocation.IsChecked(flag(kept,L"remove_location"));
+        auto note=str(view,L"note");metadataNote.Text(note);
+        metadata.Visibility(photoMetadata&&flag(view,L"available")?Visibility::Visible:Visibility::Collapsed);
+        removeLocation.Visibility(photoMetadata&&flag(view,L"location")?Visibility::Visible:Visibility::Collapsed);
+        metadataNote.Visibility(photoMetadata&&!note.empty()?Visibility::Visible:Visibility::Collapsed);
+    }
+    void chooseMetadata(){
+        if(updating||metadata.SelectedIndex()<0)return;
+        auto choice=array(object(draft,L"metadata"),L"choices").GetObjectAt(metadata.SelectedIndex());
+        normalize(O({{L"type",S(L"metadata")},{L"value",O({{L"keep",choice.GetNamedValue(L"value")},{L"remove_location",B(removeLocation.IsChecked().Value())}})}}));
     }
     J current(){
         auto value=J::Parse(recipe.Stringify());value.Insert(L"jpeg_quality",N(quality.Value()));
@@ -64,6 +84,7 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
             auto values=array(object(draft,L"choices"),key);
             for(uint32_t optionIndex=0;optionIndex<std::min(values.Size(),control.Items().Size());++optionIndex)control.Items().SetAt(optionIndex,box_value(str(values.GetObjectAt(optionIndex),L"label")));
         }
+        presentMetadata();
     }
     void init(J const& details){
         color=object(details,L"color");extent=array(details,L"extent");root.Spacing(8);recipe=J::Parse(object(details,L"recipe").Stringify());auto form=object(details,L"form");copy=object(form,L"copy");profiles=A::Parse(array(form,L"profiles").Stringify());
@@ -82,6 +103,10 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         add(resolution,text(L"resolution"));for(auto value:{text(L"keep_resolution"),text(L"omit"),text(L"ppi")})resolution.Items().Append(box_value(value));
         auto density=recipe.GetNamedValue(L"resolution");resolution.SelectedIndex(density.ValueType()==JsonValueType::Object?2:density.GetString()==L"Omit"?1:0);
         ppi.Header(box_value(text(L"ppi")));ppi.Value(density.ValueType()==JsonValueType::Object?num(density.GetObject(),L"Ppi",300):300);root.Children().Append(ppi);
+        photoMetadata=flag(form,L"metadata");metadata.HorizontalAlignment(HorizontalAlignment::Stretch);
+        AutomationProperties::SetAutomationId(metadata,L"export-metadata");AutomationProperties::SetAutomationId(removeLocation,L"export-remove-location");
+        AutomationProperties::SetAutomationId(metadataNote,L"export-metadata-note");metadataNote.TextWrapping(TextWrapping::Wrap);metadataNote.Opacity(.72);
+        for(UIElement control:{UIElement(metadata),UIElement(removeLocation),UIElement(metadataNote)})root.Children().Append(control);
         validation.TextWrapping(TextWrapping::Wrap);root.Children().Append(validation);
         normalize(O({{L"type",S(L"refresh")}}));auto weak=weak_from_this();
         auto bind=[&](ComboBox const& box,wchar_t const* field,wchar_t const* op){box.SelectionChanged([weak,box,field,op](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&box.SelectedIndex()>=0){
@@ -91,6 +116,8 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         }});};
         bind(format,L"formats",L"format");bind(depth,L"depths",L"depth");bind(background,L"backgrounds",L"background");bind(dither,L"dithers",L"encoding");
         profile.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->profile.SelectedIndex()>=0){auto value=self->profiles.GetObjectAt(self->profile.SelectedIndex());self->profileId=str(value,L"library");self->normalize(O({{L"type",S(L"profile")},{L"value",value}}));}});
+        metadata.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->chooseMetadata();});
+        removeLocation.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->chooseMetadata();});
     }
 };
 }

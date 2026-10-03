@@ -424,7 +424,8 @@ documents leave out the modes defined only on [0, 1] (see
 mode. Only groups offer **Pass Through**, first in the group with Normal, as in
 Photoshop; another layer refuses it with a reason. Choosing the current mode adds
 no undo step. GTK fills a `MenuButton` popover when it opens, Web reads the
-`layer_blend_menu` export and Android the `layer_blend_menu` query.
+`layer_blend_menu` export, Android the `layer_blend_menu` query and Windows the
+layer menu query with `blend`.
 `UiCatalog.layer_blends` stays a flat list in code order, so a host that shows a
 plain list sends its index as the code; Pass Through has the last code, and the
 Properties panel's list leaves it out for layers other than groups.

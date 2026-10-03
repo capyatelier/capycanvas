@@ -49,9 +49,14 @@ function Toggle-Flag([string]$Id,[switch]$Keyboard){
 function Edit([string]$Id,[string]$Text){
     $entry=Control $Id;$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
 }
-function Choose([string]$Id,[string]$Option){
-    (Control $Id).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    (Control $Option -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+function Blend([string]$Option,[string[]]$Present=@(),[string[]]$Absent=@()){
+    Invoke 'layer-blend'
+    $item=Control $Option -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+    foreach($name in $Present){$null=Control $name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
+    foreach($name in $Absent){if(Find $name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible){throw "The blend menu offered $name"}}
+    $pattern=$null
+    if($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
+    else{$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
 }
 function Preview-Hash([string]$Id){
     $image=Control $Id
@@ -103,8 +108,10 @@ try {
     Edit 'layer-opacity' '60';(Control 'layer-blend').SetFocus()
     Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.6) -lt .000001} 'Layer opacity not applied'
     Wait-Until {[Math]::Abs((Control 'layer-opacity-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value-.6) -lt .000001} 'Opacity slider did not follow the numeric field'
-    Choose 'layer-blend' 'Multiply'
-    Wait-Until {(Model).state.layer_tools.editing_layer.blend -eq 1} 'Layer blend not applied'
+    Blend 'Multiply' -Present @('Normal','Screen','Overlay','Difference','Luminosity') -Absent @('Pass Through')
+    Wait-Until {(Model).state.layer_tools.editing_layer.blend -eq 1 -and (Control 'layer-blend').Current.ItemStatus -eq (Model).state.layer_tools.editing_layer.blend_label} 'Layer blend not applied'
+    $revision=(Model).state.document_file.revision;Blend 'Multiply';Start-Sleep -Milliseconds 400
+    if((Model).state.document_file.revision -ne $revision){throw 'Choosing the current blend mode added an undo step'}
     Toggle-Flag 'layer-alpha_lock';Wait-Until {(Model).state.layer_tools.editing_layer.alpha_locked} 'Alpha lock not applied'
     Invoke 'Undo' -Name;Wait-Until {!(Model).state.layer_tools.editing_layer.alpha_locked -and (Control 'layer-alpha_lock').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off} 'Undo did not restore the accessible alpha-lock state'
     Invoke 'Redo' -Name;Wait-Until {(Model).state.layer_tools.editing_layer.alpha_locked -and (Control 'layer-alpha_lock').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On} 'Redo did not restore the accessible alpha-lock state'
@@ -174,7 +181,9 @@ try {
     Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.47) -lt .000001} 'Hidden editing target lost opacity control'
     Invoke "layer-$group-content"
     Wait-Until {$null -ne (Find "layer-$created-name")} 'Group did not expand'
-    Invoke "layer-$group-name";Invoke 'layer-actions';Expand 'menu-organize';Invoke 'layer-menu-ungroup'
+    Invoke "layer-$group-name";Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $group} 'The group did not become the editing target'
+    Blend 'Pass Through' -Present @('Normal');Wait-Until {(Model).state.layer_tools.editing_layer.blend_label -eq 'Pass Through'} 'The group did not pass through'
+    Invoke 'layer-actions';Expand 'menu-organize';Invoke 'layer-menu-ungroup'
     Wait-Until {@((Model).state.layers|Where-Object {$_.id -eq $group}).Count -eq 0} 'Ungroup did not remove container'
     if(@((Model).state.layers|Where-Object {$_.id -in @($created,$duplicate)}).Count -ne 2){throw 'Ungroup lost children'}
     $start=(Model).state.layers.Count

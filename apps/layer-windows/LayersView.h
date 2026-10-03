@@ -62,7 +62,8 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     StackPanel header,tools,footer;
     ScrollView list;
     ItemsRepeater repeater;
-    ComboBox blend;
+    Button blend{nullptr};
+    TextBlock blendLabel{nullptr};
     ContentControl opacityGate;
     Bindings opacityBindings;
     hstring opacityKey,epoch;
@@ -85,6 +86,6 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     void refresh();
     void preview();
     void context(double id,bool mask,UIElement const& anchor,
-        std::optional<Windows::Foundation::Point> at={},bool holding=false);
+        std::optional<Windows::Foundation::Point> at={},bool holding=false,bool blendMenu=false);
 };
 }

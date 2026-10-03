@@ -113,7 +113,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                     for(auto item:depths)depth.Items().Append(box_value(item.GetArray().GetStringAt(1)));
                     for(auto item:backgrounds)background.Items().Append(box_value(item.GetArray().GetStringAt(1)));
                     auto blendSpec=object(creation,L"blending");auto blendChoices=array(blendSpec,L"choices");
-                    blending.Header(box_value(str(blendSpec,L"label")));
+                    blending.Header(box_value(str(blendSpec,L"label")));AutomationProperties::SetAutomationId(blending,L"document-blending");
                     for(auto item:blendChoices)blending.Items().Append(box_value(str(item.GetObject(),L"label")));
                     for(auto control:{preset,space,depth,background,blending}){control.HorizontalAlignment(HorizontalAlignment::Stretch);body.Children().Append(control);}
                     std::array<TextBox,2> entries;
@@ -121,7 +121,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         AutomationProperties::SetName(entries[i],labels.GetStringAt(i));AutomationProperties::SetAutomationId(entries[i],i==0?L"document-width":L"document-height");body.Children().Append(entries[i]);}
                     TextBlock summary,blendHelp,note,error;for(auto item:{summary,blendHelp,note,error}){item.TextWrapping(TextWrapping::Wrap);body.Children().Append(item);}
                     error.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(error,L"document-error");
-                    auto loading=std::make_shared<bool>(false);auto appearanceSource=std::make_shared<hstring>();
+                    auto loading=std::make_shared<bool>(false);auto appearanceSource=std::make_shared<hstring>();auto chosen=std::make_shared<hstring>(str(creationDraft,L"blend_space"));
                     auto appearance=[creationDraft,summary,blendHelp,note,appearanceSource,blending,blendChoices,loading,this]{
                         try{
                             auto source=creationDraft.Stringify()+L"/"+to_hstring(data->localizationGeneration);if(source==*appearanceSource)return;*appearanceSource=source;
@@ -131,19 +131,19 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                             blending.IsEnabled(flag(view,L"blending_editable"));*loading=false;
                         }catch(hresult_error const&){*loading=false;}
                     };
-                    auto project=[creationDraft,entries,space,spaces,depth,depths,background,backgrounds,blending,blendChoices,loading,spec,defaults,appearance,this]{
+                    auto project=[creationDraft,entries,space,spaces,depth,depths,background,backgrounds,chosen,loading,spec,defaults,appearance,this]{
                         if(*loading||space.SelectedIndex()<0||depth.SelectedIndex()<0||background.SelectedIndex()<0)return;
                         try{
                             A dimensions;for(uint32_t i=0;i<2;++i){auto result=numeric(this->localization.get(),object(spec,L"numeric"),defaults.GetNumberAt(i),O({{L"type",S(L"expression")},{L"text",S(entries[i].Text())}}));dimensions.Append(N(num(result,L"value")));}
                             creationDraft.Insert(L"extent",dimensions);
                             creationDraft.Insert(L"color",O({{L"space",spaces.GetArrayAt(space.SelectedIndex()).GetAt(0)},{L"depth",depths.GetArrayAt(depth.SelectedIndex()).GetAt(0)}}));
                             creationDraft.Insert(L"background",backgrounds.GetArrayAt(background.SelectedIndex()).GetAt(0));
-                            if(blending.SelectedIndex()>=0)creationDraft.Insert(L"blend_space",blendChoices.GetObjectAt(blending.SelectedIndex()).GetNamedValue(L"id"));
+                            if(!chosen->empty())creationDraft.Insert(L"blend_space",S(*chosen));
                             appearance();
                         }catch(hresult_error const&){*loading=false;}
                     };
-                    auto load=[creationDraft,entries,space,depth,background,blending,spaces,depths,backgrounds,blendChoices,loading,project](J value){
-                        *loading=true;creationDraft.Insert(L"blend_space",value.GetNamedValue(L"blend_space"));auto color=object(value,L"color");
+                    auto load=[creationDraft,entries,space,depth,background,blending,spaces,depths,backgrounds,blendChoices,chosen,loading,project](J value){
+                        *loading=true;*chosen=str(value,L"blend_space");creationDraft.Insert(L"blend_space",value.GetNamedValue(L"blend_space"));auto color=object(value,L"color");
                         auto dimensions=array(value,L"extent");for(uint32_t i=0;i<2;++i)entries[i].Text(to_hstring(uint32_t(dimensions.GetNumberAt(i))));
                         for(uint32_t i=0;i<spaces.Size();++i)if(spaces.GetArrayAt(i).GetStringAt(0)==str(color,L"space"))space.SelectedIndex(i);
                         for(uint32_t i=0;i<depths.Size();++i)if(depths.GetArrayAt(i).GetStringAt(0)==str(color,L"depth"))depth.SelectedIndex(i);
@@ -152,7 +152,10 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         *loading=false;project();
                     };
                     load(creationDraft);
-                    for(auto control:{space,depth,background,blending})control.SelectionChanged([project](auto&&,auto&&){project();});
+                    for(auto control:{space,depth,background})control.SelectionChanged([project](auto&&,auto&&){project();});
+                    blending.SelectionChanged([blending,blendChoices,chosen,loading,project](auto&&,auto&&){
+                        if(!*loading&&blending.IsEnabled()&&blending.SelectedIndex()>=0)*chosen=str(blendChoices.GetObjectAt(blending.SelectedIndex()),L"id");project();
+                    });
                     for(auto entry:entries)entry.TextChanged([project](auto&&,auto&&){project();});
                     preset.SelectionChanged([preset,presets,load,loading](auto&&,auto&&){if(!*loading&&preset.SelectedIndex()>=0)load(object(presets.GetObjectAt(preset.SelectedIndex()),L"options"));});
                     auto selected=creation.GetNamedValue(L"selected",JsonValue::CreateNullValue());for(uint32_t i=0;i<presets.Size();++i)if(presets.GetObjectAt(i).GetNamedValue(L"id").Stringify()==selected.Stringify())preset.SelectedIndex(i);

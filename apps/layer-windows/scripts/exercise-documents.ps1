@@ -104,7 +104,7 @@ function Invoke-Control([string]$Name) {
         catch [System.Windows.Automation.ElementNotAvailableException] {(Model).state.document_file.revision -ne $before}
     } "Could not invoke control: $Name"
 }
-function File-Command([string]$Id) {
+function File-Command([string]$Id,[scriptblock]$Options) {
     $script:scope=$root
     Wait-Until {((Model).state.commands|Where-Object id -eq $Id).enabled} "Document command stayed disabled: $Id" 45
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
@@ -112,6 +112,7 @@ function File-Command([string]$Id) {
     (Find-Id $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     if($Id -eq 'export_document') {
         Wait-Until {(Model).windows_document.stage -eq 'options'} 'Export options did not open' 45
+        if($Options){& $Options}
         Invoke-Control 'Preview Output'
         Wait-Until {(Model).windows_document.stage -eq 'preview'} 'Export preview did not finish' 60
         Invoke-Control 'Export'
@@ -277,6 +278,22 @@ $script:scope=$root
 Wait-Until {(Model).brush_ready} 'Canvas startup did not finish' 45
 if(!(Model).windows_isolated_settings){throw 'Review must use an isolated profile'}
 File-Command 'new_document';New-Dialog
+function Combo-Value($Combo){$selection=$Combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection();if($selection.Count){$selection[0].Current.Name}}
+function Combo-Select($Combo,[scriptblock]$Pick){
+    $Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $hit=@{item=$null};Wait-Until {$hit.item=@($Combo.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ListItem))|Where-Object $Pick)[0];$hit.item} 'Missing drop-down choice'
+    $hit.item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+}
+$blendChoices=@((Model).document_options.creation.blending.choices)
+$perceptual=($blendChoices|Where-Object id -eq 'Perceptual').label;$linear=($blendChoices|Where-Object id -eq 'Linear').label
+$blending=Find-Id 'document-blending';$depth=Find-Id 'document-depth'
+Wait-Until {(Combo-Value $blending) -eq $perceptual -and $blending.Current.IsEnabled} 'New drawings did not default to Perceptual blending'
+$startDepth=Combo-Value $depth
+Combo-Select $depth {$_.Current.Name -match 'float'}
+Wait-Until {(Combo-Value $blending) -eq $linear -and !$blending.Current.IsEnabled} 'Float did not force Linear blending'
+Combo-Select $depth {$_.Current.Name -eq $startDepth}
+Wait-Until {(Combo-Value $blending) -eq $perceptual -and $blending.Current.IsEnabled} 'Leaving Float lost the Perceptual blending choice'
 Set-Size '2+' '96';Invoke-Control 'Create'
 Wait-Until {(Find-Id 'document-error').Current.Name} 'Invalid expression did not show validation'
 if((Model).state.document_file.epoch -ne 0){throw 'Invalid size replaced the drawing'}
@@ -347,6 +364,44 @@ if($png.Length -lt 45 -or [Convert]::ToHexString($png[0..7]) -ne '89504E470D0A1A
 if(!(Model).state.document_file.modified -or (Model).state.document_file.location.uri -ne $first){
     throw 'PNG export incorrectly acknowledged a project save'
 }
+$photo=Join-Path $run 'Metadata photo.jpg';$photoExport=Join-Path $run 'Metadata export.jpg'
+$bitmap=[Drawing.Bitmap]::new(64,48)
+try{
+    $graphics=[Drawing.Graphics]::FromImage($bitmap);$graphics.Clear([Drawing.Color]::FromArgb(255,180,120,60));$graphics.Dispose()
+    foreach($tag in @(@(0x013B,2,[Text.Encoding]::ASCII.GetBytes("Native Artist`0")),@(0x8298,2,[Text.Encoding]::ASCII.GetBytes("Native Copyright`0")),
+        @(0x0001,2,[Text.Encoding]::ASCII.GetBytes("N`0")),@(0x0002,5,[byte[]](51,0,0,0,1,0,0,0,30,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0)))){
+        $item=[Runtime.Serialization.FormatterServices]::GetUninitializedObject([Drawing.Imaging.PropertyItem])
+        $item.Id=$tag[0];$item.Type=$tag[1];$item.Value=[byte[]]$tag[2];$item.Len=$item.Value.Length;$bitmap.SetPropertyItem($item)
+    }
+    $bitmap.Save($photo,[Drawing.Imaging.ImageFormat]::Jpeg)
+}finally{$bitmap.Dispose()}
+function Photo-Tags([string]$Path){$image=[Drawing.Image]::FromFile($Path);try{@($image.PropertyIdList)}finally{$image.Dispose()}}
+if(@(Compare-Object (Photo-Tags $photo) @(0x013B,0x8298,0x0001,0x0002) -ExcludeDifferent -IncludeEqual).Count -ne 4){throw 'The photo fixture did not keep its Exif and GPS tags'}
+$documentEpoch=(Model).state.document_file.epoch
+File-Command 'open_document';Picker 'Open';Choose-Path $photo;Idle
+Wait-Until {(Model).state.document_file.epoch -gt $documentEpoch} 'Open did not select the photo'
+File-Command 'export_document' {
+    $format=Find-Id 'export-format';Combo-Select $format {$_.Current.Name -eq 'JPEG image'}
+    Wait-Until {(Combo-Value (Find-Id 'export-format')) -eq 'JPEG image'} 'Export did not choose JPEG'
+    Wait-Until {$script:metadata=Find-Id 'export-metadata';$script:metadata -and !$script:metadata.Current.IsOffscreen} 'Export did not offer Metadata for a photo'
+    $remove=Find-Id 'export-remove-location'
+    if(!$remove){throw "Keeping $(Combo-Value $script:metadata) metadata did not offer Remove location"}
+    $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$scroller=$walker.GetParent($remove);$scroll=$null
+    while($scroller -and !$scroller.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll)){$scroller=$walker.GetParent($scroller)}
+    if(!$scroll){throw 'The export options do not scroll'}
+    $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,100)
+    Wait-Until {!(Find-Id 'export-remove-location').Current.IsOffscreen} 'Remove location could not be scrolled into view'
+    Combo-Select $script:metadata {$_.Current.Name -eq 'Copyright & Contact'}
+    Wait-Until {!(Find-Id 'export-remove-location')} 'Remove location stayed for Copyright & Contact'
+}
+Picker 'Save As';Choose-Path $photoExport;Idle
+Wait-Until {Test-Path -LiteralPath $photoExport} 'Photo export did not create the chosen JPEG'
+$kept=Photo-Tags $photoExport
+if(0x013B -notin $kept -or 0x8298 -notin $kept){throw 'Copyright & Contact dropped the artist or copyright'}
+if(0x0001 -in $kept -or 0x0002 -in $kept){throw 'Copyright & Contact kept the location'}
+$script:scope=$root
+File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Discard Changes';$script:scope=$root;Idle
+Wait-Until {(Model).state.document_file.location.uri -eq $first} 'Closing the photo did not return to the drawing'
 
 if($RecoverGpu){
     function Signature {
@@ -500,10 +555,12 @@ if($FailGpu){
 [PSCustomObject]@{
     gpu_failure_save=if($FailGpu){'Save/Save As, committed raster preservation and queued contact cancellation, Cancel, Discard, durable reopen and identical exported pixels passed'}else{'not requested'}
     shared_new_size_and_validation='passed'
+    new_document_blending_survives_float='passed'
     image_picker_draft_cancel_and_error_recovery='passed'
     image_layer_thumbnail_undo_redo_and_embedded_reopen='passed'
     save_cancel_and_unicode_path='passed'
     png_export_cancel_dimensions_and_checkpoint='passed'
+    photo_metadata_copyright_without_location='passed'
     gpu_recovery=if($RecoverGpu){'two replacements, queued and active pen strokes, identical exported pixels, thumbnails and Undo/Redo passed'}else{'not requested'}
     save_existing_and_save_as='passed'
     corrupt_open_preserves_live_document='passed'

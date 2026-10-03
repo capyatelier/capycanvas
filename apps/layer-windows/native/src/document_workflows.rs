@@ -94,7 +94,7 @@ enum Payload {
     Source(Box<SourceTask>),
     Info(layer_color::DocumentInfo),
     Histogram {
-        project: Option<Project>,
+        project: Option<Box<Project>>,
         gpu: SnapshotGpu,
         background: [f32; 4],
         time: f32,
@@ -274,7 +274,7 @@ impl Task {
                 (
                     "histogram",
                     Payload::Histogram {
-                        project: Some(session.capture_project_recovery()?),
+                        project: Some(Box::new(session.capture_project_recovery()?)),
                         gpu: gpu.snapshot_gpu(),
                         background: session.engine().view().background_rgba_linear,
                         time: session.engine().animation_time(),
@@ -385,7 +385,7 @@ impl Task {
                 let sampled_time = project.document.has_animated_effects().then_some(*time);
                 let mut renderer = gpu
                     .capture(
-                        project,
+                        *project,
                         *background,
                         *time,
                         self.control.clone(),
