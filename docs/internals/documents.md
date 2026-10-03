@@ -7,6 +7,11 @@ is separate from the GPU textures used to display it and from the workspace used
 to edit it. This distinction matters when implementing undo, saving a project or
 recreating a renderer.
 
+Parking or suspending a drawing clears its source-aware analysis tasks.
+Window-state adoption and renderer replacement reset those tasks without
+sending commands to a retired renderer. Analysis resumes after a live renderer
+is attached.
+
 ## Artwork and history
 
 [`Document`](../../crates/layer-core/src/lib.rs) contains the layer structure and

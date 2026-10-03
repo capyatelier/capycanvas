@@ -368,6 +368,43 @@ mod tests {
     }
 
     #[test]
+    fn retired_renderer_analysis_does_not_block_drawing_activation_or_replacement() {
+        for failed in [false, true] {
+            let mut active = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
+            let mut parked = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
+            active.dispatch(UiAction::SetTheme { theme: Some(Theme::Dark) }).unwrap();
+            let layers = parked.engine().document().layers.len();
+            parked.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
+            parked.frame(0, 0).unwrap();
+            let document = parked.engine().document().clone();
+            let checkpoint = parked.engine().checkpoint();
+            if failed { parked.suspend_renderer().unwrap(); }
+            else { parked.park_document().unwrap(); }
+            parked.renderer_mut().analysis_retain_fails = true;
+            let retained = parked.engine().backend().analysis_retained.len();
+            let cancelled = parked.engine().backend().analysis_cancels;
+            parked.inherit_window_state(&active).unwrap();
+            assert_eq!(parked.engine().backend().analysis_retained.len(), retained);
+            assert!(parked.engine().backend().analysis_cancels > cancelled);
+            assert!(parked.rendering_suspended());
+            assert!(!parked.effect_analyses.busy());
+            assert_eq!(parked.state().settings, active.state().settings);
+            assert_eq!(parked.capture_workspace().unwrap(), active.capture_workspace().unwrap());
+            let (previous, change) = parked.replace_renderer(Recorder::default()).unwrap();
+            assert_eq!(previous.analysis_retained.len(), retained);
+            assert!(change.canvas_wake);
+            assert!(!parked.rendering_suspended());
+            assert_eq!(parked.engine().document(), &document);
+            assert_eq!(parked.engine().checkpoint(), checkpoint);
+            parked.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+            assert_eq!(parked.engine().document().layers.len(), layers);
+            parked.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
+            assert_eq!(parked.engine().document().layers, document.layers);
+            parked.frame(1, 1).unwrap();
+        }
+    }
+
+    #[test]
     fn replacement_retains_sources_undo_redo_workspace_and_pending_save() {
         let mut s = UiSession::new(
             sources(),

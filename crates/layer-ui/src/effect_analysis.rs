@@ -29,7 +29,7 @@ impl Analyses {
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn clear_effect_analyses(&mut self) -> Result<(), String> {
         self.engine.backend_mut().cancel_effect_analysis();
-        self.engine.backend_mut().retain_effect_analyses(&[]).map_err(error)?;
+        if !self.rendering_suspended { self.engine.backend_mut().retain_effect_analyses(&[]).map_err(error)?; }
         self.effect_analyses = Analyses {epoch: self.state.document_file.epoch, ..Default::default()};
         Ok(())
     }
