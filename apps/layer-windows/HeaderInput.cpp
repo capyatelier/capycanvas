@@ -22,7 +22,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
     std::function<void()> changed;
     J model,configuration,source,beginRequest,preview,lastCancel;
     hstring identity;
-    weak_ref<FrameworkElement> originElement;
+    weak_ref<FrameworkElement> originElement,originFocus;
     std::vector<weak_ref<UIElement>> pressedPath;
     std::vector<std::pair<weak_ref<UIElement>,ManipulationModes>> scrollModes;
     std::optional<uint32_t> pointer;
@@ -37,7 +37,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
     uint64_t generation=0,menuGeneration=0;
     double slopX=4,slopY=4;
     bool editing=false,dragging=false,starting=false,started=false,busy=false,ending=false,cancelled=false;
-    bool dirty=false,held=false,recognizing=false,releasing=false,menuOpen=false;
+    bool dirty=false,held=false,recognizing=false,releasing=false,menuOpen=false,workspaceMenu=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     ~Impl(){if(timer)timer.Stop();if(menu)menu.Hide();}
     bool focused()const{return owner&&GetAncestor(GetForegroundWindow(),GA_ROOTOWNER)==owner&&!IsIconic(owner);}
@@ -157,23 +157,62 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         if(!accepted)busy=false;
         else if(!begin&&!finish)dirty=false;
     }
-    void context(uint32_t id,Point at,bool holding=false){
+    bool workspace(uint32_t id)const{
+        for(auto zone:array(model,L"zones"))for(auto value:zone.GetArray()){
+            auto entry=value.GetObject();
+            if(num(entry,L"id")==id)return str(object(entry,L"item"),L"kind")==L"workspaces";
+        }
+        return false;
+    }
+    FrameworkElement focusSource(Windows::Foundation::IInspectable const& original)const{
+        for(auto node=original.try_as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node)){
+            if(auto control=node.try_as<Control>();control&&control.IsTabStop())return control;
+            if(node==root)break;
+        }
+        return target(original);
+    }
+    void refreshWorkspaceMenu(){
+        if(!menu||!workspaceMenu)return;
+        auto presentation=object(object(data->model,L"windows_workspace"),L"switcher_options");
+        menu.Items().GetAt(0).as<MenuFlyoutItem>().Text(str(presentation,L"title"));
+        NativeMenuItems(menu.Items(),array(presentation,L"sections"),data,[weak=weak_from_this()](J action){
+            if(auto self=weak.lock()){self->cancel();self->data->dispatch(action);}
+        },1);
+    }
+    void showMenu(J const& presentation,Point at,bool holding,FrameworkElement const& invoking,bool titled=false){
+        if(!array(presentation,L"sections").Size())return;
+        if(menu)menu.Hide();
+        menu=MenuFlyout();workspaceMenu=titled;TrackPopup(menu,data);
+        auto weak=weak_from_this();auto control=invoking.try_as<Control>();
+        if(!control)control=FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>();
+        auto focus=make_weak(control);
+        menu.Opened([weak](auto const& sender,auto&&){if(auto self=weak.lock();self&&self->menu==sender.template as<MenuFlyout>()){self->menuOpen=true;self->notify();}});
+        menu.Closed([weak,focus](auto const& sender,auto&&){if(auto self=weak.lock();self&&self->menu==sender.template as<MenuFlyout>()){
+            self->menuOpen=false;self->workspaceMenu=false;self->notify();
+            if(auto element=focus.get();element&&element.IsLoaded())element.Focus(FocusState::Keyboard);
+        }});
+        auto title=str(presentation,L"title");
+        if(titled&&!title.empty()){MenuFlyoutItem heading;heading.Text(title);heading.IsEnabled(false);menu.Items().Append(heading);}
+        NativeMenuItems(menu.Items(),array(presentation,L"sections"),data,[weak](J action){
+            if(auto self=weak.lock()){self->cancel();self->data->dispatch(action);}
+        },titled?1:0);
+        Primitives::FlyoutShowOptions options;options.Position(at);
+        options.ShowMode(holding?Primitives::FlyoutShowMode::Transient:Primitives::FlyoutShowMode::Standard);
+        menu.ShowAt(root,options);
+    }
+    void context(uint32_t id,Point at,bool holding=false,FrameworkElement invoking=nullptr){
         owner=GetAncestor(GetForegroundWindow(),GA_ROOTOWNER);
+        if(!invoking)invoking=originElement.get();if(!invoking)invoking=root;
         auto serial=++menuGeneration;
+        if(workspace(id)){
+            showMenu(object(object(data->model,L"windows_workspace"),L"switcher_options"),at,holding,invoking,true);return;
+        }
         QueryWorkspace(data->query,O({{L"type",S(L"context")},{L"target",O({{L"kind",S(L"header")},
             {L"id",id?N(id):JsonValue::CreateNullValue()}})}}),
-            [weak=weak_from_this(),serial,at,holding](J reply){
+            [weak=weak_from_this(),serial,at,holding,focus=make_weak(invoking)](J reply){
                 auto self=weak.lock();if(!self||serial!=self->menuGeneration||self->dragging||!self->focused()||self->data->externalPopup)return;
-                auto model=object(reply,L"result");if(!array(model,L"sections").Size())return;
-                self->menu=MenuFlyout();TrackPopup(self->menu,self->data);
-                self->menu.Opened([weak](auto&&,auto&&){if(auto self=weak.lock()){self->menuOpen=true;self->notify();}});
-                self->menu.Closed([weak](auto&&,auto&&){if(auto self=weak.lock()){self->menuOpen=false;self->notify();}});
-                NativeMenuItems(self->menu.Items(),array(model,L"sections"),self->data,[weak](J action){
-                    if(auto self=weak.lock()){self->cancel();self->data->dispatch(action);}
-                });
-                Primitives::FlyoutShowOptions options;options.Position(at);
-                options.ShowMode(holding?Primitives::FlyoutShowMode::Transient:Primitives::FlyoutShowMode::Standard);
-                self->menu.ShowAt(self->root,options);
+                auto invoking=focus.get();if(!invoking)return;
+                self->showMenu(object(reply,L"result"),at,holding,invoking);
             });
     }
     void down(PointerRoutedEventArgs const& e){
@@ -189,7 +228,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         bool isItem=kind==L"item";
         if(!editing&&(!isItem||p.PointerDeviceType()==NativeInput::PointerDeviceType::Mouse))return;
         if(editing)selected=isItem?uint32_t(num(item,L"value")):0;
-        ++generation;cancelled=false;hideMenu();source=item;originElement=make_weak(element);
+        ++generation;cancelled=false;hideMenu();source=item;originElement=make_weak(element);originFocus=make_weak(focusSource(e.OriginalSource()));
         for(auto node=e.OriginalSource().try_as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node)){
             if(auto target=node.try_as<UIElement>())pressedPath.push_back(make_weak(target));
             if(node==root)break;
@@ -241,7 +280,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         recognizer.Holding([weak](auto&&,NativeInput::HoldingEventArgs const& e){if(auto self=weak.lock()){
             if(e.HoldingState()!=NativeInput::HoldingState::Started||!self->pointer||self->dragging||self->held)return;
             if(!self->focused()||!self->current()||!self->claim())return;
-            self->held=true;self->context(uint32_t(num(self->source,L"value")),self->position,true);self->notify();
+            self->held=true;self->context(uint32_t(num(self->source,L"value")),self->position,true,self->originFocus.get());self->notify();
         }});
         root.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){if(auto self=weak.lock())self->down(e);})),true);
         root.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){if(auto self=weak.lock())self->move(e);})),true);
@@ -261,7 +300,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
             auto item=object(element.Tag().as<J>(),L"header_source");auto kind=str(item,L"kind");
             if(kind!=L"item"&&kind!=L"background")return;
             Point at{};if(!e.TryGetPosition(self->root,at)){auto box=visibleBounds(element,self->root);at={box.X,box.Y+box.Height};}
-            self->selected=uint32_t(num(item,L"value"));self->context(self->selected,at);self->notify();
+            self->selected=uint32_t(num(item,L"value"));self->context(self->selected,at,false,self->focusSource(e.OriginalSource()));self->notify();
         }});
         root.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->deferCancel();});
         root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->deferCancel();});
@@ -280,18 +319,36 @@ void HeaderInput::Source(FrameworkElement const& element,J const& source,hstring
     element.Tag(O({{L"header_source",source}}));element.IsHoldingEnabled(false);element.CanDrag(false);
     AutomationProperties::SetName(element,label);
 }
+void HeaderInput::WorkspaceOptions(FrameworkElement const& invoking){
+    impl->owner=GetAncestor(GetForegroundWindow(),GA_ROOTOWNER);impl->hideMenu();
+    auto box=visibleBounds(invoking,impl->root);
+    impl->showMenu(object(object(impl->data->model,L"windows_workspace"),L"switcher_options"),{box.X,box.Y+box.Height},false,invoking,true);
+}
 void HeaderInput::Configure(J const& model,bool editing,J const& request){
     auto identity=model.Stringify()+request.Stringify();
     if(impl->identity!=identity||impl->editing!=editing)impl->cancel(L"configuration_changed");
     impl->model=model;impl->configuration=request;impl->identity=identity;impl->editing=editing;
+    impl->refreshWorkspaceMenu();
     bool found=false;for(auto zone:array(model,L"zones"))for(auto entry:zone.GetArray())found|=num(entry.GetObject(),L"id")==impl->selected;
     if(!editing||!found)impl->selected=0;
 }
 bool HeaderInput::Key(KeyRoutedEventArgs const& e,bool pressed){
-    if(!impl->editing||impl->data->externalPopup)return false;
+    if(impl->data->externalPopup)return false;
     using K=Windows::System::VirtualKey;auto key=e.Key();
     if((GetKeyState(VK_CONTROL)&0x8000)||(GetKeyState(VK_MENU)&0x8000)||(GetKeyState(VK_LWIN)&0x8000)||(GetKeyState(VK_RWIN)&0x8000))return false;
     bool context=key==K::Application||(key==K::F10&&(GetKeyState(VK_SHIFT)&0x8000));
+    if(context){
+        auto element=impl->target(FocusManager::GetFocusedElement(impl->root.XamlRoot()));
+        auto id=element?uint32_t(num(object(element.Tag().as<J>(),L"header_source"),L"value")):impl->selected;
+        if(impl->workspace(id)){
+            e.Handled(true);if(pressed&&!impl->active()){
+                auto box=visibleBounds(element?element:impl->root,impl->root);
+                impl->context(id,{box.X,box.Y+box.Height},false,impl->focusSource(FocusManager::GetFocusedElement(impl->root.XamlRoot())));
+            }return true;
+        }
+    }
+    if(key==K::Escape&&impl->menuOpen){e.Handled(true);if(pressed)impl->cancel();return true;}
+    if(!impl->editing)return false;
     if(key!=K::Escape&&key!=K::Left&&key!=K::Right&&key!=K::Delete&&key!=K::Back&&!context)return false;
     if(key!=K::Escape&&!impl->selected)return false;
     e.Handled(true);if(!pressed)return true;

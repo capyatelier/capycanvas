@@ -12,6 +12,7 @@ public:
         CapyUi::J const& source,winrt::hstring const& label);
     void Configure(CapyUi::J const& model,bool editing,CapyUi::J const& geometryRequest);
     bool Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& event,bool pressed);
+    void WorkspaceOptions(winrt::Microsoft::UI::Xaml::FrameworkElement const& invoking);
     bool Cancel();
     void Select(uint32_t id);
     uint32_t Selected()const;

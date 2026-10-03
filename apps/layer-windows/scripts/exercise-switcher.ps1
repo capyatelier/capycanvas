@@ -1,6 +1,8 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('mouse','pen','touch')][string]$Device='mouse')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+$CapyFind='visible';$CapyPopups=$true
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -28,6 +30,112 @@ function Open-Manager {
     Wait-Until {$null -ne (Find 'workspace-manager')} 'Manager did not open'
     Settled
 }
+function At([string]$Id){
+    $box=(Control $Id -Arranged).Current.BoundingRectangle
+    @{x=[int]($box.X+$box.Width/2);y=[int]($box.Y+$box.Height/2)}
+}
+function Options {
+    Wait-Until {$null -ne (Find 'Show in top bar' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Visibility checklist did not open'
+    foreach($id in @((Storage).order)){
+        $row=Control ('workspace-switcher-show-'+$id)
+        $checked=$row.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
+        if($checked -ne ($id -in @((Storage).switcher.id))){throw 'Visibility checkbox differs from saved pins'}
+    }
+    $first=Control ('workspace-switcher-show-'+(Storage).order[0])
+    $menu=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($first)
+    $rows=@($menu.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -like 'workspace-switcher-show-*'})
+    $nativeOrder=@($rows|ForEach-Object {$_.Current.AutomationId.Substring('workspace-switcher-show-'.Length)})
+    if(($nativeOrder -join '|') -ne ((Storage).order -join '|')){throw 'Visibility menu does not contain every workspace in saved order'}
+    $null=Control 'Manage Workspaces…' -Name
+    if(Find 'Customize Title Bar' -Name){throw 'Switcher input opened the titlebar context menu'}
+}
+function Dismiss([string]$Focus=''){
+    [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+    Wait-Until {$null -eq (Find ('workspace-switcher-show-'+(Storage).order[0]))} 'Escape did not dismiss options'
+    if($Focus){Wait-Until {(Control $Focus).Current.HasKeyboardFocus} 'Escape did not return focus to the invoking switcher control'}
+}
+function Check-Options {
+    $active=(Storage).id;$layout=Layout;$order=(Storage).order -join '|'
+    $inactive=@((Storage).switcher_display.id|Where-Object {$_ -ne $active})[0]
+    Invoke 'workspace-switcher-options';Options;Capture 'visibility-checklist' -Composed;Dismiss 'workspace-switcher-options'
+    foreach($source in @(('workspace-switch-'+$active),('workspace-switch-'+$inactive),'workspace-switcher-options','workspace-switcher')){
+        $at=At $source
+        if($source -eq 'workspace-switcher'){$box=(Control $source).Current.BoundingRectangle;$at.y=[int]($box.Y+2)}
+        [CapyRowPointer]::RightClick($at.x,$at.y);Options
+        Dismiss $(if($source -ne 'workspace-switcher'){$source})
+        if((Storage).id -ne $active -or (Layout) -ne $layout){throw 'Secondary switcher input changed the workspace'}
+    }
+    foreach($id in @($inactive,$active)){
+        $at=At ('workspace-switch-'+$id);[CapyRowPointer]::Down($Device,$at.x,$at.y);[CapyRowPointer]::Up()
+        Wait-Until {(Storage).id -eq $id -and !(Storage).busy} 'Short switcher tap did not switch normally'
+    }
+    Invoke 'workspace-switcher-options';Options
+    $at=At ('workspace-switch-'+$active);[CapyRowPointer]::Down($Device,$at.x,$at.y);[CapyRowPointer]::Up()
+    Wait-Until {!(Find ('workspace-switcher-show-'+$active))} 'Outside tap did not dismiss visibility options'
+    if((Storage).id -ne $active){throw 'Outside dismissal changed the active workspace'}
+    (Control 'workspace-switcher-options').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x0d)
+    Options;Dismiss 'workspace-switcher-options'
+    if($Device -eq 'mouse'){
+        $at=At ('workspace-switch-'+$active);[CapyRowPointer]::Down('mouse',$at.x,$at.y);Start-Sleep -Milliseconds 900
+        if(Find ('workspace-switcher-show-'+$active)){throw 'Mouse hold opened workspace options'}
+        [CapyRowPointer]::Up()
+    }
+    foreach($key in @(0x5d,0x79)){
+        (Control ('workspace-switch-'+$inactive)).SetFocus()
+        if($key -eq 0x79){[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),[uint16]$key)}else{[CapyRowPointer]::Key([uint32]$review.Id,[uint16]$key)}
+        Options;Dismiss ('workspace-switch-'+$inactive)
+    }
+    @{theme=$Theme;device=$Device;secondary_context='passed';escape_focus='passed';short_taps='passed';outside_dismiss='passed';enter='passed';keyboard_context='passed'}|ConvertTo-Json|Set-Content (Join-Path $run 'workspace-options-input.json')
+    if($Device -ne 'mouse'){
+        foreach($source in @(('workspace-switch-'+$inactive),'workspace-switcher-options','workspace-switcher')){
+            $at=At $source
+            if($source -eq 'workspace-switcher'){$box=(Control $source).Current.BoundingRectangle;$at.y=[int]($box.Y+2)}
+            [CapyRowPointer]::Down($Device,$at.x,$at.y)
+            Wait-Until {try{(Control 'title-bar').Current.HelpText|ConvertFrom-Json|Where-Object {$_.phase -eq 'held' -and $_.menu_open}}catch{}} "Switcher hold did not open the checklist: $source"
+            [CapyRowPointer]::Up();Options;Dismiss
+            if((Storage).id -ne $active){throw 'Hold release also switched workspaces'}
+        }
+    }
+    foreach($id in @($active,$inactive)){
+        foreach($repeat in 1..2){
+            Invoke 'workspace-switcher-options';Options
+            $revision=(Storage).switcher_revision
+            Invoke ('workspace-switcher-show-'+$id)
+            Wait-Until {!(Find ('workspace-switcher-show-'+$id))} 'Checkbox activation did not dismiss options'
+            Invoke 'workspace-switcher-options'
+            $retained=Control ('workspace-switcher-show-'+$id)
+            $runtime=$retained.GetRuntimeId() -join ':'
+            Wait-Until {(Storage).switcher_revision -gt $revision -and !(Storage).switcher_busy -and $retained.Current.IsEnabled} 'Open options did not follow preference acknowledgement'
+            Options
+            if(((Control ('workspace-switcher-show-'+$id)).GetRuntimeId() -join ':') -ne $runtime){throw 'Preference acknowledgement replaced the open menu item'}
+            Dismiss 'workspace-switcher-options'
+            if((Storage).id -ne $active -or (Layout) -ne $layout -or ((Storage).order -join '|') -ne $order){throw 'Visibility edit changed the active workspace, layout or order'}
+        }
+    }
+    Invoke 'workspace-switcher-options';Options;Invoke 'Manage Workspaces…' -Name
+    Wait-Until {$null -ne (Find 'workspace-manager')} 'Options footer did not open the workspace manager'
+    Settled;Choose 'Cancel';Closed
+    if((Storage).id -ne $active -or (Layout) -ne $layout){throw 'Opening the manager disturbed the workspace'}
+}
+function Check-Compact {
+    $active=(Storage).id;$layout=Layout;$scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ([int](640*$scale)) -Height ([int](480*$scale))
+    $null=Control 'header-workspace-menu' -Arranged
+    $at=At 'header-workspace-menu';[CapyRowPointer]::RightClick($at.x,$at.y);Options;Dismiss 'header-workspace-menu'
+    Invoke 'header-workspace-menu'
+    $submenu=Control 'Show in top bar' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+    $submenu.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    Options;Capture 'compact-visibility' -Composed
+    $revision=(Storage).switcher_revision
+    Invoke ('workspace-switcher-show-'+$active)
+    Wait-Until {(Storage).switcher_revision -gt $revision -and !(Storage).switcher_busy} 'Compact visibility toggle was not acknowledged'
+    if((Storage).id -ne $active -or (Layout) -ne $layout){throw 'Compact pinning switched or changed the workspace'}
+    Invoke 'header-workspace-menu';Invoke 'Manage Workspaces…' -Name
+    Wait-Until {$null -ne (Find 'workspace-manager')} 'Compact footer did not open the manager'
+    Settled;Choose 'Cancel';Closed
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+}
 function Preference([string]$Id,[string]$Action){
     Settled
     $revision=(Storage).switcher_revision
@@ -52,17 +160,23 @@ function Launch([string]$Label){
     $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Wait-Until {$null -ne (Find 'workspace-switcher')} 'Maximized header did not show the workspace switcher'
+    $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
+    $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+    [CapyRowPointer]::Initialize([uint32]$review.Id)
     if(Find 'Test stroke' -Name){throw 'Switcher fixture requires the production UI without smoke controls'}
 }
 function Close {
+    [CapyRowPointer]::Dispose()
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
 }
 try {
     Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
+    [IO.Directory]::CreateDirectory($env:CAPY_SETTINGS_DIRECTORY)|Out-Null
+    [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{theme=$Theme}|ConvertTo-Json))
     $env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
-    Launch 'initial'
+    Launch 'initial';Check-Options
     $active=(Storage).id;$order=@((Storage).order);$original=Layout
     $preview=@($order|Where-Object {$_ -ne $active})[0]
     Open-Manager
@@ -89,6 +203,7 @@ try {
     foreach($id in @((Storage).switcher.id)){Preference $id 'show'}
     if(@((Storage).switcher_display).Count -ne 1 -or (Storage).switcher_display[0].id -ne $preview){throw 'Empty pins did not retain the current workspace'}
     Choose 'Cancel';Closed
+    Invoke 'workspace-switcher-options';Options;Dismiss 'workspace-switcher-options'
     $emptyOrder=@((Storage).order)
     Close
     Launch 'empty-pins-restart'
@@ -109,7 +224,9 @@ try {
         $scroller.SetScrollPercent(100,[System.Windows.Automation.ScrollPattern]::NoScroll)
         Wait-Until {$scroller.Current.HorizontalScrollPercent -ge 99} 'Header did not scroll to its last choices'
     }
-    Capture 'header-overflow'
+    $fixed=(Control 'workspace-switcher-options' -Arranged).Current.BoundingRectangle
+    if($scroller){$scroller.SetScrollPercent(0,[System.Windows.Automation.ScrollPattern]::NoScroll);Wait-Until {$scroller.Current.HorizontalScrollPercent -le 1} 'Choices did not scroll back';if((Control 'workspace-switcher-options').Current.BoundingRectangle -ne $fixed){throw 'Options button scrolled with the workspace choices'};$scroller.SetScrollPercent(100,[System.Windows.Automation.ScrollPattern]::NoScroll)}
+    Capture 'header-overflow' -Composed
     $overflowCurrent=(Storage).id
     Open-Manager
     Preference $overflowCurrent 'show'
@@ -117,12 +234,15 @@ try {
     if((Storage).switcher_display[0].id -ne $overflowCurrent){throw 'Overflow lost the unpinned current workspace'}
     Capture 'overflow-current-fallback'
     Choose 'Cancel';Closed
+    Check-Compact
     Close
-    @{pinning='passed';complete_order='passed';preview_cancel_and_row_retention='passed';current_fallback='passed';empty_pins_restart='passed';created_workspaces_pinned='passed';header_overflow='passed';current_fallback_scrolled_into_view='passed';zero_exit='passed';scope='native UI Automation; physical row pickup and input timing are separate'}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+    @{theme=$Theme;device=$Device;options_context_hold_keyboard='passed';options_toggle='passed';compact_options='passed';fixed_options='passed';pinning='passed';complete_order='passed';preview_cancel_and_row_retention='passed';current_fallback='passed';empty_pins_restart='passed';created_workspaces_pinned='passed';header_overflow='passed';current_fallback_scrolled_into_view='passed';zero_exit='passed';scope='native UI Automation; physical row pickup and input timing are separate'}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
     Get-Content (Join-Path $run 'results.json')
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace)
+    try{(Control 'title-bar').Current.HelpText|Set-Content (Join-Path $run 'failure-gesture.json');Capture 'failure' -Composed}catch{}
     throw
 }finally{
+    [CapyRowPointer]::Dispose()
     Exit-CapyEnvironment
 }

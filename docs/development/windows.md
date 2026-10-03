@@ -196,6 +196,11 @@ disposable profile (see [diagnosis](#diagnose-a-running-app)). Device-specific
 fixtures take `-Device mouse|pen|touch`. Results, captures and profiles stay under
 ignored `artifacts/windows`.
 
+For switcher visibility and its context menu during title-bar customization, run
+`tools/windows-vm/windows-vm.py fixtures switcher header:options header:options-light header:options-pen header:options-touch`.
+The switcher fixture covers both themes and injected mouse, pen and touch input;
+the focused header journeys also check placement cancellation and keyboard input.
+
 - **Unlocked desktop, one at a time.** Fixtures need an unlocked interactive
   desktop and foreground input. Run them sequentially.
 - **Wait for layout.** Before injecting input, wait for both the published state

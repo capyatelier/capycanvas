@@ -13,31 +13,49 @@ inline hstring menuSlug(hstring const& text){
     return hstring(L"menu-"+slug);
 }
 inline void NativeMenuItems(Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> const& target,
-    A const& sections,std::shared_ptr<WorkspaceData> const& data,std::function<void(J)> const& dispatch){
+    A const& sections,std::shared_ptr<WorkspaceData> const& data,std::function<void(J)> const& dispatch,uint32_t at=0){
+    auto retain=[&](auto fresh){
+        using T=decltype(fresh);T item{nullptr};
+        if(at<target.Size())item=target.GetAt(at).try_as<T>();
+        bool added=!item;
+        if(added){if(at<target.Size())target.RemoveAt(at);item=fresh;target.InsertAt(at,item);}
+        ++at;return std::pair{item,added};
+    };
     bool populated=false;
     for(auto sectionValue:sections){
         auto section=sectionValue.GetArray();if(!section.Size())continue;
-        if(populated)target.Append(MenuFlyoutSeparator());populated=true;
+        if(populated)retain(MenuFlyoutSeparator());populated=true;
         for(auto value:section){
             auto spec=value.GetObject();auto children=array(spec,L"sections");
             auto text=str(spec,L"label");auto action=object(spec,L"action");
             if(children.Size()){
-                MenuFlyoutSubItem item;item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));AutomationProperties::SetAutomationId(item,menuSlug(text));
-                item.FontSize(data->textSize());NativeMenuItems(item.Items(),children,data,dispatch);target.Append(item);
+                auto item=retain(MenuFlyoutSubItem()).first;item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));AutomationProperties::SetAutomationId(item,menuSlug(text));
+                item.FontSize(data->textSize());NativeMenuItems(item.Items(),children,data,dispatch);
             }else{
                 auto identifier=action.Size()?str(action,L"command",L"layer-menu-"+str(object(action,L"action"),L"op")):menuSlug(text);
+                if(str(action,L"type")==L"workspace_manager"){
+                    auto command=object(action,L"command");auto kind=str(command,L"type");
+                    identifier=kind==L"switch"?L"workspace-switch-"+str(command,L"id"):
+                        kind==L"show_in_switcher"?L"workspace-switcher-show-"+str(command,L"id"):menuSlug(text);
+                }
                 auto checked=spec.GetNamedValue(L"selected",JsonValue::CreateNullValue());
-                auto add=[&](auto item){
+                auto add=[&](auto fresh){
+                    auto [item,added]=retain(fresh);
                     item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));item.FontSize(data->textSize());item.MinHeight(34);
                     item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));AutomationProperties::SetAutomationId(item,identifier);
-                    item.Click([dispatch,action](auto&&,auto&&){if(action.Size())dispatch(action);});target.Append(item);
+                    item.Tag(action);
+                    if(added)item.Click([dispatch](auto const& sender,auto&&){
+                        auto action=sender.template as<FrameworkElement>().Tag().template as<J>();if(action.Size())dispatch(action);
+                    });
+                    return item;
                 };
                 if(checked.ValueType()==JsonValueType::Boolean){
-                    ToggleMenuFlyoutItem item;item.IsChecked(checked.GetBoolean());add(item);
+                    auto item=add(ToggleMenuFlyoutItem());item.IsChecked(checked.GetBoolean());
                 }else add(MenuFlyoutItem());
             }
         }
     }
+    while(target.Size()>at)target.RemoveAtEnd();
 }
 inline void TrackPopup(Primitives::FlyoutBase const& popup,std::shared_ptr<WorkspaceData> const& data){
     auto open=std::make_shared<bool>(false);

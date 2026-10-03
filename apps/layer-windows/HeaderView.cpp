@@ -58,8 +58,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::vector<Button> menus;
     std::vector<std::pair<Button,hstring>> sizes;
     CheckBox footer;
-    Button primary,menuOverflow,workspaceOverflow,zen,settings,recovery;
-    Grid menuGroup,workspaceGroup;Border menuCapsule;
+    Button primary,menuOverflow,workspaceOverflow,workspaceOptions,zen,settings,recovery;
+    Grid menuGroup,workspaceGroup,switcherWell;Border menuCapsule;
     ScrollViewer switcher;
     Border document;
     std::shared_ptr<DrawingTabs> drawings;
@@ -69,6 +69,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::vector<Button> overflow;
     std::vector<Border> zones;
     bool built=false,editing=false,hidden=false,fullscreenActive=false,applying=false,resolvingLink=false,queryBusy=false;
+    bool workspaceMenuOpen=false;
     bool scheduled=false,trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     float leftInset=0,rightInset=0;
     double tile=36,iconSize=20,height=48,totalHeight=48,menuWidth=0,switchWidth=36;
@@ -186,7 +187,11 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         workspaces=std::move(next);
         if(!workspaces.empty()&&workspaces.front().second==active&&(active!=switchActive||previousFirst!=active))switcher.ChangeView(0.,nullptr,nullptr,true);
         switchActive=active;
-        switcher.Visibility(values.Size()?Visibility::Visible:Visibility::Collapsed);
+        workspaceOptions.IsEnabled(flag(storage,L"ready"));
+        auto optionsLabel=str(storage,L"switcher_options_label");
+        if(AutomationProperties::GetName(workspaceOptions)!=optionsLabel){
+            tooltip(workspaceOptions,optionsLabel);AutomationProperties::SetName(workspaceOptions,optionsLabel);
+        }
     }
     double textWidth(hstring const& text,bool bold=false,bool semibold=false)const{
         auto value=label(data,text,bold);value.UseLayoutRounding(false);if(semibold)value.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
@@ -266,21 +271,28 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         switcher=ScrollViewer();switcher.UseLayoutRounding(false);switcher.Content(switches);switcher.Height(36);
         switcher.HorizontalScrollMode(ScrollMode::Enabled);switcher.VerticalScrollMode(ScrollMode::Disabled);
         switcher.HorizontalScrollBarVisibility(ScrollBarVisibility::Hidden);switcher.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
-        switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Padding({5,5,5,5});switcher.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});switcher.BorderThickness({0});
-        switcher.Background(data->glass(L"switcher"));
+        switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Padding({5,5,0,5});switcher.BorderThickness({0});
+        switcher.Background(clear());
+        switcherWell=Grid();switcherWell.Height(36);switcherWell.UseLayoutRounding(false);switcherWell.Background(data->glass(L"switcher"));
+        switcherWell.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});
+        ColumnDefinition choices;choices.Width({1,GridUnitType::Star});switcherWell.ColumnDefinitions().Append(choices);
+        ColumnDefinition options;options.Width({30,GridUnitType::Pixel});switcherWell.ColumnDefinitions().Append(options);
+        switcherWell.Children().Append(switcher);
+        workspaceOptions=button(data,L"",[weak=weak_from_this()]{if(auto self=weak.lock())self->input->WorkspaceOptions(self->workspaceOptions);});
+        style(workspaceOptions,data,false);workspaceOptions.Padding({0});workspaceOptions.MinWidth(0);workspaceOptions.Width(30);
+        workspaceOptions.BorderThickness({0});workspaceOptions.CornerRadius({0,18*CornerFit,18*CornerFit,0});
+        auto moreIcon=icon(L"more",data->theme(),16);moreIcon.Opacity(.65);workspaceOptions.Content(moreIcon);
+        AutomationProperties::SetAutomationId(workspaceOptions,L"workspace-switcher-options");
+        Grid::SetColumn(workspaceOptions,1);switcherWell.Children().Append(workspaceOptions);
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");AutomationProperties::SetName(switcher,data->caption(L"header",L"task_workspaces"));
         workspaceOverflow=button(data,data->copyCaption(L"header",L"workspaces"),[]{});style(workspaceOverflow,data,false);workspaceOverflow.Padding({0});
         AutomationProperties::SetAutomationId(workspaceOverflow,L"header-workspace-menu");
-        workspaceOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock()){
-            auto storage=object(self->data->model,L"windows_workspace");
-            for(auto value:array(storage,L"switcher_display")){
-                auto choice=value.GetObject();auto id=str(choice,L"id");ToggleMenuFlyoutItem item;item.Text(str(choice,L"title"));
-                item.IsChecked(id==str(storage,L"id"));item.IsEnabled(flag(storage,L"can_switch"));
-                item.Click([data=self->data,id](auto&&,auto&&){data->dispatch(O({{L"type",S(L"workspace_manager")},{L"command",O({{L"type",S(L"switch")},{L"id",S(id)}})}}));});
-                target.Append(item);
-            }
-        }}));
-        workspaceGroup=Grid();workspaceGroup.VerticalAlignment(VerticalAlignment::Center);workspaceGroup.Children().Append(switcher);workspaceGroup.Children().Append(workspaceOverflow);
+        workspaceOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock())
+            self->fillMenu(target,object(object(self->data->model,L"windows_workspace"),L"switcher_menu"));
+        }));
+        workspaceOverflow.Flyout().Opened([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->workspaceMenuOpen=true;});
+        workspaceOverflow.Flyout().Closed([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->workspaceMenuOpen=false;});
+        workspaceGroup=Grid();workspaceGroup.VerticalAlignment(VerticalAlignment::Center);workspaceGroup.Children().Append(switcherWell);workspaceGroup.Children().Append(workspaceOverflow);
         drawings=std::make_shared<DrawingTabs>();drawings->data=data;drawings->init();
         document=Border();document.Child(drawings->root);document.Background(clear());
         AutomationProperties::SetAutomationId(document,L"document-title");AutomationProperties::SetName(document,data->caption(L"header",L"drawings"));
@@ -421,7 +433,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         }
         // The editor overlay owns keyboard activation as well as pointer input.
         for(auto const& item:menus)item.IsTabStop(!editing);
-        menuOverflow.IsTabStop(!editing);workspaceOverflow.IsTabStop(!editing);
+        menuOverflow.IsTabStop(!editing);workspaceOverflow.IsTabStop(!editing);workspaceOptions.IsTabStop(!editing);
         for(auto const& [item,id]:workspaces)item.IsTabStop(!editing);
         systemStatus->Apply(fullscreenActive,hidden||!status,editing);
     }
@@ -572,8 +584,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             bool ownSurface=kind==L"document_title"||kind==L"clock"||kind==L"battery"||kind==L"space"||(!compact&&(kind==L"menu_labels"||kind==L"workspaces"));
             native.frame.Background(inBar||ownSurface||open?clear():headerSurface(data));native.frame.CornerRadius({corner(),corner(),corner(),corner()});native.outline.CornerRadius({corner(),corner(),corner(),corner()});
             if(kind==L"workspaces"){
-                bool focused=holdsFocus(switcher)||holdsFocus(workspaceOverflow),switching=(workspaceOverflow.Visibility()==Visibility::Visible)!=compact;
-                switcher.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);
+                bool focused=holdsFocus(switcherWell)||holdsFocus(workspaceOverflow),switching=(workspaceOverflow.Visibility()==Visibility::Visible)!=compact;
+                switcherWell.Visibility(compact?Visibility::Collapsed:Visibility::Visible);workspaceOverflow.Visibility(compact?Visibility::Visible:Visibility::Collapsed);
                 if(focused&&switching){if(compact)workspaceOverflow.Focus(FocusState::Keyboard);else if(!workspaces.empty()){
                     auto target=std::find_if(workspaces.begin(),workspaces.end(),[](auto const& p){auto checked=p.first.IsChecked();return checked&&checked.Value();});
                     (target==workspaces.end()?workspaces.front():*target).first.Focus(FocusState::Keyboard);
@@ -627,7 +639,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         root.TabFocusNavigation(editing?Input::KeyboardNavigationMode::Cycle:Input::KeyboardNavigationMode::Local);
         drawings->refresh();
-        applyWorkspaces();switchWidth=8+2*std::max(0,int(workspaces.size())-1);
+        applyWorkspaces();
+        if(workspaceMenuOpen)fillMenu(workspaceOverflow.Flyout().as<MenuFlyout>().Items(),object(object(snapshot,L"windows_workspace"),L"switcher_menu"));
+        switchWidth=35+2*std::max(0,int(workspaces.size())-1);
         for(auto const& [item,id]:workspaces){item.Width(std::min(130.,unbox_value<double>(item.Tag())+20));switchWidth+=item.Width();}
         switchWidth=std::clamp(switchWidth,tile,480.);
         for(auto const& item:overflow)item.Content(icon(L"menu",theme,iconSize));

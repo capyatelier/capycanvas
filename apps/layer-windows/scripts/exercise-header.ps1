@@ -1,7 +1,11 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','options','options-light','options-pen','options-touch')][string]$Journey='full')
 $ErrorActionPreference='Stop'
+if($Journey -eq 'options-light'){$Theme='light'}
+if($Journey -eq 'options-pen'){$Device='pen'}
+if($Journey -eq 'options-touch'){$Device='touch'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+$CapyPopups=$true
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -83,6 +87,37 @@ function Edit-Header {
     Wait-Until {(Model).header.editing} 'Titlebar editor did not open'
     Check-Geometry
     $null=Control 'header-edit-done'
+}
+function Check-WorkspaceOptions {
+    $entry=@(Entries|Where-Object {$_.item.kind -eq 'workspaces'})[0]
+    if(!$entry){return}
+    Wait-Until {!(Find 'customize_workspace_ui' -Visible)} 'Application menu did not dismiss before switcher input'
+    $id='header-select-'+$entry.id
+    $source=Control $id -Arranged;$source.SetFocus()
+    $box=$source.Current.BoundingRectangle
+    $at=@{x=[int]($box.X+$box.Width/2);y=[int]($box.Y+$box.Height/2)}
+    $before=HeaderJson;$active=(Model).windows_workspace.id
+    [CapyRowPointer]::RightClick($at.x,$at.y)
+    Wait-Until {$null -ne (Find ('workspace-switcher-show-'+$active))} 'Titlebar editor workspace context did not open visibility options'
+    if(Find 'Customize Title Bar' -Name -Visible -Type ([System.Windows.Automation.ControlType]::MenuItem)){throw 'Workspace context opened titlebar customization commands'}
+    Capture 'customize-workspace-options' -Composed
+    [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+    Wait-Until {!(Find ('workspace-switcher-show-'+$active)) -and (Control $id).Current.HasKeyboardFocus} 'Workspace context Escape did not restore editor focus'
+    (Control $id).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+    Wait-Until {$null -ne (Find ('workspace-switcher-show-'+$active))} 'Editor keyboard context did not open visibility options'
+    [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+    Wait-Until {!(Find ('workspace-switcher-show-'+$active))} 'Editor keyboard context did not dismiss'
+    if((HeaderJson) -ne $before -or (Model).windows_workspace.id -ne $active -or !(Model).header.editing){throw 'Workspace context changed the header or closed titlebar editing'}
+    @{theme=$Theme;device=$Device;secondary_context='passed';escape_focus='passed';keyboard_context='passed';header_unchanged='passed'}|ConvertTo-Json|Set-Content (Join-Path $run 'workspace-options-input.json')
+    if($Device -ne 'mouse'){
+        [CapyRowPointer]::Down($Device,$at.x,$at.y)
+        Wait-Until {(Gesture).phase -eq 'held' -and (Gesture).menu_open} 'Editor switcher hold did not open options'
+        [CapyRowPointer]::Up()
+        $null=Control ('workspace-switcher-show-'+$active)
+        [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+        Wait-Until {!(Find ('workspace-switcher-show-'+$active))} 'Editor hold menu did not dismiss'
+    }
+    if((HeaderJson) -ne $before -or (Model).windows_workspace.id -ne $active -or !(Model).header.editing){throw 'Workspace context changed the header or closed titlebar editing'}
 }
 function Drop-Component([string]$Kind='space',[switch]$Cancel,[switch]$Picker) {
     $before=HeaderJson;$from=At ('header-component-'+$Kind)
@@ -321,10 +356,27 @@ function Check-Narrow {
 try {
     Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    [IO.Directory]::CreateDirectory($env:CAPY_SETTINGS_DIRECTORY)|Out-Null
+    [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
+    if($Journey -ne 'full'){
+        $initial=HeaderJson
+        Edit-Header;Check-WorkspaceOptions
+        $entry=@(Entries|Where-Object {$_.item.kind -eq 'workspaces'})[0]
+        if(!$entry){throw 'Default header does not contain a workspace selector'}
+        Check-ItemDrag $entry.id
+        Invoke 'header-edit-cancel'
+        Wait-Until {!(Model).header.editing -and (HeaderJson) -eq $initial} 'Options journey changed the titlebar layout'
+        Capture 'options-normal' -Composed
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        @{theme=$Theme;device=$Device;workspace_options_context='passed';workspace_placement_cancel='passed';keyboard='passed'}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+        Get-Content (Join-Path $run 'results.json')
+        return
+    }
     if($Catalog){Check-Catalog}
     $initial=HeaderJson;$footer=(Model).state.workspace.layout.canvas_info.visible
-    Edit-Header;Check-Keyboard
+    Edit-Header;Check-WorkspaceOptions;Check-Keyboard
     foreach($size in @(@('medium',60),@('large',72),@('small',48))){
         Invoke ('header-size-'+$size[0])
         Wait-Until {(Header).size -eq $size[0] -and (Presentation).height -eq $size[1]} 'Size did not update the native header'
@@ -372,10 +424,10 @@ try {
     Start-Review 'unsaved-restart'
     Wait-Until {(HeaderJson) -eq $saved -and !(Model).header.editing} 'Closing without Done saved a titlebar preview'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
-    [pscustomobject]@{device=$Device;workspace=$Workspace;catalog=[bool]$Catalog;geometry='passed';sizes='passed';native_keyboard='passed';resize_cancel='passed';held_detach_reattach='passed';keyboard_zones='passed';footer_rollback='passed';fullscreen='passed';narrow_overflow='passed';unsaved_restart='passed';inert_bank='passed';immediate_component_drag='passed';preview_and_escape='passed';delete_and_cancel='passed';picker_search_and_order='passed';native_tile_hit_area='passed';drawer_switch_and_toggle='passed';done_undo_redo='passed';restart='passed';scope='OS-delivered synthetic input; physical devices and full visual acceptance are separate'}|ConvertTo-Json
+    [pscustomobject]@{theme=$Theme;workspace_options_context='passed';device=$Device;workspace=$Workspace;catalog=[bool]$Catalog;geometry='passed';sizes='passed';native_keyboard='passed';resize_cancel='passed';held_detach_reattach='passed';keyboard_zones='passed';footer_rollback='passed';fullscreen='passed';narrow_overflow='passed';unsaved_restart='passed';inert_bank='passed';immediate_component_drag='passed';preview_and_escape='passed';delete_and_cancel='passed';picker_search_and_order='passed';native_tile_hit_area='passed';drawer_switch_and_toggle='passed';done_undo_redo='passed';restart='passed';scope='OS-delivered synthetic input; physical devices and full visual acceptance are separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){
-        try{@{gesture=Gesture;header=Header;presentation=Presentation}|ConvertTo-Json -Depth 40|Set-Content (Join-Path $run 'failure-state.json');Capture 'failure'}catch{}
+        try{[CapyRowPointer]::Verify();@{gesture=Gesture;header=Header;presentation=Presentation;pointer_gap_ms=[CapyRowPointer]::MaxGapMilliseconds}|ConvertTo-Json -Depth 40|Set-Content (Join-Path $run 'failure-state.json');Capture 'failure'}catch{}
         if($Device -eq 'mouse' -and [CapyRowPointer]::Active){try{[CapyRowPointer]::Key(0x1b)}catch{}}
     }
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
