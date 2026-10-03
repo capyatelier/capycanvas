@@ -76,7 +76,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     assert_eq!(session.layer_interaction.selected, ids.iter().copied().collect());
     assert!(!session.engine.can_undo());
     let before = doc.layers[..2].to_vec();
-    session.set_transform_control("transform_x", 20.).unwrap();
+    session.set_transform_control("transform_x", 95.).unwrap();
     session.set_transform_control("transform_width", 2.).unwrap();
     for (i, layer) in session.engine.document().layers[..2].iter().enumerate() {
         assert_eq!(layer.source, before[i].source);

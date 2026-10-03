@@ -4,6 +4,17 @@ use crate::effect_catalog::ResourceLabel;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NumericMapping {
+    #[default]
+    Linear,
+    Log,
+    Power {
+        exponent: f64,
+    },
+}
+
 pub const EFFECT_ABI: u32 = 3;
 /// Header plus two records for at most 32 control points/stops. Curves store
 /// analytic Hermite segments; gradients store exact stops, never sampled LUTs.
@@ -124,6 +135,8 @@ pub struct EffectProgram {
     /// Small parameter-derived tables, computed on edits rather than per pixel.
     #[serde(default)]
     pub lookups: Arc<[EffectLookup]>,
+    #[serde(default)]
+    pub pages: Arc<[EffectPage]>,
     pub parameters: Arc<[EffectParameter]>,
     #[serde(default)]
     pub constraints: Arc<[EffectConstraint]>,
@@ -202,12 +215,30 @@ pub enum EffectConstraint {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EffectPage {
+    pub id: Arc<str>,
+    pub label: ResourceLabel,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EffectVisibility {
+    pub key: Arc<str>,
+    pub value: EffectValue,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectParameter {
     pub key: Arc<str>,
     pub label: ResourceLabel,
     /// Consecutive parameters in the same section share one heading/divider.
     #[serde(default)]
     pub section: Option<ResourceLabel>,
+    #[serde(default)]
+    pub page: Option<Arc<str>>,
+    #[serde(default)]
+    pub visible_when: Option<EffectVisibility>,
+    #[serde(default)]
+    pub soft_bounds: Option<[f64; 2]>,
+    #[serde(default)]
+    pub mapping: NumericMapping,
     pub kind: EffectParameterKind,
     pub default: EffectValue,
 }
@@ -379,6 +410,26 @@ impl EffectInstance {
                 .all(|(i, c)| c == b'_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit()))
         {
             return Err("Unsupported or invalid effect program");
+        }
+        if self.program.pages.len() > 16 {return Err("Too many effect pages");}
+        for (index,page) in self.program.pages.iter().enumerate() {
+            if page.id.is_empty() || page.id.len()>128 || !page.label.valid(256)
+                || self.program.pages[..index].iter().any(|old|old.id==page.id) {
+                return Err("Invalid effect page");
+            }
+        }
+        for parameter in self.program.parameters.iter() {
+            if parameter.page.as_ref().is_some_and(|id|!self.program.pages.iter().any(|page|page.id==*id)) {
+                return Err("Unknown effect page");
+            }
+            if let Some(condition)=&parameter.visible_when {
+                let Some(other)=self.program.parameters.iter().find(|other|other.key==condition.key) else{return Err("Unknown effect visibility parameter");};
+                if condition.key==parameter.key || !matches!((&other.kind,&condition.value),
+                    (EffectParameterKind::Toggle,EffectValue::Toggle(_)) |
+                    (EffectParameterKind::Choice{..},EffectValue::Choice(_))) || other.validate(&condition.value).is_err() {
+                    return Err("Invalid effect visibility condition");
+                }
+            }
         }
         for pass in self.program.passes.iter() {
             if pass.entry.is_empty()
@@ -565,6 +616,15 @@ impl EffectParameter {
         {
             return Err("Invalid effect parameter metadata");
         }
+        if let EffectParameterKind::Number{min,max,..}=self.kind {
+            if self.soft_bounds.is_some_and(|[low,high]|!low.is_finite() || !high.is_finite() || low>high || low<f64::from(min) || high>f64::from(max))
+                || matches!(self.mapping,NumericMapping::Power{exponent} if !exponent.is_finite() || !(0.125..=8.).contains(&exponent))
+                || matches!(self.mapping,NumericMapping::Log) && min<=0. {
+                return Err("Invalid numeric effect presentation");
+            }
+        } else if self.soft_bounds.is_some() || self.mapping!=NumericMapping::Linear {
+            return Err("Numeric presentation on nonnumeric effect parameter");
+        }
         let valid = match (&self.kind, value) {
             (
                 EffectParameterKind::Number {
@@ -699,7 +759,6 @@ pub const LOG_CURVE_FLOOR_STOPS: f32 = -8.;
 pub fn hdr_curve_white(space: &str, stops: f32) -> Option<f32> {
     match space {
         "Log HDR" => Some(-LOG_CURVE_FLOOR_STOPS / (stops - LOG_CURVE_FLOOR_STOPS)),
-        "Linear HDR" => Some(stops.exp2().recip()),
         _ => None,
     }
 }
@@ -999,7 +1058,7 @@ mod tests {
         assert!(instance.rebind(Arc::new(program)).is_err());
     }
     #[test]
-    fn sections_shorten_labels_without_changing_shader_parameters() {
+    fn pages_shorten_labels_without_changing_shader_parameters() {
         let program = fixture("color_balance").program();
         for (i, section) in ["Shadows", "Midtones", "Highlights"]
             .into_iter()
@@ -1010,7 +1069,9 @@ mod tests {
                 .enumerate()
             {
                 let parameter = &program.parameters[i * 3 + j];
-                assert_eq!(parameter.section, Some(ResourceLabel::Message { message: format!("resources-section-color-balance-{}", section.to_ascii_lowercase()).into() }));
+                assert!(parameter.section.is_none());
+                assert_eq!(parameter.page.as_deref(), Some(section.to_ascii_lowercase().as_str()));
+                assert_eq!(program.pages[i].label, ResourceLabel::Message { message: format!("resources-section-color-balance-{}", section.to_ascii_lowercase()).into() });
                 assert_eq!(parameter.label, ResourceLabel::Message { message: format!("resources-parameter-color-balance-{}", parameter.key.replace('_', "-")).into() });
             }
         }
@@ -1080,5 +1141,49 @@ mod tests {
             .set("clamp_output", EffectValue::Toggle(true))
             .unwrap();
         levels.validate().unwrap();
+    }
+}
+
+#[cfg(test)] mod presentation_tests {
+    use super::*;
+    fn schema()->EffectInstance {
+        let program=serde_json::from_value(serde_json::json!({"abi":EFFECT_ABI,"id":"presentation","label":"Presentation","kind":"adjustment","wgsl":"fn capy_presentation() {}","entry":"capy_presentation",
+            "pages":[{"id":"rgb","label":"RGB"}],"parameters":[
+                {"key":"enabled","label":"Enabled","kind":{"kind":"toggle"},"default":{"kind":"toggle","value":false}},
+                {"key":"channel","label":"Channel","kind":{"kind":"choice","options":["RGB","Red"]},"default":{"kind":"choice","value":0}},
+                {"key":"gain","label":"Gain","page":"rgb","visible_when":{"key":"enabled","value":{"kind":"toggle","value":true}},"soft_bounds":[0.1,1.],"mapping":{"type":"power","exponent":0.5},
+                    "kind":{"kind":"number","min":0.,"max":2.,"step":0.01,"decimals":2,"unit":""},"default":{"kind":"number","value":1.}}
+            ]})).unwrap();
+        EffectInstance::new(Arc::new(program))
+    }
+    #[test] fn presentation_does_not_change_parameter_payload_or_hidden_values() {
+        let mut effect=schema();effect.validate().unwrap();let payload=effect.gpu_parameters(RgbSpace::Srgb).unwrap();
+        Arc::make_mut(&mut effect.program).pages=Arc::from([]);
+        Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters)[2].page=None;
+        effect.validate().unwrap();assert_eq!(effect.gpu_parameters(RgbSpace::Srgb).unwrap(),payload);assert_eq!(effect.value("gain"),Some(&EffectValue::Number(1.)));
+    }
+    #[test] fn page_admission_rejects_unknown_duplicate_and_seventeenth_page() {
+        let mut effect=schema();let original=effect.program.clone();
+        Arc::make_mut(&mut effect.program).pages=vec![EffectPage{id:"other".into(),label:"Other".into()}].into();assert!(effect.validate().is_err());
+        effect.program=original.clone();Arc::make_mut(&mut effect.program).pages=vec![original.pages[0].clone();2].into();assert!(effect.validate().is_err());
+        effect.program=original;Arc::make_mut(&mut effect.program).pages=(0..17).map(|n|EffectPage{id:n.to_string().into(),label:"Page".into()}).collect::<Vec<_>>().into();assert!(effect.validate().is_err());
+    }
+    #[test] fn visibility_is_only_validated_toggle_or_choice_equality() {
+        let mut effect=schema();
+        let set=|effect:&mut EffectInstance,key:&str,value|Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters)[2].visible_when=Some(EffectVisibility{key:key.into(),value});
+        set(&mut effect,"channel",EffectValue::Choice(1));effect.validate().unwrap();
+        set(&mut effect,"channel",EffectValue::Choice(2));assert!(effect.validate().is_err());
+        set(&mut effect,"gain",EffectValue::Number(1.));assert!(effect.validate().is_err());
+        set(&mut effect,"missing",EffectValue::Toggle(true));assert!(effect.validate().is_err());
+    }
+    #[test] fn numeric_presentation_stays_finite_and_inside_hard_bounds() {
+        let mut effect=schema();
+        for bounds in [[f64::NAN,1.],[-0.1,1.],[0.1,2.1],[1.,0.1]] {
+            Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters)[2].soft_bounds=Some(bounds);assert!(effect.validate().is_err());
+        }
+        Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters)[2].soft_bounds=Some([0.,2.]);
+        for exponent in [f64::NAN,0.124,8.001] {
+            Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters)[2].mapping=NumericMapping::Power{exponent};assert!(effect.validate().is_err());
+        }
     }
 }

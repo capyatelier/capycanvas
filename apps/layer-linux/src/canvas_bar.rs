@@ -304,7 +304,7 @@ fn build(
             button.add_css_class(if item.accent { "suggested-action" } else { "flat" });
             (button.clone().upcast(), Some(Field::Action(button)))
         }
-        ToolOption::Choice { id, label, segmented: true, items } => {
+        ToolOption::Choice { id, label, segmented: true, items, .. } => {
             let segments = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             segments.set_widget_name(&format!("canvas-bar-choice-{id}"));
             let buttons = segment_buttons(&segments, label, items, true, send);

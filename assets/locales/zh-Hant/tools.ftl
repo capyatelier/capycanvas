@@ -163,3 +163,5 @@ tool-tonal-shadows = 暗部 · 低於 −5 級
 tool-tonal-tones = 明暗 · 相對於參考白的級數
 
 tool-action-group-transform-warp-split = 分割網格
+
+tools-transform-reference = 位置參考點

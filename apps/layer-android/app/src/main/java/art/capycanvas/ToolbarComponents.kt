@@ -144,7 +144,7 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
             val measureKey = options.map { option -> when {
                 option.has("Range") -> option.getJSONObject("Range").let { listOf(it.getString("id"), it.array("bounds").objects().map { f -> f.getJSONObject("numeric").toString() }) }
                 option.has("Numeric") -> option.getJSONObject("Numeric").let { listOf(it.getString("id"), it.getString("label"), it.getJSONObject("numeric").toString()) }
-                option.has("Choice") -> option.getJSONObject("Choice").let { listOf(it.getBoolean("segmented"), it.array("items").length()) }
+                option.has("Choice") -> option.getJSONObject("Choice").let { listOf(it.getBoolean("segmented"), it.array("items").length(), it.optInt("columns"), it.optString("beside")) }
                 else -> "action"
             } }.toString()
             val sizes = remember(measureKey, preferences.toString(), style, vertical, width, textStyle, density) {
@@ -182,6 +182,10 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
 internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float, tileWidth: Float, tileHeight: Float,
     preferences: JSONObject, textWidth: (String) -> Float, caption: String? = null, language: String = ""): List<Float> = when {
     option.has("Range") -> listOf(if (preferences.getBoolean("sliders")) 280f else 100f, 28f)
+    option.has("Choice") && option.getJSONObject("Choice").optInt("columns") > 0 -> option.getJSONObject("Choice").let {
+        val columns = it.getInt("columns")
+        listOf(columns * 18f, ((it.array("items").length() + columns - 1) / columns) * 18f)
+    }
     option.has("Choice") && option.getJSONObject("Choice").getBoolean("segmented") -> {
         val items = option.getJSONObject("Choice").array("items").objects()
         if (caption != null) listOf(items.sumOf { captionedWidth(it.getString("label"), textWidth).toDouble() }.toFloat(), tileHeight)
@@ -351,6 +355,26 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
     val colors = LocalPalette.current
     val items = choice.array("items").objects()
     val id = choice.getString("id")
+    val columns = choice.optInt("columns")
+    if (columns > 0) {
+        Column(Modifier.width((columns * 18).dp).selectableGroup().testTag("$prefix-segments-$id")) {
+            items.chunked(columns).forEachIndexed { row, cells ->
+                Row {
+                    cells.forEachIndexed { column, item ->
+                        val selected = item.getBoolean("selected")
+                        HoverTip(item.getString("label"), Modifier.size(18.dp)) {
+                            Box(Modifier.fillMaxSize().testTag("$prefix-segment-$id-${row * columns + column}")
+                                .background(if (selected) colors.active else Color.Transparent)
+                                .selectable(selected, role = Role.RadioButton) { edit(item.getJSONObject("action")) }, contentAlignment = Alignment.Center) {
+                                SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(6.dp).alpha(if (selected) 1f else .45f))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
     if (choice.getBoolean("segmented")) {
         val measurer = rememberTextMeasurer()
         val textStyle = LocalTextStyle.current

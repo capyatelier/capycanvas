@@ -1,5 +1,9 @@
 package art.capycanvas
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -9,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -44,6 +49,19 @@ import org.json.JSONObject
     limits: ClosedFloatingPointRange<Float>? = null, onTyping: (Boolean) -> Unit = {}, onText: (TextFieldValue) -> Unit = {},
     registerCommit: (Any, ((Boolean) -> Boolean)?) -> Unit = { _, _ -> },
     onChange: (Float) -> Unit) {
+    NumericSetting(label, value.toDouble(), control, modifier, enabled, description, settings, id, inline,
+        toolbar, showUnits, showSlider, valueOnly, limits?.let { it.start.toDouble()..it.endInclusive.toDouble() },
+        onTyping, onText, registerCommit, onChange = { onChange(it.toFloat()) })
+}
+
+@Composable internal fun NumericSetting(label: String, value: Double, control: JSONObject,
+    modifier: Modifier = Modifier, enabled: Boolean = true, description: String = "",
+    settings: Boolean = false, id: String = label, inline: Boolean = false,
+    toolbar: Boolean = false, showUnits: Boolean = true, showSlider: Boolean = true, valueOnly: Boolean = false,
+    limits: ClosedFloatingPointRange<Double>? = null, onTyping: (Boolean) -> Unit = {}, onText: (TextFieldValue) -> Unit = {},
+    registerCommit: (Any, ((Boolean) -> Boolean)?) -> Unit = { _, _ -> },
+    presentedText: String? = null, onEditPhase: ((String) -> Unit)? = null,
+    onChange: (Double) -> Unit) {
     val host = LocalCanvasHost.current
     val captions = remember(label, host.languageTag) { JSONObject(Native.numericLabels(label, host.languageTag)) }
     val colors = LocalPalette.current
@@ -52,42 +70,53 @@ import org.json.JSONObject
     val requester = remember { FocusRequester() }
     val ranged = control.getString("kind") == "slider"
     val displayKey = if (ranged) "edit" else "text"
-    fun resolve(value: Float, op: JSONObject): JSONObject {
+    fun resolve(value: Double, op: JSONObject): JSONObject {
         val request = obj("control" to control, "value" to value, "operation" to op)
         return JSONObject(if (toolbar && !valueOnly) Native.toolbarUi(obj("type" to "number", "request" to request, "compact" to true, "units" to showUnits).toString(), host.languageTag) else Native.number(request.toString(), host.languageTag))
     }
-    var shown by remember(value, control.toString(), showUnits, host.languageTag) { mutableStateOf(resolve(value, obj("type" to "format"))) }
-    var editing by remember { mutableStateOf(false) }
+    var shown by remember(value, control.toString(), showUnits, presentedText, host.languageTag) { mutableStateOf(resolve(value, obj("type" to "format")).also { shown -> presentedText?.let { shown.put("text", it).put("edit", it) } }) }
+    var editing by rememberSaveable { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
-    var dirty by remember { mutableStateOf(false) }
+    var dirty by rememberSaveable { mutableStateOf(false) }
     var fieldBounds by remember { mutableStateOf(Rect.Zero) }
-    var text by remember { mutableStateOf(TextFieldValue(shown.getString(displayKey))) }
-    var fieldValue by remember { mutableFloatStateOf(shown.number("value")) }
+    var text by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(shown.getString(displayKey))) }
+    var fieldValue by remember { mutableDoubleStateOf(shown.getDouble("value")) }
     var error by remember { mutableStateOf<String?>(null) }
     val height = if (settings) 48.dp else if (ranged || toolbar) 24.dp else 32.dp
     val valuePadding = if (settings) 12.dp else if (toolbar && !showUnits && !valueOnly) 2.dp else 6.dp
     val measurer = rememberTextMeasurer()
     val widest = remember(inline, control.toString(), showUnits, host.languageTag) {
-        if (inline) (if (toolbar) JSONObject(Native.toolbarUi(obj("type" to "numeric_info", "id" to id, "control" to control, "compact" to true, "units" to showUnits).toString(), host.languageTag)).array("samples").let { samples -> (0 until samples.length()).map(samples::getString) }
-            else listOf(control.number("min"), control.number("max")).map { resolve(it, obj("type" to "format")).getString("text") })
+        if (inline) (if (toolbar) JSONObject(Native.toolbarUi(obj("type" to "numeric_info", "id" to id, "control" to control, "compact" to true, "units" to true).toString(), host.languageTag)).array("samples").let { samples -> (0 until samples.length()).map(samples::getString) }
+            else listOf(control.getDouble("min"), control.getDouble("max")).map { resolve(it, obj("type" to "format")).getString("text") })
             .maxBy { it.length }.replace(Regex("[0-9]"), "8") else ""
     }
     val fixedWidth = if (inline) with(LocalDensity.current) { measurer.measure(if (valueOnly) shown.getString("text") else widest, LocalTextStyle.current).size.width.toDp() } + valuePadding * 2 + 2.dp else 0.dp
-    fun apply(op: JSONObject): Boolean = try {
-        var next = resolve(shown.number("value"), op)
+    var active by remember { mutableIntStateOf(0) }
+    var heldKey by remember { mutableStateOf<Key?>(null) }
+    val phase by rememberUpdatedState(onEditPhase)
+    fun beginEdit() { if (active == 0 && phase != null) { active = 1; phase?.invoke("down") } }
+    fun endEdit(cancel: Boolean = false) {
+        val notify = active == 1; active = 0; heldKey = null
+        if (notify) phase?.invoke(if (cancel) "cancel" else "up")
+    }
+    fun apply(op: JSONObject): Boolean {
+        if (active == 2 || (op.optString("type") == "expression" && presentedText != null && op.optString("text") == presentedText)) return true
+        return try {
+        var next = resolve(shown.getDouble("value"), op)
         limits?.let { range ->
-            val bounded = next.number("value").coerceIn(range)
-            if (bounded != next.number("value")) next = resolve(bounded, obj("type" to "format"))
+            val bounded = next.getDouble("value").coerceIn(range)
+            if (bounded != next.getDouble("value")) next = resolve(bounded, obj("type" to "format"))
         }
-        val changed = next.number("value") != shown.number("value")
+        val changed = next.getDouble("value") != shown.getDouble("value")
         shown = next; error = null
-        if (changed) onChange(next.number("value"))
+        if (changed) onChange(next.getDouble("value"))
         true
-    } catch (e: Exception) { error = e.message ?: host.bootstrap!!.getString("action_failed"); false }
+        } catch (e: Exception) { error = e.message ?: host.bootstrap!!.getString("action_failed"); false }
+    }
     fun finish(cancel: Boolean = false): Boolean {
         if (!cancel && text.composition != null) return false
         if (!dirty && !editing) return true
-        if (!cancel && dirty && !apply(obj("type" to "expression", "text" to text.text))) return false
+        if (!cancel && dirty && text.text != shown.getString(displayKey) && !apply(obj("type" to "expression", "text" to text.text))) return false
         editing = false; dirty = false
         error = null; text = TextFieldValue(shown.getString(displayKey))
         host.textComposition.clear(requester)
@@ -99,26 +128,39 @@ import org.json.JSONObject
         onDispose { registerCommit(requester, null) }
     }
     LaunchedEffect(host.languageTag) {
-        if (error != null) error = runCatching { resolve(shown.number("value"), obj("type" to "expression", "text" to text.text)) }.exceptionOrNull()?.message
+        if (error != null) error = runCatching { resolve(shown.getDouble("value"), obj("type" to "expression", "text" to text.text)) }.exceptionOrNull()?.message
     }
     LaunchedEffect(shown, dirty) {
-        if (!dirty && (!focused || fieldValue != shown.number("value"))) {
-            text = TextFieldValue(shown.getString(displayKey)); fieldValue = shown.number("value")
+        if (!dirty && (!focused || fieldValue != shown.getDouble("value"))) {
+            text = TextFieldValue(shown.getString(displayKey)); fieldValue = shown.getDouble("value")
         }
     }
     if (editing && settings) {
         val settingsOpen = LocalPreferencesOpen.current
         LaunchedEffect(settingsOpen) { if (!settingsOpen) finish(cancel = true) }
     }
-    LaunchedEffect(editing) { if (editing && (ranged || inline)) requester.requestFocus() }
+    LaunchedEffect(editing) { if (editing) requester.requestFocus() }
     DisposableEffect(Unit) { onDispose {
+        endEdit(cancel = true)
         if (focused) host.editingText = false
         host.textComposition.clear(requester)
         if (toolbar && host.toolbarEditorBounds == fieldBounds) host.toolbarEditorBounds = null
     } }
+    val contact = if (onEditPhase == null || !enabled) Modifier else Modifier.pointerInput(enabled) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            focus.clearFocus(); beginEdit(); var released = false
+            try {
+                while (true) {
+                    val change = awaitPointerEvent(PointerEventPass.Final).changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) { released = true; endEdit(); break }
+                }
+            } finally { if (!released) endEdit(cancel = true) }
+        }
+    }
     val step: @Composable (Int, String) -> Unit = { direction, name ->
-        val available = enabled && if (direction < 0) shown.number("value") > control.number("min") else shown.number("value") < control.number("max")
-        Box(Modifier.size(height).clip(shape).alpha(if (available) 1f else .36f)
+        val available = enabled && if (direction < 0) shown.getDouble("value") > control.getDouble("min") else shown.getDouble("value") < control.getDouble("max")
+        Box(Modifier.then(contact).size(height).clip(shape).alpha(if (available) 1f else .36f)
             .clickable(enabled = available) { if (finish()) { focus.clearFocus(); apply(obj("type" to "step", "steps" to direction)) } }, contentAlignment = Alignment.Center) {
             SharedIcon(name, captions.getString(if (direction < 0) "decrease" else "increase"), Modifier.size(16.dp))
         }
@@ -129,10 +171,10 @@ import org.json.JSONObject
             text = it
             host.textComposition.update(requester, text, focused)
             if (dirty) onText(it)
-        }, Modifier.then(if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (control.optString("unit").isEmpty()) 60.dp else 80.dp)).height(height)
+        }, Modifier.then(if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(height)
             .onGloballyPositioned { fieldBounds = it.boundsInRoot(); if (toolbar && focused) host.toolbarEditorBounds = fieldBounds }
             .focusRequester(requester).onFocusChanged {
-                if (focused && !it.isFocused) finish()
+                if (focused && !it.isFocused) { finish(); if (heldKey != null) endEdit() }
                 focused = it.isFocused; host.editingText = focused; onTyping(focused)
                 host.textComposition.update(requester, text, focused)
                 if (toolbar) {
@@ -141,11 +183,21 @@ import org.json.JSONObject
                 }
                 if (focused) editing = true
             }.onPreviewKeyEvent {
-                if (host.textComposition.owns(it.nativeKeyEvent)) false
-                else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { finish(true); focus.clearFocus(); true }
+                if (it.type == KeyEventType.KeyUp && it.key == heldKey) { endEdit(); true }
+                else if (host.textComposition.owns(it.nativeKeyEvent)) false
+                else if (it.type == KeyEventType.KeyDown && it.key in listOf(Key.DirectionUp, Key.DirectionDown)) {
+                    if (heldKey != null && heldKey != it.key) endEdit()
+                    beginEdit(); heldKey = it.key
+                    if (finish()) apply(obj("type" to "step", "steps" to if (it.key == Key.DirectionUp) 1 else -1))
+                    true
+                }
+                else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) {
+                    if (active == 1) { active = 2; phase?.invoke("cancel"); finish(true) }
+                    else { finish(true); focus.clearFocus() }; true
+                }
                 else if (it.type == KeyEventType.KeyDown && it.key == Key.Enter) { if (finish()) focus.clearFocus(); true }
                 else false
-            }.semantics { contentDescription = captions.getString("edit") }.testTag(if (settings) "setting-number-$id" else "number-$label"), enabled = enabled, singleLine = true,
+            }.semantics { contentDescription = captions.getString("edit") }.testTag(if (settings) "setting-number-$id" else if (presentedText != null) "number-$id" else "number-$label"), enabled = enabled, singleLine = true,
             textStyle = LocalTextStyle.current.copy(color = colors.text, textAlign = TextAlign.End),
             cursorBrush = SolidColor(colors.accent), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (text.composition == null && finish()) focus.clearFocus() }),
@@ -163,7 +215,7 @@ import org.json.JSONObject
     }
     if (inline) {
         Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (showSlider) EditorSlider(shown.number("fill"), { if (finish()) apply(obj("type" to "position", "position" to it)) }, Modifier.weight(1f),
+            if (showSlider) EditorSlider(shown.number("fill"), { if (finish()) apply(obj("type" to "position", "position" to it)) }, Modifier.weight(1f).then(contact),
                 enabled = enabled, label = label, height = height, inactiveTrackColor = colors.input, showThumb = false, activeTrackColor = colors.sliderFill)
             valueControl()
         }
@@ -181,7 +233,7 @@ import org.json.JSONObject
         if (ranged) Row(Modifier.fillMaxWidth().padding(top = if (settings) 3.dp else 0.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             step(-1, "minus")
             EditorSlider(shown.number("fill"), { if (finish()) apply(obj("type" to "position", "position" to it)) },
-                Modifier.weight(1f).testTag(if (settings) "setting-slider-$id" else "number-slider-$label"),
+                Modifier.weight(1f).then(contact).testTag(if (settings) "setting-slider-$id" else "number-slider-$label"),
                 enabled = enabled, label = label, height = height,
                 inactiveTrackColor = if (settings) colors.divider else colors.input, showThumb = settings,
                 activeTrackColor = if (settings) colors.accent else colors.sliderFill)

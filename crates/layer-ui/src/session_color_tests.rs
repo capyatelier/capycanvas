@@ -657,22 +657,10 @@ fn proof_dial_and_queued_numeric_edits_share_cancellation_and_one_step_history()
 
 #[test]
 fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
-    use layer_core::{EffectInstance, EffectParameterKind, EffectValue, Layer, LayerKind};
+    use layer_core::EffectValue;
     use layer_core::color::SampleDepth;
-    use std::sync::Arc;
     let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color.depth = SampleDepth::F16;
-    let mut legacy = (*layer_core::bundled_effect_catalog().get("curves").unwrap().program()).clone();
-    let parameters = Arc::make_mut(&mut legacy.parameters);
-    let domain = parameters.iter_mut().find(|p| &*p.key == "domain").unwrap();
-    domain.kind = EffectParameterKind::Choice { options: [layer_core::EffectOption::Literal("Encoded RGB".into()), layer_core::EffectOption::Literal("Linear HDR".into())].into() };
-    let legacy_id = document.allocate_layer_id();
-    let mut layer = Layer::paint(legacy_id, "Legacy curves");
-    layer.kind = LayerKind::Effect;
-    let mut instance = EffectInstance::new(Arc::new(legacy));
-    instance.set("domain", EffectValue::Choice(1)).unwrap();
-    layer.effect = Some(Arc::new(instance));
-    document.layers.insert(0, layer);
     let renderer = Recorder { color: document.color, ..Default::default() };
     let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
     s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }).unwrap();
@@ -686,9 +674,6 @@ fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
     s.dispatch(set("domain", EffectValue::Choice(0))).unwrap();
     assert_eq!(s.state.layer_properties.curve_max, None);
     assert_eq!(s.state.layer_properties.curve_white, None);
-    s.dispatch(UiAction::Layer { action: LayerAction::Select { id: legacy_id.0, mask: false } }).unwrap();
-    assert_eq!(s.state.layer_properties.layer, Some(legacy_id.0));
-    assert_eq!(s.state.layer_properties.curve_white, Some(1. / 16.));
 }
 
 #[test]

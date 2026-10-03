@@ -35,6 +35,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /** Real native widgets, JNI and Vulkan in the tablet emulator. No fake renderer. */
 class AndroidHostTest {
@@ -52,14 +53,23 @@ class AndroidHostTest {
     @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
     private val host get() = compose.activity.host
     @Before fun ready() {
+        val narrow = androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("presentationNarrow") == "true"
+        if (narrow) {
+            device.portrait(compose.activityRule.scenario)
+            assertTrue(compose.activity.resources.configuration.screenWidthDp <= 640)
+            host.narrowPhotoPanels(compose)
+        }
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
         host.awaitReady()
+        val expected = JSONObject(defaultWorkspace)
         compose.runOnIdle {
             host.dispatch(obj("type" to "close_settings"))
             host.dispatch(obj("type" to "set_theme", "theme" to "light"))
-            host.dispatch(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
+            if (!narrow) host.dispatch(obj("type" to "restore_workspace", "workspace" to expected))
         }
-        waitState { it.optString("theme") == "light" && it.getJSONObject("workspace").toString() == defaultWorkspace }
+        host.awaitMain("restored workspace", 10_000, { "expected=$expected actual=${state().getJSONObject("workspace")}" }, compose) {
+            state().optString("theme") == "light" && (narrow || jsonValue(state().getJSONObject("workspace")) == jsonValue(expected))
+        }
         compose.waitForIdle()
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
@@ -539,13 +549,6 @@ class AndroidHostTest {
         val root = compose.onNodeWithTag("workspace", useUnmergedTree = true)
         fun snapshot() = state().getJSONObject("workspace").toString()
         fun bounds(tag: String) = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.translate(-root.fetchSemanticsNode().boundsInRoot.topLeft)
-        fun panelGroup(panel: String): JSONObject {
-            fun find(node: JSONObject): JSONObject? = if (node.getString("kind") == "tabs") {
-                node.takeIf { panel in it.array("panels").values() }
-            } else find(node.getJSONObject("first")) ?: find(node.getJSONObject("second"))
-            val layout = state().getJSONObject("workspace").getJSONObject("layout")
-            return (layout.array("bands").objects() + layout.array("floating").objects()).firstNotNullOf { find(it.getJSONObject("root")) }
-        }
         fun history(before: String) {
             val after = snapshot(); assertNotEquals(before, after)
             action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, snapshot())
@@ -590,7 +593,7 @@ class AndroidHostTest {
                 compose.waitUntil(10_000) { state().getJSONObject("workspace").getJSONObject("layout").array("floating").length() == 1 }
                 finishGesture()
                 assertEquals("$mouse $source", if (source in listOf("grip", "empty")) 3 else 1,
-                    panelGroup(if (source == "inactive") "sizes" else "brushes").array("panels").length())
+                    host.panelGroup(if (source == "inactive") "sizes" else "brushes").array("panels").length())
                 history(before)
             }
             open()
@@ -598,7 +601,7 @@ class AndroidHostTest {
             press(bounds("drawer-tab-tool_settings").center)
             var box = bounds("column-drawer-41")
             move(androidx.compose.ui.geometry.Offset(box.left + 4f, bounds("column-drawer-header-41").center.y)); finishGesture()
-            assertEquals(listOf("tool_settings", "brushes", "sizes"), panelGroup("brushes").array("panels").values())
+            assertEquals(listOf("tool_settings", "brushes", "sizes"), host.panelGroup("brushes").array("panels").values())
             history(before)
             open(); before = snapshot()
             press(bounds("drawer-tab-brushes").center); move(away()); finishGesture(true)
@@ -624,7 +627,7 @@ class AndroidHostTest {
             before = snapshot()
             press(bounds("tab-layers").center); move(away())
             move(androidx.compose.ui.geometry.Offset(clippedTab.left + 2f, clippedTab.center.y)); finishGesture()
-            assertEquals(listOf("brushes", "layers", "sizes", "tool_settings", "navigator", "stats"), panelGroup("layers").array("panels").values())
+            assertEquals(listOf("brushes", "layers", "sizes", "tool_settings", "navigator", "stats"), host.panelGroup("layers").array("panels").values())
             history(before)
             for (zone in listOf("tab", "merge", "top", "bottom")) {
                 open(); before = snapshot()
@@ -640,7 +643,7 @@ class AndroidHostTest {
                 move(destination)
                 compose.onNodeWithTag("workspace-drop-hint", useUnmergedTree = true).assertExists()
                 finishGesture()
-                val target = panelGroup("layers")
+                val target = host.panelGroup("layers")
                 if (zone == "bottom") assertNotEquals(41, target.getInt("id")) else assertEquals(41, target.getInt("id"))
                 if (zone != "bottom") assertEquals("layers", target.array("panels").getString(0))
                 if (zone == "merge") assertEquals(6, target.array("panels").length())
@@ -670,6 +673,233 @@ class AndroidHostTest {
             action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to layer)))
         }
     }
+    @Test fun curvesPagesNativeContactsAndExactCoordinates() {
+        fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
+        val task = native { handle ->
+            Native.dispatch(handle, obj("type" to "invoke", "command" to "new_document").toString())
+            var published = JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
+            var request = published.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
+            if (request.getJSONObject("kind").getJSONObject("request").getString("type") == "confirm_close") {
+                Native.documentClose(handle, request.getInt("id"), "\"discard\"")
+                published = JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
+                request = published.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
+            }
+            val file = published.getJSONObject("document_file")
+            Native.projectTask(handle, request.getInt("id"), "null", file.getLong("epoch"), file.getLong("revision"))
+        }
+        try {
+            Native.projectOptions(task, obj("extent" to JSONArray(listOf(128, 128)), "color" to obj("space" to "Srgb", "depth" to "F32"), "background" to "White").toString())
+            Native.projectWork(task, -1, 128, 128)
+            native { Native.projectAdopt(it, task, "null") }
+        } finally { Native.projectFree(task) }
+        compose.runOnUiThread { host.documentChanged() }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+        action(obj("type" to "invoke", "command" to "fit_canvas"))
+        penStroke(12)
+        waitState { it.array("commands").objects().first { c -> c.getString("id") == "undo" }.getBoolean("enabled")
+            && !it.getJSONObject("filter_load").getBoolean("pending") }
+        action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "curves")))
+        for (panel in listOf("navigator", "proof", "layers")) action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to false)))
+        fun properties() = state().getJSONObject("layer_properties")
+        fun control() = properties().array("controls").objects().first { !it.isNull("curve") }
+        fun points() = control().getJSONObject("value").getJSONArray("value").toString()
+        fun graph() = compose.onNodeWithTag("effect-curve").performScrollTo()
+        fun effect(value: JSONObject) = action(obj("type" to "effect", "action" to value))
+        fun set(key: String, kind: String, value: Any) = effect(obj("op" to "set", "layer" to properties().getLong("layer"), "key" to key, "value" to obj("kind" to kind, "value" to value)))
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        fun key(code: Int, pressed: Boolean, repeat: Int = 0, modifiers: Int = 0) {
+            val now = SystemClock.uptimeMillis()
+            assertTrue(instrumentation.uiAutomation.injectInputEvent(KeyEvent(now, now, if (pressed) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP, code, repeat, modifiers), true))
+            settle()
+        }
+        fun coordinate(axis: String) = control().getJSONObject("curve").getJSONObject(axis)
+        fun numberTag(axis: String) = "number-curve-${control().getString("key")}-$axis"
+        fun edit(axis: String, text: String, wanted: Double = text.toDouble()) {
+            val field = compose.onNodeWithTag(numberTag(axis)).performScrollTo()
+            field.performClick().performTextReplacement(text)
+            field.performImeAction()
+            waitState {
+                val actual = coordinate(axis).getDouble("value")
+                if (wanted == 0.0) actual == 0.0 else kotlin.math.abs(actual / wanted - 1.0) < 1e-5
+            }
+        }
+        fun genericNumberUndo(key: String) {
+            fun number() = properties().array("controls").objects().first { it.getString("key") == key }
+            val before = number().getJSONObject("value").getDouble("value")
+            val slider = compose.onNodeWithTag("number-slider-${number().getString("label")}")
+            slider.performScrollTo()
+            slider.performTouchInput { swipe(androidx.compose.ui.geometry.Offset(width * .2f, height * .5f), androidx.compose.ui.geometry.Offset(width * .45f, height * .5f), 250) }
+            waitState { number().getJSONObject("value").getDouble("value") != before }
+            val after = number().getJSONObject("value").getDouble("value")
+            assertNotEquals("Native generic $key slider changes its value", before, after)
+            invoke("undo"); assertEquals("A generic numeric contact has one undo", before, number().getJSONObject("value").getDouble("value"), 0.0)
+            invoke("redo"); assertEquals(after, number().getJSONObject("value").getDouble("value"), 0.0)
+            invoke("undo")
+        }
+        fun selectPage(index: Int) {
+            val page = properties().array("pages").getJSONObject(index)
+            if (properties().getString("page") == page.getString("id")) return
+            compose.onNodeWithTag("properties-page").performScrollTo().performTouchInput { click(center) }
+            compose.onNodeWithText(page.getString("label")).performTouchInput { click(center) }
+            waitState { it.getJSONObject("layer_properties").getString("page") == page.getString("id") }
+        }
+        val curvesLayer = properties().getLong("layer")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            selectPage(0)
+            set("domain", "choice", 0)
+            val curveKey = control().getString("key")
+            set(curveKey, "curve", JSONArray("[[0,0],[0.5,0.5],[1,1]]"))
+            val original = points()
+            set(curveKey, "curve", JSONArray("[[0,0],[1,1]]"))
+            graph().performTouchInput { doubleClick(center) }
+            waitState { control().getJSONObject("value").getJSONArray("value").length() == 3 }
+            val inserted = JSONArray(points())
+            assertEquals("Double-tapping empty graph inserts one surviving knot", 3, inserted.length())
+            assertEquals("[0,0]", inserted.getJSONArray(0).toString())
+            assertEquals("[1,1]", inserted.getJSONArray(2).toString())
+            assertTrue(inserted.getJSONArray(1).getDouble(0) in 0.0..1.0)
+            set(curveKey, "curve", JSONArray(original))
+            graph().performTouchInput { click(center) }
+            waitState { !it.getJSONObject("layer_properties").array("controls").objects().first { c -> !c.isNull("curve") }.getJSONObject("curve").isNull("selected") }
+            assertEquals("Selecting an existing knot preserves its exact coordinates", original, points())
+            assertEquals("127.500", coordinate("output").getString("text"))
+            capture("curves-$theme-encoded-midpoint")
+            if (androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("curvePresentationOnly") == "true") {
+                set(curveKey, "curve", JSONArray("[[0,0],[0.5,0.12345679],[1,1]]"))
+                graph().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .5f, height * (1f - .12345679f))) }
+                waitState { !control().getJSONObject("curve").isNull("output") }
+                assertEquals("31.481", coordinate("output").getString("text"))
+                capture("curves-$theme-encoded-precise")
+                val precise = points()
+                edit("output", "127.5", .5)
+                assertEquals(.5, coordinate("output").getDouble("value"), 0.0)
+                invoke("undo"); assertEquals(precise, points())
+                continue
+            }
+            graph().performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(12f, -16f), 250) }
+            waitState { points() != original }
+            val dragged = points()
+            assertNotEquals(original, dragged)
+            invoke("undo"); assertEquals("One native contact has one undo", original, points())
+            invoke("redo"); assertEquals(dragged, points())
+            invoke("undo")
+            graph().performTouchInput { click(center) }
+            waitState { !control().getJSONObject("curve").isNull("selected") }
+            graph().assertIsFocused()
+            assertNotNull(host.curveControlFocus)
+            key(KeyEvent.KEYCODE_DPAD_UP, true)
+            assertNotEquals("Focused native graph ArrowUp edits the selected knot", original, points())
+            key(KeyEvent.KEYCODE_DPAD_UP, true, 1)
+            key(KeyEvent.KEYCODE_DPAD_LEFT, false)
+            key(KeyEvent.KEYCODE_DPAD_UP, false, modifiers = KeyEvent.META_CTRL_ON)
+            val repeated = points()
+            assertNotEquals(original, repeated)
+            invoke("undo"); assertEquals("Matching modified key-up completes one gesture", original, points())
+            invoke("redo"); assertEquals(repeated, points())
+            invoke("undo")
+            graph().performTouchInput { click(center) }
+            key(KeyEvent.KEYCODE_DPAD_UP, true)
+            key(KeyEvent.KEYCODE_ESCAPE, true); key(KeyEvent.KEYCODE_ESCAPE, false)
+            key(KeyEvent.KEYCODE_DPAD_UP, false)
+            assertEquals("Escape followed by release preserves the original knots", original, points())
+            graph().performTouchInput { click(center) }
+            key(KeyEvent.KEYCODE_FORWARD_DEL, true); key(KeyEvent.KEYCODE_FORWARD_DEL, false)
+            waitState { control().getJSONObject("value").getJSONArray("value").length() == 2 }
+            assertEquals(2, control().getJSONObject("value").getJSONArray("value").length())
+            invoke("undo"); assertEquals(original, points())
+            graph().performMouseInput { click(center, button = MouseButton.Secondary) }
+            waitState { control().getJSONObject("value").getJSONArray("value").length() == 2 }
+            assertEquals("Native right-click removes the knot", 2, control().getJSONObject("value").getJSONArray("value").length())
+            invoke("undo"); assertEquals(original, points())
+            graph().performTouchInput { doubleClick(center) }
+            waitState { control().getJSONObject("value").getJSONArray("value").length() == 2 }
+            assertEquals("Native double-click removes the knot", 2, control().getJSONObject("value").getJSONArray("value").length())
+            invoke("undo"); assertEquals(original, points())
+            graph().performTouchInput { click(center) }
+            fun focusNumber(axis: String) = compose.onNodeWithTag(numberTag(axis)).performScrollTo().performTouchInput { click(center) }
+            focusNumber("output")
+            key(KeyEvent.KEYCODE_DPAD_UP, true); key(KeyEvent.KEYCODE_DPAD_UP, true, 1)
+            key(KeyEvent.KEYCODE_DPAD_LEFT, false); key(KeyEvent.KEYCODE_DPAD_UP, false)
+            val numericRepeat = points()
+            assertNotEquals(original, numericRepeat)
+            invoke("undo"); assertEquals("Held native numeric key has one undo", original, points())
+            invoke("redo"); assertEquals(numericRepeat, points())
+            invoke("undo")
+            focusNumber("output")
+            key(KeyEvent.KEYCODE_DPAD_DOWN, true)
+            key(KeyEvent.KEYCODE_ESCAPE, true); key(KeyEvent.KEYCODE_ESCAPE, false)
+            key(KeyEvent.KEYCODE_DPAD_DOWN, false)
+            assertEquals("Numeric Escape followed by release retires the edit", original, points())
+            focusNumber("output")
+            key(KeyEvent.KEYCODE_DPAD_UP, true)
+            val firstKey = points()
+            key(KeyEvent.KEYCODE_DPAD_DOWN, true)
+            key(KeyEvent.KEYCODE_DPAD_UP, false); key(KeyEvent.KEYCODE_DPAD_DOWN, false)
+            invoke("undo"); assertEquals("Changing native numeric key commits the preceding gesture", firstKey, points())
+            invoke("undo"); assertEquals(original, points())
+            focusNumber("output")
+            key(KeyEvent.KEYCODE_DPAD_UP, true)
+            val blurValue = points()
+            focusNumber("input")
+            key(KeyEvent.KEYCODE_DPAD_UP, false)
+            assertEquals("Focus loss accepts once before later key-up", blurValue, points())
+            invoke("undo"); assertEquals(original, points())
+            val outputLabel = control().getJSONObject("curve").array("axes").getJSONObject(1).getString("label")
+            val captions = JSONObject(Native.numericLabels(outputLabel))
+            focusNumber("output")
+            key(KeyEvent.KEYCODE_DPAD_UP, true)
+            val heldBeforeStep = points()
+            compose.onNodeWithContentDescription(captions.getString("increase")).performScrollTo().performTouchInput { click(center) }
+            key(KeyEvent.KEYCODE_DPAD_UP, false)
+            assertNotEquals("A native step follows the held key", heldBeforeStep, points())
+            invoke("undo"); assertEquals("Native step has its own undo after committing the held key", heldBeforeStep, points())
+            invoke("undo"); assertEquals(original, points())
+            for (caption in listOf("increase", "decrease")) {
+                val before = points()
+                val button = compose.onNodeWithContentDescription(captions.getString(caption)).performScrollTo()
+                button.performTouchInput { down(center) }
+                SystemClock.sleep(700)
+                button.performTouchInput { up() }
+                waitState { points() != before }
+                val after = points()
+                assertNotEquals("Held native $caption changes the curve", before, after)
+                invoke("undo"); assertEquals("A held native button has one undo", before, points())
+                invoke("redo"); assertEquals(after, points())
+                invoke("undo")
+            }
+            selectPage(1)
+            graph().performTouchInput { click(center) }
+            waitState { control().getJSONObject("value").getJSONArray("value").length() == 3 }
+            assertEquals(3, control().getJSONObject("value").getJSONArray("value").length())
+            val red = points()
+            selectPage(0); assertEquals("Page navigation retains hidden RGB points", original, points())
+            selectPage(1); assertEquals(red, points())
+            selectPage(0)
+            set(curveKey, "curve", JSONArray("[[0,0],[0.5,0.12345679],[1,1]]"))
+            graph().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .5f, height * (1f - .12345679f))) }
+            waitState { !control().getJSONObject("curve").isNull("output") }
+            assertEquals("31.481", coordinate("output").getString("text"))
+            capture("curves-$theme-encoded-precise")
+            val domain = properties().array("controls").objects().first { it.getString("key") == "domain" }
+            compose.onNodeWithTag("property-domain").performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .8f, height * .5f)) }
+            compose.onNodeWithText(domain.getJSONObject("kind").array("options").getString(1)).performClick()
+            waitState { it.getJSONObject("layer_properties").array("controls").objects().first { c -> !c.isNull("curve") }.getJSONObject("curve").getJSONObject("domain").getString("kind") == "log_hdr" }
+            genericNumberUndo("hdr_stops")
+            for (literal in listOf("1e-20", "8", "0")) {
+                edit("output", literal)
+                val wanted = literal.toDouble(); val actual = coordinate("output").getDouble("value")
+                assertTrue("Exact physical HDR $literal: $actual", if (wanted == 0.0) actual == 0.0 else kotlin.math.abs(actual / wanted - 1.0) < 1e-5)
+                if (literal != "0") capture("curves-$theme-hdr-${if (literal == "8") "eight" else "tiny"}")
+            }
+            action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "exposure")))
+            genericNumberUndo("exposure")
+            action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to properties().getLong("layer"))))
+            action(obj("type" to "select_layer", "id" to curvesLayer))
+            assertNull(host.failure); assertNull(host.actionError)
+        }
+    }
+
     @Test fun adjustmentPanelsUseSharedSchema() {
         action(obj("type" to "set_theme", "theme" to "dark"))
         action(obj("type" to "set_brush_size", "value" to 220))

@@ -66,7 +66,10 @@ to relearn. Configurable layouts, controls and shortcuts let the app adapt to
 those habits while keeping the underlying commands consistent. These workflows
 are arrangements of a common editor rather than separate applications. Tool
 Settings follows the active tool, and Properties exposes the relevant effect
-parameters. The [Sketch, Paint and Photo defaults](default-workspaces.md)
+parameters. Shared Properties pages choose which parameter controls are shown;
+hidden values remain active. Curves uses these pages for RGB and channel
+selection, with [precise point controls](numeric-controls.md#properties-and-curves).
+The [Sketch, Paint and Photo defaults](default-workspaces.md)
 provide initial arrangements and remain editable workspaces.
 
 ## Session, actions and views

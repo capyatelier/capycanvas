@@ -369,6 +369,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             id: "tonal-tones",
             label: self.localization().text(MessageId::TOOL_TONAL_TONES),
             segmented: true,
+            columns: None,
+            beside: None,
             items: TonalOptions::choices(self.engine.document().color.depth.is_float())
                 .map(|(index, label, icon)| ToolSetItem {
                     label: self.localization().text(label),

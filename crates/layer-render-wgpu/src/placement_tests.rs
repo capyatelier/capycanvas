@@ -773,3 +773,93 @@ fn retained_placement_samples_full_source_across_tiles_without_creating_raster()
         );
     }
 }
+
+#[test]
+fn watercolor_prediction_and_commit_cover_a_placed_source_larger_than_canvas() {
+    watercolor_prediction_and_commit_with_canvas(256, false);
+}
+
+#[test]
+fn watercolor_prediction_and_commit_in_canvas_control() {
+    watercolor_prediction_and_commit_with_canvas(512, false);
+}
+
+#[test]
+fn watercolor_prediction_and_commit_at_reduced_zoom() {
+    watercolor_prediction_and_commit_with_canvas(256, true);
+}
+
+fn watercolor_prediction_and_commit_with_canvas(canvas: u32, reduced: bool) {
+    watercolor_prediction_and_commit_with_renderer(WgpuRasterizer::new_native_headless(Default::default()).unwrap(), canvas, reduced);
+}
+
+pub(crate) fn watercolor_prediction_and_commit_with_renderer(mut r: WgpuRasterizer, canvas: u32, reduced: bool) {
+    let mut layer = Layer::paint(LayerId(1), "larger retained watercolor source");
+    let source = rgba8_source([512; 2], |_, _| [160, 170, 180, 255]);
+    layer.source = Some(source.clone());
+    let placement = Affine([0.5, 0., 0., 0.5, 0., 0.]);
+    layer.properties.placement = layer_core::LayerPlacement::from_affine(placement);
+    let send = |r: &mut WgpuRasterizer, layer: &Layer, dabs: &[Dab], batches: &[DabBatch], reset| {
+        let mut frame = crate::test_support::packet(std::slice::from_ref(layer), [canvas; 2]);
+        if reduced {
+            frame.composite_all = false;
+            frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+            frame.view.width_px = canvas / 8; frame.view.height_px = canvas / 8;
+        }
+        r.submit(FramePacket { dabs, dab_batches: batches, reset_layers: reset,
+            ..frame }).unwrap();
+    };
+    let read = |r: &mut WgpuRasterizer| {
+        if reduced {
+            assert!(r.scale_display.as_ref().unwrap().plan.level > 0);
+            crate::scene::scale::tests::display_pixels(r).into_iter().flatten().map(|v| (v.clamp(0., 1.) * 255.).round() as u8).collect::<Vec<_>>()
+        } else { r.readback_srgb_rgba8().unwrap() }
+    };
+    send(&mut r, &layer, &[], &[], true);
+    let original = read(&mut r);
+    let mut ink = dab([0.1, 0.3, 0.8, 1.]);
+    ink.center = Point { x: 175., y: 64. };
+    ink.radii = [12.; 2];
+    ink.material = [0.8, 1., 1., 1.];
+    let mut stroke = batch(1);
+    stroke.style = preset_style(layer_core::DefaultBrushPreset::WatercolorWash);
+    stroke.style.brush_to_layer = placement.inverse().unwrap();
+    stroke.damage = ink.bounds();
+    let mut preview = stroke.clone(); preview.kind = DabBatchKind::Preview;
+    send(&mut r, &layer, &[ink], &[preview.clone()], false);
+    let prediction = read(&mut r);
+    let preview_storage = r.native_edit.as_ref().unwrap().storage_bytes();
+    assert_ne!(prediction, original);
+    assert!(layer.raster.is_empty());
+    assert!(r.paint_layers.iter().find(|p| p.id == layer.id).unwrap().watercolor.is_none());
+    assert!(r.preview_watercolor_wetness_pages.iter().any(|page| page.coordinate == [1, 0]));
+    let mut next = preview.clone(); next.first_dab = 1; next.stroke_start = false;
+    send(&mut r, &layer, &[ink, ink], &[preview, next], false);
+    assert_eq!(r.native_edit.as_ref().unwrap().storage_bytes(), preview_storage, "same-footprint prediction reuses native storage");
+    assert!(layer.raster.is_empty());
+    send(&mut r, &layer, &[], &[], false);
+    assert_eq!(read(&mut r), original, "cancel restores source pixels");
+    assert!(r.preview_watercolor_wetness_pages.is_empty());
+    assert_eq!(r.native_edit.as_ref().unwrap().storage_bytes(), preview_storage, "cancel retains bounded reusable prediction storage");
+    assert!(r.paint_layers.iter().find(|p| p.id == layer.id).unwrap().watercolor.is_none());
+    layer.raster = layer_core::raster::RasterRevision::pending();
+    send(&mut r, &layer, &[ink], &[stroke.clone()], false);
+    let accepted = read(&mut r);
+    let mut fresh = WgpuRasterizer::new_native_headless(r.document_color()).unwrap();
+    let mut fresh_layer = layer.clone();
+    fresh_layer.raster = Default::default();
+    send(&mut fresh, &fresh_layer, &[], &[], true);
+    fresh_layer.raster = layer_core::raster::RasterRevision::pending();
+    send(&mut fresh, &fresh_layer, &[ink], &[stroke.clone()], false);
+    assert_eq!(read(&mut fresh), accepted, "fresh persistent oracle excludes preview/cancel reuse");
+    let maximum = accepted.iter().zip(&prediction).map(|(a,b)|a.abs_diff(*b)).max().unwrap();
+    assert!(maximum <= 1, "prediction matches committed material: maximum={maximum}, edge_after_stroke={}", stroke.style.rendering.edge_after_stroke);
+    let data = layer.raster.wait_data().unwrap();
+    assert!(data.watercolor.is_some());
+    for plane in [layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::WatercolorWetness] {
+        assert!(data.tiles.contains_key(&layer_core::raster::TileKey { plane, coordinate: [1, 0] }));
+    }
+    assert!(std::sync::Arc::ptr_eq(layer.source.as_ref().unwrap(), &source));
+    send(&mut r, &layer, &[], &[], true);
+    assert_eq!(read(&mut r), accepted, "backing restore preserves pigment and wetness");
+}

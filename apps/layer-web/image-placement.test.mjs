@@ -146,6 +146,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     const tap=async p=>{await pointer('mousePressed',p);await pointer('mouseReleased',p);};
     const drag=async(p,dx,dy)=>{await pointer('mousePressed',p);await pointer('mouseMoved',{x:p.x+dx/2,y:p.y+dy/2});await pointer('mouseMoved',{x:p.x+dx,y:p.y+dy});await pointer('mouseReleased',{x:p.x+dx,y:p.y+dy});};
     const map=(m,x,y)=>{const w=m[6]*x+m[7]*y+m[8];return[(m[0]*x+m[1]*y+m[2])/w,(m[3]*x+m[4]*y+m[5])/w];};
+    const inverse=m=>{const [a,b,c,d,e,f,g,h,i]=m,co=[e*i-f*h,c*h-b*i,b*f-c*e,f*g-d*i,a*i-c*g,c*d-a*f,d*h-e*g,b*g-a*h,a*e-b*d],det=a*co[0]+b*co[3]+c*co[6];return co.map(v=>v/det);};
     for(const theme of ['light','dark']){
       await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
       await invoke('brush');
@@ -156,7 +157,37 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await evaluate(`layerApp.dispatch({type:'layer',action:{op:'add_mask',id:${retainedId},replace:false}});layerApp.dispatch({type:'layer',action:{op:'select',id:${retainedId},mask:false}})`);await settle();
       await invoke('scale_rotate');await transforming();
       await evaluate(`layerApp.dispatch({type:'set_tool_setting',id:'transform_width',value:.5})`);await settle();await invoke('apply_transform');
-      await invoke('scale_rotate');await transforming();await invoke('transform_distort');
+      const repeatBefore=await save();
+      await invoke('transform_again');const repeated=await save();
+      const repeatPlacement=m=>m.document.layers.find(l=>l.id===retainedId).properties.placement;
+      assert.notDeepEqual(repeatPlacement(repeated),repeatPlacement(repeatBefore),'Again applies the accepted retained outer delta');
+      assert.deepEqual(sourceIdentity(repeated),sourceIdentity(repeatBefore),'Again preserves immutable retained sources');
+      assert.deepEqual(ownerRaster(repeated),ownerRaster(repeatBefore),'Again preserves native material planes');
+      await invoke('undo');assert.deepEqual(repeatPlacement(await save()),repeatPlacement(repeatBefore),'Again makes one undo step');
+      await invoke('redo');assert.deepEqual(repeatPlacement(await save()),repeatPlacement(repeated),'Redo reapplies Again once');
+      await invoke('undo');
+      const pivotBase=await save(),pivotOuter=repeatPlacement(pivotBase).outer;
+      const centerLocal=sources[0].extent.map(v=>v/2),centerDocument=map(pivotOuter,...centerLocal);
+      await invoke('scale_rotate');await transforming();
+      await drag(await screen(...centerDocument),21,13);
+      const customPivot=[centerDocument[0]+21/(await state()).camera.zoom,centerDocument[1]+13/(await state()).camera.zoom];
+      const customLocal=map(inverse(pivotOuter),...customPivot);
+      await invoke('transform_rotate_right');await invoke('apply_transform');
+      const pivotApplied=await save(),fixed=map(repeatPlacement(pivotApplied).outer,...customLocal);
+      assert.ok(Math.hypot(fixed[0]-customPivot[0],fixed[1]-customPivot[1])<.05,'Native custom pivot remains fixed under quarter-turn');
+      await invoke('undo');assert.deepEqual(repeatPlacement(await save()),repeatPlacement(pivotBase),'Custom-pivot transform is one undo step');
+      await invoke('scale_rotate');await transforming();await invoke('transform_snapping');
+      assert.equal((await state()).commands.find(c=>c.id==='transform_snapping').selected,true,'Snapping toggle publishes shared selected state');
+      const snapCenter=map(pivotOuter,...centerLocal),snapZoom=(await state()).camera.zoom;
+      const canvasCenter=2000;
+      assert.ok(Math.abs(snapCenter[0]-canvasCenter)>100,'The snap fixture starts away from its target');
+      await drag(await screen(snapCenter[0]+90,snapCenter[1]+80),(canvasCenter-snapCenter[0])*snapZoom-3,0);
+      await invoke('apply_transform');
+      const snapped=map(repeatPlacement(await save()).outer,...centerLocal);
+      assert.ok(Math.abs(snapped[0]-canvasCenter)<.05,'A native body drag within three logical pixels snaps the layer center exactly to the canvas right edge');
+      await invoke('undo');assert.deepEqual(repeatPlacement(await save()),repeatPlacement(pivotBase),'Snapped drag creates one undo step');
+      await invoke('scale_rotate');await transforming();await invoke('transform_snapping');
+      await invoke('transform_distort');
       const anchor=(await state()).canvas_bar.anchor;
       await drag(await screen(anchor[0],anchor[1]),-25,12);await invoke('apply_transform');
       const distorted=await save(),outer=distorted.document.layers.find(l=>l.id===retainedId).properties.placement.outer;
@@ -344,7 +375,15 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await settle();await invoke('fit_canvas');await invoke('zoom_out');
       for(const theme of ['light','dark']){
         await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
-        await invoke('scale_rotate');await transforming();await invoke('transform_warp');
+        await invoke('scale_rotate');await transforming();
+        await wait(`document.querySelector('[data-tool-choice-bar="transform-reference"]')`);
+        assert.equal(await evaluate(`document.querySelectorAll('[data-tool-choice-bar="transform-reference"] [data-tool-choice-tone]').length`),9,'Position presents every shared reference anchor');
+        for(const anchor of [0,8,4]) {
+          await click(`[data-tool-choice-bar="transform-reference"] [data-tool-choice-tone="${anchor}"]`);
+          assert.equal(await evaluate(`document.querySelector('[data-tool-choice-bar="transform-reference"] [data-tool-choice-tone="${anchor}"]').getAttribute('aria-pressed')`),'true','Native anchor activation publishes selected shared state');
+        }
+        assert.equal((await state()).commands.find(c=>c.id==='transform_again').enabled,false,'Again is unavailable during an active transform');
+        await invoke('transform_warp');
         await wait(`(()=>{const n=document.querySelector('.canvas-action-bar:not(.suppressed)'),r=n?.getBoundingClientRect();return r&&r.width>0&&r.x>=0&&r.right<=innerWidth})()`);
         assert.equal(await evaluate(`document.getElementById('workspace').classList.contains('zen-hidden')`),false,'Narrow editing keeps ordinary controls visible');
         await capture(`${theme}-narrow-transform`);

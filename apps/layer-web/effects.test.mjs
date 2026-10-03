@@ -221,3 +221,246 @@ export async function checkAdjustments({call,evaluate,settle}) {
   await capture("stats-dark");await send({type:"set_theme",theme:"light"});await capture("stats-light");
   console.log(`PASS: ${choices.length} categorized filters, GPU previews, search, insertion/properties, controls, GPU rendering and live telemetry`);
 }
+
+export async function checkCurves({call,evaluate,settle}) {
+  const directory=process.env.LAYER_IMAGE_CAPTURE_DIR??'artifacts/ui/curves-web';
+  await mkdir(directory,{recursive:true});
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+25000;function poll(){if(${condition})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+": "+document.body.innerText.slice(-1200)));else setTimeout(poll,40)}poll()})`);
+  const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
+  const properties=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state().layer_properties,(_,v)=>typeof v=== "bigint"?Number(v):v))');
+  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await send({type:'invoke',command});};
+  const pointer=(type,p,pointerType='mouse')=>call('Input.dispatchMouseEvent',{type,...p,pointerType,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,force:type==='mouseReleased'?0:.65});
+  const graphPoint=async index=>evaluate(`(()=>{const g=document.querySelector('.curve-editor'),c=g.querySelectorAll('circle')[${index}],p=new DOMPoint(c.cx.baseVal.value,c.cy.baseVal.value).matrixTransform(g.getScreenCTM());return{x:p.x,y:p.y}})()`);
+  const curves=view=>view.controls.filter(c=>c.curve).map(c=>({key:c.key,value:c.value}));
+  await wait('layerApp.startupTimes.complete!==null&&!layerApp.documents.busy()');
+  await send({type:'effect',action:{op:'insert',effect:'curves'}});
+  try {
+    for(const width of [1100,640]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
+      await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','properties'].includes(id)}})`);await settle();
+      for(const theme of ['light','dark']) {
+        await send({type:'set_theme',theme});
+        await wait('document.querySelector(".curve-editor")&&document.querySelector("[data-properties-page]")');
+        let view=await properties();
+        assert.ok(view.pages.length>=4,'Curves exposes shared channel pages');
+        const page=view.pages.at(-1).id;
+        await evaluate(`(()=>{const n=document.querySelector('[data-properties-page]');n.value=${JSON.stringify(page)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);await settle();
+        assert.equal((await properties()).page,page);
+        view=await properties();const control=view.controls.find(c=>c.curve);
+        const empty=curves(view);
+        const emptyAt=await evaluate(`(()=>{const g=document.querySelector('.curve-editor'),p=new DOMPoint(100,100).matrixTransform(g.getScreenCTM());return{x:p.x,y:p.y}})()`);
+        for(const clickCount of [1,2]) {
+          await call('Input.dispatchMouseEvent',{type:'mousePressed',...emptyAt,button:'left',buttons:1,clickCount});
+          await call('Input.dispatchMouseEvent',{type:'mouseReleased',...emptyAt,button:'left',buttons:0,clickCount});
+        }
+        await settle();
+        assert.equal((await properties()).controls.find(c=>c.key===control.key).value.value.length,3,'Double-click on empty graph inserts one point instead of removing its unpublished insert');
+        await invoke('undo');assert.deepEqual(curves(await properties()),empty,'Empty double-click insertion is one undo step');
+        await send({type:'effect',action:{op:'curve_point',layer:view.layer,key:control.key,index:null,point:[.123456789,.4],remove:false}});
+        view=await properties();const current=view.controls.find(c=>c.key===control.key);
+        const index=current.value.value.findIndex(p=>p[0]>0&&p[0]<1);
+        await send({type:'effect',action:{op:'curve_select_point',layer:view.layer,key:control.key,epoch:view.epoch,index}});
+        const before=curves(await properties());
+        const point=await graphPoint(index);
+        await pointer('mousePressed',{x:point.x+3,y:point.y+2});await pointer('mouseReleased',{x:point.x+3,y:point.y+2});await settle();
+        assert.deepEqual(curves(await properties()),before,'A nearby knot click preserves exact stored coordinates');
+        for(const axis of ['input','output']) {
+          const selector=`[data-curve-axis="${axis}"] .number-entry`;
+          await wait(`document.querySelector(${JSON.stringify(selector)})`);
+          await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+          await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+          await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
+          assert.deepEqual(curves(await properties()),before,'Committing presented numeric text preserves point bits');
+        }
+        for(const target of ['.number-entry','.number-step:last-child']) {
+          const old=curves(await properties());
+          await evaluate(`document.querySelector('[data-curve-axis="output"] .number-entry').focus()`);
+          await call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});
+          const at=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(`[data-curve-axis="input"] ${target}`)}),r=n.getBoundingClientRect();return{x:r.left+r.width*.55,y:r.top+r.height*.5}})()`);
+          await pointer('mousePressed',at);await pointer('mouseReleased',at);
+          await call('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});await settle();
+          const changed=curves(await properties());
+          assert.notDeepEqual(changed,old,'Held Output arrow commits when a native pointer enters another numeric control');
+          if(target!=='.number-entry') {
+            assert.notEqual(changed.find(c=>c.key===control.key).value.value[index][0],old.find(c=>c.key===control.key).value.value[index][0],'Pointer step starts its own Input edit after prior key release');
+            await invoke('undo');
+          }
+          await invoke('undo');assert.deepEqual(curves(await properties()),old,'Cross-control pointer transition preserves separate atomic gestures');
+        }
+        for(const pointerType of ['mouse','pen']) {
+          const start=await graphPoint(index),end={x:start.x,y:start.y-12};
+          await pointer('mousePressed',start,pointerType);await pointer('mouseMoved',end,pointerType);await pointer('mouseReleased',end,pointerType);await settle();
+          const moved=curves(await properties());assert.notDeepEqual(moved,before,'Native drag changes the shared curve');
+          await invoke('undo');assert.deepEqual(curves(await properties()),before,'A complete contact creates one undo step');
+          await invoke('redo');assert.deepEqual(curves(await properties()),moved);
+          await invoke('undo');
+        }
+        await evaluate('document.querySelector(".curve-editor").focus()');
+        for(const repeat of [false,true,true])await call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38,autoRepeat:repeat});
+        await call('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});await settle();
+        assert.notDeepEqual(curves(await properties()),before,'Native held arrow updates selected point');
+        await invoke('undo');assert.deepEqual(curves(await properties()),before,'Held arrow repeats create one undo step');
+        for(const method of ['Delete','right','double']) {
+          const at=await graphPoint(index);
+          if(method==='Delete') {
+            await evaluate('document.querySelector(".curve-editor").focus()');
+            await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Delete',code:'Delete',windowsVirtualKeyCode:46});
+            await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Delete',code:'Delete',windowsVirtualKeyCode:46});
+          } else if(method==='right') {
+            await call('Input.dispatchMouseEvent',{type:'mousePressed',...at,button:'right',buttons:2,clickCount:1});
+            await call('Input.dispatchMouseEvent',{type:'mouseReleased',...at,button:'right',buttons:0,clickCount:1});
+          } else {
+            for(const clickCount of [1,2]) {
+              await call('Input.dispatchMouseEvent',{type:'mousePressed',...at,button:'left',buttons:1,clickCount});
+              await call('Input.dispatchMouseEvent',{type:'mouseReleased',...at,button:'left',buttons:0,clickCount});
+            }
+          }
+          await settle();assert.equal((await properties()).controls.find(c=>c.key===control.key).value.value.length,2,`${method} removes an interior marker`);
+          await invoke('undo');assert.deepEqual(curves(await properties()),before,`${method} removal is one undo step`);
+        }
+        const canceledTouch=await graphPoint(index);
+        await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...canceledTouch,id:91,radiusX:1,radiusY:1,force:.65}]});
+        await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:canceledTouch.x,y:canceledTouch.y-10,id:91,radiusX:1,radiusY:1,force:.65}]});
+        await call('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});await settle();
+        assert.deepEqual(curves(await properties()),before,'Native touch cancellation restores the captured curve');
+        const touchStart=await graphPoint(index),touchEnd={x:touchStart.x,y:touchStart.y-10};
+        await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...touchStart,id:91,radiusX:1,radiusY:1,force:.65}]});
+        await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{...touchEnd,id:91,radiusX:1,radiusY:1,force:.65}]});
+        await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle();
+        assert.notDeepEqual(curves(await properties()),before,'Native touch drag changes the curve');
+        await invoke('undo');assert.deepEqual(curves(await properties()),before,'Touch contact creates one undo step');
+        const start=await graphPoint(index);
+        await pointer('mousePressed',start);await pointer('mouseMoved',{x:start.x+8,y:start.y-8});
+        await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+        await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+        await pointer('mouseReleased',start);await settle();
+        assert.deepEqual(curves(await properties()),before,'Escape cancels the held curve contact');
+        assert.equal((await properties()).page,page,'Publishing curve edits retains the selected page');
+        const textWidth=await evaluate(`(()=>{const n=document.querySelector('[data-curve-axis="output"] .number-entry'),s=getComputedStyle(n),c=document.createElement('canvas').getContext('2d');c.font=[s.fontStyle,s.fontWeight,s.fontSize,s.fontFamily].join(' ');return{text:n.value,content:n.getBoundingClientRect().width-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight)-parseFloat(s.borderLeftWidth)-parseFloat(s.borderRightWidth),needed:c.measureText(n.value).width}})()`);
+        assert.equal(textWidth.text,'102.000','The precise Output fixture includes all seven displayed characters');
+        assert.ok(textWidth.content>=textWidth.needed,`Full Output text fits at ${width}px: ${JSON.stringify(textWidth)}`);
+        console.log('Curves precise Output width',theme,width,textWidth);
+        const shot=await call('Page.captureScreenshot',{format:'png'});
+        await writeFile(`${directory}/${theme}-${width}.png`,Buffer.from(shot.data,'base64'));
+        await send({type:'effect',action:{op:'curve_point',layer:view.layer,key:control.key,index,point:current.value.value[index],remove:true}});
+      }
+    }
+    await call('Emulation.setDeviceMetricsOverride',{width:1100,height:800,deviceScaleFactor:1,mobile:false});
+    await invoke('new_document');
+    await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===layerApp.app.editor_models(innerWidth,innerHeight).document_options.discard_label)?.click()`);
+    await wait('document.querySelector("[data-document-field=depth]")');
+    await evaluate(`(()=>{const n=document.querySelector('[data-document-field=depth]');n.value='F32';n.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('[data-document-action=create]').click()})()`);
+    await wait('!layerApp.state().document_file.busy&&layerApp.app.document_color().depth==="F32"&&layerApp.app.brush_ready()');
+    await send({type:'effect',action:{op:'insert',effect:'curves'}});
+    let hdr=await properties();const hdrControl=hdr.controls.find(c=>c.curve);
+    assert.ok(hdrControl,`Curves insert publishes its shared field: ${JSON.stringify(hdr)} ${await evaluate('document.body.innerText.slice(-800)')}`);
+    assert.equal(hdrControl.curve.domain.kind,'log_hdr');
+    await send({type:'effect',action:{op:'curve_point',layer:hdr.layer,key:hdrControl.key,index:null,point:[.2,.2],remove:false}});
+    hdr=await properties();
+    await send({type:'effect',action:{op:'curve_select_point',layer:hdr.layer,key:hdrControl.key,epoch:hdr.epoch,index:1}});
+    const input='[data-curve-axis="output"] .number-entry';
+    await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(input)});n.focus();n.value='1e-20';n.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
+    const tiny=(await properties()).controls.find(c=>c.key===hdrControl.key);
+    assert.ok(tiny.curve.output.value>0&&tiny.curve.output.value<1e-19,`Native expression commit preserves positive tiny HDR output: ${JSON.stringify(tiny.curve)}`);
+    const exactTiny=curves(await properties());
+    await evaluate(`document.querySelector(${JSON.stringify(input)}).focus()`);
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});await settle();
+    assert.deepEqual(curves(await properties()),exactTiny,'Escape cancels numeric held-key edits through native release');
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
+    assert.deepEqual(curves(await properties()),exactTiny,'Unchanged tiny HDR text does not quantize stored knot');
+    console.log('Curves: HDR numeric cancel passed');
+    const domain='[data-property-key="domain"] select';
+    await wait(`document.querySelector(${JSON.stringify(domain)})`);
+    for(const choice of ['0','1']) {
+      await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(domain)});n.value=${JSON.stringify(choice)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);await settle();
+      assert.equal((await properties()).controls.find(c=>c.curve).curve.domain.kind,choice==='0'?'encoded':'log_hdr','Native domain choice forwards shared policy');
+      assert.deepEqual(curves(await properties()),exactTiny,'Changing display domain preserves curve graph knots');
+    }
+    console.log('Curves: native domain choices passed');
+    await evaluate(`window.curvesFiles={open:window.showOpenFilePicker,save:window.showSaveFilePicker};
+      window.showSaveFilePicker=async o=>({name:o.suggestedName,async createWritable(){return{async write(v){curvesFiles.bytes=new Uint8Array(v instanceof Blob?await v.arrayBuffer():v)},async close(){},async abort(){}}}});
+      window.showOpenFilePicker=async()=>[{name:'curves.capy',async getFile(){return new File([curvesFiles.bytes],'curves.capy')}}];`);
+    try {
+      await invoke('save_document_as');await wait('!layerApp.state().document_file.busy&&!layerApp.state().document_file.modified');
+      await invoke('open_document');await wait('!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');
+      await wait('layerApp.state().layer_properties.controls.some(c=>c.curve)');
+      assert.deepEqual(curves(await properties()),exactTiny,'Native archive reopen preserves precise HDR knots');
+    } finally {await evaluate('window.showOpenFilePicker=curvesFiles.open;window.showSaveFilePicker=curvesFiles.save;delete window.curvesFiles');}
+    const hdrSlider='[data-property-key="hdr_stops"] .number-slider';
+    await wait(`document.querySelector(${JSON.stringify(hdrSlider)})`);
+    const stopsBefore=(await properties()).controls.find(c=>c.key==='hdr_stops').value;
+    hdr=await properties();
+    await send({type:'effect',action:{op:'curve_select_point',layer:hdr.layer,key:hdrControl.key,epoch:hdr.epoch,index:1}});
+    await evaluate(`document.querySelector('[data-curve-axis="output"] .number-entry').focus()`);
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});
+    const heldCurve=curves(await properties());
+    const otherSlider=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(hdrSlider)}).getBoundingClientRect();return{x:r.left+r.width*.6,y:r.top+r.height*.5}})()`);
+    await pointer('mousePressed',otherSlider);await pointer('mouseReleased',otherSlider);
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});await settle();
+    assert.notDeepEqual((await properties()).controls.find(c=>c.key==='hdr_stops').value,stopsBefore,'Held coordinate key yields native ownership to ordinary slider');
+    await invoke('undo');assert.deepEqual((await properties()).controls.find(c=>c.key==='hdr_stops').value,stopsBefore);
+    assert.deepEqual(curves(await properties()),heldCurve,'Slider Undo preserves the prior held coordinate edit');
+    await invoke('undo');assert.deepEqual(curves(await properties()),exactTiny,'Prior held key has its own Undo');
+    const stopsPosition=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(hdrSlider)}),r=n.getBoundingClientRect();window.curvesStopsSlider=n;return{x:r.x+Number(n.value)*r.width,y:r.y+r.height/2,end:r.x+r.width*.65}})()`);
+    await pointer('mousePressed',{x:stopsPosition.x,y:stopsPosition.y});
+    for(const x of [stopsPosition.x+(stopsPosition.end-stopsPosition.x)*.5,stopsPosition.end]) {
+      await pointer('mouseMoved',{x,y:stopsPosition.y});await settle();
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(hdrSlider)})===window.curvesStopsSlider`),true,'HDR domain publication preserves captured ordinary slider DOM identity');
+    }
+    await pointer('mouseReleased',{x:stopsPosition.end,y:stopsPosition.y});await settle();
+    assert.notDeepEqual((await properties()).controls.find(c=>c.key==='hdr_stops').value,stopsBefore,'Native HDR stops drag changes its shared parameter');
+    await invoke('undo');assert.deepEqual((await properties()).controls.find(c=>c.key==='hdr_stops').value,stopsBefore,'HDR stops drag commits one undo step');
+    assert.deepEqual(curves(await properties()),exactTiny,'HDR stops presentation preserves stored curve knots');
+    await evaluate('delete window.curvesStopsSlider');
+    hdr=await properties();
+    await send({type:'effect',action:{op:'curve_select_point',layer:hdr.layer,key:hdrControl.key,epoch:hdr.epoch,index:0}});
+    assert.equal(await evaluate(`document.querySelector('[data-curve-axis="input"] .number-entry').disabled`),true,'Endpoint Input is readonly in native control');
+    hdr=await properties();
+    await send({type:'effect',action:{op:'curve_select_point',layer:hdr.layer,key:hdrControl.key,epoch:hdr.epoch,index:1}});
+    await evaluate(`(()=>{const n=document.querySelector('[data-curve-axis="output"] .number-entry');n.focus();n.value='1/0';n.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
+    assert.equal(await evaluate(`document.querySelector('[data-curve-axis="output"] .number-entry').getAttribute('aria-invalid')`),'true','Invalid expression remains editable with native refusal');
+    assert.deepEqual(curves(await properties()),exactTiny,'Invalid expression does not mutate stored knots');
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();
+
+    await send({type:'effect',action:{op:'insert',effect:'brightness_contrast'}});
+    const numberView=await properties(),numberControl=numberView.controls.find(c=>c.kind.kind==='number'&&c.kind.numeric.kind==='slider');
+    assert.ok(numberControl,'Generic Properties fixture has an ordinary shared slider');
+    const numberSelector=`[data-property-key="${numberControl.key}"] .number-slider`;
+    console.log('Curves: generic number control',numberControl.key);
+    await wait(`document.querySelector(${JSON.stringify(numberSelector)})`);
+    const numberValue=async()=>(await properties()).controls.find(c=>c.key===numberControl.key).value;
+    for(const theme of ['light','dark']) {
+      await send({type:'set_theme',theme});
+      console.log('Curves: generic theme',theme,await evaluate(`JSON.stringify({keys:layerApp.state().layer_properties.controls.map(c=>c.key),dom:[...document.querySelectorAll('[data-property-key]')].map(n=>n.dataset.propertyKey)})`));
+      await wait(`document.querySelector(${JSON.stringify(numberSelector)})`);
+      const original=await numberValue();
+      const slider=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(numberSelector)}),r=n.getBoundingClientRect();return{x:r.x+Number(n.value)*r.width,y:r.y+r.height/2,end:r.x+r.width*.8}})()`);
+      await pointer('mousePressed',{x:slider.x,y:slider.y});
+      for(const x of [slider.x+(slider.end-slider.x)*.4,slider.end])await pointer('mouseMoved',{x,y:slider.y});
+      await pointer('mouseReleased',{x:slider.end,y:slider.y});await settle();
+      const edited=await numberValue();assert.notDeepEqual(edited,original,'Native generic slider changes the shared value');
+      await invoke('undo');assert.deepEqual(await numberValue(),original,'Generic slider drag makes exactly one undo step');
+      await invoke('redo');assert.deepEqual(await numberValue(),edited);await invoke('undo');
+      await pointer('mousePressed',{x:slider.x,y:slider.y});await pointer('mouseMoved',{x:slider.end,y:slider.y});
+      await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await pointer('mouseReleased',{x:slider.end,y:slider.y});await settle();
+      assert.deepEqual(await numberValue(),original,'Escape cancels generic numeric pointer gesture through release');
+      assert.equal(await evaluate(`document.getElementById('workspace').classList.contains('zen-hidden')`),false,'Numeric Escape cancels only its gesture and keeps ordinary panels visible');
+      await invoke('redo');assert.deepEqual(await numberValue(),edited,'Canceled generic slider preserves redo');await invoke('undo');
+    }
+    await send({type:'effect',action:{op:'insert',effect:'levels'}});
+    assert.equal((await properties()).pages.length,1,'Current Levels has only its implemented master page');
+    assert.equal(await evaluate(`document.querySelector('[data-properties-page]').hidden`),true,'A singleton Properties page has no redundant chooser');
+    console.log('PASS: focused Curves pages, exact unchanged numbers, native mouse/pen/touch contacts, one-step undo/redo, Escape, tiny HDR and native archive reopen in both themes at wide and narrow sizes');
+  } finally {await call('Emulation.clearDeviceMetricsOverride');}
+}

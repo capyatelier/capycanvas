@@ -21,28 +21,33 @@
         "resolution": "display",
         "kind": "adjustment",
         "label": {"message":"resources-filter-curves"},
+        "pages": [{"id":"rgb","label":{"message":"resources-parameter-curves-curve-0"}},{"id":"red","label":{"message":"resources-parameter-curves-curve-1"}},{"id":"green","label":{"message":"resources-parameter-curves-curve-2"}},{"id":"blue","label":{"message":"resources-parameter-curves-curve-3"}}],
         "parameters": [
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
             "key": "curve_0",
+            "page": "rgb",
             "kind": {"kind":"curve"},
             "label": {"message":"resources-parameter-curves-curve-0"}
           },
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
             "key": "curve_1",
+            "page": "red",
             "kind": {"kind":"curve"},
             "label": {"message":"resources-parameter-curves-curve-1"}
           },
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
             "key": "curve_2",
+            "page": "green",
             "kind": {"kind":"curve"},
             "label": {"message":"resources-parameter-curves-curve-2"}
           },
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
             "key": "curve_3",
+            "page": "blue",
             "kind": {"kind":"curve"},
             "label": {"message":"resources-parameter-curves-curve-3"}
           },
@@ -55,6 +60,7 @@
           {
             "default": {"kind":"number","value":4},
             "key": "hdr_stops",
+            "visible_when": {"key":"domain","value":{"kind":"choice","value":1}},
             "kind": {"kind":"number","min":0,"max":15,"step":1,"decimals":0,"unit":"EV"},
             "label": {"message":"resources-parameter-curves-hdr-stops"}
           }
@@ -74,10 +80,12 @@
         "resolution": "display",
         "kind": "adjustment",
         "label": {"message":"resources-filter-levels"},
+        "pages": [{"id":"rgb","label":{"message":"resources-parameter-curves-curve-0"}}],
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "black",
+            "page": "rgb",
             "kind": {"decimals":3,"kind":"number","max":0.999,"min":0,"step":0.01,"unit":""},
             "label": {"message":"resources-parameter-levels-black"},
             "section": {"message":"resources-section-levels-input"}
@@ -85,6 +93,7 @@
           {
             "default": {"kind":"number","value":1},
             "key": "white",
+            "page": "rgb",
             "kind": {"decimals":3,"kind":"number","max":1,"min":0.001,"step":0.01,"unit":""},
             "label": {"message":"resources-parameter-levels-white"},
             "section": {"message":"resources-section-levels-input"}
@@ -92,6 +101,7 @@
           {
             "default": {"kind":"number","value":1},
             "key": "gamma",
+            "page": "rgb",
             "kind": {"decimals":2,"kind":"number","max":10,"min":0.1,"step":0.05,"unit":""},
             "label": {"message":"resources-parameter-levels-gamma"},
             "section": {"message":"resources-section-levels-input"}
@@ -99,6 +109,7 @@
           {
             "default": {"kind":"number","value":0},
             "key": "output_black",
+            "page": "rgb",
             "kind": {"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},
             "label": {"message":"resources-parameter-levels-output-black"},
             "section": {"message":"resources-section-levels-output"}
@@ -106,6 +117,7 @@
           {
             "default": {"kind":"number","value":1},
             "key": "output_white",
+            "page": "rgb",
             "kind": {"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},
             "label": {"message":"resources-parameter-levels-output-white"},
             "section": {"message":"resources-section-levels-output"}
@@ -113,6 +125,7 @@
           {
             "default": {"kind":"toggle","value":false},
             "key": "clamp_input",
+            "page": "rgb",
             "kind": {"kind":"toggle"},
             "label": {"message":"resources-parameter-levels-clamp-input"},
             "section": {"message":"resources-section-levels-clipping"}
@@ -120,6 +133,7 @@
           {
             "default": {"kind":"toggle","value":false},
             "key": "clamp_output",
+            "page": "rgb",
             "kind": {"kind":"toggle"},
             "label": {"message":"resources-parameter-levels-clamp-output"},
             "section": {"message":"resources-section-levels-clipping"}
@@ -167,22 +181,26 @@
         "resolution": "display",
         "kind": "adjustment",
         "label": {"message":"resources-filter-hue-saturation"},
+        "pages": [{"id":"rgb","label":{"message":"resources-parameter-curves-curve-0"}}],
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "hue",
+            "page": "rgb",
             "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
             "label": {"message":"resources-parameter-hue-saturation-hue"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "saturation",
+            "page": "rgb",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
             "label": {"message":"resources-parameter-hue-saturation-saturation"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "lightness",
+            "page": "rgb",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
             "label": {"message":"resources-parameter-hue-saturation-lightness"}
           }
@@ -201,69 +219,70 @@
         "resolution": "display",
         "kind": "adjustment",
         "label": {"message":"resources-filter-color-balance"},
+        "pages": [{"id":"shadows","label":{"message":"resources-section-color-balance-shadows"}},{"id":"midtones","label":{"message":"resources-section-color-balance-midtones"}},{"id":"highlights","label":{"message":"resources-section-color-balance-highlights"}}],
         "parameters": [
           {
             "default": {"kind":"number","value":0},
             "key": "shadows_red",
+            "page": "shadows",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": {"message":"resources-parameter-color-balance-shadows-red"},
-            "section": {"message":"resources-section-color-balance-shadows"}
+            "label": {"message":"resources-parameter-color-balance-shadows-red"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "shadows_green",
+            "page": "shadows",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": {"message":"resources-parameter-color-balance-shadows-green"},
-            "section": {"message":"resources-section-color-balance-shadows"}
+            "label": {"message":"resources-parameter-color-balance-shadows-green"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "shadows_blue",
+            "page": "shadows",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": {"message":"resources-parameter-color-balance-shadows-blue"},
-            "section": {"message":"resources-section-color-balance-shadows"}
+            "label": {"message":"resources-parameter-color-balance-shadows-blue"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "midtones_red",
+            "page": "midtones",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": {"message":"resources-parameter-color-balance-midtones-red"},
-            "section": {"message":"resources-section-color-balance-midtones"}
+            "label": {"message":"resources-parameter-color-balance-midtones-red"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "midtones_green",
+            "page": "midtones",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": {"message":"resources-parameter-color-balance-midtones-green"},
-            "section": {"message":"resources-section-color-balance-midtones"}
+            "label": {"message":"resources-parameter-color-balance-midtones-green"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "midtones_blue",
+            "page": "midtones",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": {"message":"resources-parameter-color-balance-midtones-blue"},
-            "section": {"message":"resources-section-color-balance-midtones"}
+            "label": {"message":"resources-parameter-color-balance-midtones-blue"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "highlights_red",
+            "page": "highlights",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": {"message":"resources-parameter-color-balance-highlights-red"},
-            "section": {"message":"resources-section-color-balance-highlights"}
+            "label": {"message":"resources-parameter-color-balance-highlights-red"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "highlights_green",
+            "page": "highlights",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": {"message":"resources-parameter-color-balance-highlights-green"},
-            "section": {"message":"resources-section-color-balance-highlights"}
+            "label": {"message":"resources-parameter-color-balance-highlights-green"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "highlights_blue",
+            "page": "highlights",
             "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
-            "label": {"message":"resources-parameter-color-balance-highlights-blue"},
-            "section": {"message":"resources-section-color-balance-highlights"}
+            "label": {"message":"resources-parameter-color-balance-highlights-blue"}
           },
           {
             "default": {"kind":"toggle","value":true},

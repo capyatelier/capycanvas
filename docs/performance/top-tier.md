@@ -15,6 +15,7 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Navigator drag | 120 | | |
 | Brush-cursor hover | 120 | | |
 | Placed-photo drag (24 MP photo) | 120 | | |
+| Retained photo translation with snapping (61 MP) | 120 | **Not met.** 59.29–59.87 completed updates/s; matched snapping-off run 59.46–59.71/s | [Transform snapping](#transform-snapping), 2026-10-02 |
 | Retained wet-photo Transform body drag (61 MP) | 120 | **Not met.** 36.3–37.0 renderer updates/s; presentation unmeasured | [Material transforms](#retained-wet-photo-transforms), 2026-10-02 |
 | Retained wet-photo Distort corner drag (61 MP) | 120 | **Not met.** 29.37 completed updates/s, warm median; presentation unmeasured | [Retained Distort and Warp](#retained-distort-and-warp), 2026-10-02 |
 | Retained wet-photo Warp node drag (61 MP) | 120 | **Not met.** 15.97 completed updates/s, warm median; presentation unmeasured | [Retained Distort and Warp](#retained-distort-and-warp), 2026-10-02 |
@@ -27,6 +28,7 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Selection Brush or Quick Mask, 2048 px | 120 | | |
 | Grow, Shrink or Feather drag, full canvas | 120, soft | **Not met.** Feather: 14.9 updates/s on 6000 × 4000; 72.5 updates/s on 2048 × 1536 | Canvas-bar `refine-feather-drag`, 2026-09-27 |
 | Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 120, soft | | |
+| Curves point drag (61 MP) | 120, soft | **Not met.** 72.07–74.61 completed canvas updates/s; native UI 76.51–78.53 frames/s | [Curves editing](#curves-editing), 2026-10-02 |
 | Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 120, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 120, soft | | |
 | Fill layer or gradient-fill edit | 120, soft | | |
@@ -46,6 +48,102 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Tool Options or panel content change | 120 | **Not met.** UI frame p50/p95 25.1/30.6 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 120 | | |
 | Menu open and close | 120 | Menu open adds no canvas frames; UI frame p50/p95 11.5/26.6 ms | Canvas-bar `selection-bar-menu-open`, 2026-09-27 |
+
+## Transform snapping
+
+Measured on 2026-10-02 at `3e0684b08` plus the transform controls, on the reference
+tablet at thermal status zero. Both runs use the same nondebuggable release-Rust
+benchmark APK as the final Curves run, the exact tier photo, default Photo
+workspace, Fit zoom 0.203125 and closed Stats. A small real paint stroke supplies
+a neighboring snap target; photo, paint and paper are the three visible layers.
+Each run has one warm-up and three five-second body drags.
+
+| Warm measurement | Snapping on | Snapping off |
+| --- | ---: | ---: |
+| Renderer submissions/s | 59.69–60.47 | 59.86–60.11 |
+| Completed canvas updates/s | 59.29–59.87 | 59.46–59.71 |
+| Renderer owner CPU, median | 9.60–10.01 ms | 9.71–10.06 ms |
+| Renderer callback, p99 | 27.33–28.30 ms | 27.46–27.69 ms |
+
+The comparison detects no significant snapping-specific overhead. Target bounds
+are prepared asynchronously and frozen for each contact; motion reuses them.
+The existing transform workload remains below 120 Hz. GPU completions do not
+measure screen presents, and the mostly stationary native UI supplies too few
+FrameMetrics samples to qualify canvas presentation. Callback p99 is not an
+update-gap measurement.
+
+Allocator samples before and after every warm contact remain at 2,482,850,752
+allocated bytes with snapping and 2,490,216,384 without, with the same
+2,553,843,712-byte reservation. These are boundary samples, not peak memory.
+Records: `artifacts/testing/material/p11-p14-benchmark/rebased-10/snap-comparison-summary.json`.
+Low and mid tiers remain unmeasured.
+
+## Curves editing
+
+The final integrated build at `3e0684b08` plus this change uses the same photo,
+camera, workspace and three warm five-second contacts described below. At thermal
+status zero it reaches 72.47–74.81 renderer submissions/s and 72.07–74.61 completed
+canvas updates/s. Renderer owner CPU medians are 4.12–4.18 ms, with p99
+7.34–7.56 ms. Native UI rates are 76.51–78.53 frames/s with 25.00 ms interval p99;
+neither presentation criterion is met. Allocator boundary samples stay at
+2,265,137,024 allocated bytes and 2,328,776,704 reserved bytes, not an in-motion
+peak. APK SHA-256:
+`69b731b96ecb25a634c35b07794ef30431d8e95504f7ad88ddb3b20b3f86d47a`.
+Records: `artifacts/testing/material/p11-p14-benchmark/rebased-10/curves`.
+This confirmation includes the integrated live-language implementation and is separate
+from the comparison that isolates the renderer fix below.
+
+Measured on 2026-10-02 at `2e574cb20` plus the Properties and pointwise renderer
+changes, on the reference tablet at thermal status zero. The exact tier photo
+uses Perceptual blending, the default Photo workspace, Fit zoom 0.203125 and
+closed Stats. Both nondebuggable benchmark builds use release Rust with R8
+disabled for instrumentation. The same test drags the existing middle point of
+a three-point RGB curve for one warm-up and three five-second repeats.
+
+| Warm measurement | Tiled baseline | Bounded whole-window evaluation |
+| --- | ---: | ---: |
+| Renderer submissions/s | 10.38–10.57 | 78.40–78.63 |
+| Completed canvas updates/s | 10.18–10.37 | 78.00–78.23 |
+| Renderer owner CPU, median | 66.32–67.31 ms | 4.29–4.36 ms |
+| Native UI frames/s | 68.19–74.82 | 84.02–86.37 |
+
+The updated run's completion-gap p99 is 24.55–25.17 ms. Native UI interval p99
+is 16.67 ms, but its rate is below the 114 fps presentation floor. Canvas updates
+are GPU completions, not screen presents. The 120 Hz target remains unmet.
+
+Pointwise effects now reuse the existing whole-window graph evaluator when its
+sources and scratch fit the existing 608 MiB display allowance. Larger graphs
+and native-resolution evaluation retain tiled scratch. Independent pointwise
+regions share a render pass; spatial filters retain bounded passes. This removes
+the measured driver overhead without changing effect math or source resolution.
+
+A separate Stats trace reduces effect passes from 140 to a median two per
+update and command finishing from 40.21 to 0.85 ms. The changed preview contains
+3.764 MP: main GPU composition takes 6.89 ms median and viewport work 2.69 ms.
+Nested GPU intervals overlap and must not be summed. The warm trace has no
+upload drains or restores and only three source misses across 357 updates.
+Native shared effect actions take 0.36 ms median; publication takes 2.35 ms plus
+0.30 ms parsing. Qualification renderer CPU stays around 4.3 ms while native UI
+GPU time is 12.44–12.87 ms and presentation queue waits reach 8.08–8.50 ms p95.
+These costs are consistent with the remaining GPU and native UI workload; the
+audit found no further major repeated source processing or command amplification.
+They do not prove an absolute hardware limit or qualify a soft-target waiver.
+The Stats trace changes the work area and adds timing overhead, so it is not
+pooled with the rate runs. Android FrameMetrics CPU phases report elapsed time,
+not actual UI-thread CPU time.
+
+Allocator samples before and after each warm contact remain at 2,273,446,784
+allocated bytes and 2,345,553,920 reserved bytes; the baseline allocates
+2,274,506,304 bytes with the same reservation. These are boundary samples, not
+an in-motion peak or total process memory qualification.
+
+Candidate APK SHA-256:
+`5aecd79c39fd61bd0c3c900a410bd06408b32e3b3a78583f804bec5a18a37b46`.
+Baseline APK SHA-256:
+`d40c3dd859d448532db2fd2dc776570c36f794adfa1d58dd09cdbf4cef27eb1d`.
+Raw records are under `artifacts/testing/material/p11-p14-benchmark/`:
+`matched-baseline-08/qualification`, `optimized-08/qualification` and
+`optimized-08/trace-summary.json`. Low and mid tiers remain unmeasured.
 
 ## Exact content bounds
 
@@ -223,7 +321,7 @@ tiers remain unmeasured.
 
 Target: **120 completed updates/s** at the guaranteed size, on the 61 MP canvas.
 
-Except for G-Pen, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets. The ellipse is 520 × 299 px at 16.5% zoom.
+Except for G-Pen and Watercolor Wash, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets. The ellipse is 520 × 299 px at 16.5% zoom.
 
 **The 2026-09-22 G-Pen record used a different stroke.** It recorded 105.76
 updates/s for a 2000 px G-Pen.
@@ -263,7 +361,7 @@ are kept separate from the 10 s comparison table below.
 | Dual Texture (9) | Complex | 1024 px | 80.0 updates/s (79.5–80.6); gap p99 21.3 ms | **Not met** |
 | Spray (8) | Complex | 1024 px | 33.8 updates/s (32.7–34.3); gap p99 113.2 ms | **Not met** |
 | Opaque Gouache (19) | Very complex | 512 px | **Crashed**: native allocator out of memory (Scudo map failure) | **Not met** |
-| Watercolor Wash (20) | Very complex | 512 px | **Crashed**: SIGSEGV inside the Adreno Vulkan driver (fault address 0x1c) | **Not met** |
+| Watercolor Wash (20) | Very complex | 512 px | 1.40 fresh updates/s (1.20–1.40); completion-gap p99 960.82–1279.16 ms; [current comparison](#watercolor-prediction-precision) | **Not met** |
 | Wet Watercolor (21) | Very complex | 512 px | **Crashed**: SIGSEGV inside the Adreno Vulkan driver (fault address 0x1c) | **Not met** |
 | Loaded Oil (22) | Very complex | 512 px | **Crashed**: SIGSEGV inside the Adreno Vulkan driver (fault address 0x1c) | **Not met** |
 | Palette Knife (23) | Very complex | 512 px | **Crashed**: SIGSEGV inside the Adreno Vulkan driver (fault address 0x1c) | **Not met** |
@@ -302,6 +400,50 @@ Baseline APK SHA-256:
 Raw records: `artifacts/testing/material/android-pool-destroy/{gpen-top-fit,gpen-head-baseline}`.
 These strokes do not qualify resumed-contact latency; see
 [the resumed-contact audit](responsiveness.md#resumed-contacts-before-the-batch-tradeoff).
+
+## Watercolor prediction precision
+
+Measured on 2026-10-02 at `3e0684b08` plus the photo editing changes, on the
+reference tablet. The matched nondebuggable ARM64 benchmark builds use release
+Rust, R8 disabled, the exact tier photo under one empty paint layer, Perceptual
+blending, default Paint workspace, Fit zoom 0.16534 and closed Stats. Preset 20
+uses its default settings at 512 px, 16 ms prediction and a 520 × 299 px stylus
+ellipse. Each build ran one warm-up and three five-second strokes; thermal
+status stayed zero. The candidate also fixes prediction damage outside the
+canvas and supplies provisional watercolor style to composition.
+
+| Warm measurement | Before preview fixes | With native wetness precision |
+| --- | ---: | ---: |
+| Completed updates/s consuming fresh input | 1.196–1.198 | 1.197–1.397 |
+| Input completion-gap p99 | 1154.74–1202.27 ms | 960.82–1279.16 ms |
+| Owner thread CPU median | 734.39–848.12 ms | 700.57–816.47 ms |
+
+Completed canvas updates and fresh-input updates coincide in these runs. Both
+builds finish without the crash in the older table; neither meets the target.
+The comparison shows no throughput regression from canonicalizing predicted
+wetness. Candidate allocator boundary samples are 2.90–2.91 GB allocated and
+3.25–3.31 GB reserved after the warm strokes; these are not peak measurements.
+
+A separate warmed, five-second trace with Stats closed locates the large CPU
+cost in command finalization and submission: 29 finish spans total 2927 ms and
+28 queue submissions total 1244 ms. Median preparation, paint encoding,
+prediction and composition spans are 4.41, 21.28, 1.28 and 9.22 ms. Nested spans
+and different sample counts must not be added as a frame budget. Command-pass
+counters grow by 11,077 for 1,502 new dabs; source misses grow by 16, with no
+upload drain or restore batch. This is the existing material command workload,
+not evidence of a hardware ceiling or a performance waiver.
+Committed watercolor uses three-dab batches, with immutable per-tile inputs and
+three transport stages per material update. Commands consume new contacts;
+they do not replay the whole stroke. Reducing those dependent passes requires
+changing the painting execution path while preserving its material results.
+
+Candidate APK SHA-256:
+`1058ce2101aa60ef80ed71f3b14df9045efd45d1d2282a6b53d966ac1994b5f9`.
+Baseline APK SHA-256:
+`69b731b96ecb25a634c35b07794ef30431d8e95504f7ad88ddb3b20b3f86d47a`.
+Records: `artifacts/testing/material/p11-p14-benchmark/wc-comparison-summary.json`
+and `wc-current-11-trace/trace-summary.json` in the same directory. Low and mid
+tiers and preset 21 were not remeasured.
 
 ## Retouching with the integrated compositor
 

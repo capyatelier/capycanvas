@@ -876,3 +876,15 @@ fn native_in_place_runtime_matches_candidate_fallback_for_mixed_planes() {
         }
     }
 }
+
+#[test]
+fn watercolor_prediction_canonicalizes_coverage_with_candidate_fallback() {
+    for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F32] {
+        let color = DocumentColor { depth, ..Default::default() };
+        let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+        let transfer = r.prepare_native_transfer(color.space).unwrap();
+        r.native_edit = Some(NativeEdit::with_mode(&r, transfer, false));
+        assert!(r.native_edit.as_ref().unwrap().promoter.is_some());
+        crate::layer_tests::placement::watercolor_prediction_and_commit_with_renderer(r, 256, false);
+    }
+}

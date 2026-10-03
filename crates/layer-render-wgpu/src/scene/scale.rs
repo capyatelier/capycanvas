@@ -446,9 +446,19 @@ fn allocation(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<
 }
 
 fn allocation_for(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<'_>, sources: Option<&Sources>, streamed: bool, scene: Option<&Scene>) -> [u64; 2] {
+    allocation_with_tiles(r, plan, packet, sources, streamed, scene, use_tiles(r, plan, packet, sources, streamed, scene))
+}
+
+fn use_tiles(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<'_>, sources: Option<&Sources>, streamed: bool, scene: Option<&Scene>) -> bool {
+    bounded(packet.layers) && (plan.level == 0
+        || !packet.layers.iter().any(|l| images::visible(packet.layers, l) && l.effect.is_some())
+        || allocation_with_tiles(r, plan, packet, sources, streamed, scene, false).into_iter().sum::<u64>() > CACHE_BYTES)
+}
+
+fn allocation_with_tiles(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<'_>, sources: Option<&Sources>, streamed: bool, scene: Option<&Scene>, tiled: bool) -> [u64; 2] {
     let scene=scene.or(r.scene.as_ref());
     let layers = packet.layers;
-    let images = if bounded(layers) { scratch_images(layers) }
+    let images = if tiled { scratch_images(layers) }
         else { graph::scratch_images(packet, plan.level, r.device.working_space()).unwrap_or_else(|_| scratch_images(layers)) };
     let material = targets(r, packet).any(|(_, id)| mapped_material(r, packet, id));
     let images = images + u64::from(plan.level > 0 && material);
@@ -470,7 +480,7 @@ fn allocation_for(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePac
                 * if kept { 2 } else { 1 }
         }).sum::<u64>();
     let output = plan.level_bytes(plan.level);
-    let working = if bounded(layers) {
+    let working = if tiled {
         u64::from(PAGE_SIZE).pow(2) * 16 * (images + pixel_transform::TRANSFORM_SLOTS as u64)
     } else { input.level_bytes(input.level) * (images - 1) };
     let own = [source_bytes, Scene::geometry_bytes(layers,scene) + output + working + root_mips + plan.level_bytes(plan.level + 1) + records + 32 + transform
@@ -728,7 +738,7 @@ impl Cache {
         let plan = if self.evaluation == Evaluation::Native { display_mips::Plan::window(self.plan.extent, 0, self.plan.bounds) }
             else { input_plan(self.plan, packet.layers) };
         self.graph.prepare(r, packet, sources, plan, budget)?;
-        if self.placed.is_some() && !self.graph.root.as_ref().unwrap().deferred(r) {
+        if self.placed.is_some() && !self.graph.root.as_ref().unwrap().deferred(r, packet.dab_batches) {
             self.valid.clear(); self.reuse_output = false;
         }
         if previous != self.graph.root {
@@ -884,7 +894,8 @@ impl Cache {
         let mut written_pixels = written.area();
         let mut written_regions = u64::from(!written.is_empty());
         let regions: Vec<_> = regions.into_iter().flat_map(|r| r.subtract(covered)).filter(|r| !r.is_empty()).collect();
-        let tiled = bounded(packet.layers) && !(self.plan.level > 0 && root.fused_transform(r));
+        let tiled = use_tiles(r, self.plan, packet, self.source_overlap.then_some(&scene.scale_sources), self.streamed_sources, Some(scene))
+            && !(self.plan.level > 0 && root.fused_transform(r));
         let regions = if tiled {
             regions.into_iter().flat_map(|region| {
                 let [x, y, width, height] = paint_transform::texel_rect(region, side);
@@ -1142,7 +1153,7 @@ struct Evaluator<'a> {
     source_plans: &'a mut std::collections::HashMap<LayerId,(layer_core::ImageTransform,[u32;2],display_mips::Plan)>,
 }
 fn mapped_material(r: &WgpuRasterizer, packet: FramePacket<'_>, id: LayerId) -> bool {
-    r.paint_layers.iter().any(|layer| layer.id == id && layer.watercolor.is_some())
+    r.watercolor_style(id, packet.dab_batches).is_some()
         && (r.moving_layer == Some(id) || !layer_core::target_geometry(packet.layers, id).is_identity())
 }
 
@@ -1179,7 +1190,7 @@ impl Evaluator<'_> {
         let value = self.source_pixels(id, placement.clone(), extent, outside)?;
         if self.cache.plan.level == 0 || !mapped_material(self.r, self.packet, id)
             || self.r.transforms.as_ref().is_some_and(|t| t.display_source(id)) { return Ok(value); }
-        let (bounds, radius) = self.scene.material_coverage(self.r, id, &placement);
+        let (bounds, radius) = self.scene.material_coverage(self.r, id, &placement, self.packet.dab_batches);
         if bounds.is_empty() { return Ok(value); }
         let bounds = bounds.outset((radius + 2 * (1 << self.cache.plan.level)) as f32);
         let region = self.region.intersect(paint_transform::aligned(pixel_rect(bounds, self.packet.document_extent), PAGE_SIZE, self.packet.document_extent));
@@ -1211,7 +1222,7 @@ impl Evaluator<'_> {
             let slot = if let Some(index) = self.packet.layers.iter().position(|l| l.id == id) {
                 let layer = &self.packet.layers[index];
                 let stored = self.r.paint_layers.iter().find(|l| l.id == id);
-                if placement.is_identity() && stored.is_none_or(|s| s.watercolor.is_none()) {
+                if placement.is_identity() && self.r.watercolor_style(id, self.packet.dab_batches).is_none() {
                     let preview = self.r.preview_layer_id == Some(id);
                     let inputs = match self.scene.color_inputs(self.r, layer, stored, tile, preview) {
                         Err(GpuRasterError::SourceWorkingSetExceeded) => {

@@ -135,7 +135,7 @@ fn transform_publishes_a_bar_whose_edits_expire_with_the_transform() {
     let bar = s.state.canvas_bar.clone().expect("transform bar");
     assert_eq!(bar.context.kind, CanvasBarKind::Transform);
     assert_eq!(mode_choice(&bar), [CommandId::TransformFree, CommandId::TransformUniform, CommandId::TransformDistort, CommandId::TransformWarp]);
-    assert_eq!(bar_commands(&bar.items), [CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft, CommandId::TransformRotateRight, CommandId::ResetTransform]);
+    assert_eq!(bar_commands(&bar.items), [CommandId::TransformSnapping, CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft, CommandId::TransformRotateRight, CommandId::ResetTransform]);
     assert_eq!(bar_commands(&bar.completion), [CommandId::CancelTransform, CommandId::ApplyTransform]);
     assert!(bar.items.iter().all(|item| !item.accent));
     assert_eq!(bar.completion.iter().map(|item| item.accent).collect::<Vec<_>>(), [false, true], "Apply is the accented step");
@@ -175,11 +175,11 @@ fn canvas_bar_keeps_its_view_during_a_handle_drag_and_follows_the_object_after()
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
     let before = s.state.canvas_bar.clone().unwrap();
-    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), Point { x: 200., y: 200. }).unwrap();
-    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), Point { x: 400., y: 260. }).unwrap();
+    s.transform_pen(event(&s, 1, PenPhase::Down, 1.), Point { x: 150., y: 180. }).unwrap();
+    s.transform_pen(event(&s, 2, PenPhase::Move, 1.), Point { x: 350., y: 240. }).unwrap();
     s.frame(2, 2).unwrap();
     assert_eq!(s.state.canvas_bar.as_ref().unwrap().anchor, before.anchor);
-    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), Point { x: 400., y: 260. }).unwrap();
+    s.transform_pen(event(&s, 3, PenPhase::Up, 1.), Point { x: 350., y: 240. }).unwrap();
     s.frame(3, 3).unwrap();
     let after = s.state.canvas_bar.as_ref().unwrap();
     assert_eq!(after.context, before.context, "the same transform keeps its bar");
@@ -327,6 +327,7 @@ fn photo_placement_bar_offers_original_size_and_counts_a_batch() {
         bar_commands(&bar.items),
         [
             CommandId::PlacementOriginalSize,
+            CommandId::TransformSnapping,
             CommandId::TransformFlipHorizontal,
             CommandId::TransformFlipVertical,
             CommandId::TransformRotateLeft,
@@ -526,12 +527,13 @@ fn handle_drags_publish_values_and_the_document_only_on_release() {
         if !placing {
             invoke(&mut s, CommandId::ScaleRotate);
         }
+        if placing { s.set_transform_control("transform_width", 10.).unwrap(); }
         s.frame(2, 2).unwrap();
         let value = |s: &UiSession<Recorder>| s.state.tool_settings.iter().find(|c| c.id == "transform_x").unwrap().value;
         let placement = |s: &UiSession<Recorder>| s.engine.document().layer(s.engine.document().active_layer).unwrap().properties.placement.clone();
         let before = (value(&s), placement(&s));
         let quad = s.operation.quad();
-        let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
+        let centre = Point { x: (quad[0].x + quad[2].x) * 0.5 - 30., y: (quad[0].y + quad[2].y) * 0.5 - 20. };
         let moved = Point { x: centre.x + 40., y: centre.y + 20. };
         assert!(!s.hold_canvas_backdrop());
         s.transform_pen(event(&s, 1, PenPhase::Down, 1.), centre).unwrap();
@@ -779,7 +781,7 @@ fn a_press_that_moves_nothing_keeps_the_pending_apply() {
     s.frame(4, 4).unwrap();
     let reply = resampled_reply(&mut s);
     let quad = s.operation.quad();
-    let centre = Point { x: (quad[0].x + quad[2].x) * 0.5, y: (quad[0].y + quad[2].y) * 0.5 };
+    let centre = Point { x: (quad[0].x + quad[2].x) * 0.5 - 30., y: (quad[0].y + quad[2].y) * 0.5 - 20. };
     for corner in [centre, quad[2]] {
         drag_to(&mut s, corner, corner);
         s.frame(5, 5).unwrap();
@@ -881,7 +883,7 @@ fn warp_seeds_from_the_transform_and_bends_through_nodes_and_tangents() {
     s.frame(5, 5).unwrap();
     assert!(s.operation.mesh().is_some(), "leaving Warp keeps the mesh");
     assert!(s.command(CommandId::TransformFree).selected);
-    let centre = preview_map(&mut s).outer.map(Point { x: 200., y: 200. }).unwrap();
+    let centre = preview_map(&mut s).outer.map(Point { x: 170., y: 180. }).unwrap();
     let before_box_map = preview_map(&mut s);
     drag_to(&mut s, centre, Point { x: centre.x + 10., y: centre.y });
     s.frame(6, 6).unwrap();
@@ -1329,7 +1331,7 @@ fn guide_bar_anchors_to_the_selected_guide_under_ruler_and_move() {
     assert!(actions(&s).is_empty(), "guide actions leave Tool Options under unrelated tools");
     invoke(&mut s, CommandId::Move);
     assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::Guide), "above the selection bar");
-    assert_eq!(actions(&s), [CommandId::MoveLeaveCopy, CommandId::ShowRulers, CommandId::SnapRulers, CommandId::DeleteRuler]);
+    assert_eq!(actions(&s), [CommandId::MoveLeaveCopy, CommandId::TransformSnapping, CommandId::ShowRulers, CommandId::SnapRulers, CommandId::DeleteRuler]);
     let overlay = |s: &UiSession<Recorder>| {
         let mut segments = Vec::new();
         s.append_ruler_overlay(&mut segments);
@@ -1341,7 +1343,7 @@ fn guide_bar_anchors_to_the_selected_guide_under_ruler_and_move() {
     guide_pen(&mut s, 5, PenPhase::Up, [700., 150.]);
     assert!(s.rulers.selected.is_none(), "a Move click that misses the guide deselects it");
     assert_eq!(overlay(&s), 0);
-    assert_eq!(actions(&s), [CommandId::MoveLeaveCopy]);
+    assert_eq!(actions(&s), [CommandId::MoveLeaveCopy, CommandId::TransformSnapping]);
     assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::Selection));
 
     invoke(&mut s, CommandId::Ruler);
@@ -1449,6 +1451,59 @@ fn opening_and_switching_retained_modes_preserves_exact_geometry_and_redo() {
     invoke(&mut s, CommandId::ApplyTransform);
     assert_eq!(s.engine.document(), &before);
     assert!(s.engine.can_redo(), "an unchanged retained edit preserves redo");
+}
+
+#[test]
+fn transform_again_replays_only_the_last_accepted_outer_delta_once_and_atomically() {
+    let mut doc = Document::new("repeat retained geometry", 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let id = doc.active_layer;
+    doc.layers[0].source = Some(layer_core::color::source::rgba8_source([200, 160], |_, _| [180, 100, 40, 255]));
+    doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([1., 0.2, 0.3, 1., 90., 70.]));
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
+    s.frame(1, 1).unwrap();
+    assert!(!s.command(CommandId::TransformAgain).enabled);
+    let original = s.engine.document().layer(id).unwrap().properties.placement.outer;
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformRotateRight);
+    assert!(!s.command(CommandId::TransformAgain).enabled);
+    assert!(s.dispatch(UiAction::Invoke { command: CommandId::TransformAgain }).is_err());
+    invoke(&mut s, CommandId::ApplyTransform);
+    let accepted = s.engine.document().layer(id).unwrap().properties.placement.outer;
+    let delta = original.inverse().unwrap().then(accepted).unwrap();
+    let probe = Point { x: 31., y: 79. };
+    assert!(!close(original.then(delta).unwrap().map(probe).unwrap(), delta.then(original).unwrap().map(probe).unwrap(), 0.1));
+    let before = s.engine.document().clone();
+    assert!(s.command(CommandId::TransformAgain).enabled);
+    invoke(&mut s, CommandId::TransformAgain);
+    let after = s.engine.document().clone();
+    let expected = accepted.then(delta).unwrap();
+    for probe in [Point::default(), probe, Point { x: 200., y: 160. }] {
+        assert!(close(after.layer(id).unwrap().properties.placement.outer.map(probe).unwrap(), expected.map(probe).unwrap(), 0.001));
+    }
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().layers, before.layers);
+    invoke(&mut s, CommandId::Redo);
+    assert_eq!(s.engine.document().layers, after.layers);
+    let remembered = s.operation.last_transform;
+    invoke(&mut s, CommandId::ScaleRotate);
+    let x = s.state.tool_settings.iter().find(|control| control.id == "transform_x").unwrap().value;
+    s.set_transform_control("transform_x", x + 25.).unwrap();
+    invoke(&mut s, CommandId::CancelTransform);
+    assert_eq!(s.operation.last_transform, remembered);
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformNearest);
+    invoke(&mut s, CommandId::ApplyTransform);
+    assert_eq!(s.operation.last_transform, remembered);
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformWarp);
+    let mesh = s.operation.mesh().unwrap();
+    let node = mesh.node(5).unwrap();
+    let outer = s.engine.document().layer(id).unwrap().properties.placement.outer;
+    let from = outer.map(node).unwrap();
+    drag_to(&mut s, from, Point { x: from.x + 7., y: from.y - 5. });
+    invoke(&mut s, CommandId::ApplyTransform);
+    assert!(s.engine.document().layer(id).unwrap().properties.placement.mesh.is_some());
+    assert_eq!(s.operation.last_transform, remembered);
 }
 
 #[test]

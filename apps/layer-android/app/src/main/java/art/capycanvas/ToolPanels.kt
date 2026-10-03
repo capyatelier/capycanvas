@@ -144,16 +144,32 @@ import kotlinx.coroutines.withContext
             }
         }
         if (actions.any { it.getString("command") in modes }) SelectionMenuButton(host, controlCopy.getString("selection_menu"), "selection")
-        var group = ""
-        state.array("tool_settings").objects().forEach { field ->
-            val next = field.getString("group")
-            if (next != group && next.isNotEmpty()) Text(next, fontWeight = FontWeight.Bold, color = LocalPalette.current.secondary)
-            group = next
+        val choices = state.array("tool_extra").objects().mapNotNull { it.optJSONObject("Choice") }
+        val beside = choices.filter { it.has("beside") }.associateBy { it.getString("beside") }
+        choices.filterNot { it.has("beside") }.forEach { choice ->
+            ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool", height = 32f)
+        }
+        val fieldControl: @Composable (JSONObject, Boolean) -> Unit = { field, compact ->
             val id = field.getString("id")
             Box(Modifier.testTag("tool-setting-$id")) {
-                NumericSetting(field.getString("label"), field.number("value"), field.getJSONObject("numeric")) {
+                if (compact) Row(Modifier.fillMaxWidth().height(26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(field.getString("label"), Modifier.weight(1f), maxLines = 1)
+                    NumericSetting(field.getString("label"), field.number("value"), field.getJSONObject("numeric"), id = id, inline = true, showSlider = false) {
+                        host.dispatch(obj("type" to "set_tool_setting", "id" to id, "value" to it))
+                    }
+                } else NumericSetting(field.getString("label"), field.number("value"), field.getJSONObject("numeric"), id = id) {
                     host.dispatch(obj("type" to "set_tool_setting", "id" to id, "value" to it))
                 }
+            }
+        }
+        state.array("tool_settings").objects().groupBy { it.getString("group") }.forEach { (group, fields) ->
+            val choice = beside[fields.first().getString("id")]
+            val title = choice?.getString("label") ?: group
+            if (title.isNotEmpty()) Text(title, fontWeight = FontWeight.Bold, color = LocalPalette.current.secondary)
+            if (choice == null) fields.forEach { fieldControl(it, false) }
+            else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool")
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) { fields.forEach { fieldControl(it, true) } }
             }
         }
         actions.filter { it.getString("command") !in modes }.forEach { action ->

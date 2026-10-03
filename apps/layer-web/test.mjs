@@ -76,7 +76,7 @@ import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
 import { checkParity } from "./parity.mjs";
 import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
-import { checkAdjustments } from "./effects.test.mjs";
+import { checkAdjustments, checkCurves } from "./effects.test.mjs";
 import { checkPreferences, checkSettingsParity, checkLiveLanguage } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
@@ -285,6 +285,7 @@ try {
     [process.argv.includes("--editor"), () => checkEditor({call,evaluate,settle,canvasPixels}), checkErrors],
     [process.argv.includes("--staged-startup"), () => checkStagedStartup({ call, evaluate, settle, canvasPixels }), checkErrors],
     [process.argv.includes("--stroke-recording"), () => checkStrokeRecording({call,evaluate,settle})],
+    [process.argv.includes("--curves"), () => checkCurves({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--adjustments"), () => checkAdjustments({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--selection"), () => checkSelectedPainting({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--layers"), () => checkLayers({ call, evaluate, settle }), checkErrors],

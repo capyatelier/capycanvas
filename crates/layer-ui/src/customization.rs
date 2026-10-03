@@ -1115,6 +1115,8 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
 
                 CommandId::Move => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MOVE).to_string(),
                 CommandId::MoveLeaveCopy => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_MOVE_LEAVE_COPY).to_string(),
+                CommandId::TransformAgain => localization.text(MessageId::COMMANDS_TRANSFORM_AGAIN_HELP).to_string(),
+                CommandId::TransformSnapping => localization.text(MessageId::COMMANDS_TRANSFORM_SNAPPING_HELP).to_string(),
                 CommandId::ScaleRotate => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SCALE_ROTATE).to_string(),
                 CommandId::ApplyTransform => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_APPLY_TRANSFORM).to_string(),
                 CommandId::CancelTransform => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CANCEL_TRANSFORM).to_string(),

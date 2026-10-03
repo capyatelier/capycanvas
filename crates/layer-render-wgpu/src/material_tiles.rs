@@ -65,7 +65,7 @@ impl WgpuRasterizer {
 
         let mut jobs = mem::take(&mut self.material_jobs);
         let damage =
-            batch_pixel_rect(batch, context.document_extent).intersect(self.preview_damage);
+            batch_pixel_rect(batch, context.target_extent).intersect(self.preview_damage);
         // Only non-sparse direct predictions need the rectangular plan. Dry
         // contacts already have a precise tile list shared with committed paint.
         let rectangular = from_persistent && self.preview_contact_tiles.is_none();

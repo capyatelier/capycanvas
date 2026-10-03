@@ -31,6 +31,11 @@ class AndroidRasterTest {
     private fun launch() {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+        if (InstrumentationRegistry.getArguments().getString("presentationNarrow") == "true") {
+            device.portrait(scenario)
+            assertTrue(activity.resources.configuration.screenWidthDp <= 640)
+            host.narrowPhotoPanels(compose)
+        }
         compose.waitUntil(60_000) {host.snapshot?.optBoolean("brush_ready")==true || host.failure!=null}
         assertNull(host.failure)
         compose.waitUntil(60_000) {host.workspaceManager?.optBoolean("ready")==true || host.workspaceManager?.isNull("error")==false}
@@ -1680,6 +1685,121 @@ class AndroidRasterTest {
                     assertTrue("$theme: native wetness remains stored", "WatercolorWetness" in planes)
                 }
                 assertMaterial(retained)
+                fun ownerProperties(project: JSONObject) = project.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties")
+                fun published() = host.snapshot!!.getJSONObject("state")
+                fun setting(id: String) = published().array("tool_settings").objects().first { it.getString("id") == id }.getDouble("value")
+                fun key(code: Int, pressed: Boolean, repeat: Int = 0) {
+                    val now = SystemClock.uptimeMillis()
+                    assertTrue(instrumentation.uiAutomation.injectInputEvent(android.view.KeyEvent(now, now, if (pressed) android.view.KeyEvent.ACTION_DOWN else android.view.KeyEvent.ACTION_UP, code, repeat), true))
+                    SystemClock.sleep(80); refresh()
+                }
+                fun dragDocument(from: Pair<Double, Double>, to: Pair<Double, Double>) {
+                    val camera = published().getJSONObject("camera")
+                    val shift = camera.getJSONArray("translation"); val zoom = camera.getDouble("zoom")
+                    var origin = androidx.compose.ui.geometry.Offset.Zero
+                    scenario.onActivity { origin = host.surfaceOrigin }
+                    val started = SystemClock.uptimeMillis()
+                    for (step in 0..12) {
+                        val fraction = step / 12.0
+                        val props = arrayOf(android.view.MotionEvent.PointerProperties().apply { id = 7; toolType = android.view.MotionEvent.TOOL_TYPE_STYLUS })
+                        val coords = arrayOf(android.view.MotionEvent.PointerCoords().apply {
+                            x = ((from.first + (to.first - from.first) * fraction) * zoom + shift.getDouble(0) + origin.x).toFloat()
+                            y = ((from.second + (to.second - from.second) * fraction) * zoom + shift.getDouble(1) + origin.y).toFloat()
+                            pressure = if (step == 12) 0f else .7f
+                        })
+                        val phase = when (step) { 0 -> android.view.MotionEvent.ACTION_DOWN; 12 -> android.view.MotionEvent.ACTION_UP; else -> android.view.MotionEvent.ACTION_MOVE }
+                        val event = android.view.MotionEvent.obtain(started, SystemClock.uptimeMillis(), phase, 1, props, coords, 0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_STYLUS, 0)
+                        try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+                        SystemClock.sleep(16)
+                    }
+                    refresh()
+                }
+                action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "tool_settings", "visible" to true)))
+                val settingsGroup = host.panelGroup("tool_settings")
+                if (settingsGroup.getString("active") != "tool_settings") action(obj("type" to "select_panel_tab", "group" to settingsGroup.getLong("id"), "panel" to "tool_settings"))
+                invoke("scale_rotate")
+                compose.waitUntil(30_000) { published().optJSONObject("canvas_bar") != null && published().array("tool_extra").objects().any { it.optJSONObject("Choice")?.optString("id") == "transform-reference" } }
+                val referenceHull = published().getJSONObject("canvas_bar").getJSONArray("anchor")
+                val density = activity.resources.displayMetrics.density
+                var settingsContainer = "panel-body-tool_settings"
+                fun settings(tag: String) = compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag(settingsContainer)))
+                val settingsDrawer = compose.onAllNodesWithTag("column-icon-tool_settings").fetchSemanticsNodes().isNotEmpty()
+                fun toggleSettingsDrawer() {
+                    compose.onNodeWithTag("column-icon-tool_settings").performTouchInput { click(center) }
+                    refresh()
+                }
+                if (settingsDrawer) {
+                    toggleSettingsDrawer()
+                    compose.waitUntil(10_000) { published().getJSONObject("customization").array("column_drawers").objects().any { it.getJSONObject("anchor").optString("origin") == "tool_settings" } }
+                    val drawer = published().getJSONObject("customization").array("column_drawers").objects().first { it.getJSONObject("anchor").optString("origin") == "tool_settings" }
+                    settingsContainer = "column-drawer-${drawer.getJSONObject("anchor").getInt("column")}"
+                }
+                compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("tool-segments-transform-reference") and hasAnyAncestor(hasTestTag(settingsContainer))).fetchSemanticsNodes().size == 1 }
+                val reference = settings("tool-segments-transform-reference").fetchSemanticsNode().boundsInRoot
+                val positionX = settings("tool-setting-transform_x").fetchSemanticsNode().boundsInRoot
+                val positionY = settings("tool-setting-transform_y").fetchSemanticsNode().boundsInRoot
+                assertEquals("Position reference remains compact", 54.0, (reference.width / density).toDouble(), 1.0)
+                assertEquals(54.0, (reference.height / density).toDouble(), 1.0)
+                assertEquals("Coordinates stay beside the reference", 12.0, ((positionX.left - reference.right) / density).toDouble(), 1.0)
+                assertTrue(positionX.top >= reference.top - density && positionY.bottom <= reference.bottom + density)
+                File(activity.getExternalFilesDir(null), "validation/$theme-transform-position.png").also { it.parentFile!!.mkdirs() }.outputStream().use { instrumentation.uiAutomation.takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                for (index in 0..8) {
+                    settings("tool-segment-transform-reference-$index").assertIsDisplayed().performTouchInput { click(center) }
+                    refresh()
+                    val choice = published().array("tool_extra").objects().first { it.optJSONObject("Choice")?.optString("id") == "transform-reference" }.getJSONObject("Choice")
+                    assertTrue(choice.array("items").getJSONObject(index).getBoolean("selected"))
+                    val x = referenceHull.getDouble(0) + (referenceHull.getDouble(2) - referenceHull.getDouble(0)) * (index % 3) / 2.0
+                    val y = referenceHull.getDouble(1) + (referenceHull.getDouble(3) - referenceHull.getDouble(1)) * (index / 3) / 2.0
+                    assertEquals("Reference publishes absolute document X", x, setting("transform_x"), .01)
+                    assertEquals("Reference publishes absolute document Y", y, setting("transform_y"), .01)
+                    assertEquals(referenceHull.toString(), published().getJSONObject("canvas_bar").getJSONArray("anchor").toString())
+                }
+                settings("tool-segment-transform-reference-4").performTouchInput { click(center) }; refresh()
+                val center = (referenceHull.getDouble(0) + referenceHull.getDouble(2)) / 2 to (referenceHull.getDouble(1) + referenceHull.getDouble(3)) / 2
+                val pivot = center.first - (referenceHull.getDouble(2) - referenceHull.getDouble(0)) * .1 to center.second - (referenceHull.getDouble(3) - referenceHull.getDouble(1)) * .1
+                if (settingsDrawer) toggleSettingsDrawer()
+                assertTrue("Canvas pivot contact has no expanded panel overlay", published().getJSONObject("customization").isNull("expanded"))
+                dragDocument(center, pivot)
+                assertEquals("Pivot drag leaves artwork bounds fixed", referenceHull.toString(), published().getJSONObject("canvas_bar").getJSONArray("anchor").toString())
+                if (settingsDrawer) toggleSettingsDrawer()
+                settings("number-value-transform_angle").performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .5f, height * .5f)) }
+                val angleLabel = published().array("tool_settings").objects().first { it.getString("id") == "transform_angle" }.getString("label")
+                compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("number-$angleLabel") and hasAnyAncestor(hasTestTag(settingsContainer))).fetchSemanticsNodes().isNotEmpty() }
+                settings("number-$angleLabel").performTextReplacement("30")
+                settings("number-$angleLabel").performImeAction(); refresh()
+                if (settingsDrawer) toggleSettingsDrawer()
+                press("apply_transform")
+                val rotated = manifest(save("$theme-reference-pivot.capy"))
+                val original = ownerProperties(retained).affinePlacement()
+                val rotatedMap = ownerProperties(rotated).affinePlacement()
+                val determinant = original.getDouble(0) * original.getDouble(3) - original.getDouble(1) * original.getDouble(2)
+                val px = pivot.first - original.getDouble(4); val py = pivot.second - original.getDouble(5)
+                val u = (original.getDouble(3) * px - original.getDouble(2) * py) / determinant
+                val v = (-original.getDouble(1) * px + original.getDouble(0) * py) / determinant
+                assertEquals("Native custom pivot remains fixed under numeric rotation", pivot.first, rotatedMap.getDouble(0) * u + rotatedMap.getDouble(2) * v + rotatedMap.getDouble(4), .01)
+                assertEquals(pivot.second, rotatedMap.getDouble(1) * u + rotatedMap.getDouble(3) * v + rotatedMap.getDouble(5), .01)
+                assertEquals(sourceIdentity(retained), sourceIdentity(rotated)); assertEquals(backing(retained), backing(rotated))
+                invoke("undo")
+                assertEquals(ownerProperties(retained).toString(), ownerProperties(manifest(save("$theme-pivot-undone.capy"))).toString())
+                invoke("move")
+                key(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, true)
+                key(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, true, 1)
+                key(android.view.KeyEvent.KEYCODE_DPAD_LEFT, false)
+                key(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, false)
+                val nudged = manifest(save("$theme-nudged.capy"))
+                assertNotEquals(ownerProperties(retained).toString(), ownerProperties(nudged).toString())
+                invoke("undo"); assertEquals("Held native nudge has one undo", ownerProperties(retained).toString(), ownerProperties(manifest(save("$theme-nudge-undone.capy"))).toString())
+                invoke("redo")
+                key(android.view.KeyEvent.KEYCODE_DPAD_LEFT, true)
+                key(android.view.KeyEvent.KEYCODE_ESCAPE, true); key(android.view.KeyEvent.KEYCODE_ESCAPE, false)
+                key(android.view.KeyEvent.KEYCODE_DPAD_LEFT, false)
+                assertEquals("Escape then release preserves the accepted map", ownerProperties(nudged).toString(), ownerProperties(manifest(save("$theme-nudge-cancelled.capy"))).toString())
+                invoke("transform_again")
+                val again = manifest(save("$theme-again.capy"))
+                assertNotEquals(ownerProperties(nudged).toString(), ownerProperties(again).toString())
+                invoke("undo"); assertEquals(ownerProperties(nudged).toString(), ownerProperties(manifest(save("$theme-again-undone.capy"))).toString())
+                invoke("undo"); assertEquals(ownerProperties(retained).toString(), ownerProperties(manifest(save("$theme-nudge-restored.capy"))).toString())
+                if (InstrumentationRegistry.getArguments().getString("imagePlacementPresentationOnly") == "true") continue
                 invoke("scale_rotate")
                 compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar") != null }
                 invoke("transform_distort")
@@ -1737,8 +1857,14 @@ class AndroidRasterTest {
                     .getJSONObject("properties").getJSONObject("placement").toString())
                 assertEquals(backing(retained), backing(reopenedSplit))
                 memoryStage("$theme: before pixel bake")
-                compose.onNodeWithTag("application-menu-edit").performClick()
-                compose.onNodeWithText("Apply Transform to Pixels").performClick()
+                if (compose.onAllNodesWithTag("application-menu-edit").fetchSemanticsNodes().isNotEmpty()) compose.onNodeWithTag("application-menu-edit").performClick()
+                else {
+                    compose.onNodeWithTag("header-menu-labels-compact").performClick()
+                    val label = host.snapshot!!.array("application_menus").objects().first { it.getString("id") == "edit" }.getString("label")
+                    compose.onNodeWithText(label).performClick()
+                }
+                val bakeLabel = published().array("commands").objects().first { it.getString("id") == "apply_transform_pixels" }.getString("label")
+                compose.onNodeWithText(bakeLabel).performClick()
                 compose.waitUntil(120_000) { tick(); native { state(it).isNull("canvas_bar") } }
                 refresh()
                 memoryStage("$theme: after pixel bake")

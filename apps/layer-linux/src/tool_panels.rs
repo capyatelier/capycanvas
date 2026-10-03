@@ -241,7 +241,7 @@ impl ToolSettings {
         let picking = state.layer_tools.tool.picks_color();
         let compact = state.layer_tools.tool.selection_tool() == Some(layer_ui::SelectionTool::Tonal);
         self.form.set_visible(!picking);
-        self.extra.set_visible(!picking && !state.tool_extra.is_empty());
+        self.extra.set_visible(!picking && state.tool_extra.iter().any(|option| !matches!(option, layer_ui::ToolOption::Choice { beside: Some(_), .. })));
         // Use one outer inset and a small gap between sections, instead of
         // stacking each section's top and bottom body margins.
         let inset=layer_ui::PANEL_CONTENT_INSET as i32;
@@ -280,7 +280,8 @@ impl ToolSettings {
             while let Some(child)=self.extra.first_child() {self.extra.remove(&child);}
             for option in &state.tool_extra {
                 let field=crate::tool_extra::ExtraField::new(workspace,option,context);
-                self.extra.append(&field.root);self.extra_fields.borrow_mut().push((option.clone(),field));
+                if !matches!(option, layer_ui::ToolOption::Choice { beside: Some(_), .. }) { self.extra.append(&field.root); }
+                self.extra_fields.borrow_mut().push((option.clone(),field));
             }
         } else {
             for ((old,field),next) in self.extra_fields.borrow_mut().iter_mut().zip(&state.tool_extra) {field.refresh(next);*old=next.clone();}
@@ -289,7 +290,7 @@ impl ToolSettings {
         self.updating.set(true);
         let mut fields = self.fields.borrow_mut();
         let mut actions = self.actions.borrow_mut();
-        let same_schema = !context_changed && fields.len() == controls.len()
+        let same_schema = same && !context_changed && fields.len() == controls.len()
             && fields.iter().zip(controls).all(|((old, _), next)| {
                 old.id == next.id
                     && old.numeric == next.numeric
@@ -301,6 +302,10 @@ impl ToolSettings {
                 .all(|((old, _, _), next)| old == next);
         if !same_schema {
             if let Some(range) = self.range.borrow().as_ref() { range.retire(); }
+            for (option, field) in self.extra_fields.borrow().iter() {
+                if matches!(option, layer_ui::ToolOption::Choice { beside: Some(_), .. })
+                    && let Some(parent) = field.root.parent().and_downcast::<gtk::Box>() { parent.remove(&field.root); }
+            }
             while let Some(child) = self.form.first_child() {
                 self.form.remove(&child);
             }
@@ -310,6 +315,7 @@ impl ToolSettings {
             self.range.borrow_mut().take();
             actions.clear();
             let mut group = "";
+            let mut grouped = None::<gtk::Box>;
             let inline_labels=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
             let inline_values=gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
             for control in controls {
@@ -330,8 +336,11 @@ impl ToolSettings {
                 }
                 if group != control.group.as_ref() {
                     group = control.group.as_ref();
+                    grouped = None;
+                    let extras = self.extra_fields.borrow();
+                    let beside = extras.iter().find(|(option, _)| matches!(option, layer_ui::ToolOption::Choice { beside: Some(id), .. } if *id == control.id));
                     if !group.is_empty() {
-                        let title = gtk::Label::new(Some(group));
+                        let title = gtk::Label::new(Some(beside.map_or(group, |(option, _)| match option { layer_ui::ToolOption::Choice { label, .. } => label.as_ref(), _ => group })));
                         title.add_css_class("heading");
                         title.add_css_class("dim-label");
                         title.set_xalign(0.0);
@@ -340,10 +349,18 @@ impl ToolSettings {
                         self.form.append(&title);
                         self.headings.borrow_mut().push((control.id, title));
                     }
+                    if let Some((_, field)) = beside {
+                        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                        let numbers = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                        numbers.set_hexpand(true);
+                        row.append(&field.root); row.append(&numbers); self.form.append(&row);
+                        grouped = Some(numbers);
+                    }
                 }
-                let input = if compact {
+                let input = if compact || grouped.is_some() {
                     NumberControl::labeled_inline(control.numeric.clone(), &control.label, &control.tooltip_localized(&workspace.localization()), &inline_labels, &inline_values, workspace.localization().clone())
                 } else { NumberControl::new(control.numeric.clone(), &control.label, "", workspace.localization().clone()) };
+                if grouped.is_some() { input.set_slider_visible(false); }
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;
                 input.connect_value_changed(glib::clone!(
@@ -356,7 +373,7 @@ impl ToolSettings {
                         });
                     }
                 ));
-                self.form.append(&input);
+                grouped.as_ref().unwrap_or(&self.form).append(&input);
                 fields.push((control.clone(), input));
             }
             let mut source_group: Option<gtk::CheckButton> = None;

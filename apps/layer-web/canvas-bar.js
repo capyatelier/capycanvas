@@ -9,7 +9,7 @@ export const barSchema = view => text([view.context, view.label ?? null,
     : option.Action
       ? ["action", label, option.Action.state.id, option.Action.state.icon, option.Action.state.label, option.Action.checkable]
       : option.Choice
-        ? ["choice", label, option.Choice.id, option.Choice.label, option.Choice.segmented, option.Choice.items.map(i => [i.label, i.icon])]
+        ? ["choice", label, option.Choice.id, option.Choice.label, option.Choice.segmented, option.Choice.columns, option.Choice.beside, option.Choice.items.map(i => [i.label, i.icon])]
         : ["other", label]))]);
 
 export function createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, openMenu, presented,

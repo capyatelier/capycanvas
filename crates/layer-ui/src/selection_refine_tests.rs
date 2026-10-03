@@ -364,7 +364,7 @@ mod selection_refine_checks {
                 _ => None,
             }).collect();
             assert_eq!(commands, [
-                CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft,
+                CommandId::TransformSnapping, CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft,
                 CommandId::TransformRotateRight, CommandId::ResetTransform, CommandId::CancelTransform, CommandId::ApplyTransform,
             ]);
             for command in [CommandId::TransformDistort, CommandId::TransformWarp] {

@@ -591,3 +591,10 @@ commands-warp-grid-reset-help = 将变形形状替换为平直网格
 commands-warp-split-help = 点击变形区域，添加网格线而不改变形状
 commands-warp-select-help = 点击选择要一起移动的控制点
 commands-copy-pixels-too-large = 复制的像素将超出图层大小限制
+
+command-transform-again = 再次变换
+command-transform-snapping = 吸附
+commands-transform-again-help = 将上次应用的图层变换应用于所选图层
+commands-transform-snapping-help = 吸附到画布、其他图层和标尺
+commands-transform-again-empty = 请先应用一次图层变换
+commands-transform-again-whole-layer = 请取消像素选区并选择整个图层

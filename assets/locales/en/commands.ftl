@@ -592,3 +592,10 @@ commands-warp-grid-reset-help = Replace the warp shape with a straight grid
 commands-warp-split-help = Tap the warp to add a grid line without changing its shape
 commands-warp-select-help = Tap to select points to move together
 commands-copy-pixels-too-large = The copied pixels would exceed the layer size limit
+
+command-transform-again = Transform Again
+command-transform-snapping = Snap
+commands-transform-again-help = Apply the last layer transform to the selected layers
+commands-transform-snapping-help = Snap to the canvas, other layers and rulers
+commands-transform-again-empty = Apply a layer transform first
+commands-transform-again-whole-layer = Clear the pixel selection and select a whole layer

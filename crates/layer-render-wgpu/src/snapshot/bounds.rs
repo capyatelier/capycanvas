@@ -96,7 +96,7 @@ impl SnapshotGpu {
                 };
                 if !next.is_empty() { candidates.push(next); }
             }
-            if request.scope == ContentScope::Visible {
+            if matches!(request.scope, ContentScope::Visible | ContentScope::PlacedTarget(_)) {
                 for effect in document.layers.iter().filter(|l| document.layer_is_visible(l.id) && l.opacity > 0.)
                     .filter_map(|l| l.effect.as_ref()).filter(|e| e.program.kind == layer_core::EffectKind::Adjustment
                         && e.program.alpha == layer_core::EffectAlpha::Filter)

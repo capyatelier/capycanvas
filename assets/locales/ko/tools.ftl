@@ -163,3 +163,5 @@ tool-tonal-shadows = 어두운 영역 · −5스톱 미만
 tool-tonal-tones = 톤 · 기준 흰색에 대한 스톱
 
 tool-action-group-transform-warp-split = 격자 분할
+
+tools-transform-reference = 위치 기준점

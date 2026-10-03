@@ -499,3 +499,58 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
     assert_eq!(incremental, display_pixels(&r), "global dependencies update pixels far from paint damage");
     }
 }
+
+#[test]
+fn pointwise_curve_edits_reuse_sources_and_bound_window_passes_with_masked_coordinates() {
+    for space in layer_core::BlendSpace::ALL {
+        let mut doc=document_at([2053,1541]);
+        let paint=doc.layers[0].id;
+        let mut curves=effect(97,"curves");
+        curves.opacity=0.7;
+        let mut mask=layer_core::LayerMask::reveal_all(LayerId(98),layer_core::Point{x:17.,y:-9.});
+        mask.initial=Some(layer_core::Selection::polygon(vec![
+            layer_core::Point{x:230.,y:140.},layer_core::Point{x:1750.,y:220.},
+            layer_core::Point{x:1680.,y:1310.},layer_core::Point{x:270.,y:1240.},
+        ]).unwrap());
+        curves.mask=Some(mask);
+        doc.layers.insert(0,curves);
+        let mut window=WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut full=WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let extent=[doc.width,doc.height];
+        for (step,y) in [0.2,0.7,0.4].into_iter().enumerate() {
+            Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("curve_0",EffectValue::Curve(vec![[0.,0.],[0.4,y],[1.,1.]])).unwrap();
+            let mut frame=packet(&doc.layers,extent);frame.blend_space=space;frame.composite_all=false;
+            frame.view.width_px=640;frame.view.height_px=480;
+            frame.view.document_to_surface=[0.5,0.,0.,0.5,-190.,-130.];
+            let whole=FramePacket{view:layer_render::ViewState{width_px:extent[0],height_px:extent[1],document_to_surface:[0.5,0.,0.,0.5,0.,0.],..frame.view},..frame};
+            let updates=window.scene.as_ref().and_then(|scene|scene.scale_sources.entries.get(&paint)).map(|source|source.updates);
+            window.submit(frame).unwrap();full.submit(whole).unwrap();
+            assert_window_matches_full(&window,&full);
+            assert_spatial_storage_reserved(&window,frame);
+            if step>0 {
+                assert_eq!(window.scene.as_ref().unwrap().scale_sources.entries[&paint].updates,updates.unwrap(),"curve edits must not rebuild photo source levels");
+                let cache=window.scale_display.as_ref().unwrap();
+                let expected=1+cache.overview.as_ref().map_or(0,|overview|overview.plan.bounds.subtract(cache.plan.bounds).into_iter().filter(|region|!region.is_empty()).count() as u64);
+                assert_eq!(window.scene.as_ref().unwrap().effect_passes,expected,"one pointwise effect pass per main/overview window, not per tile");
+            }
+        }
+        full.test.reference=true;
+        full.submit(FramePacket{blend_space:space,..packet(&doc.layers,extent)}).unwrap();
+        assert_eq!(exact_pixels(&mut window),exact_pixels(&mut full),"masked coordinates preserve the independent native reference");
+    }
+}
+
+#[test]
+fn pointwise_large_window_keeps_tiled_scratch_admission() {
+    let mut doc=document_at([64,64]);
+    doc.width=8192;doc.height=8192;
+    doc.layers[0].properties.extent=Some([64,64]);
+    doc.layers.insert(0,effect(97,"curves"));
+    let r=WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut frame=packet(&doc.layers,[doc.width,doc.height]);
+    frame.view.width_px=4096;frame.view.height_px=4096;
+    frame.view.document_to_surface=[0.5,0.,0.,0.5,0.,0.];
+    let plan=view_plan(frame,1,Evaluation::Display).unwrap();
+    assert!(use_tiles(&r,plan,frame,None,false,None),"whole-window scratch must not exceed the existing cache budget");
+    assert!(allocation_for(&r,plan,frame,None,false,None).into_iter().sum::<u64>()<=CACHE_BYTES,"tiled fallback remains admitted without full-window scratch");
+}

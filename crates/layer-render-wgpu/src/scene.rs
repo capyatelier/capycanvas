@@ -539,10 +539,7 @@ impl Scene {
     ) -> Result<(), GpuRasterError> {
         let preview = r.preview_layer_id == Some(layer.id)
             && !r.preview_damage.intersect(page_rect(c)).is_empty();
-        let watercolor_preview = preview && packet.dab_batches.iter().any(|b|
-            b.layer_id == layer.id && b.kind == DabBatchKind::Preview
-                && b.style.execution == BrushExecution::Watercolor);
-        let wet_nearby = stored.is_some_and(|stored| (stored.watercolor.is_some() || watercolor_preview)
+        let wet_nearby = stored.is_some_and(|stored| r.watercolor_style(layer.id, packet.dab_batches).is_some()
             && stored
                 .watercolor_wetness_pages
                 .iter()
@@ -993,7 +990,7 @@ impl Scene {
         let layer = &packet.layers[index];
         if layer.properties.placement != layer_core::LayerPlacement::IDENTITY
             || (world_offset(packet.layers, layer.id, false) != layer_core::Point::default()
-                && r.paint_layers.iter().any(|stored| stored.id == layer.id && stored.watercolor.is_some())) {
+                && r.watercolor_style(layer.id, packet.dab_batches).is_some()) {
             return self.placed_tile(r, packet, index, tile, source_level);
         }
         let out = self.alloc(r, wgpu::Color::TRANSPARENT);
@@ -1056,7 +1053,7 @@ impl Scene {
         let mask = layer.mask.as_ref().filter(|m| m.enabled);
         if mask.is_none() && self.placement_display
             && let Some(affine) = layer_core::target_geometry(packet.layers, layer.id).as_affine()
-            && !r.paint_layers.iter().any(|stored| stored.id == layer.id && stored.watercolor.is_some())
+            && r.watercolor_style(layer.id, packet.dab_batches).is_none()
             && scale::placement_level(packet.layers, layer.id) > 0
             && let Some((plan, view)) = self.scale_sources.sample(layer.id, scale::placement_level(packet.layers, layer.id))
         {
@@ -1086,10 +1083,7 @@ impl Scene {
         let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) else {
             return Ok(true);
         };
-        if stored.watercolor.is_some()
-            || packet.dab_batches.iter().any(|b| b.layer_id == layer.id
-                && b.kind == DabBatchKind::Preview && b.style.execution == BrushExecution::Watercolor)
-        {
+        if r.watercolor_style(layer.id, packet.dab_batches).is_some() {
             return Ok(false);
         }
         // Destination-reading previews already contain the complete layer
@@ -1763,7 +1757,8 @@ impl Scene {
                     }
                     let effect = self.jobs[i..end].iter().any(|j| matches!(j, Job::Effect { .. }));
                     let extent = [target.texture().width(), target.texture().height()];
-                    let span = if effect { PAGE_SIZE * 2 } else { extent[0].max(extent[1]) };
+                    let spatial = self.jobs[i..end].iter().any(|j| matches!(j, Job::Effect { prepared, .. } if !prepared.pointwise));
+                    let span = if spatial { PAGE_SIZE * 2 } else { extent[0].max(extent[1]) };
                     let windows = (0..extent[1]).step_by(span as usize).flat_map(|y|
                         (0..extent[0]).step_by(span as usize).map(move |x|
                             PixelRect::new(x, y, (x + span).min(extent[0]), (y + span).min(extent[1]))));

@@ -591,3 +591,10 @@ commands-warp-grid-reset-help = 変形したメッシュをまっすぐなグリ
 commands-warp-split-help = メッシュをタップすると、形を変えずにグリッド線を追加します
 commands-warp-select-help = 一緒に動かすポイントをタップして選択します
 commands-copy-pixels-too-large = コピーしたピクセルがレイヤーのサイズ制限を超えます
+
+command-transform-again = 変形を繰り返す
+command-transform-snapping = スナップ
+commands-transform-again-help = 最後に適用したレイヤー変形を、選択したレイヤーに適用します
+commands-transform-snapping-help = キャンバス、他のレイヤー、定規にスナップします
+commands-transform-again-empty = 先にレイヤーの変形を適用してください
+commands-transform-again-whole-layer = ピクセルの選択を解除して、レイヤー全体を選択してください

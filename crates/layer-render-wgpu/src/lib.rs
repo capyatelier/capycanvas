@@ -491,7 +491,7 @@ struct BrushEncodingContext<'a> {
     batches: &'a [DabBatch],
     dabs: &'a [Dab],
     tiles: &'a [BrushTile],
-    document_extent: [u32; 2],
+    target_extent: [u32; 2],
     target: BrushEncodingTarget,
 }
 
@@ -2161,21 +2161,7 @@ impl WgpuRasterizer {
         for (index, layer) in packet.layers.iter().enumerate() {
             let record_index = packet.dab_batches.len() + index;
             self.layer_style_records.insert(layer.id, record_index as u32);
-            let watercolor = packet
-                .dab_batches
-                .iter()
-                .rev()
-                .find(|batch| {
-                    batch.layer_id == layer.id
-                        && batch.style.execution == BrushExecution::Watercolor
-                })
-                .map(|batch| WatercolorLayerStyle::from_dab_style(&batch.style))
-                .or_else(|| {
-                    self.paint_layers
-                        .iter()
-                        .find(|stored| stored.id == layer.id)
-                        .and_then(|stored| stored.watercolor)
-                });
+            let watercolor = self.watercolor_style(layer.id, packet.dab_batches);
             let record = StyleGpu::layer(packet.document_extent, watercolor);
             let offset = record_index * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
@@ -2186,6 +2172,13 @@ impl WgpuRasterizer {
                 .write(encoder, &self.style_buffer, &self.style_upload)?;
         }
         Ok(())
+    }
+
+    fn watercolor_style(&self, layer_id: LayerId, batches: &[DabBatch]) -> Option<WatercolorLayerStyle> {
+        batches.iter().rev().find(|batch| batch.layer_id == layer_id
+            && batch.style.execution == BrushExecution::Watercolor)
+            .map(|batch| WatercolorLayerStyle::from_dab_style(&batch.style))
+            .or_else(|| self.paint_layers.iter().find(|layer| layer.id == layer_id).and_then(|layer| layer.watercolor))
     }
 
     fn update_watercolor_layer_styles(&mut self, batches: &[DabBatch]) -> PixelRect {
@@ -2387,7 +2380,7 @@ impl WgpuRasterizer {
         batch: &DabBatch,
         context: BrushEncodingContext<'_>,
     ) -> Result<(), GpuRasterError> {
-        let damage = batch_pixel_rect(batch, context.document_extent);
+        let damage = batch_pixel_rect(batch, context.target_extent);
         if batch.dab_count == 0 || damage.is_empty() {
             return Ok(());
         }
@@ -2401,7 +2394,7 @@ impl WgpuRasterizer {
             let watercolor_last = plan.state.watercolor_wetness
                 && is_last_watercolor_update_batch(context.batches, batch_index);
             let watercolor_damages = (watercolor_first || watercolor_last).then(|| {
-                watercolor_update_damages(context.batches, batch_index, context.document_extent)
+                watercolor_update_damages(context.batches, batch_index, context.target_extent)
             });
             if watercolor_first {
                 self.begin_watercolor_wetness_update(
@@ -3533,7 +3526,7 @@ impl WgpuRasterizer {
             let visual_dirty = if batch.style.execution == BrushExecution::Watercolor {
                 batch_dirty.expand(
                     WatercolorLayerStyle::from_dab_style(&batch.style).radius(),
-                    packet.document_extent,
+                    self.target_extent(batch.layer_id),
                 )
             } else if pointwise(&batch.style) && !batch.style.rendering.edge_after_stroke {
                 // Prediction retirement must use the same bounded footprint as
@@ -3829,7 +3822,7 @@ impl WgpuRasterizer {
                     batches: packet.dab_batches,
                     dabs: packet.dabs,
                     tiles: &batch_tiles[index],
-                    document_extent: self.target_extent(batch.layer_id),
+                    target_extent: self.target_extent(batch.layer_id),
                     target: BrushEncodingTarget::Persistent,
                 },
             )?;
@@ -4090,7 +4083,7 @@ impl WgpuRasterizer {
                         batches: packet.dab_batches,
                         dabs: packet.dabs,
                         tiles: &batch_tiles[index],
-                        document_extent: self.target_extent(batch.layer_id),
+                        target_extent: self.target_extent(batch.layer_id),
                         target: BrushEncodingTarget::Preview {
                             from_persistent: new_preview_from_persistent,
                         },
@@ -4098,6 +4091,7 @@ impl WgpuRasterizer {
                 )?;
             }
         }
+        if preview_is_watercolor { self.canonicalize_preview_watercolor(&mut encoder)?; }
         if let Some(started) = started { cpu_phases[3] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.composition");
         self.telemetry.phase_end(1, &mut encoder);
@@ -5658,6 +5652,7 @@ mod tests {
         let mut parameters = program.parameters.to_vec();
         parameters.extend([
             layer_core::EffectParameter {
+                page: None, visible_when: None, soft_bounds: None, mapping: Default::default(),
                 key: "animate".into(),
                 label: "Animate".into(),
                 section: Some("Animation".into()),
@@ -5665,6 +5660,7 @@ mod tests {
                 default: layer_core::EffectValue::Toggle(true),
             },
             layer_core::EffectParameter {
+                page: None, visible_when: None, soft_bounds: None, mapping: Default::default(),
                 key: "time".into(),
                 label: "Frozen time".into(),
                 section: Some("Animation".into()),

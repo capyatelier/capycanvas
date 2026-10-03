@@ -60,6 +60,20 @@ shader identities are independent of labels. Property views supply raw
 controls by identity even when translated headings match. User layer names and
 literal resource metadata remain saved text when the application language changes.
 
+Programs may declare up to 16 ordered `pages`, each with a unique nonempty `id`
+and a `ResourceLabel` label. A parameter's optional `page` names one of them;
+parameters without a page remain visible across pages. `visible_when` compares
+one named Toggle or Choice with a validated `EffectValue`. It cannot refer to
+the parameter itself. Hidden parameters retain their values and remain active
+in rendering.
+
+Numeric parameters may provide `soft_bounds: [minimum, maximum]` within their
+hard bounds and `mapping: {"type":"linear"}`, `{"type":"log"}` or
+`{"type":"power","exponent":2}`. Power exponents range from 0.125 to 8;
+logarithmic ranges must be positive. These fields control the shared slider;
+text entry retains the hard range. Pages and presentation metadata do not change
+the shader parameter layout or ABI.
+
 `program.resolution` declares the input resolution permitted for interactive
 composition. The default, `"native"`, requires document-resolution evaluation.
 `"display"` permits evaluation on the compositor's reduced grid. Positions and

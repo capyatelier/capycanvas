@@ -28,6 +28,7 @@ pub(crate) struct NativeEdit {
     validator: validate::Validator,
     colors: Vec<wgpu::Texture>,
     scalars: Vec<wgpu::Texture>,
+    preview_scalars: Option<(NativeEncodeStatus, Vec<wgpu::Buffer>)>,
 }
 impl NativeEdit {
     fn new(r: &WgpuRasterizer, transfer: NativeTransfer) -> Self {
@@ -82,6 +83,7 @@ impl NativeEdit {
             transfer,
             colors,
             scalars,
+            preview_scalars: None,
             color: if in_place {
                 NativeTileEncoder::validated_in_place(&r.device)
             } else {
@@ -119,6 +121,7 @@ impl NativeEdit {
             + self.scalar.storage_bytes()
             + self.colors.iter().map(texture_bytes).sum::<u64>()
             + self.scalars.iter().map(texture_bytes).sum::<u64>()
+            + self.preview_scalars.as_ref().map_or(0, |(_, buffers)| STATUS_BYTES + buffers.iter().map(wgpu::Buffer::size).sum::<u64>())
         // Transfer storage is owned/accounted by the shared scene decoder cache.
     }
     pub(crate) fn image_pixel_budget(&self, resident: u64) -> u64 {
@@ -165,6 +168,47 @@ impl Drop for NativeFrame {
 }
 
 impl WgpuRasterizer {
+    pub(crate) fn canonicalize_preview_watercolor(&mut self, encoder: &mut submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        let depth = self.document_color().depth.coverage();
+        let Some(native) = self.native_edit.as_mut() else { return Ok(()); };
+        let textures = self.preview_watercolor_wetness_pages.iter()
+            .filter(|page| !self.preview_damage.intersect(page_rect(page.coordinate)).is_empty())
+            .map(|page| &page.active().texture).collect::<Vec<_>>();
+        if textures.is_empty() { return Ok(()); }
+        let (status, buffers) = native.preview_scalars.get_or_insert_with(|| (NativeEncodeStatus::new(&self.device), Vec::new()));
+        while buffers.len() < textures.len().min(MAX_BATCH_TILES) {
+            buffers.push(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("watercolor preview native coverage"),
+                size: u64::from(PAGE_SIZE).pow(2) * depth.bytes() as u64,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }));
+        }
+        status.reset(encoder);
+        let mut views = Default::default();
+        for chunk in textures.chunks(MAX_BATCH_TILES) {
+            let requests = chunk.iter().enumerate().map(|(index, &texture)| NativeScalarRequest {
+                working: texture, encoded: &buffers[index], canonical: native.scalars.get(index).unwrap_or(texture),
+                depth, region: [0, 0, PAGE_SIZE, PAGE_SIZE],
+            }).collect::<Vec<_>>();
+            let scalar = native.scalar.prepare(&self.device, &requests, status, &mut views)?;
+            let promotions = requests.iter().map(|request| NativePromotion {
+                canonical: request.canonical, working: request.working, region: request.region,
+            }).collect::<Vec<_>>();
+            let promotions = native.promoter.as_ref().map(|promoter|
+                promoter.prepare(&self.device, &promotions, status, &mut views)).transpose()?;
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                native.scalar.encode(&mut pass, &scalar);
+            }
+            if let (Some(promoter), Some(promotions)) = (&native.promoter, promotions) {
+                encoder.reserve_passes(promotions.pass_count());
+                promoter.encode(encoder, &promotions);
+            }
+        }
+        Ok(())
+    }
+
     /// Admitted display, decoded-source and in-flight upload ceilings in bytes.
     pub fn display_memory_limits(&self) -> [u64; 3] {
         let display = self.native_edit.as_ref().map_or(0, |n| n.display_complete_bytes);

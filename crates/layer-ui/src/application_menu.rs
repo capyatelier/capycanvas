@@ -149,7 +149,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .map(command)
                     .collect(),
                 [CommandId::ApplyTransformPixels, CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
-                vec![command(CommandId::ScaleRotate)],
+                vec![command(CommandId::ScaleRotate), command(CommandId::TransformAgain)],
                 vec![ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_IMAGE), vec![
                     [CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize, CommandId::ImageSize].map(command).into(),
                     [CommandId::RotateImageLeft, CommandId::RotateImageRight, CommandId::RotateImage180].map(command).into(),

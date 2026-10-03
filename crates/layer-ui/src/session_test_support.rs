@@ -31,6 +31,8 @@ pub(crate) struct Recorder {
     pub(crate) bounds_reply: Option<Result<layer_core::Rect, BackendError>>,
     pub(crate) bounds_cancels: usize,
     pub(crate) bounds_wait: bool,
+    pub(crate) bounds_fails: bool,
+    pub(crate) bounds_attempts: usize,
     pub(crate) snapshot_requests: Vec<layer_render::SnapshotRequest>,
     pub(crate) snapshot_reply: Option<Result<layer_render::SnapshotResult, BackendError>>,
     pub(crate) snapshot_cancels: usize,
@@ -115,6 +117,8 @@ impl CanvasRenderer for Recorder {
         self.snapshot_reply = None;
     }
     fn request_content_bounds(&mut self, request: layer_core::ContentBoundsRequest) -> Result<bool, Self::Error> {
+        self.bounds_attempts += 1;
+        if self.bounds_fails { return Err(BackendError("bounds request failed")); }
         if self.bounds_wait { return Ok(false); }
         self.bounds_requests.push(request);
         Ok(true)

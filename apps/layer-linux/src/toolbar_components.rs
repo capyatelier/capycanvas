@@ -395,11 +395,13 @@ pub(crate) enum Field {
     Choice(gtk::DropDown),
     Menu(gtk::MenuButton, gtk::Image, gtk::Label),
     Segments(Vec<gtk::ToggleButton>),
+    Extra(crate::tool_extra::ExtraField),
     Action(gtk::Button),
 }
 impl Field {
     pub(crate) fn update(&self, option: &ToolOption, localization: &std::sync::Arc<layer_ui::Localizer>) {
         match (self, option) {
+            (Field::Extra(field), option) => field.refresh(option),
             (Field::Numeric(number), ToolOption::Numeric(f)) => {
                 number.set_caption(&f.label, &f.tooltip_localized(localization), localization.clone());
                 number.set_value(f.value as f64);
@@ -508,6 +510,8 @@ pub(crate) fn segment_buttons(
     send: impl Fn(UiAction) + Clone + 'static,
 ) -> Vec<gtk::ToggleButton> {
     row.add_css_class("linked");
+    row.add_css_class("selection-modes");
+    if captions { row.add_css_class("labeled"); }
     row.update_property(&[gtk::accessible::Property::Label(label)]);
     let mut buttons: Vec<gtk::ToggleButton> = Vec::new();
     for item in items {
@@ -1248,13 +1252,18 @@ impl Component {
                 row.append(&number);
                 Field::Numeric(number)
             }
+            ToolOption::Choice { segmented: true, columns: Some(_), .. } => {
+                let field = crate::tool_extra::ExtraField::new(w, option, context);
+                row.append(&field.root);
+                Field::Extra(field)
+            }
             ToolOption::Choice {
                 id,
                 label,
                 segmented: true,
                 items,
+                ..
             } => {
-                row.add_css_class("selection-modes");
                 row.add_css_class("option-segments");
                 row.set_spacing(0);
                 row.set_homogeneous(true);
@@ -1273,6 +1282,7 @@ impl Component {
                 label,
                 segmented: false,
                 items,
+                ..
             } => {
                 // Store the core icon alongside each label in a native model.
                 let model = gtk::gio::ListStore::new::<glib::BoxedAnyObject>();

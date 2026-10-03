@@ -33,6 +33,14 @@ levels cannot supply linear transform inputs. Source identity, immutable native 
 and retired prediction footprints invalidate the affected pages at every level.
 Brush invalidation reuses the painting tile plan, preserving untouched pages
 inside a contact batch's bounding rectangle.
+Paint and watercolor prediction pages use the target layer's local extent,
+including photo pixels beyond the canvas dimensions. Placement maps their
+damage into document coordinates for composition. Prediction and committed
+paint share the current packet's watercolor style in placement, reduction and
+composition; a provisional stroke leaves the retained material metadata intact.
+The native scalar encoder rounds provisional wetness to the document's coverage
+precision before placement and edge evaluation, using bounded reusable buffers.
+This keeps a wet edge from changing when the stroke becomes permanent.
 One current native backing is retained per source, rather than per level.
 Each image carries its native extent, resident bounds and texel footprint.
 Source windows cover the inverse-mapped output with page-aligned sampling
@@ -117,8 +125,10 @@ resolution. Retained root images have viewport bounds; finite-radius filters
 expand their input and branch bounds by the sum of their scaled pass supports.
 Source preparation, scratch allocation and admission use those same padded
 bounds. Dense filter scratch reserves the expression graph's peak live images,
-including held masks and intermediate passes. Pointwise
-temporary results reuse 256-texel working tiles at every resolution. Every value and output carries its own grid,
+including held masks and intermediate passes. Reduced pointwise effects use the
+whole input window when its sources and graph scratch fit the same allowance.
+Larger stacks and native-resolution pointwise evaluation reuse 256-texel working
+tiles. Every value and output carries its own grid,
 so a tile can compose directly into a viewport image without changing document
 coordinates. Aligned native sources borrow paint or decoded tiles directly.
 Decoded tiles carry leases until their consuming commands are encoded; eviction
@@ -142,10 +152,11 @@ Document-wide effects retain whole-document dependency coverage at reduced
 resolution. Finite-radius filters preserve document-edge sampling while evaluating
 the requested output window and its complete input support. Native queries and
 idle refinement still use exact document pixels.
-Effect render passes cover at most 512 × 512 texels, with the complete input grid
+Spatial effect render passes cover at most 512 × 512 texels, with the complete input grid
 and unchanged sampling coordinates. Shorter passes let native controls share the
 GPU during expensive filters; their load/store cost remains part of the preview
-budget.
+budget. Fused pointwise effects share one pass across the target, avoiding repeated
+attachment loads and driver command work for independent regions.
 Retained windows are admitted again when their source requirements change.
 Presentation regeneration advances display damage independently of the artwork
 revision used by document previews; camera motion does not publish an artwork edit.

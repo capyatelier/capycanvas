@@ -1,5 +1,9 @@
 //! Effect catalog, properties and navigation policy shared by every native view.
 use super::*;
+#[path = "effects/curves.rs"]
+mod curves;
+pub use curves::{CurveAxis,CurveAxisView,CurveControls,CurveCoordinateControl,CurveDomain};
+pub(super) use curves::PropertyEditorState;
 use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, Layer, ResourceLabel};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -50,6 +54,7 @@ fn validate_label(label: &ResourceLabel, l: &Localizer) -> Result<(), String> {
 }
 fn validate_program_labels(program: &layer_core::EffectProgram, l: &Localizer) -> Result<(), String> {
     validate_label(&program.label, l)?;
+    for page in program.pages.iter(){validate_label(&page.label,l)?;}
     for parameter in program.parameters.iter() {
         validate_label(&parameter.label, l)?;
         if let Some(section) = &parameter.section { validate_label(section, l)?; }
@@ -254,6 +259,12 @@ fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EffectAction {
+    SelectPage { layer:u64, page:String },
+    CurveSelectPoint { layer:u64, key:String, epoch:u64, index:Option<usize> },
+    CurveRemoveAt { layer:u64, key:String, epoch:u64, point:[f32;2], extent:[f32;2], point_count:Option<usize> },
+    CurveContact { layer:u64, key:String, epoch:u64, phase:ContactPhase, point:[f32;2], extent:[f32;2] },
+    CurveKey { layer:u64, key:String, epoch:u64, key_event:String, pressed:bool, repeat:bool, modifiers:Modifiers },
+    CurveNumber { layer:u64, key:String, epoch:u64, axis:CurveAxis, operation:NumericOperation },
     CancelFilter,
     UseCurrentColor { layer: u64, key: String },
     /// Live property editing uses the same validation as individual actions,
@@ -361,6 +372,9 @@ pub(super) fn catalog(
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct LayerPropertiesView {
+    pub pages:Vec<PropertyPageView>,
+    pub page:Option<String>,
+    pub epoch:u64,
     pub layer: Option<u64>,
     pub title: String,
     pub description: String,
@@ -370,8 +384,12 @@ pub struct LayerPropertiesView {
     pub curve_max: Option<f32>,
     pub curve_white: Option<f32>,
 }
+#[derive(Clone,Debug,PartialEq,Serialize)]
+pub struct PropertyPageView { pub id:String, pub label:String }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PropertyControl {
+    pub curve:Option<CurveControls>,
+    pub page:Option<String>,
     pub plot: Vec<[f32; 2]>,
     pub key: String,
     pub label: String,
@@ -387,6 +405,8 @@ pub struct PropertyControl {
 impl PropertyControl {
     pub(super) fn new(key: &str, label: &str, kind: PropertyKind, value: EffectValue, default: EffectValue) -> Self {
         Self {
+            curve:None,
+            page:None,
             plot: Vec::new(),
             key: key.into(),
             label: label.into(),
@@ -437,6 +457,8 @@ pub(super) fn number_control(p: &layer_core::EffectParameter) -> Option<NumericC
         return None;
     };
     let mut numeric = NumericControl::number(*min as f64, *max as f64, *step as f64, *decimals as u32).unit(unit);
+    numeric.mapping=p.mapping;
+    if let Some([low,high])=p.soft_bounds {numeric.soft_min=low;numeric.soft_max=high;}
     // Percentages express an amount, not an item count, even when the
     // displayed range is short. Keep their compact slider presentation.
     if unit.as_ref() == "%" {
@@ -476,6 +498,7 @@ fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &
     });
     PropertyControl {
         plot,
+        page:p.page.as_ref().map(|id|id.to_string()),
         section: p.section.as_ref().map(|s| resource_label(s, l).to_string()),
         section_id: p.section.clone(),
         color_action,
@@ -518,6 +541,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
                 .parameters
                 .iter()
                 .zip(&effect.values)
+                .filter(|(p,_)|p.visible_when.as_ref().is_none_or(|condition|effect.value(&condition.key)==Some(&condition.value)))
                 .map(|(p, v)| control(layer.id.0, p, v.clone(), l)),
         );
         if effect.program.id.as_ref() == "curves" {
@@ -565,6 +589,28 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
         controls,
         curve_max,
         curve_white,
+        ..LayerPropertiesView::default()
+    }
+}
+pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,state:&mut PropertyEditorState,gesture:Option<&EffectGesture>,l:&Localizer) {
+    let effect=if doc.active_mask {None} else {view.layer.and_then(|id|doc.layer(layer_core::LayerId(id))).and_then(|layer|layer.effect.as_ref())};
+    view.pages=effect.map_or_else(Vec::new,|effect|effect.program.pages.iter().map(|page|PropertyPageView{id:page.id.to_string(),label:resource_label(&page.label,l).to_string()}).collect());
+    state.sync(doc.id.clone(),view.layer,doc.revision,view.pages.iter().map(|page|page.id.clone()).collect(),gesture.is_some());
+    view.epoch=state.epoch;view.page=state.page().map(str::to_string);
+    view.controls.retain(|control|control.page.as_deref().is_none_or(|page|Some(page)==state.page()));
+    let domain=effect.filter(|effect|effect.choice("domain")==Some("Log HDR")).and_then(|effect|match effect.value("hdr_stops"){Some(EffectValue::Number(stops))=>Some(CurveDomain::LogHdr{stops:*stops}),_=>None}).unwrap_or(CurveDomain::Encoded);
+    for control in &mut view.controls {
+        let EffectValue::Curve(points)=&control.value else{continue;};
+        let selected=if gesture.is_some_and(|gesture|gesture.key==control.key && gesture.detached_curve_point){None}else{state.selected(&control.key,points)};
+        let coordinate=|axis:CurveAxis,index:usize| {
+            let graph=points[index][usize::from(axis==CurveAxis::Output)];let value=domain.decode(f64::from(graph));
+            CurveCoordinateControl{value,text:domain.text(graph),read_only:axis==CurveAxis::Input && (index==0 || index+1==points.len()),
+                ev:matches!(domain,CurveDomain::LogHdr{..}).then(||if value==0.{l.text(MessageId::RESOURCES_PARAMETER_LEVELS_BLACK).to_string()}else{format!("{:.2} EV",value.log2())})}
+        };
+        let axis=|label|CurveAxisView{label:l.text(label).to_string(),minimum:domain.axis_text(0.),maximum:domain.axis_text(1.),white:matches!(domain,CurveDomain::LogHdr{..}).then(||domain.encode(1.) as f32)};
+        control.curve=Some(CurveControls{epoch:state.epoch,numeric:domain.numeric(),selected,input:selected.map(|index|coordinate(CurveAxis::Input,index)),output:selected.map(|index|coordinate(CurveAxis::Output,index)),
+            axes:[axis(MessageId::RESOURCES_SECTION_LEVELS_INPUT),axis(MessageId::RESOURCES_SECTION_LEVELS_OUTPUT)],domain,
+            help:l.text(MessageId::RESOURCES_CURVES_HELP).to_string(),reset_label:l.text(MessageId::RESOURCES_CURVES_RESET).to_string()});
     }
 }
 pub(super) struct EffectGesture {
@@ -595,8 +641,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         phase: ContactPhase,
         action: EffectAction,
     ) -> Result<(), String> {
+        if let EffectAction::CurveNumber{layer,key,epoch,..}=&action
+            && !self.curve_action_target(*layer,key,*epoch) {return Ok(());}
         let (layer, key) = match &action {
             EffectAction::CurvePoint { layer, key, .. }
+            | EffectAction::CurveNumber { layer, key, .. }
+            | EffectAction::Number { layer, key, .. }
             | EffectAction::GradientStop { layer, key, .. }
             | EffectAction::Set {
                 layer,
@@ -661,6 +711,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if phase == ContactPhase::Up {
             let gesture = self.effect_gesture.take().unwrap();
+            if gesture.detached_curve_point {self.property_editor.clear_selection(&gesture.key);}
             let edited = self
                 .engine
                 .document()
@@ -676,6 +727,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if changed {
                 self.layer_edit(Edit::ReplaceLayer(Box::new(edited)))?;
             }
+            self.property_editor.commit_revision(self.engine.document().revision);
         }
         Ok(())
     }
@@ -686,10 +738,97 @@ impl<R: CanvasRenderer> UiSession<R> {
         effect.value(key).cloned().ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_PROPERTY).to_string())
     }
 
+    fn curve_action_target(&self,layer:u64,key:&str,epoch:u64)->bool {
+        self.property_editor.accepts(layer,epoch) && self.state.layer_properties.layer==Some(layer)
+            && self.state.layer_properties.controls.iter().any(|control|control.key==key && matches!(control.kind,PropertyKind::Curve))
+    }
     pub(super) fn effect_action(&mut self, action: EffectAction) -> Result<(), String> {
         if let Some(result) = self.mask_property_action(&action) { return result; }
+
         if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_ARTWORK_REQUIRED).to_string());}
         match action {
+            EffectAction::SelectPage{layer,page}=> {
+                if self.state.layer_properties.layer!=Some(layer) || self.state.layer_properties.page.as_deref()==Some(&page)
+                    || !self.state.layer_properties.pages.iter().any(|candidate|candidate.id==page){return Ok(());}
+                self.cancel_effect_gesture()?;
+                self.property_editor.select_page(layer,&page);
+                self.refresh_document();return Ok(());
+            }
+            EffectAction::CurveSelectPoint{layer,key,epoch,index}=> {
+                if !self.curve_action_target(layer,&key,epoch){return Ok(());}
+                let EffectValue::Curve(points)=self.effect_parameter(layer,&key)? else{return Ok(());};
+                self.property_editor.select(layer,epoch,&key,index,&points);self.refresh_document();return Ok(());
+            }
+            EffectAction::CurveNumber{layer,key,epoch,axis,operation}=> {
+                if !self.curve_action_target(layer,&key,epoch){return Ok(());}
+                let EffectValue::Curve(points)=self.effect_parameter(layer,&key)? else{return Ok(());};
+                let Some(index)=self.property_editor.selected(&key,&points) else{return Ok(());};
+                let Some(control)=self.state.layer_properties.controls.iter().find(|control|control.key==key).and_then(|control|control.curve.as_ref()) else{return Ok(());};
+                if matches!(operation,NumericOperation::Format){return Ok(());}
+                let domain=control.domain;let old=domain.decode(f64::from(points[index][usize::from(axis==CurveAxis::Output)]));
+                if matches!(operation,NumericOperation::Value{value} if value==old) {return Ok(());}
+                let resolved=domain.numeric().resolve(old,operation).map_err(|_|self.state.localization.text(MessageId::RESOURCES_ERROR_INVALID_CURVE_COORDINATE).to_string())?;
+                let Some(point)=curves::numeric_point(&points,index,axis,domain,resolved.value) else{return Ok(());};
+                return self.effect_action(EffectAction::CurvePoint{layer,key,index:Some(index),point,remove:false});
+            }
+            EffectAction::CurveRemoveAt{layer,key,epoch,point,extent,point_count}=> {
+                if !self.curve_action_target(layer,&key,epoch){return Ok(());}
+                let EffectValue::Curve(points)=self.effect_parameter(layer,&key)? else{return Ok(());};
+                if point_count.is_some_and(|count|count!=points.len()){return Ok(());}
+                let Some(index)=curves::hit(&points,point,extent) else{return Ok(());};
+                if index==0 || index+1==points.len(){return Ok(());}
+                self.cancel_effect_gesture()?;
+                self.effect_action(EffectAction::CurvePoint{layer,key,index:Some(index),point:points[index],remove:true})?;
+                self.refresh_document();return Ok(());
+            }
+            EffectAction::CurveContact{layer,key,epoch,phase,point,extent}=> {
+                if !self.curve_action_target(layer,&key,epoch){return Ok(());}
+                if phase==ContactPhase::Cancel {self.property_editor.end_contact();self.cancel_effect_gesture()?;return Ok(());}
+                if point.iter().any(|v|!v.is_finite()) || extent.iter().any(|v|!v.is_finite() || *v<=0.) {return Ok(());}
+                let EffectValue::Curve(points)=self.effect_parameter(layer,&key)? else{return Ok(());};
+                if phase==ContactPhase::Down {
+                    self.cancel_effect_gesture()?;
+                    let index=curves::hit(&points,point,extent).or_else(||points.iter().enumerate().filter(|(_,p)|(p[0]-point[0]/extent[0]).abs()<=0.002).min_by(|a,b|(a.1[0]-point[0]/extent[0]).abs().total_cmp(&(b.1[0]-point[0]/extent[0]).abs())).map(|(index,_)|index));
+                    if let Some(index)=index {
+                        self.property_editor.begin_contact(&key,index,point,extent,points[index]);
+                        return self.effect_gesture_action(phase,EffectAction::CurvePoint{layer,key,index:Some(index),point:points[index],remove:false});
+                    }
+                    let graph=[(point[0]/extent[0]).clamp(0.,1.),(1.-point[1]/extent[1]).clamp(0.,1.)];
+                    if points.len()>=32 || graph[0]<=0. || graph[0]>=1. {return Ok(());}
+                    self.effect_gesture_action(phase,EffectAction::CurvePoint{layer,key:key.clone(),index:None,point:graph,remove:false})?;
+                    let EffectValue::Curve(inserted)=self.effect_parameter(layer,&key)? else{return Ok(());};
+                    let Some(index)=inserted.iter().position(|p|p[0]==graph[0]) else{return Ok(());};
+                    self.property_editor.begin_contact(&key,index,point,extent,inserted[index]);return Ok(());
+                }
+                let Some(index)=self.property_editor.contact_index(&key) else{return Ok(());};
+                let Some(graph)=self.property_editor.contact_point(&key,point) else{return Ok(());};
+                self.effect_gesture_action(phase,EffectAction::CurvePoint{layer,key,index:Some(index),point:graph,remove:false})?;
+                if phase==ContactPhase::Up {self.property_editor.end_contact();}return Ok(());
+            }
+            EffectAction::CurveKey{layer,key,epoch,key_event,pressed,repeat:_,modifiers}=> {
+                if !self.curve_action_target(layer,&key,epoch){return Ok(());}
+                if key_event=="Escape" && pressed {self.property_editor.end_contact();self.cancel_effect_gesture()?;return Ok(());}
+                let EffectValue::Curve(points)=self.effect_parameter(layer,&key)? else{return Ok(());};
+                let Some(index)=self.property_editor.selected(&key,&points) else{return Ok(());};
+                let action=|point,remove|EffectAction::CurvePoint{layer,key:key.clone(),index:Some(index),point,remove};
+                if !pressed {
+                    if self.property_editor.release_key(&key_event){self.effect_gesture_action(ContactPhase::Up,action(points[index],false))?;}return Ok(());
+                }
+                if modifiers.command || modifiers.alt{return Ok(());}
+                if matches!(key_event.as_str(),"Delete"|"Backspace") {
+                    self.cancel_effect_gesture()?;
+                    return self.effect_action(action(points[index],true));
+                }
+                let (axis,direction)=match key_event.as_str(){"ArrowLeft"=>(0,-1.),"ArrowRight"=>(0,1.),"ArrowUp"=>(1,1.),"ArrowDown"=>(1,-1.),_=>return Ok(())};
+                if axis==0 && (index==0 || index+1==points.len()){return Ok(());}
+                if self.property_editor.key().is_some_and(|old|old!=key_event) {
+                    self.effect_gesture_action(ContactPhase::Up,action(points[index],false))?;
+                }
+                let phase=if self.property_editor.key()==Some(key_event.as_str()){ContactPhase::Move}else{ContactPhase::Down};
+                let mut point=points[index];point[axis]+=(if modifiers.shift{10.}else{1.})*direction/255.;
+                if axis==0 {let Some(x)=curves::point_between(point[0],points[index-1][0],points[index+1][0]) else{return Ok(());};point[0]=x;}else{point[1]=point[1].clamp(0.,1.);}
+                self.property_editor.press_key(&key_event);return self.effect_gesture_action(phase,action(point,false));
+            }
             EffectAction::CancelFilter => {
                 let doc = self.engine.document();
                 if let Some(layer) = doc.layer(doc.active_layer).filter(|l| l.effect.is_some()) {
@@ -775,6 +914,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 let dragging = self.effect_gesture.as_ref().filter(|g| g.original.id.0 == layer && g.key == key);
                 let detached = dragging.is_some_and(|g| g.detached_curve_point);
+                if !detached && !remove && index.is_some_and(|index| points.get(index)==Some(&point)) {return Ok(());}
                 let off_graph = dragging.is_some()
                     && point.iter().any(|v| !(-CURVE_DETACH_MARGIN..=1. + CURVE_DETACH_MARGIN).contains(v));
                 if let Some(i) = index {
@@ -785,22 +925,25 @@ impl<R: CanvasRenderer> UiSession<R> {
                         if off_graph {
                             return Ok(());
                         }
-                        points.insert(i, [point_between(point[0], points[i - 1][0], points[i][0]), point[1].clamp(0., 1.)]);
+                        points.insert(i, [curves::point_between(point[0], points[i - 1][0], points[i][0]).ok_or_else(||self.state.localization.text(MessageId::RESOURCES_ERROR_INVALID_CURVE_COORDINATE).to_string())?, point[1].clamp(0., 1.)]);
                         self.effect_gesture.as_mut().unwrap().detached_curve_point = false;
                     } else if remove {
                         if i > 0 && i + 1 < points.len() {
                             points.remove(i);
+                            self.property_editor.clear_selection(&key);
                         }
                     } else if off_graph && i > 0 && i + 1 < points.len() {
                         points.remove(i);
                         self.effect_gesture.as_mut().unwrap().detached_curve_point = true;
                     } else {
-                        let x = if i == 0 {
+                        let x = if point[0] == points[i][0] {
+                            points[i][0]
+                        } else if i == 0 {
                             0.
                         } else if i + 1 == points.len() {
                             1.
                         } else {
-                            point_between(point[0], points[i - 1][0], points[i + 1][0])
+                            curves::point_between(point[0], points[i - 1][0], points[i + 1][0]).unwrap_or(points[i][0])
                         };
                         points[i] = [x, point[1].clamp(0., 1.)];
                     }

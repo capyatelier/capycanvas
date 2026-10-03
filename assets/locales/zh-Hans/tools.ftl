@@ -163,3 +163,5 @@ tool-tonal-shadows = 阴影 · 低于 −5 档
 tool-tonal-tones = 明暗 · 相对于参考白的档数
 
 tool-action-group-transform-warp-split = 拆分网格
+
+tools-transform-reference = 位置参考点

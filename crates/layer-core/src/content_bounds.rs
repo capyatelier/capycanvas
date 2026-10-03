@@ -7,6 +7,7 @@ pub enum ContentScope {
     Visible,
     All,
     Target(LayerId),
+    PlacedTarget(LayerId),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,7 +20,18 @@ pub struct ContentBoundsRequest {
 impl ContentBoundsRequest {
     pub fn new(document: &Document, scope: ContentScope) -> Self {
         let mut document = document.clone();
-        document.layers = if let ContentScope::Target(id) = scope
+        document.layers = if let ContentScope::PlacedTarget(id) = scope {
+            let mut members = document.layer_subtrees(&[id]);
+            let mut parent = document.layer(id).and_then(|layer| layer.properties.parent);
+            while let Some(id) = parent {
+                members.insert(id);
+                parent = document.layer(id).and_then(|layer| layer.properties.parent);
+            }
+            document.active_layer = id;
+            document.active_mask = false;
+            document.selection = None;
+            document.layers.iter().filter(|layer| members.contains(&layer.id)).map(crate::Layer::composite_snapshot).collect()
+        } else if let ContentScope::Target(id) = scope
             && let Some(owner) = document.target_owner(id)
         {
             let mut layer = owner.composite_snapshot();
@@ -56,6 +68,10 @@ pub struct ContentBoundsCache {
 impl ContentBoundsCache {
     pub fn get(&self, request: &ContentBoundsRequest) -> Option<Rect> {
         self.entries.iter().find(|(key, _)| key == request).map(|(_, bounds)| *bounds)
+    }
+    pub fn current(&self, document: &Document, scope: ContentScope) -> Option<Rect> {
+        self.entries.iter().find(|(key, _)| key.document.id == document.id
+            && key.document.revision == document.revision && key.scope == scope).map(|(_, bounds)| *bounds)
     }
     pub fn insert(&mut self, request: ContentBoundsRequest, bounds: Rect) {
         self.entries.retain(|(key, _)| key.document.id == request.document.id

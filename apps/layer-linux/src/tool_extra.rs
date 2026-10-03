@@ -18,25 +18,35 @@ impl Drop for ExtraField {
 impl ExtraField {
     pub fn new(w: &Rc<Workspace>, option: &ToolOption, context: ToolbarContext) -> Self {
         let ToolOption::Choice {
-            id, label, items, segmented: true,
+            id, label, items, columns, segmented: true, ..
         } = option
         else {
             unreachable!("additional segmented tool choice")
         };
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         root.set_homogeneous(true);
-        root.add_css_class("linked");
+        if columns.is_none() { root.add_css_class("linked"); }
         root.add_css_class("selection-modes");
         root.set_widget_name(&format!("tool-choice-bar-{id}"));
         root.update_property(&[gtk::accessible::Property::Label(label)]);
+        root.set_tooltip_text(Some(label));
+        let grid = columns.map(|_| {
+            root.add_css_class("choice-grid");
+            root.set_hexpand(false);
+            root.set_halign(gtk::Align::Start);
+            root.set_valign(gtk::Align::Center);
+            let grid = gtk::Grid::new();
+            grid.set_column_homogeneous(true); grid.set_row_homogeneous(true);
+            root.append(&grid); grid
+        });
         let updating = Rc::new(Cell::new(false));
         let mut buttons: Vec<gtk::ToggleButton> = Vec::new();
         for (index, item) in items.iter().enumerate() {
             let button = gtk::ToggleButton::new();
             let icon = crate::icons::image(&format!("layer-{}-symbolic", item.icon));
-            icon.set_pixel_size(20);
+            icon.set_pixel_size(if columns.is_some() { 6 } else { 20 });
             button.set_child(Some(&icon));
-            button.set_size_request(24, 36);
+            button.set_size_request(if columns.is_some() { 18 } else { 24 }, if columns.is_some() { 18 } else { 36 });
             button.set_hexpand(true);
             button.set_widget_name(&format!("tool-choice-{id}-{index}"));
             button.set_tooltip_text(Some(&item.label));
@@ -59,7 +69,10 @@ impl ExtraField {
                     }
                 }
             ));
-            root.append(&button);
+            if let (Some(grid), Some(columns)) = (&grid, columns) {
+                let width = usize::from(*columns).max(1);
+                grid.attach(&button, (index % width) as i32, (index / width) as i32, 1, 1);
+            } else { root.append(&button); }
             buttons.push(button);
         }
         let field = Self { root, buttons, updating };

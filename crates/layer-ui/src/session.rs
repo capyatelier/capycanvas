@@ -103,7 +103,7 @@ mod renderer_lifecycle;
 pub use document_files::*;
 pub use effects::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
-    LayerPropertiesView, PropertyControl, PropertyKind,
+    LayerPropertiesView, PropertyControl, PropertyKind, PropertyPageView, CurveAxis, CurveAxisView, CurveControls, CurveCoordinateControl, CurveDomain,
 };
 pub use filter_loading::FilterLoadState;
 
@@ -194,6 +194,7 @@ pub struct UiSession<R: CanvasRenderer> {
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
     effect_gesture: Option<effects::EffectGesture>,
+    property_editor:effects::PropertyEditorState,
     sdr_gesture: Option<layer_core::color::hdr::SdrRendition>,
     last_proof_mode: Option<ProofMode>,
     proof_setup_pending: bool,
@@ -288,7 +289,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         !self.canvas_idle() || self.input_pending || self.touch.is_active()
             || self.interaction.pointer.is_some() || self.interaction.facts.held
             || self.interaction.facts.dragging || self.interaction.axes.active()
-            || self.operation.dragging() || self.navigator_drag.is_some()
+            || self.operation.dragging() || self.operation.nudging() || self.navigator_drag.is_some()
             || self.divider_drag.is_some() || self.floating_resize.is_some()
             || self.workspace_drag.is_some() || self.workspace_tab_drag.is_some()
     }
@@ -360,6 +361,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             touch: TouchGesture::default(),
             navigator_drag: None,
             effect_gesture: None,
+            property_editor:Default::default(),
             sdr_gesture: None,
             last_proof_mode: None,
             proof_setup_pending: false,
@@ -1212,6 +1214,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     reply.change = merge_change(reply.change, change);
                     reply.handled |= changed;
                 }
+                if self.transform_nudge(&key, pressed, hold_allowed && self.state.preferences.capture.is_none(), modifiers)? {
+                    self.refresh_commands();
+                    reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
+                    reply.handled = true;
+                    return Ok(reply);
+                }
                 if self.state.command_search.is_some() {
                     if !pressed {
                         self.interaction.keys.remove(&key);
@@ -1431,6 +1439,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             UiInput::Blur => {
+                if self.finish_transform_nudge(true)? {
+                    reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
+                }
                 if self.cancel_picker() {
                     reply.change = self.changed(regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION | regions::COLOR_PREVIEW, true);
                 }
@@ -2283,6 +2294,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::CloseDocument => self.require_document_snapshot_idle().is_ok(),
             CommandId::ScaleRotate => idle && !self.cropping() && self.can_transform(),
+            CommandId::TransformAgain => self.require_document_idle().is_ok() && self.transform_again_refusal().is_none(),
+            CommandId::TransformSnapping => idle && (self.operation.transforming() || self.layer_interaction.tool == LayerCanvasTool::Move),
             CommandId::Crop => {
                 idle && (self.cropping()
                     || (self.require_document_idle().is_ok() && self.canvas_geometry_refusal().is_none()))
@@ -2535,6 +2548,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.warp_command_selected(id)
             || (id == CommandId::LayerMaskEnabled
                 && document.layer(document.active_layer).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled))
+            || (id == CommandId::TransformSnapping && self.operation.snapping)
             || (id == CommandId::TransformPerspective && self.transform_mode().is_some_and(|(_, perspective)| perspective))
             || transform_choice(id).is_some_and(|choice| match choice {
                 TransformChoice::Mode(mode, uniform) => self.transform_mode().is_some_and(|(current, _)| {
@@ -2580,11 +2594,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         // An interrupted property contact still needs to restore its preview.
         // The gesture handler cancels it when editing is no longer available.
-        let continuing_effect_gesture = matches!(&action, UiAction::Effect {
-            action: EffectAction::Gesture {
-                phase: ContactPhase::Move | ContactPhase::Up | ContactPhase::Cancel, ..
-            }
-        });
+        let continuing_effect_gesture = matches!(&action,UiAction::Effect{action:
+            EffectAction::Gesture{phase:ContactPhase::Move|ContactPhase::Up|ContactPhase::Cancel,..}
+            | EffectAction::CurveContact{phase:ContactPhase::Move|ContactPhase::Up|ContactPhase::Cancel,..}
+            | EffectAction::CurveKey{pressed:false,..}})
+            || matches!(&action,UiAction::Effect{action:EffectAction::CurveKey{key_event,..}}
+                if key_event=="Escape" || self.property_editor.key().is_some());
         if self.rendering_suspended && !continuing_effect_gesture && !Self::action_without_renderer(&action) {
             return Err("Painting is unavailable. Save the drawing and reopen it.".into());
         }
@@ -3267,6 +3282,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .ok_or("This setting has no default")?.value;
                 return self.dispatch(UiAction::SetToolSetting { id, value });
             }
+            UiAction::TransformReference { reference } => { self.set_transform_reference(reference)?; (BRUSH, false) }
             UiAction::Tonal { action } => {self.tonal_action(action)?;(BRUSH | COMMANDS,true)}
             UiAction::StepToolSetting { id, steps } => {
                 let setting = self
@@ -4227,6 +4243,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= regions::BRUSH;
         }
         self.input_pending = self.engine.has_pending_input();
+        if !command_activity.0 && self.canvas_idle() {
+            let _ = self.prepare_transform_snapping();
+        }
         let modified = self.state.document_file.modified;
         self.refresh_file_state();
         self.files.pending_modified_change |= modified != self.state.document_file.modified;
@@ -4411,6 +4430,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::CloseDocument => {
                 self.request_document_close()?;
                 Ok((DOCUMENT | HOST, false))
+            }
+            CommandId::TransformAgain => { self.transform_again()?; Ok((BRUSH | DOCUMENT | COMMANDS, true)) }
+            CommandId::TransformSnapping => {
+                self.operation.snapping = !self.operation.snapping;
+                self.refresh_tools();
+                Ok((BRUSH | COMMANDS, true))
             }
             CommandId::ScaleRotate => {
                 self.begin_transform()?;
@@ -5117,6 +5142,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CommandId::TransformDistort,
                 CommandId::TransformWarp,
                 CommandId::PlacementOriginalSize,
+                CommandId::TransformSnapping,
                 CommandId::TransformPerspective,
                 CommandId::WarpSplitVertical,
                 CommandId::WarpSplitHorizontal,
@@ -5165,6 +5191,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             moving
                 .then_some(CommandId::MoveLeaveCopy)
                 .into_iter()
+                .chain(moving.then_some(CommandId::TransformSnapping))
                 .chain(guides.then_some([CommandId::ShowRulers, CommandId::SnapRulers, CommandId::DeleteRuler]).into_iter().flatten())
                 .chain(mixing.then_some(tool_settings::COLOR_MIXING_COMMANDS).into_iter().flatten())
                 .map(|command| ToolSettingAction {
@@ -5263,12 +5290,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             self.state.tool_settings.extend(edges);
         }
-        self.state.tool_extra=self.tonal_extra();
+        self.state.tool_extra = if self.operation.transforming() { self.transform_extra() } else { self.tonal_extra() };
         self.state.layer_tools.mask_editing = self.mask_editing_view();
         self.state.layer_tools.selection_resize = self.selection_masks.refine_view();
         self.state.layer_tools.canvas_size = self.canvas_size_view();
         self.state.layer_tools.image_size = self.image_size_view();
         self.state.layer_tools.frequency_separation = self.frequency_separation_view();
+        let _ = self.prepare_transform_snapping();
     }
 
     /// Whether a contact of `kind` pressed with `button` at surface
@@ -5623,6 +5651,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.layer_tools.controls = LayerControls::default();
             self.state.layer_properties = selection_properties::properties(0, &self.localization().text(MessageId::COMMAND_QUICK_MASK), &self.selection_masks.quick_properties, self.state.settings.selection_painting, true, self.localization());
         }
+        effects::publish_properties(&mut self.state.layer_properties,doc,&mut self.property_editor,self.effect_gesture.as_ref(),&self.state.localization);
         self.state.layer_tools.has_selection = self.current_selection().is_some();
         self.state.layer_tools.quick_mask = self.selection_masks.quick();
         self.state.layer_tools.tool = self.layer_interaction.tool;
@@ -6060,6 +6089,7 @@ mod tests {
     include!("crop_tests.rs");
     include!("image_size_tests.rs");
     include!("image_geometry_tests.rs");
+    include!("curve_session_tests.rs");
     include!("clipboard_tests.rs");
     include!("blend_menu_tests.rs");
     include!("clone_source_tests.rs");
@@ -8472,16 +8502,16 @@ mod tests {
         invoke(&mut s, CommandId::ScaleRotate);
         s.dispatch(UiAction::SetToolSetting {
             id: "transform_x".into(),
-            value: 30.,
+            value: 230.,
         })
         .unwrap();
         s.frame(2, 2).unwrap();
         let preview = |s: &mut UiSession<Recorder>| s.renderer_mut().transform.clone().unwrap().transform;
         let settled = preview(&mut s);
         for interrupt in [None, Some(PenPhase::Cancel)] {
-            s.transform_pen(event(&s, 1, PenPhase::Down, 1.), Point { x: 230., y: 200. })
+            s.transform_pen(event(&s, 1, PenPhase::Down, 1.), Point { x: 200., y: 180. })
                 .unwrap();
-            s.transform_pen(event(&s, 2, PenPhase::Move, 1.), Point { x: 280., y: 240. })
+            s.transform_pen(event(&s, 2, PenPhase::Move, 1.), Point { x: 250., y: 220. })
                 .unwrap();
             s.frame(3, 3).unwrap();
             assert_ne!(preview(&mut s), settled);
@@ -8586,6 +8616,8 @@ mod tests {
         invoke(&mut s, CommandId::ScaleRotate);
         s.frame(6, 6).unwrap();
         let before = s.renderer_mut().transform.clone();
+        let quad = s.operation.quad();
+        let reference = [(quad[0].x + quad[2].x) * 0.5, (quad[0].y + quad[2].y) * 0.5];
         assert!(
             s.dispatch(UiAction::SetToolSetting {
                 id: "transform_width".into(),
@@ -8619,8 +8651,8 @@ mod tests {
         };
         assert!((size(&s, "transform_width") - size(&s, "transform_height")).abs() < 0.001);
         assert!(key(&mut s, "Alt_L", true, false, true).change.canvas_wake);
-        assert!(size(&s, "transform_x").abs() < 0.001);
-        assert!(size(&s, "transform_y").abs() < 0.001);
+        assert!((size(&s, "transform_x") - reference[0]).abs() < 0.001);
+        assert!((size(&s, "transform_y") - reference[1]).abs() < 0.001);
         key(&mut s, "escape", true, false, false);
         s.frame(8, 8).unwrap();
         assert!(!s.operation.active());
@@ -14319,10 +14351,9 @@ mod tests {
             },
         );
         let controls = &app.state.layer_properties.controls;
-        assert_eq!(controls[0].section.as_deref(), Some("Shadows"));
-        assert_eq!(controls[3].section.as_deref(), Some("Midtones"));
-        assert_eq!(controls[6].section.as_deref(), Some("Highlights"));
-        assert!(controls[9].section.is_none());
+        assert_eq!(controls[0].page.as_deref(), Some("shadows"));
+        assert_eq!(app.state.layer_properties.pages.iter().map(|page| page.label.as_str()).collect::<Vec<_>>(), ["Shadows", "Midtones", "Highlights"]);
+        assert!(controls[3].page.is_none());
         assert_eq!(controls[0].label, "Cyan — Red");
         send(
             &mut app,

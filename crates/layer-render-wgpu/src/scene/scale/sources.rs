@@ -87,7 +87,7 @@ impl Sources {
                 self.update(r, packet, layer, false, batch_tiles);
                 let source = self.entries.get_mut(&layer.id).unwrap();
                 source.raster = layer.raster.identity();
-                let watercolor = r.paint_layers.iter().find(|l| l.id == layer.id).and_then(|l| l.watercolor);
+                let watercolor = r.watercolor_style(layer.id, packet.dab_batches);
                 if source.watercolor != watercolor {
                     source.watercolor = watercolor;
                     self.reset = true;

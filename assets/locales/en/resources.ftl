@@ -313,6 +313,9 @@ resources-mask-overlay-opacity = Overlay opacity
 resources-mask-select-before-edit = Select this mask before editing its properties
 resources-mask-invalid-property = Invalid mask property
 resources-mask-invalid-properties = Invalid selection mask properties
+
+resources-curves-help = Drag points to change tones. Arrow keys move the selected point; Shift moves it farther. Double-click an interior point to remove it.
+resources-curves-reset = Reset curve
 resources-size-canvas-title = Canvas Size
 resources-size-image-title = Image Size
 resources-size-width = Width

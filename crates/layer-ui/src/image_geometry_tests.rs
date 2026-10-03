@@ -1,7 +1,7 @@
 fn content_session(size: [u32; 2]) -> UiSession<Recorder> {
     let mut doc = Document::new("content", size[0], size[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.layers.retain(|l| l.kind != layer_core::LayerKind::Background);
-    let mut s = UiSession::new(Recorder::default(), doc, [1600, 1000], Platform::Gtk).unwrap();
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
     s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
     invoke(&mut s, CommandId::FitCanvas);
     s.frame(1, 1).unwrap();
@@ -208,4 +208,197 @@ mod bounds_review {
 mod transform_pixels {
     use super::*;
     include!("transform_pixels_tests.rs");
+}
+
+#[test]
+fn snapping_request_failures_cache_empty_without_history_or_retry_loops() {
+    for retry in [false, true] {
+        let mut s = content_session([1000, 800]);
+        let id = s.engine.document().active_target();
+        let before = s.engine.document().clone();
+        let purpose = super::image_geometry::ContentUse::PrepareSnap(id);
+        s.engine.backend_mut().bounds_wait = retry;
+        s.engine.backend_mut().bounds_fails = !retry;
+        let result = s.request_content_bounds(purpose);
+        if retry {
+            result.unwrap();
+            assert!(s.content_bounds.busy());
+            s.engine.backend_mut().bounds_wait = false;
+            s.engine.backend_mut().bounds_fails = true;
+            s.poll_content_bounds();
+        } else {
+            assert!(result.is_err());
+        }
+        assert!(!s.content_bounds.busy());
+        let calls = s.engine.backend().bounds_attempts;
+        for _ in 0..4 { s.request_content_bounds(purpose).unwrap(); }
+        assert_eq!(s.engine.backend().bounds_attempts, calls);
+        assert_eq!(s.engine.document(), &before);
+        assert!(!s.engine.can_undo());
+    }
+}
+
+#[test]
+fn snapping_failed_completion_is_quiet_and_cached_for_the_current_revision() {
+    let mut s = content_session([1000, 800]);
+    let id = s.engine.document().active_target();
+    let before = s.engine.document().clone();
+    let purpose = super::image_geometry::ContentUse::PrepareSnap(id);
+    s.request_content_bounds(purpose).unwrap();
+    s.engine.backend_mut().bounds_reply = Some(Err(layer_render::BackendError("bounds readback failed")));
+    s.poll_content_bounds();
+    assert!(!s.content_bounds.busy());
+    let calls = s.engine.backend().bounds_attempts;
+    s.request_content_bounds(purpose).unwrap();
+    assert_eq!(s.engine.backend().bounds_attempts, calls);
+    assert_eq!(s.engine.document(), &before);
+    assert!(!s.engine.can_undo());
+}
+
+#[test]
+fn held_transform_nudge_defers_background_snapping_preparation_until_release() {
+    let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    doc.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
+    let mut other = doc.layers[0].clone();
+    other.id = doc.allocate_layer_id();
+    let target = other.id;
+    doc.layers.push(other);
+    doc.layers[0].source = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
+    s.frame(1, 1).unwrap();
+    s.begin_transform().unwrap();
+    if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 100., 80.]); }
+    assert!(s.operation.transforming());
+    s.operation.snapping = true;
+    assert!(s.transform_nudge("arrowright", true, true, Modifiers::default()).unwrap());
+    let calls = s.engine.backend().bounds_attempts;
+    for _ in 0..4 { s.prepare_transform_snapping().unwrap(); }
+    assert_eq!(s.engine.backend().bounds_attempts, calls);
+    assert!(!s.content_bounds.busy());
+    assert!(s.transform_nudge("arrowright", false, true, Modifiers::default()).unwrap());
+    s.prepare_transform_snapping().unwrap();
+    assert_eq!(s.engine.backend().bounds_attempts, calls + 1);
+    assert_eq!(s.engine.backend().bounds_requests.last().unwrap().scope, layer_core::ContentScope::PlacedTarget(target));
+}
+
+#[test]
+fn failed_background_query_does_not_refuse_snapping_toggle() {
+    let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    doc.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
+    let mut other = doc.layers[0].clone();
+    other.id = doc.allocate_layer_id();
+    doc.layers.push(other);
+    doc.layers[0].source = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
+    s.frame(1, 1).unwrap();
+    s.begin_transform().unwrap();
+    if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 100., 80.]); }
+    assert!(s.operation.transforming());
+    let before = s.engine.document().clone();
+    let calls = s.engine.backend().bounds_attempts;
+    s.engine.backend_mut().bounds_fails = true;
+    s.dispatch(UiAction::Invoke { command: CommandId::TransformSnapping }).unwrap();
+    assert!(s.operation.snapping);
+    assert!(!s.content_bounds.busy());
+    assert_eq!(s.engine.backend().bounds_attempts, calls + 1);
+    assert_eq!(s.engine.document(), &before);
+    assert!(!s.engine.can_undo());
+}
+
+#[test]
+fn blurring_held_transform_nudge_publishes_document_and_command_changes() {
+    let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    doc.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
+    let mut other = doc.layers[0].clone();
+    other.id = doc.allocate_layer_id();
+    doc.layers.push(other);
+    doc.layers[0].source = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
+    s.frame(1, 1).unwrap();
+    s.begin_transform().unwrap();
+    if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 100., 80.]); }
+    assert!(s.operation.transforming());
+    assert!(s.transform_nudge("arrowright", true, true, Modifiers::default()).unwrap());
+    assert!(s.localization_input_busy());
+    let changed = s.input(UiInput::Blur).unwrap().change;
+    assert_ne!(changed.regions & regions::DOCUMENT, 0);
+    assert_ne!(changed.regions & regions::COMMANDS, 0);
+    assert!(!s.operation.nudging());
+    assert!(!s.localization_input_busy());
+}
+
+#[test]
+fn enabled_snapping_prepares_after_pending_input_drains_without_idle_resubmission() {
+    let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    doc.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
+    let mut other = doc.layers[0].clone();
+    other.id = doc.allocate_layer_id();
+    doc.layers.push(other);
+    doc.layers[0].source = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
+    s.frame(1, 1).unwrap();
+    s.begin_transform().unwrap();
+    if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 100., 80.]); }
+    assert!(s.operation.transforming());
+    let target = s.engine.document().layers[1].id;
+    s.dispatch(UiAction::Invoke { command: CommandId::TransformSnapping }).unwrap();
+    s.cancel_content_bounds();
+    let calls = s.engine.backend().bounds_attempts;
+    s.input_pending = true;
+    s.refresh_tools();
+    assert!(s.operation.snapping && s.operation.transforming());
+    assert_eq!(s.engine.backend().bounds_attempts, calls);
+    assert!(!s.content_bounds.busy());
+    s.frame(102, 102).unwrap();
+    assert!(!s.input_pending);
+    assert!(s.content_bounds.busy());
+    assert_eq!(s.engine.backend().bounds_attempts, calls + 1);
+    assert_eq!(s.engine.backend().bounds_requests.last().unwrap().scope, layer_core::ContentScope::PlacedTarget(target));
+    reply_bounds(&mut s, [400., 200., 500., 300.]);
+    assert!(s.operation.transforming());
+    assert_eq!(s.measured_snap_bounds(), vec![(target, layer_core::Rect { min: Point { x: 400., y: 200. }, max: Point { x: 500., y: 300. } })]);
+    let calls = s.engine.backend().bounds_attempts;
+    for frame in 103..107 { s.frame(frame, frame).unwrap(); }
+    assert_eq!(s.engine.backend().bounds_attempts, calls);
+
+}
+
+#[test]
+fn snapping_excludes_moved_nested_ancestors_but_keeps_siblings_and_cousins() {
+    let mut doc=Document::new("snap tree",1000,800,layer_core::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
+    doc.layers.clear();
+    let mut add=|name:&str,parent,group| {
+        let id=doc.allocate_layer_id();let mut layer=layer_core::Layer::paint(id,name);
+        if group {layer.kind=layer_core::LayerKind::Group;}
+        layer.properties.parent=parent;doc.layers.push(layer);id
+    };
+    let outer=add("Outer",None,true);
+    let nested=add("Nested",Some(outer),true);
+    let moved=add("Moved",Some(nested),false);
+    let sibling=add("Sibling",Some(nested),false);
+    let cousin_group=add("Cousin group",Some(outer),true);
+    let cousin=add("Cousin",Some(cousin_group),false);
+    let unrelated=add("Unrelated",None,false);
+    let hidden_group=add("Hidden group",None,true);
+    let _hidden_child=add("Hidden child",Some(hidden_group),false);
+    doc.layers.iter_mut().find(|layer|layer.id==hidden_group).unwrap().visible=false;
+    doc.active_layer=moved;
+    let mut s=UiSession::new(Recorder::default(),doc,[1600,1000],Platform::Gtk).unwrap();
+    s.layer_interaction.tool=LayerCanvasTool::Move;
+    s.operation.snapping=true;
+    s.frame(1,1).unwrap();
+    for _ in 0..20 {
+        s.prepare_transform_snapping().unwrap();
+        if !s.content_bounds.busy() {break;}
+        reply_bounds(&mut s,[0.,0.,10.,10.]);
+    }
+    let eligible=|s:&UiSession<Recorder>|s.measured_snap_bounds().into_iter().map(|(id,_)|id).collect::<Vec<_>>();
+    let mut expected=vec![sibling,cousin_group,cousin,unrelated];expected.sort();
+    assert_eq!(eligible(&s),expected);
+    s.layer_interaction.selected=[nested].into_iter().collect();
+    let mut expected=vec![cousin_group,cousin,unrelated];expected.sort();
+    assert_eq!(eligible(&s),expected,"selected group excludes its subtree and ancestors");
+    s.layer_interaction.selected=[moved,cousin].into_iter().collect();
+    let mut expected=vec![sibling,unrelated];expected.sort();
+    assert_eq!(eligible(&s),expected,"multiple nested roots exclude each ancestor chain only");
 }

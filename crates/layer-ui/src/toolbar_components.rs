@@ -126,6 +126,10 @@ pub enum ToolOption {
         id: &'static str,
         label: std::sync::Arc<str>,
         segmented: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        columns: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        beside: Option<&'static str>,
         items: Vec<ToolSetItem>,
     },
     Action {
@@ -150,18 +154,22 @@ impl ToolOption {
                 Self::Choice {
                     id: a,
                     segmented: p,
+                    columns: c,
+                    beside: e,
                     items: x,
                     ..
                 },
                 Self::Choice {
                     id: b,
                     segmented: q,
+                    columns: d,
+                    beside: f,
                     items: y,
                     ..
                 },
             ) => {
                 a == b
-                    && p == q
+                    && p == q && c == d && e == f
                     && x.len() == y.len()
                     && x.iter()
                         .zip(y)
@@ -231,7 +239,7 @@ impl UiState {
     }
     pub(crate) fn toolbar_edit_allowed(&self, action: &UiAction) -> bool {
         match action {
-            UiAction::Tonal { .. } => self.tool_extra.iter().any(|o| matches!(o,ToolOption::Choice {items,..} if items.iter().any(|i| i.action==*action))),
+            UiAction::Tonal { .. } | UiAction::TransformReference { .. } => self.tool_extra.iter().any(|o| matches!(o,ToolOption::Choice {items,..} if items.iter().any(|i| i.action==*action))),
             UiAction::ToggleSliderBookmark { control } => control.slider()
                 .is_some_and(|binding| binding.field(self).is_some()),
             UiAction::SetBrushSize { .. } => {
@@ -291,6 +299,8 @@ impl UiState {
                 id,
                 label,
                 segmented,
+                columns: None,
+                beside: None,
                 items,
             })
         };

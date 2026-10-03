@@ -10,6 +10,8 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.Window
 import android.view.WindowManager
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -61,6 +63,7 @@ class AndroidCanvasBarBenchmarkTest {
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
             val host = activity.host
             var transformEntry: JSONObject? = null
+            var snapNeighbor: Long? = null
             fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
             fun waitFor(label: String, condition: () -> Boolean) = host.awaitMain(label, 120_000, condition = condition)
             fun action(value: JSONObject) = host.drain(value, 30)
@@ -373,6 +376,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val result = obj("label" to label, "display_hz" to refreshRate, "seconds" to seconds, "transparency" to transparency,
                     "canvas" to documentExtent, "debuggable" to BuildConfig.DEBUG, "material_watercolor" to materialWatercolor,
                     "transform_entry" to transformEntry,
+                    "snap_neighbor_layer" to snapNeighbor,
                     "visible_layer_ids_before" to JSONArray(visibleLayerIdsBefore), "visible_layer_count_before" to visibleLayerIdsBefore.size,
                     "photo" to (photoPath ?: "synthetic"), "renderer_profile" to (args.getString("rendererProfile") == "true"), "camera_before" to cameraBefore,
                     "motion" to obj("begin_ns" to began, "end_ns" to operated,
@@ -422,17 +426,21 @@ class AndroidCanvasBarBenchmarkTest {
             fun wanted(name: String) = only == null || name in only
             inject(MotionEvent.ACTION_CANCEL, SystemClock.uptimeMillis(), 0.0, 0.0, 0f)
             waitFor("ready") { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
+            if (args.getString("defaultPhoto") == "true") {
+                instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "switch", "id" to "builtin:workspace:photographer")) }
+                waitFor("Photo workspace") { host.workspaceManager?.optString("id") == "builtin:workspace:photographer" && host.workspaceManager?.optBoolean("busy") == false }
+            }
             action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
             val panels = listOfNotNull(args.getString("panel"), if (args.getString("rendererProfile") == "true") "stats" else null).distinct()
             for (name in listOf("stats", "navigator")) {
+                if (args.getString("defaultPhoto") == "true" && panels.isEmpty()) continue
                 action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to name, "visible" to (name in panels))))
             }
             for (panel in panels) {
                 if (panel !in listOf("stats", "navigator")) action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to true)))
-                val group = host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects()
-                    .first { panel in it.getJSONArray("panels").values() }.getInt("id")
-                action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
-                action(obj("type" to "select_panel_tab", "group" to group, "panel" to panel))
+                val group = host.panelGroup(panel)
+                action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+                if (group.getString("active") != panel) action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to panel))
             }
             val wiggle = { t: Double -> (60 * (cos(2 * PI * t) - 1)) to (40 * (cos(2 * PI * t) - 1)) }
             fun primeTransform(fraction: Double = 1.0, mode: String? = null) {
@@ -441,9 +449,9 @@ class AndroidCanvasBarBenchmarkTest {
                 if (materialWatercolor) File(output, "prime-$fraction.json").writeText(obj(
                     "before" to before, "after" to state().optJSONObject("canvas_bar"),
                     "notice" to state().optJSONObject("notice"), "camera" to state().getJSONObject("camera")).toString(2))
-                if (mode == null && (fraction == 1.0 || fraction == .5)) waitFor("priming gesture changes its geometry") {
+                if (mode == null && (fraction == 1.0 || fraction == .4)) waitFor("priming gesture changes its geometry") {
                     val after = state().getJSONObject("canvas_bar").getJSONArray("anchor")
-                    if (fraction == .5) kotlin.math.abs(after.getDouble(0) - before.getDouble(0)) > 100
+                    if (fraction == .4) kotlin.math.abs(after.getDouble(0) - before.getDouble(0)) > 100
                     else kotlin.math.abs((after.getDouble(2) - after.getDouble(0)) - (before.getDouble(2) - before.getDouble(0))) > 100
                 }
                 invoke("reset_transform")
@@ -517,8 +525,7 @@ class AndroidCanvasBarBenchmarkTest {
                     }
                     effect(obj("op" to "insert", "effect" to scrub.id))
                     action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
-                    val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
-                        .first { "properties" in it.array("panels").values() }
+                    val group = host.panelGroup("properties")
                     action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
                     if (group.optString("active") != "properties") action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to "properties"))
                     action(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
@@ -566,12 +573,85 @@ class AndroidCanvasBarBenchmarkTest {
                     shot.recycle()
                 }
             }
+            if (wanted("curves") && args.getString("labels")?.split(',')?.let { "effect-curves-drag" in it } != false) {
+                val photoLayer = photoDocument()
+                action(obj("type" to "select_layer", "id" to photoLayer))
+                waitFor("Curves catalog ready") { !state().getJSONObject("filter_load").getBoolean("pending") }
+                action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "curves")))
+                waitFor("published Curves controls") { state().getJSONObject("layer_properties").array("controls").objects().any { !it.isNull("curve") } }
+                action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
+                val group = host.panelGroup("properties")
+                action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+                if (group.getString("active") != "properties") action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to "properties"))
+                val layer = state().getJSONObject("layer_properties").getLong("layer")
+                val key = state().getJSONObject("layer_properties").array("controls").objects().first { !it.isNull("curve") }.getString("key")
+                action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to layer, "key" to key,
+                    "value" to obj("kind" to "curve", "value" to JSONArray("[[0,0],[0.5,0.5],[1,1]]")))))
+                waitFor("native curve graph") { findTag("effect-curve") != null }
+                invoke("fit_canvas")
+                var graph = android.graphics.RectF()
+                var visibleGraph = android.graphics.RectF()
+                instrumentation.runOnMainSync {
+                    val node = findTag("effect-curve")!!.second
+                    val middle = node.positionInRoot.y + node.size.height * .5f
+                    val visible = node.boundsInRoot
+                    if (middle <= visible.top + visible.height * .25f || middle >= visible.bottom - visible.height * .25f) {
+                        val scroll = generateSequence(node.parent) { it.parent }.first { it.config.getOrNull(SemanticsActions.ScrollBy) != null }
+                        check(scroll.config[SemanticsActions.ScrollBy].action!!.invoke(0f, middle - node.boundsInRoot.center.y))
+                    }
+                }
+                waitFor("existing middle knot visible") {
+                    val node = findTag("effect-curve")!!.second
+                    val middle = node.positionInRoot.y + node.size.height * .5f
+                    val visible = node.boundsInRoot
+                    middle > visible.top + visible.height * .25f && middle < visible.bottom - visible.height * .25f
+                }
+                val repeats = args.getString("translationRepeats", "1")!!.toInt().also { require(it > 0) }
+                repeat(repeats) { index ->
+                    instrumentation.runOnMainSync {
+                        val (root, node) = findTag("effect-curve")!!
+                        val origin = IntArray(2); root.view.getLocationOnScreen(origin)
+                        graph = android.graphics.RectF(node.positionInRoot.x + origin[0], node.positionInRoot.y + origin[1],
+                            node.positionInRoot.x + node.size.width + origin[0], node.positionInRoot.y + node.size.height + origin[1])
+                        node.boundsInRoot.let { visibleGraph = android.graphics.RectF(it.left + origin[0], it.top + origin[1], it.right + origin[0], it.bottom + origin[1]) }
+                    }
+                    check(graph.width() > 40 && graph.height() > 40)
+                    val points = state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key") == key }.getJSONObject("value").getJSONArray("value")
+                    check(points.length() == 3)
+                    val middle = points.getJSONArray(1)
+                    val x = graph.left + middle.getDouble(0) * graph.width()
+                    val y = graph.top + (1 - middle.getDouble(1)) * graph.height()
+                    check(visibleGraph.contains(x.toFloat(), y.toFloat())) { "Existing middle knot is outside the visible graph: $points $graph $visibleGraph" }
+                    val start = x - host.surfaceOrigin.x.toDouble() to y - host.surfaceOrigin.y.toDouble()
+                    val values = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+                    measure("effect-curves-drag") {
+                        val sampler = Thread {
+                            val until = SystemClock.uptimeMillis() + duration
+                            while (SystemClock.uptimeMillis() < until) {
+                                values += state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key") == key }.getJSONObject("value").getJSONArray("value").toString()
+                                SystemClock.sleep(8)
+                            }
+                        }.apply { start() }
+                        drag(start, duration) { t -> visibleGraph.width() * .12 * (cos(2 * PI * t) - 1) to visibleGraph.height() * .12 * (cos(2 * PI * t) - 1) }
+                        sampler.join()
+                    }
+                    check(values.size > 1) { "Native curve motion did not change its stored points" }
+                    val after = state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key") == key }.getJSONObject("value").getJSONArray("value")
+                    check(after.length() == 3) { "Native curve contact must move the existing middle knot: before=$points after=$after graph=$graph visible=$visibleGraph start=$start" }
+                    val result = File(output, "effect-curves-drag.json")
+                    result.writeText(JSONObject(result.readText()).put("curve_variants", values.size)
+                        .put("curve_graph_bounds", JSONArray(listOf(graph.left, graph.top, graph.right, graph.bottom)))
+                        .put("curve_graph_visible_bounds", JSONArray(listOf(visibleGraph.left, visibleGraph.top, visibleGraph.right, visibleGraph.bottom))).toString(2))
+                    result.copyTo(File(output, "effect-curves-drag-${index + 1}.json"), overwrite = true)
+                }
+            }
             if (wanted("photo")) {
-                newDocument()
-                place(photo())
+                val openedPhoto = if (args.getString("transformSnapping") == "true") photoDocument() else null
+                if (openedPhoto == null) { newDocument(); place(photo()) }
+                else action(obj("type" to "select_layer", "id" to openedPhoto))
                 if (materialWatercolor || args.getString("acceptedPhoto") == "true") {
                     Log.i("CapyBarPerf", "material setup: accept photo")
-                    invoke("apply_transform")
+                    if (openedPhoto == null) invoke("apply_transform")
                     if (materialWatercolor) {
                         Log.i("CapyBarPerf", "material setup: select wet brush")
                         invoke("brush")
@@ -597,6 +677,23 @@ class AndroidCanvasBarBenchmarkTest {
                             tile.getJSONObject("key").getString("plane") == "WatercolorWetness" } }) { "The workload has no stored watercolor material" }
                         check(manifest.getJSONObject("tiled_sources").getJSONArray("images").length() > 0) { "The photo source was lost" }
                     }
+                    if (args.getString("transformSnapping") == "true") {
+                        val photoLayer = state().array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
+                        invoke("add_layer")
+                        snapNeighbor = state().array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
+                        invoke("brush")
+                        action(obj("type" to "select_brush", "id" to 1))
+                        action(obj("type" to "set_brush_size", "value" to 80))
+                        waitFor("snap target brush ready") { host.snapshot?.optBoolean("brush_ready") == true }
+                        val camera = state().getJSONObject("camera")
+                        val shift = camera.getJSONArray("translation"); val zoom = camera.getDouble("zoom")
+                        val center = width * .5 * zoom + shift.getDouble(0) to height * .5 * zoom + shift.getDouble(1)
+                        drag(center, 300) { t -> 40 * t to 0.0 }
+                        val target = saveProject("snap-input.capy")
+                        check(target.array("rasters").objects().any { it.getLong("target") == snapNeighbor && it.array("tiles").objects().any { tile ->
+                            tile.getJSONObject("key").getString("plane") == "Color" } }) { "Snapping has no painted target" }
+                        action(obj("type" to "select_layer", "id" to photoLayer))
+                    }
                     val entryBegan = android.os.SystemClock.elapsedRealtimeNanos()
                     instrumentation.runOnMainSync { host.dispatch(obj("type" to "invoke", "command" to "scale_rotate")) }
                     waitFor("material placement bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "placement" }
@@ -612,11 +709,16 @@ class AndroidCanvasBarBenchmarkTest {
                 SystemClock.sleep(3000)
                 measure("photo-bar-show-hide") { hideAndShow(duration) }
                 measure("photo-bar-contact-taps") { taps(corner().let { it.first - 200 to it.second - 200 }, duration) }
-                primeTransform(.5)
+                primeTransform(.4)
+                if (args.getString("transformSnapping") == "true") {
+                    val snapping = args.getString("snappingEnabled", "true") != "false"
+                    if (snapping) invoke("transform_snapping")
+                    waitFor("transform snapping matches the workload") { state().array("commands").objects().any { it.getString("id") == "transform_snapping" && it.getBoolean("selected") == snapping } }
+                }
                 val translationRepeats = args.getString("translationRepeats", "1")!!.toInt().also { require(it > 0) }
                 recordProcessMemory("before-photo-motion")
                 repeat(translationRepeats) { index ->
-                    measure("photo-translate-drag") { drag(anchorPoint(.5), duration, wiggle) }
+                    measure("photo-translate-drag") { drag(anchorPoint(.4), duration, wiggle) }
                     if (translationRepeats > 1) File(output, "photo-translate-drag.json").takeIf { it.exists() }
                         ?.copyTo(File(output, "photo-translate-drag-${index + 1}.json"), overwrite = true)
                     recordProcessMemory("after-photo-motion-${index + 1}")
@@ -667,8 +769,8 @@ class AndroidCanvasBarBenchmarkTest {
                         invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
                         waitFor("photo transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
                         SystemClock.sleep(1500)
-                        primeTransform(.5)
-                        measure("photo-pixels-translate-drag") { drag(anchorPoint(.5), duration, wiggle) }
+                        primeTransform(.4)
+                        measure("photo-pixels-translate-drag") { drag(anchorPoint(.4), duration, wiggle) }
                         invoke("reset_transform")
                         primeTransform()
                         measure("photo-pixels-handle-drag") { drag(corner(), duration, wiggle) }
@@ -712,9 +814,9 @@ class AndroidCanvasBarBenchmarkTest {
                 repeat(4) { if (state().getJSONObject("camera").getDouble("zoom") > .35) invoke("zoom_out") }
                 check(state().getJSONObject("camera").getDouble("zoom") <= .35)
                 SystemClock.sleep(1500)
-                drag(anchorPoint(.5), 500, wiggle)
+                drag(anchorPoint(.4), 500, wiggle)
                 SystemClock.sleep(1500)
-                measure("cropped-photo-translate-drag") { drag(anchorPoint(.5), duration, wiggle) }
+                measure("cropped-photo-translate-drag") { drag(anchorPoint(.4), duration, wiggle) }
                 invoke("cancel_transform")
             }
             if (wanted("crop")) {

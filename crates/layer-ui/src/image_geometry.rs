@@ -17,10 +17,12 @@ pub(super) enum ContentUse {
     Transform,
     Move,
     PrepareMove,
+    PrepareSnap(layer_core::LayerId),
 }
 impl ContentUse {
     fn scope(self, target: layer_core::LayerId) -> ContentScope {
         match self {
+            Self::PrepareSnap(id) => ContentScope::PlacedTarget(id),
             Self::Trim => ContentScope::Canvas,
             Self::FitContent => ContentScope::Visible,
             Self::RevealAll => ContentScope::All,
@@ -127,6 +129,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn content_bounds_refusal(&self, purpose: ContentUse) -> Option<std::sync::Arc<str>> {
         let l = self.localization();
         match purpose {
+            ContentUse::PrepareSnap(_) => None,
             ContentUse::FitContent => (!self.cropping()).then_some(l.text(MessageId::COMMANDS_CHOOSE_THE_CROP_TOOL_FIRST)),
             ContentUse::Trim | ContentUse::RevealAll => self.canvas_geometry_refusal(),
             ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove => (!self.can_transform()).then_some(l.text(MessageId::COMMANDS_SELECT_UNLOCKED_PAINT_CONTENT_OR_A_LAYER_MASK)),
@@ -136,7 +139,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Fit Content edits the open crop; Trim and Reveal All edit the document.
     fn require_content_idle(&self, purpose: ContentUse) -> Result<(), String> {
         match purpose {
-            ContentUse::FitContent | ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove => self.require_idle(),
+            ContentUse::FitContent | ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove | ContentUse::PrepareSnap(_) => self.require_idle(),
             ContentUse::Trim | ContentUse::RevealAll => self.require_document_idle(),
         }
     }
@@ -160,13 +163,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let revision = doc.revision;
         let target = doc.active_target();
-        let roots = if matches!(request.scope, ContentScope::Target(_)) { self.transform_roots() } else { Vec::new() };
+        let roots = if matches!(request.scope, ContentScope::Target(_) | ContentScope::PlacedTarget(_)) { self.transform_roots() } else { Vec::new() };
         if let Some(job) = &mut self.content_bounds.job && job.request == request {
             job.purpose = purpose;
             return Ok(());
         }
         self.engine.backend_mut().cancel_content_bounds();
-        let submitted = self.engine.backend_mut().request_content_bounds(request.clone()).map_err(error)?;
+        let submitted = match self.engine.backend_mut().request_content_bounds(request.clone()) {
+            Ok(submitted) => submitted,
+            Err(reason) => {
+                if matches!(purpose, ContentUse::PrepareSnap(_)) { self.content_bounds.cache.insert(request, Rect::EMPTY); }
+                return Err(error(reason));
+            }
+        };
         self.content_bounds.job = Some(ContentJob { purpose, revision, target, roots, request, submitted });
         Ok(())
     }
@@ -178,6 +187,57 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .filter(|id| doc.layer(*id).is_some_and(|layer| layer.kind == layer_core::LayerKind::Paint)).collect();
         }
         std::iter::once(doc.active_target()).chain(self.bounds_companion()).collect()
+    }
+    fn snap_target_ids(&self) -> Vec<layer_core::LayerId> {
+        let doc = self.engine.document();
+        let roots = self.transform_roots();
+        let mut excluded = doc.layer_subtrees(&roots);
+        for root in roots {
+            let mut parent = doc.layer(root).and_then(|layer| layer.properties.parent);
+            while let Some(id) = parent {
+                if !excluded.insert(id) { break; }
+                parent = doc.layer(id).and_then(|layer| layer.properties.parent);
+            }
+        }
+        let mut ids: Vec<_> = doc.layers.iter().filter(|layer| {
+            if !matches!(layer.kind, layer_core::LayerKind::Paint | layer_core::LayerKind::Group)
+                || excluded.contains(&layer.id) { return false; }
+            let mut current = Some(*layer);
+            while let Some(layer) = current {
+                if !layer.visible || layer.properties.clipped || layer.opacity <= 0. { return false; }
+                current = layer.properties.parent.and_then(|id| doc.layer(id));
+            }
+            true
+        }).map(|layer| layer.id).collect();
+        ids.sort_unstable();
+        ids
+    }
+    pub(super) fn measured_snap_bounds(&self) -> Vec<(layer_core::LayerId, Rect)> {
+        let doc = self.engine.document();
+        self.snap_target_ids().into_iter().filter_map(|id| {
+            self.content_bounds.cache.current(doc, ContentScope::PlacedTarget(id))
+                .filter(|bounds| !bounds.is_empty()).map(|bounds| (id, bounds))
+        }).collect()
+    }
+    pub(super) fn prepare_transform_snapping(&mut self) -> Result<(), String> {
+        if !self.operation.snapping {
+            if self.content_bounds.job.as_ref().is_some_and(|job| matches!(job.purpose, ContentUse::PrepareSnap(_))) {
+                self.cancel_content_bounds();
+            }
+            return Ok(());
+        }
+        if self.operation.dragging() || self.operation.nudging() || self.content_bounds.busy() || !self.canvas_idle()
+            || (!self.operation.transforming() && self.layer_interaction.tool != LayerCanvasTool::Move) { return Ok(()); }
+        if self.layer_interaction.tool == LayerCanvasTool::Move && self.retained_transforming()
+            && self.measured_target_bounds().is_none() {
+            return self.request_content_bounds(ContentUse::PrepareMove);
+        }
+        let doc = self.engine.document();
+        if let Some(id) = self.snap_target_ids().into_iter().find(|id|
+            self.content_bounds.cache.current(doc, ContentScope::PlacedTarget(*id)).is_none()) {
+            self.request_content_bounds(ContentUse::PrepareSnap(id))?;
+        }
+        Ok(())
     }
     pub(super) fn measured_target_bounds(&self) -> Option<Rect> {
         let doc = self.engine.document();
@@ -209,10 +269,11 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn cancel_content_bounds(&mut self) -> bool {
         self.content_bounds.moving = None;
-        let cancelled = self.content_bounds.job.take().is_some() | self.content_bounds.bake.take().is_some();
-        if !cancelled { return false; }
+        let job = self.content_bounds.job.take();
+        let bake = self.content_bounds.bake.take().is_some();
+        if job.is_none() && !bake { return false; }
         self.engine.backend_mut().cancel_content_bounds();
-        true
+        bake || job.is_some_and(|job| !matches!(job.purpose, ContentUse::PrepareSnap(_)))
     }
 
     pub(super) fn transform_pixels_refusal(&self) -> Option<std::sync::Arc<str>> {
@@ -301,7 +362,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 match self.engine.backend_mut().request_content_bounds(job.request.clone()).map_err(error) {
                     Ok(accepted) => { job.submitted = accepted; return 0; }
                     Err(message) => {
-                        let notify = job.purpose != ContentUse::PrepareMove;
+                        let notify = !matches!(job.purpose, ContentUse::PrepareMove | ContentUse::PrepareSnap(_));
+                        if matches!(job.purpose, ContentUse::PrepareSnap(_)) { self.content_bounds.cache.insert(job.request.clone(), Rect::EMPTY); }
                         self.content_bounds.job = None;
                         self.content_bounds.moving = None;
                         if notify { self.notify(message); }
@@ -315,6 +377,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         let job = self.content_bounds.job.take().unwrap();
+        if matches!(job.purpose, ContentUse::PrepareSnap(_)) && !cancelled && result.is_err() {
+            self.content_bounds.cache.insert(job.request.clone(), Rect::EMPTY);
+        }
         let outcome = result.and_then(|bounds| {
             refused(self.content_bounds_refusal(job.purpose))?;
             self.require_content_idle(job.purpose)?;
@@ -324,7 +389,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         });
         if let Err(message) = outcome {
             self.content_bounds.moving = None;
-            if job.purpose != ContentUse::PrepareMove { self.notify(message); }
+            if !matches!(job.purpose, ContentUse::PrepareMove | ContentUse::PrepareSnap(_)) { self.notify(message); }
         }
         self.refresh_tools();
         regions::DOCUMENT | regions::BRUSH | regions::COMMANDS | regions::CAMERA | regions::HOST
@@ -336,6 +401,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let whole = CanvasRect { origin: [0; 2], size: [doc.width, doc.height] };
         match purpose {
             ContentUse::PrepareMove => Ok(()),
+            ContentUse::PrepareSnap(_) => self.prepare_transform_snapping(),
             ContentUse::Move => {
                 let Some(moving) = self.content_bounds.moving.take() else { return Ok(()); };
                 if bounds.is_empty() { return Err("The selection does not overlap this layer".into()); }

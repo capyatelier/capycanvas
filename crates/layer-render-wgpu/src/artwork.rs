@@ -261,7 +261,7 @@ impl WgpuRasterizer {
         for (index, batch) in packet.dab_batches.iter().enumerate() {
             self.encode_brush_batch(encoder, index, batch, BrushEncodingContext {
                 batches: packet.dab_batches, dabs: packet.dabs, tiles: &tiles[index],
-                document_extent: self.target_extent(batch.layer_id),
+                    target_extent: self.target_extent(batch.layer_id),
                 target: BrushEncodingTarget::Preview { from_persistent: true },
             })?;
         }

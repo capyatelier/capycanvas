@@ -876,6 +876,29 @@ fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
 }
 
 #[test]
+fn transform_position_reference_projects_beside_x_and_floating_modes_are_joined() {
+    let mut s = placed_photo("position anchor metadata");
+    s.frame(1, 1).unwrap();
+    let options = s.state().tool_options();
+    let reference = options.iter().find(|option| matches!(option, ToolOption::Choice { id: "transform-reference", .. })).unwrap();
+    let ToolOption::Choice { columns, beside, segmented, items, .. } = reference else { panic!("reference choice required") };
+    assert_eq!(*columns, Some(3));
+    assert_eq!(*beside, Some("transform_x"));
+    assert!(*segmented);
+    assert_eq!(items.len(), 9);
+    assert_eq!(items.iter().filter(|item| item.selected).count(), 1);
+    let encoded = serde_json::to_value(reference).unwrap();
+    assert_eq!(encoded["Choice"]["beside"], "transform_x");
+    let bar = s.state.canvas_bar.as_ref().unwrap();
+    let modes = bar.items.iter().find(|item| matches!(&item.option, ToolOption::Choice { items, .. } if items.iter().any(|item| matches!(item.action, UiAction::Invoke { command: CommandId::TransformFree })))).unwrap();
+    let ToolOption::Choice { segmented, beside, items, .. } = &modes.option else { panic!("mode choice required") };
+    assert!(*segmented);
+    assert_eq!(*beside, None);
+    assert_eq!(items.len(), 4);
+    assert!(serde_json::to_value(&modes.option).unwrap()["Choice"].get("beside").is_none());
+}
+
+#[test]
 fn slider_bookmarks_round_trip_follow_presets_and_reject_stale_editors() {
     let mut s = session(Platform::Gtk);
     let control = ToolbarControl::BrushSizeSlider;

@@ -119,7 +119,7 @@ pub use session::{
     DEFAULT_DOCUMENT_EXTENT,
     DocumentColorOperation, DocumentHostError, DocumentHostErrorCopy, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
     FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
-    MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, new_drawing, new_document_spec,
+    MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, PropertyPageView, CurveAxis, CurveAxisView, CurveControls, CurveCoordinateControl, CurveDomain, new_drawing, new_document_spec,
 };
 pub use stats::{StatRow, StatsView};
 
@@ -435,6 +435,8 @@ command_ids! {
     SelectionReference,
     Move,
     ScaleRotate,
+    TransformAgain,
+    TransformSnapping,
     ApplyTransform,
     CancelTransform,
     PlacementOriginalSize,
@@ -609,7 +611,7 @@ impl CommandId {
                 | Self::CropRatioTwoThree | Self::CropRatioFiveSeven | Self::CropRatioSixteenNine
                 | Self::CropOverlayThirds | Self::CropOverlayGrid | Self::CropOverlayDiagonal | Self::CropOverlayGolden
                 | Self::CropStraighten | Self::CropDeleteCroppedPixels
-                | Self::TransformFree | Self::TransformUniform | Self::TransformDistort | Self::TransformPerspective
+                | Self::TransformSnapping | Self::TransformFree | Self::TransformUniform | Self::TransformDistort | Self::TransformPerspective
                 | Self::TransformNearest | Self::TransformBilinear | Self::TransformBicubic | Self::TransformLanczos
                 | Self::ColorMixOklab | Self::ColorMixLinear | Self::ColorMixClassic
                 | Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive
@@ -703,7 +705,8 @@ impl CommandId {
             Self::SelectionReference => "reference",
 
             Self::Move => "move",
-            Self::ScaleRotate => "transform",
+            Self::ScaleRotate | Self::TransformAgain => "transform",
+            Self::TransformSnapping => "ruler-snap",
             Self::ApplyTransform => "check",
             Self::CancelTransform => "close",
             Self::PlacementOriginalSize => "transform",
@@ -946,6 +949,8 @@ impl CommandId {
             Self::SelectionReference => MessageId::COMMAND_SELECTION_REFERENCE,
             Self::Move => MessageId::COMMAND_MOVE,
             Self::ScaleRotate => MessageId::COMMAND_SCALE_ROTATE,
+            Self::TransformAgain => MessageId::COMMAND_TRANSFORM_AGAIN,
+            Self::TransformSnapping => MessageId::COMMAND_TRANSFORM_SNAPPING,
             Self::ApplyTransform => MessageId::COMMAND_APPLY_TRANSFORM,
             Self::CancelTransform => MessageId::COMMAND_CANCEL_TRANSFORM,
             Self::PlacementOriginalSize => MessageId::COMMAND_PLACEMENT_ORIGINAL_SIZE,
@@ -1242,6 +1247,7 @@ pub enum UiAction {
     ImageSize { action: ImageSizeAction },
     FrequencySeparation { action: FrequencySeparationAction },
     Tonal { action: TonalAction },
+    TransformReference { reference: CanvasAnchor },
     ActivateHeaderItem {
         id: u32,
     },

@@ -1950,10 +1950,10 @@ fn a_large_bent_material_photo_keeps_the_display_source_budget() {
     doc.layers.remove(0);Scene::geometry_bytes(&doc.layers,Some(scene));
     assert_eq!(scene.mesh_geometry.borrow().len(),1,"retired owner geometry cannot accumulate across poses");
     let mut scene=r.scene.take().unwrap();
-    let mapped=scene.material_coverage(&r,doc.layers[0].id,&geometry).0;
+    let mapped=scene.material_coverage(&r,doc.layers[0].id,&geometry,&[]).0;
     assert!(!mapped.is_empty());
     assert!((mapped.max.x-mapped.min.x)*(mapped.max.y-mapped.min.y)<256.*256.*2.,"one wet tile keeps its mapped footprint: {mapped:?}");
-    assert_eq!(scene.material_coverage(&r,doc.layers[0].id,&geometry).0,mapped);
+    assert_eq!(scene.material_coverage(&r,doc.layers[0].id,&geometry,&[]).0,mapped);
     let frame=packet(&doc.layers,[doc.width,doc.height]);
     for tile in [[0,0],[1,0],[0,1]] {
         scene.placed_material_tile(&r,frame,&doc.layers[0],geometry.clone(),tile).unwrap();

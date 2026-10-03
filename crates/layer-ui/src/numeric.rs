@@ -128,18 +128,7 @@ pub enum NumericKind {
     Slider,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum NumericMapping {
-    Linear,
-    Log,
-    /// The control travels uniformly through value^exponent. Exponent 2 on
-    /// brush diameter gives equal increments of brush area; 0.5 gives a
-    /// quadratic diameter response. Signed powers also support negative ranges.
-    Power {
-        exponent: f64,
-    },
-}
+pub use layer_core::NumericMapping;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NumericControl {

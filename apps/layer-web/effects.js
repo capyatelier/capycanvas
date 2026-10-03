@@ -1,5 +1,6 @@
 import {liveCopy,bindCopy} from './localization.js';
 import {composingKey} from "./text-input.js";
+import {captureSliderContacts} from "./numeric.js";
 import {strokeRecordingControl} from './stroke-recording.js';
 import {colorButton, colorCss} from './color-controls.js';
 import {filterPreviewView} from './filter-previews.js';
@@ -88,7 +89,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   });
   panels.get("adjustments").append(adjustments);
   const properties=element("div","effect-properties");properties.dataset.control="properties";
-  const title=element("h3"),body=element("div","property-controls");properties.append(title,body);panels.get("properties").append(properties);
+  const title=element("h3"),page=element("select"),body=element("div","property-controls");page.dataset.propertiesPage="";page.onchange=()=>send({op:"select_page",layer:state().layer_properties.layer,page:page.value});properties.append(title,page,body);panels.get("properties").append(properties);
   const stats=element("div","renderer-stats");stats.dataset.control="stats";panels.get("stats").append(stats);
   const recordButton=button("Start stroke recording",()=>{}); stats.append(recordButton);
   const disposeRecording=strokeRecordingControl(app,recordButton,message);
@@ -106,53 +107,93 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     line.setAttribute("d",view.samples.map((ms,i)=>`${i?"L":"M"}${i*200/119} ${y(ms)}`).join(" "));
   },200);
   function row(label,input){const r=element("label","property-row"),text=element("span","",label);if(typeof label!=="function")text.title=label;r.append(text,input);return r;}
-  function curveEditor(layer,key){
-    const graph=svg("svg",{viewBox:"0 0 200 200",preserveAspectRatio:"none",class:"curve-editor",role:"img","aria-label":"Tone curve"});
+  function numberEditor(numeric,label,request){
+    let owner;
+    const action=value=>({...(owner??request()),operation:{type:"value",value}});
+    const number=numberField(numeric,label,value=>send(owner?{op:"gesture",phase:"move",action:action(value)}:action(value)));
+    number.onEditPhase=phase=>{
+      if(phase==="down")owner=request();
+      const next=action(number.getValue());
+      if(phase!=="down")owner=null;
+      send({op:"gesture",phase,action:next});
+    };
+    captureSliderContacts(number);
+    return number;
+  }
+  function curveEditor(layer,key,initial){
+    let control=initial,drag,held,pressCount,clickCount;
+    const node=element("div","curve-field"),frame=element("div","curve-frame"),plot=element("div","curve-plot");
+    const graph=svg("svg",{viewBox:"0 0 200 200",preserveAspectRatio:"none",class:"curve-editor",role:"group",tabindex:0});
     const grid=svg("path",{d:"M50 0V200M100 0V200M150 0V200M0 50H200M0 100H200M0 150H200",stroke:"currentColor",opacity:.2});
-    const path=svg("path",{fill:"none",stroke:"currentColor","stroke-width":1.5}),points=svg("g",{fill:"currentColor"});graph.append(grid,path,points);
-    const white=svg("path",{fill:"none",stroke:"currentColor","stroke-dasharray":"3 3",opacity:.7}),axis=svg("text",{x:5,y:13,fill:"currentColor","font-size":10});graph.append(white,axis);
-    let control,drag,pressed,origin,lastTap=null;
-    const node=element("div","curve-field"),reset=button("",()=>{lastTap=null;send({op:"reset",layer,key});});
-    reset.append(icon("reset"));bindCopy(reset,()=>copy.reset_curve,"title");reset.dataset.action="curve-reset";node.append(graph,reset);
-    bindCopy(node,()=>copy.curve_help,"title");
-    bindCopy(graph,()=>copy.curve_help,"ariaLabel");
-    const position=e=>{const b=graph.getBoundingClientRect();return [(e.clientX-b.left)/b.width,1-(e.clientY-b.top)/b.height];};
-    const nearest=p=>control.value.value.findIndex(q=>Math.hypot((q[0]-p[0])*graph.clientWidth,(q[1]-p[1])*graph.clientHeight)<12);
-    const gesture=(phase,index,point,remove=false)=>send({op:"gesture",phase,action:{op:"curve_point",layer,key,index,point,remove}});
+    const path=svg("path",{fill:"none",stroke:"currentColor","stroke-width":1.5}),points=svg("g");
+    const white=svg("path",{fill:"none",stroke:"currentColor","stroke-dasharray":"3 3",opacity:.7});graph.append(grid,white,path,points);
+    const reset=button("",()=>send({op:"reset",layer,key}));reset.append(icon("reset"));reset.dataset.action="curve-reset";
+    plot.append(graph,reset);
+    const axes=initial.curve.axes;
+    const vertical=element("div","curve-axis curve-axis-y"),horizontal=element("div","curve-axis curve-axis-x");
+    vertical.append(...[axes[1].maximum,axes[1].label,axes[1].minimum].map(text=>element("span","",text)));
+    horizontal.append(...[axes[0].minimum,axes[0].label,axes[0].maximum].map(text=>element("span","",text)));
+    frame.append(vertical,plot,element("span"),horizontal);node.append(frame);
+    const coordinates=["input","output"].map((axis,index)=>{
+      const number=numberEditor(initial.curve.numeric,axes[index].label,()=>({op:"curve_number",layer,key,epoch:control.curve.epoch,axis}));
+      number.dataset.curveAxis=axis;
+      const ev=element("div","curve-ev");node.append(number,ev);return{axis,number,ev};
+    });
+    const current=()=>({layer,key,epoch:control.curve.epoch});
+    const position=(e,rect=graph.getBoundingClientRect())=>[e.clientX-rect.left,e.clientY-rect.top];
+    const contact=(phase,e)=>{if(drag)send({op:"curve_contact",...drag.owner,phase,point:e?position(e,drag.rect):[0,0],extent:[drag.rect.width,drag.rect.height]});};
+    const cancel=()=>{
+      const owner=drag?.owner??held;
+      drag=null;held=null;
+      if(owner)send({op:"curve_contact",...owner,phase:"cancel",point:[0,0],extent:[1,1]});
+    };
     graph.onpointerdown=e=>{
-      if(e.button)return;e.preventDefault();e.stopPropagation();const point=position(e);let index=nearest(point);
-      pressed=index>=0;origin=[e.clientX,e.clientY];
-      if(pressed)gesture("down",index,control.value.value[index]);
-      else{gesture("down",null,point);index=control.value.value.findIndex(q=>Math.abs(q[0]-point[0])<.002);}
-      drag=index;graph.setPointerCapture(e.pointerId);
+      if(e.button)return;e.preventDefault();e.stopPropagation();graph.focus({preventScroll:true});
+      cancel();
+      pressCount=control.value.value.length;
+      drag={id:e.pointerId,rect:graph.getBoundingClientRect(),owner:current()};graph.setPointerCapture(e.pointerId);
+      contact("down",e);
     };
-    graph.onpointermove=e=>{if(drag==null||drag<0)return;e.preventDefault();gesture("move",drag,position(e));};
-    graph.onpointerup=e=>{
-      if(drag==null)return;
-      if(drag<0)gesture("cancel",null,[0,0]);
-      else{
-        const tapped=pressed&&Math.hypot(e.clientX-origin[0],e.clientY-origin[1])<4;
-        const double=tapped&&lastTap?.index===drag&&e.timeStamp-lastTap.time<400;
-        lastTap=tapped&&!double?{index:drag,time:e.timeStamp}:null;
-        gesture("up",drag,position(e),double);
-      }
-      drag=null;
+    graph.onpointermove=e=>{if(drag?.id===e.pointerId){e.preventDefault();contact("move",e);}};
+    graph.onpointerup=e=>{if(drag?.id===e.pointerId){contact("up",e);drag=null;graph.releasePointerCapture(e.pointerId);}};
+    graph.onpointercancel=graph.onlostpointercapture=cancel;
+    const remove=(e,point_count=null)=>{const rect=graph.getBoundingClientRect();send({op:"curve_remove_at",...current(),point:position(e,rect),extent:[rect.width,rect.height],point_count});};
+    graph.onclick=e=>{if(e.detail===1)clickCount=pressCount;};
+    graph.ondblclick=e=>{e.preventDefault();e.stopPropagation();remove(e,clickCount);};
+    graph.oncontextmenu=e=>{e.preventDefault();e.stopPropagation();cancel();remove(e);};
+    const keyEvent=(e,pressed)=>{
+      if(composingKey(e)||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace','Escape'].includes(e.key))return;
+      if(pressed&&(e.ctrlKey||e.metaKey||e.altKey))return;
+      e.preventDefault();e.stopPropagation();
+      const owner=held?.key_event===e.key?held:current();
+      if(pressed)held={...owner,key_event:e.key};
+      send({op:"curve_key",...owner,key_event:e.key,pressed,repeat:e.repeat,modifiers:{command:e.ctrlKey||e.metaKey,shift:e.shiftKey,alt:e.altKey}});
+      if((!pressed&&held?.key_event===e.key)||e.key==='Escape'){held=null;if(e.key==='Escape')drag=null;}
     };
-    graph.onpointercancel=()=>{if(drag==null)return;gesture("cancel",drag<0?null:drag,[0,0]);drag=null;};
-    graph.oncontextmenu=e=>{e.preventDefault();e.stopPropagation();const index=nearest(position(e));if(index>=0)send({op:"curve_point",layer,key,index,point:[0,0],remove:true});};
-    return {node,update:c=>{reset.hidden=!c.modified;control=c;const {curve_max:peak,curve_white:reference}=state().layer_properties;white.setAttribute("d",peak?`M${200*reference} 0V200M0 ${200-200*reference}H200`:"");axis.textContent=peak?`SDR white · 0 EV | ${peak} · +${Math.log2(peak)} EV`:`${copy.output} / ${copy.input}`;path.setAttribute("d",c.plot.map(([x,y],i)=>`${i?"L":"M"}${x*200} ${(1-y)*200}`).join(" "));points.replaceChildren(...c.value.value.map(([x,y])=>svg("circle",{cx:x*200,cy:(1-y)*200,r:3.5})));}};
+    graph.onkeydown=e=>keyEvent(e,true);graph.onkeyup=e=>keyEvent(e,false);graph.onblur=cancel;
+    window.addEventListener('blur',cancel);
+    function update(c){
+      control=c;const curve=c.curve;reset.hidden=!c.modified;reset.title=curve.reset_label;node.title=curve.help;graph.setAttribute('aria-label',c.label);
+      for(const [index,axis] of curve.axes.entries()){const row=index?vertical:horizontal;[...row.children].forEach((label,i)=>label.textContent=(index?[axis.maximum,axis.label,axis.minimum]:[axis.minimum,axis.label,axis.maximum])[i]);}
+      for(const [index,{number}] of coordinates.entries())number.relabel(curve.axes[index].label);
+      const [x,y]=curve.axes.map(axis=>axis.white);
+      white.setAttribute('d',x==null?'':`M${200*x} 0V200M0 ${200-200*y}H200`);
+      path.setAttribute('d',c.plot.map(([x,y],i)=>`${i?'L':'M'}${x*200} ${(1-y)*200}`).join(' '));
+      points.replaceChildren(...c.value.value.map(([x,y],index)=>svg('circle',{cx:x*200,cy:(1-y)*200,r:index===curve.selected?5:3.5,fill:index===curve.selected?'none':'currentColor',stroke:'currentColor','stroke-width':1.5})));
+      for(const {axis,number,ev} of coordinates){const value=curve[axis];number.update(value?.value??0,value?.text??'');number.setDisabled(!state().layer_properties.enabled||!value||value.read_only);ev.hidden=curve.domain.kind!=='log_hdr';ev.textContent=value?.ev??'';}
+    }
+    update(initial);
+    return {node,update,dispose(){window.removeEventListener('blur',cancel);cancel();coordinates.forEach(({number})=>number.dispose());}};
   }
   function refresh(){
     refreshPicker();
     const view=state().layer_properties;title.textContent=view.title;title.title=view.description;
-    const next=JSON.stringify([String(view.layer),view.controls.map(c=>[c.key,c.kind.kind,c.kind.numeric,c.section_id,c.color_action])],(_,v)=>typeof v==="bigint"?String(v):v);
+    const pages=JSON.stringify(view.pages);
+    if(page.dataset.schema!==pages){page.dataset.schema=pages;page.replaceChildren(...view.pages.map(p=>{const option=element("option","",p.label);option.value=p.id;return option;}));}
+    page.hidden=view.pages.length<2;page.value=view.page??"";page.disabled=!view.enabled;
+    const next=JSON.stringify([String(state().document_file.epoch),String(view.layer),view.controls.map(c=>[c.key,c.kind.kind,c.kind.numeric,c.section_id,c.color_action])],(_,v)=>typeof v==="bigint"?String(v):v);
     if(schema!==next){
-      schema=next;body.replaceChildren();fields.clear();
-      const curves=view.controls.filter(c=>c.kind.kind==="curve");let curveBox;
-      if(curves.length){const select=element("select"),stack=element("div","curve-stack");curveBox=stack;
-        for(const c of curves){const option=element("option","",()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"");option.value=c.key;select.append(option);}
-        select.onchange=()=>{for(const child of stack.children)child.toggleAttribute("hidden",child.dataset.key!==select.value);};body.append(select,stack);
-      }
+      schema=next;for(const field of fields.values())field.dispose?.();body.replaceChildren();fields.clear();
       let section=JSON.stringify(null);
       for(const [index,c] of view.controls.entries()){
         const identity=JSON.stringify(c.section_id);
@@ -162,22 +203,30 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
           if(c.section)body.append(element("h4","property-section",()=>state().layer_properties.controls.find(v=>v.key===c.key)?.section??""));
         }
         const change=value=>send({op:"set",layer:view.layer,key:c.key,value:{kind:c.kind.kind,value}});let field;
-        if(c.kind.kind==="number") {const n=numberField(c.kind.numeric,()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",value=>change(value));field={node:n,update:c=>n.update(c.value.value),disable:x=>n.setDisabled(x)};}
-        else if(c.kind.kind==="curve"){field=curveEditor(view.layer,c.key);field.node.dataset.key=c.key;field.node.toggleAttribute("hidden",c!==curves[0]);curveBox.append(field.node);}
+        if(c.kind.kind==="number") {const n=numberEditor(c.kind.numeric,()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",()=>({op:"number",layer:view.layer,key:c.key}));field={node:n,update:c=>n.update(c.value.value),disable:x=>n.setDisabled(x),dispose:()=>n.dispose()};}
+        else if(c.kind.kind==="curve") {
+          let curve=curveEditor(view.layer,c.key,c),domain=JSON.stringify(c.curve.domain);
+          const node=element('div');node.append(curve.node);
+          field={node,update(c){
+            const next=JSON.stringify(c.curve.domain);
+            if(next!==domain){domain=next;curve.dispose();curve=curveEditor(view.layer,c.key,c);node.replaceChildren(curve.node);}
+            else curve.update(c);
+          },dispose:()=>curve.dispose()};
+        }
         else if(c.kind.kind==="toggle"){const n=element("input");n.type="checkbox";n.onchange=()=>change(n.checked);field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.checked=c.value.value,disable:x=>n.disabled=x};}
         else if(c.kind.kind==="choice"){const n=element("select");c.kind.options.forEach((label,i)=>{const o=element("option","",()=>state().layer_properties.controls.find(v=>v.key===c.key)?.kind.options[i]??"");o.value=i;n.append(o);});n.onchange=()=>change(Number(n.value));field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.value=c.value.value,disable:x=>n.disabled=x};}
         else if(c.kind.kind==="color"){const n=colorButton({app,label:()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",element,button,change,current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}`});let input=n.node,bucket;
           if(c.color_action){bucket=button("",()=>dispatch(c.color_action));bucket.dataset.action=`${c.key.replaceAll("_","-")}-bucket`;bindCopy(bucket,()=>copy.use_selected,"title");bucket.append(icon("fill"));input=element("div","color-action-property");input.append(n.node,bucket);}
           field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",input),update:c=>n.update(c.value.value),disable:x=>{n.disable(x);if(bucket)bucket.disabled=x;}};}
         else if(c.kind.kind==="gradient")field=gradientEditor(view.layer,c.key);
-        if(field){if(c.kind.kind!=="curve")body.append(field.node);fields.set(c.key,field);}
+        if(field){field.node.dataset.propertyKey=c.key;body.append(field.node);fields.set(c.key,field);}
       }
       contentChanged("properties");
     }
     body.classList.toggle("disabled",!view.enabled);
     for(const c of view.controls){const field=fields.get(c.key);field?.update(c);field?.disable?.(!view.enabled);}
   }
-  return {refresh,dispose(){disposePreviews();clearInterval(statsTimer);disposeRecording();}};
+  return {refresh,dispose(){for(const field of fields.values())field.dispose?.();disposePreviews();clearInterval(statsTimer);disposeRecording();}};
   function gradientEditor(layer,key) {
     const node=element("div","gradient-editor"),bar=element("div","gradient-ramp"),stopsRow=element("div","gradient-stops");
     let stops=[],selected=0,rampKey;

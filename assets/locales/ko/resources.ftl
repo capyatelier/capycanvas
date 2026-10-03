@@ -547,3 +547,6 @@ resources-selection-menu-subtract-opacity-from-selection = 선택 영역에서 �
 resources-selection-menu-unlock-editing = 편집 잠금 해제
 
 resources-layer-menu-duplicate = 복제
+
+resources-curves-help = 점을 끌어 톤을 조절하세요. 방향키로 선택한 점을 이동하고 Shift를 누르면 더 크게 이동합니다. 끝점이 아닌 점을 두 번 눌러 삭제할 수 있습니다.
+resources-curves-reset = 곡선 초기화

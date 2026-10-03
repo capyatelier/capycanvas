@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [M2–M4 record](../history/photo-editing-m2-m4.md) · [Photo editing performance](photo-editing-performance.md)
 
-Status: **open** (2026-09-28). Milestones M0 to M4 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) are done: M1 on every host, and M2 to M4 on GTK, Web and Android. This plan lists what is left of the photo editing epic. Item IDs (GEO-1, RET-5 and so on) are specified in sections 5 and 6 of the research record, and journey numbers refer to its section 2. Performance and memory gates are in [photo editing performance](photo-editing-performance.md).
+Status: **open** (2026-10-02). Milestones M0 to M5 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) are implemented: M1 on every host, and M2 to M5 on GTK, Web and Android, with live Liquify deferred. This plan lists what is left of the photo editing epic. Item IDs (GEO-1, RET-5 and so on) are specified in sections 5 and 6 of the research record, and journey numbers refer to its section 2. Unmet performance and memory gates remain in [photo editing performance](photo-editing-performance.md) and the [tier tables](../PERFORMANCE_TARGETS.md).
 
 Each milestone gets its own implementation plan, as M2–M4 had: decisions first, then steps with tests and an exit test, then host journeys in light and dark. Delete the plan when its work lands.
 
@@ -16,22 +16,31 @@ pigment, wetness and editable masks, with cancellable atomic publication.
 Paint and photos retain perspective and Warp, with exact reopen, grid splits,
 point selection and atomic group transforms. Their controls are described in
 the [canvas action bar](../ui/canvas-action-bar.md#transform-modes).
+Position anchor controls absolute X/Y independently of the draggable pivot;
+snapping, held nudges and Transform Again share one session implementation.
+Properties now supplies bounded pages, conditional visibility, slider mappings
+and soft bounds. Curves uses shared channel navigation and precise numeric
+point editing in Encoded RGB and Log HDR, described in
+[numeric controls](../ui/numeric-controls.md#properties-and-curves).
 
 ## Milestones
 
 | Milestone | Contents | Journeys |
 | --- | --- | --- |
-| **M5 Lossless transforms** | XF-4 reference point, pivot, snapping, nudge and Transform Again. | Improves 17, 25 |
-| **M6 Tone and color** | P-6, P-7, ADJ-1 with ADJ-4 and the picker bar modes (BAR-5), ADJ-2, ADJ-3, ADJ-5, ADJ-6, ADJ-10, VIEW-2 with its bar mode, VIEW-3 with sampler bars, IO-3, T-3, T-7, T-14. | Improves 5–10, 13, 29 |
+| **M6 Tone and color** | Remaining P-7 picker metadata, ADJ-1 with ADJ-4 and the picker bar modes (BAR-5), ADJ-2, ADJ-3, ADJ-5, ADJ-6, ADJ-10, VIEW-2 with its bar mode, VIEW-3 with sampler bars, IO-3, T-3, T-7, T-14. | Improves 5–10, 13, 29 |
 | **M7 Masking and compositing** | SEL-6 as an on-canvas session, SEL-7, SEL-8, LYR-3, LYR-4, ADJ-7, ADJ-8, T-10. | Opens 15; improves 11, 12, 14, 16, 17, 19 |
 | **M8 Advanced** | RET-5 (Content-Aware on the selection bar), RET-6, RET-8, RET-9 history brush, LYR-6 to LYR-9, IO-4 to IO-6, ADJ-11 remainder, ADJ-12, SEL-9, VIEW-4, VIEW-5, T-12, T-19, and the BAR-8 decision. | Opens 9; completes 21, 28 |
 
-Order: M5 to M8 as listed. Gradient interpolation in Oklab (T-14, in M6) is a per-gradient choice, as decision 4 of the M2–M4 record planned.
+Order: M6 to M8 as listed. Gradient interpolation in Oklab (T-14, in M6) is a per-gradient choice, as decision 4 of the M2–M4 record planned.
 
 **Later, by decision:** per-layer linear blending for non-Normal layers in Perceptual documents; constant-colour pages, so a Dodge & Burn layer and other fill layers stop costing a full layer of GPU memory.
 Live Liquify (XF-5) is deferred to a future effect; existing baked Liquify remains supported.
 
 ## Apple and Windows
+
+The M5 transform controls and shared Properties pages/precise Curves also need
+native presentation and device verification on Apple and Windows. Shared Rust
+support and bridge compilation do not establish native UI parity.
 
 M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_PORTING_GUIDE.md) and [Windows](../WINDOWS_PORTING_GUIDE.md) porting guides. Shared Rust already provides the behaviour; the hosts need to present it. Apple presents the shared UI state, M2 and Canvas Size already; the items marked *Windows* are left only there:
 

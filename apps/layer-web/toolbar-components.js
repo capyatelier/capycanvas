@@ -29,10 +29,11 @@ export function actionField({ element, button, icon }, spec, send, { label, aria
 export function choiceField({ element, button, icon, openPopup, closePopup }, spec, send, { labels = false } = {}) {
   const row = element('div', `toolbar-option ${spec.segmented ? 'toolbar-segments selection-modes' : 'toolbar-choice'}`);
   row.dataset.toolbarField = ''; row.dataset.toolbarChoice = spec.id;
+  if (spec.columns) { row.classList.add('choice-grid'); row.style.setProperty('--choice-columns', spec.columns); row.title = spec.label; }
   let selected = spec.items.findIndex(i => i.selected);
   const buttons = spec.segmented ? spec.items.map((item, i) => {
     const b = button('', () => send(item.action)); b.append(icon(item.icon));
-    if (labels) b.append(element('span', 'toolbar-segment-label', item.label));
+    if (labels && !spec.columns) b.append(element('span', 'toolbar-segment-label', item.label));
     b.title = item.label; b.setAttribute('aria-label', item.label); b.dataset.toolbarSegment = `${spec.id}-${i}`; row.append(b); return b;
   }) : [];
   const b = spec.segmented ? null : button('', () => {

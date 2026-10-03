@@ -2,6 +2,7 @@ import {liveCopy,bindCopy} from './localization.js';
 import { createRasterWorker } from './raster-worker-client.js';
 import { chooseColor } from './color-controls.js';
 import { createRangeControl } from './range-control.js';
+import { choiceField } from './toolbar-components.js';
 const selectionModes = new Set(['selection_new', 'selection_add', 'selection_subtract', 'selection_intersect']);
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ selectionUi, app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
@@ -87,14 +88,13 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         const modes = element("div", "selection-modes");
         modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Selection mode");
         if (s.tool_actions.some(spec => selectionModes.has(spec.command))) root.append(modes);
+        const beside=new Map();let grouped;
         for (const {Choice:spec} of s.tool_extra) {
-          const bar=element('div','selection-modes tonal-tones'); bar.dataset.toolChoiceBar=spec.id;
-          bar.setAttribute('role','radiogroup');bar.setAttribute('aria-label',spec.label);
-          spec.items.forEach((item,index)=>{
-            const node=button('',()=>dispatch(item.action));node.append(icon(item.icon));node.title=item.label;
-            node.dataset.toolChoiceTone=String(index);node.setAttribute('role','radio');node.setAttribute('aria-label',item.label);
-            bar.append(node);choices.push([spec.id,index,node]);
-          });root.append(bar);
+          const field=choiceField({element,button,icon},spec,dispatch),bar=field.row;
+          bar.dataset.toolChoiceBar=spec.id;
+          [...bar.children].forEach((node,index)=>node.dataset.toolChoiceTone=String(index));
+          choices.push([spec.id,field]);
+          if(spec.beside)beside.set(spec.beside,{spec,bar});else root.append(bar);
         }
         for (const field of s.tool_settings) {
           if (compact && field.id==='tonal_upper') continue;
@@ -104,10 +104,15 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
               onChange:(index,value)=>dispatch({type:'set_tool_setting',id:bounds[index].id,value})});
             root.append(range);continue;
           }
-          if (field.group && field.group !== group) root.append(element("h3", "", ()=>state().tool_settings.find(f=>f.id===field.id)?.group??"")); group=field.group;
-          const node=numberField(field.numeric,()=>state().tool_settings.find(f=>f.id===field.id)?.label??"",value=>dispatch({type:"set_tool_setting",id:field.id,value}),compact);
+          if(field.group!==group){
+            group=field.group;grouped=null;const extra=beside.get(field.id);
+            if(group)root.append(element('h3','',()=>state().tool_extra.find(o=>o.Choice?.beside===field.id)?.Choice.label??state().tool_settings.find(f=>f.id===field.id)?.group??''));
+            if(extra){const row=element('div','tool-position-group');grouped=element('div','tool-position-numbers');row.append(extra.bar,grouped);root.append(row);}
+          }
+          const node=numberField(field.numeric,()=>state().tool_settings.find(f=>f.id===field.id)?.label??"",value=>dispatch({type:"set_tool_setting",id:field.id,value}),compact||!!grouped);
           node.dataset.toolSetting=field.id;
-          if(compact){const row=element('label','tonal-numeric-row');row.append(element('span','',()=>state().tool_settings.find(f=>f.id===field.id)?.label??''),node);root.append(row);}else root.append(node);
+          if(grouped)node.querySelector('.number-track').hidden=true;
+          if(compact||grouped){const row=element('label','tonal-numeric-row');row.append(element('span','',()=>state().tool_settings.find(f=>f.id===field.id)?.label??''),node);(grouped??root).append(row);}else root.append(node);
           numbers.push([field.id,node]);
         }
         for (const spec of s.tool_actions) {
@@ -120,7 +125,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
       if(range) {range.relabel(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id)),copy.tool_controls.range_hint);range.update(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id).value));}
-      for(const [id,index,node] of choices) {const item=s.tool_extra.find(o=>o.Choice.id===id).Choice.items[index];node.title=item.label;node.setAttribute('aria-label',item.label);const selected=item.selected;node.setAttribute('aria-checked',selected);node.setAttribute('aria-pressed',selected);}
+      for(const [id,field] of choices)field.update(s.tool_extra.find(o=>o.Choice.id===id));
       for (const [spec,node] of actions) {
         const c=s.commands.find(c=>c.id===spec.command);
         if(!node.firstChild) {

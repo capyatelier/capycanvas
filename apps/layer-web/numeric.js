@@ -37,7 +37,48 @@ export function createNumberField({ control, label, labels: captions, resolve, o
     valueBox.append(measure);
     if (valueOnly) { root.classList.add('number-value-only'); entry.size = 1; }
   }
-  let value = control.min, display, editing = false, disabled = false;
+  let value = control.min, display, presented, editing = false, disabled = false;
+  let gesture = false, cancelled = false, heldKey, releaseTimer, releasePointer;
+  const finishGesture = (phase = 'up') => {
+    clearTimeout(releaseTimer); releaseTimer = null;
+    releasePointer?.(); releasePointer = null;
+    window.removeEventListener('blur', blurGesture);
+    const active=gesture&&!cancelled;
+    gesture = cancelled = false; heldKey = null;
+    if(active)root.onEditPhase?.(phase);
+  };
+  const blurGesture = () => finishGesture();
+  const beginGesture = () => {
+    if(releaseTimer)finishGesture();
+    if(!root.onEditPhase || disabled || gesture)return;
+    gesture = true;root.onEditPhase('down');window.addEventListener('blur',blurGesture);
+  };
+  root.addEventListener('pointerdown', e => {
+    if(e.button || !(e.target===slider || e.target.closest('.number-step')))return;
+    document.activeElement?.blur?.();
+    beginGesture();if(!gesture)return;
+    const end = event => {
+      if(event.pointerId!==e.pointerId)return;
+      if(event.type==='pointercancel')finishGesture('cancel');
+      else releaseTimer=setTimeout(()=>finishGesture(),0);
+    };
+    window.addEventListener('pointerup',end,true);window.addEventListener('pointercancel',end,true);
+    releasePointer=()=>{window.removeEventListener('pointerup',end,true);window.removeEventListener('pointercancel',end,true);};
+  },true);
+  root.addEventListener('lostpointercapture',()=>{if(gesture&&!releaseTimer)finishGesture('cancel');});
+  root.addEventListener('keydown',e=>{
+    if(composingKey(e))return;
+    if(e.key==='Escape'&&gesture){
+      e.preventDefault();e.stopPropagation();
+      if(!cancelled){root.onEditPhase?.('cancel');cancelled=true;}finish(true);return;
+    }
+    if((e.target===entry&&['ArrowUp','ArrowDown'].includes(e.key)) || (e.target===slider&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','PageUp','PageDown','Home','End'].includes(e.key))){
+      if(heldKey&&heldKey!==e.key)finishGesture();
+      beginGesture();heldKey=e.key;
+    }
+  },true);
+  root.addEventListener('keyup',e=>{if(e.key===heldKey)finishGesture();},true);
+  root.addEventListener('focusout',e=>{if(gesture&&!root.contains(e.relatedTarget))finishGesture();});
   function show(next) {
     value = next.value; display = next; valueButton.textContent = next.text;
     if (valueOnly) valueBox.querySelector('.number-measure').textContent = next.text;
@@ -48,6 +89,7 @@ export function createNumberField({ control, label, labels: captions, resolve, o
     minus.disabled = disabled || value <= control.min; plus.disabled = disabled || value >= control.max;
   }
   function apply(operation) {
+    if(cancelled || (operation.type==='expression' && presented!=null && operation.text===presented))return true;
     try {
       const next = resolve({ control, value, operation });
       root.classList.remove("error"); entry.removeAttribute("aria-invalid"); entry.title = "";
@@ -83,8 +125,11 @@ export function createNumberField({ control, label, labels: captions, resolve, o
     }
   });
   slider.addEventListener("input", () => { if (finish()) apply({ type: "position", position: Number(slider.value) }); else show(display); });
-  root.update = next => { if(!display || next !== value) show(resolve({ control, value: next, operation: { type: "format" } })); };
-  root.setDisabled = next => { if (disabled === next) return; disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; show(display); };
+  root.update = (next,text) => {
+    if(!display || next!==value || text!==presented){presented=text;const result=resolve({control,value:next,operation:{type:'format'}});if(text!=null)result.text=result.edit=text;show(result);}
+  };
+  root.getValue = () => value;
+  root.setDisabled = next => { if (disabled === next) return; if(next)finishGesture('cancel');disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; show(display); };
   root.setDescription = text => {
     labels.querySelector('.number-description')?.remove();
     if (text) { const p = node("p", "number-description"); p.textContent = text; labels.append(p); }
@@ -105,10 +150,11 @@ export function createNumberField({ control, label, labels: captions, resolve, o
   root.entry = entry;
   root.valueButton = valueButton;
   root.slider = slider;
-  root.format = () => show(resolve({ control, value, operation: { type: "format" } }));
+  root.format = () => {const result=resolve({control,value,operation:{type:'format'}});if(presented!=null)result.text=result.edit=presented;show(result);};
   root.apply = apply;
   root.cancelEditing = () => finish(true);
   root.commit = () => finish();
+  root.dispose = () => {finishGesture('cancel');finish(true);};
   entry.hidden = buttonValue; valueButton.hidden = !buttonValue;
   if (!ranged) { entry.setAttribute("role", "spinbutton"); entry.setAttribute("aria-valuemin", control.min * control.scale); entry.setAttribute("aria-valuemax", control.max * control.scale); }
   root.update(value);
@@ -131,6 +177,7 @@ export function captureSliderContacts(number) {
     if (e.button || slider.disabled) return;
     e.preventDefault(); e.stopPropagation();
     if (!pick(e)) return;
+    slider.focus({preventScroll:true});
     contact = e.pointerId; slider.setPointerCapture(e.pointerId);
   });
   slider.addEventListener("pointermove", e => { if (contact === e.pointerId) { e.preventDefault(); pick(e); } });

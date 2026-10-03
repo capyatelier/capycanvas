@@ -11,6 +11,9 @@ use layer_render::{CanvasRenderer, CursorSegment, TransformPreview};
 #[path = "operation/placement.rs"]
 mod placement;
 use placement::Placement;
+#[path = "operation/snapping.rs"]
+mod snapping;
+use snapping::Snapping;
 pub(crate) use placement::PlacementInsertion;
 
 /// Translate, rotate, shear x by y, then scale, all about the box centre.
@@ -75,9 +78,10 @@ pub(super) enum TransformMode {
     Distort,
     Warp,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Handle {
     Move,
+    Pivot,
     Scale([f32; 2]),
     Rotate,
     Corner(usize),
@@ -96,8 +100,18 @@ struct Geometry {
     inner: Option<Projective>,
     mesh: Option<Arc<MeshMap>>,
     frame: Rect,
+    pivot: Point,
     interpolation: Option<Interpolation>,
     nodes: BTreeSet<u32>,
+}
+impl Geometry {
+    fn outer(&self) -> Option<Projective> {
+        if self.inner.is_none() && let Some((pose, exact)) = self.exact_affine
+            && self.pose == pose { return Some(exact); }
+        if self.pose == Pose::identity() { return Some(self.inner.unwrap_or(Projective::IDENTITY)); }
+        let pose = Projective::from_affine(self.pose.affine(center(self.frame)));
+        self.inner.map_or(Some(pose), |inner| inner.then(pose))
+    }
 }
 struct WarpSplit {
     axes: [bool; 2],
@@ -110,6 +124,8 @@ struct Drag {
     press: Point,
     current: Point,
     start: Geometry,
+    anchor: Point,
+    snapping: Option<Snapping>,
 }
 /// `bounds` is the source rectangle. An `outline` transaction moves only that
 /// document selection's placement, never pixels. A `pixel_move` is a Move-tool
@@ -134,6 +150,7 @@ struct Transaction {
     pixel_move: bool,
     retained_move: bool,
     keep_source: bool,
+    reference: CanvasAnchor,
 }
 #[derive(Default)]
 pub(super) struct Operation {
@@ -144,6 +161,9 @@ pub(super) struct Operation {
     serial: u64,
     pub aspect: bool,
     interpolation: Option<Interpolation>,
+    pub snapping: bool,
+    nudging: Option<String>,
+    pub last_transform: Option<Projective>,
     /// Move drags of selected pixels leave the originals in place.
     pub leave_copy: bool,
     /// The target and layer-local selection the renderer prepares a Move
@@ -163,6 +183,7 @@ impl Operation {
     pub fn moving_layer(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.retained_move)
     }
+    pub fn nudging(&self) -> bool { self.nudging.is_some() }
     pub fn moving_pixels(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.pixel_move)
     }
@@ -367,11 +388,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// pixels: a translation by whole layer pixels that keeps the Move tool,
     /// and with `keep_source` leaves the originals in place.
     pub(super) fn begin_move_transform(&mut self, p: Point, keep_source: bool) -> Result<(), String> {
+        let snapping = self.transform_snapping();
         if !self.moves_selected_pixels() {
             self.begin_retained_placement(None, true)?;
             let t = self.operation.current.as_mut().unwrap();
             let press = t.basis.inverse().ok_or("Invalid layer placement")?.map(p);
-            t.drag = Some(Drag { handle: Handle::Move, press, current: press, start: t.geometry.clone() });
+            t.drag = Some(Drag { handle: Handle::Move, press, current: press, start: t.geometry.clone(), anchor: t.reference_point(), snapping });
             self.layer_interaction.path = vec![press];
             return self.update_transform();
         }
@@ -385,7 +407,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let press = t.basis.inverse().ok_or("Invalid layer placement")?.map(p);
         t.pixel_move = true;
         t.keep_source = keep_source;
-        t.drag = Some(Drag { handle: Handle::Move, press, current: press, start: t.geometry.clone() });
+        t.drag = Some(Drag { handle: Handle::Move, press, current: press, start: t.geometry.clone(), anchor: t.reference_point(), snapping });
         self.operation.serial = t.request.transaction;
         self.operation.current = Some(t);
         self.layer_interaction.path = vec![press];
@@ -502,6 +524,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.region_tools.applying_transform() {
             self.region_tools.cancel();
         }
+        self.operation.nudging = None;
         let Some(transaction) = self.operation.current.take() else {
             return Ok(false);
         };
@@ -620,20 +643,21 @@ impl<R: CanvasRenderer> UiSession<R> {
             ..NumericControl::number(-limit, limit, 0.01, 3).unit("°")
         };
         let pose = t.geometry.pose;
+        let position = t.basis.map(t.reference_point());
         [
             (
                 "transform_x",
                 MessageId::TOOL_CONTROL_TRANSFORM_X,
                 MessageId::TOOL_CONTROL_GROUP_POSITION,
                 pixels(t.bounds.max.x - t.bounds.min.x),
-                pose.offset.x,
+                position.x,
             ),
             (
                 "transform_y",
                 MessageId::TOOL_CONTROL_TRANSFORM_Y,
                 MessageId::TOOL_CONTROL_GROUP_POSITION,
                 pixels(t.bounds.max.y - t.bounds.min.y),
-                pose.offset.y,
+                position.y,
             ),
             (
                 "transform_width",
@@ -687,9 +711,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         control.numeric.validate(value, control.label.as_ref()).map_err(|reason| reason.message(self.localization()))?;
         let t = self.operation.current.as_mut().ok_or("No transform")?;
         let mut pose = t.geometry.pose;
+        let pivot = t.pivot();
         match id {
-            "transform_x" => pose.offset.x = value,
-            "transform_y" => pose.offset.y = value,
+            "transform_x" | "transform_y" => {
+                let point = t.reference_point();
+                let mut document = t.basis.map(point);
+                if id == "transform_x" { document.x = value; } else { document.y = value; }
+                let local = t.basis.inverse().ok_or("Invalid transform basis")?.map(document);
+                pose.offset = add(pose.offset, sub(local, point));
+            }
             "transform_angle" => pose.angle = value,
             "transform_skew" => pose.shear = value.tan(),
             "transform_width" | "transform_height" => {
@@ -712,10 +742,82 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Scale must be between 0.1% and 10000%".into());
         }
         t.geometry.pose = pose;
+        if !matches!(id, "transform_x" | "transform_y") { t.keep_pivot(pivot); }
         self.update_transform()
     }
+    pub(super) fn finish_transform_nudge(&mut self, apply: bool) -> Result<bool, String> {
+        if self.operation.nudging.take().is_none() { return Ok(false); }
+        if self.operation.moving_layer() { self.finish_layer_placement(apply)?; }
+        Ok(true)
+    }
+    pub(super) fn transform_nudge(&mut self, key: &str, pressed: bool, allowed: bool, modifiers: Modifiers) -> Result<bool, String> {
+        if !pressed {
+            return if self.operation.nudging.as_deref() == Some(key) { self.finish_transform_nudge(true) } else { Ok(false) };
+        }
+        if allowed && key == "escape" && self.operation.nudging.is_some() {
+            if self.operation.moving_layer() { return self.finish_transform_nudge(false); }
+            self.operation.nudging = None;
+            return Ok(false);
+        }
+        if !allowed || modifiers.command || modifiers.alt || self.operation.dragging() || self.cropping() { return Ok(false); }
+        let step = if modifiers.shift { 10. } else { 1. };
+        let delta = match key {
+            "arrowleft" => Point { x: -step, y: 0. }, "arrowright" => Point { x: step, y: 0. },
+            "arrowup" => Point { x: 0., y: -step }, "arrowdown" => Point { x: 0., y: step },
+            _ => return Ok(false),
+        };
+        if self.operation.current.is_none() && (self.layer_interaction.tool != LayerCanvasTool::Move || !self.retained_transforming()) {
+            return Ok(false);
+        }
+        self.require_idle()?;
+        if self.operation.nudging.as_deref().is_some_and(|held| held != key) { self.finish_transform_nudge(true)?; }
+        if self.operation.current.is_none() { self.begin_retained_placement(None, true)?; }
+        let t = self.operation.current.as_mut().unwrap();
+        let inverse = t.basis.inverse().ok_or("Invalid transform basis")?;
+        let delta = sub(inverse.map(delta), inverse.map(Point::default()));
+        t.geometry.pose.offset = add(t.geometry.pose.offset, delta);
+        self.operation.nudging = Some(key.into());
+        self.update_transform()?;
+        Ok(true)
+    }
+    pub(super) fn transform_again_refusal(&self) -> Option<Arc<str>> {
+        let l = self.localization();
+        if self.operation.last_transform.is_none() { return Some(l.text(MessageId::COMMANDS_TRANSFORM_AGAIN_EMPTY)); }
+        if !self.retained_transforming() { return Some(l.text(MessageId::COMMANDS_TRANSFORM_AGAIN_WHOLE_LAYER)); }
+        self.engine.document().retained_transform_targets(&self.transform_roots()).err().map(|reason| reason.to_string().into())
+    }
+    pub(super) fn transform_again(&mut self) -> Result<(), String> {
+        self.require_document_idle()?;
+        refused(self.transform_again_refusal())?;
+        let delta = self.operation.last_transform.unwrap();
+        let roots = self.transform_roots();
+        let mut candidate = self.engine.document().clone();
+        let targets = candidate.retained_transform_targets(&roots).map_err(error)?;
+        let edit = candidate.retained_transform_edit(&roots, delta).map_err(error)?;
+        candidate.apply(edit.clone()).map_err(error)?;
+        let mut edits = vec![edit];
+        edits.extend(candidate.paint_extent_plan(&targets, self.engine.geometry_limits()).map_err(error)?);
+        self.layer_edit(layer_core::Edit::Batch(edits))
+    }
+    pub(super) fn set_transform_reference(&mut self, reference: CanvasAnchor) -> Result<(), String> {
+        let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
+        t.reference = reference;
+        self.refresh_tools();
+        Ok(())
+    }
+    pub(super) fn transform_extra(&self) -> Vec<ToolOption> {
+        let Some(t) = self.operation.current.as_ref().filter(|t| !t.pixel_move && !t.retained_move && t.mode != TransformMode::Warp) else { return Vec::new(); };
+        vec![ToolOption::Choice { id: "transform-reference", label: self.localization().text(MessageId::TOOLS_TRANSFORM_REFERENCE),
+            segmented: true, columns: Some(3), beside: Some("transform_x"), items: CanvasAnchor::ALL.into_iter().map(|reference| ToolSetItem {
+                label: reference.localized_label(self.localization()),
+                icon: "ellipse-fill", preview: None, selected: t.reference == reference,
+                action: UiAction::TransformReference { reference },
+            }).collect() }]
+    }
     pub(super) fn transform_pen(&mut self, event: PenEvent, p: Point) -> Result<(), String> {
+        if event.phase == PenPhase::Down { self.finish_transform_nudge(true)?; }
         let reach = self.ruler_reach();
+        let snapping = (event.phase == PenPhase::Down).then(|| self.transform_snapping()).flatten();
         let Some(t) = &mut self.operation.current else {
             return Ok(());
         };
@@ -748,6 +850,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                         press: p,
                         current: p,
                         start: t.geometry.clone(),
+                        anchor: t.handles(reach).into_iter().find(|(candidate, _)| *candidate == handle).map_or(t.reference_point(), |(_, point)| point),
+                        snapping,
                     });
                     self.layer_interaction.path = vec![p];
                 }
@@ -758,7 +862,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 drag.current = p;
                 let drag = drag.clone();
-                t.apply_drag(drag, p, self.interaction.modifiers, self.operation.aspect);
+                t.apply_drag(drag, p, self.interaction.modifiers, self.operation.aspect, reach / 12.);
                 if event.phase == PenPhase::Up {
                     t.drag = None;
                     self.layer_interaction.path.clear();
@@ -802,6 +906,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             _ => return Err("Not a transform command".into()),
         };
+        let pivot = t.pivot();
         let pose = &mut t.geometry.pose;
         if flip != [1., 1.] {
             pose.angle = -pose.angle;
@@ -811,6 +916,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let pi = std::f32::consts::PI;
             pose.angle = (pose.angle + turn + pi).rem_euclid(std::f32::consts::TAU) - pi;
         }
+        t.keep_pivot(pivot);
         self.update_transform()
     }
     pub(super) fn cancel_transform_drag(&mut self) -> Result<bool, String> {
@@ -874,6 +980,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && self.selection_masks.target().is_none()
     }
     pub(super) fn update_transform_drag(&mut self) -> Result<bool, String> {
+        let units = self.ruler_reach() / 12.;
         let Some(t) = &mut self.operation.current else {
             return Ok(false);
         };
@@ -881,7 +988,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(false);
         };
         let current = drag.current;
-        t.apply_drag(drag, current, self.interaction.modifiers, self.operation.aspect);
+        t.apply_drag(drag, current, self.interaction.modifiers, self.operation.aspect, units);
         self.update_transform()?;
         Ok(true)
     }
@@ -1024,9 +1131,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         Some(t.corners().map(self.transform_surface_map(t)))
     }
     pub(super) fn append_transform_overlay(&self, segments: &mut Vec<CursorSegment>) {
-        let Some(t) = self.operation.current.as_ref().filter(|t| !t.pixel_move && !t.retained_move) else {
-            return;
-        };
+        let Some(t) = self.operation.current.as_ref() else { return; };
+        if let Some(snapping) = t.drag.as_ref().and_then(|drag| drag.snapping.as_ref()) {
+            let map = self.document_to_logical();
+            segments.extend(snapping.guides.iter().map(|[from, to]| CursorSegment {
+                from: map(*from), to: map(*to), distance: 0., marker: 0., scale: 1.,
+            }));
+        }
+        if t.retained_move || t.pixel_move { return; }
         let map = self.transform_surface_map(t);
         let reach = self.ruler_reach();
         let mut line = |a, b, solid| {
@@ -1097,7 +1209,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 from: [x - half, y - half],
                 to: [x + half, y + half],
                 distance: 0.,
-                marker: 2.,
+                marker: if matches!(handle, Handle::Pivot) { 5. } else { 2. },
                 scale: 1.,
             });
         }
@@ -1158,7 +1270,7 @@ pub(super) fn inside_convex(quad: &[Point; 4], p: Point) -> bool {
 }
 impl Transaction {
     fn new(transaction: u64, layer: LayerId, selection: Option<Selection>, revision: u64, basis: Affine, bounds: Rect, pose: Pose) -> Self {
-        let geometry = Geometry { pose, exact_affine: None, inner: None, mesh: None, frame: bounds, interpolation: None, nodes: BTreeSet::new() };
+        let geometry = Geometry { pose, exact_affine: None, inner: None, mesh: None, frame: bounds, pivot: center(bounds), interpolation: None, nodes: BTreeSet::new() };
         Self {
             placement: None,
             request: TransformPreview {
@@ -1185,10 +1297,21 @@ impl Transaction {
             pixel_move: false,
             retained_move: false,
             keep_source: false,
+            reference: CanvasAnchor::Center,
         }
     }
     fn pose_affine(&self) -> Affine {
         self.geometry.pose.affine(center(self.geometry.frame))
+    }
+    fn pivot(&self) -> Point { self.pose_affine().map(self.geometry.pivot) }
+    fn keep_pivot(&mut self, position: Point) {
+        self.geometry.pose.offset = add(self.geometry.pose.offset, sub(position, self.pivot()));
+    }
+    fn reference_point(&self) -> Point {
+        let [x, y] = self.reference.cell().map(|v| v as f32 * 0.5);
+        let q = self.corners();
+        let mix = |a: Point, b: Point, v: f32| Point { x: a.x + (b.x - a.x) * v, y: a.y + (b.y - a.y) * v };
+        mix(mix(q[0], q[1], x), mix(q[3], q[2], x), y)
     }
     fn outer_bounds(&self) -> Rect {
         self.mapped_mesh().map_or(self.bounds, |mesh| mesh.bounds())
@@ -1198,13 +1321,7 @@ impl Transaction {
             && self.start.mesh.is_none() && mesh.cells() == MeshMap::PRESETS[0]
             && mesh.can_refine(MeshMap::PRESETS[0]) && mesh.is_identity()))
     }
-    fn outer(&self) -> Option<Projective> {
-        if self.geometry.inner.is_none() && let Some((pose, exact)) = self.geometry.exact_affine
-            && self.geometry.pose == pose { return Some(exact); }
-        if self.geometry.pose == Pose::identity() { return Some(self.geometry.inner.unwrap_or(Projective::IDENTITY)); }
-        let pose = Projective::from_affine(self.pose_affine());
-        self.geometry.inner.map_or(Some(pose), |inner| inner.then(pose))
-    }
+    fn outer(&self) -> Option<Projective> { self.geometry.outer() }
     fn map(&self) -> Option<LayerPlacement> {
         let outer = if self.pixel_move {
             let offset = self.geometry.pose.offset;
@@ -1229,7 +1346,7 @@ impl Transaction {
         }
     }
     fn handles(&self, reach: f32) -> Vec<(Handle, Point)> {
-        match self.mode {
+        let mut handles: Vec<(Handle, Point)> = match self.mode {
             TransformMode::Warp => {
                 let Some(mesh) = &self.geometry.mesh else {
                     return Vec::new();
@@ -1256,9 +1373,12 @@ impl Transaction {
                     .chain([(Handle::Rotate, self.rotate_handle(reach))])
                     .collect()
             }
-        }
+        };
+        if self.mode != TransformMode::Warp { handles.push((Handle::Pivot, self.pivot())); }
+        handles
     }
     fn fold(&mut self) {
+        let pivot = self.pivot();
         let Some(inner) = self.outer() else { return; };
         let bounds = self.outer_bounds();
         if self.mapped_mesh().is_none() && let Some(pose) = inner.as_affine().and_then(|map| Pose::from_affine(map, center(bounds))) {
@@ -1266,12 +1386,14 @@ impl Transaction {
             self.geometry.pose = pose;
             self.geometry.inner = None;
             self.geometry.exact_affine = Some((pose, inner));
+            self.geometry.pivot = self.pose_affine().inverse().map_or(pivot, |map| map.map(pivot));
             return;
         }
         self.geometry.inner = Some(inner);
         self.geometry.exact_affine = None;
         self.geometry.pose = Pose::identity();
         self.geometry.frame = inner.bounds(bounds).unwrap_or(bounds);
+        self.geometry.pivot = pivot;
     }
     fn enter_warp(&mut self) {
         if self.geometry.mesh.is_none() {
@@ -1346,9 +1468,75 @@ impl Transaction {
         self.select_points = false;
         self.mode = TransformMode::Free;
     }
-    fn apply_drag(&mut self, drag: Drag, p: Point, modifiers: Modifiers, aspect: bool) {
+    fn apply_drag(&mut self, mut drag: Drag, p: Point, modifiers: Modifiers, aspect: bool, units: f32) {
+        let snapping = drag.snapping.take();
+        self.apply_geometry_drag(drag.clone(), p, modifiers, aspect);
+        if let Some(mut snapping) = snapping {
+            if !matches!(drag.handle, Handle::Rotate) {
+                let bounds = if matches!(drag.handle, Handle::Move) { Rect::around(self.corners().map(|p| self.basis.map(p))) }
+                    else {
+                        let point = self.handles(units * 12.).into_iter().find(|(handle, _)| *handle == drag.handle)
+                            .map_or(p, |(_, point)| point);
+                        let point = self.basis.map(point);
+                        Rect { min: point, max: point }
+                    };
+                let direction = match drag.handle {
+                    Handle::Move if self.mode != TransformMode::Distort && modifiers.shift => Some(sub(p, drag.press)),
+                    Handle::Corner(_) if self.perspective || modifiers.shift => Some(sub(p, drag.press)),
+                    _ => None,
+                }.map(|delta| if delta.x.abs() >= delta.y.abs() { Point { x: 1., y: 0. } } else { Point { x: 0., y: 1. } })
+                    .or_else(|| match drag.handle {
+                        Handle::Scale(side) => {
+                            let moving = local_handle(drag.start.frame, side);
+                            let fixed = if modifiers.alt { drag.start.pivot } else { local_handle(drag.start.frame, side.map(|value| -value)) };
+                            let direction = if modifiers.command && (side[0] == 0. || side[1] == 0.) {
+                                Some(if side[0] == 0. { Point { x: 1., y: 0. } } else { Point { x: 0., y: 1. } })
+                            } else if aspect || modifiers.shift { Some(sub(moving, fixed)) }
+                            else if side[0] == 0. { Some(Point { x: 0., y: moving.y - fixed.y }) }
+                            else if side[1] == 0. { Some(Point { x: moving.x - fixed.x, y: 0. }) }
+                            else { None };
+                            direction.map(|direction| drag.start.pose.map_linear(direction))
+                        }
+                        _ => None,
+                    }).map(|direction| sub(self.basis.map(direction), self.basis.map(Point::default())));
+                let delta = snapping.correction(bounds, self.basis.map(drag.anchor), direction, units);
+                if delta != Point::default() && let Some(inverse) = self.basis.inverse() {
+                    let delta = sub(inverse.map(delta), inverse.map(Point::default()));
+                    let pointer = match drag.handle {
+                        Handle::Scale(side) => {
+                            let start = drag.start.pose.affine(center(drag.start.frame)).map(local_handle(drag.start.frame, side));
+                            let current = self.pose_affine().map(local_handle(self.geometry.frame, side));
+                            add(drag.press, sub(current, start))
+                        }
+                        Handle::Move if self.mode != TransformMode::Distort && modifiers.shift => {
+                            let delta = sub(p, drag.press);
+                            add(drag.press, if delta.x.abs() >= delta.y.abs() { Point { x: delta.x, y: 0. } } else { Point { x: 0., y: delta.y } })
+                        }
+                        Handle::Corner(_) if self.perspective || modifiers.shift => {
+                            let delta = sub(p, drag.press);
+                            add(drag.press, if delta.x.abs() >= delta.y.abs() { Point { x: delta.x, y: 0. } } else { Point { x: 0., y: delta.y } })
+                        }
+                        _ => p,
+                    };
+                    self.apply_geometry_drag(drag.clone(), add(pointer, delta), modifiers, aspect);
+                }
+                let actual = if matches!(drag.handle, Handle::Move) { Rect::around(self.corners().map(|point| self.basis.map(point))) }
+                    else { let point = self.handles(units * 12.).into_iter().find(|(handle, _)| *handle == drag.handle)
+                        .map_or(p, |(_, point)| point); let point = self.basis.map(point); Rect { min: point, max: point } };
+                snapping.retain_guides(actual, units);
+            }
+            if let Some(drag) = &mut self.drag { drag.snapping = Some(snapping); }
+        }
+    }
+    fn apply_geometry_drag(&mut self, drag: Drag, p: Point, modifiers: Modifiers, aspect: bool) {
         if p == drag.press {
             self.geometry = drag.start;
+            return;
+        }
+        if matches!(drag.handle, Handle::Pivot) {
+            if let Some(inverse) = drag.start.pose.affine(center(drag.start.frame)).inverse() {
+                self.geometry.pivot = add(drag.start.pivot, sub(inverse.map(p), inverse.map(drag.press)));
+            }
             return;
         }
         let inner_delta = || {
@@ -1404,7 +1592,7 @@ impl Transaction {
                 q[(i + 1) % 4] = add(q[(i + 1) % 4], delta);
             }
             Handle::Move => q = q.map(|c| add(c, delta)),
-            Handle::Scale(_) | Handle::Rotate | Handle::Node(_) | Handle::Tangent(..) => return drag.start.inner,
+            Handle::Scale(_) | Handle::Rotate | Handle::Node(_) | Handle::Tangent(..) | Handle::Pivot => return drag.start.inner,
         }
         let inverse = outer.inverse()?;
         Projective::rect_to_quad(bounds, q.map(|c| inverse.map(c)))
@@ -1439,7 +1627,7 @@ impl Transaction {
                 pose.offset = add(pose.offset, delta);
             }
             Handle::Rotate => {
-                let c = add(pivot, pose.offset);
+                let c = pose.affine(pivot).map(drag.start.pivot);
                 pose.angle +=
                     (p.y - c.y).atan2(p.x - c.x) - (drag.press.y - c.y).atan2(drag.press.x - c.x);
                 if modifiers.shift {
@@ -1448,11 +1636,12 @@ impl Transaction {
                 }
                 pose.angle = (pose.angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
                     - std::f32::consts::PI;
+                pose.offset = add(pose.offset, sub(c, pose.affine(pivot).map(drag.start.pivot)));
             }
             Handle::Scale(side) if modifiers.command && (side[0] == 0. || side[1] == 0.) => {
                 let start = pose.affine(pivot);
                 let moving = local_handle(self.geometry.frame, side);
-                let fixed = local_handle(self.geometry.frame, side.map(|v| -v));
+                let fixed = if modifiers.alt { drag.start.pivot } else { local_handle(self.geometry.frame, side.map(|v| -v)) };
                 let top_bottom = side[0] == 0.;
                 let along = pose.map_linear(if top_bottom {
                     Point { x: 1., y: 0. }
@@ -1462,6 +1651,7 @@ impl Transaction {
                 let delta = sub(p, drag.press);
                 let travel = (delta.x * along.x + delta.y * along.y) / (along.x * along.x + along.y * along.y);
                 let lever = if top_bottom { moving.y - fixed.y } else { moving.x - fixed.x };
+                if lever == 0. { return pose; }
                 let limit = MAX_SKEW.tan();
                 let skew = if top_bottom {
                     (travel / lever).clamp(-limit - pose.shear, limit - pose.shear)
@@ -1479,12 +1669,12 @@ impl Transaction {
                     pose = next;
                 }
             }
-            Handle::Corner(_) | Handle::Edge(_) | Handle::Node(_) | Handle::Tangent(..) => {}
+            Handle::Corner(_) | Handle::Edge(_) | Handle::Node(_) | Handle::Tangent(..) | Handle::Pivot => {}
             Handle::Scale(side) => {
                 let start = pose.affine(pivot);
                 let moving = local_handle(self.geometry.frame, side);
                 let fixed = if modifiers.alt {
-                    pivot
+                    drag.start.pivot
                 } else {
                     local_handle(self.geometry.frame, side.map(|v| -v))
                 };
@@ -1495,16 +1685,18 @@ impl Transaction {
                 let local = [delta.x * c + delta.y * s, -delta.x * s + delta.y * c];
                 let original = pose.scale;
                 let span = [moving.x - fixed.x, moving.y - fixed.y];
-                if side[1] != 0. {
+                let active = [side[0] != 0. && span[0] != 0., side[1] != 0. && span[1] != 0.];
+                if !active[0] && !active[1] { return pose; }
+                if active[1] {
                     pose.scale[1] = local[1] / span[1];
                 }
-                if side[0] != 0. {
+                if active[0] {
                     pose.scale[0] = (local[0] - pose.shear * pose.scale[1] * span[1]) / span[0];
                 }
                 if aspect || modifiers.shift {
-                    let axis = if side[0] == 0. {
+                    let axis = if !active[0] {
                         1
-                    } else if side[1] == 0.
+                    } else if !active[1]
                         || (pose.scale[0] / original[0] - 1.).abs()
                             >= (pose.scale[1] / original[1] - 1.).abs()
                     {
@@ -1541,6 +1733,82 @@ mod tests {
     }
     fn near(a: Point, b: Point) {
         assert!((a.x - b.x).hypot(a.y - b.y) < 0.001, "{a:?} != {b:?}");
+    }
+    #[test]
+    fn alt_scale_and_skew_keep_custom_pivots_under_rotated_reflected_poses() {
+        for scale in [[1.3, 0.7], [-1.3, 0.7], [1.3, -0.7]] {
+            let mut t = transaction();
+            t.geometry.pose = Pose { offset: Point { x: 12., y: -7. }, angle: 0.63, scale, shear: 0.31 };
+            t.geometry.pivot = Point { x: 83., y: 112. };
+            let center = center(t.geometry.frame);
+            let original = t.geometry.pose.affine(center);
+            let pivot = original.map(t.geometry.pivot);
+            for side in [[1., 1.], [0., 1.], [1., 0.]] {
+                let press = original.map(local_handle(t.geometry.frame, side));
+                let drag = Drag { handle: Handle::Scale(side), press, current: press, start: t.geometry.clone(), anchor: t.reference_point(), snapping: None };
+                for command in [false, true] {
+                    let modifiers = Modifiers { alt: true, command, ..Default::default() };
+                    let unchanged = t.drag_pose(&drag, press, modifiers, false);
+                    near(unchanged.affine(center).map(t.geometry.pivot), pivot);
+                    let next = t.drag_pose(&drag, add(press, Point { x: 31., y: 19. }), modifiers, false);
+                    near(next.affine(center).map(t.geometry.pivot), pivot);
+                    assert!(next.affine(center).inverse().is_some());
+                    assert_ne!(next.affine(center), original);
+                }
+            }
+        }
+    }
+    #[test]
+    fn pivot_coincident_with_handle_keeps_zero_span_axes_unchanged() {
+        let mut t = transaction();
+        t.geometry.pose = Pose { offset: Point { x: 12., y: -7. }, angle: 0.63, scale: [-1.3, 0.7], shear: 0.31 };
+        let center = center(t.geometry.frame);
+        for (pivot, side) in [(t.geometry.frame.max, [1., 1.]), (local_handle(t.geometry.frame, [1., 0.]), [1., 0.]), (Point { x: t.geometry.frame.max.x, y: 80. }, [1., 1.])] {
+            t.geometry.pivot = pivot;
+            let original = t.geometry.pose.affine(center);
+            let press = original.map(local_handle(t.geometry.frame, side));
+            let drag = Drag { handle: Handle::Scale(side), press, current: press, start: t.geometry.clone(), anchor: t.reference_point(), snapping: None };
+            for command in [false, true] {
+                let next = t.drag_pose(&drag, add(press, Point { x: 31., y: 19. }), Modifiers { alt: true, command, ..Default::default() }, false);
+                near(next.affine(center).map(pivot), original.map(pivot));
+                assert!(next.affine(center).inverse().is_some());
+                if pivot == local_handle(t.geometry.frame, side) {
+                    assert_eq!(next.affine(center), original);
+                } else if !command {
+                    assert_eq!(next.scale[0], t.geometry.pose.scale[0]);
+                    assert_ne!(next.scale[1], t.geometry.pose.scale[1]);
+                }
+            }
+        }
+    }
+    #[test]
+    fn changing_reference_point_preserves_geometry_and_custom_pivot() {
+        let mut t = transaction();
+        t.geometry.pose = Pose { offset: Point { x: 12., y: -7. }, angle: 0.63, scale: [1.3, 0.7], shear: 0.31 };
+        t.geometry.pivot = Point { x: 83., y: 112. };
+        let original = t.map().unwrap();
+        let pivot = t.pivot();
+        for reference in CanvasAnchor::ALL {
+            t.reference = reference;
+            let _ = t.reference_point();
+            assert_eq!(t.map().unwrap(), original);
+            near(t.pivot(), pivot);
+        }
+    }
+    #[test]
+    fn one_axis_alt_scale_snaps_without_following_the_inactive_pivot_offset() {
+        let mut t = transaction();
+        t.geometry.pivot = Point { x: 80., y: 60. };
+        let side = [1., 0.];
+        let press = local_handle(t.geometry.frame, side);
+        let target = t.basis.map(add(press, Point { x: 8., y: 0. }));
+        let snapping = Snapping::new(vec![(layer_core::LayerId(2), Rect { min: target, max: add(target, Point { x: 1000., y: 1000. }) })], vec![]);
+        let drag = Drag { handle: Handle::Scale(side), press, current: press, start: t.geometry.clone(), anchor: t.reference_point(), snapping: Some(snapping) };
+        t.drag = Some(drag.clone());
+        t.apply_drag(drag, add(press, Point { x: 5., y: 0. }), Modifiers { alt: true, ..Default::default() }, false, 1.);
+        near(t.pose_affine().map(local_handle(t.geometry.frame, side)), add(press, Point { x: 8., y: 0. }));
+        near(t.pose_affine().map(t.geometry.pivot), t.geometry.pivot);
+        assert!(!t.drag.as_ref().unwrap().snapping.as_ref().unwrap().guides.is_empty());
     }
     #[test]
     fn distorting_a_warp_follows_the_true_perspective() {
@@ -1604,7 +1872,7 @@ mod tests {
                 } else {
                     Point { x: 0., y: 1. }
                 });
-                let drag = Drag { handle: Handle::Scale(side), press, current: press, start: t.geometry.clone() };
+                let drag = Drag { handle: Handle::Scale(side), press, current: press, start: t.geometry.clone(), anchor: t.reference_point(), snapping: None };
                 let target = add(press, Point { x: along.x * 0.2, y: along.y * 0.2 });
                 let next = t.drag_pose(&drag, target, command, false);
                 let fixed = local_handle(t.bounds, side.map(|v| -v));
@@ -1637,6 +1905,8 @@ mod tests {
                         press,
                         current: press,
                         start: t.geometry.clone(),
+                        anchor: t.reference_point(),
+                        snapping: None,
                     };
                     for alt in [false, true] {
                         for shift in [false, true] {
@@ -1678,7 +1948,8 @@ mod tests {
     fn hit_testing_and_zero_crossing_and_rotation_are_stable() {
         let t = transaction();
         let pivot = center(t.bounds);
-        assert!(matches!(t.hit(pivot, 12.), Some(Handle::Move)));
+        assert!(matches!(t.hit(pivot, 12.), Some(Handle::Pivot)));
+        assert!(matches!(t.hit(add(pivot, Point { x: 30., y: 20. }), 12.), Some(Handle::Move)));
         assert!(matches!(
             t.hit(t.rotate_handle(12.), 12.),
             Some(Handle::Rotate)
@@ -1692,6 +1963,8 @@ mod tests {
                     press,
                     current: press,
                     start: t.geometry.clone(),
+                    anchor: t.reference_point(),
+                    snapping: None,
                 },
                 add(press, Point { x: delta, y: -150. }),
                 Modifiers::default(),
@@ -1707,6 +1980,8 @@ mod tests {
                 press,
                 current,
                 start: t.geometry.clone(),
+                anchor: t.reference_point(),
+                snapping: None,
             },
             current,
             Modifiers {

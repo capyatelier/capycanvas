@@ -93,17 +93,17 @@ impl Expression {
             _ => {}
         }
     }
-    pub(super) fn deferred(&self, r: &WgpuRasterizer) -> bool {
+    pub(super) fn deferred(&self, r: &WgpuRasterizer, batches: &[DabBatch]) -> bool {
         match self {
             Self::Source { id, placement, .. } => {
                 if let Some(transforms) = r.transforms.as_ref().filter(|t| t.display_source(*id)) {
                     return transforms.direct_source(*id);
                 }
-                placement.0.as_affine().is_some() && r.paint_layers.iter().find(|l| l.id == *id).is_none_or(|l| l.watercolor.is_none())
+                placement.0.as_affine().is_some() && r.watercolor_style(*id, batches).is_none()
                     && (r.moving_layer == Some(*id) || !placement.0.is_identity())
             }
-            Self::Opacity { input, .. } => input.deferred(r),
-            Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(r),
+            Self::Opacity { input, .. } => input.deferred(r, batches),
+            Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(r, batches),
             _ => false,
         }
     }
@@ -269,7 +269,7 @@ impl stack::Compositor for Builder<'_> {
 impl Evaluator<'_> {
     pub(super) fn evaluate_root(&mut self, node: &Node, direct: bool) -> Result<Value, GpuRasterError> {
         let deferred = if direct && self.cache.plan.level > 0 && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
-            && node.deferred(self.r) { Some(self.evaluate(node)?) } else { None };
+            && node.deferred(self.r, self.packet.dab_batches) { Some(self.evaluate(node)?) } else { None };
         if matches!(deferred, Some(Value::Placed(_) | Value::Transform(_))) { return Ok(deferred.unwrap()); }
         self.cache.pixels.ensure_root(self.r, self.cache.plan, "composition level");
         let image = self.cache.pixels.root().unwrap();

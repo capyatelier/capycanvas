@@ -56,6 +56,7 @@ pub(super) fn properties(
         controls,
         curve_max: None,
         curve_white: None,
+        ..Default::default()
     }
 }
 

@@ -22,6 +22,14 @@ impl Placement {
     pub(super) fn reset(&mut self) {
         if let Some(initial) = self.initial.take() { self.members = initial; }
     }
+    fn repeat_delta(&self, t: &Transaction) -> Option<Projective> {
+        if self.insertion.is_some() || self.initial.is_some() || t.start.mesh.as_ref() != t.mapped_mesh() { return None; }
+        let before = t.start.outer()?;
+        let after = t.outer()?;
+        if before == after { return None; }
+        Projective::from_affine(t.basis.inverse()?).then(before.inverse()?)?.then(after)?
+            .then(Projective::from_affine(t.basis))
+    }
     pub(super) fn count(&self) -> usize {
         self.roots.len()
     }
@@ -76,7 +84,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             .ok_or("The transformed layer was removed")).collect::<Result<_, _>>()?;
         let single = members.len() == 1 && layer.kind == LayerKind::Paint;
         let bounds = if imported.is_some() || moving {
-            if single { source_frame(doc, layer.id) } else { batch_bounds(doc, &members) }
+            self.measured_target_bounds().filter(|_| moving).unwrap_or_else(||
+                if single { source_frame(doc, layer.id) } else { batch_bounds(doc, &members) })
         } else { self.measured_target_bounds().ok_or("The content bounds are still being measured")? };
         if bounds.is_empty() { return Err("The layers have no pixels to transform".into()); }
         let (insertion, rollback, selected) = imported.map_or_else(
@@ -98,6 +107,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let mut filters = members.iter().filter(|layer| layer.kind == LayerKind::Paint).map(|layer| layer.properties.placement.interpolation);
             transaction.geometry.interpolation = filters.next().filter(|first| filters.all(|filter| filter == *first));
         }
+        transaction.geometry.pivot = center(transaction.geometry.frame);
         transaction.start = transaction.geometry.clone();
         transaction.accepted = transaction.geometry.clone();
         self.operation.serial = self.operation.serial.wrapping_add(1);
@@ -147,6 +157,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else { placement.selected.clone() };
         let mut original = self.engine.document().clone();
         original.apply(placement.rollback.clone()).map_err(error)?;
+        let repeat = placement.repeat_delta(t);
         let changed = placement.insertion.is_some() || current.iter().any(|layer| original.layer(layer.id) != Some(layer));
         if apply && changed {
             let ids: Vec<_> = current.iter().map(|layer| layer.id).collect();
@@ -175,6 +186,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return Err(error(cause));
             }
         }
+        if apply && changed && let Some(delta) = repeat { self.operation.last_transform = Some(delta); }
+        self.operation.nudging = None;
         self.operation.current = None;
         self.engine.backend_mut().prepare_moving_layer(None);
         self.layer_interaction.editing = Some(self.engine.document().active_layer);
@@ -198,6 +211,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .as_mut()
             .filter(|t| t.placement.is_some())
             .ok_or("Select an active photo placement")?;
+        let pivot_position = t.pivot();
         let placement = t.placement.as_mut().unwrap();
         let previous = (placement.members.clone(), placement.initial.clone(), t.bounds);
         if placement.members.len() > 1 {
@@ -230,6 +244,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             t.geometry.pose = Pose::identity();
             t.fold();
         }
+        t.geometry.pivot = t.pose_affine().inverse().map_or(pivot_position, |map| map.map(pivot_position));
         let result = self.update_transform();
         if result.is_err() {
             let t = self.operation.current.as_mut().unwrap();

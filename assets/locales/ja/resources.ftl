@@ -547,3 +547,6 @@ resources-selection-menu-subtract-opacity-from-selection = 選択範囲から不
 resources-selection-menu-unlock-editing = 編集のロックを解除
 
 resources-layer-menu-duplicate = 複製
+
+resources-curves-help = ポイントをドラッグして階調を変更します。矢印キーで選択したポイントを移動し、Shiftキーで移動量を増やします。端点以外のポイントはダブルクリックで削除できます。
+resources-curves-reset = カーブをリセット

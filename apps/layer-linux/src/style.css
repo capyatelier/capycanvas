@@ -198,8 +198,12 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .brush-choice label { font-size: 1em; }
 .tool-groups flowboxchild { padding: 0; margin: 0; }
 .dock-panel .tool-group { padding: 0 6px; }
-.selection-modes > button { min-width: 0; padding: 0; }
-.selection-modes > button:checked, .toolbar-component .option-action button:checked { background: var(--selection-bg); }
+.selection-modes button { min-width: 0; padding: 0; }
+.selection-modes button:checked, .toolbar-component .option-action button:checked { background: var(--selection-bg); }
+.selection-modes.labeled > button { padding: 0 12px; }
+.choice-grid button { min-width: 0; min-height: 0; padding: 0; border: 0; box-shadow: none; background: transparent; border-radius: var(--control-radius); }
+.choice-grid button image { opacity: .45; }
+.choice-grid button:checked image { opacity: 1; }
 .dock-panel .size-preset { padding: 2px; min-width: 32px; min-height: 44px; }
 .toolbar-controls button.tile-button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
 .dock-panel.expanded-panel { background: transparent; box-shadow: none; }
@@ -335,7 +339,7 @@ window.capy-workspace.glass .dock-tabs { background: var(--glass-strip); }
 window.capy-workspace.glass .dock-tabs button.selected-tool { background: var(--glass-tab); }
 window.capy-workspace.glass .tab-joins { color: var(--glass-tab); }
 window.capy-workspace.glass .drawer-connection { color: var(--glass-panel); }
-window.capy-workspace.glass .selected-tool:not(.color-swatch), window.capy-workspace.glass .layer-row.selected, window.capy-workspace.glass .selection-modes > button:checked, window.capy-workspace.glass .toolbar-component .option-action button:checked { background: var(--glass-selection); }
+window.capy-workspace.glass .selected-tool:not(.color-swatch), window.capy-workspace.glass .layer-row.selected, window.capy-workspace.glass .selection-modes button:checked, window.capy-workspace.glass .toolbar-component .option-action button:checked { background: var(--glass-selection); }
 window.capy-workspace.glass .toolbar-controls.drawer-source { background: var(--glass-source); }
 window.capy-workspace.glass .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--glass-open-tile); }
 window.capy-workspace.glass .window-bar .header-tool.selected-tool { background-color: var(--header-control-bg); background-image: image(var(--glass-header-selection)); }

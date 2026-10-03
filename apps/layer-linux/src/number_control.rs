@@ -10,6 +10,7 @@ mod imp {
         pub spec: OnceCell<NumericControl>,
         pub localization: RefCell<Option<std::sync::Arc<layer_ui::Localizer>>>,
         pub value: Cell<f64>,
+        pub presented_text: RefCell<Option<String>>,
         pub updating: Cell<bool>,
         pub composing: Cell<bool>,
         pub(super) composition_keys: crate::input::CompositionKeys,
@@ -67,6 +68,77 @@ mod imp {
     }
     impl WidgetImpl for NumberControl {}
     impl BoxImpl for NumberControl {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "private GTK display"]
+    fn unchanged_shared_numeric_publication_preserves_partial_spin_input() {
+        let _app = crate::workspace::tests::native_test_app("art.capycanvas.NumericPartialEdit");
+        let control = NumberControl::new(layer_ui::NumericControl {
+            kind: layer_ui::NumericKind::Number,
+            ..layer_ui::NumericControl::number(0., 1., 0.01, 3)
+        }, "Value", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+        control.set_presented_value(0.5, "0.5");
+        let spin = control.imp().spin.get().unwrap();
+        spin.set_text("0.5e-");
+        control.set_presented_value(0.5, "0.5");
+        assert_eq!(spin.text(), "0.5e-");
+        control.set_presented_value(0.6, "0.6");
+        assert_eq!(spin.text(), "0.6");
+        spin.set_text("6e-");
+        control.set_presented_value(0.6, "6e-1");
+        assert_eq!(spin.text(), "6e-1");
+    }
+
+    #[test]
+    #[ignore = "private GTK display"]
+    fn committing_unchanged_shared_precise_text_preserves_values_without_editing() {
+        let _app = crate::workspace::tests::native_test_app("art.capycanvas.NumericPreciseCommit");
+        let mut spec = NumericControl::number(0., 2f64.powi(127), 0.01, 3);
+        spec.kind = NumericKind::Number;
+        spec.resolution = 2f64.powi(-149);
+        let control = NumberControl::new(spec, "Output", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+        let changes = std::rc::Rc::new(Cell::new(0));
+        control.connect_value_changed(glib::clone!(#[strong] changes, move |_| changes.set(changes.get() + 1)));
+        let spin = control.imp().spin.get().unwrap();
+        for value in [0.123456789, 1e-20, 2f64.powi(-149), 2f64.powi(127)] {
+            let text = value.to_string();
+            control.set_presented_value(value, &text);
+            spin.set_text(&text);
+            assert!(control.commit_text());
+            assert_eq!(control.value(), value);
+            assert_eq!(spin.text().as_str(), text);
+            assert_eq!(changes.get(), 0, "unchanged precise text must not emit an edit");
+        }
+    }
+
+    #[test]
+    #[ignore = "private GTK display"]
+    fn unchanged_rounded_encoded_text_keeps_exact_value_on_commit_and_focus_loss() {
+        let _app = crate::workspace::tests::native_test_app("art.capycanvas.NumericEncodedCommit");
+        let mut spec = NumericControl::number(0., 1., 1. / 255., 3);
+        spec.kind = NumericKind::Number; spec.scale = 255.; spec.resolution = 1. / 255000.;
+        let control = NumberControl::new(spec, "Output", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+        let changes = std::rc::Rc::new(Cell::new(0));
+        control.connect_value_changed(glib::clone!(#[strong] changes, move |_| changes.set(changes.get() + 1)));
+        let value = f64::from(0.12345679f32);
+        control.set_presented_value(value, "31.481");
+        let spin = control.imp().spin.get().unwrap();
+        assert!(control.commit_text());
+        spin.delegate().and_downcast::<gtk::Text>().unwrap().emit_by_name::<()>("activate", &[]);
+        spin.update();
+        assert_eq!(control.value(), value);
+        assert_eq!(changes.get(), 0);
+        assert_eq!(spin.text(), "31.481");
+        spin.set_text("32.481"); spin.update();
+        assert!(control.value() > value);
+        assert_eq!(changes.get(), 1, "changed text still commits");
+    }
+
 }
 glib::wrapper! {
     pub struct NumberControl(ObjectSubclass<imp::NumberControl>)
@@ -385,6 +457,12 @@ impl NumberControl {
                     }
                 }
             ));
+            spin.connect_output(glib::clone!(#[weak] control, #[upgrade_or] glib::Propagation::Proceed, move |spin| {
+                if let Some(text) = control.imp().presented_text.borrow().as_deref() {
+                    spin.set_text(text);
+                    glib::Propagation::Stop
+                } else { glib::Propagation::Proceed }
+            }));
             header.append(&spin);
             control.imp().spin.set(spin).unwrap();
         } else {
@@ -507,7 +585,7 @@ impl NumberControl {
                     if !control.has_css_class("number-inline") {
                         entry.set_width_chars(value.edit.chars().count().clamp(3, 10) as i32);
                     }
-                    entry.set_text(&value.edit);
+                    entry.set_text(imp.presented_text.borrow().as_deref().unwrap_or(&value.edit));
                     imp.stack.get().unwrap().set_visible_child_name("entry");
                     entry.grab_focus();
                     entry.select_region(0, -1);
@@ -707,18 +785,25 @@ impl NumberControl {
         self.imp().value.get()
     }
     /// Project model state without emitting a user edit back to the core.
-    pub fn set_value(&self, value: f64) {
+    pub fn set_value(&self, value: f64) { self.present_value(value, None); }
+    pub fn set_presented_value(&self, value: f64, text: &str) {
+        if let Some(spin) = self.imp().spin.get() { spin.set_width_chars(7); }
+        self.present_value(value, Some(text));
+    }
+    fn present_value(&self, value: f64, text: Option<&str>) {
         let Ok(result) = self.spec().resolve(value, NumericOperation::Format) else {
             return;
         };
         let imp = self.imp();
         imp.updating.set(true);
         imp.value.set(value);
+        let text_changed = imp.presented_text.borrow().as_deref() != text;
+        *imp.presented_text.borrow_mut() = text.map(str::to_string);
         if let Some(editor) = imp.popover_control.get() {
-            editor.set_value(value);
+            editor.present_value(value, text);
         }
         if let Some(label) = imp.value_label.get() {
-            label.set_text(&if imp.compact.get() {
+            label.set_text(&if let Some(text) = text { text.to_string() } else if imp.compact.get() {
                 if imp.separate_unit.get() {
                     self.spec().compact_value(value)
                 } else {
@@ -730,19 +815,82 @@ impl NumberControl {
             imp.display
                 .get()
                 .unwrap()
-                .update_property(&[gtk::accessible::Property::ValueText(&result.text)]);
+                .update_property(&[gtk::accessible::Property::ValueText(text.unwrap_or(&result.text))]);
         }
         if let Some(slider) = imp.slider.get() {
             slider.set_value(result.fill);
         }
-        if let Some(spin) = imp.spin.get() {
-            if spin.value() != value * self.spec().scale { spin.set_value(value * self.spec().scale); }
+        if let Some(spin) = imp.spin.get()
+            && (spin.value() != value * self.spec().scale || text_changed) {
+            spin.set_value(value * self.spec().scale);
+            if let Some(text) = text { spin.set_text(text); }
         }
         if let Some([minus, plus]) = imp.steps.get() {
             minus.set_sensitive(value > self.spec().min);
             plus.set_sensitive(value < self.spec().max);
         }
         imp.updating.set(false);
+    }
+    pub fn connect_edit_phase(&self, callback: impl Fn(layer_ui::ContactPhase) + 'static) {
+        use layer_ui::ContactPhase;
+        let callback = std::rc::Rc::new(callback);
+        let active = std::rc::Rc::new(Cell::new(0u8));
+        let held = std::rc::Rc::new(Cell::new(None::<gtk::gdk::Key>));
+        let pending = std::rc::Rc::new(Cell::new(false));
+        let finish: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(glib::clone!(#[strong] callback, #[strong] active, #[strong] held, #[strong] pending, move || {
+            if pending.replace(false) && active.replace(0) != 0 { held.set(None); callback(ContactPhase::Up); }
+        }));
+        let end: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(glib::clone!(#[strong] active, #[strong] pending, #[strong] finish, move || {
+            if active.get() != 0 && !pending.replace(true) {
+                let finish = finish.clone(); glib::idle_add_local_once(move || finish());
+            }
+        }));
+        let events = gtk::EventControllerLegacy::new();
+        events.set_propagation_phase(gtk::PropagationPhase::Capture);
+        events.connect_event(glib::clone!(#[weak(rename_to=control)] self, #[strong] callback, #[strong] active, #[strong] held, #[strong] pending, #[strong] finish, #[strong] end, #[upgrade_or] glib::Propagation::Proceed, move |_, event| {
+            use gtk::gdk::{EventType, Key};
+            if event.event_type() == EventType::KeyPress
+                && (control.imp().composing.get() || control.imp().composition_keys.active()) { return glib::Propagation::Proceed; }
+            if matches!(event.event_type(), EventType::ButtonPress | EventType::TouchBegin) {
+                if held.get().is_some() { pending.set(true); finish(); }
+                if let Some(root) = control.root()
+                    && root.focus().is_some_and(|focus| focus != control && !focus.is_ancestor(&control)) {
+                    root.set_focus(None::<&gtk::Widget>);
+                }
+            }
+            if matches!(event.event_type(), EventType::ButtonPress | EventType::TouchBegin | EventType::KeyPress) { finish(); }
+            let phase = match event.event_type() {
+                EventType::ButtonPress | EventType::ButtonRelease
+                    if event.downcast_ref::<gtk::gdk::ButtonEvent>().is_some_and(|event| event.button() == 1) =>
+                    Some(if event.event_type() == EventType::ButtonPress { ContactPhase::Down } else { ContactPhase::Up }),
+                EventType::TouchBegin => Some(ContactPhase::Down),
+                EventType::TouchEnd => Some(ContactPhase::Up),
+                EventType::TouchCancel => Some(ContactPhase::Cancel),
+                EventType::KeyPress | EventType::KeyRelease => event.downcast_ref::<gtk::gdk::KeyEvent>().and_then(|event| {
+                    let key = event.keyval();
+                    if key == Key::Escape { return Some(ContactPhase::Cancel); }
+                    if !matches!(key, Key::Up | Key::Down | Key::Left | Key::Right | Key::Page_Up | Key::Page_Down) { return None; }
+                    if event.event_type() == EventType::KeyPress {
+                        if held.get().is_some_and(|old| old != key) { pending.set(true); finish(); }
+                        held.set(Some(key)); Some(ContactPhase::Down)
+                    } else if held.get() == Some(key) { Some(ContactPhase::Up) } else { None }
+                }),
+                _ => None,
+            };
+            if let Some(phase) = phase {
+                if phase == ContactPhase::Down {
+                    if active.get() == 0 { active.set(1); callback(phase); }
+                } else if phase == ContactPhase::Cancel {
+                    if active.get() == 1 { active.set(2); callback(phase); }
+                    if event.event_type() == EventType::TouchCancel { end(); }
+                } else { end(); }
+            }
+            glib::Propagation::Proceed
+        }));
+        self.add_controller(events);
+        let focus = gtk::EventControllerFocus::new();
+        focus.connect_leave(move |_| { pending.set(true); finish(); });
+        self.add_controller(focus);
     }
     pub fn connect_value_changed(&self, f: impl Fn(&Self) + 'static) {
         self.connect_closure(
@@ -839,6 +987,11 @@ impl NumberControl {
     }
     fn text_input(&self, text: &str) -> Result<layer_ui::NumericValue, ()> {
         if self.imp().composing.get() || self.imp().composition_keys.active() { return Err(()); }
+        if self.imp().presented_text.borrow().as_deref() == Some(text) {
+            let value = self.spec().resolve(self.value(), NumericOperation::Format).map_err(|_| ())?;
+            self.feedback(None);
+            return Ok(value);
+        }
         match self.spec().resolve(0., NumericOperation::Expression { text: text.into() }) {
             Ok(value) => { self.feedback(None); Ok(value) }
             Err(error) => { self.feedback(Some(error)); Err(()) }
@@ -867,6 +1020,10 @@ impl NumberControl {
         true
     }
     fn apply(&self, op: NumericOperation) -> bool {
+        if matches!(&op, NumericOperation::Expression { text } if self.imp().presented_text.borrow().as_deref() == Some(text.as_str())) {
+            self.feedback(None);
+            return true;
+        }
         match self.spec().resolve(self.value(), op) {
             Ok(v) => {
                 self.feedback(None);

@@ -388,3 +388,47 @@ fn identity_warp_preserves_linked_companion_pixels_outside_primary_tight_bounds(
         assert!(warped_primary == original_primary, "identity Warp must preserve the primary pixels");
     }
 }
+
+#[test]
+fn placed_target_bounds_match_masked_world_pixels_and_exclude_siblings() {
+    let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut document = document(Default::default());
+    let target = document.layers[0].id;
+    document.layers[0].source = Some(source([48, 32], |_, _| 255));
+    document.layers[0].properties.placement = layer_core::LayerPlacement::from_projective(
+        layer_core::Projective::rect_to_quad(Rect::from_extent([48, 32]), [
+            Point { x: 20., y: 15. }, Point { x: 65., y: 19. },
+            Point { x: 72., y: 56. }, Point { x: 15., y: 52. },
+        ]).unwrap());
+    let mut group = Layer::paint(document.allocate_layer_id(), "masked parent");
+    group.kind = layer_core::LayerKind::Group;
+    group.properties.offset = Point { x: 7., y: 9. };
+    group.properties.blend = layer_core::LayerBlend::PassThrough;
+    document.layers[0].properties.parent = Some(group.id);
+    let mut mask = LayerMask::reveal_all(document.allocate_layer_id(), group.properties.offset);
+    mask.default_coverage = 0.;
+    mask.raster = raster(RasterPlane::Mask, document.color,
+        |x, y| if (10..50).contains(&x) && (10..55).contains(&y) { 0.5 } else { 0. });
+    group.mask = Some(mask);
+    document.layers.push(group);
+    let mut sibling = Layer::paint(document.allocate_layer_id(), "unrelated outside target");
+    sibling.source = Some(source([8, 8], |_, _| 255));
+    sibling.properties.offset = Point { x: 106., y: 106. };
+    document.layers.push(sibling);
+    let mut reference = document.clone();
+    reference.layers.pop();
+    let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: reference },
+        [0.; 4], 0., Default::default()).unwrap();
+    let expected = capture.read_region([0, 0, 128, 128]).unwrap().iter().enumerate()
+        .filter(|(_, pixel)| pixel[3] > 0.).fold(Rect::EMPTY, |bounds, (i, _)| {
+            let x = (i % 128) as f32; let y = (i / 128) as f32;
+            bounds.union(rect(x, y, x + 1., y + 1.))
+        });
+    assert!(!expected.is_empty());
+    assert!(expected.max.x < 80. && expected.max.y < 80., "masked, placed target: {expected:?}");
+    assert_eq!(bounds(&renderer, &document, ContentScope::PlacedTarget(target)), expected);
+    assert_eq!(bounds(&renderer, &document, ContentScope::Target(target)), Rect::from_extent([48, 32]),
+        "raw target bounds remain local and unmasked");
+    assert!(bounds(&renderer, &document, ContentScope::Visible).max.x > expected.max.x,
+        "the independent visible scene includes the unrelated sibling");
+}

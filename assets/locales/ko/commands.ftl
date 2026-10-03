@@ -591,3 +591,10 @@ commands-warp-grid-reset-help = 뒤틀린 모양을 곧은 격자로 바꿉니�
 commands-warp-split-help = 모양을 유지하면서 격자선을 추가하려면 뒤틀기 영역을 누르세요
 commands-warp-select-help = 함께 이동할 점을 눌러 선택하세요
 commands-copy-pixels-too-large = 복사한 픽셀이 레이어 크기 제한을 초과합니다
+
+command-transform-again = 변형 반복
+command-transform-snapping = 스냅
+commands-transform-again-help = 마지막으로 적용한 레이어 변형을 선택한 레이어에 적용합니다
+commands-transform-snapping-help = 캔버스, 다른 레이어, 자에 맞춥니다
+commands-transform-again-empty = 먼저 레이어 변형을 적용하세요
+commands-transform-again-whole-layer = 픽셀 선택을 해제하고 레이어 전체를 선택하세요

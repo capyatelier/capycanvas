@@ -859,3 +859,159 @@ fn native_photo_file_drops() {
     drop(driver);
     w.window.destroy();
 }
+
+#[test]
+#[ignore = "private Wayland display, hardware GPU and native pointer/keyboard"]
+fn native_photo_transform_reference_pivot_snap_and_nudge() {
+    let app = native_test_app("art.capycanvas.TransformReference");
+    let mut project = new_drawing(300, 220, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let id = project.document.active_layer;
+    let photo = project.document.layers.iter_mut().find(|layer| layer.id == id).unwrap();
+    photo.source = Some(layer_core::color::source::rgba8_source([120, 80], |_, _| [40, 120, 200, 255]));
+    photo.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point { x: 40., y: 50. }));
+    let mut neighbor = layer_core::Layer::paint(project.document.allocate_layer_id(), "Snap reference");
+    neighbor.source = Some(layer_core::color::source::rgba8_source([20, 80], |_, _| [200, 80, 40, 255]));
+    neighbor.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point { x: 180., y: 50. }));
+    project.document.layers.push(neighbor);
+    let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.maximize(); w.window.present(); ready(&w);
+    if let Ok(theme) = std::env::var("CAPY_NATIVE_TEST_THEME") {
+        w.dispatch(UiAction::SetTheme { theme: Some(if theme == "dark" { layer_ui::Theme::Dark } else { layer_ui::Theme::Light }) });
+    }
+    for panel in layer_ui::Panel::ALL.into_iter().filter(|panel| !matches!(panel, layer_ui::Panel::Toolbar | layer_ui::Panel::Commands | layer_ui::Panel::ToolSettings)) {
+        w.dispatch(UiAction::Customize { action: layer_ui::CustomizationAction::SetPanelVisible { panel, visible: false } });
+    }
+    invoke(&w, CommandId::FitCanvas); ready(&w);
+    invoke(&w, CommandId::ScaleRotate);
+    until(|| state(&w).tool_settings.iter().any(|field| field.id == "transform_x"), "reference controls ready");
+    let mut native = super::canvas_bar_tests::remote_input();
+    let output = PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());
+    std::fs::create_dir_all(&output).unwrap();
+    let mapped = |name: &str| widgets(w.window.upcast_ref()).find(|widget| widget.widget_name() == name && widget.is_mapped()).unwrap_or_else(|| panic!("mapped {name}"));
+    let number = |name: &str| state(&w).tool_settings.iter().find(|field| field.id == name).unwrap().value;
+    let geometry = || ui_session(&w).engine().document().layer_geometry(id);
+    let unchanged = geometry();
+    for index in [1, 2, 3, 0] {
+        let modes = mapped("canvas-bar-choice-transform-mode");
+        assert!(modes.has_css_class("linked") && modes.has_css_class("selection-modes"));
+        assert_eq!(modes.downcast_ref::<gtk::Box>().unwrap().spacing(), 0);
+        let buttons = descendants::<gtk::ToggleButton>(&modes);
+        assert_eq!(buttons.len(), 4);
+        for pair in buttons.windows(2) {
+            let a = pair[0].compute_bounds(&w.window).unwrap();
+            let b = pair[1].compute_bounds(&w.window).unwrap();
+            assert!((a.x() + a.width() - b.x()).abs() <= 1., "joined mode buttons have no gap");
+        }
+        native.click(screen_point(buttons[index].upcast_ref(), &w.window, [0.5, 0.5]));
+        let buttons = descendants::<gtk::ToggleButton>(&mapped("canvas-bar-choice-transform-mode"));
+        assert_eq!(buttons.iter().filter(|button| button.is_active()).count(), 1);
+        assert!(buttons[index].is_active());
+    }
+    assert_eq!(geometry(), unchanged, "changing Transform modes keeps the accepted placement");
+    let reference = mapped("tool-choice-bar-transform-reference").compute_bounds(&w.window).unwrap();
+    let x = mapped("tool-setting-transform_x").compute_bounds(&w.window).unwrap();
+    let y = mapped("tool-setting-transform_y").compute_bounds(&w.window).unwrap();
+    assert!((reference.width() - 54.).abs() <= 1. && (reference.height() - 54.).abs() <= 1., "compact nine-dot selector: {reference:?}");
+    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { native.perform(json!([{"wait_ms":250},{"capture":"transform-position-layout"}])); }
+    assert!((x.x() - reference.x() - reference.width() - 12.).abs() <= 1. && (x.x() - y.x()).abs() <= 1., "selector sits beside aligned X/Y fields: selector={reference:?}, X={x:?}, Y={y:?}");
+    assert!((reference.y() + reference.height() * 0.5 - (x.y() + y.y() + y.height()) * 0.5).abs() <= 2., "selector is centered beside the X/Y rows");
+    for (index, anchor) in layer_ui::CanvasAnchor::ALL.into_iter().enumerate() {
+        let widget = mapped(&format!("tool-choice-transform-reference-{index}"));
+        let bounds = widget.compute_bounds(&w.window).unwrap();
+        assert!((bounds.width() - 18.).abs() <= 1. && (bounds.height() - 18.).abs() <= 1., "compact dot hit target: {bounds:?}");
+        let dot = widget.first_child().unwrap().downcast::<gtk::Image>().unwrap();
+        assert!(dot.is_visible()); assert_eq!(dot.pixel_size(), 6);
+        native.click(screen_point(&widget, &w.window, [0.5, 0.5]));
+        let [x, y] = anchor.cell();
+        assert!((number("transform_x") - (40. + x as f32 * 60.)).abs() < 0.001);
+        assert!((number("transform_y") - (50. + y as f32 * 40.)).abs() < 0.001);
+        assert_eq!(geometry(), unchanged, "reference changes are presentation state");
+    }
+    native.click(screen_point(&mapped("tool-choice-transform-reference-0"), &w.window, [0.5, 0.5]));
+    super::new_photo::capture_ui(&w, &output, "transform-reference-grid.png");
+    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { native.perform(json!([{"wait_ms":250},{"capture":"transform-reference-grid"}])); }
+    let type_number = |native: &mut RemoteInput, id: &str, text: &str| {
+        let field = mapped(&format!("tool-setting-{id}"));
+        if let Some(spin) = descendant::<gtk::SpinButton>(&field) { spin.grab_focus(); }
+        else {
+            let display = find_css(&field, "number-value").unwrap();
+            display.grab_focus(); pump(50);
+            native.click(screen_point(&display, &w.window, [0.5, 0.5]));
+            descendant::<gtk::Entry>(&field).unwrap().grab_focus();
+        }
+        native.perform(json!([{"key":0xffe3,"down":true},{"key":97,"down":true},{"key":97,"down":false},{"key":0xffe3,"down":false}]));
+        for c in text.chars() { native.key(c as u32); }
+        native.key(0xff0d); ready(&w);
+    };
+    type_number(&mut native, "transform_x", "45");
+    assert!((geometry().map(Point::default()).unwrap().x - 45.).abs() < 0.01);
+    type_number(&mut native, "transform_x", "40");
+    assert_eq!(geometry(), unchanged);
+    let pivot = super::canvas_bar_tests::canvas_point(&w, [100., 90.]);
+    let custom = super::canvas_bar_tests::canvas_point(&w, [80., 75.]);
+    native.perform(json!([{"point":pivot,"down":true},{"point":custom},{"down":false}]));
+    assert_eq!(geometry(), unchanged, "moving the pivot does not move pixels");
+    type_number(&mut native, "transform_angle", "30");
+    let fixed = geometry().map(Point { x: 40., y: 25. }).unwrap();
+    assert!((fixed.x - 80.).hypot(fixed.y - 75.) < 0.02, "numeric rotation uses the dragged pivot: {fixed:?}");
+    let corner = geometry().map(Point { x: 120., y: 80. }).unwrap();
+    let corner = super::canvas_bar_tests::canvas_point(&w, [corner.x, corner.y]);
+    native.perform(json!([{"key":0xffe9,"down":true},{"point":corner,"down":true},{"point":[corner[0]+15.,corner[1]+10.]},{"down":false},{"key":0xffe9,"down":false}]));
+    let fixed = geometry().map(Point { x: 40., y: 25. }).unwrap();
+    assert!((fixed.x - 80.).hypot(fixed.y - 75.) < 0.05, "Alt scaling keeps the dragged pivot: {fixed:?}");
+    super::new_photo::capture_ui(&w, &output, "transform-custom-pivot.png");
+    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { native.perform(json!([{"wait_ms":250},{"capture":"transform-custom-pivot"}])); }
+    invoke(&w, CommandId::ResetTransform); ready(&w);
+    pump(500);
+    invoke(&w, CommandId::TransformSnapping); pump(500);
+    assert!(state(&w).commands.iter().find(|command| command.id == CommandId::TransformSnapping).unwrap().selected, "snapping command was accepted");
+    let from = super::canvas_bar_tests::canvas_point(&w, [60., 70.]);
+    let to = super::canvas_bar_tests::canvas_point(&w, [79., 70.]);
+    let edge = super::canvas_bar_tests::canvas_point(&w, [179., 50.]);
+    let target = super::canvas_bar_tests::canvas_point(&w, [180., 50.]);
+    assert!((edge[0]-target[0]).abs() <= 6., "native snap contact is within its logical-pixel threshold");
+    native.perform(json!([{"point":from,"down":true},{"point":to}]));
+    let right = geometry().map(Point { x: 120., y: 0. }).unwrap();
+    assert!((right.x - 180.).abs() < 0.05, "native body drag snaps to the neighboring source: {right:?}");
+    super::new_photo::capture_ui(&w, &output, "transform-snap-guides.png");
+    native.perform(json!([{"down":false}]));
+    invoke(&w, CommandId::ApplyTransform); ready(&w);
+    invoke(&w, CommandId::Move); w.area.grab_focus(); pump(50);
+    let before = geometry();
+    let checkpoint = ui_session(&w).engine().checkpoint();
+    native.perform(json!([{"key":0xff53,"down":true},{"wait_ms":600}]));
+    assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint, "held nudge is only a preview");
+    assert_ne!(geometry(), before);
+    native.perform(json!([{"key":0xff53,"down":false}]));
+    let moving = geometry();
+    invoke(&w, CommandId::Undo); ready(&w); assert_eq!(geometry(), before);
+    invoke(&w, CommandId::Redo); ready(&w); assert_eq!(geometry(), moving);
+    w.area.grab_focus(); pump(20);
+    let before = geometry();
+    native.perform(json!([{"key":0xff51,"down":true}]));
+    native.key(0xff1b);
+    native.perform(json!([{"key":0xff51,"down":false}]));
+    assert_eq!(geometry(), before, "Escape then key release keeps the accepted source");
+    w.area.grab_focus(); pump(30);
+    native.perform(json!([{"key":0xff53,"down":true}]));
+    assert_ne!(geometry(), before);
+    w.interact(layer_ui::UiInput::Blur); pump(50);
+    let accepted = geometry();
+    native.perform(json!([{"key":0xff53,"down":false}]));
+    assert_eq!(geometry(), accepted, "Blur commits the held nudge and its later release adds no edit");
+    invoke(&w, CommandId::Undo); ready(&w); assert_eq!(geometry(), before);
+    invoke(&w, CommandId::Redo); ready(&w); assert_eq!(geometry(), accepted);
+    until(|| state(&w).commands.iter().any(|command| command.id == CommandId::TransformAgain && command.enabled), "accepted transform can be repeated");
+    let before = geometry();
+    let checkpoint = ui_session(&w).engine().checkpoint();
+    invoke(&w, CommandId::TransformAgain); ready(&w);
+    assert_ne!(geometry(), before);
+    assert_ne!(ui_session(&w).engine().checkpoint(), checkpoint);
+    invoke(&w, CommandId::Undo); ready(&w); assert_eq!(geometry(), before);
+    invoke(&w, CommandId::Redo); ready(&w);
+    invoke(&w, CommandId::ScaleRotate); ready(&w);
+    super::new_photo::capture_ui(&w, &output, "transform-again-controls.png");
+    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { native.perform(json!([{"wait_ms":250},{"capture":"transform-again-controls"}])); }
+    invoke(&w, CommandId::CancelTransform); ready(&w);
+    native.finish(); w.window.destroy(); pump(100);
+}

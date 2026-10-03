@@ -95,6 +95,7 @@ pub(super) fn pass_regions(effect: &EffectInstance, output: PixelRect, plan: dis
 pub(super) struct PreparedEffect {
     pub pipeline: Deferred<wgpu::RenderPipeline>,
     pub binding: wgpu::BindGroup,
+    pub pointwise: bool,
 }
 struct Instance {
     effects: Vec<Arc<EffectInstance>>,
@@ -306,6 +307,7 @@ impl Effects {
             return Ok(PreparedEffect {
                 pipeline: pipeline.clone(),
                 binding: old.binding.clone(),
+                pointwise: execution == Execution::Fused,
             });
         }
         let ids = self.ids.clone();
@@ -485,6 +487,7 @@ impl Effects {
         let prepared = PreparedEffect {
             pipeline,
             binding: binding.clone(),
+            pointwise: execution == Execution::Fused,
         };
         self.instances.insert(
             ids,

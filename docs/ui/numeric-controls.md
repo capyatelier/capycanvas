@@ -78,6 +78,34 @@ context; they do not select a language for each request. No GPU handle/lock or U
 is needed to evaluate a number. Hosts own native focus, gesture capture,
 unfinished text and transient display state only.
 
+## Properties and Curves
+
+A property scrub uses the existing shared gesture transaction: press begins a
+preview, release commits one undo step, and cancellation restores the original
+value and redo history. Hosts keep the gesture open through native release
+handling. Unchanged model publications preserve unfinished text and focus.
+
+Curves keeps Input and Output in place, blank and disabled until a point is
+selected, so selecting a point does not move the graph. Encoded RGB
+uses a 0–255 readout with three decimals. Log HDR uses physical linear values,
+including small positive values in scientific notation, with a separate EV
+readout. Zero displays Black in the EV readout. The shared view supplies exact
+editable text; formatting never changes a point. Endpoint Input is read-only.
+
+Arrow keys move a selected point by 1/255 of the graph range; Shift moves it by
+10/255. A held key is one edit. Delete removes an interior point, and Escape
+cancels its live edit. Point selection and the active channel belong to the
+session and do not add undo entries. Stale contacts from a previous page, layer
+or document are ignored.
+
+GTK, Web and Android present the same shared page selector, graph axes and point
+fields. Native controls retain unfinished text while the model refreshes; page,
+layer and document changes retire the old contact. Android keeps numeric values
+as doubles through JNI so HDR coordinates retain the shared field's precision.
+Its native numeric draft, selection and edit focus use Compose saved state across
+Activity recreation; an in-progress IME composition is still owned by the input
+method.
+
 ## Checks
 
 `native_number_controls` (an ignored Wayland widget test) writes a dark/light
@@ -90,6 +118,11 @@ isolation. `native_numeric_preedit_guard` covers both GTK widget branches and
 step buttons using native preedit signals; actual IME journeys remain separate.
 `native_numeric_size_apply_refuses_uncommitted_text` checks Canvas Size and Image
 Size Apply in both themes, including refusal without document edits.
+Web's `--curves` journey covers graph contacts, page changes, exact readouts and
+numeric cancellation. Android's
+`AndroidHostTest#curvesPagesNativeContactsAndExactCoordinates` exercises native
+contacts and history; `AndroidTextCompositionTest#curveCoordinatesKeepNativeCompositionAndUnchangedPrecision`
+checks InputConnection composition and unchanged commits.
 
 References: [GTK Scale](https://docs.gtk.org/gtk4/class.Scale.html),
 [Adwaita SpinRow](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1-latest/class.SpinRow.html),

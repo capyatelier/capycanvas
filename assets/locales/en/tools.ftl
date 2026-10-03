@@ -163,3 +163,5 @@ tool-tonal-shadows = Shadows · below −5 stops
 tool-tonal-tones = Tones · stops relative to reference white
 
 tool-action-group-transform-warp-split = Split Grid
+
+tools-transform-reference = Position anchor

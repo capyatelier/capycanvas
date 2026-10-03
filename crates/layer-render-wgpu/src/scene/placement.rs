@@ -73,7 +73,7 @@ impl Scene {
         let layer = &packet.layers[index];
         let extent = layer.local_extent(r.document_extent);
         let geometry = layer_core::target_geometry(packet.layers, layer.id);
-        if r.paint_layers.iter().any(|stored| stored.id == layer.id && stored.watercolor.is_some()) {
+        if r.watercolor_style(layer.id, packet.dab_batches).is_some() {
             return self.placed_material_tile(r, packet, layer, geometry, tile);
         }
         if self.placement_display
@@ -306,7 +306,7 @@ impl Scene {
     ) -> Result<(usize, wgpu::TextureView), GpuRasterError> {
         use layer_core::raster::RasterPlane;
         let base = geometry.clone();
-        let (bounds, radius) = self.material_coverage(r, layer.id, &base);
+        let (bounds, radius) = self.material_coverage(r, layer.id, &base, packet.dab_batches);
         if bounds.is_empty() || bounds
             .outset(radius as f32).intersect(page_rect(tile).to_rect()).is_empty() {
             let page = self.placed_raw_plane(r, layer, base, tile, RasterPlane::Color, layer.local_extent(packet.document_extent))?;
@@ -328,15 +328,14 @@ impl Scene {
         Ok((out, pages[0].clone()))
     }
 
-    pub(super) fn material_coverage(&mut self, r: &WgpuRasterizer, id: LayerId, geometry: &layer_core::ImageTransform) -> (layer_core::Rect, u32) {
+    pub(super) fn material_coverage(&mut self, r: &WgpuRasterizer, id: LayerId, geometry: &layer_core::ImageTransform, batches: &[DabBatch]) -> (layer_core::Rect, u32) {
         let entry=self.material_bounds.entry(id).or_insert_with(||MaterialBounds {raw:material_bounds(r,id),mapped:None});
         let bounds=if let Some((key,bounds))=&entry.mapped && key==geometry {*bounds} else {
             let source=entry.raw.outset(geometry.placement.interpolation.support() as f32);
             let bounds=self.mesh_geometry(geometry).map_or_else(||geometry.forward_bounds(source),|mesh|mesh.forward_bounds(source,geometry.source_from_owner));
             self.material_bounds.get_mut(&id).unwrap().mapped=Some((geometry.clone(),bounds));bounds
         };
-        let radius = r.paint_layers.iter().find(|stored| stored.id == id)
-            .and_then(|stored| stored.watercolor).map_or(0, |style| style.radius());
+        let radius = r.watercolor_style(id, batches).map_or(0, |style| style.radius());
         (bounds, radius)
     }
 
@@ -352,7 +351,7 @@ impl Scene {
     ) -> Result<wgpu::TextureView, GpuRasterError> {
         let coordinate = std::array::from_fn(|i| tile[i] as i32 + neighbor[i] as i32 - 1);
         if plane == layer_core::raster::RasterPlane::WatercolorWetness || neighbor != [1, 1] {
-            let bounds = self.material_coverage(r, layer.id, &geometry).0;
+            let bounds = self.material_coverage(r, layer.id, &geometry, packet.dab_batches).0;
             let origin = coordinate.map(|n| (n * PAGE_SIZE as i32) as f32);
             let page = layer_core::Rect { min: layer_core::Point { x: origin[0], y: origin[1] },
                 max: layer_core::Point { x: origin[0] + PAGE_SIZE as f32, y: origin[1] + PAGE_SIZE as f32 } };

@@ -163,3 +163,5 @@ tool-tonal-shadows = シャドウ · −5段より下
 tool-tonal-tones = 階調 · 基準白に対する段数
 
 tool-action-group-transform-warp-split = グリッドを分割
+
+tools-transform-reference = 位置の基準点

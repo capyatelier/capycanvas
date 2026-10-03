@@ -182,6 +182,12 @@ behavior and high-refresh presentation need a real tablet.
     `-e filterDrawing true`. They read the app's private
     `files/filter-memory-test.jpg` and write reports to its external-files
     directory.
+- `AndroidHostTest#curvesPagesNativeContactsAndExactCoordinates` covers shared
+  Properties pages, native graph contacts, keyboard editing and precise HDR
+  fields. `AndroidTextCompositionTest#curveCoordinatesKeepNativeCompositionAndUnchangedPrecision`
+  checks composition ownership and unchanged numeric commits through the native
+  InputConnection. `AndroidRasterTest#imagePlacementBatchHistoryAndStaleRequests`
+  includes Position anchor, pivot, held nudges and Transform Again.
 
 ### Test data
 
@@ -251,7 +257,7 @@ APK calls, so test-APK benchmarks use the unminified build.
   transparency (off to high) and restores it afterwards. Results appear in
   logcat under `CapyDragPerf` and `CapyResizePerf`.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
-  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,composed_transform,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation,effects,spatial-effects`,
+  `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,composed_transform,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation,effects,curves,spatial-effects`,
   `durationMs`, `width`, `height`, `blending` (`perceptual` or `linear`) and
   `transparency` (`off` to `high`) narrow or
   resize the run. `-e photo <readable-file>` uses a JPEG matching `width` and
@@ -264,6 +270,7 @@ APK calls, so test-APK benchmarks use the unminified build.
   the retained source and native watercolor planes alongside its motion report.
   `-e translationRepeats 4` saves the first translation and three more gestures
   in the same session, keeping cold-start and warm results separate.
+  `-e transformSnapping true` enables snapping for the translation measurement.
   `-e labels photo-retained-distort-drag` or
   `-e labels photo-retained-warp-drag` measures retained corner or mesh-node
   motion on the same input and repeats it in the same session.
@@ -287,6 +294,9 @@ APK calls, so test-APK benchmarks use the unminified build.
   `effects` scrubs Exposure alone and after Levels/Vibrance; `spatial-effects`
   scrubs Gaussian Blur at small and large radii. Both prime the actual slider,
   wait for shader readiness and verify changing parameter values during motion.
+  `curves` with `-e labels effect-curves-drag` drags the native Curves graph over
+  the photo and verifies changing points. `-e translationRepeats 4` retains the
+  first contact and three subsequent contacts separately.
   `-e effectZoom 0.5` sets the filter camera after Fit; omit it for the Fit control.
   `-e captureFilters true` captures the resulting filter canvas in both themes
   after timing finishes.

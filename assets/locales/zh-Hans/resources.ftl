@@ -547,3 +547,6 @@ resources-selection-menu-subtract-opacity-from-selection = 从选区减去不透
 resources-selection-menu-unlock-editing = 解锁编辑
 
 resources-layer-menu-duplicate = 复制
+
+resources-curves-help = 拖动控制点调整色调。方向键移动所选控制点；按住 Shift 可增大移动距离。双击内部控制点可将其删除。
+resources-curves-reset = 重置曲线

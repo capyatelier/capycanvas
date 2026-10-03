@@ -32,6 +32,14 @@ import java.util.concurrent.TimeUnit
 
 internal val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
+fun jsonValue(value: Any?): Any? = when (value) {
+    is JSONObject -> value.keys().asSequence().associateWith { jsonValue(value.get(it)) }
+    is JSONArray -> (0 until value.length()).map { jsonValue(value.get(it)) }
+    is Number -> value.toString().toBigDecimal().stripTrailingZeros()
+    JSONObject.NULL -> null
+    else -> value
+}
+
 class CapyDeviceRule(private val nativeFileJobs: Boolean = false) : ExternalResource() {
     lateinit var root: File
         private set
@@ -97,6 +105,20 @@ fun CanvasHost.awaitReady(timeout: Long = 60_000, compose: ComposeTestRule? = nu
         snapshot?.optBoolean("brush_ready") == true && workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true
     }
 
+fun CanvasHost.narrowPhotoPanels(compose: ComposeTestRule) {
+    awaitMain("workspace available before narrow brush preparation", 30_000, { "$workspaceManager" }, compose) {
+        snapshot != null && workspaceManager?.optBoolean("ready") == true && workspaceManager?.optBoolean("busy") == false
+    }
+    instrumentation.runOnMainSync { workspaceInput(obj("type" to "switch", "id" to "builtin:workspace:photographer")) }
+    awaitMain("Photo workspace", 30_000, { "$workspaceManager" }, compose) {
+        workspaceManager?.optString("id") == "builtin:workspace:photographer" && workspaceManager?.optBoolean("busy") == false
+    }
+    instrumentation.runOnMainSync {
+        for (panel in listOf("tools", "brushes", "color", "palettes", "sizes", "layers", "navigator", "proof")) customize(obj("type" to "set_panel_visible", "panel" to panel, "visible" to false))
+        for (panel in listOf("properties", "tool_settings")) customize(obj("type" to "set_panel_visible", "panel" to panel, "visible" to true))
+    }
+}
+
 fun CanvasHost.awaitMain(label: String, timeout: Long = 10_000, diagnostics: () -> String = { "" }, condition: () -> Boolean) =
     awaitMain(label, timeout, diagnostics, null, condition)
 
@@ -117,6 +139,17 @@ fun CanvasHost.drain(action: JSONObject? = null, seconds: Long = 15) {
     val done = CountDownLatch(1)
     instrumentation.runOnMainSync { action?.let { dispatch(it) }; query(obj("type" to "catalog")) { done.countDown() } }
     assertTrue("Native UI publication", done.await(seconds, TimeUnit.SECONDS))
+}
+
+fun CanvasHost.panelGroup(panel: String): JSONObject {
+    fun find(node: JSONObject): JSONObject? = when (node.getString("kind")) {
+        "tabs" -> node.takeIf { panel in it.array("panels").values() }
+        "split" -> find(node.getJSONObject("first")) ?: find(node.getJSONObject("second"))
+        else -> null
+    }
+    val layout = snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout")
+    return (layout.array("bands").objects() + layout.array("floating").objects())
+        .firstNotNullOfOrNull { find(it.getJSONObject("root")) } ?: error("No $panel panel in the workspace")
 }
 
 fun CanvasHost.workspaceCapture(): String {

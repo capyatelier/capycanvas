@@ -60,7 +60,7 @@ mod move_pixels_checks {
         assert!(preview.moving);
         assert_eq!(preview.transform, moved([30., 12.], false), "whole pixels, sampled exactly");
         let actions: Vec<_> = s.state.tool_actions.iter().map(|a| a.command).collect();
-        assert_eq!(actions, [CommandId::MoveLeaveCopy], "Tool Options stay Move's");
+        assert_eq!(actions, [CommandId::MoveLeaveCopy, CommandId::TransformSnapping], "Tool Options stay Move's");
         let mut overlay = Vec::new();
         s.append_layer_overlay(&mut overlay);
         assert!(overlay.iter().all(|segment| segment.marker != 2.), "no transform handles");

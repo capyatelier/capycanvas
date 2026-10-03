@@ -120,6 +120,98 @@ class AndroidTextCompositionTest {
         }
     }
 
+    @Test fun curveCoordinatesKeepNativeCompositionAndUnchangedPrecision() {
+        launchCapy(compose = compose).use { scenario ->
+            val host = scenario.activity().host
+            host.drain(obj("type" to "close_settings"))
+            compose.waitUntil(60_000) { host.snapshot?.getJSONObject("state")?.getJSONObject("filter_load")?.optBoolean("pending") == false }
+            host.drain(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "curves")))
+            for (panel in listOf("navigator", "proof", "layers")) host.drain(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to false)))
+            fun properties() = host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties")
+            fun control() = properties().array("controls").objects().first { !it.isNull("curve") }
+            fun points() = control().getJSONObject("value").getJSONArray("value").toString()
+            fun invoke(command: String) = host.drain(obj("type" to "invoke", "command" to command))
+            fun field(axis: String) = "number-curve-${control().getString("key")}-$axis"
+            fun literal(axis: String) = findTag(field(axis))!!.second.config.getOrNull(SemanticsProperties.EditableText)!!.text
+            fun open(axis: String): android.view.inputmethod.InputConnection {
+                compose.onNodeWithTag(field(axis)).performScrollTo().assertIsDisplayed()
+                compose.onNodeWithTag(field(axis)).performTouchInput { click(center) }
+                compose.onNodeWithTag(field(axis)).assertIsFocused()
+                var connection: android.view.inputmethod.InputConnection? = null
+                compose.waitUntil(10_000) {
+                    compose.runOnUiThread { connection = findTag(field(axis))!!.first.view.onCreateInputConnection(android.view.inputmethod.EditorInfo()) }
+                    connection != null
+                }
+                return connection!!
+            }
+            fun nativeEnter(connection: android.view.inputmethod.InputConnection) {
+                for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) compose.runOnIdle {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    connection.sendKeyEvent(KeyEvent(now, now, phase, KeyEvent.KEYCODE_ENTER, 0, 0, 0, 0, KeyEvent.FLAG_SOFT_KEYBOARD))
+                }
+                compose.waitForIdle()
+            }
+            for (theme in listOf("light", "dark")) {
+                host.drain(obj("type" to "set_theme", "theme" to theme))
+                val key = control().getString("key")
+                host.drain(obj("type" to "effect", "action" to obj("op" to "set", "layer" to properties().getLong("layer"), "key" to key,
+                    "value" to obj("kind" to "curve", "value" to org.json.JSONArray("[[0,0],[0.5,0.12345679],[1,1]]")))))
+                compose.onNodeWithTag("effect-curve").performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .5f, height * (1f - .12345679f))) }
+                compose.waitUntil(10_000) { !control().getJSONObject("curve").isNull("selected") }
+                val original = points()
+                assertEquals("31.481", control().getJSONObject("curve").getJSONObject("output").getString("text"))
+                var connection = open("output")
+                assertEquals("31.481", literal("output"))
+                nativeEnter(connection)
+                open("input")
+                assertEquals("Enter and focus loss do not quantize an unchanged presented knot", original, points())
+                connection = open("output")
+                compose.runOnIdle {
+                    assertTrue(connection.setSelection(0, literal("output").length))
+                    assertTrue(connection.setComposingText("12", 1))
+                }
+                compose.waitForIdle()
+                assertTrue(host.textComposition.active)
+                nativeEnter(connection)
+                assertTrue("Candidate Enter belongs to the native composition", host.textComposition.active)
+                assertEquals(original, points())
+                compose.runOnIdle {
+                    assertTrue(connection.commitText("127.5", 1))
+                    assertTrue(connection.finishComposingText())
+                }
+                compose.waitUntil(10_000) { !host.textComposition.active }
+                nativeEnter(connection)
+                compose.waitUntil(10_000) { control().getJSONObject("curve").getJSONObject("output").getDouble("value") == .5 }
+                invoke("undo"); assertEquals("Committed IME text has one undo", original, points())
+                connection = open("output")
+                compose.runOnIdle {
+                    assertTrue(connection.setSelection(0, literal("output").length))
+                    assertTrue(connection.commitText("1e-", 1))
+                }
+                nativeEnter(connection)
+                assertEquals("A partial expression cannot publish an earlier draft", original, points())
+                val retired = connection
+                scenario.recreate()
+                assertSame("Activity recreation retains the authoritative session", host, scenario.activity().host)
+                compose.waitUntil(60_000) { findTag(field("output")) != null }
+                compose.onNodeWithTag(field("output")).assertIsFocused()
+                assertEquals("Native partial draft survives Activity recreation", "1e-", literal("output"))
+                assertEquals("Recreation does not edit the document", original, points())
+                compose.runOnIdle { retired.commitText("255", 1) }
+                compose.waitForIdle()
+                assertEquals("A retired InputConnection cannot edit the recreated controls", original, points())
+                compose.runOnIdle { connection = findTag(field("output"))!!.first.view.onCreateInputConnection(android.view.inputmethod.EditorInfo())!! }
+                val now = android.os.SystemClock.uptimeMillis()
+                for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) compose.runOnIdle {
+                    connection.sendKeyEvent(KeyEvent(now, now, phase, KeyEvent.KEYCODE_ESCAPE, 0))
+                }
+                compose.waitForIdle()
+                assertEquals(original, points())
+                assertNull(host.failure); assertNull(host.actionError)
+            }
+        }
+    }
+
     @Test fun numericBlurCommitsNativeTextAndPristineLinkedFieldsFollowTheDraft() {
         launchCapy(compose = compose).use { scenario ->
             val host = scenario.activity().host

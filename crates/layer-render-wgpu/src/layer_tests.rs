@@ -18,7 +18,7 @@ mod transform_latency;
 #[path = "transform_oracle_tests.rs"]
 mod transform_oracles;
 #[path = "placement_tests.rs"]
-mod placement;
+pub(crate) mod placement;
 #[path = "placement_material_tests.rs"]
 mod placement_material;
 #[path = "erase_tests.rs"]
