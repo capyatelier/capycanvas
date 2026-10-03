@@ -269,12 +269,22 @@ APK calls, so test-APK benchmarks use the unminified build.
 - **Workspace switcher scrolling.**
   `AndroidWorkspacePerformanceTest#workspaceSwitcherScrollFrameTiming` runs with
   `-e switcherBenchmark true -e photo <readable-tier-photo.jpg>`. It scrolls the
-  workspace choices and visibility checklist with native contacts, one warm-up
-  and three five-second gestures per surface. It uses the 12 MP photo, an empty
-  paint layer, Fit zoom and a long workspace list. Moving draw samples under
-  `workspace-switcher-benchmark` in the test app's external files identify
-  motion; pair them with SurfaceFlinger presentation data to measure frame
-  rates. Draw callbacks alone do not establish presentation performance.
+  workspace choices and visibility checklist on the 12 MP photo with an empty
+  paint layer, Fit zoom and a long workspace list.
+- **Grouped tool drawer scrolling.**
+  `AndroidWorkspacePerformanceTest#groupedDrawerScrollFrameTiming` runs with
+  `-e groupedToolBenchmark true -e photo <readable-tier-photo.jpg>`. It uses the
+  default Photo workspace and scrolls the grouped Drawing drawer on the 12 MP
+  photo with an empty paint layer and Fit zoom. It does not measure drawer
+  opening, sibling switching or tile dragging.
+  Both scrolling fixtures use native contacts, one warm-up and three six-second
+  gestures per surface. Their `workspace-switcher-benchmark` and
+  `grouped-drawer-benchmark` external-file directories contain draw samples where
+  the scroll offset changes and raw `FrameMetrics`. The draw timestamps and frame
+  vsyncs use Android's monotonic clock; match them to retain moving frames and
+  count each vsync once. A 200 ms callback drain retains late frame metrics
+  without extending the recorded motion window. Draw callbacks alone do not
+  establish presentation performance.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
   `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,composed_transform,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation,effects,curves,spatial-effects`,
   `durationMs`, `width`, `height`, `blending` (`perceptual` or `linear`) and

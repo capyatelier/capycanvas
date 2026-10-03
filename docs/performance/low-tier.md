@@ -63,7 +63,8 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Panel, tab, column or toolbar drag and docking | 60 | | |
 | Panel or column resize | 60 | | |
 | Drawer open and close | 60 | | |
-| Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
+| Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); functional checks do not qualify this tier |
+| Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 59.02–59.52 Hz, maximum p99 33.31 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
 | Colour wheel or picker drag | 60 | | |
 | Slider scrub: size, opacity, flow | 60 | | |
 | Canvas action bar show, hide and move | 60 | **Not met.** UI frame p50/p95: 32.9/41.7 ms moving the bar, 11.6/21.0 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
@@ -73,6 +74,34 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
 | Menu open and close | 60 | | |
 | Interface language change | 60 | Single samples: cold preparation 18.240–27.400 ms; maximum isolated batch 2.355 ms; German publication 190.340 ms | Fifteen-language diagnostic below; no tier qualification |
+
+## Grouped tool drawer scrolling
+
+Measured on the TCL reference tablet on 2026-10-03, thermal status 0 before and
+after, 60 Hz default display settings. The 4248 × 2832 Sony photo has one empty
+paint layer at Fit (25.5508%), default Photo panels and glass. The grouped Drawing
+drawer receives one priming gesture and three six-second native finger gestures.
+Actual moving windows span 5.964–5.981 seconds.
+
+| Run | Moving UI FrameMetrics, Hz | Interval p99, ms | Moving draws / matched distinct vsyncs | Maximum draw-to-vsync lag, ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 59.02 | 33.31 | 353 / 353 | 12.08 |
+| 2 | 59.52 | 16.76 | 357 / 357 | 12.12 |
+| 3 | 59.52 | 16.74 | 356 / 356 | 12.41 |
+
+Only draws with changed scroll offsets count. Their monotonic timestamps match
+the nearest preceding `FrameMetrics` vsync; duplicate callbacks count once.
+A 200 ms callback drain retains late metrics without extending the motion window.
+All draws match within one frame, with zero lost callbacks or unmatched draws.
+These UI FrameMetrics meet the 57 Hz floor and 33.333 ms p99 limit. No
+SurfaceFlinger trace was collected; drawer opening, sibling switching, menus,
+tile dragging and other tiers remain unqualified.
+
+The unminified benchmark variant uses release Rust from `65e514761`.
+App APK SHA-256:
+`8a695ee0e8ad77209f06ad685e88aa012d647e003ca482f75d6577d8fbde70f2`.
+Raw gestures, thermal records, fixture, exact hashes and the reproducible report
+are retained in `artifacts/tool-variations-evidence/android-grouped-drawer-low-tier/`.
 
 ## Workspace switcher scrolling
 
