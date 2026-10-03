@@ -19,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import android.view.KeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
@@ -32,6 +34,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.PopupProperties
 import org.json.JSONArray
@@ -44,7 +49,10 @@ import org.json.JSONObject
     // A focusable Android popup cancels the contact in the activity that opened
     // it. Context menus must leave that contact with the original drag owner.
     BackHandler(!focusable, dismiss)
-    DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).testTag("workspace-menu"),
+    DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).testTag("workspace-menu").onPreviewKeyEvent { event ->
+            val key = event.nativeKeyEvent
+            if (key.keyCode == KeyEvent.KEYCODE_ESCAPE) { if (key.action == KeyEvent.ACTION_DOWN) dismiss(); true } else false
+        },
         properties = if (focusable) PopupProperties(focusable = true) else WindowlessMenu,
         shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
         WorkspaceMenuItems(host, menu.array("sections"), dismiss, if (menu.has("title")) menu.getString("title") else null, command)
@@ -87,25 +95,36 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
 @Composable internal fun WorkspaceMenuItems(host: CanvasHost, sections: JSONArray,
     dismiss: () -> Unit = {}, title: String? = null, command: ((JSONObject) -> Unit)? = null) {
     val colors = LocalPalette.current
-    var pages by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
-    val page = pages.lastOrNull()
-    if (page != null) {
+    var pages by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
+    var page: JSONObject? = null
+    for ((section, item) in pages) {
+        page = (page?.array("sections") ?: sections).optJSONArray(section)?.optJSONObject(item)
+        if (page == null) break
+    }
+    val currentPage = page
+    if (currentPage != null) {
         Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).clickable { pages = pages.dropLast(1) }
             .padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SharedIcon("down", "Back", Modifier.rotate(90f))
-            Text(page.getString("label"), fontWeight = FontWeight.Bold)
+            Text(currentPage.getString("label"), fontWeight = FontWeight.Bold)
         }
         HorizontalDivider(color = colors.divider)
     } else if (title != null) Text(title, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = colors.secondary)
-    (page?.array("sections") ?: sections).values().map { it as JSONArray }.filter { it.length() > 0 }.forEachIndexed { index, section ->
+    (currentPage?.array("sections") ?: sections).values().mapIndexed { section, value -> section to (value as JSONArray) }
+        .filter { it.second.length() > 0 }.forEachIndexed { index, (sectionIndex, section) ->
         if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = colors.divider)
-        section.objects().forEach { item ->
+        section.objects().forEachIndexed { itemIndex, item ->
             val enabled = item.optBoolean("enabled", true)
+            val checkbox = item.objectOrNull("action")?.objectOrNull("command")?.optString("type") == "show_in_switcher"
             Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(horizontal = 6.dp)
+                .then(if (checkbox) Modifier.semantics {
+                    role = Role.Checkbox
+                    toggleableState = ToggleableState(item.optBoolean("selected"))
+                } else Modifier)
                 .clip(RoundedCornerShape(6.dp)).alpha(if (enabled) 1f else .4f)
                 .clickable(enabled = enabled) {
-                    if (item.array("sections").length() > 0) pages = pages + item
+                    if (item.array("sections").length() > 0) pages = pages + (sectionIndex to itemIndex)
                     else item.objectOrNull("command")?.takeIf { command != null }?.let { dismiss(); command!!(it) }
                         ?: item.objectOrNull("action")?.let { action -> dismiss(); host.dispatch(action) }
                 }.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,

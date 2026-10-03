@@ -68,8 +68,32 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Canvas action bar show, hide and move | 60 | **Not met.** UI frame p50/p95: 32.9/41.7 ms moving the bar, 11.6/21.0 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
 | Tool Options or panel content change | 60 | **Not met.** UI frame p50/p95 25.4/35.3 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 60 | | |
+| Workspace choices: horizontal scroll | 60 | Screen 59.42–59.82 presents/s, maximum p99 33.24 ms | Workspace switcher scrolling below; long-list fixture |
+| Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
 | Menu open and close | 60 | | |
 | Interface language change | 60 | Single samples: cold preparation 18.240–27.400 ms; maximum isolated batch 2.355 ms; German publication 190.340 ms | Fifteen-language diagnostic below; no tier qualification |
+
+## Workspace switcher scrolling
+
+Measured on the TCL reference tablet on 2026-10-03, thermal status 0 before and
+after, 60 Hz default display settings. The 4248 × 2832 Sony photo has one empty
+paint layer at Fit (15.9703%), default Paint panels and glass. The fixture uses a
+small, left-aligned switcher-only header and 30 custom long names plus the three
+included workspaces. Each surface has one priming gesture and three five-second
+native touch gestures.
+
+Both measured surfaces meet the 57 presents/s floor and 33.3 ms p99 limit.
+Every moving draw sample matches an actual app or popup frame, whose display
+token joins the SurfaceFlinger actual-present timestamp. Canvas surfaces and
+unchanged draws are excluded. These results qualify this long-list fixture;
+other header configurations, opening latency and other tiers remain unmeasured.
+
+The unminified benchmark variant uses release Rust from `f224ef05e` plus Android
+patch SHA-256 `5a0abb5b8f59fbef43f7d2dc4fcd09be2dd4fdb9cb46cc053911f369a69fa417`.
+App APK SHA-256:
+`b58c13f842eb77fd21d72acbff4c4a0b19728d57c563f79c4c9d84d14798803e`.
+Raw gestures, trace, analysis, source patch, APKs and provenance are retained in
+`artifacts/workspace-switcher-validation/android-switcher-benchmark/`.
 
 ## Language preparation
 

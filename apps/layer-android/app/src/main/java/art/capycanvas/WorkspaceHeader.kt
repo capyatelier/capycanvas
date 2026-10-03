@@ -21,6 +21,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import android.view.KeyEvent
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -77,7 +79,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
     val tab = state.array("tabs").optJSONObject(0)
     val title = tab?.let { "${it.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${it.optInt("width")} × ${it.optInt("height")}" } ?: ""
     val choices = host.workspaceManager?.array("switcher_display")?.objects() ?: emptyList()
-    val workspaceWidth = (8f + choices.sumOf { (measure(it.getString("title")) + 18f).coerceAtMost(130f).toDouble() }).toFloat().coerceAtMost(480f)
+    val workspaceWidth = (36f + choices.sumOf { (measure(it.getString("title")) + 18f).coerceAtMost(130f).toDouble() }).toFloat().coerceAtMost(480f)
     val metrics = JSONArray(entries.map { entry ->
         val kind = entry.getJSONObject("item").getString("kind")
         val natural = when (kind) {
@@ -93,7 +95,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
             "compact" to (if (kind in listOf("menu_labels", "workspaces", "document_title")) tile else natural) + grip)
     })
     var bankHeight by remember { mutableFloatStateOf(0f) }
-    var overflowMenu by remember { mutableStateOf<JSONObject?>(null) }
+    var overflowMenu by remember { mutableStateOf<(() -> JSONObject?)?>(null) }
     val modelKey = model.toString()
     LaunchedEffect(modelKey, editing) {
         input.finish(true); input.overflow = null; input.context = null
@@ -175,14 +177,16 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
                     ids.forEach { id ->
                         val spec = specs.getValue(id)
                         Row(Modifier.fillMaxWidth().height(44.dp).testTag("header-overflow-item-$id")
-                            .headerSource(input, obj("kind" to "item", "value" to id), spec.getString("label"), 2)
+                            .headerSource(input, obj("kind" to "item", "value" to id), spec.getString("label"), 2,
+                                context = if (entries.first { it.getInt("id") == id }.getJSONObject("item").getString("kind") == "workspaces")
+                                    ({ host.workspaceManager?.optJSONObject("switcher_options") }) else null)
                             .then(if(entries.first { it.getInt("id")==id }.getJSONObject("item").getString("kind")=="document_title")Modifier.drawingDropTarget(host,!editing)else Modifier)
                             .clickable(enabled = !editing) {
                                 val entry = entries.first { it.getInt("id") == id }
                                 input.overflow = null
                                 when (entry.getJSONObject("item").getString("kind")) {
-                                    "menu", "menu_labels" -> host.primaryMenu { overflowMenu = it }
-                                    "workspaces" -> overflowMenu = workspaceSwitcherMenu(host.workspaceManager)
+                                    "menu", "menu_labels" -> host.primaryMenu { loaded -> overflowMenu = { loaded } }
+                                    "workspaces" -> overflowMenu = { workspaceSwitcherMenu(host.workspaceManager) }
                                     else -> activateHeader(host, entry)
                                 }
                             }.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -202,12 +206,14 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
                 Text(source.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         } }
+        PopupOwner(input.context != null)
         input.context?.let { menu ->
             Box(Modifier.placed(input.contextBounds.headerBounds(), density)) {
-                WorkspaceMenu(host, menu, preserveContact = input.contact) { input.context = null }
+                WorkspaceMenu(host, input.contextProvider?.invoke() ?: menu, preserveContact = input.contact) { input.context = null }
             }
         }
-        overflowMenu?.let { menu ->
+        PopupOwner(overflowMenu != null)
+        overflowMenu?.invoke()?.let { menu ->
             Box(Modifier.offset(6.dp, height.dp)) { WorkspaceMenu(host, menu) { overflowMenu = null } }
         }
     }
@@ -245,7 +251,15 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
         onDispose { if (ownsPopup) input.dock.popup(false) }
     }
     val open = input.dock.drawerSources["tool"]?.anchor?.let { it.optString("kind") == "header" && it.optInt("id") == id } == true
-    Row(modifier.alpha(if (!editing && !spec.optBoolean("enabled")) .4f else 1f).testTag("header-item-$id").headerSource(input, obj("kind" to "item", "value" to id), label, 1)
+    Row(modifier.alpha(if (!editing && !spec.optBoolean("enabled")) .4f else 1f).testTag("header-item-$id").headerSource(input, obj("kind" to "item", "value" to id), label, 1,
+            context = if (kind == "workspaces") ({ host.workspaceManager?.optJSONObject("switcher_options") }) else null)
+        .onPreviewKeyEvent { event ->
+            val key = event.nativeKeyEvent
+            if (kind == "workspaces" && (key.keyCode == KeyEvent.KEYCODE_MENU || key.isShiftPressed && key.keyCode == KeyEvent.KEYCODE_F10)) {
+                if (key.action == KeyEvent.ACTION_DOWN) input.menu(id, input.sources.values.firstOrNull { it.source.optInt("value", -1) == id }?.bounds ?: Rect.Zero)
+                true
+            } else false
+        }
         .then(if (editing) Modifier.border(1.dp, if (input.selected == id) colors.accent else colors.divider, TileShape)
             .focusRequester(focus).onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
@@ -275,7 +289,9 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                         }
                     }
                 }
-                kind == "workspaces" && !compact -> WorkspaceSwitcher(host, Modifier.fillMaxWidth(), interactive = !editing)
+                kind == "workspaces" && !compact -> WorkspaceSwitcher(host, Modifier.fillMaxWidth(), interactive = !editing) {
+                    input.menu(id, input.sources.values.firstOrNull { it.source.optInt("value", -1) == id }?.bounds ?: Rect.Zero)
+                }
                 kind == "document_title" -> DrawingHeader(host, title, editing, size.number("tile"), size.number("gap")) { headerSource(input, obj("kind" to "item", "value" to id), label, 2, hold = false) }
                 kind == "clock" -> SystemStatus(showBattery = false)
                 kind == "battery" -> SystemStatus(clock = false)
@@ -294,13 +310,13 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     else SharedIcon(icon, label, Modifier.size(iconSize.dp))
                 }
             }
-            if (kind != "menu_labels" || compact) menu?.let { WorkspaceMenu(host, it) { menu = null } }
+            if (kind != "menu_labels" || compact) menu?.let { WorkspaceMenu(host, if (kind == "workspaces") workspaceSwitcherMenu(host.workspaceManager) else it) { menu = null } }
         }
     }
 }
 
 /** Active tools stay blue through hover/press; actions use neutral feedback. */
-@Composable private fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
+@Composable internal fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
     modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, shape: Shape = drawerButtonShape(if (open) "bottom" else null),
     inBar: Boolean = false, onClick: () -> Unit, content: @Composable () -> Unit) {
     val colors = LocalPalette.current

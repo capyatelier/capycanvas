@@ -101,17 +101,9 @@ import org.json.JSONArray
         })
 }
 
-internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject {
-    val enabled = view != null && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("prompt")
-    val choices = view?.array("switcher_display")?.objects() ?: emptyList()
-    return obj("title" to "Workspaces", "sections" to JSONArray(listOf(JSONArray(choices.map { row ->
-        val id = row.getString("id")
-        obj("label" to row.getString("title"), "selected" to (view?.optString("id") == id), "enabled" to enabled,
-            "action" to obj("type" to "workspace_manager", "command" to obj("type" to "switch", "id" to id)), "sections" to JSONArray())
-    }))))
-}
+internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject = view?.optJSONObject("switcher_menu") ?: obj("sections" to JSONArray())
 
-@Composable internal fun WorkspaceSwitcher(host: CanvasHost, modifier: Modifier = Modifier, interactive: Boolean = true) {
+@Composable internal fun WorkspaceSwitcher(host: CanvasHost, modifier: Modifier = Modifier, interactive: Boolean = true, options: () -> Unit) {
     val view = host.workspaceManager ?: return
     val colors = LocalPalette.current
     val choices = view.array("switcher_display").objects()
@@ -119,18 +111,25 @@ internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject {
     LaunchedEffect(choices.firstOrNull()?.optString("id"), view.optString("id")) {
         if (choices.firstOrNull()?.optString("id") == view.optString("id")) scroll.scrollTo(0)
     }
-    if (choices.isNotEmpty()) Row(modifier.height(36.dp).clip(SquircleShape(50)).glass(SquircleShape(50), colors.switcher)
-        .horizontalScroll(scroll).padding(5.dp).testTag("workspace-switcher"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        choices.forEach { row ->
-            val id = row.getString("id")
-            val selected = view.optString("id") == id
-            Box(Modifier.widthIn(max = 128.dp).height(26.dp).clip(SquircleShape(50))
-                .background(if (selected) colors.switcherActive else Color.Transparent)
-                .selectable(selected, enabled = interactive && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("prompt"), role = Role.RadioButton) {
-                    host.workspaceInput(obj("type" to "switch", "id" to id))
-                }.padding(horizontal = 8.dp).testTag("workspace-switch-$id"), contentAlignment = Alignment.Center) {
-                Text(row.getString("title"), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+    Row(modifier.height(36.dp).clip(SquircleShape(50)).glass(SquircleShape(50), colors.switcher)
+        .testTag("workspace-switcher"), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).horizontalScroll(scroll).padding(start = 5.dp, top = 5.dp, bottom = 5.dp)
+            .testTag("workspace-switcher-choices"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            choices.forEach { row ->
+                val id = row.getString("id")
+                val selected = view.optString("id") == id
+                Box(Modifier.widthIn(max = 128.dp).height(26.dp).clip(SquircleShape(50))
+                    .background(if (selected) colors.switcherActive else Color.Transparent)
+                    .selectable(selected, enabled = interactive && view.optBoolean("ready") && !view.optBoolean("busy") && view.isNull("page") && view.isNull("prompt"), role = Role.RadioButton) {
+                        host.workspaceInput(obj("type" to "switch", "id" to id))
+                    }.padding(horizontal = 8.dp).testTag("workspace-switch-$id"), contentAlignment = Alignment.Center) {
+                    Text(row.getString("title"), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
             }
+        }
+        HeaderButton(view.getString("switcher_options_label"), false, true, false,
+            Modifier.width(28.dp).fillMaxHeight().testTag("workspace-switcher-options"), surface = false, shape = SquircleShape(50), onClick = options) {
+            SharedIcon("more", view.getString("switcher_options_label"), Modifier.size(16.dp), tint = colors.secondary)
         }
     }
     if (!view.isNull("error")) TextButton({ host.workspaceInput(obj("type" to "retry")) }, enabled = !view.optBoolean("busy")) { Text("Retry workspace save") }

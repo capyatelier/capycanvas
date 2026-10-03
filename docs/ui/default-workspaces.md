@@ -209,9 +209,9 @@ like a slider track, with a subtle accent for the active choice, and scrolls
 horizontally when its choices overflow. By default it sits to the right of the
 document title; Sketch centers it, and the title-bar editor can move it.
 
-On GTK and Web, a vertical **⋮** at the end of the switcher well opens **Workspace
-options**. The button stays fixed while the choices scroll. Its **Show in top
-bar** checklist includes every workspace in the saved order; checking a row
+On GTK, Web and Android, a vertical **⋮** at the end of the switcher well opens
+**Workspace options**. The button stays fixed while the choices scroll. Its
+**Show in top bar** checklist includes every workspace in the saved order; checking a row
 changes its saved visibility without switching or previewing a workspace.
 **Manage Workspaces…** is the last entry and opens the full editor. Reordering
 stays in that editor. The compact workspace menu includes the same checklist
@@ -287,5 +287,6 @@ node apps/layer-web/device.test.mjs --paint-columns
 The browser store contract first needs its fixture:
 `CAPY_STORE_CONTRACT_FIXTURE=/tmp/capy-workspace-store-contract.json cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`,
 then `bash tools/performance/workspace-motion.sh web --workspace-store`. Android
-covers the same journeys in `AndroidTitleBarTest`. These tests use isolated
-stores and never touch the normal app workspaces.
+covers header behavior in `AndroidTitleBarTest` and switcher visibility,
+persistence and pending-save menus in `AndroidWorkspaceSwitcherTest`. These
+tests use isolated stores and never touch the normal app workspaces.

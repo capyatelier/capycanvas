@@ -262,6 +262,15 @@ APK calls, so test-APK benchmarks use the unminified build.
   display clock and `FrameMetrics`. `-e workspaceTransparency 0`–`3` sets panel
   transparency (off to high) and restores it afterwards. Results appear in
   logcat under `CapyDragPerf` and `CapyResizePerf`.
+- **Workspace switcher scrolling.**
+  `AndroidWorkspacePerformanceTest#workspaceSwitcherScrollFrameTiming` runs with
+  `-e switcherBenchmark true -e photo <readable-tier-photo.jpg>`. It scrolls the
+  workspace choices and visibility checklist with native contacts, one warm-up
+  and three five-second gestures per surface. It uses the 12 MP photo, an empty
+  paint layer, Fit zoom and a long workspace list. Moving draw samples under
+  `workspace-switcher-benchmark` in the test app's external files identify
+  motion; pair them with SurfaceFlinger presentation data to measure frame
+  rates. Draw callbacks alone do not establish presentation performance.
 - **Canvas action bar.** `AndroidCanvasBarBenchmarkTest` runs with
   `-e canvasBarBenchmark true`. `-e scenarios ui,paint,photo,composed_transform,scaled,move,selection,menus,canvas_size,refine,crop,merge,dodge_burn,frequency_separation,effects,curves,spatial-effects`,
   `durationMs`, `width`, `height`, `blending` (`perceptual` or `linear`) and

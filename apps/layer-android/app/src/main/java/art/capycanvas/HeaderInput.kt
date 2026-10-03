@@ -34,7 +34,7 @@ internal fun Modifier.headerChrome(): Modifier = pointerInput(Unit) {
 /** The stable workspace owns capture, so compacting/reparenting a child cannot
  * lose a contact. Only Rust resolves destinations, live slides and final edits. */
 internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction) {
-    data class Source(val token: Any, val source: JSONObject, val label: String, val bounds: Rect, val priority: Int, val hold: Boolean)
+    data class Source(val token: Any, val source: JSONObject, val label: String, val bounds: Rect, val priority: Int, val hold: Boolean, val context: (() -> JSONObject?)?)
     val sources = mutableMapOf<Any, Source>()
     var editing = false
     var enabled = false
@@ -47,6 +47,7 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
     var held by mutableStateOf<Source?>(null)
     var overflow by mutableStateOf<Int?>(null)
     var context by mutableStateOf<JSONObject?>(null)
+    var contextProvider: (() -> JSONObject?)? = null
     var contextBounds = Rect.Zero
     var contact by mutableStateOf(false)
     private var generation = 0
@@ -73,11 +74,18 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
     }
     fun menu(id: Int?, bounds: Rect) {
         contextBounds = bounds
-        host.query(obj("type" to "context", "target" to obj("kind" to "header", "id" to id))) {
+        val source = sources.values.filter { it.source.optInt("value", -1) == id && it.context != null }.maxByOrNull { it.priority }
+        contextProvider = source?.context
+        if (source != null) context = contextProvider?.invoke()
+        else host.query(obj("type" to "context", "target" to obj("kind" to "header", "id" to id))) {
             context = it as? JSONObject
         }
     }
     fun key(event: KeyEvent): Boolean {
+        if (!host.editingText && context != null && event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
+            if (event.action == KeyEvent.ACTION_DOWN) context = null
+            return true
+        }
         if (!editing || !enabled || host.editingText || event.isCtrlPressed || event.isMetaPressed || event.isAltPressed) return false
         val keys = listOf(KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL,
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_F10)
@@ -99,13 +107,13 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
     }
 }
 
-@Composable internal fun Modifier.headerSource(input: HeaderInteraction, source: JSONObject, label: String, priority: Int = 0, hold: Boolean = true): Modifier {
+@Composable internal fun Modifier.headerSource(input: HeaderInteraction, source: JSONObject, label: String, priority: Int = 0, hold: Boolean = true, context: (() -> JSONObject?)? = null): Modifier {
     val token = remember { Any() }
     DisposableEffect(input, token) { onDispose { input.sources.remove(token) } }
     return onGloballyPositioned {
         val bounds = it.boundsInRoot().translate(-input.dock.origin)
         input.sources[token] = HeaderInteraction.Source(token, source, label,
-            Rect(bounds.topLeft / input.dock.density, bounds.bottomRight / input.dock.density), priority, hold)
+            Rect(bounds.topLeft / input.dock.density, bounds.bottomRight / input.dock.density), priority, hold, context)
     }
 }
 

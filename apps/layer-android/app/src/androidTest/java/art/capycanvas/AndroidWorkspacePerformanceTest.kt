@@ -12,6 +12,9 @@ import android.view.Window
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONArray
@@ -35,6 +38,129 @@ class AndroidWorkspacePerformanceTest {
     @Test fun continuousResizeFrameTiming() = frameTiming(true)
 
     @Test fun colorPanelOverlapFrameTiming() = frameTiming(false, colorOverlap = true)
+
+    @Test fun workspaceSwitcherScrollFrameTiming() {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue(args.getString("switcherBenchmark") == "true")
+        launchCapy(120_000).use { scenario ->
+            device.landscape(scenario)
+            val host = scenario.activity().host
+            fun idle() = host.awaitMain("workspace preferences saved", 60_000, { "${host.workspaceManager}" }) {
+                host.workspaceManager?.let { !it.optBoolean("busy") && !it.optBoolean("switcher_busy") && !it.optBoolean("dirty") } == true
+            }
+            fun workspace(value: JSONObject) { instrumentation.runOnMainSync { host.workspaceInput(value) }; host.drain(); idle() }
+            workspace(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
+            host.newDocument(4248, 2832)
+            host.importImage(java.io.File(checkNotNull(args.getString("photo"))))
+            host.awaitMain("photo placement") {
+                host.snapshot?.getJSONObject("state")?.objectOrNull("canvas_bar")?.objectOrNull("context")?.optString("kind") == "placement"
+            }
+            host.drain(obj("type" to "invoke", "command" to "apply_transform"))
+            host.awaitMain("photo placement applied") {
+                host.snapshot?.getJSONObject("state")?.objectOrNull("canvas_bar")?.objectOrNull("context")?.optString("kind") != "placement"
+            }
+            for (id in listOf(1, 2)) host.drain(obj("type" to "layer", "action" to obj("op" to "delete", "id" to id)))
+            host.drain(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false)))
+            host.drain(obj("type" to "invoke", "command" to "fit_canvas"))
+            val fixture = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString())
+            repeat(30) { index ->
+                workspace(obj("type" to "form", "action" to obj("type" to "new")))
+                workspace(obj("type" to "submit", "name" to "Workspace ${index.toString().padStart(2, '0')} long name"))
+            }
+            workspace(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
+            fixture.getJSONObject("layout").put("header", obj("size" to "small", "next_id" to 901,
+                "zones" to JSONArray(listOf(JSONArray(listOf(obj("id" to 900, "item" to obj("kind" to "workspaces")))), JSONArray(), JSONArray()))))
+            host.drain(obj("type" to "restore_workspace", "workspace" to fixture))
+            host.awaitMain("scrolling switcher and settled renderer", 120_000) {
+                findTag("workspace-switcher-options") != null && host.snapshot?.optBoolean("shaders_ready") == true
+            }
+            val output = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "workspace-switcher-benchmark").apply { mkdirs() }
+            output.listFiles()?.forEach { it.delete() }
+            for (mode in listOf("choices", "options")) {
+                if (mode == "options") instrumentation.runOnMainSync {
+                    val button = findTag("workspace-switcher-options")!!.second.find { it.config.getOrNull(SemanticsActions.OnClick) != null }!!
+                    button.config[SemanticsActions.OnClick].action!!.invoke()
+                }
+                host.awaitMain("$mode scroll surface") { findTag(if (mode == "choices") "workspace-switcher-choices" else "workspace-menu") != null }
+                lateinit var owner: ViewRootForTest
+                lateinit var scroll: SemanticsNode
+                lateinit var dots: androidx.compose.ui.geometry.Rect
+                instrumentation.runOnMainSync {
+                    val surface = findTag(if (mode == "choices") "workspace-switcher-choices" else "workspace-menu")!!
+                    owner = surface.first
+                    scroll = surface.second.find { it.config.getOrNull(if (mode == "choices") SemanticsProperties.HorizontalScrollAxisRange else SemanticsProperties.VerticalScrollAxisRange) != null }!!
+                    dots = findTag("workspace-switcher-options")!!.second.boundsInRoot
+                }
+                val range = scroll.config[if (mode == "choices") SemanticsProperties.HorizontalScrollAxisRange else SemanticsProperties.VerticalScrollAxisRange]
+                assertTrue("$mode has overflow", range.maxValue() > 0f)
+                val bounds = scroll.boundsInRoot
+                val amplitude = minOf((if (mode == "choices") bounds.width else bounds.height) * .2f, range.maxValue() * .2f)
+                val rows = java.util.Collections.synchronizedList(mutableListOf<LongArray>())
+                val measuring = AtomicBoolean(false)
+                var previous = Float.NaN
+                val draw = android.view.ViewTreeObserver.OnDrawListener {
+                    val value = range.value()
+                    if (measuring.get() && value != previous) rows.add(longArrayOf(SystemClock.elapsedRealtimeNanos(), (value * 1000).toLong()))
+                    previous = value
+                }
+                instrumentation.runOnMainSync { owner.view.viewTreeObserver.addOnDrawListener(draw) }
+                try {
+                    for (run in 0..3) {
+                        instrumentation.runOnMainSync {
+                            val delta = range.maxValue() * .5f - range.value()
+                            scroll.config[SemanticsActions.ScrollBy].action!!.invoke(if (mode == "choices") delta else 0f, if (mode == "options") delta else 0f)
+                        }
+                        host.awaitMain("$mode centered scroll") { kotlin.math.abs(range.value() - range.maxValue() * .5f) < 2f }
+                        val duration = if (run == 0) 1000L else 5000L
+                        val downAt = SystemClock.uptimeMillis()
+                        fun event(action: Int, displacement: Float) {
+                            val point = bounds.center + if (mode == "choices") Offset(displacement, 0f) else Offset(0f, displacement)
+                            val contact = motion(MotionEvent.TOOL_TYPE_FINGER, action, point, downAt)
+                            try { owner.view.dispatchTouchEvent(contact) } finally { contact.recycle() }
+                        }
+                        instrumentation.runOnMainSync { event(MotionEvent.ACTION_DOWN, -amplitude) }
+                        val complete = CountDownLatch(1)
+                        var inputs = 0
+                        lateinit var callback: Choreographer.FrameCallback
+                        rows.clear(); previous = Float.NaN
+                        val begin = SystemClock.elapsedRealtimeNanos()
+                        measuring.set(true)
+                        android.os.Trace.beginAsyncSection("workspace-switcher-scroll-$mode-$run", run)
+                        instrumentation.runOnMainSync {
+                            val clock = Choreographer.getInstance()
+                            callback = Choreographer.FrameCallback {
+                                val elapsed = SystemClock.uptimeMillis() - downAt
+                                if (elapsed >= duration) complete.countDown()
+                                else {
+                                    val cycle = (elapsed % 2000) / 1000f
+                                    event(MotionEvent.ACTION_MOVE, amplitude * (2 * (if (cycle <= 1) cycle else 2 - cycle) - 1))
+                                    inputs++
+                                    clock.postFrameCallback(callback)
+                                }
+                            }
+                            clock.postFrameCallback(callback)
+                        }
+                        try { assertTrue("Native scroll input completed", complete.await(15, TimeUnit.SECONDS)) }
+                        finally { instrumentation.runOnMainSync { Choreographer.getInstance().removeFrameCallback(callback); event(MotionEvent.ACTION_CANCEL, 0f) } }
+                        android.os.Trace.endAsyncSection("workspace-switcher-scroll-$mode-$run", run)
+                        measuring.set(false)
+                        val end = SystemClock.elapsedRealtimeNanos()
+                        if (run > 0) {
+                            val moving = synchronized(rows) { rows.toList() }
+                            assertTrue("$mode scroll visibly moves", moving.size > 100)
+                            val result = obj("mode" to mode, "run" to run, "begin_ns" to begin, "end_ns" to end,
+                                "duration_ms" to duration, "inputs" to inputs, "display_hz" to owner.view.display.refreshRate,
+                                "debuggable" to BuildConfig.DEBUG, "camera" to host.snapshot!!.getJSONObject("state").getJSONObject("camera"),
+                                "tabs" to host.snapshot!!.getJSONObject("state").array("tabs"), "draws" to JSONArray(moving.map { JSONArray(it.toList()) }))
+                            java.io.File(output, "$mode-$run.json").writeText(result.toString())
+                        }
+                        instrumentation.runOnMainSync { assertEquals("Options stay fixed while $mode scrolls", dots, findTag("workspace-switcher-options")!!.second.boundsInRoot) }
+                    }
+                } finally { instrumentation.runOnMainSync { owner.view.viewTreeObserver.removeOnDrawListener(draw) } }
+                if (mode == "options") pressKey(android.view.KeyEvent.KEYCODE_ESCAPE)
+            }
+        }
+    }
 
     private fun frameTiming(resize: Boolean, colorOverlap: Boolean = false) {
         assumeTrue(InstrumentationRegistry.getArguments().getString("workspaceBenchmark") == "true")

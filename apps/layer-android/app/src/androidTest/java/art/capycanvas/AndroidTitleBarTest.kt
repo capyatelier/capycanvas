@@ -393,7 +393,7 @@ class AndroidTitleBarTest {
             waitFor("workspace choices") { node("workspace-menu") != null }
             instrumentation.runOnMainSync {
                 val (root, popup) = checkNotNull(node("workspace-menu"))
-                assertEquals("Only the pill's choices, in configured order", listOf("Workspaces") + choices.map { it.getString("title") }, texts(popup))
+                assertEquals("Only the pill's choices, in configured order", listOf(view().getJSONObject("switcher_menu").getString("title")) + view().getJSONObject("switcher_menu").array("sections").values().flatMap { (it as JSONArray).objects().map { row -> row.getString("label") } }, texts(popup))
                 pressed = root
                 point = checkNotNull(label(popup, target.getString("title"))).boundsInRoot.center
             }
