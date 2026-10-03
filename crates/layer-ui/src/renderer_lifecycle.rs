@@ -91,6 +91,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// layout/history/settings forward without overwriting this drawing's view,
     /// tools, history, dirty checkpoint or color interpretation.
     pub fn inherit_window_state(&mut self, previous: &Self) -> Result<UiChange, String> {
+        self.set_localization(previous.localization().clone());
+        self.localization_generation = previous.localization_generation;
+        self.preferences_revision = self.preferences_revision.max(previous.preferences_revision);
         // A recording is window state, shared by parked and active documents.
         self.engine.recording = previous.engine.recording.clone();
         self.state.platform = previous.state.platform;
@@ -205,7 +208,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.poll_document_close();
         self.refresh_commands();
         if recovered? > 0 || interrupted_selection {
-            self.state.host_error = Some("Painting stopped. Edits whose pixels could not be recovered were canceled; earlier edits are retained.".into());
+            self.set_host_error(Some("Painting stopped. Edits whose pixels could not be recovered were canceled; earlier edits are retained.".into()));
         }
         Ok(self.changed(
             retired_regions
@@ -244,7 +247,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_file_state();
         self.sync_renderer_telemetry();
         if self.rendering_suspended {
-            self.state.host_error = None;
+            self.set_host_error(None);
         }
         self.rendering_suspended = false;
         if let Some(pending) = &mut self.pending_filters {

@@ -7,7 +7,7 @@ use layer_ui::{
     proof_workflow::{ProofPreparation, ProofView, proof_form},
 };
 use serde_json::{Value, json};
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::Arc;
 
 pub(super) struct Task {
     job: ProofPreparation,
@@ -45,10 +45,20 @@ impl Task {
             applied: false,
         })
     }
-    pub fn details(&self, cancel: &AtomicBool) -> Result<Value, String> {
+    pub(crate) fn relocalize(&mut self, details: &mut Value, localization: Arc<layer_ui::Localizer>) {
+        self.localization = localization;
+        self.form["copy"] = json!(layer_ui::color_feature_copy::ProofCopy::new(&self.localization));
+        details["form"]["copy"] = self.form["copy"].clone();
+        details["intents"] = json!(layer_ui::proof_panel::proof_intents(&self.localization).map(|choice| json!({
+            "value":choice.value,"label":choice.label,
+            "bpc_available": PrintProofSettings { intent:choice.value,..Default::default() }.bpc_available()
+        })));
+        details["simulations"] = json!(layer_ui::proof_panel::proof_simulations(&self.localization));
+    }
+    pub fn details(&self, profiles: Value) -> Result<Value, String> {
         Ok(json!({
             "form": self.form, "settings": self.settings,
-            "profiles": crate::color_storage::list_view(cancel, &self.localization)?,
+            "profiles": profiles,
             "intents": layer_ui::proof_panel::proof_intents(&self.localization).map(|choice| json!({
                 "value": choice.value, "label": choice.label,
                 "bpc_available": PrintProofSettings { intent: choice.value, ..Default::default() }.bpc_available()
@@ -61,7 +71,7 @@ impl Task {
         mut settings: PrintProofSettings,
         profile_id: Option<String>,
         control: &CaptureControl,
-    ) -> Result<(), String> {
+    ) -> Result<(), layer_ui::ColorFeatureError> {
         self.validated = false;
         self.preserved = false;
         self.lut = None;
@@ -79,7 +89,7 @@ impl Task {
         self.validated = true;
         Ok(())
     }
-    pub fn preserve(&mut self, control: &CaptureControl) -> Result<(), String> {
+    pub fn preserve(&mut self, control: &CaptureControl) -> Result<(), layer_ui::ColorFeatureError> {
         if !self.validated || self.lut.is_none() {
             return Err("Validate the prepared proof first".into());
         }

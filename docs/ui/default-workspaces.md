@@ -189,6 +189,18 @@ The shared pieces are `workspace_session.rs` (captures, previews), the
 `sqlite.rs`, `worker.rs`) and its `WorkspaceController` in `controller.rs` for
 pages, forms, previews, autosave, ownership and close.
 
+Hosts apply a prepared language context with
+`WorkspaceController::set_localization`. The controller refreshes workspace and
+history labels, manager details, form chrome and retained refusals from their
+semantic sources. Names, descriptions, form values, searches and selections stay
+intact. The existing manager and its store, claims, save checkpoints and pending
+futures remain owned by the same objects. Relabeling does not read storage;
+preview and interrupted-change replies retain the data needed to project their
+copy in the current language. A visible storage startup notice keeps its identity
+and timeout while its text changes; an expired or replaced notice stays gone.
+Hosts report shared failures with `set_error` so a
+later language change can present the same refusal again.
+
 ## Configurable switcher
 
 The title-bar switcher is a rounded 36px track with 26px choices, vertically

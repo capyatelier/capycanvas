@@ -55,6 +55,8 @@ pub struct CapyHost {
     poisoned: bool,
     gpu: layer_host::DeviceWatch,
     gpu_generation: u64,
+    localization_generation: Option<u64>,
+    localization_input_busy: bool,
     document_epoch: u64,
     window: usize,
     display: crate::display::Display,
@@ -136,6 +138,8 @@ impl CapyHost {
             poisoned: false,
             gpu: Default::default(),
             gpu_generation: 0,
+            localization_generation: None,
+            localization_input_busy: false,
             document_epoch: native.session.state().document_file.epoch,
             window: 0,
             display: Default::default(),
@@ -225,7 +229,11 @@ impl CapyHost {
         self.sync_document();
         if let Some(service) = self.services.as_mut()
             && (!self.native.session.state().document_file.close_ready || self.documents.as_ref().is_none_or(|d| d.window_close_ready(&self.native))) {
+            service.localization_input(self.localization_input_busy || !self.live_contacts.is_empty());
             service.poll(&mut self.native)?;
+        }
+        if let Some(service) = self.documents.as_mut() {
+            service.set_localization(self.native.session.localization().clone())?;
         }
         if let Some(service) = self.filters.as_mut() {
             service.poll(&mut self.native);
@@ -976,6 +984,16 @@ pub unsafe extern "C" fn capy_acquire(host: *mut CapyHost) -> i32 {
     })
 }
 /// # Safety
+/// The host remains exclusively owned on the render thread during this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_localization_input(host: *mut CapyHost, busy: bool) -> i32 {
+    guard(host, |host| {
+        host.localization_input_busy = busy;
+        host.poll_services()?;
+        Ok(0)
+    })
+}
+/// # Safety
 /// `host` must be null or a live host exclusively accessed by this caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_frame(host: *mut CapyHost, now: u64, presentation: u64) -> i32 {
@@ -983,7 +1001,10 @@ pub unsafe extern "C" fn capy_frame(host: *mut CapyHost, now: u64, presentation:
 }
 #[derive(serde::Serialize)]
 struct WindowsMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    localization: Option<serde_json::Value>,
     windows_gpu_generation: u64,
+    windows_active_tag: &'static str,
     windows_display: serde_json::Value,
     windows_rendering_suspended: bool,
     windows_filter_load: Option<crate::filter_packages::Status>,
@@ -1007,8 +1028,15 @@ struct WindowsMetadata {
 pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     let mut result = std::ptr::null_mut();
     guard(host, |host| {
+        let generation = host.native.localization_generation();
+        let localization = if host.localization_generation != Some(generation) {
+            Some(serde_json::json!({"generation": generation, "bootstrap": host.native.bootstrap_view(),
+                "catalog": host.native.query(serde_json::json!({"type":"catalog"}))?}))
+        } else { None };
         let metadata = WindowsMetadata {
+            localization,
             windows_gpu_generation: host.gpu_generation,
+            windows_active_tag: host.native.session.localization().language().tag(),
             windows_display: serde_json::json!({"output": host.display, "format": host.config.as_ref().map(|c| format!("{:?}", c.format)), "headroom": host.config.as_ref().map_or(1., |c| host.display.available_headroom(c.format)), "analysis": host.documents.as_ref().map(|s| s.tone.status())}),
             windows_rendering_suspended: host.native.session.rendering_suspended(),
             windows_recovery: host.documents.as_ref().and_then(|d| d.recovery.as_ref()).map(|service| service.status()),
@@ -1049,6 +1077,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
         };
         let extension = serde_json::to_vec(&metadata).map_err(err)?;
         if let Some(bytes) = host.native.take_update_bytes().map_err(err)? {
+            host.localization_generation = Some(generation);
             result = CString::new(layer_host::extend_update(bytes, &extension))
                 .map_err(err)?
                 .into_raw();

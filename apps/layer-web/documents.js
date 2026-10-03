@@ -1,3 +1,4 @@
+import { liveCopy, bindCopy } from './localization.js';
 import {createDrawingTabs} from './drawing-tabs.js';
 import {createDocumentRecovery} from './document-recovery.js';
 import {chooseDocumentColor} from './document-color.js';
@@ -17,10 +18,10 @@ import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
 export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged}) {
-  const common=bootstrap.common,exportCopy=app.export_copy(),colorCopy=app.document_color_copy();
-  const formatLabels={Exr:exportCopy.format_exr,PngHdr:exportCopy.format_pq,PngHdrMapped:exportCopy.format_pq_clipped,
+  const common=bootstrap.common,exportCopy=liveCopy(app,"export_copy"),colorCopy=liveCopy(app,"document_color_copy");
+  const formatLabels=()=>({Exr:exportCopy.format_exr,PngHdr:exportCopy.format_pq,PngHdrMapped:exportCopy.format_pq_clipped,
     JpegHdr:exportCopy.format_jpeg_hdr,JpegHdrMapped:exportCopy.format_jpeg_hdr,AvifHdr:exportCopy.format_avif_hdr,AvifHdrMapped:exportCopy.format_avif_hdr,
-    Png:exportCopy.format_png,Tiff:exportCopy.format_tiff,Jpeg:exportCopy.format_jpeg,Webp:exportCopy.format_webp};
+    Png:exportCopy.format_png,Tiff:exportCopy.format_tiff,Jpeg:exportCopy.format_jpeg,Webp:exportCopy.format_webp});
   const deliveryMessage=(type,values)=>app.document_delivery_message({type,...values});
   const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
   let nextHandle=0,closing=false,changing=false,batching=false;
@@ -28,25 +29,26 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     interpret:()=>chooseSourceProfile({app,dialog,element,button})});
   const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.map(t=>t.uri));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${++nextHandle}`;if(handle)handles.set(uri,handle);return{uri,name};};
+  const openDialogs=new Set();
   const dialog=(title,build)=>new Promise(resolve=>{
     const root=element("dialog","document-dialog"),form=element("form");
-    form.method="dialog";form.append(element("h2","",title));root.append(form);document.body.append(root);
-    let result=null;root.addEventListener("close",()=>{root.remove();resolve(result);},{once:true});
+    form.method="dialog";form.append(element("h2","",title));openDialogs.add(form);root.append(form);document.body.append(root);
+    let result=null;root.addEventListener("close",()=>{openDialogs.delete(form);root.remove();resolve(result);},{once:true});
     const finish=value=>{result=value;root.close();};
     build(form,finish);root.showModal();
   });
-  const cancel=(footer,finish)=>footer.append(button(common.cancel,()=>finish(null)));
+  const cancel=(footer,finish)=>footer.append(button(()=>common.cancel,()=>finish(null)));
   const proof=createProof({app,dialog,element,button,icon,applyChange,wake,dispatch,contentChanged});
   async function newDocument() {
     const spec=app.editor_models(innerWidth,innerHeight).document_options;
     let model=spec.creation;
-    return dialog(model.text.new_title,(form,finish)=>{
-      const field=(id,title,node)=>{const label=element("label","document-size",title);node.dataset.documentField=id;node.setAttribute("aria-label",title);label.append(node);form.append(label);return node;};
+    return dialog(()=>model.text.new_title,(form,finish)=>{
+      const field=(id,title,node)=>{const label=element("label","document-size",title);node.dataset.documentField=id;if(typeof title==="function")bindCopy(node,title,"ariaLabel");else node.setAttribute("aria-label",title);label.append(node);form.append(label);return node;};
       const select=(id,title,choices,value)=>{const node=element("select");for(const [key,label] of choices){const option=element("option","",label);option.value=key;node.append(option);}node.value=value;return field(id,title,node);};
       const presetKey=id=>id?JSON.stringify(id):"custom";
-      const preset=select("preset",model.text.preset,[["custom",model.text.custom],...model.presets.map(p=>[presetKey(p.id),p.name])],presetKey(model.selected));
+      const preset=select("preset",()=>model.text.preset,[["custom",model.text.custom],...model.presets.map(p=>[presetKey(p.id),p.name])],presetKey(model.selected));
       const selectedPreset=()=>model.presets.find(p=>presetKey(p.id)===preset.value);
-      const remove=button(model.text.remove_preset,()=>{const action=selectedPreset()?.remove;if(!action)return;
+      const remove=button(()=>model.text.remove_preset,()=>{const action=selectedPreset()?.remove;if(!action)return;
         applyChange(app.dispatch({type:"new_document_preferences",action}));
         model=app.editor_models(innerWidth,innerHeight).document_options.creation;
         preset.replaceChildren(...[["custom",model.text.custom],...model.presets.map(p=>[presetKey(p.id),p.name])].map(([key,label])=>{const option=element("option","",label);option.value=key;return option;}));
@@ -54,16 +56,16 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
       });remove.dataset.documentAction="remove-preset";remove.disabled=!selectedPreset()?.remove;form.append(remove);
       const dimensions=[...model.options.extent];
       const fields=dimensions.map((value,i)=>{
-        const number=numberField(spec.numeric,i?model.text.height:model.text.width,next=>{dimensions[i]=next;edited();describe();});
+        const number=numberField(spec.numeric,()=>i?model.text.height:model.text.width,next=>{dimensions[i]=next;edited();describe();});
         number.classList.add("document-size");number.entry.dataset.documentField=i?"height":"width";number.entry.required=true;
         number.update(value);form.append(number);return number;
       });
-      const space=select("space",model.text.space,model.spaces,model.options.color.space);
-      const depth=select("depth",model.text.depth,model.depths,model.options.color.depth);
-      const blending=select("blending",model.blending.label,model.blending.choices.map(c=>[c.id,c.label]),model.options.blend_space);
+      const space=select("space",()=>model.text.space,model.spaces,model.options.color.space);
+      const depth=select("depth",()=>model.text.depth,model.depths,model.options.color.depth);
+      const blending=select("blending",()=>model.blending.label,model.blending.choices.map(c=>[c.id,c.label]),model.options.blend_space);
       const blendingNote=element("p","document-note");form.append(blendingNote);
       const summary=element("p","document-color-summary"),note=element("p","document-color-note");form.append(summary,note);
-      const background=select("background",model.text.background,model.backgrounds,model.options.background);
+      const background=select("background",()=>model.text.background,model.backgrounds,model.options.background);
       let chosen=model.options.blend_space;
       const read=()=>({extent:[...dimensions],color:{space:space.value,depth:depth.value},background:background.value,blend_space:chosen});
       const describe=()=>{const appearance=app.new_document_appearance(read());
@@ -79,11 +81,18 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
         fields.forEach((number,i)=>{dimensions[i]=p.options.extent[i];number.cancelEditing();number.update(dimensions[i]);});space.value=p.options.color.space;depth.value=p.options.color.depth;background.value=p.options.background;chosen=p.options.blend_space;describe();
       };
       describe();
-      const name=field("preset-name",model.text.preset_name,element("input"));name.maxLength=64;
-      const remember=element("input");remember.type="checkbox";field("remember",model.text.remember,remember);
+      const name=field("preset-name",()=>model.text.preset_name,element("input"));name.maxLength=64;
+      const remember=element("input");remember.type="checkbox";field("remember",()=>model.text.remember,remember);
+      form.localize=()=>{
+        model=app.editor_models(innerWidth,innerHeight).document_options.creation;
+        for(const [node,choices] of [[space,model.spaces],[depth,model.depths],[background,model.backgrounds],[blending,model.blending.choices.map(c=>[c.id,c.label])]]) {
+          for(const [key,label] of choices){const option=[...node.options].find(o=>o.value===key);if(option)option.textContent=label;}
+        }
+        describe();
+      };
       const error=element("p","error-message");form.append(error);
-      const footer=element("footer"),cancelNew=button(model.text.cancel,()=>finish(null));cancelNew.dataset.documentAction="cancel";footer.append(cancelNew);
-      const create=button(model.text.create,()=>{if(!fields.every(number=>number.commit())||!form.reportValidity())return;const options=read();try{
+      const footer=element("footer"),cancelNew=button(()=>model.text.cancel,()=>finish(null));cancelNew.dataset.documentAction="cancel";footer.append(cancelNew);
+      const create=button(()=>model.text.create,()=>{if(!fields.every(number=>number.commit())||!form.reportValidity())return;const options=read();try{
         applyChange(app.dispatch({type:"new_document_preferences",action:{type:"remember",options,name:name.value,defaults:remember.checked}}));
         finish(options);
       }catch(e){error.textContent=String(e);}},"suggested-action");create.dataset.documentAction="create";
@@ -119,7 +128,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
       control=app.capture_control();
       if(task.large()){
         progress=element("aside","file-progress");progress.setAttribute("role","status");
-        progress.append(element("span","",task.progress()),button(common.cancel,()=>{control.cancel();progress.firstChild.textContent=delivery.cancelling;}));
+        progress.append(element("span","",task.progress()),button(()=>common.cancel,()=>{control.cancel();progress.firstChild.textContent=delivery.cancelling;}));
         document.body.append(progress);
       }
       clip=await gpuOperation(()=>task.run(control,nonce));
@@ -171,11 +180,11 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   async function download(bytes,name,mime) {
     const url=URL.createObjectURL(new Blob([bytes],{type:mime}));
     try {
-      return await dialog(delivery.download_file,(form,finish)=>{
+      return await dialog(()=>delivery.download_file,(form,finish)=>{
         form.append(element("p","",deliveryMessage("download_confirm",{name})));
         const footer=element("footer");cancel(footer,finish);
-        const done=button(delivery.file_saved,()=>finish(true),"suggested-action");done.disabled=true;
-        const start=button(delivery.download,()=>{const a=element("a");a.href=url;a.download=name;a.click();done.disabled=false;});
+        const done=button(()=>delivery.file_saved,()=>finish(true),"suggested-action");done.disabled=true;
+        const start=button(()=>delivery.download,()=>{const a=element("a");a.href=url;a.download=name;a.click();done.disabled=false;});
         footer.append(start,done);form.append(footer);
       });
     } finally {URL.revokeObjectURL(url);}
@@ -185,7 +194,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     if(old)return{location:request.location,handle:old};
     if(window.showSaveFilePicker) {
       const [extension,mime]=recipe?exportFormats[recipe.format]:["capy","application/octet-stream"];
-      const description=recipe?formatLabels[recipe.format]:delivery.drawing_type;
+      const description=recipe?formatLabels()[recipe.format]:delivery.drawing_type;
       const name=recipe?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name;
       const handle=await window.showSaveFilePicker({suggestedName:name,types:[{description,accept:{[mime]:["."+extension]}}]});
       return{location:location(handle.name,handle),handle};
@@ -207,13 +216,13 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
         const spec=app.editor_models(innerWidth,innerHeight).document_options;
         const decision=await dialog(r.title,(form,finish)=>{
           form.append(element("p","",spec.unsaved_description));const footer=element("footer");cancel(footer,finish);
-          footer.append(button(spec.discard_label,()=>finish("discard")),button(common.save,()=>finish("save"),"suggested-action"));form.append(footer);
+          footer.append(button(spec.discard_label,()=>finish("discard")),button(()=>common.save,()=>finish("save"),"suggested-action"));form.append(footer);
         });
         applyChange(app.respond_document(id,decision??"cancel"));return;
       }
       if(r.type==="properties") {
         const rows=await app.document_properties();
-        await dialog(app.state().commands.find(c=>c.id==="document_properties").label,(form,finish)=>{for(const [name,value]of rows){form.append(element("h3","",name),element("p","source-details",value));}form.append(button(common.done,()=>finish(true)));});
+        await dialog(app.state().commands.find(c=>c.id==="document_properties").label,(form,finish)=>{for(const [name,value]of rows){form.append(element("h3","",name),element("p","source-details",value));}form.append(button(()=>common.done,()=>finish(true)));});
         applyChange(app.finish_document(id,true));
       } else if(["change_color","color_history","repair_source_profile","rasterize_source"].includes(r.type)) {
         candidate=await chooseDocumentColor({app,dialog,element,button,gpuOperation,request:r,id});
@@ -225,7 +234,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
           if(original&&target.handle&&await original.isSameEntry?.(target.handle))throw new Error(colorCopy.choose_different);
           const progress=element("aside","file-progress");progress.setAttribute("role","status");
           let cancelled=false;
-          progress.append(element("span","",delivery.preparing_converted_copy),button(common.cancel,()=>{cancelled=true;candidate.cancel();}));document.body.append(progress);
+          progress.append(element("span","",()=>delivery.preparing_converted_copy),button(()=>common.cancel,()=>{cancelled=true;candidate.cancel();}));document.body.append(progress);
           try {
             const bytes=await app.save_color_copy(candidate);
             if(cancelled)throw new DOMException("Converted copy cancelled","AbortError");
@@ -282,7 +291,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
         try {
           if(recipe){
             control=app.capture_control();progress=element("aside","file-progress");progress.setAttribute("role","status");
-            progress.append(element("span","",exportCopy.preparing),button(common.cancel,()=>{control.cancel();progress.firstChild.textContent=delivery.cancelling;}));document.body.append(progress);
+            progress.append(element("span","",()=>exportCopy.preparing),button(()=>common.cancel,()=>{control.cancel();progress.firstChild.textContent=delivery.cancelling;}));document.body.append(progress);
           }
           const bytes=r.type==="save"?await app.save_project(id,target.location):(output=await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
           if(progress){progress.firstChild.textContent=exportCopy.writing_image;progress.querySelector('button').disabled=true;}
@@ -332,7 +341,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   async function transition(action,capture=true){
     if(changing)throw Error(delivery.change_in_progress);
     changing=true;tabs.cancel();
-    const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','',delivery.switching_drawing));document.body.append(blocker);
+    const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','',()=>delivery.switching_drawing));document.body.append(blocker);
     try{
       await proof.pause();await histogram.retire();await readyToPark();
       if(capture)await recovery.capture().catch(error=>message(app.document_recovery_unavailable(String(error))));
@@ -369,7 +378,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     }
     const id=request??0,fileState=app.state().document_file,target=file?location(file.file.name,file.handle):null;
     const progress=element('aside','file-progress');progress.setAttribute('role','status');let cancelled=false,candidate;
-    progress.append(element('span','',bootstrap.preparing_document),button(common.cancel,()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}));document.body.append(progress);
+    progress.append(element('span','',bootstrap.preparing_document),button(()=>common.cancel,()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}));document.body.append(progress);
     try{
       if(file)bytes=new Uint8Array(await file.file.arrayBuffer());
       candidate=await gpuOperation(()=>app.prepare_document(id,bytes,0,0,fileState.epoch,fileState.revision,recovered,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
@@ -397,7 +406,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     canOffer:()=>app.gpu_ready()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
   return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing||batching,showSelector:tabs.showSelector,
-    mountProof:proof.mount,handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
+    mountProof:proof.mount,localize(){for(const form of openDialogs)form.localize?.();proof.sync();tabs.refresh(true);},handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
     proof.sync();tabs.refresh();
     const published=state();
     if(closing||changing||!published.document_file.close_ready)return;

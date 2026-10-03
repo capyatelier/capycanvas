@@ -22,11 +22,11 @@ export function createImageSizeUi({state,element,button,numberField,resolve,disp
     const v=view();
     if(!v){shell?.close();shell=null;return;}
     if(!shell)open(v);
-    shell.title.textContent=v.title;
+    shell.title.textContent=v.title;shell.relabel(v);unit.relabel(v.units);
     for(const axis of [0,1])fields.show(axis,v.numeric[axis],v.labels[axis],v.values[axis],()=>view().values[axis]);
     fields.show(2,v.resolution_numeric,v.resolution_label,v.resolution,()=>view().resolution);
     unit.value=v.unit;unit.setAttribute('aria-label',v.units.find(choice=>choice.unit===v.unit).label);constrain.input.checked=v.constrain;constrain.text.textContent=v.constrain_label;
-    resampleLabel.textContent=v.resample_label;resample.value=v.resample;
+    resampleLabel.textContent=v.resample_label;resample.relabel(v.resamples);resample.setAttribute("aria-label",v.resample_label);resample.value=v.resample;
     shell.message.textContent=v.message;shell.apply.disabled=!v.can_apply;
   }
   return {refresh,dialog:()=>shell?.dialog??null};

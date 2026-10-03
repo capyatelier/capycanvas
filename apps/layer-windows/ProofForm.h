@@ -21,6 +21,18 @@ struct ProofFormView {
         result.Insert(L"bpc",B(bpc.IsChecked().Value()));
         return result;
     }
+    void relocalize(J const& details,hstring const& tag){
+        copy=object(object(details,L"form"),L"copy");root.Language(tag);
+        for(auto const& [control,key]:std::initializer_list<std::pair<ComboBox,wchar_t const*>>{{profile,L"profile"},{simulation,L"simulation"},{intent,L"intent"}}){
+            control.Header(box_value(str(copy,key)));AutomationProperties::SetName(control,str(copy,key));
+        }
+        bpc.Content(box_value(str(copy,L"black_point_compensation")));
+        auto replace=[&](ComboBox const& control,A& values,wchar_t const* key){
+            values=array(details,key);for(uint32_t i=0;i<std::min(values.Size(),control.Items().Size());++i)control.Items().SetAt(i,box_value(str(values.GetObjectAt(i),L"label")));
+        };
+        replace(intent,intents,L"intents");replace(simulation,simulations,L"simulations");
+        auto selected=profile.SelectedIndex();for(uint32_t i=0;i<profiles.Size();++i){auto entry=profiles.GetObjectAt(i);auto id=str(entry,L"library");if(id.empty())continue;auto current=find(array(details,L"profiles"),L"id",id);if(current.Size()){entry.Insert(L"name",S(str(current,L"name")));entry.Insert(L"channels",S(str(current,L"channels")));profile.Items().SetAt(i,box_value(str(current,L"name")));}}profile.SelectedIndex(selected);
+    }
     void init(J const& details,J const& saved,hstring const& savedId) {
         draft=J::Parse((saved.Size()?saved:object(details,L"settings")).Stringify());
         auto form=object(details,L"form");copy=object(form,L"copy");auto original=object(draft,L"profile");

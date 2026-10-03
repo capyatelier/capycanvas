@@ -57,7 +57,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceCompare(
         let t = unsafe { crate::inspection::borrow::<Task>(handle) };
         crate::inspection::on_worker("capy-source", "Source comparison worker failed", move || {
             t.task.compare(t.control.clone())?;
-            serde_json::to_string(&t.task.details_localized(crate::launch::active_localization()?)?).map_err(error)
+            serde_json::to_string(&t.task.details_localized(&*crate::launch::active_localization()?)?).map_err(error)
         })
     })();
     string(&mut env, result)

@@ -10,6 +10,7 @@ final class EditorPersistence: @unchecked Sendable {
     let root: URL?
     private let queue = DispatchQueue(label: "art.capycanvas.storage", qos: .utility)
     private var revision: UInt64 = 0
+    private var acceptedSettings: Data?
     private var observers: [UUID: @Sendable (SettingsChange) -> Void] = [:]
 
     init(root: URL?) { self.root = root }
@@ -32,20 +33,20 @@ final class EditorPersistence: @unchecked Sendable {
         queue.async { [self] in
             observers[observer] = changed
             var result = Loaded()
-            if let root {
-                result.settings = try? AtomicJSONFile.read(root.appendingPathComponent("settings.json"))
-            }
+            if let acceptedSettings { result.settings = acceptedSettings }
+            else if let root { result.settings = try? AtomicJSONFile.read(root.appendingPathComponent("settings.json")) }
             completion(result)
         }
     }
     func unsubscribe(_ observer: UUID) { queue.async { [self] in observers.removeValue(forKey: observer) } }
     func saveSettings(_ data: Data, completion: @escaping @Sendable (String?) -> Void) {
         queue.async { [self] in
+            acceptedSettings = data
+            revision &+= 1
+            let change = SettingsChange(revision: revision, data: data)
+            for observer in observers.values { observer(change) }
             do {
                 if let root { try AtomicJSONFile.write(data, to: root.appendingPathComponent("settings.json")) }
-                revision &+= 1
-                let change = SettingsChange(revision: revision, data: data)
-                for observer in observers.values { observer(change) }
                 completion(nil)
             } catch { completion("Could not save settings: \(error.localizedDescription)") }
         }

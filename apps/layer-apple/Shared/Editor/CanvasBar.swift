@@ -49,7 +49,7 @@ private struct PlacedCanvasBar: View {
                 + ceil(toolbarTextWidth(item["label"].string, size: textSize))
         }
         return toolOptionSize(item["option"], vertical: false, width: 0, tile: CGSize(width: Self.itemHeight, height: Self.itemHeight),
-            preferences: Self.preferences, textSize: textSize, caption: item["label"].string).width
+            preferences: Self.preferences, textSize: textSize, caption: item["label"].string, language: store.interfaceLanguage).width
     }
     private var labelWidth: CGFloat {
         view["label"].isNull ? 0 : ceil(toolbarTextWidth(view["label"].string, size: textSize)) + 2 * Self.labelPadding

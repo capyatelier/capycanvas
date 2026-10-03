@@ -24,6 +24,16 @@ impl FileFailure {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentHostErrorCopy { Color(crate::ColorFeatureError), Profile(crate::ColorFeatureError), Preset(crate::ColorFeatureError) }
+impl DocumentHostErrorCopy {
+    pub fn message(&self, localization: &Localizer) -> String {
+        let reason=match self { Self::Color(reason)|Self::Profile(reason)|Self::Preset(reason)=>reason };
+        if let crate::ColorFeatureError::Diagnostic(detail)=reason { return detail.clone(); }
+        match self { Self::Color(reason)=>reason.message(localization),Self::Profile(reason)=>reason.profile_message(localization),Self::Preset(reason)=>reason.preset_message(localization) }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentHostError {
     NewWindowUnavailable, DrawingTabsUnavailable, ChooseDeviceFile, ChooseFilename, ProjectWriterFailed, NoDrawingToOpen,
@@ -85,6 +95,10 @@ impl DocumentFileState {
         Self { epoch: 0, revision: 0, location: None, unsaved_name: None, modified: false,
             busy: false, close_ready: false, untitled: localization.text(MessageId::DOCUMENTS_UNTITLED) }
     }
+    pub fn set_localization(&mut self, localization: &Localizer) {
+        self.untitled = localization.text(MessageId::DOCUMENTS_UNTITLED);
+    }
+
     pub fn title(&self) -> &str {
         self.location.as_ref().map_or_else(
             || self.unsaved_name.as_deref().unwrap_or(&self.untitled),
@@ -230,6 +244,11 @@ pub struct DocumentExport {
     pub time: f32,
 }
 
+enum DocumentRequestCopy {
+    Filename(&'static str),
+    Close(Option<String>),
+}
+
 #[derive(Default)]
 pub(super) struct DocumentFiles {
     pub(super) saved_checkpoint: u64,
@@ -239,10 +258,45 @@ pub(super) struct DocumentFiles {
     replace_after: Option<bool>,
     pub(super) pending: Option<(u32, Option<(u64, DocumentLocation)>)>,
     close_after: bool,
+    pending_copy: Option<DocumentRequestCopy>,
     pub(super) cut: Option<clipboard::PendingCut>,
+    host_error_copy: Option<DocumentHostErrorCopy>,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn set_host_error(&mut self, error: Option<String>) {
+        self.state.host_error=error;self.files.host_error_copy=None;
+    }
+    pub fn complete_document_request_failed(&mut self, id: u32, reason: DocumentHostErrorCopy) -> Result<UiChange, String> {
+        let change=self.complete_document_request(id, Err(reason.message(self.localization())))?;
+        self.files.host_error_copy=Some(reason);
+        Ok(change)
+    }
+    pub(super) fn refresh_document_file_localization(&mut self) {
+        if let Some(reason)=&self.files.host_error_copy { self.state.host_error=Some(reason.message(self.localization())); }
+        self.state.document_file.set_localization(&self.state.localization);
+        let Some((id, _)) = &self.files.pending else { return; };
+        let Some(copy) = &self.files.pending_copy else { return; };
+        let text = match copy {
+            DocumentRequestCopy::Filename(extension) => {
+                format!("{}.{}", self.state.localization.text(MessageId::DOCUMENTS_UNTITLED), extension)
+            }
+            DocumentRequestCopy::Close(name) => {
+                let mut args = FluentArgs::new();
+                let untitled = self.state.localization.text(MessageId::DOCUMENTS_UNTITLED);
+                args.set("name", name.as_deref().unwrap_or(&untitled));
+                self.state.localization.format(MessageId::DOCUMENTS_CLOSE_CONFIRM, &args)
+            }
+        };
+        if let Some(request) = self.state.requests.iter_mut().find(|request| request.id == *id) {
+            match &mut request.kind {
+                HostRequestKind::Document { request: DocumentRequest::Save { name, .. } | DocumentRequest::Export { name } } => *name = text,
+                HostRequestKind::Document { request: DocumentRequest::ConfirmClose { title } } => *title = text,
+                _ => {},
+            }
+        }
+    }
+
     pub(super) fn numbered_document_name(&self, id: MessageId, number: u64) -> String {
         let mut args = FluentArgs::new();
         args.set("number", number.to_string());
@@ -337,9 +391,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.files.pending.is_some() {
             return Err(FileFailure::Busy.message(self.localization()));
         }
+        let pending_copy = if self.state.document_file.location.is_none() && self.state.document_file.unsaved_name.is_none() {
+            match &request {
+                DocumentRequest::Save { .. } => Some(DocumentRequestCopy::Filename("capy")),
+                DocumentRequest::Export { .. } => Some(DocumentRequestCopy::Filename("png")),
+                _ => None,
+            }
+        } else { None };
         let id = self.next_request;
         self.request(HostRequestKind::Document { request })?;
-        self.state.host_error = None;
+        self.files.pending_copy = pending_copy;
+        self.set_host_error(None);
         self.files.pending = Some((id, None));
         self.refresh_file_state();
         Ok(())
@@ -488,10 +550,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(FileFailure::NoSavedSnapshot.message(self.localization()));
         }
         let (_, snapshot) = self.files.pending.take().unwrap();
+        self.files.pending_copy = None;
         self.state.requests.retain(|r| r.id != id);
         let success = result == Ok(true);
         let cut = self.files.cut.take().filter(|_| cutting && success);
-        self.state.host_error = result.err();
+        self.set_host_error(result.err());
         if save
             && success
             && let Some((checkpoint, location)) = snapshot
@@ -526,7 +589,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             self.files.close_after = false;
             if let Err(error) = self.request_document_close() {
-                self.state.host_error = Some(error);
+                self.set_host_error(Some(error));
             }
             regions::DOCUMENT | regions::COMMANDS | regions::HOST
         } else {
@@ -547,6 +610,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.localization().format(MessageId::DOCUMENTS_CLOSE_CONFIRM, &args)
                 },
             })?;
+            self.files.pending_copy = Some(DocumentRequestCopy::Close(
+                (self.state.document_file.location.is_some() || self.state.document_file.unsaved_name.is_some())
+                    .then(|| self.state.document_file.title().to_owned()),
+            ));
         } else {
             self.finish_close_or_replace()?;
         }
@@ -566,6 +633,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(FileFailure::NotCloseRequest.message(self.localization()));
         }
         self.files.pending = None;
+        self.files.pending_copy = None;
         self.files.close_after = false;
         self.state.requests.retain(|r| r.id != id);
         match decision {
@@ -642,6 +710,55 @@ impl<R: CanvasRenderer> UiSession<R> {
 mod localization_tests {
     use super::*;
     use crate::session::test_support::{Recorder, layer};
+
+    #[test]
+    fn completed_typed_host_failure_refreshes_and_literal_replacement_clears_its_source() {
+        let english=Localizer::shared(UiLanguage::English);
+        let japanese=Localizer::shared(UiLanguage::Japanese);
+        let mut session=UiSession::blank_localized(Recorder::default(), [256,256], Platform::Windows, english.clone()).unwrap();
+        session.request_document(DocumentRequest::Open).unwrap();
+        let id=session.files.pending.as_ref().unwrap().0;
+        let checkpoint=session.engine.checkpoint();let epoch=session.state.document_file.epoch;
+        let reason=DocumentHostErrorCopy::Profile(crate::ColorFeatureError::SelectImportedProfile);
+        session.complete_document_request_failed(id,reason.clone()).unwrap();
+        session.set_localization(japanese.clone());
+        assert_eq!(session.state.host_error,Some(reason.message(&japanese)));
+        assert_eq!(session.engine.checkpoint(),checkpoint);assert_eq!(session.state.document_file.epoch,epoch);
+        assert!(!session.state.requests.iter().any(|request| request.id==id));
+        session.set_host_error(Some("literal diagnostic { $name }".into()));
+        session.set_localization(english);
+        assert_eq!(session.state.host_error.as_deref(),Some("literal diagnostic { $name }"));
+    }
+    #[test]
+    fn document_language_refresh_retains_request_and_saved_name_provenance() {
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        let english = Localizer::shared(UiLanguage::English);
+        let mut session = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, english.clone()).unwrap();
+        session.request_save(false).unwrap();
+        let id = session.files.pending.as_ref().unwrap().0;
+        let epoch = session.state.document_file.epoch;
+        let checkpoint = session.engine.checkpoint();
+        assert!(session.set_localization(japanese.clone()));
+        assert_eq!(session.state.document_file.title(), "無題");
+        assert_eq!(session.state.document_file.epoch, epoch);
+        assert_eq!(session.engine.checkpoint(), checkpoint);
+        assert!(matches!(session.document_request(id).unwrap(), DocumentRequest::Save { name, .. } if name == "無題.capy"));
+        session.complete_document_request(id, Ok(false)).unwrap();
+        session.state.document_file.unsaved_name = Some("Untitled".into());
+        layer(&mut session, LayerAction::New { group: false, clipped: false });
+        session.request_document_close().unwrap();
+        let id = session.files.pending.as_ref().unwrap().0;
+        assert!(session.set_localization(english.clone()));
+        let mut args = FluentArgs::new(); args.set("name", "Untitled");
+        let expected = english.format(MessageId::DOCUMENTS_CLOSE_CONFIRM, &args);
+        assert!(matches!(session.document_request(id).unwrap(), DocumentRequest::ConfirmClose { title } if title == &expected));
+        assert_eq!(session.state.document_file.title(), "Untitled");
+        session.respond_document_close(id, CloseDecision::Cancel).unwrap();
+        session.request_save(false).unwrap();
+        let id = session.files.pending.as_ref().unwrap().0;
+        assert!(session.set_localization(japanese));
+        assert!(matches!(session.document_request(id).unwrap(), DocumentRequest::Save { name, .. } if name == "Untitled.capy"));
+    }
 
     #[test]
     fn untitled_is_presentation_and_literal_close_names_are_whole_message_arguments() {

@@ -291,7 +291,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         let Err(cause) = self.apply_transform_selection(result.pixels) else {
                             return Ok(0);
                         };
-                        self.state.host_error = Some(cause);
+                        self.set_host_error(Some(cause));
                         return Ok(regions::HOST);
                     }
                     Purpose::Region { operation, .. } if operation.is_some() && result.pixels.bounds() == [0; 4] => {

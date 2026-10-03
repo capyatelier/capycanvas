@@ -121,10 +121,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .map_err(StoreError::invalid)?;
         let visible = capture.history.layout().panel_group(panel).is_some();
         Ok(ManagerDetails {
-            title: config.title_localized(&self.localization),
-            description: message(&self.localization, layer_ui::MessageId::WORKSPACE_TOOLBAR_IN, &[("name", self.display_name(&current.id, &current.metadata))]),
+            title: config.title_localized(&self.localization()),
+            description: message(&self.localization(), layer_ui::MessageId::WORKSPACE_TOOLBAR_IN, &[("name", self.display_name(&current.id, &current.metadata))]),
             preview: None,
-            actions: toolbar_actions(&self.localization, panel, visible, idle),
+            actions: toolbar_actions(&self.localization(), panel, visible, idle),
         })
     }
     pub fn rows(&self, page: ManagerPage, query: &str, now: u64) -> Vec<WorkspaceRow> {
@@ -144,14 +144,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .panels
                 .iter()
                 .filter(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
-                .filter(|p| layer_ui::normalize_search(&p.title_localized(&self.localization)).contains(&layer_ui::normalize_search(query)))
+                .filter(|p| layer_ui::normalize_search(&p.title_localized(&self.localization())).contains(&layer_ui::normalize_search(query)))
                 .map(|p| WorkspaceRow {
                     id: serde_json::to_string(&p.id).unwrap(),
-                    title: p.title_localized(&self.localization),
+                    title: p.title_localized(&self.localization()),
                     subtitle: if capture.history.layout().panel_group(p.id).is_some() {
-                        self.localization.text(layer_ui::MessageId::WORKSPACE_VISIBLE).to_string()
+                        self.localization().text(layer_ui::MessageId::WORKSPACE_VISIBLE).to_string()
                     } else {
-                        self.localization.text(layer_ui::MessageId::WORKSPACE_HIDDEN).to_string()
+                        self.localization().text(layer_ui::MessageId::WORKSPACE_HIDDEN).to_string()
                     }
                     .into(),
                     current: false,
@@ -190,16 +190,16 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             })
             .map(|i| {
                 let subtitle = if let Some(error) = &i.error {
-                    message(&self.localization, layer_ui::MessageId::WORKSPACE_UNAVAILABLE, &[("error", error.localized_message(&self.localization))])
+                    message(&self.localization(), layer_ui::MessageId::WORKSPACE_UNAVAILABLE, &[("error", error.localized_message(&self.localization()))])
                 } else if active.as_ref() == Some(&i.id) {
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_CURRENT_WORKSPACE).to_string()
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_CURRENT_WORKSPACE).to_string()
                 } else if i
                     .claim
                     .as_ref().is_some_and(|c| c.owner != self.owner && c.expires_at_ms > now)
                 {
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_OPEN_IN_ANOTHER_WINDOW).to_string()
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_OPEN_IN_ANOTHER_WINDOW).to_string()
                 } else if i.metadata.builtin {
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_INCLUDED_WITH_CAPYCANVAS).to_string()
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_INCLUDED_WITH_CAPYCANVAS).to_string()
                 } else if i.metadata.kind == ItemKind::Workspace {
                     String::new()
                 } else {
@@ -233,7 +233,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let available = !elsewhere;
         let mut actions = Vec::new();
         let mut add =
-            |action, enabled, primary| actions.push(ManagerButton::new(&self.localization, action, enabled, primary));
+            |action, enabled, primary| actions.push(ManagerButton::new(&self.localization(), action, enabled, primary));
         match metadata.kind {
             ItemKind::Workspace => {
                 add(
@@ -268,7 +268,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             }
         }
         if current && let Some(primary) = actions.first_mut() {
-            primary.label = self.localization.text(layer_ui::MessageId::WORKSPACE_CURRENT_WORKSPACE).to_string();
+            primary.label = self.localization().text(layer_ui::MessageId::WORKSPACE_CURRENT_WORKSPACE).to_string();
         }
         actions
     }
@@ -280,7 +280,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         };
         let mut description = entity.metadata.description.clone();
         if entity.metadata.builtin {
-            description = message(&self.localization, layer_ui::MessageId::WORKSPACE_INCLUDED_DESCRIPTION, &[("description", description)]);
+            description = message(&self.localization(), layer_ui::MessageId::WORKSPACE_INCLUDED_DESCRIPTION, &[("description", description)]);
         }
         ManagerDetails {
             title: self.display_name(&entity.id, &entity.metadata),

@@ -13,10 +13,13 @@ inputs. Catalog-only changes rebuild the embedded native UI text.
 
 The render worker supplies saved settings and the ordered application resource
 locales before shared launch creates the first localization context or GPU.
-Android retains that first context for the process, including Activity, surface and
-editor recreation. The active bootstrap view supplies startup captions and a widget locale context;
-system fonts retain Android's native fallback. Settings language changes take
-effect after restart. `locales_config.xml` advertises only shared shipped languages,
+Language changes prepare the shared context on a separate worker, then publish
+bootstrap, catalog and editor views together on the render owner. Publication
+waits for active text composition and canvas or workspace contact. The Activity,
+Compose context, native text fields and canvas surface retain their identities.
+Recreated and resumed owners adopt the application's latest choice. Stateless
+control helpers use the owning view's language tag; system fonts retain Android's
+native fallback. `locales_config.xml` advertises only shared shipped languages,
 and the Rust launch test rejects inventory drift. Text fields retain native
 composition ranges; editor key captures yield while preedit or IME key events own
 input. InputConnection fixtures check that boundary, independently of checks with
@@ -147,6 +150,9 @@ behavior and high-refresh presentation need a real tablet.
 
 ### Where to start
 
+- `AndroidLanguageTest`: all six language choices through Preferences in both
+  themes, stable Activity/host/surface ownership, drawing history, and retained
+  numeric text/selection across a deferred InputConnection composition.
 - [`AndroidInteractionTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt):
   drawers, drag geometry, panels, the canvas action bar, notices, the zoom
   readout, effects and retouching, each with mouse, finger and stylus. It
@@ -339,7 +345,13 @@ APK calls, so test-APK benchmarks use the unminified build.
   with the gesture, before draining frames. Navigation warms a matching gesture
   and restores the camera before measurement. `-e motion pan|pinch` measures navigation;
   the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
-  `intervalMs`, `durationMs`, `repeats`, `blending` and `label`. Pull
+  `intervalMs`, `durationMs`, `repeats`, `blending` and `label`.
+  `-e languageSwitches ja,zh-Hans,zh-Hant` requests a language halfway through
+  each stroke and records the deferred publication and first resumed completion
+  separately from the moving-frame window. Photo runs move the empty paint layer above
+  the photo and undo the priming stroke. Set `radiusX`, `radiusY` in surface
+  pixels for a contained tier workload. `navigator false` is a separate
+  diagnostic; tier measurements retain the default workspace. Pull
   `files/viewport-benchmark/` from the app's external storage and summarize it
   with `python3 tools/performance/android-viewport-report.py DIRECTORY`.
 - **UI startup.** With an `-PcapyOptimize` build under an isolated ID, run

@@ -175,6 +175,7 @@ impl CanvasSizeDialog {
         if let Some((current, number)) = &self.numbers.borrow()[axis]
             && current == spec
         {
+            number.set_caption(view.labels[axis].as_ref(), "", localization.clone());
             return number.clone();
         }
         let number = NumberControl::new(spec.clone(), view.labels[axis].as_ref(), "", localization.clone());
@@ -214,7 +215,7 @@ impl CanvasSizeDialog {
             return;
         };
         self.updating.set(true);
-        if !self.shown.get() {
+        {
             self.dialog.set_response_label("apply", &view.apply_label);
             self.dialog.set_response_label("cancel", &view.cancel_label);
             let units: Vec<_> = view.units.iter().map(|choice| choice.label.as_ref()).collect();
@@ -229,7 +230,7 @@ impl CanvasSizeDialog {
         self.relative.set_label(Some(view.relative_label.as_ref()));
         self.anchor_label.set_text(view.anchor_label.as_ref());
         for axis in 0..2 {
-            self.number(axis, view, &w.localization).set_value(view.values[axis]);
+            self.number(axis, view, &w.localization()).set_value(view.values[axis]);
         }
         self.unit.set_selected(CanvasSizeUnit::ALL.iter().position(|u| *u == view.unit).unwrap_or(0) as u32);
         self.relative.set_active(view.relative);

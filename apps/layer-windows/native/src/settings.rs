@@ -281,13 +281,14 @@ pub(crate) struct SettingsService {
     load_error: Option<String>,
     save_error: Option<String>,
     close: CloseStatus,
+    localization_input_busy: bool,
 }
 impl SettingsService {
     pub(crate) fn launch(preferred_tags: &[&str]) -> Result<(NativeHost, PreparedSettings), String> {
         Self::launch_at(SettingsFile::environment(), preferred_tags)
     }
     fn launch_at(file: Result<SettingsFile, String>, preferred_tags: &[&str]) -> Result<(NativeHost, PreparedSettings), String> {
-        let prepared = file.and_then(|file| shared::Hub::with_launch(file, |saved| {
+        let prepared = file.and_then(|file| shared::Hub::with_launch(file, preferred_tags, |saved| {
             NativeHost::launch(layer_ui::Platform::Windows, saved.unwrap_or_default(), preferred_tags)
         }));
         let (native, hub) = match prepared {
@@ -320,13 +321,17 @@ impl SettingsService {
         if native.error.is_none() {
             native.error = load_error.clone();
         }
-        Self { worker, subscription, submitted: None, load_error, save_error: None, close: CloseStatus::default() }
+        Self { worker, subscription, submitted: None, load_error, save_error: None, close: CloseStatus::default(), localization_input_busy: false }
     }
+    pub(crate) fn localization_input(&mut self, busy: bool) { self.localization_input_busy = busy; }
     fn sync(&mut self, native: &mut NativeHost) -> Result<(), String> {
         if let Some(client) = &mut self.subscription
             && let Some(settings) = client.adopt(&native.session.state().settings)
         {
             native.dispatch(UiAction::RestoreSettings { settings })?;
+        }
+        if !self.localization_input_busy && !native.session.localization_input_busy() && let Some(client) = &self.subscription {
+            native.set_localization(client.localization());
         }
         Ok(())
     }

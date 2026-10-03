@@ -12,7 +12,7 @@ use std::{
 };
 
 pub(crate) struct Form {
-    localization: std::sync::Arc<layer_ui::Localizer>,
+    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     editor: RefCell<ColorEditor>,
     updating: Cell<bool>,
     composing: [Cell<bool>; 5],
@@ -34,7 +34,7 @@ impl Form {
     fn populate(&self) {
         self.updating.set(true);
         let editor = self.editor.borrow();
-        let labels = editor.model().localized_labels(&self.localization);
+        let labels = editor.model().localized_labels(&self.localization.borrow());
         self.model.set_selected(
             ColorInputModel::ALL
                 .iter()
@@ -46,7 +46,7 @@ impl Form {
             row.set_visible(!labels[i].is_empty());
             row.set_text(&editor.fields()[i]);
         }
-        self.description.set_text(&editor.localized_description(&self.localization));
+        self.description.set_text(&editor.localized_description(&self.localization.borrow()));
         drop(editor);
         self.updating.set(false);
         self.refresh_preview();
@@ -57,11 +57,11 @@ impl Form {
         let color: Result<(RgbColor, RgbColor), String> = (|| {
             let editor = self.editor.borrow();
             if let Some(reason) = self.intensity_error.borrow().as_ref() { return Err(reason.clone()); }
-            editor.colors_localized(&self.localization)
+            editor.colors_localized(&self.localization.borrow())
         })();
         match color {
             Ok((color, base)) => {
-                let text = layer_ui::color_validation_localized(color, self.space, view.space(), self.hdr, &self.localization).unwrap();
+                let text = layer_ui::color_validation_localized(color, self.space, view.space(), self.hdr, &self.localization.borrow()).unwrap();
                 self.validation.remove_css_class("error");
                 self.validation.set_text(&text);
                 self.dialog.set_response_enabled("apply", true);
@@ -150,10 +150,10 @@ fn choose_with_intensity(
     if hdr {
         editor.set_model(ColorInputModel::LinearRgb).unwrap();
         let stops = intensity.unwrap_or_else(|| definition.brightness_ev(space).ok().flatten().unwrap_or(0.).max(0.));
-        if let Err(error) = editor.enable_hdr(stops) { workspace.changed(Err(error.message(editor.model(), &workspace.localization))); return; }
+        if let Err(error) = editor.enable_hdr(stops) { workspace.changed(Err(error.message(editor.model(), &workspace.localization()))); return; }
     }
-    let copy = layer_ui::NativeCopy::new(&workspace.localization).color;
-    let common = layer_ui::CommonCopy::new(&workspace.localization);
+    let copy = layer_ui::NativeCopy::new(&workspace.localization()).color;
+    let common = layer_ui::CommonCopy::new(&workspace.localization());
     let dialog = adw::AlertDialog::builder()
         .heading(copy.edit.as_ref())
         .content_width(400)
@@ -168,17 +168,19 @@ fn choose_with_intensity(
     let model = adw::ComboRow::builder().title(copy.model.as_ref()).build();
     model.set_widget_name("edit-color-model");
     model.set_model(Some(&gtk::StringList::new(
-        &ColorInputModel::ALL.map(|model| model.localized_name(&workspace.localization)).iter().map(|name|name.as_ref()).collect::<Vec<_>>(),
+        &ColorInputModel::ALL.map(|model| model.localized_name(&workspace.localization())).iter().map(|name|name.as_ref()).collect::<Vec<_>>(),
     )));
     group.add(&model);
     let intensity = adw::EntryRow::builder().title(copy.intensity_ev.as_ref()).build();
     intensity.set_widget_name("edit-color-ev");
+    crate::input::guard_editable_activation(&intensity);
     intensity.set_visible(hdr);
     if hdr { intensity.set_text(&editor.intensity().unwrap().to_string()); }
     group.add(&intensity);
     let fields = std::array::from_fn(|i| {
         let row = adw::EntryRow::new();
         row.set_widget_name(&format!("edit-color-value-{i}"));
+        crate::input::guard_editable_activation(&row);
         group.add(&row);
         row
     });
@@ -224,7 +226,7 @@ fn choose_with_intensity(
         .build());
     dialog.set_extra_child(Some(&scroll));
     let form = Rc::new(Form {
-        localization: workspace.localization.clone(),
+        localization: RefCell::new(workspace.localization()),
         editor: RefCell::new(editor),
         updating: Cell::new(false),
         composing: std::array::from_fn(|_| Cell::new(false)),
@@ -242,14 +244,45 @@ fn choose_with_intensity(
         space,
         hdr,
     });
+    let weak_form = Rc::downgrade(&form);
+    workspace.on_localization(glib::clone!(#[weak] labels, #[upgrade_or] false, move |localization| {
+        let Some(form) = weak_form.upgrade() else { return false; };
+        *form.localization.borrow_mut() = localization.clone();
+        let copy = layer_ui::NativeCopy::new(localization).color;
+        let common = layer_ui::CommonCopy::new(localization);
+        form.updating.set(true);
+        form.dialog.set_heading(Some(&copy.edit));
+        form.dialog.set_response_label("cancel", &common.cancel);
+        form.dialog.set_response_label("apply", &copy.use_color);
+        form.model.set_title(&copy.model);
+        let selected = form.model.selected();
+        form.model.set_model(Some(&gtk::StringList::new(&ColorInputModel::ALL.map(|model| model.localized_name(localization)).iter().map(|name| name.as_ref()).collect::<Vec<_>>())));
+        form.model.set_selected(selected);
+        form.intensity.set_title(&copy.intensity_ev);
+        let editor = form.editor.borrow();
+        let captions = editor.model().localized_labels(localization);
+        for (row, caption) in form.fields.iter().zip(captions) { row.set_title(&caption); }
+        form.description.set_text(&editor.localized_description(localization));
+        if form.intensity_error.borrow().is_some() {
+            *form.intensity_error.borrow_mut() = layer_ui::color_intensity_input(&form.intensity.text(), localization).err();
+        }
+        drop(editor);
+        form.preview.update_property(&[gtk::accessible::Property::Label(&copy.adjusted)]);
+        form.base_preview.update_property(&[gtk::accessible::Property::Label(&copy.base)]);
+        if let Some(label) = labels.first_child().and_downcast::<gtk::Label>() { label.set_text(&copy.base); }
+        if let Some(label) = labels.last_child().and_downcast::<gtk::Label>() { label.set_text(&copy.adjusted); }
+        form.updating.set(false);
+        form.refresh_preview();
+        true
+    }));
     workspace.color_editors.borrow_mut().push(Rc::downgrade(&form));
     refresh_display(workspace);
     let weak = Rc::downgrade(&form);
     form.intensity.connect_changed(move |row| {
         let Some(form) = weak.upgrade() else { return; };
         if form.updating.get() || form.composing[4].get() { return; }
-        let result = layer_ui::color_intensity_input(&row.text(), &form.localization)
-            .and_then(|stops| { let mut editor = form.editor.borrow_mut(); editor.set_intensity(stops).map_err(|reason| reason.message(editor.model(), &form.localization)) });
+        let result = layer_ui::color_intensity_input(&row.text(), &form.localization.borrow())
+            .and_then(|stops| { let mut editor = form.editor.borrow_mut(); editor.set_intensity(stops).map_err(|reason| reason.message(editor.model(), &form.localization.borrow())) });
         match result {
             Ok(()) => { form.intensity_error.borrow_mut().take(); form.populate(); },
             Err(error) => {
@@ -336,7 +369,7 @@ fn choose_with_intensity(
                 workspace.changed(Err("The document changed; reopen Edit Color".into()));
                 return;
             }
-            match form.editor.borrow().color_localized(&workspace.localization) {
+            match form.editor.borrow().color_localized(&workspace.localization()) {
                 Ok(color) => accepted(&workspace, color, form.editor.borrow().intensity()),
                 Err(error) => workspace.changed(Err(error)),
             }

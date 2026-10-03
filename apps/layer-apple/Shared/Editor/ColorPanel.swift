@@ -106,8 +106,8 @@ struct ColorPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }.aspectRatio(1 / Self.aspect(hdr: hdr), contentMode: .fit).frame(minWidth: 128, minHeight: 128)
             .modifier(ColorPanelMeasurement(id: "panel"))
-            .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls").onAppear {
-                for shape in ["circle", "triangle", "square"] { shapeCaptions[shape] = NativeTextContext.caption(["type": "color_shape", "shape": shape]) }
+            .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls").onChange(of: store.interfaceLanguage, initial: true) { _, _ in
+                for shape in ["circle", "triangle", "square"] { shapeCaptions[shape] = NativeTextContext.caption(["type": "color_shape", "shape": shape], language: store.interfaceLanguage) }
             }
     }
     private func color(_ action: [String: Any]) { store.dispatch(["type": "color", "action": action]) }

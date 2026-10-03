@@ -1,3 +1,4 @@
+import { bindCopy } from "./localization.js";
 import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -12,6 +13,8 @@ class FakeElement extends SharedElement {
     this.children = []; this.parentNode = null; this.attributes = new Map(); this.listeners = {};
     this.hidden = false; this.disabled = false; this.value = ""; this.style = {};
   }
+  set ariaLabel(value){this.setAttribute("aria-label",value);}
+  get ariaLabel(){return this.getAttribute("aria-label");}
   get options() { return this.children.filter(n => n.tagName === "OPTION"); }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   closest(selector) { for (let n = this; n; n = n.parentNode) if (n.tagName === selector.toUpperCase()) return n; return null; }
@@ -24,7 +27,7 @@ class FakeElement extends SharedElement {
   click() { for (const listener of this.listeners.click ?? []) listener({ target: this }); }
 }
 
-const element = (tag, className, text) => new FakeElement(tag, className, text);
+const element = (tag, className, text) => {const node=new FakeElement(tag,className,typeof text==="function"?text():text);if(typeof text==="function")bindCopy(node,text);return node;};
 const button = (text, action, className = "") => { const node = element("button", className, text); node.addEventListener("click", action); return node; };
 const numberField = (control, label, changed) => {
   const root = element("div"), entry = element("input"); root.append(entry); root.entry = entry;
@@ -85,6 +88,7 @@ function fakeApp({ extent = [20000, 400], photo = false } = {}) {
   return {
     calls,
     export_form: () => ({ profiles: [base.profile], metadata: photo, copy: exportCopy, numeric: { dimension: { min: 1, max: 32768 }, ppi: { min: 1, max: 65535 }, quality: { min: 1, max: 100 } } }),
+    export_copy: () => exportCopy,
     profile_copy: () => sharedCopy("ProfileCopy"),
     export_presets: async action => { if (action?.type !== "get") calls.preferences.push(action); return { names: ["Web", "Print", "Archive", "Last"], recipe: base, index: 0 }; },
     document_color: () => ({ space: "Srgb", depth: "U8" }),

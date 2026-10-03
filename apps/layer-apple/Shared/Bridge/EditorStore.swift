@@ -13,6 +13,7 @@ import SwiftUI
     @Published var catalog = JSON()
     @Published private(set) var bootstrap = JSON()
     @Published private(set) var interfaceLanguage = ""
+    @Published private(set) var languageGeneration: UInt64 = 0
     var bootstrapChanged: (() -> Void)?
     @Published var failure: String?
     private var lastCanvasDiagnostic: String?
@@ -109,6 +110,7 @@ import SwiftUI
                 managedWorkspaces: usesWorkspaceLibrary) { [weak self] snapshot, failure in
                 DispatchQueue.main.async { self?.receive(snapshot, failure) }
             }
+            native?.languageInputBusy = { [weak self] in self?.workspace.languageInputBusy == true }
             native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
                 DispatchQueue.main.async {
                     self?.catalog = result ?? JSON()
@@ -135,7 +137,16 @@ import SwiftUI
         if let next {
             if !next["bootstrap"].isNull {
                 bootstrap = next["bootstrap"]; interfaceLanguage = bootstrap["active_tag"].string
-                bootstrapChanged?(); wake?(); return
+                colorPreferences.setLanguage(interfaceLanguage)
+                if !next["catalog"].isNull {
+                    catalog = next["catalog"]
+                    canvasBar.delay = catalog["canvas_bar_reappear_ms"].number / 1000
+                }
+                languageGeneration = next["language_generation"].uint
+                if !next["workspace_view"].isNull { workspaces?.receiveLanguage(next["workspace_view"]) }
+                palettes.refreshLanguage(); histogram.refreshLanguage()
+                bootstrapChanged?()
+                if next["state"].isNull { wake?(); return }
             }
             if !next["persistence"].isNull {
                 storagePending = next["persistence"]["pending"].uint != 0
@@ -388,7 +399,7 @@ import SwiftUI
         catch { failure = error.localizedDescription }
     }
     func resolveNumber(_ control: JSON, value: Double, operation: [String: Any]) throws -> JSON {
-        let request = try JSON(["control": control.raw, "value": value, "operation": operation]).encoded()
+        let request = try JSON(["language": interfaceLanguage, "request": ["control": control.raw, "value": value, "operation": operation]]).encoded()
         guard let response = request.withCString({ capy_apple_numeric($0) }) else { throw HostFailure(message: "Numeric input failed") }
         defer { capy_apple_string_free(response) }
         let value = try JSON.decode(String(cString: response))

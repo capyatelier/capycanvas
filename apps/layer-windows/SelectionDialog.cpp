@@ -50,21 +50,24 @@ struct SelectionDialog::Impl:std::enable_shared_from_this<Impl>{
     void build(J const& resize){
         fields.clear();admissions.clear();body.Children().Clear();
         auto weak=weak_from_this();
+        NumberPresentation presentation;presentation.title=[weak]{if(auto self=weak.lock())return str(self->view(),L"label");return hstring();};
         auto control=number(data,str(resize,L"label"),object(resize,L"numeric"),
             [weak]{if(auto self=weak.lock())return num(self->view(),L"radius");return 0.;},
             [weak](double value){if(auto self=weak.lock();self&&self->settled()&&!self->data->updating)
                 self->send(O({{L"op",S(L"resize_radius")},{L"radius",N(value)}}));},
-            fields,nullptr,false,L"selection-resize-distance",false,{},&admissions);
+            fields,nullptr,false,L"selection-resize-distance",false,presentation,&admissions);
         body.Children().Append(control);
     }
     void apply(J const& snapshot,bool blocked){
+        data->adoptLocalization(snapshot);
         data->model=snapshot;data->state=object(snapshot,L"state");data->refreshPalette();
         auto resize=view();
         if(!resize.Size()){hide();return;}
         if(!showing&&blocked)return;
         dialog.RequestedTheme(data->theme()==L"light"?ElementTheme::Light:ElementTheme::Dark);
+        dialog.Language(data->language());dialog.PrimaryButtonText(data->common(L"apply"));dialog.CloseButtonText(data->common(L"cancel"));
         dialog.Title(box_value(str(resize,L"title")));
-        auto key=str(resize,L"title")+object(resize,L"numeric").Stringify()+data->theme();
+        auto key=object(resize,L"numeric").Stringify();
         if(key!=built){built=key;build(resize);}
         data->updating=true;
         struct Reset{bool& flag;~Reset(){flag=false;}} reset{data->updating};

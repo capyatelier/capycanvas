@@ -130,6 +130,8 @@ pub(crate) struct FilterService {
     validating: Option<u64>,
     document_epoch: Option<u64>,
     status: Status,
+    failure: Option<layer_ui::FilterLoadState>,
+    localization_generation: u64,
 }
 impl FilterService {
     pub(crate) fn new(wake: impl Fn() + Send + 'static) -> Self {
@@ -139,6 +141,8 @@ impl FilterService {
             validating: None,
             document_epoch: None,
             status: Status::default(),
+            failure: None,
+            localization_generation: 0,
         }
     }
     pub(crate) fn status(&self) -> &Status {
@@ -192,6 +196,7 @@ impl FilterService {
                 job.await?
             })
             .map_err(|_| "Filter file transport is unavailable.")?;
+        self.failure = None;
         self.document_epoch = document_epoch;
         self.status = Status {
             request_id: id,
@@ -203,6 +208,7 @@ impl FilterService {
         Ok(())
     }
     fn failed(&mut self, native: &mut NativeHost, error: String) {
+        self.failure = None;
         self.status.pending = false;
         self.status.phase = "failed";
         self.status.error = Some(error);
@@ -211,6 +217,11 @@ impl FilterService {
         native.invalidate_snapshot();
     }
     pub(crate) fn poll(&mut self, native: &mut NativeHost) {
+        let generation=native.localization_generation();
+        if generation!=self.localization_generation {
+            self.localization_generation=generation;
+            if let Some(failure)=&self.failure { self.status.error=failure.localized_error(native.session.localization());native.invalidate_snapshot(); }
+        }
         // Native staged renderers hold speculative previews until the initial
         // host catalog has settled. Also release that hold after GPU replacement
         // and failed/fallback loads; the renderer makes this idempotent.
@@ -289,7 +300,9 @@ impl FilterService {
             let load = &native.session.state().filter_load;
             if load.request_id == id && !load.pending {
                 if let Some(error) = &load.error {
+                    let failure=load.clone();
                     self.failed(native, error.clone());
+                    self.failure=Some(failure);
                 } else {
                     self.validating = None;
                     self.status.pending = false;

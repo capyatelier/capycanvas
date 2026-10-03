@@ -156,6 +156,7 @@ impl ManagerUi {
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
         self.bind_reorder_drop(w);
+        crate::input::guard_editable_activation(&self.search);
         self.dialog.connect_closed(glib::clone!(
             #[weak]
             w,
@@ -237,7 +238,19 @@ impl ManagerUi {
     pub fn close(&self, w: &Rc<Workspace>) {
         w.workspaces.send(w, WorkspaceInput::Dismiss);
     }
+    pub(crate) fn invalidate_localization(&self) {
+        self.row_captions.borrow_mut().clear();
+        self.rows_key.borrow_mut().clear();
+        self.details_key.borrow_mut().clear();
+        self.page.set(None);
+    }
+
     pub fn render(&self, w: &Rc<Workspace>, view: &WorkspaceView) {
+        let localization = w.localization();
+        self.search.set_placeholder_text(Some(&localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_SEARCH)));
+        self.create.set_tooltip_text(Some(&localization.text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE)));
+        self.create.update_property(&[gtk::accessible::Property::Label(&localization.text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE))]);
+        if let Some(cancel) = self.footer.first_child().and_downcast::<gtk::Button>() { cancel.set_label(&localization.text(layer_ui::MessageId::COMMON_CANCEL)); }
         self.switcher_pending.set(view.switcher_busy);
         *self.order.borrow_mut() = view.order.clone();
         let Some(page) = view.page else {
@@ -287,7 +300,7 @@ impl ManagerUi {
             ManagerPage::ThisWorkspace | ManagerPage::ToolbarLibrary
         );
         let compact = !toolbar;
-        let empty = gtk::Label::new(Some(&w.localization.text(layer_ui::MessageId::NATIVE_HEADER_NO_ITEMS)));
+        let empty = gtk::Label::new(Some(&w.localization().text(layer_ui::MessageId::NATIVE_HEADER_NO_ITEMS)));
         margins(&empty, 18);
         self.list.set_placeholder(Some(&empty));
         self.footer.set_visible(compact);
@@ -304,7 +317,7 @@ impl ManagerUi {
         clear(&self.tabs);
         if toolbar {
             for tab in [ManagerPage::ThisWorkspace, ManagerPage::ToolbarLibrary] {
-                let button = gtk::ToggleButton::with_label(&tab.label(&w.localization));
+                let button = gtk::ToggleButton::with_label(&tab.label(&w.localization()));
                 button.set_active(tab == page);
                 button.connect_clicked(glib::clone!(
                     #[weak]
@@ -317,7 +330,7 @@ impl ManagerUi {
         self.tabs.set_visible(toolbar);
         clear(&self.actions);
         if page == ManagerPage::ThisWorkspace {
-            let button = gtk::Button::with_label(&ManagerAction::NewToolbar(None).label(&w.localization));
+            let button = gtk::Button::with_label(&ManagerAction::NewToolbar(None).label(&w.localization()));
             button.connect_clicked(glib::clone!(
                 #[weak]
                 w,
@@ -394,8 +407,8 @@ impl ManagerUi {
         handle.set_pixel_size(12);
         handle.set_size_request(16, 44);
         handle.set_cursor_from_name(Some("grab"));
-        handle.set_tooltip_text(Some(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM)));
-        handle.update_property(&[gtk::accessible::Property::Label(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM))]);
+        handle.set_tooltip_text(Some(&w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM)));
+        handle.update_property(&[gtk::accessible::Property::Label(&w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM))]);
         row.add_prefix(&handle);
         if item.current {
             row.add_suffix(&crate::icons::image("layer-check-symbolic"));
@@ -403,8 +416,8 @@ impl ManagerUi {
         if pinned.contains(&item.id) {
             let pin = crate::icons::image("layer-pin-symbolic");
             pin.add_css_class("dim-label");
-            pin.set_tooltip_text(Some(&w.localization.text(layer_ui::MessageId::NATIVE_HEADER_SHOWN_TOP)));
-            pin.update_property(&[gtk::accessible::Property::Label(&w.localization.text(layer_ui::MessageId::NATIVE_HEADER_SHOWN_TOP))]);
+            pin.set_tooltip_text(Some(&w.localization().text(layer_ui::MessageId::NATIVE_HEADER_SHOWN_TOP)));
+            pin.update_property(&[gtk::accessible::Property::Label(&w.localization().text(layer_ui::MessageId::NATIVE_HEADER_SHOWN_TOP))]);
             row.add_suffix(&pin);
         }
         let actions = item
@@ -421,9 +434,9 @@ impl ManagerUi {
             .cloned()
             .collect();
         let mut captions = self.row_captions.borrow_mut();
-        let caption = captions.entry(item.id.clone()).or_insert_with(|| (item.title.clone(), layer_ui::NativeCaption::OptionsFor { title: item.title.clone() }.message(&w.localization)));
+        let caption = captions.entry(item.id.clone()).or_insert_with(|| (item.title.clone(), layer_ui::NativeCaption::OptionsFor { title: item.title.clone() }.message(&w.localization())));
         if caption.0 != item.title {
-            *caption = (item.title.clone(), layer_ui::NativeCaption::OptionsFor { title: item.title.clone() }.message(&w.localization));
+            *caption = (item.title.clone(), layer_ui::NativeCaption::OptionsFor { title: item.title.clone() }.message(&w.localization()));
         }
         let more = actions_menu(w, &caption.1, actions);
         self.add_switcher_actions(w, &more, &item.id, pinned);
@@ -442,7 +455,7 @@ impl ManagerUi {
         let Some(details) = &view.details else {
             if view.rows.is_empty() {
                 self.details
-                    .append(&gtk::Label::new(Some(&w.localization.text(layer_ui::MessageId::NATIVE_HEADER_NO_ITEMS))));
+                    .append(&gtk::Label::new(Some(&w.localization().text(layer_ui::MessageId::NATIVE_HEADER_NO_ITEMS))));
             }
             return;
         };
@@ -466,8 +479,8 @@ impl ManagerUi {
             self.details.append(&widget);
         }
         if !secondary.is_empty() {
-            let more = actions_menu(w, &w.localization.text(layer_ui::MessageId::COMMON_MORE), secondary);
-            more.set_label(&w.localization.text(layer_ui::MessageId::COMMON_MORE));
+            let more = actions_menu(w, &w.localization().text(layer_ui::MessageId::COMMON_MORE), secondary);
+            more.set_label(&w.localization().text(layer_ui::MessageId::COMMON_MORE));
             self.details.append(&more);
         }
     }
@@ -481,7 +494,7 @@ impl ManagerUi {
             }
             return;
         };
-        let key = serde_json::to_string(&(&view.prompt_action, &prompt)).unwrap_or_default();
+        let key = serde_json::to_string(&(&view.prompt_action, prompt.name.is_some(), prompt.description.is_some(), prompt.choices.iter().map(|choice| &choice.id).collect::<Vec<_>>())).unwrap_or_default();
         if self.prompt_key.replace(Some(key.clone())).as_ref() != Some(&key) {
             *self.draft.borrow_mut() = None;
             let dialog = self.prompt.borrow_mut().take();
@@ -489,10 +502,38 @@ impl ManagerUi {
                 dialog.force_close();
             }
         }
-        if self.prompt.borrow().is_some() || view.busy {
+        if let Some(dialog) = self.prompt.borrow().as_ref() {
+            dialog.set_heading(Some(&prompt.title));
+            dialog.set_body(&prompt.message);
+            dialog.set_response_label("confirm", &prompt.confirm);
+            dialog.set_response_label("cancel", &w.localization().text(layer_ui::MessageId::COMMON_CANCEL));
+            if let Some(localization) = unsafe { dialog.data::<Rc<RefCell<std::sync::Arc<layer_ui::Localizer>>>>("capy-prompt-localization") } {
+                *unsafe { localization.as_ref() }.borrow_mut() = w.localization();
+            }
+            crate::text_language::visit(dialog.upcast_ref(), &mut |widget| {
+                if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
+                    let id = match entry.widget_name().as_str() {
+                        "workspace-item-name" => Some(layer_ui::MessageId::COMMON_NAME),
+                        "workspace-item-description" => Some(layer_ui::MessageId::COMMON_DESCRIPTION),
+                        _ => None,
+                    };
+                    if let Some(id) = id { entry.set_placeholder_text(Some(&w.localization().text(id))); }
+                }
+                if widget.widget_name() == "workspace-item-choice-label" {
+                    if let Some(label) = widget.downcast_ref::<gtk::Label>() { label.set_text(prompt.choice_label.as_deref().unwrap_or("")); }
+                }
+                if widget.widget_name() == "workspace-item-choice" {
+                    if let Some(choice) = widget.downcast_ref::<gtk::DropDown>() {
+                        let selected = choice.selected();
+                        choice.set_model(Some(&gtk::StringList::new(&prompt.choices.iter().map(|choice| choice.label.as_str()).collect::<Vec<_>>())));
+                        choice.set_selected(selected);
+                    }
+                }
+            });
             return;
         }
-        let dialog = prompt_dialog(&prompt, self.draft.borrow().clone(), view.error.as_deref(), &w.localization);
+        if view.busy { return; }
+        let dialog = prompt_dialog(&prompt, self.draft.borrow().clone(), view.error.as_deref(), &w.localization());
         dialog.connect_response(
             None,
             glib::clone!(
@@ -570,7 +611,8 @@ fn prompt_dialog(
             .build();
         entry.set_widget_name("workspace-item-name");
         crate::input::guard_entry_activation(&entry);
-        let localization = localization.clone();
+        let localization = Rc::new(RefCell::new(localization.clone()));
+        unsafe { dialog.set_data("capy-prompt-localization", localization.clone()); }
         entry.connect_changed(glib::clone!(
             #[weak]
             dialog,
@@ -583,7 +625,7 @@ fn prompt_dialog(
                     &result
                         .as_ref()
                         .err()
-                        .map_or_else(String::new, |reason| reason.localized_message(&localization)),
+                        .map_or_else(String::new, |reason| reason.localized_message(&localization.borrow())),
                 );
                 validation.set_visible(result.is_err());
             }
@@ -606,6 +648,7 @@ fn prompt_dialog(
     if !prompt.choices.is_empty() {
         if let Some(text) = &prompt.choice_label {
             let label = gtk::Label::new(Some(text));
+            label.set_widget_name("workspace-item-choice-label");
             label.set_xalign(0.);
             form.append(&label);
         }

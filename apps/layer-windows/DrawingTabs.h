@@ -33,7 +33,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     hstring plainTitle(){
         auto all=array(data->state,L"tabs");if(!all.Size())return L"Capy Canvas";auto tab=all.GetObjectAt(0);
         auto request=O({{L"type",S(L"drawing_title")},{L"title",S(str(tab,L"title"))},{L"width",N(num(tab,L"width"))},{L"height",N(num(tab,L"height"))}});
-        auto source=request.Stringify();if(source!=plainSource){plainSource=source;plainCaption=data->caption(request);}return plainCaption;
+        auto requestSource=request.Stringify()+L"/"+to_hstring(data->localizationGeneration);if(requestSource!=plainSource){plainSource=requestSource;plainCaption=data->caption(request);}return plainCaption;
     }
     static hstring marked(J const& spec){return (flag(spec,L"modified")?hstring(L"• "):hstring())+str(spec,L"title");}
     std::optional<uint64_t> neighbor(uint64_t id,K key){
@@ -156,7 +156,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
                 Tab t;
                 t.select=button(data,label,[weak,id]{if(auto self=weak.lock())self->select(id);});t.select.HorizontalAlignment(HorizontalAlignment::Stretch);t.select.VerticalAlignment(VerticalAlignment::Stretch);t.select.HorizontalContentAlignment(HorizontalAlignment::Center);t.select.MinWidth(0);
                 t.text=CapyUi::label(data,label);t.text.TextTrimming(TextTrimming::CharacterEllipsis);t.select.Content(t.text);AutomationProperties::SetAutomationId(t.select,L"drawing-tab-"+key);
-                t.close=button(data,data->caption(L"header",L"close_drawing"),[weak,id]{if(auto self=weak.lock())self->close(id);});t.close.Content(box_value(L"×"));t.close.Padding({0});t.close.MinWidth(0);t.close.Width(24);t.close.Height(24);t.close.HorizontalAlignment(HorizontalAlignment::Right);t.close.VerticalAlignment(VerticalAlignment::Center);AutomationProperties::SetAutomationId(t.close,L"drawing-close-"+key);
+                t.close=button(data,data->copyCaption(L"header",L"close_drawing"),[weak,id]{if(auto self=weak.lock())self->close(id);});t.close.Content(box_value(L"×"));t.close.Padding({0});t.close.MinWidth(0);t.close.Width(24);t.close.Height(24);t.close.HorizontalAlignment(HorizontalAlignment::Right);t.close.VerticalAlignment(VerticalAlignment::Center);AutomationProperties::SetAutomationId(t.close,L"drawing-close-"+key);
                 t.menu=menu(id);t.select.KeyDown([weak,id](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock())self->tabKey(id,e);});t.select.ContextRequested([weak,id](auto&&,ContextRequestedEventArgs const& e){e.Handled(true);if(auto self=weak.lock();self&&self->available()&&!self->pointer)self->tabs.at(id).menu.ShowAt(self->tabs.at(id).select);});t.select.IsHoldingEnabled(false);t.select.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([weak,id](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
                     auto p=e.GetCurrentPoint(self->root);if(p.Properties().IsMiddleButtonPressed()){self->close(id);e.Handled(true);return;}
                     if(!self->available()||self->pointer||!p.IsInContact()||p.Properties().IsRightButtonPressed()||p.Properties().IsBarrelButtonPressed())return;
@@ -165,8 +165,8 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
                     if(p.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Mouse){self->recognizing=true;self->hold.ProcessDownEvent(p);}e.Handled(true);
                 }})),true);t.box.Children().Append(t.select);t.box.Children().Append(t.close);styleTab(t);tabs.emplace(id,t);
                 Row r;r.item.Tag(box_value(key));AutomationProperties::SetAutomationId(r.item,L"drawing-row-"+key);Grid row;row.ColumnDefinitions().Append(ColumnDefinition());ColumnDefinition first;first.Width({28,GridUnitType::Pixel});row.ColumnDefinitions().InsertAt(0,first);ColumnDefinition lastColumn;lastColumn.Width({28,GridUnitType::Pixel});row.ColumnDefinitions().Append(lastColumn);auto title=str(spec,L"title");
-                r.grip=button(data,data->caption(L"header",L"reorder_drawing"),[]{});r.grip.Content(panelGrip(data->theme()));r.grip.Padding({0});r.grip.MinWidth(0);AutomationProperties::SetAutomationId(r.grip,L"drawing-grip-"+key);
-                r.remove=button(data,data->caption(L"header",L"close_drawing"),[weak,id]{if(auto self=weak.lock())self->close(id);});r.remove.Content(box_value(L"×"));r.remove.Padding({0});r.remove.MinWidth(0);Grid::SetColumn(r.remove,2);AutomationProperties::SetAutomationId(r.remove,L"drawing-row-close-"+key);r.menu=menu(id);
+                r.grip=button(data,data->copyCaption(L"header",L"reorder_drawing"),[]{});r.grip.Content(panelGrip(data->theme()));r.grip.Padding({0});r.grip.MinWidth(0);AutomationProperties::SetAutomationId(r.grip,L"drawing-grip-"+key);
+                r.remove=button(data,data->copyCaption(L"header",L"close_drawing"),[weak,id]{if(auto self=weak.lock())self->close(id);});r.remove.Content(box_value(L"×"));r.remove.Padding({0});r.remove.MinWidth(0);Grid::SetColumn(r.remove,2);AutomationProperties::SetAutomationId(r.remove,L"drawing-row-close-"+key);r.menu=menu(id);
                 StackPanel labels;r.text=CapyUi::label(data,label);r.location=CapyUi::label(data,L"");r.location.FontSize(11);r.location.TextTrimming(TextTrimming::CharacterEllipsis);labels.Children().Append(r.text);labels.Children().Append(r.location);Grid::SetColumn(labels,1);row.Children().Append(r.grip);row.Children().Append(labels);row.Children().Append(r.remove);r.item.Content(row);
                 rowDrag->Attach(r.item,r.grip,r.remove,r.menu,key);rows.emplace(id,r);
             }

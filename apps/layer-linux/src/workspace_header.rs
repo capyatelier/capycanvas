@@ -86,6 +86,8 @@ struct Item {
     content: gtk::Widget,
     button: Option<gtk::Button>,
     compact: Option<gtk::MenuButton>,
+    placeholder: Option<gtk::Label>,
+    grip: Option<gtk::Image>,
 }
 impl Item {
     fn switcher_width(&self) -> f32 {
@@ -187,7 +189,7 @@ impl Header {
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
         for (i, button) in self.overflow.iter().enumerate() {
-            button.set_tooltip_text(Some(&HeaderZone::ALL[i].overflow_label(&w.localization)));
+            button.set_tooltip_text(Some(&HeaderZone::ALL[i].overflow_label(&w.localization())));
         }
         *self.root.imp().owner.borrow_mut() = Rc::downgrade(w);
         w.system_status.battery.connect_visible_notify(glib::clone!(
@@ -469,8 +471,22 @@ impl Header {
         w.system_status.set_components(clock, battery);
         w.system_status.set_header_size(model.size);
         w.documents.set_header_size(model.size);
+        for (i, button) in self.overflow.iter().enumerate() {
+            let caption = HeaderZone::ALL[i].overflow_label(&w.localization());
+            button.set_tooltip_text(Some(&caption));
+            button.update_property(&[gtk::accessible::Property::Label(&caption)]);
+        }
         for item in self.items.borrow().iter() {
+            let label = w.gpu.borrow().as_ref().unwrap().session.header_item_label(item.entry.item);
+            item.root.update_property(&[gtk::accessible::Property::Label(&label)]);
+            if let Some(placeholder) = &item.placeholder { placeholder.set_label(&label); }
+            if let Some(grip) = &item.grip {
+                let caption = w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM);
+                grip.set_tooltip_text(Some(&caption));
+                grip.update_property(&[gtk::accessible::Property::Label(&caption)]);
+            }
             if let Some(button) = &item.button {
+                button.set_tooltip_text(Some(&label));
                 let (enabled, active) = match item.entry.item {
                     HeaderItem::Tool { control } => tool_state(state, control),
                     HeaderItem::Capy => (true, state.workspace.zen_mode),
@@ -503,7 +519,7 @@ impl Header {
                             "layer-fullscreen-enter-symbolic"
                         }),
                     );
-                    button.set_tooltip_text(Some(&w.localization.text(if state.fullscreen {
+                    button.set_tooltip_text(Some(&w.localization().text(if state.fullscreen {
                         layer_ui::MessageId::WORKSPACE_HEADER_LEAVE_FULLSCREEN
                     } else {
                         layer_ui::MessageId::WORKSPACE_HEADER_FULLSCREEN
@@ -521,12 +537,21 @@ impl Header {
                     }
                 }
             }
+            if let Some(button) = &item.button {
+                if let Some(caption) = button.tooltip_text() {
+                    button.update_property(&[gtk::accessible::Property::Label(&caption)]);
+                    item.root.update_property(&[gtk::accessible::Property::Label(&caption)]);
+                }
+            }
             if let Some(compact) = &item.compact {
+                let caption = w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_SWITCH_WORKSPACE);
+                compact.set_tooltip_text(Some(&caption));
+                compact.update_property(&[gtk::accessible::Property::Label(&caption)]);
                 let view = w.workspaces.view();
                 let name = if view.id.is_some() {
                     view.name
                 } else {
-                    w.localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES).to_string()
+                    w.localization().text(layer_ui::MessageId::WORKSPACE_WORKSPACES).to_string()
                 };
                 compact.set_label(&name);
             }
@@ -573,6 +598,8 @@ impl Header {
         root.update_property(&[gtk::accessible::Property::Label(&w.gpu.borrow().as_ref().unwrap().session.header_item_label(entry.item))]);
         let mut button = None;
         let mut compact = None;
+        let mut placeholder_label = None;
+        let mut editing_grip = None;
         let content: gtk::Widget = match entry.item {
             HeaderItem::Capy
             | HeaderItem::Tool { .. }
@@ -675,8 +702,8 @@ impl Header {
                 w.workspaces.switcher.set_halign(gtk::Align::Center);
                 stack.add_named(&w.workspaces.switcher, Some("full"));
                 let menu = gtk::MenuButton::builder()
-                    .label(w.localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES).as_ref())
-                    .tooltip_text(w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_SWITCH_WORKSPACE).as_ref())
+                    .label(w.localization().text(layer_ui::MessageId::WORKSPACE_WORKSPACES).as_ref())
+                    .tooltip_text(w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_SWITCH_WORKSPACE).as_ref())
                     .build();
                 menu.add_css_class("flat");
                 menu.add_css_class("chrome-control");
@@ -718,6 +745,7 @@ impl Header {
             stack.add_named(&content, Some("value"));
             let placeholder = gtk::Label::new(Some(&w.gpu.borrow().as_ref().unwrap().session.header_item_label(entry.item)));
             stack.add_named(&placeholder, Some("placeholder"));
+            placeholder_label = Some(placeholder);
             stack.set_visible_child_name(if content.is_visible() {
                 "value"
             } else {
@@ -765,8 +793,9 @@ impl Header {
             grip.set_valign(gtk::Align::Center);
             grip.set_size_request(20, 28);
             grip.set_widget_name(&format!("header-grip-{}", entry.id));
-            grip.set_tooltip_text(Some(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM)));
+            grip.set_tooltip_text(Some(&w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_DRAG_ITEM)));
             root.append(&grip);
+            editing_grip = Some(grip);
             w.register_drag(&root, DragTarget::Header(HeaderDragSource::Item(entry.id)));
         }
         root.append(&content);
@@ -813,6 +842,8 @@ impl Header {
             content,
             button,
             compact,
+            placeholder: placeholder_label,
+            grip: editing_grip,
         }
     }
     fn metrics(&self, size: HeaderSize) -> Vec<HeaderMetric> {

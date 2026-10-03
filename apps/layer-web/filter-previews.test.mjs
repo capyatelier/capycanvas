@@ -71,6 +71,26 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
     await wait(`previewCheck.status?.retained.includes('curves')&&!previewCheck.status.pending&&previewCheck.pixels('curves')`);
     assert.ok(await evaluate('previewCheck.pipelineCalls>0'),'Queued previews resume after release');
     const first=await status();assert.equal(first.error??null,null);
+    for(const theme of ['light','dark']){
+      await evaluate(`(()=>{
+        layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}});
+        const row=document.querySelector('[data-effect="curves"]');
+        previewCheck.row=row;previewCheck.canvas=row.querySelector('canvas');previewCheck.label=row.textContent;
+        previewCheck.pixelsBefore=Array.from(previewCheck.canvas.getContext('2d').getImageData(0,0,previewCheck.canvas.width,previewCheck.canvas.height).data);
+        const saved=JSON.stringify({...layerApp.state().settings,language:{Explicit:'ja'}});
+        layerApp.dispatch({type:'restore_saved_settings',saved});
+      })()`);
+      await wait(`!layerApp.app.language_pending()&&document.documentElement.lang==='ja'`);
+      assert.ok(await evaluate(`(()=>{
+        const row=document.querySelector('[data-effect="curves"]');
+        const pixels=Array.from(previewCheck.canvas.getContext('2d').getImageData(0,0,previewCheck.canvas.width,previewCheck.canvas.height).data);
+        return row===previewCheck.row&&row.querySelector('canvas')===previewCheck.canvas&&row.textContent!==previewCheck.label&&pixels.every((v,i)=>v===previewCheck.pixelsBefore[i]);
+      })()`),'Language publication retains filter rows, canvases and preview pixels');
+      const localized=await status();assert.equal(localized.key,first.key);assert.equal(localized.requests,first.requests,'Language publication reuses the preview atlas');
+      await capture(`web-preview-language-${theme}`);
+      await evaluate(`(()=>{const saved=JSON.stringify({...layerApp.state().settings,language:{Explicit:'en'}});layerApp.dispatch({type:'restore_saved_settings',saved});})()`);
+      await wait(`!layerApp.app.language_pending()&&document.documentElement.lang==='en'`);
+    }
     await evaluate(`document.querySelector('.dock-tab[data-panel=properties]').click()`);await settle();
     await wait(`previewCheck.ids.length===0&&!previewCheck.status.pending`);
     await show();

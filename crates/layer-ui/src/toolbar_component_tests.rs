@@ -21,6 +21,28 @@ fn check_choice_items(s: &mut UiSession<Recorder>, id: &str) {
 }
 
 #[test]
+fn language_refresh_retains_toolbar_editor_schema_and_action_context() {
+    let mut s = session(Platform::Gtk);
+    for command in [CommandId::Pen, CommandId::Fill, CommandId::RectangleSelect] {
+        s.dispatch(UiAction::Invoke { command }).unwrap();
+        let context = s.state().toolbar_context();
+        let initial = s.state().tool_options();
+        for language in UiLanguage::ALL {
+            s.set_localization(Localizer::shared(language));
+            let updated = s.state().tool_options();
+            assert_eq!(initial.len(), updated.len());
+            assert!(initial.iter().zip(&updated).all(|(before, after)| before.same_schema(after)));
+            assert_eq!(context, s.state().toolbar_context());
+            if let Some(ToolOption::Numeric(field)) = updated.iter().find(|option| matches!(option, ToolOption::Numeric(_))) {
+                let mut different = field.clone();
+                different.id = "different-control".into();
+                assert!(!ToolOption::Numeric(field.clone()).same_schema(&ToolOption::Numeric(different)));
+            }
+        }
+    }
+}
+
+#[test]
 fn toolbar_resets_use_tool_defaults_and_reject_stale_context() {
     let mut s = session(Platform::Gtk);
     let original = s.state().brush.diameter;

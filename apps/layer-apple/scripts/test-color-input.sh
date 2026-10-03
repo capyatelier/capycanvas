@@ -10,6 +10,7 @@ cargo build --locked --manifest-path "$CAPY_APP/../../Cargo.toml" -p layer-apple
 xcrun swiftc -parse-as-library -target arm64-apple-macos15.0 \
   -import-objc-header "$CAPY_APP/native/include/CapyApple.h" \
   "$CAPY_APP/Shared/Bridge/JSON.swift" "$CAPY_APP/Shared/Bridge/ColorUI.swift" \
+  "$CAPY_APP/Shared/Bridge/NativeTextContext.swift" \
   "$CAPY_APP/Shared/Editor/ColorSwatch.swift" "$CAPY_APP/Shared/Editor/ColorEditor.swift" \
   "$CAPY_APP/tests/color-editor.swift" \
   -L "$CAPY_TARGET_DIR/aarch64-apple-darwin/debug" -llayer_apple -lc++ \

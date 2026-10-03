@@ -31,6 +31,9 @@ fn apple_request_seven_extends_the_shared_layout_update() {
         let extension = published.as_object_mut().unwrap();
         assert!(extension.remove("display_status").is_some());
         assert!(extension.remove("document_tabs").is_some());
+        assert_eq!(extension.remove("language_generation"), Some(json!(0)));
+        assert_eq!(extension.remove("bootstrap"), Some(app.request(2, json!({"type":"bootstrap"})).unwrap()));
+        assert_eq!(extension.remove("catalog"), Some(app.request(2, json!({"type":"catalog"})).unwrap()));
         normalize_paint_revisions(&shared, &mut expected);
         normalize_paint_revisions(&app, &mut published);
         assert_eq!(published, expected);

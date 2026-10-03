@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
     var copy: JSON { store?.catalog["native_copy"]["header"] ?? JSON() }
     private var request: UInt64?
     private var closeCaptions: [UInt64: String] = [:]
+    private var captionLanguage = ""
     private var closeTitles: [UInt64: String] = [:]
     func closeCaption(_ id: UInt64) -> String { closeCaptions[id] ?? "" }
     init(store: EditorStore) { self.store = store }
@@ -23,7 +24,8 @@ import UniformTypeIdentifiers
     func receive() {
         guard let store else { return }
         let next = store.snapshot["document_tabs"]
-        if !SnapshotProjection.equal(view.raw, next.raw) {
+        if captionLanguage != store.interfaceLanguage || !SnapshotProjection.equal(view.raw, next.raw) {
+            if captionLanguage != store.interfaceLanguage { closeTitles = [:]; captionLanguage = store.interfaceLanguage }
             view = next
             var captions: [UInt64: String] = [:]
             var titles: [UInt64: String] = [:]
@@ -31,7 +33,7 @@ import UniformTypeIdentifiers
                 let id = row["id"].uint, title = row["title"].string
                 titles[id] = title
                 captions[id] = closeTitles[id] == title ? closeCaptions[id]
-                    : NativeTextContext.caption(["type": "close_drawing", "title": title])
+                    : NativeTextContext.caption(["type": "close_drawing", "title": title], language: store.interfaceLanguage)
             }
             closeTitles = titles; closeCaptions = captions
         }

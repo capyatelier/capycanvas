@@ -29,8 +29,8 @@ private val SizePanelGap = 12.dp
 private val SizePanelMaxWidth = 400.dp
 
 /** The value typed so far, or null while the text is not yet a number. */
-private fun typedValue(control: JSONObject, value: Float, text: String): Float? = runCatching {
-    JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to obj("type" to "expression", "text" to text)).toString())).number("value")
+private fun typedValue(control: JSONObject, value: Float, text: String, language: String): Float? = runCatching {
+    JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to obj("type" to "expression", "text" to text)).toString(), language)).number("value")
 }.getOrNull()
 
 internal class SizePanelActions(private val dispatch: (JSONObject) -> Unit, private val clearFocus: () -> Unit) {
@@ -95,11 +95,12 @@ internal class SizePanelActions(private val dispatch: (JSONObject) -> Unit, priv
 
 /** A number field whose typed values reach the draft as soon as they read as numbers. */
 @Composable internal fun SizeNumber(actions: SizePanelActions, label: String, value: Float, control: JSONObject, id: String, op: String) {
+    val host = LocalCanvasHost.current
     val register = remember(actions) { { owner: Any, commit: ((Boolean) -> Boolean)? -> actions.register(owner, commit) } }
     key(control.toString()) {
         NumericSetting(label, value, control, settings = true, id = id,
             registerCommit = register,
-            onText = { text -> if (text.composition == null) typedValue(control, value, text.text)?.takeIf { it != value }?.let { actions.send(obj("op" to op, "value" to it)) } }) {
+            onText = { text -> if (text.composition == null) typedValue(control, value, text.text, host.languageTag)?.takeIf { it != value }?.let { actions.send(obj("op" to op, "value" to it)) } }) {
             actions.send(obj("op" to op, "value" to it))
         }
     }

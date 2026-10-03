@@ -3,13 +3,21 @@ use super::*;
 use serde_json::{Value, json};
 
 fn stateless(call: unsafe extern "C" fn(*const c_char) -> *mut c_char, request: impl Into<Vec<u8>>) -> Value {
-    fixture_localization();
     let source = CString::new(request).unwrap();
     let output = unsafe { call(source.as_ptr()) };
     assert!(!output.is_null());
     let value = serde_json::from_slice(unsafe { CStr::from_ptr(output) }.to_bytes()).unwrap();
     unsafe { capy_apple_string_free(output) };
     value
+}
+fn localized_stateless(call: unsafe extern "C" fn(*const c_char) -> *mut c_char, request: impl Into<Vec<u8>>) -> Value {
+    fixture_localization();
+    let request = request.into();
+    let request = serde_json::from_slice::<Value>(&request).map(|request| {
+        if request.get("language").is_some() && request.get("request").is_some() { request }
+        else { json!({"language":"en", "request":request}) }
+    }).map(|request| request.to_string().into_bytes()).unwrap_or(request);
+    stateless(call, request)
 }
 
 struct App(*mut CapyApple);
@@ -1488,7 +1496,7 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
 
 #[test]
 fn stateless_color_forms_preserve_tagged_precision_and_convert_previews() {
-    let resolve = |request: Value| stateless(capy_apple_color_ui, request.to_string());
+    let resolve = |request: Value| localized_stateless(capy_apple_color_ui, request.to_string());
     for space in layer_core::color::RgbSpace::ALL {
         let color = layer_core::color::RgbColor::new(space, [-0.12, 1.2, 31234. / 65535., 213. / 65535.]).unwrap();
         let mut form = resolve(json!({"type":"form","request":{"color":color,"document_space":"ProPhoto"}}));
@@ -1531,7 +1539,7 @@ fn stateless_numeric_input_uses_shared_policy_without_a_session() {
     let prepared = App(unsafe { capy_apple_launch(0, launch.as_ptr(), std::ptr::null_mut()) });
     assert!(!prepared.0.is_null());
     let control = serde_json::to_value(layer_ui::ui_catalog()).unwrap()["layer_opacity"].clone();
-    let resolve = |operation| stateless(capy_apple_numeric,
+    let resolve = |operation| localized_stateless(capy_apple_numeric,
         json!({"control":control,"value":1.,"operation":operation}).to_string());
     assert_eq!(
         resolve(json!({"type":"expression","text":"25+25"}))["value"],
@@ -1769,9 +1777,63 @@ fn apple_launch_prepared_context_survives_restore_and_invalid_platform_keeps_boo
 fn stateless_native_captions_keep_the_prepared_context_and_literal_titles() {
     let localization = fixture_localization().clone();
     let title = "{ $title } 🖌 日本語\u{2068}user\u{2069}";
-    let value = stateless(capy_apple_native_caption, json!({"type":"close_drawing", "title":title}).to_string());
+    let value = localized_stateless(capy_apple_native_caption, json!({"type":"close_drawing", "title":title}).to_string());
     assert_eq!(value["text"], format!("Close {title}"));
-    assert!(std::sync::Arc::ptr_eq(&localization, control_localization().unwrap()));
-    let appearance = stateless(capy_apple_document_appearance, serde_json::to_string(&layer_ui::NewDocumentOptions::default()).unwrap());
+    assert!(std::sync::Arc::ptr_eq(&localization, &layer_ui::Localizer::prepared(layer_ui::UiLanguage::English).unwrap()));
+    let appearance = localized_stateless(capy_apple_document_appearance, serde_json::to_string(&layer_ui::NewDocumentOptions::default()).unwrap());
     assert!(appearance["summary"].as_str().is_some_and(|value| !value.is_empty()));
+}
+
+#[test]
+fn apple_language_publication_is_atomic_deferred_and_window_local() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let other = App::new(platform);
+        let begin = |language: &str| {
+            app.action(json!({"type":"restore_saved_settings", "saved":json!({"language":{"Explicit":language}}).to_string()}));
+            let task = unsafe { capy_apple_language_request(app.0, c"[\"en\"]".as_ptr()) };
+            assert!(!task.is_null());
+            task
+        };
+        let document = unsafe { (*app.0).host.session.engine().document().revision };
+        let epoch = app.state()["document_file"]["epoch"].clone();
+        let camera = app.state()["camera"].clone();
+        let old = begin("ja");
+        let latest = begin("ko");
+        unsafe { capy_language_prepare(old) };
+        assert!(!unsafe { capy_apple_language_prepared(app.0, old) });
+        unsafe { capy_language_free(old); capy_language_prepare(latest) };
+        assert!(unsafe { capy_apple_language_prepared(app.0, latest) });
+        unsafe { capy_language_free(latest) };
+        assert_eq!(unsafe { capy_apple_language_publish(app.0, true) }, 0);
+        assert_eq!(app.request(2, json!({"type":"bootstrap"})).unwrap()["active_tag"], "en");
+        unsafe { (*app.0).chrome_facts.held = true };
+        assert_eq!(unsafe { capy_apple_language_publish(app.0, false) }, 0);
+        unsafe { (*app.0).chrome_facts.held = false };
+        assert_eq!(unsafe { capy_apple_language_publish(app.0, false) }, 1);
+        let snapshot = app.request(7, Value::Null).unwrap();
+        assert_eq!(snapshot["bootstrap"]["active_tag"], "ko");
+        assert_eq!(snapshot["language_generation"], 1);
+        assert!(snapshot["catalog"]["native_copy"].is_object());
+        assert_eq!(snapshot["state"]["document_file"]["epoch"], epoch);
+        assert_eq!(snapshot["state"]["camera"], camera);
+        assert_eq!(unsafe { (*app.0).host.session.engine().document().revision }, document);
+        assert_eq!(other.request(2, json!({"type":"bootstrap"})).unwrap()["active_tag"], "en");
+        let title = "user 日本語 🖌";
+        for language in [layer_ui::UiLanguage::English, layer_ui::UiLanguage::Korean] {
+            let actual = localized_stateless(capy_apple_native_caption, json!({"language":language,"request":{"type":"close_drawing","title":title}}).to_string());
+            let expected = layer_ui::NativeCaption::CloseDrawing { title: title.into() }.message(&layer_ui::Localizer::shared(language));
+            assert_eq!(actual["text"], expected);
+        }
+    }
+}
+
+#[test]
+fn apple_launch_uses_each_scene_settings_instead_of_first_process_language() {
+    for (platform, language) in [(0, "ja"), (1, "ko"), (0, "en")] {
+        let source = CString::new(json!({"saved":json!({"language":{"Explicit":language}}).to_string(),"preferred_languages":["en"]}).to_string()).unwrap();
+        let app = App(unsafe { capy_apple_launch(platform, source.as_ptr(), std::ptr::null_mut()) });
+        assert!(!app.0.is_null());
+        assert_eq!(app.request(2, json!({"type":"bootstrap"})).unwrap()["active_tag"], language);
+    }
 }

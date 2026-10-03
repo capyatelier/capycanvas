@@ -84,7 +84,8 @@ struct NumberControl: View {
         }
         .modifier(NumberControlMeasurement(id: key + ":root"))
         .onAppear { field.receive(value); format(); measureInlineRange(); registerAdmission?(key, admit) }
-        .onChange(of: label, initial: true) { _, next in numericLabels = NativeTextContext.numericLabels(next) }
+        .onChange(of: store.interfaceLanguage) { _, _ in numericLabels = NativeTextContext.numericLabels(label, language: store.interfaceLanguage); format() }
+        .onChange(of: label, initial: true) { _, next in numericLabels = NativeTextContext.numericLabels(next, language: store.interfaceLanguage) }
         .onChange(of: value) { _, next in field.receive(next); format(); registerAdmission?(key, admit) }
         .onChange(of: control.stableKey) { _, _ in registerAdmission?(key, admit) }
         .onChange(of: contact) { _, active in if !active { cancelDrag() } }
@@ -208,7 +209,7 @@ struct NumberControl: View {
     private func resolveNumber(value: Double, operation: [String: Any]) throws -> JSON {
         guard toolbar != nil else { return try store.resolveNumber(control, value: value, operation: operation) }
         let result = ToolbarUI.resolve(["type": "number", "request": ["control": control.raw, "value": value, "operation": operation],
-            "compact": true, "units": true])
+            "compact": true, "units": true], language: store.interfaceLanguage)
         if !result["error"].isNull { throw HostFailure(message: result["error"].string) }
         return result
     }

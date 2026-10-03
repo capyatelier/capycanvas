@@ -164,7 +164,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto content=item.Content().as<TextBlock>();
             if(content.Text()!=name){
                 content.Text(name);
-                auto measure=CapyUi::label(data,name);measure.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+                auto measure=CapyUi::label(data,name,false,false);measure.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
                 measure.UseLayoutRounding(false);measure.Measure({std::numeric_limits<float>::infinity(),36});
                 item.Tag(box_value(double(measure.DesiredSize().Width)));
                 tooltip(item,data->caption(O({{L"type",S(L"switch_workspace")},{L"title",S(name)}})));
@@ -247,9 +247,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             menuLabels.Children().Append(item);menus.push_back(item);
         }
         auto primaryMenu=[weak=weak_from_this()](auto target){if(auto self=weak.lock())self->fillMenu(target,object(self->view,L"primary_menu"));};
-        primary=button(data,data->caption(L"header",L"main_menu"),[]{});style(primary,data,false);primary.Padding({0});primary.Flyout(menu(primaryMenu));
+        primary=button(data,data->copyCaption(L"header",L"main_menu"),[]{});style(primary,data,false);primary.Padding({0});primary.Flyout(menu(primaryMenu));
         AutomationProperties::SetAutomationId(primary,L"application-primary-menu");
-        menuOverflow=button(data,data->caption(L"header",L"menus"),[]{});style(menuOverflow,data,false);menuOverflow.Padding({0});
+        menuOverflow=button(data,data->copyCaption(L"header",L"menus"),[]{});style(menuOverflow,data,false);menuOverflow.Padding({0});
         AutomationProperties::SetAutomationId(menuOverflow,L"application-menus");
         menuOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock()){
             for(auto value:array(self->data->model,L"application_menus")){
@@ -269,7 +269,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         switcher.ZoomMode(ZoomMode::Disabled);switcher.IsTabStop(false);switcher.Padding({5,5,5,5});switcher.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});switcher.BorderThickness({0});
         switcher.Background(data->glass(L"switcher"));
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");AutomationProperties::SetName(switcher,data->caption(L"header",L"task_workspaces"));
-        workspaceOverflow=button(data,data->caption(L"header",L"workspaces"),[]{});style(workspaceOverflow,data,false);workspaceOverflow.Padding({0});
+        workspaceOverflow=button(data,data->copyCaption(L"header",L"workspaces"),[]{});style(workspaceOverflow,data,false);workspaceOverflow.Padding({0});
         AutomationProperties::SetAutomationId(workspaceOverflow,L"header-workspace-menu");
         workspaceOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock()){
             auto storage=object(self->data->model,L"windows_workspace");
@@ -294,7 +294,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         canvas.Children().Append(ghost);Canvas::SetZIndex(ghost,40);
         for(int zone=0;zone<3;++zone){
             Border outline;outline.IsHitTestVisible(false);outline.BorderThickness({1,1,1,1});outline.CornerRadius({6,6,6,6});canvas.Children().Append(outline);zones.push_back(outline);
-            auto more=button(data,data->caption(L"header",L"more_items"),[]{});style(more,data);more.Padding({0});
+            auto more=button(data,data->copyCaption(L"header",L"more_items"),[]{});style(more,data);more.Padding({0});
             AutomationProperties::SetAutomationId(more,L"header-overflow-"+to_hstring(zone));
             more.Flyout(menu([weak=weak_from_this(),zone](auto target){if(auto self=weak.lock()){
                 auto hidden=array(self->geometry,L"hidden");if(uint32_t(zone)>=hidden.Size())return;
@@ -308,7 +308,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             }}));
             canvas.Children().Append(more);Canvas::SetZIndex(more,10);overflow.push_back(more);
         }
-        recovery=button(data,data->caption(L"header",L"main_menu"),[]{});style(recovery,data);recovery.Padding({0});recovery.Flyout(menu(primaryMenu));
+        recovery=button(data,data->copyCaption(L"header",L"main_menu"),[]{});style(recovery,data);recovery.Padding({0});recovery.Flyout(menu(primaryMenu));
         AutomationProperties::SetAutomationId(recovery,L"header-recovery-menu");canvas.Children().Append(recovery);Canvas::SetZIndex(recovery,10);
         built=true;
     }
@@ -616,6 +616,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto key=value.Stringify();if(key!=traceKey){traceKey=key;AutomationProperties::SetItemStatus(canvas,key);}
     }
     void apply(J const& snapshot){
+        data->adoptLocalization(snapshot);
         if(!snapshot.HasKey(L"state"))return;
         data->model=snapshot;data->state=object(snapshot,L"state");data->refreshPalette();view=object(snapshot,L"header");
         if(!view.Size())return;

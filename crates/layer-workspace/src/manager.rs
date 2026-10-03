@@ -24,7 +24,7 @@ struct State {
 /// Called from one UI/input owner. RefCell borrows never span storage awaits;
 /// accepted live edits can continue while an immutable save is in flight.
 pub struct WorkspaceManager<S: WorkspaceStore> {
-    pub(crate) localization: std::sync::Arc<layer_ui::Localizer>,
+    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     pub store: S,
     pub owner: Owner,
     pub platform: Platform,
@@ -46,7 +46,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     pub fn new_localized(store: S, platform: Platform, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
         Self {
-            localization,
+            localization: RefCell::new(localization),
             store,
             owner: Owner::fresh(),
             platform,
@@ -55,6 +55,17 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             memory: RefCell::new(None),
             clock: Cell::new(0),
         }
+    }
+    pub fn localization(&self) -> std::sync::Arc<layer_ui::Localizer> {
+        self.localization.borrow().clone()
+    }
+    pub fn set_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) -> bool {
+        let mut current = self.localization.borrow_mut();
+        if current.language() == localization.language() {
+            return false;
+        }
+        *current = localization;
+        true
     }
     pub(crate) async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
         if let Some(memory) = self.memory.borrow_mut().as_mut() {
@@ -80,10 +91,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.state.borrow().latest.as_ref().map(|e| e.id.clone())
     }
     pub fn summary_display_name(&self, summary: &ItemSummary) -> String {
-        summary.display_name(&self.localization)
+        summary.display_name(&self.localization())
     }
     pub fn display_name(&self, id: &str, metadata: &Metadata) -> String {
-        workspace_display_name(id, metadata, &self.localization)
+        workspace_display_name(id, metadata, &self.localization())
     }
     pub fn active_name(&self) -> Option<String> {
         self.state
@@ -424,14 +435,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .first()
             .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspacesAreAvailable))?;
         let source = self.load(&source.id).await?.entity;
-        let name = message(&self.localization, layer_ui::MessageId::WORKSPACE_COPY_NAME, &[("name", self.display_name(&source.id, &source.metadata))]);
+        let name = message(&self.localization(), layer_ui::MessageId::WORKSPACE_COPY_NAME, &[("name", self.display_name(&source.id, &source.metadata))]);
         self.create_from_snapshot(source, &name, true, now).await
     }
 
     async fn ensure_defaults(&self, now: u64) -> Result<()> {
         for (workspace_id, _) in DEFAULT_WORKSPACES {
             self.ensure_default(
-                Entity::included_workspace(workspace_id, self.platform, now, &self.localization).unwrap(),
+                Entity::included_workspace(workspace_id, self.platform, now, &self.localization()).unwrap(),
             )
             .await?;
         }
@@ -808,6 +819,7 @@ mod operations;
 
 #[path = "manager_recovery.rs"]
 mod recovery;
+pub(crate) use recovery::InterruptedChange;
 
 #[path = "manager_switcher.rs"]
 mod switcher;

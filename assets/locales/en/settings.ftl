@@ -1,6 +1,5 @@
 settings-language = Language
 settings-language-system = Use system language
-settings-language-restart = Applies after restart.
 
 settings-reset-to-default = Reset to Default
 settings-pressure-response = Pressure response

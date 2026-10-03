@@ -13,6 +13,7 @@ use std::{
 /// has a native dialog parent before it has a document or rendering device.
 pub(super) async fn prepare(
     window: &adw::ApplicationWindow,
+    workspace: Option<&std::rc::Rc<crate::workspace::Workspace>>,
     file: gio::File,
     policy: layer_ui::PhotoOpenPolicy,
     working: layer_core::color::RgbSpace,
@@ -24,25 +25,26 @@ pub(super) async fn prepare(
         uri: file.uri().into(),
         name: path.file_name().ok_or_else(|| layer_ui::DocumentHostError::ChooseFilename.message(localization))?.to_string_lossy().into_owned(),
     };
-    let Some((mut project, location)) = run(window, path, location, policy, names, localization).await? else {
+    let Some((mut project, location)) = run(window, workspace, path, location, policy, names, localization).await? else {
         return Ok(None);
     };
     if !window.is_visible() { return Ok(None); }
     if location.is_none() {
         let source = Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or_else(|| localization.text(layer_ui::MessageId::DOCUMENTS_ERROR_MISSING_SOURCE).to_string())?);
         let metadata = std::mem::take(&mut project.document.metadata);
-        let Some(source) = interpret_window(window, source, policy, working, localization).await? else { return Ok(None); };
+        let Some(source) = interpret_window(window, workspace, source, policy, working, localization).await? else { return Ok(None); };
         let names = layer_core::DocumentNames { paint: project.document.layers[0].name.clone(),
             paper: project.document.layers[1].name.clone() };
         project = gio::spawn_blocking(move || policy.photo_project(source, metadata, names))
-            .await.map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(localization))?
-            .map_err(|detail| layer_ui::ColorFeatureError::Diagnostic(detail).profile_message(localization))?;
+            .await.map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(workspace.map(|w| w.localization()).as_deref().unwrap_or(localization)))?
+            .map_err(|detail| layer_ui::ColorFeatureError::Diagnostic(detail).profile_message(workspace.map(|w| w.localization()).as_deref().unwrap_or(localization)))?;
     }
     Ok(window.is_visible().then_some((project, location)))
 }
 
 async fn run(
     window: &adw::ApplicationWindow,
+    workspace: Option<&std::rc::Rc<crate::workspace::Workspace>>,
     path: PathBuf,
     location: DocumentLocation,
     policy: layer_ui::PhotoOpenPolicy,
@@ -50,7 +52,7 @@ async fn run(
     localization: &layer_ui::Localizer,
 ) -> Result<Option<(Project, Option<DocumentLocation>)>, String> {
     let copy = layer_ui::bootstrap_view(localization);
-    let failure = layer_ui::file_open_failure(localization, &location.name);
+    let failure_name = location.name.clone();
     let dialog = adw::AlertDialog::builder()
         .heading(copy.opening_files.as_ref())
         .body(copy.preparing_document.as_ref())
@@ -58,6 +60,16 @@ async fn run(
     dialog.set_widget_name("document-open-progress");
     dialog.add_response("cancel", copy.common.cancel.as_ref());
     dialog.set_close_response("cancel");
+    if let Some(w) = workspace {
+        let weak = dialog.downgrade();
+        w.on_localization(move |localization| {
+            let Some(dialog) = weak.upgrade() else { return false };
+            let copy = layer_ui::bootstrap_view(localization);
+            dialog.set_heading(Some(&copy.opening_files)); dialog.set_body(&copy.preparing_document);
+            dialog.set_response_label("cancel", &copy.common.cancel);
+            true
+        });
+    }
     let cancelled = Arc::new(AtomicBool::new(false));
     let signal = dialog.connect_response(Some("cancel"), {
         let cancelled = cancelled.clone();
@@ -76,7 +88,9 @@ async fn run(
         return Ok(None);
     }
     dialog.close();
-    result.map(Some).map_err(|detail| format!("{failure}\n{detail}"))
+    let current = workspace.map(|w| w.localization());
+    let localization = current.as_deref().unwrap_or(localization);
+    result.map(Some).map_err(|detail| format!("{}\n{detail}", layer_ui::file_open_failure(localization, &failure_name)))
 }
 
 /// Shared by Open, Place and Paste. Choosing an interpretation changes no source
@@ -86,13 +100,14 @@ pub(super) async fn interpret(
     source: layer_core::color::source::SourceImage,
     policy: layer_ui::PhotoOpenPolicy,
 ) -> Result<Option<layer_core::color::source::SourceImage>, String> {
-    let working = w.gpu.borrow().as_ref().ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization))?
+    let working = w.gpu.borrow().as_ref().ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?
         .session.engine().document().color.space;
-    interpret_window(&w.window, source, policy, working, &w.localization).await
+    interpret_window(&w.window, Some(w), source, policy, working, &w.localization()).await
 }
 
 async fn interpret_window(
     window: &adw::ApplicationWindow,
+    workspace: Option<&std::rc::Rc<crate::workspace::Workspace>>,
     mut source: layer_core::color::source::SourceImage,
     policy: layer_ui::PhotoOpenPolicy,
     working: layer_core::color::RgbSpace,
@@ -103,16 +118,17 @@ async fn interpret_window(
         return Ok(Some(source));
     }
     let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
-    let chooser = super::profile::ProfileChooser::for_window(
-        window, copy.interpret_as.as_ref(), "untagged-profile-space", working,
-        super::profile::ProfilePurpose::Source(source.interpretation.clone()),
-    );
+    let purpose = super::profile::ProfilePurpose::Source(source.interpretation.clone());
+    let chooser = match workspace {
+        Some(w) => super::profile::ProfileChooser::new(w, &copy.interpret_as, "untagged-profile-space", working, purpose),
+        None => super::profile::ProfileChooser::for_window(window, &copy.interpret_as, "untagged-profile-space", working, purpose),
+    };
     let space = chooser.row.clone();
     let group = adw::PreferencesGroup::new();
     group.add(&space);
     let current = source.interpretation.profile.clone();
     let profile = gio::spawn_blocking(move || super::profile::describe(current)).await
-        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(localization))?.map_err(|reason| reason.profile_message(localization))?;
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(workspace.map(|w| w.localization()).as_deref().unwrap_or(localization)))?.map_err(|reason| reason.profile_message(workspace.map(|w| w.localization()).as_deref().unwrap_or(localization)))?;
     (chooser.restore)(profile);
     let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
     body.append(&group);
@@ -123,12 +139,23 @@ async fn interpret_window(
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("use"));
     dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
-    space.connect_subtitle_notify(glib::clone!(
+    if let Some(w) = workspace {
+        let weak = dialog.downgrade(); let space = space.downgrade();
+        w.on_localization(move |localization| {
+            let Some(dialog) = weak.upgrade() else { return false };
+            let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
+            dialog.set_heading(Some(&copy.interpret_title)); dialog.set_body(&copy.interpret_help);
+            dialog.set_response_label("cancel", &copy.common.cancel); dialog.set_response_label("use", &copy.use_profile);
+            if let Some(space) = space.upgrade() { space.set_title(&copy.interpret_as); }
+            true
+        });
+    }
+    chooser.connect_changed(glib::clone!(
         #[weak]
         dialog,
         #[strong(rename_to=select)]
         chooser.selected,
-        move |_| {
+        move || {
             dialog.set_response_enabled("use", select().is_ok());
         }
     ));
@@ -144,8 +171,8 @@ async fn interpret_window(
         Ok(Some(source))
     })
     .await
-    .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile validation worker failed".into()).profile_message(localization))?
-    .map_err(|detail| layer_ui::ColorFeatureError::Diagnostic(detail).profile_message(localization))
+    .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile validation worker failed".into()).profile_message(workspace.map(|w| w.localization()).as_deref().unwrap_or(localization)))?
+    .map_err(|detail| layer_ui::ColorFeatureError::Diagnostic(detail).profile_message(workspace.map(|w| w.localization()).as_deref().unwrap_or(localization)))
 }
 
 pub(crate) fn read(

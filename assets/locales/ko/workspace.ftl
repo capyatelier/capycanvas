@@ -617,3 +617,4 @@ workspace-storage-write-failed = 작업 영역 변경 사항을 저장하지 못
 workspace-storage-full = 작업 영역 저장소가 가득 찼습니다. 디스크 공간을 확보하고 다시 시도하세요.
 workspace-storage-unavailable = 작업 영역 저장소를 열지 못했습니다. 다시 시도하세요.
 workspace-unreadable-name = 읽을 수 없는 작업 영역
+workspace-backup-saved = 작업 공간 백업을 저장했습니다.

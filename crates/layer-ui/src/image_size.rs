@@ -135,6 +135,11 @@ impl ImageSizeDraft {
         }
     }
 
+    pub(super) fn set_localization(&mut self, document: &Document, limits: layer_core::GeometryLimits, localization: &Localizer) {
+        self.view = Self::new(self.current, document.resolution, localization).view;
+        self.update(document, limits, localization);
+    }
+
     fn pixels(&self, axis: usize) -> Option<u32> {
         let pixels = match self.unit {
             CanvasSizeUnit::Pixels => self.values[axis],
@@ -286,5 +291,32 @@ mod tests {
             session.set_viewport([640. + size, 480.], [640 + size as u32, 480]).unwrap();
             assert_eq!(session.image_size.as_ref().unwrap().view.message.as_ptr(), message);
         }
+    }
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use super::*;
+    use crate::session::test_support::{session, invoke};
+
+    #[test]
+    fn image_size_language_refresh_preserves_resolution_resample_and_linked_values() {
+        let mut session = session(Platform::Gtk);
+        invoke(&mut session, CommandId::ImageSize);
+        session.image_size_action(ImageSizeAction::Width { value: 117. }).unwrap();
+        session.image_size_action(ImageSizeAction::Resolution { value: 240. }).unwrap();
+        session.image_size_action(ImageSizeAction::Resample { resample: ImageResample::Lanczos }).unwrap();
+        let before = session.image_size_view().unwrap();
+        let checkpoint = session.engine.checkpoint();
+        assert!(session.set_localization(Localizer::shared(UiLanguage::Japanese)));
+        let after = session.image_size_view().unwrap();
+        assert_ne!(before.title, after.title);
+        assert_ne!(before.message, after.message);
+        assert_eq!(after.values, before.values);
+        assert_eq!(after.numeric, before.numeric);
+        assert_eq!(after.resolution, before.resolution);
+        assert_eq!(after.resample, before.resample);
+        assert_eq!(after.constrain, before.constrain);
+        assert_eq!(session.engine.checkpoint(), checkpoint);
     }
 }

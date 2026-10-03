@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         updateTheme(newConfig)
+        host.systemLocalesChanged(newConfig.locales)
     }
     private val devices = object : android.hardware.input.InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(id: Int) {}
@@ -72,6 +73,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         getSystemService(android.hardware.input.InputManager::class.java).registerInputDeviceListener(devices, null)
+        host.systemLocalesChanged(resources.configuration.locales)
         host.filterPreviewCache.resume()
         if (!host.restartingWindow) host.workspaceInput(obj("type" to "resume"))
         host.restartingWindow = false

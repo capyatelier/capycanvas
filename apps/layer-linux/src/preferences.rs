@@ -40,15 +40,43 @@ impl Field {
             Self::Info(w) => w.upcast_ref(),
         }
     }
-    fn update(&self, row: &PreferenceRow) {
+    fn update(&self, row: &PreferenceRow, localization: &std::sync::Arc<layer_ui::Localizer>) {
+        if let Some(native) = self.widget().downcast_ref::<adw::PreferencesRow>() {
+            native.set_title(&row.title);
+            if let Some(action) = self.widget().downcast_ref::<adw::ActionRow>() {
+                action.set_subtitle(&row.description);
+            }
+        } else if let Some(body) = self.widget().first_child().and_downcast::<gtk::Box>() {
+            if let Some(text) = body.first_child().and_downcast::<gtk::Box>() {
+                if let Some(title) = text.first_child().and_downcast::<gtk::Label>() {
+                    title.set_text(&row.title);
+                }
+                if let Some(description) = text.last_child().and_downcast::<gtk::Label>()
+                    && description != text.first_child().unwrap()
+                {
+                    description.set_text(&row.description);
+                }
+            }
+        }
         self.widget().set_sensitive(row.enabled);
         self.widget().set_visible(row.visible);
         match (self, &row.kind) {
-            (Self::Choice(w), PreferenceKind::Choice { selected, .. }) => w.set_selected(*selected),
-            (Self::ImageChoice(_, w), PreferenceKind::Choice { selected, .. }) => {
+            (Self::Choice(w), PreferenceKind::Choice { selected, options, .. }) => {
+                if let Some(model) = w.model().and_downcast::<gtk::StringList>() {
+                    let changed = model.n_items() != options.len() as u32
+                        || options.iter().enumerate().any(|(i, text)| model.string(i as u32).as_deref() != Some(text));
+                    if changed { model.splice(0, model.n_items(), &options.iter().map(String::as_str).collect::<Vec<_>>()); }
+                }
+                w.set_selected(*selected);
+            },
+            (Self::ImageChoice(_, w), PreferenceKind::Choice { selected, options, .. }) => {
+                w.set_labels(options);
                 w.set_selected(*selected)
             }
-            (Self::Circles(_, w), PreferenceKind::Choice { selected, .. }) => w.set_selected(*selected),
+            (Self::Circles(_, w), PreferenceKind::Choice { selected, options, .. }) => {
+                w.set_labels(options);
+                w.set_selected(*selected);
+            },
             (
                 Self::Swatches(_, w),
                 PreferenceKind::Swatches {
@@ -60,10 +88,11 @@ impl Field {
                 },
             ) => w.update(swatches, *selected, value, custom),
             (Self::Number(_, w), PreferenceKind::Number { value, .. }) => {
+                w.set_caption(&row.title, &row.description, localization.clone());
                 w.set_value(*value as f64)
             }
             (Self::Spin(w), PreferenceKind::Number { value, control }) => {
-                w.set_value(*value as f64 * control.scale)
+                if w.value() != *value as f64 * control.scale { w.set_value(*value as f64 * control.scale); }
             }
             (Self::Switch(w), PreferenceKind::Switch { active }) => w.set_active(*active),
             _ => {}
@@ -521,7 +550,9 @@ impl Preferences {
                 }
             }
         ));
-        self.search.connect_search_changed(glib::clone!(
+        crate::input::guard_editable_activation(&self.search);
+        crate::input::guard_editable_activation(&self.shortcut_search);
+        self.search.connect_changed(glib::clone!(
             #[weak]
             w,
             move |entry| send(
@@ -556,7 +587,7 @@ impl Preferences {
                     );
                 }
             ));
-        self.shortcut_search.connect_search_changed(glib::clone!(
+        self.shortcut_search.connect_changed(glib::clone!(
             #[weak]
             w,
             move |entry| {
@@ -759,6 +790,7 @@ impl Preferences {
                             spin.set_digits(control.digits);
                             spin.set_numeric(false);
                             spin.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
+                            crate::input::guard_editable_activation(&spin);
                             let format = control.clone();
                             spin.connect_output(move |spin| {
                                 let value = format
@@ -804,7 +836,7 @@ impl Preferences {
                                 control.clone(),
                                 &row.title,
                                 &row.description,
-                             w.localization.clone());
+                             w.localization().clone());
                             number.set_widget_name(&format!("setting-{}", id.key()));
                             number.connect_value_changed(glib::clone!(
                                 #[weak]
@@ -881,8 +913,8 @@ impl Preferences {
             };
             if page.id == SettingsPage::Color {
                 let group = adw::PreferencesGroup::new();
-                let copy = CommonCopy::new(&w.localization);
-                let title = w.localization.text(MessageId::DOCUMENTS_DEFAULTS_TITLE);
+                let copy = CommonCopy::new(&w.localization());
+                let title = w.localization().text(MessageId::DOCUMENTS_DEFAULTS_TITLE);
                 let row = text_row(title.as_ref(), "");
                 let button = gtk::Button::with_label(copy.more.as_ref());
                 button.set_widget_name("color-drawing-defaults");
@@ -895,7 +927,7 @@ impl Preferences {
                 row.add_suffix(&button);
                 row.set_activatable_widget(Some(&button));
                 group.add(&row);
-                let copy = layer_ui::color_feature_copy::ProfileCopy::new(&w.localization);
+                let copy = layer_ui::color_feature_copy::ProfileCopy::new(&w.localization());
                 let row = text_row(copy.library_title.as_ref(), copy.menu_help.as_ref());
                 let button = gtk::Button::with_label(copy.manage.as_ref());
                 button.set_widget_name("color-profile-library");
@@ -956,6 +988,14 @@ impl Preferences {
             if let Some(page) = view.pages.iter().find(|page| page.id == view.page) {
                 if self.content_page.title().as_str() != page.title { self.content_page.set_title(&page.title); }
             }
+            self.search_toggle.set_tooltip_text(Some(&view.search_label));
+            self.search.set_placeholder_text(Some(&view.search_placeholder));
+            self.empty.set_text(&view.no_results);
+            for page in &view.pages {
+                if let Some(child) = self.stack.child_by_name(page.id.key()) {
+                    self.stack.page(&child).set_title(Some(&page.title));
+                }
+            }
             self.empty.set_visible(view.empty);
             self.stack.set_visible_child_name(view.page.key());
             self.search_toggle.set_active(view.searching);
@@ -1001,10 +1041,11 @@ impl Preferences {
                 .flat_map(|g| &g.rows)
             {
                 if let Some(field) = self.fields.borrow().get(&row.id) {
-                    field.update(row);
+                    field.update(row, &w.localization());
                 }
             }
             for (id, index, group) in self.groups.borrow().iter() {
+                group.set_title(&view.pages.iter().find(|p| p.id == *id).unwrap().groups[*index].title);
                 group.set_visible(
                     view.pages.iter().find(|p| p.id == *id).unwrap().groups[*index]
                         .rows
@@ -1051,23 +1092,23 @@ impl Preferences {
 }
 
 pub(crate) async fn export_keymap(w: &Rc<Workspace>, name: String, text: String) -> Result<(), String> {
-    let copy = NativeCopy::new(&w.localization);
+    let copy = NativeCopy::new(&w.localization());
     let dialog = gtk::FileDialog::builder().title(copy.shortcuts.export_menu.as_ref()).initial_name(name.as_str()).build();
     let file = match dialog.save_future(Some(&w.window)).await {
         Ok(file) => file,
         Err(e) if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) => return Ok(()),
-        Err(e) => return Err(format!("{}\n{e}", w.localization.text(MessageId::COMMON_ACTION_FAILED))),
+        Err(e) => return Err(format!("{}\n{e}", w.localization().text(MessageId::COMMON_ACTION_FAILED))),
     };
-    let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization))?;
+    let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization()))?;
     gtk::gio::spawn_blocking(move || std::fs::write(path, text).map_err(|e| e.to_string()))
         .await
         .map_err(|_| "Could not save the keymap".to_string())
         .and_then(|result| result)
-        .map_err(|detail| format!("{}\n{detail}", w.localization.text(MessageId::COMMON_ACTION_FAILED)))
+        .map_err(|detail| format!("{}\n{detail}", w.localization().text(MessageId::COMMON_ACTION_FAILED)))
 }
 
 pub(crate) async fn import_keymap(w: &Rc<Workspace>) -> Result<(), String> {
-    let copy = NativeCopy::new(&w.localization);
+    let copy = NativeCopy::new(&w.localization());
     let filter = gtk::FileFilter::new();
     filter.set_name(Some(copy.shortcuts.keymap.as_ref()));
     filter.add_suffix("capykeys");
@@ -1077,9 +1118,9 @@ pub(crate) async fn import_keymap(w: &Rc<Workspace>) -> Result<(), String> {
     let file = match dialog.open_future(Some(&w.window)).await {
         Ok(file) => file,
         Err(e) if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) => return Ok(()),
-        Err(e) => return Err(format!("{}\n{e}", w.localization.text(MessageId::COMMON_ACTION_FAILED))),
+        Err(e) => return Err(format!("{}\n{e}", w.localization().text(MessageId::COMMON_ACTION_FAILED))),
     };
-    let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization))?;
+    let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization()))?;
     let text = gtk::gio::spawn_blocking(move || {
         use std::io::Read;
         let mut bytes = Vec::new();
@@ -1091,8 +1132,8 @@ pub(crate) async fn import_keymap(w: &Rc<Workspace>) -> Result<(), String> {
     .await
     .map_err(|_| "Could not read the keymap".to_string())
     .and_then(|result| result)
-    .map_err(|detail| format!("{}\n{detail}", w.localization.text(MessageId::COMMON_ACTION_FAILED)))?
-    .map_err(|_| w.localization.text(MessageId::SETTINGS_KEYMAP_INVALID).to_string())?;
+    .map_err(|detail| format!("{}\n{detail}", w.localization().text(MessageId::COMMON_ACTION_FAILED)))?
+    .map_err(|_| w.localization().text(MessageId::SETTINGS_KEYMAP_INVALID).to_string())?;
     send(w, PreferenceAction::ImportKeymap { text });
     Ok(())
 }
@@ -1125,7 +1166,7 @@ pub(crate) async fn persist(w: &Workspace, settings: Box<Settings>) -> Result<()
     })
     .await
     .unwrap_or_else(|_| Err("Settings writer failed".into()))
-    .map_err(|detail| format!("{}\n{detail}", w.localization.text(MessageId::COMMON_ACTION_FAILED)))
+    .map_err(|detail| format!("{}\n{detail}", w.localization().text(MessageId::COMMON_ACTION_FAILED)))
 }
 
 fn path() -> Option<std::path::PathBuf> {

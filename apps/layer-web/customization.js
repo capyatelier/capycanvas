@@ -41,8 +41,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   const menuKey = model => JSON.stringify(model, (_, value) => typeof value === "bigint" ? String(value) : value);
   // The same recursive Rust menu drives both the header and contextual menus.
   // Submenus replace their parent page, as in GTK's sliding popover menus.
-  function renderMenu(container, model, close, parents = []) {
-    container.menuPath=[...parents.map(p=>p.title),model.title].slice(1);
+  function renderMenu(container, model, close, parents = [], path = []) {
+    container.menuPath=path;
     container.menuModelKey=menuKey(parents[0]||model);
     container.classList.add("workspace-menu-items");
     container.setAttribute("aria-label", model.title);
@@ -50,16 +50,17 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (parents.length) {
       const back = button(model.title, () => {
         const previous = parents.at(-1);
-        renderMenu(container, previous, close, parents.slice(0, -1));
+        renderMenu(container, previous, close, parents.slice(0, -1), path.slice(0,-1));
       }, "submenu-back");
       back.prepend(icon("down")); container.append(back, element("hr"));
     }
-    model.sections.filter(section => section.length).forEach((section, index) => {
+    model.sections.forEach((section, index) => {
+      if (!section.length) return;
       if (index) container.append(element("hr"));
-      for (const item of section) {
+      for (const [itemIndex,item] of section.entries()) {
         const submenu = item.sections?.some(section => section.length);
         const row = button("", () => {
-          if (submenu) renderMenu(container, { title: item.label, sections: item.sections }, close, [...parents, model]);
+          if (submenu) renderMenu(container, { title: item.label, sections: item.sections }, close, [...parents, model], [...path,[index,itemIndex]]);
           else { close(); if (item.action) dispatch(item.action); else if (item.command) menuCommand?.(item.command, item); }
         });
         row.disabled = !item.enabled;
@@ -78,12 +79,12 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   function refreshMenu(container,model,close) {
     if(container.menuModelKey===menuKey(model))return;
     const parents=[];
-    for(const title of container.menuPath||[]) {
-      const item=model.sections.flat().find(i=>i.label===title&&i.sections?.some(s=>s.length));
+    for(const [section,index] of container.menuPath||[]) {
+      const item=model.sections[section]?.[index];
       if(!item)break;
       parents.push(model);model={title:item.label,sections:item.sections};
     }
-    renderMenu(container,model,close,parents);
+    renderMenu(container,model,close,parents,container.menuPath?.slice(0,parents.length)??[]);
   }
   function showContext(node, point) {
     const claimed = new Event("workspace-context-claimed", { bubbles: true, cancelable: true });
@@ -215,7 +216,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         row.append(element("span", "", label)); break;
       default: throw new Error(`Unknown panel control: ${control}`);
     }
-    if (input) input.setAttribute("aria-label", label);
+    const readLabel=()=>[...views.values()].flatMap(v=>v.controls).find(c=>c.control===control)?.label??label;
+    const syncValue=sync;sync=()=>{const next=readLabel();if(input){input.setAttribute("aria-label",next);input.relabel?.(next);}else if(["filter_types","adjustments","properties","stats"].includes(control))row.querySelector("span").textContent=next;syncValue();};
     fields.set(row, sync); sync(); return row;
   }
   function discardFields(node) {
@@ -249,6 +251,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     const node = root.querySelector('button'); if (!node) return;
     node.disabled = !tile.enabled; node.title = tile.tooltip;
     node.setAttribute('aria-label', tile.label); node.setAttribute('aria-pressed', tile.selected);
+    const label = node.querySelector('.tile-label');if(label)label.textContent=tile.label;
     const glyph = node.querySelector('svg'); if (glyph?.dataset.asset !== tile.icon) glyph?.replaceWith(icon(tile.icon));
   }
   function layoutTile(tile, bounds, axis, style) {
@@ -519,6 +522,11 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (expanded) {
       const options = expanded.body.querySelector(".toolbar-options");
       if (options) renderToolbarOptions(options, views.get(expanded.panel)?.toolbar_options || []);
+    }
+    if(context.matches(":popover-open") && context.menuOwner) {
+      const owner=context.menuOwner;
+      const model=owner.menuModel?owner.menuModel():owner.layerMenu?owner.layerMenu():app.context_menu(JSON.parse(owner.dataset.context));
+      refreshMenu(context,model,()=>context.hidePopover());
     }
     const control = state().customization.control;
     if (popupControl !== control) {

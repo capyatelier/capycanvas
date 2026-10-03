@@ -54,7 +54,7 @@ private struct BrushSliderComponent: View {
     private var model: JSON { tile["component"] }
     private var field: JSON { model["numeric"] }
     private var spec: JSON {
-        field.isNull ? ToolbarUI.cached(["type": "slider_spec", "control": tile["control"].raw]) : field["numeric"]
+        field.isNull ? ToolbarUI.cached(["type": "slider_spec", "control": tile["control"].raw], language: store.interfaceLanguage) : field["numeric"]
     }
     private var value: Double { field.isNull ? spec["min"].number : field["value"].number }
     private var label: String { field.isNull ? tile["label"].string : field["label"].string }
@@ -64,8 +64,8 @@ private struct BrushSliderComponent: View {
     var body: some View {
         let item = toolbarItem(panel, tile)
         let layout = ToolbarUI.cached(["type": "slider_layout", "width": size.width, "height": size.height,
-            "axis": vertical ? "vertical" : "horizontal"])
-        let shown = ToolbarUI.formatted(spec, value: value)
+            "axis": vertical ? "vertical" : "horizontal"], language: store.interfaceLanguage)
+        let shown = ToolbarUI.formatted(spec, value: value, language: store.interfaceLanguage)
         let marks = model["bookmarks"].array
         ZStack(alignment: .topLeading) {
             Button {
@@ -100,7 +100,7 @@ private struct BrushSliderComponent: View {
         let next: Double
         if snap {
             next = ToolbarUI.resolve(["type": "slider_bookmark_value", "control": tile["control"].raw,
-                "values": model["bookmarks"].array.map { $0["value"].number }, "position": fill, "travel": travel]).number
+                "values": model["bookmarks"].array.map { $0["value"].number }, "position": fill, "travel": travel], language: store.interfaceLanguage).number
         } else {
             guard let resolved = try? store.resolveNumber(spec, value: value, operation: ["type": "position", "position": fill]) else { return }
             next = resolved["value"].number
@@ -127,7 +127,7 @@ private struct BrushSliderComponent: View {
     private func refreshPreview() {
         guard session.open, let stamp = session.stamp else { return }
         let geometry = ToolbarUI.resolve(["type": "slider_preview", "control": tile["control"].raw, "style": panel["tile_style"].raw,
-            "value": value, "length": max(size.width, size.height), "extent": stamp.extent])
+            "value": value, "length": max(size.width, size.height), "extent": stamp.extent], language: store.interfaceLanguage)
         guard geometry["error"].isNull else { return }
         let control = tile["control"].raw, model = model, store = store
         store.workspace.sliderPreview.show(.init(owner: session.id, anchor: frame, vertical: vertical,
@@ -366,14 +366,14 @@ private struct ToolOptionsComponent: View {
     private var textSize: CGFloat { store.catalog["text_size_pt"].number * 4 / 3 }
     var body: some View {
         let item = toolbarItem(panel, tile)
-        let style = ToolbarUI.cached(["type": "style", "style": panel["tile_style"].raw])
+        let style = ToolbarUI.cached(["type": "style", "style": panel["tile_style"].raw], language: store.interfaceLanguage)
         let tileSize = CGSize(width: style["size"][0].number, height: style["size"][1].number)
         let options = model["options"].array
         let sizes = options.map { toolOptionSize($0, vertical: vertical, width: size.width, tile: tileSize,
-            preferences: preferences, textSize: textSize) }
+            preferences: preferences, textSize: textSize, language: store.interfaceLanguage) }
         let layout = ToolbarUI.cached(["type": "options_layout", "width": size.width, "height": size.height,
             "axis": vertical ? "vertical" : "horizontal", "sizes": sizes.map { [$0.width, $0.height] },
-            "button": style["size"].raw, "gap": vertical ? style["gap"].number : 10])
+            "button": style["size"].raw, "gap": vertical ? style["gap"].number : 10], language: store.interfaceLanguage)
         ZStack(alignment: .topLeading) {
             Color.clear.contentShape(Rectangle())
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: item, surface: .tile, context: item, canDrag: false))
@@ -425,7 +425,7 @@ typealias ToolOptionEdit = (Any, @escaping @MainActor (String?) -> Void) -> Void
 private let captionPadding: CGFloat = 10, captionGap: CGFloat = 6, captionIcon: CGFloat = 20, choicePadding: CGFloat = 8
 
 @MainActor func toolOptionSize(_ option: JSON, vertical: Bool, width: CGFloat, tile: CGSize, preferences: JSON, textSize: CGFloat,
-    caption: String? = nil) -> CGSize {
+    caption: String? = nil, language: String = "en") -> CGSize {
     func captioned(_ text: String) -> CGFloat { captionPadding * 2 + captionIcon + captionGap + ceil(toolbarTextWidth(text, size: textSize)) }
     if !option["Range"].isNull { return CGSize(width: preferences["sliders"].bool ? 280 : 100, height: 28) }
     let choice = option["Choice"]
@@ -444,7 +444,7 @@ private let captionPadding: CGFloat = 10, captionGap: CGFloat = 6, captionIcon: 
     if !choice.isNull { return CGSize(width: 168, height: 24) }
     let field = option["Numeric"]
     let samples = ToolbarUI.cached(["type": "numeric_info", "id": field["id"].raw, "control": field["numeric"].raw,
-        "compact": true, "units": true])["samples"].array
+        "compact": true, "units": true], language: language)["samples"].array
     let valueWidth = (samples.map { toolbarTextWidth($0.string.map { $0.isNumber ? "8" : String($0) }.joined(), size: textSize) }.max() ?? 0) + 14
     let labelWidth = preferences["text"].bool ? toolbarTextWidth(field["label"].string, size: textSize) : 16
     return CGSize(width: labelWidth + 4 + valueWidth + (preferences["sliders"].bool ? 60 : 0), height: 24)
@@ -652,10 +652,10 @@ private struct ToolbarNumberField: View {
     }
     var body: some View {
         let icon = ToolbarUI.cached(["type": "numeric_info", "id": field["id"].raw, "control": control.raw,
-            "compact": true, "units": true])["icon"].string
+            "compact": true, "units": true], language: store.interfaceLanguage)["icon"].string
         if vertical {
-            let shown = ToolbarUI.formatted(control, value: value, units: style != "small")
-            let bare = ToolbarUI.formatted(control, value: value, units: false)
+            let shown = ToolbarUI.formatted(control, value: value, units: style != "small", language: store.interfaceLanguage)
+            let bare = ToolbarUI.formatted(control, value: value, units: false, language: store.interfaceLanguage)
             Button { open = true } label: {
                 Group {
                     if labeled {

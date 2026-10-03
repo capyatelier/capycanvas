@@ -35,7 +35,7 @@ import org.json.JSONObject
     var height by remember { mutableStateOf(options.getJSONArray("extent").getInt(1).toString()) }
     var preset by remember { mutableStateOf(model.objectOrNull("selected")?.toString() ?: "custom") }
     val text=model.getJSONObject("text")
-    val appearance=remember(options.toString()) { JSONObject(Native.documentAppearance(options.toString())) }
+    val appearance=remember(options.toString(), host.languageTag) { JSONObject(Native.documentAppearance(options.toString(), host.languageTag)) }
     var name by remember { mutableStateOf("") }
     var defaults by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }

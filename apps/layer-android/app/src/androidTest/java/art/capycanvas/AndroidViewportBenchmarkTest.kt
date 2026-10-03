@@ -34,10 +34,12 @@ class AndroidViewportBenchmarkTest {
         val strokeOffset = args.getString("strokeOffset", "0")!!.toDouble()
         val zoomSteps = args.getString("zoomSteps", "0")!!.toInt()
         val transparency = args.getString("transparency")?.let { listOf("off", "low", "medium", "high").indexOf(it) }
+        val languageSwitches = args.getString("languageSwitches")?.split(',').orEmpty()
         val motion = args.getString("motion", "stroke")!!
         val blending = args.getString("blending")
         check(motion in listOf("stroke", "pan", "pinch"))
         val passThrough = args.getString("passThrough", "false") == "true"
+        val navigator = args.getString("navigator", "true") == "true"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity: MainActivity
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -54,6 +56,8 @@ class AndroidViewportBenchmarkTest {
                 waitFor { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") == "placement" }
                 scenario.onActivity { host.invoke("apply_transform") }
                 waitFor { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") != "placement" }
+                val ink = host.snapshot!!.getJSONObject("state").array("layers").objects().single { it.getBoolean("can_rename") && !it.getBoolean("selected") }.getLong("id")
+                scenario.onActivity { host.dispatch(obj("type" to "select_layer", "id" to ink)); host.invoke("raise_layer") }
             }
             scenario.onActivity { blending?.let { host.invoke("blend_$it") }; host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
             val preset = host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() }.first { it.getString("label") == "G-Pen" }.getInt("id")
@@ -62,6 +66,7 @@ class AndroidViewportBenchmarkTest {
                 host.dispatch(obj("type" to "set_brush_size", "value" to brushSize))
                 host.preference(obj("type" to "edit", "id" to "feedback", "value" to prediction))
                 host.preference(obj("type" to "edit", "id" to "platform_prediction", "value" to false))
+                host.dispatch(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "navigator", "visible" to navigator)))
                 transparency?.let { host.preference(obj("type" to "edit", "id" to "transparency", "value" to it)) }
                 if (passThrough) {
                     host.preference(obj("type" to "edit", "id" to "pass_through_groups", "value" to true))
@@ -80,8 +85,18 @@ class AndroidViewportBenchmarkTest {
             val cx = area.getDouble(0) + area.getDouble(2) * (.5 + strokeOffset)
             val cy = area.getDouble(1) + area.getDouble(3) / 2
             val radius = min(area.getDouble(2), area.getDouble(3)) * .32
+            val radiusX = args.getString("radiusX")?.toDouble() ?: radius
+            val radiusY = args.getString("radiusY")?.toDouble() ?: radius * .65
             val output = File(activity.getExternalFilesDir(null), "viewport-benchmark").apply { mkdirs() }
             var activePresent: JSONArray? = null
+            var switchLanguage: String? = null
+            var languageRequested = 0L
+            fun requestLanguage(tag: String) {
+                val index = listOf("system", "en", "ja", "zh-Hans", "zh-Hant", "ko").indexOf(tag)
+                check(index >= 0)
+                languageRequested = System.nanoTime()
+                scenario.onActivity { host.preference(obj("type" to "edit", "id" to "language", "value" to index)) }
+            }
             fun stroke(run: Int, milliseconds: Int) {
                 val count = (milliseconds / interval).toInt()
                 val began = System.nanoTime()
@@ -94,9 +109,10 @@ class AndroidViewportBenchmarkTest {
                     val deadline = began + (i * interval * 1e6).toLong()
                     val left = deadline - System.nanoTime()
                     if (left > 0) java.util.concurrent.locks.LockSupport.parkNanos(left)
+                    if (i == count / 2) switchLanguage?.let { tag -> requestLanguage(tag); switchLanguage = null }
                     val t = i * interval / 1000.0 * speed
-                    val x = cx + radius * sin(t * 3.2)
-                    val y = cy + radius * .65 * sin(t * 4.7 + run * .31)
+                    val x = cx + radiusX * sin(t * 3.2)
+                    val y = cy + radiusY * sin(t * 4.7 + run * .31)
                     val p = pressure ?: (.65 + .3 * sin(t * 1.7))
                     if (osInput) {
                         coords[0].x = x.toFloat() + host.surfaceOrigin.x
@@ -149,33 +165,46 @@ class AndroidViewportBenchmarkTest {
                 send(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl pointer), 2, end)
                 send(android.view.MotionEvent.ACTION_UP, 1, end)
             }
-            stroke(0, 1500); SystemClock.sleep(800)
+            stroke(0, 1500)
+            waitFor { !native { Native.renderingPending(it) } }
+            host.drain(obj("type" to "invoke", "command" to "undo"))
+            SystemClock.sleep(800)
             if (motion != "stroke") {
                 gesture(1500)
                 scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
                 SystemClock.sleep(800)
             }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true }
-            val info = obj("label" to label, "photo" to (args.getString("photo") ?: "generated"), "motion" to motion, "repeats" to repeats, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
+            val info = obj("radii" to JSONArray(listOf(radiusX, radiusY)), "navigator" to navigator, "label" to label, "photo" to (args.getString("photo") ?: "generated"), "motion" to motion, "repeats" to repeats, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
                 "display" to native { JSONObject(Native.displayStatus(it)) })
             File(output, "$label-info.json").writeText(info.toString(2))
             assertEquals(if (motion == "stroke") "SharedDemandRefresh" else "Fifo", info.getJSONObject("display").getString("present_mode"))
             assertEquals(motion == "stroke", info.getJSONObject("display").getBoolean("retained_target"))
-            assertTrue("Navigator survives document adoption", info.getJSONObject("display").getInt("overview_count") > 0)
+            assertEquals("Navigator visibility after adoption", navigator, info.getJSONObject("display").getInt("overview_count") > 0)
             native { Native.presentationTimings(it, true) }
             repeat(repeats) { run ->
                 val beforeRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
                 host.measurementReport(true)
                 val present = JSONArray()
                 native { Native.presentationTimings(it, true); Native.completionTimings(it, true) }
+                val beforeRenderer = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
                 activePresent = present
+                val switchedTag = languageSwitches.takeIf { it.isNotEmpty() }?.let { it[run % it.size] }
+                switchLanguage = switchedTag
                 val began = System.nanoTime()
                 val beganBoot = SystemClock.elapsedRealtimeNanos()
                 if (motion == "stroke") stroke(run + 1, duration) else gesture(duration)
                 val ended = System.nanoTime()
                 val endedBoot = SystemClock.elapsedRealtimeNanos()
                 activePresent = null
-                SystemClock.sleep(500)
+                val languageVisible = switchedTag?.let { tag -> waitFor { host.languageTag == tag }; System.nanoTime() }
+                val resumed = languageVisible?.let {
+                    val beganResume = System.nanoTime()
+                    stroke(run + 20, 100)
+                    waitFor { !native { Native.renderingPending(it) } }
+                    beganResume
+                }
+                if (switchedTag == null) SystemClock.sleep(500)
                 native { present.put(JSONArray(Native.presentationTimings(it, true))) }
                 val completions = native { JSONArray(Native.completionTimings(it, false)) }
                 val afterRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
@@ -186,9 +215,19 @@ class AndroidViewportBenchmarkTest {
                     .put("begin_boot_ns", beganBoot).put("end_boot_ns", endedBoot)
                     .put("revision_before", beforeRevision).put("revision_after", afterRevision)
                     .put("display", native { JSONObject(Native.displayStatus(it)) })
-                    .put("renderer", native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) })
+                    .put("renderer_before", beforeRenderer).put("renderer", native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) })
                 assertTrue("CPU frame instrumentation must be enabled", data.getJSONArray("frames").length() > 100)
                 assertTrue("GPU timestamps must be collected", (0 until present.length()).sumOf { present.getJSONArray(it).length() } > 100)
+                if (switchedTag != null) {
+                    val visible = checkNotNull(languageVisible)
+                    val resumed = checkNotNull(resumed)
+                    val resumedCompletions = JSONArray(completions.values().filter { (it as JSONArray).getLong(4) >= resumed })
+                    val first = resumedCompletions.values().map { it as JSONArray }.firstOrNull { it.getLong(4) >= resumed }
+                    data.put("language", obj("tag" to switchedTag, "requested_ns" to languageRequested,
+                        "model_published_observed_ns" to visible, "gesture_end_ns" to ended, "resumed_input_ns" to resumed,
+                        "resume_gap_ms" to (resumed - visible) / 1e6,
+                        "first_resumed_completion_ms" to first?.let { (it.getLong(2) - resumed) / 1e6 }, "resumed_completions" to resumedCompletions))
+                }
                 File(output, "$label-$run.json").writeText(data.toString())
                 println("VIEWPORT $label run=$run frames=${data.getJSONArray("frames").length()} renderer=${data.getJSONObject("renderer").getJSONArray("rows")}")
                 if (motion != "stroke") {

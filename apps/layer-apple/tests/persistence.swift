@@ -69,15 +69,26 @@ private final class ResultBox<Value>: @unchecked Sendable {
         precondition(load().settings == second, "Acknowledgment must follow durable replacement")
 
         try Data("broken".utf8).write(to: file)
-        let failed = load()
-        precondition(failed.settings == nil, "Corrupt settings must read as defaults without overwriting the file")
+        precondition(load().settings == second, "New scenes must inherit accepted in-memory settings")
+        let fresh = EditorPersistence(root: directory)
+        let freshLoaded = ResultBox<EditorPersistence.Loaded>()
+        fresh.load(observer: UUID(), changed: { _ in }) { freshLoaded.set($0) }
+        precondition(freshLoaded.get().settings == nil, "A fresh process must read corrupt settings as defaults")
         check(try Data(contentsOf: file) == Data("broken".utf8))
 
         let blocked = directory.appendingPathComponent("blocked")
         try first.write(to: blocked)
         let unavailable = EditorPersistence(root: blocked)
+        let accepted = ResultBox<EditorPersistence.SettingsChange>()
+        let unavailableLoaded = ResultBox<EditorPersistence.Loaded>()
+        unavailable.load(observer: UUID(), changed: { accepted.set($0) }) { unavailableLoaded.set($0) }
+        _ = unavailableLoaded.get()
         let failure = ResultBox<String?>(); unavailable.saveSettings(second) { failure.set($0) }
         precondition(failure.get() != nil, "Write failure must reach its completion")
+        precondition(accepted.get().data == second, "Accepted settings must reach existing scenes despite a write failure")
+        let joined = ResultBox<EditorPersistence.Loaded>()
+        unavailable.load(observer: UUID(), changed: { _ in }) { joined.set($0) }
+        precondition(joined.get().settings == second, "New scenes must join the accepted settings after a write failure")
         check(try Data(contentsOf: blocked) == first)
         print("Persistence checks passed: atomic generations, private files, failure preservation, settings notifications and flush ordering")
     }

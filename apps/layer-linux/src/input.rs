@@ -52,8 +52,14 @@ impl EntryComposition {
     fn clear(&self) { self.composing.set(false); self.keys.clear(); }
 }
 pub(crate) fn guard_entry_activation(entry: &gtk::Entry) -> Rc<EntryComposition> {
+    guard_editable_activation(entry)
+}
+
+pub(crate) fn guard_editable_activation(entry: &(impl IsA<gtk::Widget> + IsA<gtk::Editable>)) -> Rc<EntryComposition> {
     let ownership = Rc::new(EntryComposition::default());
-    if let Some(text) = entry.delegate().and_downcast::<gtk::Text>() {
+    let mut editable = entry.upcast_ref::<gtk::Editable>().clone();
+    while let Some(delegate) = editable.delegate() { editable = delegate; }
+    if let Some(text) = editable.downcast_ref::<gtk::Text>() {
         text.connect_preedit_changed(glib::clone!(#[strong] ownership, move |_, preedit| ownership.composing.set(!preedit.is_empty())));
         text.connect_activate(glib::clone!(#[strong] ownership, move |text| {
             if ownership.active() { text.stop_signal_emission_by_name("activate"); }
@@ -73,14 +79,35 @@ pub(crate) fn guard_entry_activation(entry: &gtk::Entry) -> Rc<EntryComposition>
         if ownership.active() { glib::Propagation::Stop } else { glib::Propagation::Proceed }
     }));
     entry.add_controller(bubble);
-    entry.connect_activate(glib::clone!(#[strong] ownership, move |entry| {
-        if ownership.active() { entry.stop_signal_emission_by_name("activate"); }
-    }));
+    if let Some(entry) = entry.upcast_ref::<gtk::Widget>().downcast_ref::<gtk::Entry>() {
+        entry.connect_activate(glib::clone!(#[strong] ownership, move |entry| {
+            if ownership.active() { entry.stop_signal_emission_by_name("activate"); }
+        }));
+    }
     let focus = gtk::EventControllerFocus::new();
     focus.connect_leave(glib::clone!(#[strong] ownership, move |_| ownership.clear()));
     entry.connect_unmap(glib::clone!(#[strong] ownership, move |_| ownership.clear()));
     entry.add_controller(focus);
+    unsafe { entry.set_data("capy-entry-composition", ownership.clone()); }
     ownership
+}
+
+pub(crate) fn localization_input_busy(window: &impl IsA<gtk::Window>) -> bool {
+    let mut busy = false;
+    for window in crate::text_language::owned_windows(window) {
+    crate::text_language::visit(window.upcast_ref(), &mut |widget| {
+        busy |= widget.is_mapped() && (widget.is::<gtk::PopoverMenu>()
+            || widget.is::<gtk::Popover>() && (widget.ancestor(gtk::DropDown::static_type()).is_some()
+                || widget.ancestor(adw::ComboRow::static_type()).is_some()));
+        if let Some(control) = widget.downcast_ref::<crate::number_control::NumberControl>() {
+            busy |= control.composing();
+        }
+        if let Some(ownership) = unsafe { widget.data::<Rc<EntryComposition>>("capy-entry-composition") } {
+            busy |= unsafe { ownership.as_ref() }.active();
+        }
+    });
+    }
+    busy
 }
 
 /// Only direct touch/stylus contacts open menus on a primary-button hold.

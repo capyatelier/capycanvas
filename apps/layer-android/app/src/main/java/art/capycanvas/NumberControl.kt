@@ -45,7 +45,7 @@ import org.json.JSONObject
     registerCommit: (Any, ((Boolean) -> Boolean)?) -> Unit = { _, _ -> },
     onChange: (Float) -> Unit) {
     val host = LocalCanvasHost.current
-    val captions = remember(label) { JSONObject(Native.numericLabels(label)) }
+    val captions = remember(label, host.languageTag) { JSONObject(Native.numericLabels(label, host.languageTag)) }
     val colors = LocalPalette.current
     val shape = if (settings) RoundedCornerShape(6.dp) else ControlShape
     val focus = LocalFocusManager.current
@@ -54,20 +54,21 @@ import org.json.JSONObject
     val displayKey = if (ranged) "edit" else "text"
     fun resolve(value: Float, op: JSONObject): JSONObject {
         val request = obj("control" to control, "value" to value, "operation" to op)
-        return JSONObject(if (toolbar && !valueOnly) Native.toolbarUi(obj("type" to "number", "request" to request, "compact" to true, "units" to showUnits).toString()) else Native.number(request.toString()))
+        return JSONObject(if (toolbar && !valueOnly) Native.toolbarUi(obj("type" to "number", "request" to request, "compact" to true, "units" to showUnits).toString(), host.languageTag) else Native.number(request.toString(), host.languageTag))
     }
-    var shown by remember(value, control.toString(), showUnits) { mutableStateOf(resolve(value, obj("type" to "format"))) }
+    var shown by remember(value, control.toString(), showUnits, host.languageTag) { mutableStateOf(resolve(value, obj("type" to "format"))) }
     var editing by remember { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
     var dirty by remember { mutableStateOf(false) }
     var fieldBounds by remember { mutableStateOf(Rect.Zero) }
     var text by remember { mutableStateOf(TextFieldValue(shown.getString(displayKey))) }
+    var fieldValue by remember { mutableFloatStateOf(shown.number("value")) }
     var error by remember { mutableStateOf<String?>(null) }
     val height = if (settings) 48.dp else if (ranged || toolbar) 24.dp else 32.dp
     val valuePadding = if (settings) 12.dp else if (toolbar && !showUnits && !valueOnly) 2.dp else 6.dp
     val measurer = rememberTextMeasurer()
-    val widest = remember(inline, control.toString(), showUnits) {
-        if (inline) (if (toolbar) JSONObject(Native.toolbarUi(obj("type" to "numeric_info", "id" to id, "control" to control, "compact" to true, "units" to showUnits).toString())).array("samples").let { samples -> (0 until samples.length()).map(samples::getString) }
+    val widest = remember(inline, control.toString(), showUnits, host.languageTag) {
+        if (inline) (if (toolbar) JSONObject(Native.toolbarUi(obj("type" to "numeric_info", "id" to id, "control" to control, "compact" to true, "units" to showUnits).toString(), host.languageTag)).array("samples").let { samples -> (0 until samples.length()).map(samples::getString) }
             else listOf(control.number("min"), control.number("max")).map { resolve(it, obj("type" to "format")).getString("text") })
             .maxBy { it.length }.replace(Regex("[0-9]"), "8") else ""
     }
@@ -97,7 +98,14 @@ import org.json.JSONObject
         registerCommit(requester) { cancel -> commit(cancel) }
         onDispose { registerCommit(requester, null) }
     }
-    LaunchedEffect(shown, dirty) { if (!dirty) text = TextFieldValue(shown.getString(displayKey)) }
+    LaunchedEffect(host.languageTag) {
+        if (error != null) error = runCatching { resolve(shown.number("value"), obj("type" to "expression", "text" to text.text)) }.exceptionOrNull()?.message
+    }
+    LaunchedEffect(shown, dirty) {
+        if (!dirty && (!focused || fieldValue != shown.number("value"))) {
+            text = TextFieldValue(shown.getString(displayKey)); fieldValue = shown.number("value")
+        }
+    }
     if (editing && settings) {
         val settingsOpen = LocalPreferencesOpen.current
         LaunchedEffect(settingsOpen) { if (!settingsOpen) finish(cancel = true) }

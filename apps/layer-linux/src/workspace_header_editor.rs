@@ -54,8 +54,8 @@ impl Editor {
         for (source, chip) in &self.components {
             let source = *source;
             let label = match source {
-                HeaderDragSource::Tools => w.localization.text(layer_ui::MessageId::WORKSPACE_ADD_TOOLS_MENU).to_string(),
-                HeaderDragSource::Component(item) => item.palette_label(&w.localization),
+                HeaderDragSource::Tools => w.localization().text(layer_ui::MessageId::WORKSPACE_ADD_TOOLS_MENU).to_string(),
+                HeaderDragSource::Component(item) => item.palette_label(&w.localization()),
                 HeaderDragSource::Item(_) => unreachable!(),
             };
             let icon = match source {
@@ -76,7 +76,7 @@ impl Editor {
             };
             chip.set_widget_name(&format!("header-component-{name}"));
             chip.add_css_class("header-component");
-            chip.set_tooltip_text(Some(&layer_ui::header_drag_label(&label, &w.localization)));
+            chip.set_tooltip_text(Some(&layer_ui::header_drag_label(&label, &w.localization())));
             chip.update_property(&[gtk::accessible::Property::Label(&label)]);
             w.register_drag(chip, DragTarget::Header(source));
             // One inert drag surface, including its padding, icon and label.
@@ -105,10 +105,10 @@ impl Editor {
         let choices = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         choices.add_css_class("linked");
         choices.set_homogeneous(true);
-        choices.update_property(&[gtk::accessible::Property::Label(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_SIZE))]);
+        choices.update_property(&[gtk::accessible::Property::Label(&w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_SIZE))]);
         for (i, button) in self.sizes.iter().enumerate() {
-            button.set_label(&HeaderSize::ALL[i].localized_label(&w.localization));
-            button.set_tooltip_text(Some(&HeaderSize::ALL[i].tooltip(&w.localization)));
+            button.set_label(&HeaderSize::ALL[i].localized_label(&w.localization()));
+            button.set_tooltip_text(Some(&HeaderSize::ALL[i].tooltip(&w.localization())));
             button.connect_clicked(glib::clone!(
                 #[weak]
                 w,
@@ -124,7 +124,7 @@ impl Editor {
             choices.append(button);
         }
         options.append(&choices);
-        self.canvas_info.set_label(Some(&w.localization.text(layer_ui::MessageId::WORKSPACE_HEADER_SHOW_FOOTER)));
+        self.canvas_info.set_label(Some(&w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_SHOW_FOOTER)));
         self.canvas_info.connect_toggled(glib::clone!(
             #[weak]
             w,
@@ -142,15 +142,55 @@ impl Editor {
         options.append(&self.canvas_info);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         footer.set_halign(gtk::Align::End);
-        let cancel = w.action_button(&w.localization.text(layer_ui::MessageId::COMMON_CANCEL), HeaderAction::Cancel.action());
+        let cancel = w.action_button(&w.localization().text(layer_ui::MessageId::COMMON_CANCEL), HeaderAction::Cancel.action());
         cancel.set_widget_name("header-edit-cancel");
         footer.append(&cancel);
-        let done = w.action_button(&w.localization.text(layer_ui::MessageId::COMMON_DONE), HeaderAction::Edit { editing: false }.action());
+        let done = w.action_button(&w.localization().text(layer_ui::MessageId::COMMON_DONE), HeaderAction::Edit { editing: false }.action());
         done.set_widget_name("header-edit-done");
         done.add_css_class("suggested-action");
         footer.append(&done);
         options.append(&footer);
         self.content.append(&options);
+        let root = self.root.downgrade();
+        let components: Vec<_> = self.components.iter().map(|(source, chip)| (*source, chip.downgrade())).collect();
+        let sizes = self.sizes.each_ref().map(|button| button.downgrade());
+        let choices = choices.downgrade(); let canvas_info = self.canvas_info.downgrade();
+        let cancel = cancel.downgrade(); let done = done.downgrade();
+        w.on_localization(move |localization| {
+            if root.upgrade().is_none() { return false; }
+            for (source, chip) in &components {
+                let Some(chip) = chip.upgrade() else { continue };
+                let label = match source {
+                    HeaderDragSource::Tools => localization.text(layer_ui::MessageId::WORKSPACE_ADD_TOOLS_MENU).to_string(),
+                    HeaderDragSource::Component(item) => item.palette_label(localization),
+                    HeaderDragSource::Item(_) => unreachable!(),
+                };
+                let drag = layer_ui::header_drag_label(&label, localization);
+                chip.set_tooltip_text(Some(&drag));
+                chip.update_property(&[gtk::accessible::Property::Label(&label)]);
+                if let Some(grip) = chip.first_child() { grip.set_tooltip_text(Some(&drag)); grip.update_property(&[gtk::accessible::Property::Label(&drag)]); }
+                if let Some(label_widget) = chip.last_child().and_then(|content| content.last_child()).and_downcast::<gtk::Label>() { label_widget.set_label(&label); }
+            }
+            if let Some(choices) = choices.upgrade() { choices.update_property(&[gtk::accessible::Property::Label(&localization.text(layer_ui::MessageId::WORKSPACE_HEADER_SIZE))]); }
+            for (size, button) in HeaderSize::ALL.into_iter().zip(&sizes) {
+                if let Some(button) = button.upgrade() {
+                    let label = size.localized_label(localization);
+                    button.set_label(&label); button.set_tooltip_text(Some(&size.tooltip(localization)));
+                    button.update_property(&[gtk::accessible::Property::Label(&label)]);
+                }
+            }
+            if let Some(canvas_info) = canvas_info.upgrade() {
+                let label = localization.text(layer_ui::MessageId::WORKSPACE_HEADER_SHOW_FOOTER);
+                canvas_info.set_label(Some(&label)); canvas_info.update_property(&[gtk::accessible::Property::Label(&label)]);
+            }
+            for (button, message) in [(&cancel, layer_ui::MessageId::COMMON_CANCEL), (&done, layer_ui::MessageId::COMMON_DONE)] {
+                if let Some(button) = button.upgrade() {
+                    let label = localization.text(message); button.set_label(&label);
+                    button.set_tooltip_text(Some(&label)); button.update_property(&[gtk::accessible::Property::Label(&label)]);
+                }
+            }
+            true
+        });
     }
     pub fn select(&self, w: &Workspace, selected: Option<u32>) {
         self.selected.set(selected);

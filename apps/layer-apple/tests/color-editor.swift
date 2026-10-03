@@ -20,6 +20,14 @@ import SwiftUI
         (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
     }
     @MainActor static func run() async throws {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = #"{"saved":"","preferred_languages":["en"]}"#.withCString {
+                    capy_apple_launch(9, $0, nil)
+                }
+                done.resume()
+            }
+        }
         for space in ["Srgb", "DisplayP3", "AdobeRgb", "ProPhoto"] {
             let original = JSON(["space": space, "rgba": [0.12345678, 0.23456789, 0.34567891, 213.0 / 65535]])
             for mode in ["unchanged", "alpha", "rgb", "invalid"] {

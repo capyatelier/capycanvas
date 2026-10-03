@@ -69,7 +69,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .layout()
                 .panel(panel)
                 .map_err(StoreError::invalid)?,
-            &self.localization,
+            &self.localization(),
         )?;
         definition.name = name.trim().into();
         self.save_reusable(Entity::toolbar(definition, now), NamePolicy::Exact)
@@ -122,7 +122,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .layout()
                 .panel(panel)
                 .map_err(StoreError::invalid)?,
-            &self.localization,
+            &self.localization(),
         )?;
         self.update_toolbar(id, definition, now).await
     }
@@ -143,7 +143,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 definition
             }
             None => ToolbarDefinition {
-                name: self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR).to_string(),
+                name: self.localization().text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR).to_string(),
                 tiles: Vec::new(),
                 tile_style: layer_ui::TileStyle::Small,
                 hide_tab: false,

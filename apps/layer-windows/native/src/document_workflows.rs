@@ -73,13 +73,17 @@ impl Drop for Import {
     }
 }
 static NEXT_CLIPBOARD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+use layer_ui::DocumentHostErrorCopy as FeatureFailure;
+fn retain_failure(slot: &mut Option<FeatureFailure>, reason: FeatureFailure, localization: &layer_ui::Localizer) -> String {
+    let text=reason.message(localization);*slot=Some(reason);text
+}
 enum Payload {
     Profiles,
     Proof(Box<proof::Task>),
     Export {
         task: Box<ExportTask>,
         destination: usize,
-        notice: Option<String>,
+        notice: Option<layer_ui::ColorFeatureError>,
     },
     Import(Import),
     Color(Box<ColorTask>),
@@ -103,7 +107,11 @@ pub(crate) struct Task {
     preset_view: Value,
     feature_copy: Value,
     converted_name: String,
+    original_name: String,
+    inspection: Option<layer_color::InspectedDocumentInfo>,
+    profiles: Vec<layer_ui::profile_library::ProfileEntry>,
     error: Option<String>,
+    error_reason: Option<FeatureFailure>,
     payload: Payload,
 }
 impl Task {
@@ -120,8 +128,12 @@ impl Task {
                 details: Value::Null,
                 preset_view: Value::Null,
                 feature_copy: Self::feature_copy(session.localization()),
+                inspection: None,
+                profiles: Vec::new(),
+                original_name: session.state().document_file.title().to_string(),
                 converted_name: layer_ui::DocumentDeliveryMessage::ConvertedName { name: session.state().document_file.title().to_string() }.message(session.localization()),
                 error: None,
+                error_reason: None,
                 payload: Payload::Profiles,
             }));
         }
@@ -276,8 +288,12 @@ impl Task {
             details: Value::Null,
             preset_view: Value::Null,
             feature_copy: Self::feature_copy(session.localization()),
+            inspection: None,
+            profiles: Vec::new(),
+            original_name: session.state().document_file.title().to_string(),
             converted_name: layer_ui::DocumentDeliveryMessage::ConvertedName { name: session.state().document_file.title().to_string() }.message(session.localization()),
             error: None,
+            error_reason: None,
             payload,
         }))
     }
@@ -287,11 +303,15 @@ impl Task {
             "profile": ProfileCopy::new(localization), "proof": ProofCopy::new(localization)})
     }
     fn describe(&mut self) -> Result<(), String> {
+        if matches!(self.payload, Payload::Profiles | Payload::Proof(_) | Payload::Export { .. } | Payload::Import(_) | Payload::Source(_)) {
+            self.profiles = crate::color_storage::list(self.control.cancellation_flag())?;
+        }
+        let profiles = json!(self.profiles.iter().map(|entry| entry.localized_view(&self.localization)).collect::<Vec<_>>());
         self.details = match &mut self.payload {
             Payload::Profiles => {
-                json!({"profiles":crate::color_storage::list_view(self.control.cancellation_flag(), &self.localization)?})
+                json!({"profiles":profiles.clone()})
             }
-            Payload::Proof(task) => task.details(self.control.cancellation_flag())?,
+            Payload::Proof(task) => task.details(profiles.clone())?,
             Payload::Export { task, .. } => {
                 if self.preset_view.is_null() {
                     let view = crate::color_storage::presets(
@@ -307,20 +327,17 @@ impl Task {
                             self.control.cancellation_flag(),
                             &self.localization,
                         )
-                    })?;
+                    }).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Preset(reason),&self.localization))?;
                     if let Some(recipe) = &view.recipe
                         && task.configure(recipe.clone()).is_err()
                     {
-                        task.configure(layer_ui::ExportRecipe::web_share()).map_err(|reason| reason.message(&self.localization))?;
+                        task.configure(layer_ui::ExportRecipe::web_share()).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Color(reason),&self.localization))?;
                     }
                     self.preset_view = serde_json::to_value(view).map_err(|e| e.to_string())?;
                 }
                 let mut details = task.details_localized(&self.localization)?;
                 details["presets"] = self.preset_view.clone();
-                details["profiles"] = serde_json::to_value(crate::color_storage::list_view(
-                    self.control.cancellation_flag(), &self.localization,
-                )?)
-                .map_err(|e| e.to_string())?;
+                details["profiles"] = profiles.clone();
                 details
             }
             Payload::Import(task) => {
@@ -330,19 +347,17 @@ impl Task {
                     })?;
                 }
                 json!({"pending":task.images.pending_source().map(|s| &s.interpretation),"extensions":layer_color::photo::extensions().collect::<Vec<_>>(),
-                    "profiles":crate::color_storage::list_view(self.control.cancellation_flag(), &self.localization)?, "clipboard":task.clipboard.as_ref().map(|p| json!({"path":p,"folder":p.parent(),"name":p.file_name().and_then(|s| s.to_str())}))})
+                    "profiles":profiles.clone(), "clipboard":task.clipboard.as_ref().map(|p| json!({"path":p,"folder":p.parent(),"name":p.file_name().and_then(|s| s.to_str())}))})
             }
             Payload::Color(task) => task.details(),
             Payload::Source(task) => {
                 let mut details = task.details_localized(&self.localization)?;
-                details["profiles"] = serde_json::to_value(crate::color_storage::list_view(
-                    self.control.cancellation_flag(), &self.localization,
-                )?)
-                .map_err(|e| e.to_string())?;
+                details["profiles"] = profiles.clone();
                 details
             }
             Payload::Info(info) => {
-                serde_json::to_value(layer_ui::document_properties(&info.inspect()?, &self.localization)).map_err(|e| e.to_string())?
+                self.inspection = Some(info.inspect()?);
+                serde_json::to_value(layer_ui::document_properties(self.inspection.as_ref().unwrap(), &self.localization)).map_err(|e| e.to_string())?
             }
             Payload::Histogram {
                 project,
@@ -370,6 +385,7 @@ impl Task {
     }
     /// Only the file worker calls this; errors keep a reviewable task to cancel.
     pub fn work(&mut self, action: Action) {
+        self.error_reason = None;
         let result = (|| {
             if self.control.is_cancelled() {
                 return Err("Document operation cancelled".into());
@@ -388,22 +404,22 @@ impl Task {
                         std::path::Path::new(&path),
                         self.control.cancellation_flag(),
                         &self.localization,
-                    )?;
+                    ).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
                     self.describe()
                 }
                 Action::ProfileRemove { id } => {
-                    crate::color_storage::remove(&id, self.control.cancellation_flag(), &self.localization)?;
+                    crate::color_storage::remove(&id, self.control.cancellation_flag(), &self.localization).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
                     self.describe()
                 }
                 Action::ProofOptions { settings, profile_id } => {
                     let Payload::Proof(task) = &mut self.payload else { return Err("No proof setup is pending".into()); };
-                    task.work(settings, profile_id, &self.control)?;
+                    task.work(settings, profile_id, &self.control).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
                     self.stage = "proof_candidate";
                     self.describe()
                 }
                 Action::ProofPreserve => {
                     let Payload::Proof(task) = &mut self.payload else { return Err("No proof setup is pending".into()); };
-                    task.preserve(&self.control)?;
+                    task.preserve(&self.control).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
                     self.stage = "commit";
                     Ok(())
                 }
@@ -415,10 +431,10 @@ impl Task {
                         return Err("No export is pending".into());
                     };
                     if let Some(id) = profile_id {
-                        recipe.profile = crate::color_storage::export_profile(&id, self.control.cancellation_flag(), &self.localization)?;
+                        recipe.profile = crate::color_storage::export_profile(&id, self.control.cancellation_flag(), &self.localization).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
                     }
-                    task.configure(recipe).map_err(|reason| reason.message(&self.localization))?;
-                    task.compare(self.control.clone()).map_err(|reason| reason.message(&self.localization))?;
+                    task.configure(recipe).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Color(reason),&self.localization))?;
+                    task.compare(self.control.clone()).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Color(reason),&self.localization))?;
                     self.stage = "preview";
                     self.describe()
                 }
@@ -438,7 +454,7 @@ impl Task {
                     crate::document_io::atomic_write_seek(
                         std::path::Path::new(&path),
                         self.control.cancellation_flag(),
-                        |file| task.write(file, self.control.clone()).map_err(|reason| reason.message(&self.localization)),
+                        |file| task.write(file, self.control.clone()).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Color(reason),&self.localization)),
                     )?;
                     let remember = layer_ui::ExportPresetAction::Remember {
                         index: (*destination).min(3),
@@ -450,7 +466,7 @@ impl Task {
                         self.control.cancellation_flag(),
                         &self.localization,
                     ) {
-                        *notice = Some(layer_ui::DocumentDeliveryMessage::ExportPreferences { detail: error }.message(&self.localization));
+                        *notice = Some(error);
                     }
                     self.stage = "saved";
                     Ok(())
@@ -460,7 +476,7 @@ impl Task {
                     profile_id,
                 } => {
                     if let Some(id) = profile_id {
-                        let value = crate::color_storage::export_profile(&id, self.control.cancellation_flag(), &self.localization)?;
+                        let value = crate::color_storage::export_profile(&id, self.control.cancellation_flag(), &self.localization).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
                         match &mut action {
                             layer_ui::ExportPresetAction::Save { recipe, .. }
                             | layer_ui::ExportPresetAction::Update { recipe, .. }
@@ -481,9 +497,9 @@ impl Task {
                         task.document(),
                         self.control.cancellation_flag(),
                         &self.localization,
-                    )?;
+                    ).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Preset(reason),&self.localization))?;
                     if let Some(recipe) = &view.recipe {
-                        task.configure(recipe.clone()).map_err(|reason| reason.message(&self.localization))?;
+                        task.configure(recipe.clone()).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Color(reason),&self.localization))?;
                     }
                     if let Some(index) = view.index {
                         *destination = index;
@@ -510,7 +526,7 @@ impl Task {
                         return Err("No image interpretation is pending".into());
                     };
                     task.images.interpret(
-                        profile.resolve(self.control.cancellation_flag(), &self.localization)?,
+                        profile.resolve(self.control.cancellation_flag(), &self.localization).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?,
                         self.control.is_cancelled(),
                     )?;
                     self.read_images()
@@ -526,7 +542,7 @@ impl Task {
                             self.stage = "preview";
                         }
                         Payload::Source(task) if !copy => {
-                            task.work(serde_json::from_value::<Option<crate::color_storage::ProfileChoice>>(choice).map_err(|e| e.to_string())?.map(|p| p.resolve(self.control.cancellation_flag(), &self.localization)).transpose()?, || self.control.is_cancelled())?;
+                            task.work(serde_json::from_value::<Option<crate::color_storage::ProfileChoice>>(choice).map_err(|e| e.to_string())?.map(|p| p.resolve(self.control.cancellation_flag(), &self.localization)).transpose().map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?, || self.control.is_cancelled())?;
                             self.stage = "source_candidate";
                         }
                         _ => return Err("This request cannot prepare an edit".into()),
@@ -687,9 +703,9 @@ impl Task {
             Ok(())
         }
     }
-    pub fn notice(&self) -> Option<&str> {
+    pub fn notice(&self) -> Option<String> {
         match &self.payload {
-            Payload::Export { notice, .. } => notice.as_deref(),
+            Payload::Export { notice, .. } => notice.as_ref().map(|reason| layer_ui::DocumentDeliveryMessage::ExportPreferences { detail:reason.preset_message(&self.localization) }.message(&self.localization)),
             _ => None,
         }
     }
@@ -699,8 +715,40 @@ impl Task {
     }
     pub fn fail(&mut self, error: String) {
         self.error = Some(error);
+        self.error_reason = None;
         self.stage = "error";
         self.serial = self.serial.saturating_add(1);
+    }
+    pub(crate) fn set_localization(&mut self, localization: std::sync::Arc<layer_ui::Localizer>) -> Result<(), String> {
+        if std::sync::Arc::ptr_eq(&self.localization, &localization) { return Ok(()); }
+        self.localization = localization;
+        if let Some(reason)=&self.error_reason { self.error=Some(reason.message(&self.localization)); }
+        self.feature_copy = Self::feature_copy(&self.localization);
+        self.converted_name = layer_ui::DocumentDeliveryMessage::ConvertedName { name:self.original_name.clone() }.message(&self.localization);
+        match &mut self.payload {
+            Payload::Export { task, .. } => {
+                let next = task.details_localized(&self.localization)?;
+                for (key, value) in next.as_object().ok_or("Invalid export presentation")? { self.details[key] = value.clone(); }
+                if !self.preset_view.is_null() {
+                    let mut view: layer_ui::ExportPresetView = serde_json::from_value(self.preset_view.clone()).map_err(|error| error.to_string())?;
+                    view.localize_names(task.document().color, &self.localization);
+                    self.preset_view = json!(view);
+                    self.details["presets"] = self.preset_view.clone();
+                }
+            }
+            Payload::Source(task) => {
+                let next = task.details_localized(&self.localization)?;
+                for (key, value) in next.as_object().ok_or("Invalid source presentation")? { self.details[key] = value.clone(); }
+            }
+            Payload::Proof(task) => task.relocalize(&mut self.details, self.localization.clone()),
+            Payload::Info(_) => if let Some(inspection) = &self.inspection {
+                self.details = serde_json::to_value(layer_ui::document_properties(inspection, &self.localization)).map_err(|error| error.to_string())?;
+            },
+            _ => {},
+        }
+        if self.details.get("profiles").is_some() { self.details["profiles"] = json!(self.profiles.iter().map(|entry| entry.localized_view(&self.localization)).collect::<Vec<_>>()); }
+        self.details["feature_copy"] = self.feature_copy.clone();
+        Ok(())
     }
     pub fn status(&self) -> Value {
         json!({"type":"workflow", "id":self.id,"serial":self.serial,"kind":self.kind,
@@ -742,6 +790,59 @@ mod tests {
     fn ready(task: &mut Task, action: Action) {
         task.work(action);
         assert!(task.error.is_none(), "{}: {:?}", task.kind, task.error);
+    }
+    #[test]
+    fn properties_reproject_cached_inspection_without_restarting_the_workflow() {
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        let checkpoint = host.session.state().document_file.clone();
+        let mut task = begin(&mut host, CommandId::DocumentProperties);
+        ready(&mut task, Action::Describe);
+        let identity = (task.id, task.serial, task.stage);
+        let inspected = task.inspection.as_ref().unwrap() as *const _;
+        let english = task.details.clone();
+        let japanese = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+        host.set_localization(japanese.clone());task.set_localization(japanese.clone()).unwrap();
+        assert_eq!((task.id, task.serial, task.stage), identity);
+        assert_eq!(task.inspection.as_ref().unwrap() as *const _, inspected);
+        assert_ne!(task.details["title"], english["title"]);
+        assert_eq!(task.details["title"], layer_ui::document_properties(task.inspection.as_ref().unwrap(), &japanese).title.as_ref());
+        assert_eq!(host.session.state().document_file.epoch, checkpoint.epoch);
+        assert_eq!(host.session.state().document_file.revision, checkpoint.revision);
+        task.set_localization(layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        assert_eq!(task.details, english);
+    }
+    #[test]
+    fn late_profile_inventory_reprojects_semantic_issues_without_reinspection() {
+        let host = NativeHost::new(Platform::Windows).unwrap();
+        let mut task = Task::capture(&host, 0).unwrap();
+        let entry = layer_ui::profile_library::ProfileEntry {
+            id: "user-profile".into(), bytes: 0, name: "My literal name".into(), channels: None, profile: None,
+            issue: Some(layer_ui::ColorFeatureError::ProfileMissing),
+        };
+        task.profiles.push(entry.clone());
+        task.details = json!({"profiles":[entry.localized_view(host.session.localization())]});
+        let identity = (task.id, task.serial, task.stage);
+        let japanese = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+        task.set_localization(japanese.clone()).unwrap();
+        assert_eq!((task.id, task.serial, task.stage), identity);
+        assert_eq!(task.details["profiles"][0], entry.localized_view(&japanese));
+        assert_eq!(task.profiles[0].name, "My literal name");
+        assert_eq!(task.profiles[0].issue, entry.issue);
+    }
+    #[test]
+    fn late_profile_failure_reprojects_typed_reason_and_retains_the_task() {
+        let host = NativeHost::new(Platform::Windows).unwrap();
+        let mut task = Task::capture(&host, 0).unwrap();
+        task.work(Action::ProfileRemove { id: "../invalid".into() });
+        let english=task.error.clone().expect("invalid profile must fail before storage");
+        let identity=(task.id,task.serial,task.stage);
+        let japanese=layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+        task.set_localization(japanese.clone()).unwrap();
+        assert_eq!((task.id,task.serial,task.stage),identity);
+        assert_ne!(task.error.as_ref(),Some(&english));
+        assert_eq!(task.error.as_ref(),Some(&task.error_reason.as_ref().unwrap().message(&japanese)));
+        task.set_localization(host.session.localization().clone()).unwrap();
+        assert_eq!(task.error,Some(english));
     }
     fn pixels(gpu: &mut WgpuRasterizer) -> Vec<u8> {
         gpu.readback_srgb_rgba8().unwrap()

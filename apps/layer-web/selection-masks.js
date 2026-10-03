@@ -12,7 +12,7 @@ export function createSelectionUi({app,state,element,button,icon,numberField,dis
     node.append(icon('chevron-down'));return node;
   };
   const send=action=>dispatch({type:'selection',action});
-  const refine=createPreviewPanel({name:'selection-refine',view:()=>state().layer_tools.selection_resize,kind:v=>v.kind,
+  const refine=createPreviewPanel({app,name:'selection-refine',view:()=>state().layer_tools.selection_resize,kind:v=>v.kind,
     value:radius=>send({op:'resize_radius',radius}),apply:()=>send({op:'apply_resize'}),cancel:()=>send({op:'cancel_resize'}),
     element,button,numberField,workspace,layout,bar});
   return {menuButton,refresh:refine.refresh,place:refine.place,bounds:refine.bounds};

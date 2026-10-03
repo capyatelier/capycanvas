@@ -2,8 +2,8 @@
 use super::*;
 
 struct Manager {
-    copy: layer_ui::color_feature_copy::ProfileCopy,
-    localization: std::sync::Arc<layer_ui::Localizer>,
+    copy: RefCell<layer_ui::color_feature_copy::ProfileCopy>,
+    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     w: std::rc::Weak<Workspace>,
     window: glib::WeakRef<adw::ApplicationWindow>,
     dialog: glib::WeakRef<adw::Dialog>,
@@ -13,6 +13,7 @@ struct Manager {
     note: glib::WeakRef<gtk::Label>,
     entries: RefCell<Vec<Entry>>,
     busy: Cell<bool>,
+    failure: RefCell<Option<ColorFeatureError>>,
 }
 
 enum Operation {
@@ -36,23 +37,23 @@ impl Manager {
             .filter(|(_, e)| e.name.to_lowercase().contains(&query))
         {
             let row = adw::ActionRow::builder()
-                .title(entry.display_name(&self.localization))
-                .subtitle(entry.description(&self.localization))
+                .title(entry.display_name(&self.localization.borrow()))
+                .subtitle(entry.description(&self.localization.borrow()))
                 .use_markup(false)
                 .build();
             if entry.visible {
                 let pin = crate::icons::image("layer-pin-symbolic");
                 pin.add_css_class("dim-label");
-                pin.set_tooltip_text(Some(self.copy.shown.as_ref()));
-                pin.update_property(&[gtk::accessible::Property::Label(self.copy.shown.as_ref())]);
+                pin.set_tooltip_text(Some(self.copy.borrow().shown.as_ref()));
+                pin.update_property(&[gtk::accessible::Property::Label(self.copy.borrow().shown.as_ref())]);
                 row.add_suffix(&pin);
             }
             let menu = gio::Menu::new();
             let visibility = gio::Menu::new();
-            visibility.append(Some(self.copy.show.as_ref()), Some("saved.show"));
+            visibility.append(Some(self.copy.borrow().show.as_ref()), Some("saved.show"));
             menu.append_section(None, &visibility);
             let removal = gio::Menu::new();
-            removal.append(Some(self.copy.remove.as_ref()), Some("saved.remove"));
+            removal.append(Some(self.copy.borrow().remove.as_ref()), Some("saved.remove"));
             menu.append_section(None, &removal);
             let popup = gtk::PopoverMenu::from_model(Some(&menu));
             let actions = gio::SimpleActionGroup::new();
@@ -82,7 +83,7 @@ impl Manager {
             popup.insert_action_group("saved", Some(&actions));
             let more = gtk::MenuButton::builder()
                 .child(&crate::icons::image("layer-more-symbolic"))
-                .tooltip_text(layer_ui::color_feature_copy::named(&self.localization, layer_ui::MessageId::COLOR_FEATURES_PROFILE_OPTIONS, &entry.display_name(&self.localization)))
+                .tooltip_text(layer_ui::color_feature_copy::named(&self.localization.borrow(), layer_ui::MessageId::COLOR_FEATURES_PROFILE_OPTIONS, &entry.display_name(&self.localization.borrow())))
                 .valign(gtk::Align::Center)
                 .popover(&popup)
                 .build();
@@ -109,6 +110,7 @@ impl Manager {
         if let Some(dialog) = self.dialog.upgrade() {
             dialog.set_can_close(false);
         }
+        self.failure.borrow_mut().take();
         if let Some(note) = self.note.upgrade() {
             note.set_visible(false);
         }
@@ -140,8 +142,9 @@ impl Manager {
                     }
                     Ok(None) => (),
                     Err(message) => {
+                        *state.failure.borrow_mut() = Some(message.clone());
                         if let Some(note) = state.note.upgrade() {
-                            note.set_text(&message.profile_message(&state.localization));
+                            note.set_text(&message.profile_message(&state.localization.borrow()));
                             note.set_visible(true);
                         }
                     }
@@ -165,18 +168,28 @@ impl Manager {
             return Ok(None);
         };
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some(self.copy.filter.as_ref()));
+        filter.set_name(Some(self.copy.borrow().filter.as_ref()));
         filter.add_suffix("icc");
         filter.add_suffix("icm");
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let chooser = gtk::FileDialog::builder()
-            .title(self.copy.add_profile.as_ref())
-            .accept_label(self.copy.add.as_ref())
+            .title(self.copy.borrow().add_profile.as_ref())
+            .accept_label(self.copy.borrow().add.as_ref())
             .modal(true)
             .filters(&filters)
             .default_filter(&filter)
             .build();
+        if let Some(w) = self.w.upgrade() {
+            let weak = chooser.downgrade(); let filter = filter.downgrade();
+            w.on_localization(move |localization| {
+                let Some(chooser) = weak.upgrade() else { return false };
+                let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
+                chooser.set_title(&copy.add_profile); chooser.set_accept_label(Some(&copy.add));
+                if let Some(filter) = filter.upgrade() { filter.set_name(Some(&copy.filter)); }
+                true
+            });
+        }
         match crate::files::chooser::open(
             &chooser,
             &window,
@@ -211,7 +224,7 @@ pub(crate) async fn manage_for_window(
     window: &adw::ApplicationWindow,
     workspace: Option<&Rc<Workspace>>,
 ) -> Result<(), String> {
-    let localization = workspace.map(|w| w.localization.clone()).unwrap_or_else(|| crate::launch_localization().clone());
+    let localization = workspace.map(|w| w.localization().clone()).unwrap_or_else(|| crate::launch_localization().clone());
     let copy = layer_ui::color_feature_copy::ProfileCopy::new(&localization);
     let entries = gio::spawn_blocking(|| list(&directory()))
         .await
@@ -288,7 +301,7 @@ pub(crate) async fn manage_for_window(
     view.set_content(Some(&body));
     dialog.set_child(Some(&view));
     let state = Rc::new(Manager {
-        copy, localization,
+        copy: RefCell::new(copy), localization: RefCell::new(localization),
         w: workspace.map_or_else(std::rc::Weak::new, Rc::downgrade),
         window: window.downgrade(),
         dialog: dialog.downgrade(),
@@ -298,7 +311,31 @@ pub(crate) async fn manage_for_window(
         note: note.downgrade(),
         entries: RefCell::new(entries),
         busy: Cell::new(false),
+        failure: RefCell::new(None),
     });
+    if let Some(workspace) = workspace {
+        let weak = Rc::downgrade(&state);
+        let intro = intro.downgrade(); let empty = empty.downgrade(); let done = done.downgrade();
+        workspace.on_localization(move |localization| {
+            let Some(state) = weak.upgrade() else { return false };
+            let Some(dialog) = state.dialog.upgrade() else { return false };
+            let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
+            dialog.set_title(&copy.manage_title);
+            if let Some(add) = state.add.upgrade() {
+                add.set_tooltip_text(Some(&copy.add_profile));
+                add.update_property(&[gtk::accessible::Property::Label(&copy.add_profile)]);
+            }
+            if let Some(search) = state.search.upgrade() { search.set_placeholder_text(Some(&copy.search)); search.update_property(&[gtk::accessible::Property::Label(&copy.search)]); }
+            if let Some(intro) = intro.upgrade() { intro.set_label(&copy.menu_help); }
+            if let Some(empty) = empty.upgrade() { empty.set_label(&copy.empty); }
+            if let Some(done) = done.upgrade() { done.set_label(&copy.common.done); }
+            *state.copy.borrow_mut() = copy;
+            *state.localization.borrow_mut() = localization.clone();
+            state.render();
+            if let Some(note) = state.note.upgrade() { if let Some(reason) = state.failure.borrow().as_ref() { note.set_text(&reason.profile_message(localization)); } }
+            true
+        });
+    }
     add.connect_clicked(glib::clone!(
         #[strong]
         state,

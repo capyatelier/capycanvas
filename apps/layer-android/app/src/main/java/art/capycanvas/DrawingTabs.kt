@@ -218,7 +218,7 @@ private const val TabCloseSize=24f
                     if(vertical)Text(item.getString("location"),style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=TextOverflow.Ellipsis)
                 }
                 val title=item.getString("title")
-                val close=remember(title) { JSONObject(Native.nativeCaption(obj("type" to "close_drawing", "title" to title).toString())).getString("text") }
+                val close=remember(title, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "close_drawing", "title" to title).toString(), host.languageTag)).getString("text") }
                 if(vertical)IconButton({controller.select(id,true)},Modifier.size(48.dp).drawingBounds(drag.closes,id).testTag("drawing-close-$id"),enabled=!controller.blocked){SharedIcon("close",close,Modifier.size(16.dp))}
                 else TabClose(close,closeInset,!controller.blocked,Modifier.drawingBounds(drag.closes,id).testTag("drawing-close-$id")){controller.select(id,true)}
             }

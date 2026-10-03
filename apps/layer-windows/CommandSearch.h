@@ -57,7 +57,7 @@ struct CommandSearchPopup : std::enable_shared_from_this<CommandSearchPopup> {
         field.Children().Append(entry);header.Children().Append(field);
         unit.VerticalAlignment(VerticalAlignment::Center);unit.Opacity(.7);unit.Visibility(Visibility::Collapsed);
         Grid::SetColumn(unit,1);header.Children().Append(unit);
-        close=button(data,data->caption(L"search",L"close_search"),[weak]{if(auto self=weak.lock())self->send(O({{L"type",S(L"close")}}));});
+        close=button(data,data->copyCaption(L"search",L"close_search"),[weak]{if(auto self=weak.lock())self->send(O({{L"type",S(L"close")}}));});
         close.Width(32);close.Height(32);close.Padding({0,0,0,0});
         AutomationProperties::SetAutomationId(close,L"command-search-close");
         Grid::SetColumn(close,2);header.Children().Append(close);

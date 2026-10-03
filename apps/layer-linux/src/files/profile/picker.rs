@@ -18,21 +18,23 @@ pub(crate) struct ProfilePicker {
     pub button: gtk::MenuButton,
     pub error: gtk::Label,
     pub selected: Rc<dyn Fn() -> Result<ExportProfile, String>>,
+    pub selected_typed: Rc<dyn Fn() -> Result<ExportProfile, layer_ui::ColorFeatureError>>,
     pub restore: Rc<dyn Fn(ExportProfile)>,
     state: Rc<State>,
 }
 
 struct State {
-    copy: layer_ui::color_feature_copy::ProfileCopy,
-    localization: std::sync::Arc<layer_ui::Localizer>,
+    copy: RefCell<layer_ui::color_feature_copy::ProfileCopy>,
+    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     w: std::rc::Weak<Workspace>,
     window: glib::WeakRef<adw::ApplicationWindow>,
     changed: RefCell<Vec<Rc<dyn Fn(&str)>>>,
+    edits: RefCell<Vec<Rc<dyn Fn()>>>,
     error: glib::WeakRef<gtk::Label>,
     menu: glib::WeakRef<gtk::MenuButton>,
     value: RefCell<Option<ExportProfile>>,
     document: RefCell<Option<ExportProfile>>,
-    failure: RefCell<Option<String>>,
+    failure: RefCell<Option<layer_ui::ColorFeatureError>>,
     busy: Cell<bool>,
     in_flight: Cell<bool>,
     listing: Cell<bool>,
@@ -43,16 +45,20 @@ struct State {
 
 impl State {
     fn notify(&self) {
+        self.refresh_copy();
+        for changed in self.edits.borrow().clone() { changed(); }
+    }
+    fn refresh_copy(&self) {
         let subtitle = if self.busy.get() {
-            self.copy.reading.as_ref().into()
+            self.copy.borrow().reading.as_ref().into()
         } else {
             self.value
                 .borrow()
                 .as_ref()
-                .map_or_else(|| self.copy.choose.as_ref().into(), |p| p.name.clone())
+                .map_or_else(|| self.copy.borrow().choose.as_ref().into(), |p| p.name.clone())
         };
         if let Some(error) = self.error.upgrade() {
-            error.set_label(self.failure.borrow().as_deref().unwrap_or(""));
+            error.set_label(&self.failure.borrow().as_ref().map(|reason| reason.profile_message(&self.localization.borrow())).unwrap_or_default());
             error.set_visible(self.failure.borrow().is_some());
         }
         if let Some(menu) = self.menu.upgrade() {
@@ -64,7 +70,7 @@ impl State {
         }
     }
     fn set(&self, mut value: ExportProfile) {
-        if value.name.is_empty() { value.name = self.copy.embedded.to_string(); }
+        if value.name.is_empty() { value.name = self.copy.borrow().embedded.to_string(); }
         self.generation.set(self.generation.get().wrapping_add(1));
         *self.value.borrow_mut() = Some(value);
         self.failure.borrow_mut().take();
@@ -130,7 +136,7 @@ impl State {
         &self,
         value: Option<ExportProfile>,
         path: Option<std::path::PathBuf>,
-    ) -> Result<Option<ExportProfile>, String> {
+    ) -> Result<Option<ExportProfile>, layer_ui::ColorFeatureError> {
         let purpose = self.purpose.clone();
         let working = self.working;
         if let Some(mut value) = value {
@@ -140,31 +146,41 @@ impl State {
                 Ok::<_,layer_ui::ColorFeatureError>(Some(value))
             })
             .await
-            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&self.localization))?.map_err(|reason|reason.profile_message(&self.localization));
+            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()))?;
         }
         if let Some(path) = path {
             return gio::spawn_blocking(move || {
                 library::read_entry(&path, working, &purpose).map(Some)
             })
             .await
-            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&self.localization))?.map_err(|reason|reason.profile_message(&self.localization));
+            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()))?;
         }
         let Some(window) = self.window.upgrade() else {
             return Ok(None);
         };
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some(self.copy.filter.as_ref()));
+        filter.set_name(Some(self.copy.borrow().filter.as_ref()));
         filter.add_suffix("icc");
         filter.add_suffix("icm");
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title(self.copy.add_profile.as_ref())
-            .accept_label(self.copy.add.as_ref())
+            .title(self.copy.borrow().add_profile.as_ref())
+            .accept_label(self.copy.borrow().add.as_ref())
             .modal(true)
             .filters(&filters)
             .default_filter(&filter)
             .build();
+        if let Some(w) = self.w.upgrade() {
+            let weak = dialog.downgrade(); let filter = filter.downgrade();
+            w.on_localization(move |localization| {
+                let Some(dialog) = weak.upgrade() else { return false };
+                let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
+                dialog.set_title(&copy.add_profile); dialog.set_accept_label(Some(&copy.add));
+                if let Some(filter) = filter.upgrade() { filter.set_name(Some(&copy.filter)); }
+                true
+            });
+        }
         let file = match super::super::chooser::open(
             &dialog,
             &window,
@@ -179,9 +195,9 @@ impl State {
             {
                 return Ok(None);
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(layer_ui::ColorFeatureError::Diagnostic(e.to_string())),
         };
-        let path = file.path().ok_or_else(||self.copy.choose.to_string())?;
+        let path = file.path().ok_or(layer_ui::ColorFeatureError::ProfileChooseFile)?;
         gio::spawn_blocking(move || {
             let value = super::read(&path, working, &purpose)?;
             let ColorProfile::Icc(bytes) = &value.profile else {
@@ -191,7 +207,7 @@ impl State {
             Ok::<_,layer_ui::ColorFeatureError>(Some(value))
         })
         .await
-        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile import worker failed".into()).profile_message(&self.localization))?.map_err(|reason|reason.profile_message(&self.localization))
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile import worker failed".into()))?
     }
 }
 
@@ -239,9 +255,9 @@ impl ProfilePicker {
 
     pub fn connect_changed(&self, changed: impl Fn() + 'static) {
         self.state
-            .changed
+            .edits
             .borrow_mut()
-            .push(Rc::new(move |_| changed()));
+            .push(Rc::new(changed));
     }
     pub fn compact(
         w: &Rc<Workspace>,
@@ -251,7 +267,7 @@ impl ProfilePicker {
     ) -> Self {
         let picker = Self::build(&w.window, Some(w), working, purpose);
         picker.button.set_widget_name(name);
-        crate::panel_controls::menu_choice(&picker.button, &picker.state.copy.choose_short);
+        crate::panel_controls::menu_choice(&picker.button, &picker.state.copy.borrow().choose_short);
         picker.state.changed.borrow_mut().push(Rc::new(glib::clone!(
             #[weak(rename_to = button)]
             picker.button,
@@ -297,7 +313,7 @@ impl ProfileChooser {
         let picker = ProfilePicker::build(window, workspace, working, purpose);
         let row = adw::ActionRow::builder()
             .title(title)
-            .subtitle(picker.state.copy.choose.as_ref())
+            .subtitle(picker.state.copy.borrow().choose.as_ref())
             .use_markup(false)
             .build();
         row.set_widget_name(name);
@@ -324,7 +340,7 @@ impl ProfilePicker {
         working: RgbSpace,
         purpose: ProfilePurpose,
     ) -> Self {
-        let localization = workspace.map(|w| w.localization.clone()).unwrap_or_else(|| crate::launch_localization().clone());
+        let localization = workspace.map(|w| w.localization().clone()).unwrap_or_else(|| crate::launch_localization().clone());
         let copy = layer_ui::color_feature_copy::ProfileCopy::new(&localization);
         let prefix = match purpose {
             ProfilePurpose::Proof => "proof",
@@ -345,10 +361,11 @@ impl ProfilePicker {
         error.add_css_class("error");
         error.set_widget_name(&format!("{prefix}-profile-error"));
         let state = Rc::new(State {
-            copy: copy.clone(), localization,
+            copy: RefCell::new(copy.clone()), localization: RefCell::new(localization),
             w: workspace.map_or_else(std::rc::Weak::new, Rc::downgrade),
             window: window.downgrade(),
             changed: RefCell::default(),
+            edits: RefCell::default(),
             error: error.downgrade(),
             menu: menu.downgrade(),
             value: Default::default(),
@@ -397,7 +414,7 @@ impl ProfilePicker {
                                     library::manage_for_window(&window, state.w.upgrade().as_ref())
                                         .await
                                 {
-                                    *state.failure.borrow_mut() = Some(error);
+                                    *state.failure.borrow_mut() = Some(layer_ui::ColorFeatureError::Diagnostic(error));
                                     state.notify();
                                 }
                             }
@@ -429,7 +446,7 @@ impl ProfilePicker {
                         actions.remove_action(&name);
                     }
                 }
-                choices.append(Some(state.copy.loading.as_ref()), None);
+                choices.append(Some(state.copy.borrow().loading.as_ref()), None);
                 glib::MainContext::default().spawn_local(glib::clone!(
                     #[strong]
                     state,
@@ -479,9 +496,10 @@ impl ProfilePicker {
                         });
                         state.listing.set(false);
                         choices.remove_all();
+                        let copy = state.copy.borrow().clone();
                         for (profile, label, action) in [
-                            (document, state.copy.document.as_ref(), "document"),
-                            (current, state.copy.current.as_ref(), "current"),
+                            (document, copy.document.as_ref(), "document"),
+                            (current, copy.current.as_ref(), "current"),
                         ] {
                             let Some(profile) = profile else { continue };
                             let section = gio::Menu::new();
@@ -514,7 +532,7 @@ impl ProfilePicker {
                                     item(
                                         &saved,
                                         &actions,
-                                        &entry.display_name(&state.localization),
+                                        &entry.display_name(&state.localization.borrow()),
                                         &format!("saved-{index}"),
                                         glib::clone!(
                                             #[strong]
@@ -524,10 +542,10 @@ impl ProfilePicker {
                                     );
                                 }
                                 if saved.n_items() > 0 {
-                                    choices.append_section(Some(state.copy.saved.as_ref()), &saved);
+                                    choices.append_section(Some(state.copy.borrow().saved.as_ref()), &saved);
                                 }
                             }
-                            Err(reason) => choices.append(Some(&reason.profile_message(&state.localization)), None),
+                            Err(reason) => choices.append(Some(&reason.profile_message(&state.localization.borrow())), None),
                         }
                         if state.compatible(ProfileChannels::Rgb) {
                             let standard = gio::Menu::new();
@@ -546,26 +564,59 @@ impl ProfilePicker {
                                     ),
                                 );
                             }
-                            choices.append_section(Some(state.copy.standard.as_ref()), &standard);
+                            choices.append_section(Some(state.copy.borrow().standard.as_ref()), &standard);
                         }
                     }
                 ));
             }
         ));
+        if let Some(workspace) = workspace {
+            let weak = Rc::downgrade(&state);
+            let popup = popover.downgrade();
+            let footer = footer.downgrade();
+            workspace.on_localization(move |localization| {
+                let Some(state) = weak.upgrade().filter(|state| state.menu.upgrade().is_some()) else { return false };
+                let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
+                if let Some(menu) = state.menu.upgrade() {
+                    menu.set_tooltip_text(Some(&copy.choose_add));
+                    menu.update_property(&[gtk::accessible::Property::Label(&copy.choose_add)]);
+                }
+                if let Some(footer) = footer.upgrade() {
+                    for (index, label) in [&copy.add_profile_dialog, &copy.manage].into_iter().enumerate() {
+                        let item = gio::MenuItem::from_model(&footer, index as i32);
+                        item.set_label(Some(label));
+                        footer.remove(index as i32); footer.insert_item(index as i32, &item);
+                    }
+                }
+                *state.copy.borrow_mut() = copy;
+                *state.localization.borrow_mut() = localization.clone();
+                state.refresh_copy();
+                if let Some(popup) = popup.upgrade().filter(|popup| popup.is_visible()) { popup.emit_by_name::<()>("show", &[]); }
+                true
+            });
+        }
         let selected = Rc::new({
             let state = state.clone();
             move || {
                 if state.busy.get() {
-                    return Err(state.copy.reading.to_string());
+                    return Err(state.copy.borrow().reading.to_string());
                 }
                 if let Some(error) = state.failure.borrow().clone() {
-                    return Err(error);
+                    return Err(error.profile_message(&state.localization.borrow()));
                 }
                 state
                     .value
                     .borrow()
                     .clone()
-                    .ok_or_else(|| "Choose a profile".into())
+                    .ok_or_else(|| state.copy.borrow().choose.to_string())
+            }
+        });
+        let selected_typed = Rc::new({
+            let state = state.clone();
+            move || {
+                if state.busy.get() || state.in_flight.get() { return Err(layer_ui::ColorFeatureError::ProfileMissing); }
+                if let Some(error) = state.failure.borrow().clone() { return Err(error); }
+                state.value.borrow().clone().ok_or(layer_ui::ColorFeatureError::ProfileMissing)
             }
         });
         let restore = Rc::new({
@@ -576,6 +627,7 @@ impl ProfilePicker {
             button: menu,
             error,
             selected,
+            selected_typed,
             restore,
             state,
         }

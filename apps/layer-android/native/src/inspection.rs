@@ -140,7 +140,7 @@ pub extern "system" fn Java_art_capycanvas_Native_documentInfo(
     string(
         &mut env,
         ( || { let inspected = info.inspect()?;
-            let rows = layer_ui::document_properties(&inspected, crate::launch::active_localization()?);
+            let rows = layer_ui::document_properties(&inspected, &*crate::launch::active_localization()?);
             serde_json::to_string(&rows).map_err(error) })(),
     )
 }
@@ -158,7 +158,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
         let recipe: layer_ui::ExportRecipe =
             serde_json::from_str(&crate::android::read(&mut env, &recipe)?).map_err(error)?;
         let (previews,stats)=crate::inspection::on_worker("capy-output-preview", "Output preview worker failed", move || {
-            let localization = crate::launch::active_localization()?;
+            let localization = &*crate::launch::active_localization()?;
             let mut renderer=job.gpu.capture(job.project,job.background,job.time,job.control).map_err(error)?;
             let before=renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?;
             let output=layer_host::export::preview_recipe(&mut renderer,[512,384],layer_core::color::RgbSpace::Srgb,1.,&recipe).map_err(|reason| reason.message(localization))?;

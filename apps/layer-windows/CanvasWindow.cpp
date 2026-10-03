@@ -23,7 +23,7 @@ using namespace Microsoft::UI::Xaml::Media;
 using namespace Microsoft::UI::Windowing;
 using namespace Windows::Foundation;
 static std::string PreferredLanguages() {
-    static const auto tags=[] {
+    const auto tags=[] {
         DWORD count=0,size=0;
         Windows::Data::Json::JsonArray tags;
         if(GetUserPreferredUILanguages(MUI_LANGUAGE_NAME,&count,nullptr,&size)&&size){
@@ -43,6 +43,7 @@ static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
     auto json=command.json.c_str();
     switch(command.kind){
         case CanvasCommandKind::Input:return capy_input(host,json);
+        case CanvasCommandKind::LocalizationInput:return capy_localization_input(host,command.json=="true");
         case CanvasCommandKind::Prediction:return capy_native_prediction(host,command.json=="true");
         case CanvasCommandKind::Document:return capy_document_action(host,json);
         case CanvasCommandKind::Workspace:return capy_workspace_action(host,json);
@@ -147,7 +148,9 @@ void CanvasWindow::Open() {
     root.Children().Append(canvasFocus);
     textFocus=FocusManager::GettingFocus(auto_revoke,[weak=weak_from_this()](auto&&,GettingFocusEventArgs const& e){
         if(auto self=weak.lock();self&&!self->closed)if(auto entry=e.NewFocusedElement().try_as<TextBox>();entry&&entry.XamlRoot()==self->root.XamlRoot()){
-            entry.Language(self->root.Language());CapyUi::captureTextComposition(entry);
+            entry.Language(self->root.Language());CapyUi::captureTextComposition(entry,[weak](bool busy){
+                if(auto self=weak.lock();self&&!self->closing)self->Send(busy?"true":"false",CanvasCommandKind::LocalizationInput);
+            });
         }
     });
     root.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
@@ -1186,7 +1189,7 @@ void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject 
     bool post;
     {
         std::lock_guard lock(mutex);if(closing)return;
-        snapshots.Push(std::move(snapshot),full,model.HasKey(L"workspace_update"),std::move(camera),model.HasKey(L"command_search"));
+        snapshots.Push(std::move(snapshot),full,model.HasKey(L"workspace_update"),std::move(camera),model.HasKey(L"command_search"),model.HasKey(L"localization")?to_string(CapyUi::object(model,L"localization").Stringify()):std::string());
         post=!snapshotPosted;snapshotPosted=true;
     }
     if(post)dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyPending();});
@@ -1199,7 +1202,11 @@ void CanvasWindow::ApplyPending() {
         batch=snapshots.Take();
     }
     try {
-        if(!batch.full.empty())ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.full)));
+        if(!batch.full.empty()){
+            auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(batch.full));
+            if(!batch.localization.empty())model.Insert(L"localization",Windows::Data::Json::JsonObject::Parse(to_hstring(batch.localization)));
+            ApplyModel(model);
+        }
         if(!closing&&!batch.workspace.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.workspace)));
         if(!closing&&!batch.camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.camera)));
         if(!closing&&!batch.search.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.search)));
@@ -1288,6 +1295,15 @@ void CanvasWindow::RefreshWorkspaceSwitcher() {
 }
 void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     using namespace CapyUi;
+    auto presentation=object(model,L"localization");
+    if(presentation.Size()){
+        bootstrap=object(presentation,L"bootstrap");auto tag=to_string(str(bootstrap,L"active_tag"));
+        localization=std::shared_ptr<CapyLocalization>(capy_localization_for_tag(tag.c_str()),capy_localization_free);
+        root.Language(str(bootstrap,L"active_tag"));
+        AutomationProperties::SetName(canvasFocus,str(bootstrap,L"drawing_canvas"));
+        AutomationProperties::SetHelpText(canvasFocus,str(bootstrap,L"drawing_canvas_help"));
+        AutomationProperties::SetName(root,str(bootstrap,L"drawing_workspace"));
+    }
     auto focus=settings&&settings->IsOpen()?FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>():nullptr;
     if(focus)if(auto owner=ItemsControl::ItemsControlFromItemContainer(focus))focus=owner;
     if(!workspace->Apply(model))return;

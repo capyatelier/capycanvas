@@ -258,12 +258,13 @@ private struct LayerRow: View {
             .accessibilityLabel(rowCaption)
             .onAppear { refreshCaption() }
             .onChange(of: layer["label"].string) { _, _ in refreshCaption() }
+            .onChange(of: store.interfaceLanguage) { _, _ in refreshCaption() }
             .accessibilityValue(layer["mask_selected"].bool ? store.catalog["native_copy"]["layers"]["editing_mask"].string
                 : layer["drawing"].bool ? (layer["selection_layer"].bool ? store.catalog["native_copy"]["layers"]["editing_selection"].string : store.catalog["native_copy"]["layers"]["drawing_target"].string)
                 : layer["selected"].bool ? store.catalog["native_copy"]["layers"]["selected"].string : "")
             .accessibilityIdentifier("layer-row-\(id)")
     }
-    private func refreshCaption() { rowCaption = NativeTextContext.caption(["type": "layer_row", "title": layer["label"].string]) }
+    private func refreshCaption() { rowCaption = NativeTextContext.caption(["type": "layer_row", "title": layer["label"].string], language: store.interfaceLanguage) }
     private var visibilityLabel: String {
         layer["selection_layer"].bool ? (layer["visible"].bool ? store.catalog["native_copy"]["layers"]["hide_selection"].string : store.catalog["native_copy"]["layers"]["show_selection"].string)
             : (layer["visible"].bool ? store.catalog["native_copy"]["layers"]["hide"].string : store.catalog["native_copy"]["layers"]["show"].string)

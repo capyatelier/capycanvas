@@ -243,14 +243,14 @@ impl ToolbarManagerUi {
         self.list.set_visible(!model.toolbars.is_empty());
         self.delete.set_label(&model.delete_label);
         self.delete.set_sensitive(model.delete_action.is_some());
-        let key = serde_json::to_string(&model.toolbars).expect("serializable toolbars");
+        let key = serde_json::to_string(&model.toolbars.iter().map(|toolbar| toolbar.panel).collect::<Vec<_>>()).expect("serializable toolbars");
         if *self.rows_key.borrow() != key {
             *self.rows_key.borrow_mut() = key;
             while let Some(child) = self.list.first_child() {
                 self.list.remove(&child);
             }
             *self.panels.borrow_mut() = model.toolbars.iter().map(|p| p.panel).collect();
-            for toolbar in model.toolbars {
+            for toolbar in &model.toolbars {
                 let row = adw::ActionRow::new();
                 row.set_use_markup(false);
                 row.set_title(&toolbar.title);
@@ -261,6 +261,12 @@ impl ToolbarManagerUi {
                     toolbar.icon
                 )));
                 self.list.append(&row);
+            }
+        }
+        for (index, toolbar) in model.toolbars.iter().enumerate() {
+            if let Some(row) = self.list.row_at_index(index as i32).and_downcast::<adw::ActionRow>() {
+                row.set_title(&toolbar.title);
+                row.set_subtitle(&toolbar.subtitle);
             }
         }
         let index = self
@@ -311,6 +317,7 @@ pub(super) struct Customization {
     expanded_root: RefCell<Option<PanelColumns>>,
     visibility: RefCell<Vec<(PanelControl, gtk::CheckButton)>>,
     configuration_title: RefCell<Option<gtk::Label>>,
+    configuration_hint: RefCell<Option<gtk::Label>>,
     toolbar_options: RefCell<Vec<ToolbarOptionWidget>>,
 }
 
@@ -353,6 +360,7 @@ impl Customization {
             expanded_root: RefCell::new(None),
             visibility: RefCell::new(Vec::new()),
             configuration_title: RefCell::new(None),
+            configuration_hint: RefCell::new(None),
             toolbar_options: RefCell::new(Vec::new()),
         }
     }
@@ -436,7 +444,7 @@ impl Customization {
         header.set_show_start_title_buttons(false);
         header.set_show_end_title_buttons(false);
         let cancel = w.action_button(
-            &w.localization.text(layer_ui::MessageId::COMMON_CANCEL),
+            &w.localization().text(layer_ui::MessageId::COMMON_CANCEL),
             UiAction::Customize {
                 action: CustomizationAction::CancelTools,
             },
@@ -479,7 +487,7 @@ impl Customization {
                 }
             }
         ));
-        self.catalog.search.connect_search_changed(glib::clone!(
+        self.catalog.search.connect_changed(glib::clone!(
             #[weak]
             w,
             move |entry| {
@@ -531,6 +539,7 @@ impl Customization {
 
     pub fn collapse_panel(&self) {
         self.configuration_title.borrow_mut().take();
+        self.configuration_hint.borrow_mut().take();
         self.toolbar_options.borrow_mut().clear();
         if let Some(animation) = self.animation.take() {
             animation.pause();
@@ -670,6 +679,7 @@ impl Customization {
                 label.set_xalign(0.0);
                 label.add_css_class("dim-label");
                 body.append(&label);
+                *self.configuration_hint.borrow_mut() = Some(label);
                 for control in &view.controls {
                     let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
                     let check = gtk::CheckButton::with_label(&control.label);
@@ -772,6 +782,7 @@ impl Customization {
             if let Some(title) = self.configuration_title.borrow().as_ref() {
                 title.set_label(&view.configuration_title);
             }
+            if let Some(hint) = self.configuration_hint.borrow().as_ref() { hint.set_label(&view.configuration_hint); }
             for ToolbarOptionWidget {
                 section,
                 item: index,
@@ -786,7 +797,11 @@ impl Customization {
                 {
                     widget.set_sensitive(item.enabled);
                     if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
+                        check.set_label(Some(&item.label));
                         check.set_active(item.selected.unwrap_or(false));
+                    } else if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                        if let Some(title) = button.child().and_then(|row| row.first_child()).and_downcast::<gtk::Label>() { title.set_label(&item.label); }
+                        else { button.set_label(&item.label); }
                     }
                     if let Some(hint) = hint {
                         hint.set_label(&item.hint);
@@ -795,6 +810,7 @@ impl Customization {
             }
             for (control, check) in self.visibility.borrow().iter() {
                 if let Some(control) = view.controls.iter().find(|c| c.control == *control) {
+                    check.set_label(Some(&control.label));
                     check.set_active(control.visible_in_panel);
                 }
             }
@@ -837,7 +853,7 @@ impl Customization {
                         TileStrip::new()
                     };
                     strip.add_css_class("toolbar-controls");
-                    let grip = tiles::grip(&w.localization.text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
+                    let grip = tiles::grip(&w.localization().text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
                     w.install_panel_drag(&grip, DockItem::Panel { panel: config.id });
                     strip.set_grip(&grip);
                     w.install_context(&strip, ContextTarget::Ribbon { panel: config.id });
@@ -970,6 +986,12 @@ impl Customization {
             .brush
             .clone();
         for field in self.controls.borrow().iter() {
+            let localization = w.localization();
+            let caption = field.control.localized_label(&localization);
+            if let Some(label) = field.widget.first_child().and_downcast::<gtk::Label>() { label.set_text(&caption); }
+            if let Some(FieldValue::Size(number) | FieldValue::Opacity(number) | FieldValue::LayerOpacity(number)) = &field.value {
+                number.set_caption(&caption, "", localization.clone());
+            }
             let shown = views
                 .iter()
                 .find(|v| v.id == field.panel)
@@ -984,11 +1006,19 @@ impl Customization {
                     input.set_color(definition, w.view_color());
                 }
                 None => (),
-                Some(FieldValue::Brush(input)) => input.set_selected(
+                Some(FieldValue::Brush(input)) => {
+                    let labels = layer_ui::brush_catalog_localized(&localization).map(|brush| brush.label.to_string()).collect::<Vec<_>>();
+                    if let Some(model) = input.model().and_downcast::<gtk::StringList>() {
+                        if labels.iter().enumerate().any(|(index, label)| model.string(index as u32).as_deref() != Some(label)) {
+                            model.splice(0, model.n_items(), &labels.iter().map(String::as_str).collect::<Vec<_>>());
+                        }
+                    }
+                    input.set_selected(
                     layer_ui::brush_ids()
                         .position(|id| id == brush.preset)
                         .unwrap_or(0) as u32,
-                ),
+                    );
+                },
                 Some(FieldValue::Layer(input)) => {
                     let gpu = w.gpu.borrow();
                     let state = gpu.as_ref().unwrap().session.state();
@@ -1009,13 +1039,16 @@ impl Customization {
                 }
             }
         }
+        if let Some(control) = control {
+            if let Some(label) = self.popup.child().and_then(|body| body.first_child()).and_downcast::<gtk::Label>() { label.set_text(&control.localized_label(&w.localization())); }
+        }
         if self.popup_control.get() != control {
             self.popup_control.set(control);
             self.popup.set_child(None::<&gtk::Widget>);
             if let Some(control) = control {
                 let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
                 margins(&body, 12);
-                body.append(&gtk::Label::new(Some(&control.localized_label(&w.localization))));
+                body.append(&gtk::Label::new(Some(&control.localized_label(&w.localization()))));
                 match control {
                     PanelControl::BrushColor => body.append(&w.color.widget),
                     PanelControl::BrushOpacity => body.append(&w.opacity),
@@ -1051,7 +1084,8 @@ impl Customization {
             self.error.set_visible(view.error.is_some());
             self.count
                 .set_text(&format!("{} selected", view.selected_count));
-            let key = serde_json::to_string(&view.choices).expect("serializable tools");
+            let choice_rows = view.choices.clone();
+            let key = serde_json::to_string(&view.choices.iter().map(|choice| choice.control).collect::<Vec<_>>()).expect("serializable tools");
             self.catalog.update(key, |catalog| {
                 for choice in view.choices {
                     let row = catalog.row(&choice.label, &choice.description, choice.icon);
@@ -1066,6 +1100,7 @@ impl Customization {
                         #[weak]
                         w,
                         move |check| {
+                            if w.customization.updating.get() { return; }
                             w.customize(CustomizationAction::PickerSelect {
                                 control: choice.control,
                                 selected: check.is_active(),
@@ -1076,6 +1111,13 @@ impl Customization {
                     row.set_activatable_widget(Some(&check));
                 }
             });
+            for (index, choice) in choice_rows.iter().enumerate() {
+                if let Some(row) = self.catalog.choices.row_at_index(index as i32).and_downcast::<adw::ActionRow>() {
+                    row.set_title(&choice.label);
+                    row.set_subtitle(&choice.description);
+                    if let Some(check) = row.activatable_widget().and_downcast::<gtk::CheckButton>() { check.set_active(choice.selected); }
+                }
+            }
             if !self.picker_shown.replace(true) {
                 self.picker.present(Some(&w.window));
                 if view.name.is_some() {
@@ -1148,7 +1190,7 @@ impl Workspace {
             }
             let group = gtk::Box::new(gtk::Orientation::Vertical, 6);
             group.set_widget_name(&format!("panel-field-{panel:?}-{control:?}"));
-            let label = gtk::Label::new(Some(&control.localized_label(&self.localization)));
+            let label = gtk::Label::new(Some(&control.localized_label(&self.localization())));
             label.set_xalign(0.0);
             if !matches!(
                 control,
@@ -1212,9 +1254,9 @@ impl Workspace {
             PanelControl::BrushSize => {
                 let input = crate::number_control::NumberControl::new(
                     NumericControl::brush_size(),
-                    &control.localized_label(&self.localization),
+                    &control.localized_label(&self.localization()),
                     "",
-                 self.localization.clone());
+                 self.localization().clone());
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -1228,9 +1270,9 @@ impl Workspace {
             PanelControl::BrushOpacity => {
                 let input = crate::number_control::NumberControl::new(
                     NumericControl::percent(),
-                    &control.localized_label(&self.localization),
+                    &control.localized_label(&self.localization()),
                     "",
-                 self.localization.clone());
+                 self.localization().clone());
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -1250,13 +1292,14 @@ impl Workspace {
                 FieldValue::Color(input)
             }
             PanelControl::Brushes => {
-                let brushes: Vec<_> = layer_ui::brush_catalog_localized(&self.localization).collect();
+                let brushes: Vec<_> = layer_ui::brush_catalog_localized(&self.localization()).collect();
                 let labels: Vec<_> = brushes.iter().map(|b| b.label.as_ref()).collect();
                 let input = gtk::DropDown::from_strings(&labels);
                 input.connect_selected_notify(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
                     move |input| {
+                        if w.customization.updating.get() { return; }
                         if let Some(choice) = brushes.get(input.selected() as usize) {
                             w.dispatch(UiAction::SelectBrush { id: choice.id });
                         }
@@ -1289,9 +1332,9 @@ impl Workspace {
             PanelControl::LayerOpacity => {
                 let input = crate::number_control::NumberControl::new(
                     NumericControl::percent(),
-                    &control.localized_label(&self.localization),
+                    &control.localized_label(&self.localization()),
                     "",
-                 self.localization.clone());
+                 self.localization().clone());
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -1327,7 +1370,7 @@ impl Workspace {
                     let mut buttons = Vec::new();
                     for command in CommandId::LAYERS {
                         let button =
-                            self.action_button(&command.localized_label(&self.localization), UiAction::Invoke { command });
+                            self.action_button(&command.localized_label(&self.localization()), UiAction::Invoke { command });
                         grid.insert(&button, -1);
                         buttons.push((command, button));
                     }

@@ -328,6 +328,39 @@ mod tests {
         }));
     }
     #[test]
+    fn language_refresh_preserves_pending_previews_and_completed_images() {
+        let mut s = session();
+        let mut v = View::default();
+        v.poll(&mut s, 0, &["curves", "levels"]);
+        let pending = v.poll(&mut s, 200, &["curves", "levels"]);
+        assert!(pending.status.pending);
+        let source = s.filter_preview_revision();
+        let key = pending.status.key;
+        let requests = s.renderer_mut().filter_preview_requests;
+        let request_id = s.renderer_mut().filter_preview.as_ref().unwrap().request_id;
+        assert!(s.set_localization(crate::Localizer::shared(crate::UiLanguage::Japanese)));
+        assert_eq!(s.filter_preview_revision(), source);
+        let pending = v.poll(&mut s, 208, &["curves", "levels"]);
+        assert_eq!(pending.status.key, key);
+        assert!(pending.status.pending);
+        assert_eq!(s.renderer_mut().filter_preview_requests, requests);
+        assert_eq!(s.renderer_mut().filter_preview.as_ref().unwrap().request_id, request_id);
+        assert_eq!(s.renderer_mut().filter_preview_cancels, 0);
+        finish(&mut s);
+        let completed = v.poll(&mut s, 216, &["curves", "levels"]);
+        assert!(completed.image.is_some());
+        let retained = completed.status.retained;
+        assert!(s.set_localization(crate::Localizer::shared(crate::UiLanguage::Korean)));
+        let warm = v.poll(&mut s, 224, &["curves", "levels"]);
+        assert_eq!(warm.status.key, key);
+        assert_eq!(warm.status.retained, retained);
+        assert!(!warm.status.pending);
+        assert!(warm.image.is_none());
+        assert_eq!(s.renderer_mut().filter_preview_requests, requests);
+        assert_eq!(s.renderer_mut().filter_preview_cancels, 0);
+    }
+
+    #[test]
     fn pending_work_is_prompt_idle_work_is_debounced_and_rows_are_reused() {
         let mut s = session();
         let mut v = View::default();

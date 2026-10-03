@@ -49,7 +49,7 @@ struct Model {
     serial: Cell<u64>,
     busy: Cell<bool>,
     cancelled: RefCell<Option<Arc<AtomicBool>>>,
-    error: RefCell<String>,
+    error: RefCell<Option<layer_ui::ColorFeatureError>>,
     views: RefCell<Vec<Weak<ProofPanel>>>,
 }
 pub(crate) struct ProofPanel {
@@ -112,8 +112,8 @@ impl ProofPanel {
             p.update(w)
         }
     }
-    fn issue(&self, w: &Rc<Workspace>, error: impl Into<String>) {
-        *self.model.error.borrow_mut() = error.into();
+    fn issue(&self, w: &Rc<Workspace>, error: impl Into<layer_ui::ColorFeatureError>) {
+        *self.model.error.borrow_mut() = Some(error.into());
         self.update_all(w)
     }
     pub fn refresh(self: &Rc<Self>, w: &Rc<Workspace>, state: &UiState) {
@@ -144,7 +144,7 @@ impl ProofPanel {
                 ProofMode::Print => Page::Print,
             });
             self.model.print_dirty.set(false);
-            self.model.error.borrow_mut().clear();
+            self.model.error.borrow_mut().take();
             for p in self.views() {
                 p.form.borrow_mut().take();
                 while let Some(c) = p.root.first_child() {
@@ -200,7 +200,7 @@ impl ProofPanel {
                     }
                     p.model.print.borrow_mut().profile = Some(value);
                 }
-                Err(reason) => *p.model.error.borrow_mut() = reason.profile_message(&w.localization),
+                Err(reason) => *p.model.error.borrow_mut() = Some(reason),
             }
             p.update_all(&w);
         });
@@ -223,7 +223,7 @@ impl ProofPanel {
                 .serial
                 .set(self.model.serial.get().wrapping_add(1));
         }
-        self.model.error.borrow_mut().clear();
+        self.model.error.borrow_mut().take();
         if page != Page::Print {
             self.cancel_job();
         }
@@ -257,9 +257,9 @@ impl ProofPanel {
                 }
             });
         if let Err(e) = &result {
-            *self.model.error.borrow_mut() = e.clone();
+            *self.model.error.borrow_mut() = Some(layer_ui::ColorFeatureError::Diagnostic(e.clone()));
         } else {
-            self.model.error.borrow_mut().clear();
+            self.model.error.borrow_mut().take();
         }
         w.changed(result);
         self.update_all(w);
@@ -282,8 +282,8 @@ impl ProofPanel {
                 (form.chooser.selected)()?;
             }
         }
-        if self.model.page.get() == Page::Print && !self.model.error.borrow().is_empty() {
-            return Err(self.model.error.borrow().clone());
+        if self.model.page.get() == Page::Print {
+            if let Some(error) = self.model.error.borrow().as_ref() { return Err(error.profile_message(&w.localization())); }
         }
         Ok(())
     }
@@ -302,7 +302,7 @@ impl ProofPanel {
             .serial
             .set(self.model.serial.get().wrapping_add(1));
         self.model.print_dirty.set(true);
-        self.model.error.borrow_mut().clear();
+        self.model.error.borrow_mut().take();
         self.cancel_job();
         self.prepare_print(w);
     }
@@ -356,19 +356,19 @@ impl ProofPanel {
                 })
             })
             .await
-            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Proof preparation worker failed".into()).profile_message(&w.localization))
-            .and_then(|r| r);
+            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Proof preparation worker failed".into()))
+            .and_then(|r| r.map_err(layer_ui::ColorFeatureError::Diagnostic));
             let result=async{
                 if cancelled.load(Ordering::Acquire)||panel.model.identity.get()!=Some(identity){return Ok(None)}
                 let lut=Arc::new(result?);
-                profile::preserve_replaced_proof(previous.as_ref(),&recipe,&w.localization).await?;
+                profile::preserve_replaced_proof(previous.as_ref(),&recipe).await?;
                 if cancelled.load(Ordering::Acquire)||panel.model.identity.get()!=Some(identity){return Ok(None)}
                 let change={let mut gpu=w.gpu.borrow_mut();let s=&mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
                     if (s.state().document_file.epoch,s.engine().document().color)!=identity{return Ok(None)}
                     if s.proof_panel_mode()!=ProofMode::Print{return Ok(None)}
                     if s.engine().document().proof!=previous{return Err("Print settings changed while preparing the proof. Choose the profile again.".into())}
-                    s.set_proof_recipe(Some(recipe.clone()))?};
-                w.proof.retain(identity.1.space,recipe.clone(),lut);Ok::<_,String>(Some(change))
+                    s.set_proof_recipe(Some(recipe.clone())).map_err(layer_ui::ColorFeatureError::Diagnostic)?};
+                w.proof.retain(identity.1.space,recipe.clone(),lut);Ok::<_,layer_ui::ColorFeatureError>(Some(change))
             }.await;
             w.window.disconnect(close);
             panel.model.busy.set(false);
@@ -461,14 +461,14 @@ impl ProofPanel {
         f.progress.set_visible(self.model.busy.get());
         f.progress.set_spinning(self.model.busy.get());
         let error = self.model.error.borrow();
-        f.error.set_label(&error);
-        f.error.set_visible(!error.is_empty());
+        f.error.set_label(&error.as_ref().map(|reason| reason.profile_message(&w.localization())).unwrap_or_default());
+        f.error.set_visible(error.is_some());
         f.updating.set(false);
     }
 }
 impl Form {
     fn new(panel: &Rc<ProofPanel>, w: &Rc<Workspace>, space: RgbSpace, hdr: bool) -> Rc<Self> {
-        let copy = layer_ui::color_feature_copy::ProofCopy::new(&w.localization);
+        let copy = layer_ui::color_feature_copy::ProofCopy::new(&w.localization());
         let mut modes = vec![("off", copy.mode_off.as_ref())];
         if hdr { modes.push(("sdr", "SDR")); }
         modes.push(("print", copy.mode_print.as_ref()));
@@ -482,7 +482,7 @@ impl Form {
             .build();
         stack.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("off"));
         panel.root.append(&stack);
-        let dial = crate::proof_dial::ProofDial::new(&w.localization);
+        let dial = crate::proof_dial::ProofDial::new(&w.localization());
         stack.add_named(&dial.root, Some("sdr"));
         let print = panel_controls::column();
         print.set_widget_name("soft-proof-setup");
@@ -492,28 +492,34 @@ impl Form {
             space,
             profile::ProfilePurpose::Proof,
         );
-        let simulation = panel_controls::dropdown(&layer_ui::proof_panel::proof_simulations(&w.localization).iter().map(|c| c.label.as_ref()).collect::<Vec<_>>());
+        let simulation = panel_controls::dropdown(&layer_ui::proof_panel::proof_simulations(&w.localization()).iter().map(|c| c.label.as_ref()).collect::<Vec<_>>());
         simulation.set_widget_name("proof-simulation");
-        let intent = panel_controls::dropdown(&layer_ui::proof_panel::proof_intents(&w.localization).iter().map(|c| c.label.as_ref()).collect::<Vec<_>>());
+        let intent = panel_controls::dropdown(&layer_ui::proof_panel::proof_intents(&w.localization()).iter().map(|c| c.label.as_ref()).collect::<Vec<_>>());
         intent.set_widget_name("proof-intent");
-        let bpc = panel_controls::check(&PrintProofControl::BlackPointCompensation.localized_label(&w.localization));
+        let bpc = panel_controls::check(&PrintProofControl::BlackPointCompensation.localized_label(&w.localization()));
         bpc.set_widget_name("proof-bpc");
-        let warning = panel_controls::check(&PrintProofControl::GamutWarning.localized_label(&w.localization));
+        let warning = panel_controls::check(&PrintProofControl::GamutWarning.localized_label(&w.localization()));
         warning.set_widget_name("proof-gamut-warning");
         // Shared order and labels; only native widget construction lives here.
+        let mut captions = Vec::new();
         for field in PrintProofControl::ALL {
             match field {
                 PrintProofControl::Profile => {
-                    let row = panel_controls::row(&field.localized_label(&w.localization), &chooser.button);
+                    let row = panel_controls::row(&field.localized_label(&w.localization()), &chooser.button);
+                    captions.push((field, row.first_child().and_downcast::<gtk::Label>().unwrap().downgrade()));
                     row.set_widget_name("proof-profile");
                     print.append(&row);
                     print.append(&chooser.error);
                 }
                 PrintProofControl::Simulation => {
-                    print.append(&panel_controls::row(&field.localized_label(&w.localization), &simulation))
+                    let row = panel_controls::row(&field.localized_label(&w.localization()), &simulation);
+                    captions.push((field, row.first_child().and_downcast::<gtk::Label>().unwrap().downgrade()));
+                    print.append(&row);
                 }
                 PrintProofControl::Intent => {
-                    print.append(&panel_controls::row(&field.localized_label(&w.localization), &intent))
+                    let row = panel_controls::row(&field.localized_label(&w.localization()), &intent);
+                    captions.push((field, row.first_child().and_downcast::<gtk::Label>().unwrap().downgrade()));
+                    print.append(&row);
                 }
                 PrintProofControl::BlackPointCompensation => print.append(&bpc),
                 PrintProofControl::GamutWarning => print.append(&warning),
@@ -542,6 +548,33 @@ impl Form {
             progress,
             error,
             updating: Cell::new(false),
+        });
+        let weak = Rc::downgrade(&f);
+        let model = Rc::downgrade(&panel.model);
+        w.on_localization(move |localization| {
+            let Some(f) = weak.upgrade() else { return false };
+            f.updating.set(true);
+            let copy = layer_ui::color_feature_copy::ProofCopy::new(localization);
+            if let Some(toggle) = f.mode.toggle_by_name("off") { toggle.set_label(Some(&copy.mode_off)); }
+            if let Some(toggle) = f.mode.toggle_by_name("print") { toggle.set_label(Some(&copy.mode_print)); }
+            for (field, label) in &captions { if let Some(label) = label.upgrade() { label.set_label(&field.localized_label(localization)); } }
+            for (dropdown, choices) in [
+                (&f.simulation, layer_ui::proof_panel::proof_simulations(localization).iter().map(|c| c.label.clone()).collect::<Vec<_>>()),
+                (&f.intent, layer_ui::proof_panel::proof_intents(localization).iter().map(|c| c.label.clone()).collect::<Vec<_>>()),
+            ] {
+                let selected = dropdown.selected();
+                if let Some(model) = dropdown.model().and_downcast::<gtk::StringList>() {
+                    model.splice(0, model.n_items(), &choices.iter().map(|text| text.as_ref()).collect::<Vec<_>>());
+                    dropdown.set_selected(selected);
+                }
+            }
+            f.bpc.set_label(Some(&PrintProofControl::BlackPointCompensation.localized_label(localization)));
+            f.warning.set_label(Some(&PrintProofControl::GamutWarning.localized_label(localization)));
+            f.progress.update_property(&[gtk::accessible::Property::Label(&copy.preparing_print)]);
+            f.dial.set_localization(localization.clone());
+            if let Some(model) = model.upgrade() { if let Some(error) = model.error.borrow().as_ref() { f.error.set_label(&error.profile_message(localization)); } }
+            f.updating.set(false);
+            true
         });
         f.mode.connect_active_name_notify(glib::clone!(
             #[weak]

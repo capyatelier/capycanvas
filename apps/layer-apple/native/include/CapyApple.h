@@ -11,6 +11,12 @@ typedef struct CapyApple CapyApple;
 /* All session calls run on one serial engine/render owner. UIKit/AppKit owns
    the retained CAMetalLayer and must keep it alive until detach completes. */
 CapyApple *capy_apple_launch(uint32_t platform, const char *json, char **bootstrap);
+typedef struct CapyLanguageTask CapyLanguageTask;
+CapyLanguageTask *capy_apple_language_request(CapyApple *app, const char *preferred_languages);
+void capy_language_prepare(CapyLanguageTask *task);
+bool capy_apple_language_prepared(CapyApple *app, CapyLanguageTask *task);
+int32_t capy_apple_language_publish(CapyApple *app, bool input_busy);
+void capy_language_free(CapyLanguageTask *task);
 void capy_apple_destroy(CapyApple *app);
 const char *capy_apple_error(const CapyApple *app); /* borrowed until next call */
 void capy_apple_string_free(char *text);
@@ -73,7 +79,9 @@ void capy_project_cancel(const CapyProjectTask *task);
 int32_t capy_project_begin_commit(const CapyProjectTask *task);
 char *capy_project_error(const CapyProjectTask *task); /* owned, NULL on success */
 void capy_project_free(CapyProjectTask *task);
-/* Stateless numeric policy; safe on the UI thread. Owned JSON result contains
+/* Stateless presentation requests contain {"language": tag, "request": payload}.
+   The tag selects a previously prepared immutable context.
+   Numeric policy is safe on the UI thread. Owned JSON result contains
    either the shared numeric response or {"error": ...}. */
 char *capy_apple_numeric(const char *json);
 char *capy_apple_native_caption(const char *json);

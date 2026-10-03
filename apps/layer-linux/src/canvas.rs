@@ -50,6 +50,7 @@ impl GpuCanvas {
         area: &gtk::Picture,
         project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
         localization: std::sync::Arc<layer_ui::Localizer>,
+        settings: Option<layer_ui::Settings>,
     ) -> Result<Self, String> {
         let parent = area
             .native()
@@ -57,13 +58,13 @@ impl GpuCanvas {
             .ok_or_else(|| layer_ui::bootstrap_view(&localization).canvas_init_failed.to_string())?;
         // Load once before allocating document resources so a new window uses
         // the same explicit creation defaults as File → New.
-        let settings = match crate::preferences::load() {
+        let settings = settings.unwrap_or_else(|| match crate::preferences::load() {
             Ok(settings) => settings.unwrap_or_default(),
             Err(error) => {
                 eprintln!("{error}; using default preferences");
                 Default::default()
             }
-        };
+        });
         let (project, location) = match project {
             Some(project) => project,
             None => (settings.new_document.defaults.project(&localization)?, None),

@@ -889,6 +889,15 @@ fn late_save_completion_keeps_newer_dirty_values_and_unrelated_errors() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(1));
     }
+    let pending = m.state.borrow().pending.clone().unwrap();
+    let saved = m.current_record().unwrap();
+    assert!(m.set_localization(layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese)));
+    assert!(m.saving());
+    assert_eq!(serde_json::to_value(&m.state.borrow().pending.as_ref().unwrap().batch).unwrap(), serde_json::to_value(&pending.batch).unwrap());
+    assert_eq!(m.state.borrow().pending.as_ref().unwrap().snapshot, pending.snapshot);
+    assert_eq!(m.current_record().unwrap().claim, saved.claim);
+    assert_eq!(m.current_record().unwrap().generations, saved.generations);
+    assert_eq!(m.current().unwrap().working, Some(working.clone()));
     working
         .tools
         .set_override(working.preset, "size", 137., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))

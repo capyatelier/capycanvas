@@ -80,7 +80,7 @@ internal class ProofController(private val host: CanvasHost) {
         if(paused||!dirty||form?.optString("mode")!="print")return
         val draft=settings?:return
         if(draft.objectOrNull("profile")==null)return
-        val recipe=try{JSONObject(Native.colorUi(obj("type" to "print_proof","settings" to draft).toString()))}
+        val recipe=try{JSONObject(Native.colorUi(obj("type" to "print_proof","settings" to draft).toString(), host.languageTag))}
             catch(e:Exception){error=e.message;return}
         if(recipe.toString()==form?.objectOrNull("document_profile")?.toString()){dirty=false;return}
         start(-1,recipe)

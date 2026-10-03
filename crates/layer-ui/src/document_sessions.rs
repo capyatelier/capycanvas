@@ -31,6 +31,7 @@ pub struct DocumentSessions<T> {
     tabs: DocumentTabs,
     parked: BTreeMap<u64, ParkedDocument<T>>,
     clock: u64,
+    language: crate::UiLanguage,
     untitled: String,
     pub budget: DocumentBudget,
     storage_error: Option<String>,
@@ -49,11 +50,21 @@ impl<T> Deref for DocumentSessions<T> {
 impl<T> DocumentSessions<T> {
     pub fn localized(localization: &Localizer) -> Self {
         Self {
-            tabs: Default::default(), parked: Default::default(), clock: 0,
+            tabs: Default::default(), parked: Default::default(), clock: 0, language: localization.language(),
             untitled: DocumentTabLabel::untitled(1, localization),
             budget: Default::default(), storage_error: None, clip: None,
         }
     }
+    pub fn set_localization(&mut self, localization: &Localizer) -> bool {
+        if self.language == localization.language() { return false; }
+        self.language = localization.language();
+        self.untitled = DocumentTabLabel::untitled(self.selected(), localization);
+        for (&id, parked) in &mut self.parked {
+            parked.untitled = DocumentTabLabel::untitled(id, localization);
+        }
+        true
+    }
+
     pub fn parked(&self) -> impl Iterator<Item = (&u64, &ParkedDocument<T>)> {
         self.parked.iter()
     }
@@ -87,6 +98,7 @@ impl<T> DocumentSessions<T> {
             0,
             "use start_empty after the final drawing closes"
         );
+        self.set_localization(localization);
         self.park(self.selected(), outgoing, tiles);
         let id = self.tabs.add();
         self.untitled = DocumentTabLabel::untitled(id, localization);
@@ -98,6 +110,7 @@ impl<T> DocumentSessions<T> {
         if !self.tabs.order().is_empty() || !self.parked.is_empty() {
             return Err(DocumentSessionError::DrawingsStillOpen);
         }
+        self.set_localization(localization);
         let id = self.tabs.add();
         self.untitled = DocumentTabLabel::untitled(id, localization);
         Ok(id)
@@ -364,6 +377,26 @@ mod tests {
     fn inventory() -> RetainedTiles {
         RetainedTiles::default()
     }
+    #[test]
+    fn tab_language_refresh_retains_membership_and_literal_names() {
+        let japanese = Localizer::shared(crate::UiLanguage::Japanese);
+        let mut active = DocumentFileState::localized(&english());
+        let mut tabs = DocumentSessions::localized(&english());
+        tabs.append(active.clone(), inventory(), &english());
+        let order = tabs.order().to_vec();
+        assert!(tabs.set_localization(&japanese));
+        assert!(!tabs.set_localization(&japanese));
+        assert_eq!(tabs.order(), order);
+        assert_eq!(tabs.labels(&active, |file| file, &japanese).iter().map(|label| label.title.as_str()).collect::<Vec<_>>(), ["無題 1", "無題 2"]);
+        active.unsaved_name = Some("Untitled 2".into());
+        let labels = tabs.labels(&active, |file| file, &japanese);
+        assert_eq!(labels[0].title, "無題 1");
+        assert_eq!(labels[1].title, "Untitled 2");
+        let before = tabs.untitled.as_ptr();
+        assert!(!tabs.set_localization(&japanese));
+        assert_eq!(tabs.untitled.as_ptr(), before);
+    }
+
     #[test]
     fn tab_projection_localizes_only_absent_titles_without_mutating_files() {
         let japanese = crate::Localizer::shared(crate::UiLanguage::Japanese);

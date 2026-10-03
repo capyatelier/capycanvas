@@ -477,6 +477,10 @@ impl Documents {
             "tabs"
         });
     }
+    pub(crate) fn set_localization(&self, localization: &layer_ui::Localizer) {
+        self.model.borrow_mut().set_localization(localization);
+    }
+
     pub fn refresh(&self, w: &Rc<Workspace>) {
         let gpu = w.gpu.borrow();
         let Some(g) = gpu.as_ref() else { return; };
@@ -493,7 +497,7 @@ impl Documents {
         let labels = self.model.borrow().labels(
             &state.document_file,
             |parked| &parked.canvas.session.state().document_file,
-            &w.localization,
+            &w.localization(),
         );
         let Some(current) = labels.iter().find(|label| label.id == self.selected()).cloned() else { return; };
         drop(gpu);
@@ -807,7 +811,7 @@ impl Documents {
             return Err("Wait for the drawing canvas to finish opening".into());
         }
         if self.changing.replace(true) {
-            return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(&w.localization).to_string());
+            return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(&w.localization()).to_string());
         }
         let deadline = Instant::now() + Duration::from_secs(30);
         // Alert responses precede their closing animation. A completed New/Open
@@ -815,7 +819,7 @@ impl Documents {
         while w.servicing.get() || w.window.visible_dialog().is_some() {
             if Instant::now() >= deadline || !w.window.is_visible() {
                 self.changing.set(false);
-                return Err(layer_ui::DocumentTransportRefusal::SwitchDialog.message(&w.localization).to_string());
+                return Err(layer_ui::DocumentTransportRefusal::SwitchDialog.message(&w.localization()).to_string());
             }
             glib::timeout_future(Duration::from_millis(8)).await;
         }
@@ -827,7 +831,7 @@ impl Documents {
         {
             if Instant::now() >= deadline || !w.window.is_visible() {
                 self.changing.set(false);
-                return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(&w.localization).to_string());
+                return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(&w.localization()).to_string());
             }
             w.wake();
             glib::timeout_future(Duration::from_millis(8)).await;
@@ -862,7 +866,7 @@ impl Documents {
         recovery.drain().await;
         if !w.window.is_visible() {
             self.changing.set(false);
-            return Err(layer_ui::bootstrap_view(&w.localization).editor_closed.to_string());
+            return Err(layer_ui::bootstrap_view(&w.localization()).editor_closed.to_string());
         }
         self.paused.set(true);
         let parked = w.gpu.borrow_mut().as_mut().map(|g| {
@@ -893,7 +897,7 @@ impl Documents {
         if let Some(error) = error {
             w.document_canvas_error(&error);
         } else if let Some(error) = storage_error {
-            w.changed(Err(layer_ui::document_storage_retained(&w.localization, &error)));
+            w.changed(Err(layer_ui::document_storage_retained(&w.localization(), &error)));
         }
         self.refresh(w);
         w.area.grab_focus();
@@ -911,10 +915,10 @@ impl Documents {
             return Ok(());
         }
         if !self.model.borrow().contains_parked(id) {
-            return Err(layer_ui::DocumentSessionError::TabClosed.message(&w.localization));
+            return Err(layer_ui::DocumentSessionError::TabClosed.message(&w.localization()));
         }
         self.prepare_switch(w).await?;
-        let previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization))?;
+        let previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?;
         let tiles = previous.session.retained_document_tiles();
         let error = {
             let mut model = self.model.borrow_mut();
@@ -936,23 +940,23 @@ impl Documents {
         (project, location, origin): Prepared,
     ) -> Result<(), String> {
         if !w.window.is_visible() || self.closing_window.get() {
-            return Err(layer_ui::bootstrap_view(&w.localization).editor_closed.to_string());
+            return Err(layer_ui::bootstrap_view(&w.localization()).editor_closed.to_string());
         }
         let retry_storage = self.model.borrow().storage_error().is_some();
         if retry_storage {
             self.trim().await;
         }
         let active = w.gpu.borrow().as_ref().map(|g| g.session.retained_document_tiles()).unwrap_or_default();
-        self.model.borrow().admit(&active, &project).map_err(|reason| reason.message(&w.localization))?;
+        self.model.borrow().admit(&active, &project).map_err(|reason| reason.message(&w.localization()))?;
         self.prepare_switch(w).await?;
-        let mut previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization))?;
+        let mut previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?;
         if self.closing_window.get() || self.cancel_open.get() {
             let error = previous.reattach(&w.area).err();
             *w.gpu.borrow_mut() = Some(previous);
             self.finish_switch(w, error);
             return Err("Opening was cancelled because the window is closing".into());
         }
-        let candidate = GpuCanvas::with_project_localized(&w.area, Some((project, location)), w.localization.clone());
+        let candidate = GpuCanvas::with_project_localized(&w.area, Some((project, location)), w.localization(), Some(previous.session.state().settings.clone()));
         let mut next = match candidate {
             Ok(next) => next,
             Err(error) => {
@@ -973,7 +977,7 @@ impl Documents {
             eprintln!("Recovery ownership: {e}");
         }
         let tiles = previous.session.retained_document_tiles();
-        self.model.borrow_mut().append(Parked { canvas: previous, recovery: w.recovery() }, tiles, &w.localization);
+        self.model.borrow_mut().append(Parked { canvas: previous, recovery: w.recovery() }, tiles, &w.localization());
         *w.gpu.borrow_mut() = Some(next);
         *w.recovery.borrow_mut() = recovery;
         self.trim().await;

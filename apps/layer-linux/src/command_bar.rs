@@ -10,7 +10,8 @@ use std::{
 };
 
 pub struct CommandBar {
-    copy: layer_ui::native_copy::SearchCopy,
+    copy: RefCell<layer_ui::native_copy::SearchCopy>,
+    close: gtk::Button,
     popup: gtk::Popover,
     entry: gtk::SearchEntry,
     unit: gtk::Label,
@@ -26,6 +27,8 @@ pub struct CommandBar {
 }
 
 impl CommandBar {
+    pub(crate) fn composition_busy(&self) -> bool { self.composing.get() || self.composition_keys.active() }
+
     pub fn is_open(&self) -> bool {
         self.view.borrow().is_some()
     }
@@ -88,7 +91,8 @@ impl CommandBar {
         body.append(&detail);
         popup.set_child(Some(&body));
         Self {
-            copy,
+            copy: RefCell::new(copy),
+            close,
             popup,
             entry,
             unit,
@@ -104,9 +108,22 @@ impl CommandBar {
         }
     }
 
+    pub(crate) fn set_localization(&self, localization: std::sync::Arc<Localizer>) {
+        let copy = NativeCopy::new(&localization).search;
+        self.popup.update_property(&[gtk::accessible::Property::Label(&copy.title)]);
+        self.close.set_tooltip_text(Some(&copy.close_search));
+        self.close.update_property(&[gtk::accessible::Property::Label(&copy.close_search)]);
+        self.list.update_property(&[gtk::accessible::Property::Label(&copy.commands)]);
+        self.empty.set_text(&copy.no_matches);
+        *self.copy.borrow_mut() = copy;
+        self.signature.borrow_mut().clear();
+        self.update_entry_copy(None);
+    }
+
     fn update_entry_copy(&self, parameter: Option<&str>) {
-        self.entry.update_property(&[gtk::accessible::Property::Label(parameter.unwrap_or(self.copy.search_commands.as_ref()))]);
-        self.entry.set_placeholder_text(Some(if parameter.is_some() { self.copy.enter_value.as_ref() } else { self.copy.search_commands.as_ref() }));
+        let copy = self.copy.borrow();
+        self.entry.update_property(&[gtk::accessible::Property::Label(parameter.unwrap_or(copy.search_commands.as_ref()))]);
+        self.entry.set_placeholder_text(Some(if parameter.is_some() { copy.enter_value.as_ref() } else { copy.search_commands.as_ref() }));
     }
 
     pub fn glass(&self, w: &Workspace) -> Option<BackdropRegion> {
@@ -464,7 +481,7 @@ mod tests {
                 assert_eq!(bar.entry.placeholder_text().as_deref(), Some(expected.enter_value.as_ref()));
                 bar.update_entry_copy(None);
                 assert_eq!(bar.entry.placeholder_text().as_deref(), Some(expected.search_commands.as_ref()));
-                assert!(std::sync::Arc::ptr_eq(&bar.copy.search_commands, &expected.search_commands));
+                assert!(std::sync::Arc::ptr_eq(&bar.copy.borrow().search_commands, &expected.search_commands));
             }
         }
         let removed = Rc::new(Cell::new(false));

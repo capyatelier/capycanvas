@@ -185,6 +185,7 @@ pub struct ToolSettings {
     extra_context: Cell<Option<layer_ui::ToolbarContext>>,
     picker: crate::color_picker::Settings,
     fields: RefCell<Vec<(ToolSetting, NumberControl)>>,
+    headings: RefCell<Vec<(&'static str, gtk::Label)>>,
     range: RefCell<Option<Rc<crate::range_control::RangeControl>>>,
     actions: RefCell<Vec<(ToolSettingAction, std::sync::Arc<str>, gtk::Widget)>>,
     selection_actions: gtk::MenuButton,
@@ -222,6 +223,7 @@ impl ToolSettings {
         Self {
             root, form, picker, extra, modes, mode_container, extra_fields:RefCell::default(), extra_context:Cell::new(None),
             fields: RefCell::default(),
+            headings: RefCell::default(),
             range: RefCell::default(),
             actions: RefCell::default(),
             selection_actions,
@@ -229,6 +231,11 @@ impl ToolSettings {
             selection_bound: Cell::new(false),
             updating: Rc::new(Cell::new(false)),
         }
+    }
+    pub(crate) fn set_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
+        self.modes.update_property(&[gtk::accessible::Property::Label(&ToolActionGroup::SelectionMode.localized_label(&localization))]);
+        self.selection_actions.set_label(&localization.text(layer_ui::MessageId::MENU_SELECT));
+        for (control, input) in self.fields.borrow().iter() { input.set_caption(&control.label, "", localization.clone()); }
     }
     pub fn refresh(&self, workspace: &Rc<Workspace>, state: &UiState) {
         let picking = state.layer_tools.tool.picks_color();
@@ -286,15 +293,12 @@ impl ToolSettings {
             && fields.iter().zip(controls).all(|((old, _), next)| {
                 old.id == next.id
                     && old.numeric == next.numeric
-                    && old.group == next.group
-                    && old.label == next.label
             })
             && actions.len() == state.tool_actions.len()
             && actions
                 .iter()
                 .zip(&state.tool_actions)
-                .all(|((old, label, _), next)| old == next
-                    && state.commands.iter().any(|c| c.id == next.command && c.label == *label));
+                .all(|((old, _, _), next)| old == next);
         if !same_schema {
             if let Some(range) = self.range.borrow().as_ref() { range.retire(); }
             while let Some(child) = self.form.first_child() {
@@ -302,6 +306,7 @@ impl ToolSettings {
             }
             while let Some(child)=self.modes.first_child() {self.modes.remove(&child);}
             fields.clear();
+            self.headings.borrow_mut().clear();
             self.range.borrow_mut().take();
             actions.clear();
             let mut group = "";
@@ -317,7 +322,7 @@ impl ToolSettings {
                         if let Some(w) = weak.upgrade() {
                             w.dispatch(UiAction::ToolbarEdit { context, action: Box::new(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 }) });
                         }
-                    }, workspace.localization.clone());
+                    }, workspace.localization().clone());
                     self.form.append(&range.root);
                     fields.extend([(control.clone(), range.inputs[0].clone()), (upper.clone(), range.inputs[1].clone())]);
                     self.range.replace(Some(range));
@@ -333,11 +338,12 @@ impl ToolSettings {
                         title.set_margin_top(6);
                         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
                         self.form.append(&title);
+                        self.headings.borrow_mut().push((control.id, title));
                     }
                 }
                 let input = if compact {
-                    NumberControl::labeled_inline(control.numeric.clone(), &control.label, &control.tooltip(), &inline_labels, &inline_values, workspace.localization.clone())
-                } else { NumberControl::new(control.numeric.clone(), &control.label, "", workspace.localization.clone()) };
+                    NumberControl::labeled_inline(control.numeric.clone(), &control.label, &control.tooltip_localized(&workspace.localization()), &inline_labels, &inline_values, workspace.localization().clone())
+                } else { NumberControl::new(control.numeric.clone(), &control.label, "", workspace.localization().clone()) };
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;
                 input.connect_value_changed(glib::clone!(
@@ -431,14 +437,30 @@ impl ToolSettings {
                 actions.push((*action, command.label.clone(), widget));
             }
         }
-        for ((_, input), control) in fields.iter().zip(controls) {
+        for (id, title) in self.headings.borrow().iter() {
+            if let Some(control) = controls.iter().find(|control| control.id == *id) { title.set_text(&control.group); }
+        }
+        for ((old, input), control) in fields.iter_mut().zip(controls) {
+            if old.label != control.label { input.set_caption(&control.label, "", workspace.localization()); input.set_tooltip_text(Some(&control.tooltip_localized(&workspace.localization()))); }
+            *old = control.clone();
             input.set_value(control.value as f64);
         }
         if let Some(range) = self.range.borrow().as_ref() {
             range.set_values([fields[0].1.value(), fields[1].1.value()]);
         }
-        for (action, _, widget) in actions.iter() {
+        for (action, label, widget) in actions.iter_mut() {
             if let Some(command) = state.commands.iter().find(|c| c.id == action.command) {
+                if *label != command.label {
+                    if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
+                        if let Some(child) = check.child().and_downcast::<gtk::Label>() { child.set_text(&command.label); }
+                    } else if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                        if !action.group().is_some_and(ToolActionGroup::segmented) {
+                            if let Some(child) = button.child().and_then(|row| row.last_child()).and_downcast::<gtk::Label>() { child.set_text(&command.label); }
+                        }
+                    }
+                    widget.update_property(&[gtk::accessible::Property::Label(&command.label)]);
+                    *label = command.label.clone();
+                }
                 widget.set_sensitive(command.enabled);
                 widget.set_tooltip_text(Some(&command.tooltip));
                 if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
@@ -510,7 +532,7 @@ impl SizePanel {
     pub fn new(workspace: &Rc<Workspace>) -> Self {
         let root = body();
         root.set_spacing(12);
-        let number = NumberControl::new(layer_ui::NumericControl::brush_size(), &workspace.localization.text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE), "", workspace.localization.clone());
+        let number = NumberControl::new(layer_ui::NumericControl::brush_size(), &workspace.localization().text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE), "", workspace.localization().clone());
         number.connect_value_changed(glib::clone!(
             #[weak]
             workspace,
@@ -830,8 +852,8 @@ impl ColorWheel {
     }
 }
 pub struct ColorPanel {
-    shape_descriptions: [String; 3],
-    localization: std::sync::Arc<layer_ui::Localizer>,
+    shape_descriptions: RefCell<[String; 3]>,
+    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     pub root: gtk::Box,
     initialized: Cell<bool>,
     wheel: ColorWheel,
@@ -961,7 +983,7 @@ impl ColorPanel {
         menu.set_child(Some(&actions));
         *wheel.imp().menu.borrow_mut() = Some(menu);
         Self {
-            localization, shape_descriptions,
+            localization: RefCell::new(localization), shape_descriptions: RefCell::new(shape_descriptions),
             root,
             wheel,
             initialized: Cell::new(false),
@@ -1203,6 +1225,36 @@ impl ColorPanel {
         drag.connect_cancel(move |_, _| part.set(None));
         self.wheel.add_controller(drag);
     }
+    pub(crate) fn set_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
+        let copy = layer_ui::NativeCopy::new(&localization).color;
+        *self.shape_descriptions.borrow_mut() = [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle]
+            .map(|shape| layer_ui::NativeCaption::ColorShape { shape }.message(&localization));
+        self.edit_color.set_tooltip_text(Some(&copy.edit_menu));
+        self.edit_color.update_property(&[gtk::accessible::Property::Label(&copy.edit)]);
+        self.swap.set_tooltip_text(Some(&copy.swap));
+        self.swap.update_property(&[gtk::accessible::Property::Label(&copy.swap)]);
+        self.menu_swap.update_property(&[gtk::accessible::Property::Label(&copy.swap)]);
+        if let Some(label) = self.menu_swap.child().and_then(|row| row.last_child()).and_downcast::<gtk::Label>() { label.set_text(&copy.swap); }
+        self.menu_edit.set_label(&copy.edit_menu);
+        self.menu_library.set_label(&copy.palettes);
+        for (white, button, _) in &self.quick_colors {
+            let label = if *white { &copy.paint_white } else { &copy.paint_black };
+            button.set_tooltip_text(Some(label));
+            button.update_property(&[gtk::accessible::Property::Label(label)]);
+        }
+        for (slot, button, _) in &self.swatches {
+            let message = match slot {
+                ColorSlot::Background => layer_ui::MessageId::COMMANDS_BACKGROUND_COLOR,
+                ColorSlot::Foreground => layer_ui::MessageId::COMMANDS_FOREGROUND_COLOR,
+                _ => layer_ui::MessageId::COMMANDS_TRANSPARENT_PAINT,
+            };
+            let label = localization.text(message);
+            button.set_tooltip_text(Some(&label));
+            button.update_property(&[gtk::accessible::Property::Label(&label)]);
+        }
+        *self.localization.borrow_mut() = localization;
+        self.initialized.set(false);
+    }
     pub fn headroom(&self) -> f32 { self.wheel.imp().headroom.get() }
     pub fn refresh_preview(&self, state: &ColorState, view: ViewColor, headroom: f32) {
         self.refresh_color(state, view, headroom, true);
@@ -1232,23 +1284,25 @@ impl ColorPanel {
         }
         *self.wheel.imp().color.borrow_mut() = state.clone();
         self.wheel.queue_draw();
+        let shape_descriptions = self.shape_descriptions.borrow();
+        let localization = self.localization.borrow();
         for (button, shape) in self.shape_buttons.iter().zip(state.other_shapes()) {
             let (icon, description) = match shape {
-                ColorShape::Circle => ("layer-color-circle-symbolic", &self.shape_descriptions[0]),
-                ColorShape::Square => ("layer-color-square-symbolic", &self.shape_descriptions[1]),
-                ColorShape::Triangle => ("layer-color-triangle-symbolic", &self.shape_descriptions[2]),
+                ColorShape::Circle => ("layer-color-circle-symbolic", &shape_descriptions[0]),
+                ColorShape::Square => ("layer-color-square-symbolic", &shape_descriptions[1]),
+                ColorShape::Triangle => ("layer-color-triangle-symbolic", &shape_descriptions[2]),
             };
             crate::icons::set_button(button, icon);
             button.set_tooltip_text(Some(description));
             button.update_property(&[gtk::accessible::Property::Label(description)]);
         }
-        let description = state.picker_description_localized(view.space(), hdr, &self.localization);
+        let description = state.picker_description_localized(view.space(), hdr, &localization);
         self.readout.set_tooltip_text(Some(&description));
         self.readout
             .update_property(&[gtk::accessible::Property::Label(&description)]);
         self.readout.queue_draw();
         for (white, button, sample) in &self.quick_colors {
-            let preset = &state.quick_colors_localized(&self.localization)[usize::from(*white)];
+            let preset = &state.quick_colors_localized(&localization)[usize::from(*white)];
             selected(button, preset.selected);
             sample.set_display_color(if *white { layer_core::color::RgbColor::WHITE } else { layer_core::color::RgbColor::BLACK }, ViewColor::Srgb, 1.);
         }

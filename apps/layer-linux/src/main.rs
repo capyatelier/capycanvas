@@ -113,6 +113,21 @@ fn launch_localization() -> &'static std::sync::Arc<layer_ui::Localizer> {
     })
 }
 
+#[derive(Clone)]
+struct ApplicationLocalization {
+    localization: std::sync::Arc<layer_ui::Localizer>,
+    settings: Option<layer_ui::Settings>,
+}
+
+fn application_localization(app: &adw::Application) -> Rc<RefCell<ApplicationLocalization>> {
+    if let Some(state) = unsafe { app.data::<Rc<RefCell<ApplicationLocalization>>>("capy-application-localization") } {
+        return unsafe { state.as_ref() }.clone();
+    }
+    let state = Rc::new(RefCell::new(ApplicationLocalization { localization: launch_localization().clone(), settings: None }));
+    unsafe { app.set_data("capy-application-localization", state.clone()); }
+    state
+}
+
 fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Workspace>>>>) {
     launch_localization();
     let app = adw::Application::builder()
@@ -144,8 +159,7 @@ fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Work
                 return;
             }
             app.activate_action("new-window", None);
-            let workspace = active.borrow().last().unwrap().clone();
-            recovery::offer_stale(&workspace);
+
         }
     ));
     (app, active)
@@ -156,6 +170,8 @@ fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace:
     let settings_changed =
         gtk::gio::SimpleAction::new("settings-changed", Some(glib::VariantTy::STRING));
     settings_changed.connect_activate(glib::clone!(
+        #[weak]
+        app,
         #[strong]
         active,
         move |_, value| {
@@ -167,6 +183,7 @@ fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace:
             };
             // GTK's style manager is display-wide. Keep all windows' Rust settings
             // consistent too; RestoreSettings does not echo a persistence request.
+            application_localization(&app).borrow_mut().settings = Some(settings.clone());
             let windows = active.borrow().clone();
             for w in windows {
                 if w.gpu
@@ -210,15 +227,39 @@ fn open_workspace(
     project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
     recovered: Option<std::path::PathBuf>,
 ) {
-    let settings = active.borrow().last().and_then(|w| {
-        w.gpu
-            .borrow()
-            .as_ref()
-            .map(|g| g.session.state().settings.clone())
-    });
-    let localization = active.borrow().last()
-        .map(|w| w.localization.clone())
-        .unwrap_or_else(|| launch_localization().clone());
+    let state = application_localization(app);
+    let hold = app.hold();
+    glib::spawn_future_local(glib::clone!(#[weak] app, #[strong] active, async move {
+        loop {
+            let (settings, initial) = {
+                let state = state.borrow();
+                (state.settings.clone().or_else(|| active.borrow().last().and_then(|w| w.gpu.borrow().as_ref().map(|g| g.session.state().settings.clone()))), state.localization.clone())
+            };
+            let languages = glib::language_names_with_category("LC_MESSAGES");
+            let tags = languages.iter().map(|tag| tag.as_str()).collect::<Vec<_>>();
+            let language = settings.as_ref().map_or(initial.language(), |settings| layer_ui::resolve_launch_language(settings.language, &tags));
+            let localization = if initial.language() == language { initial }
+                else { gtk::gio::spawn_blocking(move || layer_ui::Localizer::shared(language)).await.unwrap() };
+            if state.borrow().settings.as_ref().is_some_and(|settings| layer_ui::resolve_launch_language(settings.language, &tags) != language) { continue; }
+            state.borrow_mut().localization = localization.clone();
+            let settings = state.borrow().settings.clone().or(settings);
+            let offer_recovery = project.is_none() && active.borrow().is_empty();
+            open_workspace_ready(&app, &active, project, recovered, settings, localization);
+            if offer_recovery { if let Some(workspace) = active.borrow().last() { recovery::offer_stale(workspace); } }
+            drop(hold);
+            break;
+        }
+    }));
+}
+
+fn open_workspace_ready(
+    app: &adw::Application,
+    active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>,
+    project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
+    recovered: Option<std::path::PathBuf>,
+    settings: Option<layer_ui::Settings>,
+    localization: std::sync::Arc<layer_ui::Localizer>,
+) {
     let workspace = match project {
         None => workspace::Workspace::new_localized(app, localization),
         Some(project) => workspace::Workspace::with_project_localized(app, Some(project), localization),

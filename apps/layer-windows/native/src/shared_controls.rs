@@ -4,6 +4,15 @@ pub struct CapyLocalization {
     pub(crate) localizer: std::sync::Arc<layer_ui::Localizer>,
 }
 /// # Safety
+/// The input is a readable NUL-terminated shipped language tag.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_localization_for_tag(tag: *const c_char) -> *mut CapyLocalization {
+    if tag.is_null() { return std::ptr::null_mut(); }
+    let Ok(tag) = unsafe { CStr::from_ptr(tag) }.to_str() else { return std::ptr::null_mut(); };
+    let Some(language) = layer_ui::UiLanguage::ALL.into_iter().find(|language| language.tag() == tag) else { return std::ptr::null_mut(); };
+    Box::into_raw(Box::new(CapyLocalization { localizer: layer_ui::Localizer::shared(language) }))
+}
+/// # Safety
 /// Free a uniquely owned immutable context after its final borrowed call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_localization_free(context: *mut CapyLocalization) {

@@ -86,8 +86,11 @@ struct Pending {
 /// One worker plus one replaceable request. Cancellation is acknowledged before
 /// starting its successor, so rapid profile changes cannot accumulate GPU jobs.
 pub(super) struct Comparison {
-    copy: layer_ui::color_feature_copy::ComparisonCopy,
-    localization: std::sync::Arc<layer_ui::Localizer>,
+    copy: RefCell<layer_ui::color_feature_copy::ComparisonCopy>,
+    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
+    localization_bound: Cell<bool>,
+    output_labels: Cell<Option<(bool, bool)>>,
+    failure: RefCell<Option<layer_ui::ColorFeatureError>>,
     pub widget: gtk::Box,
     gpu: SnapshotGpu,
     view: crate::display_color::ViewColor,
@@ -120,7 +123,10 @@ impl Comparison {
     pub fn for_output(gpu: SnapshotGpu, original: Project, view: crate::display_color::ViewColor, localization: &std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
         let copy = layer_ui::color_feature_copy::ComparisonCopy::new(localization);
         let labels = [copy.master.clone(), copy.output.clone()];
-        Self::with_labels(gpu, original, view, labels, copy, localization.clone())
+        let hdr_document = original.document.color.depth.is_float();
+        let comparison = Self::with_labels(gpu, original, view, labels, copy, localization.clone());
+        comparison.output_labels.set(Some((hdr_document, false)));
+        comparison
     }
     fn with_labels(
         gpu: SnapshotGpu,
@@ -163,7 +169,7 @@ impl Comparison {
         widget.append(&pictures);
         widget.append(&status);
         Rc::new(Self {
-            copy, localization,
+            localization_bound: Cell::new(false), copy: RefCell::new(copy), localization: RefCell::new(localization), output_labels: Cell::new(None), failure: RefCell::new(None),
             gpu,
             view,
             widget,
@@ -195,6 +201,8 @@ impl Comparison {
         }
     }
     pub fn invalidate(&self, message: &str) {
+        self.failure.borrow_mut().take();
+        self.status_copy.borrow_mut().take();
         self.range_exceeded.set(false);
         self.serial.set(self.serial.get() + 1);
         self.pending.borrow_mut().take();
@@ -205,6 +213,10 @@ impl Comparison {
         self.status.set_label(message);
         self.status.set_visible(!message.is_empty());
         self.mark_ready(false);
+    }
+    pub fn invalidate_error(&self, error: layer_ui::ColorFeatureError) {
+        self.invalidate(&error.message(&self.localization.borrow()));
+        *self.failure.borrow_mut() = Some(error);
     }
     pub fn close(&self) {
         self.closed.set(true);
@@ -224,7 +236,25 @@ impl Comparison {
         self.before.set_paintable(None::<&gtk::gdk::Paintable>);
         true
     }
+    pub fn bind_localization(self: &Rc<Self>, w: &Rc<Workspace>) {
+        if self.localization_bound.replace(true) { return; }
+        let weak = Rc::downgrade(self);
+        w.on_localization(move |localization| {
+            let Some(this) = weak.upgrade().filter(|this| !this.closed.get()) else { return false };
+            *this.copy.borrow_mut() = layer_ui::color_feature_copy::ComparisonCopy::new(localization);
+            *this.localization.borrow_mut() = localization.clone();
+            this.refresh_labels();
+            if let Some(error) = this.failure.borrow().as_ref() { this.status.set_label(&error.message(localization)); }
+            else if let Some((key, text)) = this.status_copy.borrow_mut().as_mut() {
+                *text = this.status_message(*key);
+                this.status.set_label(text);
+            } else if this.running.get() { this.status.set_label(&this.copy.borrow().rendering); }
+            else if !this.ready.get() { this.status.set_label(&this.copy.borrow().choose_profile); }
+            true
+        });
+    }
     pub fn follow_display(self: &Rc<Self>, w: &Rc<Workspace>, refresh: Rc<dyn Fn()>) {
+        self.bind_localization(w);
         glib::timeout_add_local(std::time::Duration::from_millis(250), glib::clone!(
             #[weak(rename_to = this)] self, #[weak] w, #[upgrade_or] glib::ControlFlow::Break,
             move || {
@@ -235,22 +265,41 @@ impl Comparison {
         ));
     }
     pub fn show_fallback(&self,show:bool){
+        let copy = self.copy.borrow();
         self.show_sdr.set(show);
         if let Some(texture)=&self.textures.borrow()[usize::from(show)]{self.after.set_paintable(Some(texture));}
-        let label=if show{self.copy.sdr_fallback.as_ref()}else if self.headroom.get()>1.{self.copy.hdr_output.as_ref()}else{self.copy.hdr_sdr_display.as_ref()};
+        let label=if show{copy.sdr_fallback.as_ref()}else if self.headroom.get()>1.{copy.hdr_output.as_ref()}else{copy.hdr_sdr_display.as_ref()};
         self.labels[1].set_label(label);self.after.set_alternative_text(Some(label));
     }
-    pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
-        let hdr_document = snapshot.project.document.color.depth.is_float();
+    fn refresh_labels(&self) {
+        let copy = self.copy.borrow();
         let hdr_view = self.headroom.get() > 1.;
-        let labels = [
-            if hdr_document { if hdr_view { self.copy.hdr_master.as_ref() } else { self.copy.master_sdr.as_ref() } } else { self.copy.master.as_ref() },
-            if recipe.format.is_hdr() { if hdr_view { self.copy.hdr_output.as_ref() } else { self.copy.output_sdr.as_ref() } }
-                else if hdr_document { self.copy.sdr_output.as_ref() } else { self.copy.output.as_ref() },
-        ];
+        let labels = match self.output_labels.get() {
+            Some((hdr_document, hdr_output)) => [
+                if hdr_document { if hdr_view { &copy.hdr_master } else { &copy.master_sdr } } else { &copy.master },
+                if self.show_sdr.get() { &copy.sdr_fallback } else if hdr_output { if hdr_view { &copy.hdr_output } else { &copy.output_sdr } }
+                    else if hdr_document { &copy.sdr_output } else { &copy.output },
+            ],
+            None => [&copy.before, &copy.after],
+        };
         for ((label, picture), text) in self.labels.iter().zip([&self.before, &self.after]).zip(labels) {
             label.set_label(text); picture.set_alternative_text(Some(text));
         }
+    }
+    fn status_message(&self, (kind, display_hdr, space): (u8, bool, layer_core::color::RgbSpace)) -> String {
+        let copy = self.copy.borrow();
+        let localization = self.localization.borrow();
+        let description = [&copy.outside_hdr, &copy.hdr_checked, &copy.hdr_clipped, &copy.output_preview, &copy.output_gamut, &copy.complete_canvas][kind as usize];
+        let viewing = if display_hdr { copy.hdr_view.to_string() } else {
+            let mut args = layer_ui::FluentArgs::new(); args.set("space", space.name());
+            localization.format(layer_ui::MessageId::COLOR_FEATURES_COMPARISON_VIEW, &args)
+        };
+        let mut args = layer_ui::FluentArgs::new(); args.set("description", description.as_ref()); args.set("view", viewing.as_str());
+        localization.format(layer_ui::MessageId::COLOR_FEATURES_COMPARISON_STATUS, &args)
+    }
+    pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
+        self.output_labels.set(Some((snapshot.project.document.color.depth.is_float(), recipe.format.is_hdr())));
+        self.refresh_labels();
         self.request_image(
             snapshot.project.clone(),
             snapshot.background,
@@ -265,7 +314,7 @@ impl Comparison {
         time: f32,
         output: Option<ExportRecipe>,
     ) {
-        self.invalidate(self.copy.rendering.as_ref());
+        self.invalidate(self.copy.borrow().rendering.as_ref());
         *self.pending.borrow_mut() = Some(Pending {
             project,
             background,
@@ -343,32 +392,27 @@ impl Comparison {
                             this.before.set_paintable(Some(&texture(before)));
                             this.before_ready.set(true);
                         }
-                        let mut after=match after {Ok(after)=>after,Err(error)=>{this.status.set_label(&error.message(&this.localization));this.status.set_visible(true);this.mark_ready(false);continue;}};
+                        let mut after=match after {Ok(after)=>after,Err(error)=>{this.status.set_label(&error.message(&this.localization.borrow()));*this.failure.borrow_mut() = Some(error);this.status.set_visible(true);this.mark_ready(false);continue;}};
                         let ready = !after.range_blocked;
                         let show_status=after.range_blocked || after.clipped.is_some_and(|count|count>0);
                         this.range_exceeded.set(after.range_blocked);
                         let kind = if after.range_blocked {0} else if after.hdr {if after.clipped == Some(0) {1} else {2}} else {match after.clipped {Some(0)=>3,Some(_)=>4,None=>5}};
                         let key = (kind, after.display_hdr, view.space());
                         if this.status_copy.borrow().as_ref().is_none_or(|(previous,_)| *previous != key) {
-                            let description = [this.copy.outside_hdr.as_ref(), this.copy.hdr_checked.as_ref(), this.copy.hdr_clipped.as_ref(), this.copy.output_preview.as_ref(), this.copy.output_gamut.as_ref(), this.copy.complete_canvas.as_ref()][kind as usize];
-                            let viewing = if after.display_hdr {this.copy.hdr_view.as_ref().to_string()} else {
-                                let mut args = layer_ui::FluentArgs::new(); args.set("space", view.space().name());
-                                this.localization.format(layer_ui::MessageId::COLOR_FEATURES_COMPARISON_VIEW, &args)
-                            };
-                            let mut args = layer_ui::FluentArgs::new(); args.set("description", description); args.set("view", viewing.as_str());
-                            *this.status_copy.borrow_mut() = Some((key, this.localization.format(layer_ui::MessageId::COLOR_FEATURES_COMPARISON_STATUS, &args)));
+                            *this.status_copy.borrow_mut() = Some((key, this.status_message(key)));
                         }
                         let fallback=after.fallback.take().map(|i|texture(*i));
                         let hdr=texture(after);
                         this.after.set_paintable(Some(if this.show_sdr.get(){fallback.as_ref().unwrap_or(&hdr)}else{&hdr}));
                         *this.textures.borrow_mut()=[Some(hdr),fallback];
-                        if this.show_sdr.get(){this.labels[1].set_label(this.copy.sdr_fallback.as_ref());this.after.set_alternative_text(Some(this.copy.sdr_fallback.as_ref()));}
+                        if this.show_sdr.get(){this.labels[1].set_label(this.copy.borrow().sdr_fallback.as_ref());this.after.set_alternative_text(Some(this.copy.borrow().sdr_fallback.as_ref()));}
                         this.status.set_label(&this.status_copy.borrow().as_ref().unwrap().1);
                         this.status.set_visible(show_status);
                         this.mark_ready(ready);
                     }
                     Err(error) => {
-                        this.status.set_label(&error.message(&this.localization));
+                        this.status.set_label(&error.message(&this.localization.borrow()));
+                        *this.failure.borrow_mut() = Some(error);
                         this.status.set_visible(true);
                         this.mark_ready(false);
                     }

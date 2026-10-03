@@ -358,6 +358,21 @@ impl PalettePanel {
         panel
     }
     pub fn bind(self: &Rc<Self>, workspace: &Rc<Workspace>) {
+        crate::input::guard_editable_activation(&self.search);
+        workspace.on_localization(glib::clone!(#[weak(rename_to=panel)] self, #[upgrade_or] false, move |localization| {
+            let copy = layer_ui::NativeCopy::new(localization).palettes;
+            panel.search.set_placeholder_text(Some(&copy.find));
+            panel.empty.set_text(&copy.no_matches);
+            panel.history.set_tooltip_text(Some(&copy.history_help));
+            panel.add_color.set_tooltip_text(Some(&copy.add_current));
+            panel.add_color.update_property(&[gtk::accessible::Property::Label(&copy.add_current)]);
+            panel.name.set_tooltip_text(Some(&copy.rename_help));
+            panel.detail.set_tooltip_text(Some(&copy.hex_help));
+            crate::text_language::visit(panel.root.upcast_ref(), &mut |widget| {
+                if widget.widget_name() == "palette-library-add" { widget.set_tooltip_text(Some(&copy.new_import)); }
+            });
+            true
+        }));
         *self.workspace.borrow_mut() = Rc::downgrade(workspace);
         self.bind_reorder(workspace);
         workspace.watch_popover(self.library_menu.upcast_ref());
@@ -615,11 +630,11 @@ impl PalettePanel {
             })
         };
         match command {
-            PaletteCommand::NewPalette => self.ask_name("New Palette", "", None),
+            PaletteCommand::NewPalette => self.ask_name("", None),
             PaletteCommand::ImportPalette => self.import(),
             PaletteCommand::RenamePalette { id } => {
                 if let Some(name) = palette_name(id) {
-                    self.ask_name("Rename Palette", &name, Some(id))
+                    self.ask_name(&name, Some(id))
                 }
             }
             PaletteCommand::ExportPalette { id, format } => self.export(id, format),
@@ -765,6 +780,7 @@ impl PalettePanel {
             return;
         }
         let Some(workspace) = self.workspace.borrow().upgrade() else { return };
+        let copy = layer_ui::NativeCopy::new(&workspace.localization()).palettes;
         let colors = state.display_colors();
         let current = colors.definition();
         let library = &state.colors.library;
@@ -805,17 +821,17 @@ impl PalettePanel {
             .set(layer_ui::selected_swatch(palette, current, self.selected.get()));
         self.selector_label.set_text(&palette.name);
         self.selector
-            .set_tooltip_text(Some(&format!("Choose a palette · {}", palette.name)));
+            .set_tooltip_text(Some(&layer_ui::NativeCaption::ChoosePalette { name: palette.name.clone() }.message(&workspace.localization())));
         let name = self
             .selected
             .get()
             .and_then(|id| library.swatch(id))
-            .map_or_else(|| library.color_name(current, &workspace.localization), |s| s.name.clone());
+            .map_or_else(|| library.color_name(current, &workspace.localization()), |s| s.name.clone());
         self.name_label.set_text(&name);
         self.name
-            .set_tooltip_text(Some(&format!("{name} · Click to rename")));
+            .set_tooltip_text(Some(&format!("{name} · {}", copy.rename_help)));
         self.detail.set_text(&ColorLibrary::color_detail(colors));
-        self.detail.set_tooltip_text(Some("sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity"));
+        self.detail.set_tooltip_text(Some(&copy.hex_help));
         self.name.set_sensitive(!colors.transparent());
         self.add_color.set_sensitive(!colors.transparent());
         if palette_changed {
@@ -935,12 +951,13 @@ impl PalettePanel {
         }
         self.filter();
     }
-    fn ask_name(self: &Rc<Self>, heading: &str, initial: &str, id: Option<u64>) {
+    fn ask_name(self: &Rc<Self>, initial: &str, id: Option<u64>) {
         let Some(w) = self.workspace.borrow().upgrade() else {
             return;
         };
-        let dialog = adw::AlertDialog::builder().heading(heading).build();
-        let common = layer_ui::CommonCopy::new(&w.localization);
+        let copy = layer_ui::NativeCopy::new(&w.localization()).palettes;
+        let dialog = adw::AlertDialog::builder().heading(if id.is_some() { &*copy.rename_title } else { &*copy.new_title }).build();
+        let common = layer_ui::CommonCopy::new(&w.localization());
         dialog.add_responses(&[("cancel", common.cancel.as_ref()), ("save", common.save.as_ref())]);
         dialog.set_close_response("cancel");
         dialog.set_default_response(Some("save"));
@@ -953,10 +970,25 @@ impl PalettePanel {
         crate::input::guard_entry_activation(&entry);
         entry.set_widget_name("palette-library-name");
         let library = self.library.borrow().clone().unwrap();
-        let localization = w.localization.clone();
+        let callback_library = library.clone();
+        w.on_localization(glib::clone!(#[weak] dialog, #[weak] entry, #[upgrade_or] false, move |localization| {
+            let common = layer_ui::CommonCopy::new(localization);
+            let copy = layer_ui::NativeCopy::new(localization).palettes;
+            dialog.set_heading(Some(if id.is_some() { &copy.rename_title } else { &copy.new_title }));
+            dialog.set_response_label("cancel", &common.cancel);
+            dialog.set_response_label("save", &common.save);
+            entry.set_placeholder_text(Some(&copy.palette_name));
+            let action = if let Some(id) = id { Action::RenamePalette { id, name: entry.text().into() } } else { Action::CreatePalette { name: entry.text().into() } };
+            let result = callback_library.check(action, localization);
+            dialog.set_response_enabled("save", result.is_ok());
+            entry.set_tooltip_text(result.err().as_deref());
+            true
+        }));
         entry.connect_changed(glib::clone!(
             #[weak]
             dialog,
+            #[weak]
+            w,
             move |entry| {
                 let action = if let Some(id) = id {
                     Action::RenamePalette {
@@ -968,7 +1000,7 @@ impl PalettePanel {
                         name: entry.text().into(),
                     }
                 };
-                let result = library.check(action, &localization);
+                let result = library.check(action, &w.localization());
                 dialog.set_response_enabled("save", result.is_ok());
                 entry.set_tooltip_text(result.err().as_deref());
             }
@@ -1056,11 +1088,18 @@ impl PalettePanel {
         let Some(w) = self.workspace.borrow().upgrade() else {
             return;
         };
-        let dialog = adw::AlertDialog::builder()
-            .heading("Remove Palette?")
-            .body(format!("Remove “{name}” and its saved colors?"))
-            .build();
-        dialog.add_responses(&[("cancel", "Cancel"), ("remove", "Remove")]);
+        let dialog = adw::AlertDialog::new(None, None);
+        dialog.add_responses(&[("cancel", ""), ("remove", "")]);
+        let name = name.to_string();
+        w.on_localization(glib::clone!(#[weak] dialog, #[upgrade_or] false, move |localization| {
+            let copy = layer_ui::NativeCopy::new(localization).palettes;
+            let common = layer_ui::CommonCopy::new(localization);
+            dialog.set_heading(Some(&copy.remove_title));
+            dialog.set_body(&layer_ui::NativeCaption::RemovePalette { name: name.clone() }.message(localization));
+            dialog.set_response_label("cancel", &common.cancel);
+            dialog.set_response_label("remove", &common.remove);
+            true
+        }));
         dialog.set_close_response("cancel");
         dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
         glib::MainContext::default().spawn_local(glib::clone!(

@@ -4,8 +4,8 @@ use super::*;
 use std::cell::RefCell;
 
 pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
-    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization));
-    let localization = w.localization.clone();
+    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()));
+    let localization = w.localization().clone();
     let (workflow, background, time) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
@@ -20,7 +20,8 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let current = original.interpretation.profile.clone();
     let description = gio::spawn_blocking(move || layer_color::profile_description_optional(&current))
         .await
-        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&localization))?.map_err(|reason| layer_ui::ColorFeatureError::Diagnostic(reason).profile_message(&localization))?;
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&w.localization()))?.map_err(|reason| layer_ui::ColorFeatureError::Diagnostic(reason).profile_message(&w.localization()))?;
+    let profile_description = description.clone();
     let description = description.unwrap_or_else(|| localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string());
     let mut args = layer_ui::FluentArgs::new(); args.set("name", description.as_str());
     args.set("assumed", if original.interpretation.profile_assumed {"yes"} else {"no"});
@@ -43,7 +44,8 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let hint = gtk::Label::builder().wrap(true).xalign(0.).build();
     hint.set_widget_name("source-profile-hint");
     content.append(&hint);
-    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color(), &w.localization);
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color(), &w.localization());
+    comparison.bind_localization(w);
     content.append(&comparison.widget);
     let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -79,8 +81,26 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
             dialog.set_response_enabled("apply", ready);
         }
     )));
+    let weak = dialog.downgrade(); let current = current.downgrade(); let space_weak = space.downgrade();
+    let assumed = original.interpretation.profile_assumed;
+    w.on_localization(move |localization| {
+        let Some(dialog) = weak.upgrade() else { return false };
+        let copy = layer_ui::color_feature_copy::DocumentColorCopy::new(localization);
+        dialog.set_heading(Some(&copy.repair_title));
+        dialog.set_body(if baked { &copy.source_baked_help } else { &copy.source_native_help });
+        dialog.set_response_label("cancel", &copy.common.cancel);
+        dialog.set_response_label("apply", if baked { &copy.add_source } else { &copy.apply_profile });
+        if let Some(space) = space_weak.upgrade() { space.set_title(&copy.correct_profile); }
+        if let Some(current) = current.upgrade() {
+            current.set_title(&copy.current_source);
+            let name = profile_description.clone().unwrap_or_else(|| localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string());
+            let mut args = layer_ui::FluentArgs::new(); args.set("name", name.as_str()); args.set("assumed", if assumed { "yes" } else { "no" });
+            current.set_subtitle(&localization.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_SOURCE_NAME, &args));
+        }
+        true
+    });
     let selected = chooser.selected.clone();
-    space.connect_subtitle_notify(glib::clone!( #[strong] copy,
+    chooser.connect_changed(glib::clone!(
         #[weak]
         w,
         #[weak]
@@ -91,7 +111,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         workflow,
         #[strong]
         original_gpu,
-        move |_| {
+        move || {
             let result = selected().and_then(|profile| {
                 let (corrected, _) = workflow.borrow().prepare(Some(profile.profile), layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || false)?;
                 let gpu = w.gpu.borrow();
@@ -106,14 +126,14 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
                 Err(message) => {
                     hint.set_label(&message);
                     hint.set_visible(true);
-                    comparison.invalidate(copy.choose_valid_profile.as_ref());
+                    comparison.invalidate(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()).choose_valid_profile.as_ref());
                 }
             }
         }
     ));
     let embedded = original.interpretation.profile.clone();
     let profile = gio::spawn_blocking(move || super::profile::describe(embedded)).await
-        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&w.localization))?.map_err(|reason| reason.profile_message(&w.localization))?;
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&w.localization()))?.map_err(|reason| reason.profile_message(&w.localization()))?;
     (chooser.restore)(profile);
     let response = crate::alert::choose(dialog, &w.window).await;
     let compared = comparison.ready.get();

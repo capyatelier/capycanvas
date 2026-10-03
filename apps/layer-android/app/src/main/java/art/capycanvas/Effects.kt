@@ -220,7 +220,7 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
     fun change(i:Int?,position:Float,color:JSONObject?=null,remove:Boolean=false) = host.effect(obj("op" to "gradient_stop","layer" to layer,"key" to key,"index" to i,"position" to position,"color" to color,"remove" to remove))
     val samples = remember(control.getJSONObject("value").toString(), documentRgbSpace(host)) {
         JSONArray(Native.colorUi(obj("type" to "gradient", "stops" to control.getJSONObject("value").getJSONArray("value"),
-            "document_space" to documentRgbSpace(host)).toString())).objects()
+            "document_space" to documentRgbSpace(host)).toString(), host.languageTag)).objects()
     }
     Canvas(Modifier.fillMaxWidth().height(44.dp).testTag("effect-gradient").pointerInput(layer,key,enabled) {
         if(!enabled)return@pointerInput

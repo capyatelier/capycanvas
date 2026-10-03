@@ -235,7 +235,7 @@ internal class LayerSwipe {
     val colors=LocalPalette.current
     val id=layer.getLong("id")
     val label=layer.getString("label")
-    val rowCaption=remember(label) { JSONObject(Native.nativeCaption(obj("type" to "layer_row", "title" to label).toString())).getString("text") }
+    val rowCaption=remember(label, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "layer_row", "title" to label).toString(), host.languageTag)).getString("text") }
     val latest by rememberUpdatedState(layer)
     var origin by remember { mutableStateOf(Offset.Zero) }
     var press by remember { mutableStateOf(Offset.Zero) }

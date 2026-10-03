@@ -66,7 +66,7 @@ impl WorkspaceStore for Store {
     }
 }
 #[test]
-fn controllers_preserve_independent_launch_languages() {
+fn controllers_begin_with_independent_languages() {
     use layer_ui::{Localizer, UiLanguage};
     use std::sync::Arc;
     let japanese = Localizer::shared(UiLanguage::Japanese);
@@ -1297,6 +1297,38 @@ fn start<S: WorkspaceStore + 'static>(
         controller.tick(&mut host.session, 1000);
     }
     (controller, host)
+}
+#[test]
+fn startup_notices_relabel_in_place_and_do_not_resurrect_dismissed_or_replaced_notices() {
+    for (reset_heals, replace) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (mut controller, mut host) = start(FaultyStore::new(0, reset_heals), Platform::Web);
+        assert!(controller.view.ready);
+        let before = host.session.state().notice.clone().unwrap();
+        let original = controller.manager.current().unwrap();
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        host.session.set_localization(japanese.clone());
+        controller.set_localization(japanese);
+        controller.tick(&mut host.session, 1000);
+        let after = host.session.state().notice.as_ref().unwrap();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.action, before.action);
+        assert_ne!(after.text, before.text);
+        assert_eq!(controller.manager.current().unwrap(), original);
+        let copy = after.text.clone();
+        controller.tick(&mut host.session, 1000);
+        assert_eq!(host.session.state().notice.as_ref().unwrap().text, copy);
+        if replace {
+            host.session.notify("a later literal notice");
+        } else {
+            host.session.dispatch(UiAction::Notice { id: before.id, accept: false }).unwrap();
+        }
+        let replacement = host.session.state().notice.clone();
+        let korean = Localizer::shared(UiLanguage::Korean);
+        host.session.set_localization(korean.clone());
+        controller.set_localization(korean);
+        controller.tick(&mut host.session, 1000);
+        assert_eq!(host.session.state().notice, replacement);
+    }
 }
 fn notice(host: &layer_host::NativeHost) -> Option<String> {
     host.session.state().notice.as_ref().map(|n| n.text.clone())

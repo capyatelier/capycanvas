@@ -58,7 +58,7 @@ struct ProofDial: View {
         GeometryReader { bounds in
             let glassImage = glass.image
             let size = max(128, min(bounds.size.width, bounds.size.height))
-            let g = ColorUI.resolve(["type": "proof_dial", "size": size, "recipe": model["recipe"].raw])
+            let g = ColorUI.resolve(["type": "proof_dial", "size": size, "recipe": model["recipe"].raw], language: store.interfaceLanguage)
             let markers = [g["marker"], g["arcs"][0]["point"], g["arcs"][1]["point"]]
             ZStack(alignment: .topLeading) {
                 Canvas { graphics, _ in
@@ -182,7 +182,7 @@ private struct PrintProofControls: View {
         let profile = JSON(["name": value["name"].raw, "profile": value["profile"].raw, "channels": "Rgb"])
         let normalized = ColorUI.resolve(["type": "print_proof", "settings": ["profile": profile.raw,
             "intent": value["conversion"]["intent"].raw, "bpc": value["conversion"]["black_point_compensation"].bool,
-            "simulation": value["simulate_paper"].bool ? "paper_and_ink" : value["simulate_black_ink"].bool ? "black_ink" : "colors"]])
+            "simulation": value["simulate_paper"].bool ? "paper_and_ink" : value["simulate_black_ink"].bool ? "black_ink" : "colors"]], language: store.interfaceLanguage)
         guard normalized["error"].isNull else { controller.error = normalized["error"].string; return }
         recipe = normalized; controller.applyLive(normalized)
     }

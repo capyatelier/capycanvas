@@ -42,6 +42,14 @@ Rust owns editor behavior; JavaScript owns browser events, controls and services
 The session runs on the browser event loop, without a worker thread or shared
 memory.
 
+Language changes use the running session's browser language tags and shared
+`LanguageTransition`. Preparation runs in short event-loop tasks and publication
+waits for pointer contacts and composition keys to retire. The publication updates
+retained catalog objects and semantic DOM bindings together; numeric entries,
+selection, dialogs, the canvas and WebGPU owners keep their identities. Same-origin
+tabs receive preference choices through the existing storage event and reconcile
+again when visible. Browser `languagechange` events refresh a System choice.
+
 Color, retained-source and output previews share `output::preview_value` for
 their extent and sRGB pixel array.
 
@@ -50,9 +58,10 @@ their extent and sRGB pixel array.
 Pure unit tests need no browser or GPU:
 
 ```bash
-node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input}.test.mjs
+node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs
 ```
 
+The localization tests cover retained semantic copy, optional fields and binding replacement.
 The text-input tests cover composition key ownership through native key release,
 including a keydown delivered after composition ends and engines that consume the
 release. Real IME checks must also distinguish candidate confirmation from the
@@ -102,7 +111,11 @@ first matching row and its error check, or leaves the default journey to the hos
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--drawer-drag`, `--drawer-style` |
 | Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
-| Settings | `--preferences`, `--settings-audit` |
+| Settings | `--preferences`, `--settings-audit`, `--language-switching` |
+
+`--language-switching` visits all shipped languages in light and dark themes,
+checks retained Preferences and dirty size-entry identity, focus and selection,
+rapid choices, browser language resolution and another same-profile tab.
 
 Setup that some journeys need:
 

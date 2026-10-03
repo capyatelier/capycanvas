@@ -1,4 +1,4 @@
-param([int]$ProcessId, [string]$Output = 'artifacts/windows/window.png', [switch]$ClientOnly, [switch]$Composed)
+param([int]$ProcessId, [string]$Output = 'artifacts/windows/window.png', [switch]$ClientOnly, [switch]$Composed, [long]$WindowHandle=0)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
 Add-Type -TypeDefinition @'
@@ -16,7 +16,7 @@ public static class CapyWindowCapture {
 '@
 $p=Get-Process -Id $ProcessId
 $p.Refresh()
-$handle=$p.MainWindowHandle
+$handle=if($WindowHandle){[IntPtr]$WindowHandle}else{$p.MainWindowHandle}
 if($handle -eq 0){throw 'The process has no main window yet.'}
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
 $nodes=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)

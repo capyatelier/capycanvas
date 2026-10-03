@@ -177,6 +177,8 @@ struct CustomizationCopy {
 /// A host-owned session: call inline or put the entire owner behind a host
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
+    localization_generation: u64,
+    preferences_revision: u64,
     panel_copy: Vec<(Panel, std::sync::Arc<customization::PanelCopy>)>,
     customization_copy: std::cell::RefCell<CustomizationCopy>,
     command_search: command_catalog::CommandSearch,
@@ -279,6 +281,48 @@ impl<R: CanvasRenderer> UiSession<R> {
         &self.state.localization
     }
 
+    pub fn localization_generation(&self) -> u64 { self.localization_generation }
+    pub fn preferences_revision(&self) -> u64 { self.preferences_revision }
+
+    pub fn localization_input_busy(&self) -> bool {
+        !self.canvas_idle() || self.input_pending || self.touch.is_active()
+            || self.interaction.pointer.is_some() || self.interaction.facts.held
+            || self.interaction.facts.dragging || self.interaction.axes.active()
+            || self.operation.dragging() || self.navigator_drag.is_some()
+            || self.divider_drag.is_some() || self.floating_resize.is_some()
+            || self.workspace_drag.is_some() || self.workspace_tab_drag.is_some()
+    }
+
+    pub fn set_localization(&mut self, localization: std::sync::Arc<Localizer>) -> bool {
+        if self.localization().language() == localization.language() { return false; }
+        self.state.localization = localization;
+        self.localization_generation += 1;
+        self.preferences_revision += 1;
+        self.panel_copy.clear();
+        *self.customization_copy.get_mut() = CustomizationCopy::default();
+        self.refresh_document_file_localization();
+        self.refresh_size_localization();
+        self.state.preferences.set_localization(&self.state.settings, self.state.platform, &self.state.localization);
+        self.state.customization.set_localization(&self.state.localization);
+        self.state.filter_load.set_localization(&self.state.localization);
+        let l = &self.state.localization;
+        self.state.filter_picker.search_label = l.text(MessageId::RESOURCES_SEARCH_FILTERS);
+        self.state.filter_picker.empty_label = l.text(MessageId::RESOURCES_NO_MATCHING_FILTERS);
+        self.state.adjustments = effects::catalog(&self.effect_catalog, &self.state.filter_picker, l);
+        self.state.filter_categories = effects::categories(&self.effect_catalog, l);
+        self.refresh_layer_presentation();
+        self.state.commands.clear();
+        self.refresh_commands();
+        self.refresh_shortcuts(true);
+        self.refresh_command_search_localization();
+        self.refresh_notice_localization();
+        self.update_canvas_bar();
+        self.state.revision += 1;
+        self.workspace_model_revision = self.state.revision;
+        self.workspace_content_revision = self.state.revision;
+        true
+    }
+
     pub fn new_localized(renderer: R, document: Document, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
         effects::validate_document_labels(&document, &localization)?;
         if document.layers.iter().any(|l| l.source.is_some()) && !renderer.supports_tiled_sources() {
@@ -303,6 +347,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         effects::validate_catalog_labels(&effect_catalog, &localization)?;
         let mut session = Self {
+            localization_generation: 0,
+            preferences_revision: 0,
             panel_copy: Default::default(),
             customization_copy: Default::default(),
             command_search: Default::default(),
@@ -3495,6 +3541,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 // change only view state and never trigger storage or rendering.
                 let reveal = matches!(action, PreferenceAction::Reveal { .. });
                 let mut settings = self.state.settings.clone();
+                let mut accepted = false;
                 if !self.platform_prediction_available()
                     && matches!(
                         action,
@@ -3506,8 +3553,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                     )
                 {
-                    self.state.preferences.error =
-                        Some(self.localization().text(MessageId::SETTINGS_NATIVE_PREDICTION_UNAVAILABLE).to_string());
+                    self.state.preferences.set_error(MessageId::SETTINGS_NATIVE_PREDICTION_UNAVAILABLE, &self.state.localization);
                 } else if self.platform_prediction_available()
                     && self.state.settings.platform_prediction
                     && matches!(
@@ -3520,18 +3566,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                     )
                 {
-                    self.state.preferences.error =
-                        Some(self.localization().text(MessageId::SETTINGS_NATIVE_PREDICTION_DISABLE).to_string());
+                    self.state.preferences.set_error(MessageId::SETTINGS_NATIVE_PREDICTION_DISABLE, &self.state.localization);
                 } else {
-                    self.state
+                    accepted = self.state
                         .preferences
                         .edit(&mut settings, action, self.state.platform, &self.state.localization);
                 }
-                if reveal && self.state.preferences.error.is_none() {
+                if reveal && accepted {
                     self.state.settings_open = true;
                 }
                 save_settings =
-                    self.state.preferences.error.is_none() && settings != self.state.settings;
+                    accepted && settings != self.state.settings;
                 if save_settings {
                     settings.validate_localized(self.localization())?;
                     self.apply_settings(settings)?;
@@ -3561,7 +3606,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Err("Complete document requests through the document service".into());
                 }
                 self.state.requests.remove(index);
-                self.state.host_error = error;
+                self.set_host_error(error);
                 (HOST, false)
             }
             UiAction::CloseSettings => {
@@ -5309,6 +5354,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.state.theme = self.state.settings.theme.unwrap_or(self.system_theme);
         if regions & regions::SETTINGS != 0 {
+            self.preferences_revision += 1;
             self.state.palette = self
                 .state
                 .settings
@@ -5437,7 +5483,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.reconcile_transform();
         self.source_preview_revisions.update(&self.engine.document().layers);
-        let ui_rendition = self.effective_sdr_rendition();
         if self
             .rulers
             .selected
@@ -5458,7 +5503,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         interaction.selected.retain(|id| doc.layer(*id).is_some());
         let drawing_target = doc.drawing_target();
         self.end_dry_mask_session(drawing_target);
+        self.refresh_layer_presentation();
+    }
+
+    fn refresh_layer_presentation(&mut self) {
+        let ui_rendition = self.effective_sdr_rendition();
         let doc = self.engine.document();
+        let drawing_target = doc.drawing_target();
         let drawing_owner = if self.selection_masks.target().is_some() { None } else { drawing_target.and_then(|id| doc.target_owner(id)) };
         let layer_state = |l: &layer_core::Layer| LayerState {
             id: l.id.0,
@@ -5853,7 +5904,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_preserve_independent_launch_languages() {
+    fn sessions_publish_prepared_languages_independently() {
         use std::sync::Arc;
         let japanese = Localizer::shared(UiLanguage::Japanese);
         let korean = Localizer::shared(UiLanguage::Korean);
@@ -5874,9 +5925,68 @@ mod tests {
         first.dispatch(UiAction::Preferences { action: PreferenceAction::Reset { id: PreferenceId::Language } }).unwrap();
         first.dispatch(UiAction::RestoreSavedSettings { saved }).unwrap();
         assert!(Arc::ptr_eq(first.localization(), &japanese));
+        let english = Localizer::shared(UiLanguage::English);
+        assert!(first.set_localization(english.clone()));
+        assert!(Arc::ptr_eq(first.localization(), &english));
+        assert!(Arc::ptr_eq(second.localization(), &korean));
         let reopened = UiSession::from_project_localized(Recorder::default(), NewDocumentOptions::default().project(first.localization()).unwrap(), None, [256, 256], Platform::Gtk, first.localization().clone()).unwrap();
         assert!(Arc::ptr_eq(reopened.localization(), first.localization()));
-        assert_eq!(reopened.engine().document().layers[0].name, first.engine().document().layers[0].name);
+        assert_eq!(reopened.localization().language(), UiLanguage::English);
+    }
+
+    #[test]
+    fn language_refresh_preserves_drawing_and_invalidates_only_presentation() {
+        let mut s = session(Platform::Gtk);
+        s.frame(0, 0).unwrap();
+        customize(&mut s, CustomizationAction::ManageToolbars);
+        let document = serde_json::to_value(s.engine.document()).unwrap();
+        let camera = serde_json::to_value(&s.state.camera).unwrap();
+        let checkpoint = s.engine.checkpoint();
+        let files = (s.state.document_file.epoch, s.state.document_file.revision, s.state.document_file.modified);
+        let rendering = (s.engine.backend().composites, s.engine.backend().dabs, s.engine.backend().snapshot_requests.len());
+        let literal_names: Vec<_> = s.engine.document().layers.iter().map(|layer| layer.name.clone()).collect();
+        for language in UiLanguage::ALL.into_iter().skip(1).chain([UiLanguage::English]) {
+            let l = Localizer::shared(language);
+            assert!(s.set_localization(l.clone()));
+            for (panel, _) in &s.panel_copy { assert_eq!(s.panel_view(*panel).unwrap().title, s.state.workspace.layout.panel(*panel).unwrap().title_localized(&l)); }
+            assert_eq!(s.state.commands.iter().find(|command| command.id == CommandId::Settings).unwrap().label, CommandId::Settings.localized_label(&l));
+            assert_eq!(s.state.filter_picker.search_label, l.text(MessageId::RESOURCES_SEARCH_FILTERS));
+            assert_eq!(serde_json::to_value(s.engine.document()).unwrap(), document);
+            assert_eq!(serde_json::to_value(&s.state.camera).unwrap(), camera);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            assert_eq!((s.state.document_file.epoch, s.state.document_file.revision, s.state.document_file.modified), files);
+            assert_eq!((s.engine.backend().composites, s.engine.backend().dabs, s.engine.backend().snapshot_requests.len()), rendering);
+            assert_eq!(s.engine.document().layers.iter().map(|layer| layer.name.clone()).collect::<Vec<_>>(), literal_names);
+            let panel = s.panel_copy[0].1.clone();
+            let revision = s.state.revision;
+            assert!(!s.set_localization(l));
+            assert_eq!(s.state.revision, revision);
+            assert!(std::sync::Arc::ptr_eq(&panel, &s.panel_copy[0].1));
+        }
+    }
+
+    #[test]
+    fn preferences_revision_tracks_settings_and_language_without_layout_work() {
+        let mut s = session(Platform::Web);
+        s.dispatch(UiAction::OpenSettings { page: SettingsPage::Appearance }).unwrap();
+        let initial = s.preferences_revision();
+        let view = serde_json::to_value(s.preferences()).unwrap();
+        s.set_viewport([1024., 768.], [1024, 768]).unwrap();
+        s.dispatch(UiAction::MeasureHeader { height: 60., items: Vec::new() }).unwrap();
+        s.dispatch(UiAction::SetZoom { zoom: 1.5 }).unwrap();
+        assert_eq!(s.preferences_revision(), initial);
+        assert_eq!(serde_json::to_value(s.preferences()).unwrap(), view);
+        s.dispatch(UiAction::Preferences { action: PreferenceAction::Search { query: "pressure".into() } }).unwrap();
+        assert!(s.preferences_revision() > initial);
+        let before = s.preferences_revision();
+        s.set_localization(Localizer::shared(UiLanguage::Japanese));
+        assert!(s.preferences_revision() > before);
+        let before = s.preferences_revision();
+        s.set_platform_prediction_available(true);
+        assert!(s.preferences_revision() > before);
+        let mut parked = session(Platform::Web);
+        parked.inherit_window_state(&s).unwrap();
+        assert!(parked.preferences_revision() > s.preferences_revision());
     }
 
     #[test]

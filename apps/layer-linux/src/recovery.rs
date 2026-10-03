@@ -217,9 +217,18 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
             let mut policy = RecoveryState::default();
             policy.event(RecoveryEvent::Ownership { owned: true }).unwrap();
             policy.event(RecoveryEvent::Offer { key: path.to_string_lossy().into_owned(), owned: true }).unwrap();
-            let dialog = adw::AlertDialog::builder().heading("Recover an unsaved drawing?")
-                .body("A recovery copy contains completed edits from a previous session. Samples that had not reached a checkpoint may be missing.").build();
-            dialog.add_responses(&[("later", "Later"), ("discard", "Discard Copy"), ("recover", "Recover")]);
+            let copy = layer_ui::bootstrap_view(&w.localization()).recovery;
+            let dialog = adw::AlertDialog::builder().heading(copy.title.as_ref()).body(copy.explanation.as_ref()).build();
+            dialog.add_responses(&[("later", &copy.later), ("discard", &copy.discard), ("recover", &copy.restore)]);
+            w.on_localization(glib::clone!(#[weak] dialog, #[upgrade_or] false, move |localization| {
+                let copy = layer_ui::bootstrap_view(localization).recovery;
+                dialog.set_heading(Some(&copy.title));
+                dialog.set_body(&copy.explanation);
+                dialog.set_response_label("later", &copy.later);
+                dialog.set_response_label("discard", &copy.discard);
+                dialog.set_response_label("recover", &copy.restore);
+                true
+            }));
             dialog.set_close_response("later");
             dialog.set_default_response(Some("recover"));
             match crate::alert::choose(dialog, &w.window).await.as_str() {

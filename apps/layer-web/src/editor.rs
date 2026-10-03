@@ -30,12 +30,15 @@ struct DrawerQuery {
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn application_menus(&self) -> Result<JsValue, JsValue> {
+        js_sys::JSON::parse(&serde_json::to_string(&self.application_menu_models()).map_err(js)?)
+    }
     pub fn editor_models(&self, _width: f32, _height: f32) -> Result<JsValue, JsValue> {
         let state = self.session.state();
         let document = layer_ui::new_document_spec(self.session.localization());
         js_sys::JSON::parse(&serde_json::to_string(&json!({
             "color_panel": state.preview_colors().view_mapped(self.session.effective_sdr_rendition(), self.session.localization()),
-            "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.localized_label(self.session.localization()), "model":self.session.application_menu(menu)})),
+            "application_menus": self.application_menu_models(),
             "document_options": json!({
                 "extent": state.settings.new_document.defaults.extent,
                 "creation": state.settings.new_document.form(self.session.localization()),
@@ -231,6 +234,7 @@ impl WebApp {
 }
 
 impl WebApp {
+    fn application_menu_models(&self) -> serde_json::Value { json!(layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.localized_label(self.session.localization()), "model":self.session.application_menu(menu)}))) }
     pub(super) fn present_navigators(&mut self) -> Result<bool, JsValue> {
         // DOM reflow can run while an attached renderer is suspended/replaced.
         if !self.gpu_ready() || !self.startup.canvas_ready {

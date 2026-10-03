@@ -8,22 +8,26 @@ type Wake = Mutex<Option<Box<dyn Fn() + Send>>>;
 pub(super) struct Hub {
     state: Mutex<State>,
     file: Mutex<SettingsFile>,
-    localization: Arc<layer_ui::Localizer>,
 }
 struct State {
     settings: Settings,
+    preferred_tags: Vec<String>,
+    localization: Arc<layer_ui::Localizer>,
     bytes: Vec<u8>,
     load_error: Option<String>,
     dirty: bool,
     listeners: Vec<Weak<Wake>>,
 }
 impl Hub {
-    pub(super) fn with_launch(file: SettingsFile, launch: impl FnOnce(Option<&str>) -> Result<NativeHost, String>) -> Result<(NativeHost, Arc<Self>), String> {
+    pub(super) fn with_launch(file: SettingsFile, preferred_tags: &[&str], launch: impl FnOnce(Option<&str>) -> Result<NativeHost, String>) -> Result<(NativeHost, Arc<Self>), String> {
         static PROFILES: OnceLock<Mutex<HashMap<PathBuf, Arc<Hub>>>> = OnceLock::new();
         let mut profiles = PROFILES.get_or_init(Default::default).lock().unwrap();
         if let Some(hub) = profiles.get(&file.directory).cloned() {
-            let saved = String::from_utf8(hub.state.lock().unwrap().bytes.clone()).map_err(|error| error.to_string())?;
-            let native = NativeHost::launch_localized(layer_ui::Platform::Windows, &saved, hub.localization.clone())?;
+            let state = hub.state.lock().unwrap();
+            let saved = String::from_utf8(state.bytes.clone()).map_err(|error| error.to_string())?;
+            let language = layer_ui::resolve_launch_language(state.settings.language, &state.preferred_tags.iter().map(String::as_str).collect::<Vec<_>>());
+            drop(state);
+            let native = NativeHost::launch_localized(layer_ui::Platform::Windows, &saved, layer_ui::Localizer::shared(language))?;
             return Ok((native, hub));
         }
         let (saved, load_error) = match file.load_saved() {
@@ -35,8 +39,7 @@ impl Hub {
         let bytes = encode(&settings)?;
         let key = file.directory.clone();
         let hub = Arc::new(Self {
-            localization: native.session.localization().clone(),
-            state: Mutex::new(State { settings, bytes, load_error, dirty: false, listeners: Vec::new() }),
+            state: Mutex::new(State { preferred_tags: preferred_tags.iter().map(|tag| (*tag).to_owned()).collect(), localization: native.session.localization().clone(), settings, bytes, load_error, dirty: false, listeners: Vec::new() }),
             file: Mutex::new(file),
         });
         profiles.insert(key, hub.clone());
@@ -44,7 +47,7 @@ impl Hub {
     }
     #[cfg(test)]
     pub(super) fn open(file: SettingsFile, defaults: Settings) -> Result<Arc<Self>, String> {
-        Self::with_launch(file, |saved| {
+        Self::with_launch(file, &["en"], |saved| {
             let mut native = NativeHost::new_localized(layer_ui::Platform::Windows, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))?;
             let settings = saved.map(|saved| Settings::restore_localized(saved, native.session.localization())).unwrap_or(defaults);
             native.dispatch(UiAction::RestoreSettings { settings })?;
@@ -58,6 +61,23 @@ impl Hub {
         self.state.lock().unwrap().dirty
     }
     pub(super) fn write(&self, bytes: &[u8]) -> Result<(), String> {
+        let language = {
+            let mut state = self.state.lock().unwrap();
+            if state.bytes != bytes { return Ok(()); }
+            if state.settings.language == layer_ui::LanguagePreference::System { state.preferred_tags = system_tags(&state.preferred_tags); }
+            layer_ui::resolve_launch_language(state.settings.language, &state.preferred_tags.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let localization = layer_ui::Localizer::shared(language);
+        let listeners = {
+            let mut state = self.state.lock().unwrap();
+            if state.bytes != bytes { return Ok(()); }
+            if Arc::ptr_eq(&state.localization, &localization) { Vec::new() }
+            else {
+                state.localization = localization;
+                state.listeners.iter().filter_map(Weak::upgrade).collect::<Vec<_>>()
+            }
+        };
+        for listener in listeners { notify(&listener); }
         // Serialize replacement across all windows. A newer accepted edit will
         // either supersede this job before it starts or replace it afterwards.
         let mut file = self.file.lock().unwrap();
@@ -106,6 +126,9 @@ impl Subscription {
         }
         (current != &self.baseline).then(|| self.baseline.clone())
     }
+    pub(super) fn localization(&self) -> Arc<layer_ui::Localizer> {
+        self.hub.state.lock().unwrap().localization.clone()
+    }
     pub(super) fn edit(&mut self, desired: &Settings) -> Result<Vec<u8>, String> {
         let (bytes, listeners) = {
             let mut state = self.hub.state.lock().unwrap();
@@ -118,7 +141,7 @@ impl Subscription {
                 &mut value,
             );
             let settings: Settings = serde_json::from_value(value).map_err(|e| e.to_string())?;
-            settings.validate_localized(&self.hub.localization)?;
+            settings.validate_localized(&state.localization)?;
             let bytes = encode(&settings)?;
             let changed = state.settings != settings;
             state.dirty |= changed;
@@ -180,4 +203,18 @@ fn merge(before: &serde_json::Value, desired: &serde_json::Value, current: &mut 
     } else {
         *current = desired.clone();
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(super) fn system_tags(fallback: &[String]) -> Vec<String> { fallback.to_vec() }
+#[cfg(target_os = "windows")]
+pub(super) fn system_tags(fallback: &[String]) -> Vec<String> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" { fn GetUserPreferredUILanguages(flags: u32, count: *mut u32, buffer: *mut u16, length: *mut u32) -> i32; }
+    let mut count = 0;
+    let mut length = 0;
+    if unsafe { GetUserPreferredUILanguages(8, &mut count, std::ptr::null_mut(), &mut length) } == 0 || length == 0 { return fallback.to_vec(); }
+    let mut buffer = vec![0; length as usize];
+    if unsafe { GetUserPreferredUILanguages(8, &mut count, buffer.as_mut_ptr(), &mut length) } == 0 { return fallback.to_vec(); }
+    buffer.split(|unit| *unit == 0).filter(|tag| !tag.is_empty()).map(String::from_utf16_lossy).collect()
 }

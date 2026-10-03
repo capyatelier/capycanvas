@@ -1,8 +1,10 @@
+import {liveCopy,bindCopy} from './localization.js';
 import { composingKey } from "./text-input.js";
 let thumbnailRequest=0n;
 const thumbnailPending=new Map();
 // Layer widgets only. Selection, references, hierarchy and menu policy are Rust.
 export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext, openMenu, contentChanged = () => {} }) {
+  const copy=liveCopy(app,"catalog").native_copy.layers;
   const send = action => dispatch({ type: "layer", action });
   const header = element("div", "layer-header"), footer = element("div", "layer-footer");
   header.dataset.control = "layer_opacity"; footer.dataset.control = "layer_actions";
@@ -20,22 +22,22 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   blend.addEventListener("pointerdown", () => { blendReopen = blendOpen && blendMenu?.menuOwner === blend; });
   const blendLabel = element("span", "layer-blend-label", catalog.layer_blends[0]);
   blend.append(blendLabel, icon("chevron-down"));
-  blend.title = "Layer blend mode"; blend.setAttribute("aria-label", blend.title); blend.setAttribute("aria-haspopup", "menu");
+  bindCopy(blend,()=>copy.blend,"title"); bindCopy(blend,()=>copy.blend,"ariaLabel"); blend.setAttribute("aria-haspopup", "menu");
   const options = element("div", "layer-options");
-  const opacity = numberField(catalog.layer_opacity, "Layer opacity", value => dispatch({ type: "set_layer_opacity", opacity: value }), true);
+  const opacity = numberField(catalog.layer_opacity, ()=>copy.opacity, value => dispatch({ type: "set_layer_opacity", opacity: value }), true);
   opacity.id = "layer-opacity"; options.append(blend, opacity); header.append(options);
   const glyphButton = (glyph, label, click, cls = "", getAction) => {
     const b = button("", e => { e.stopPropagation(); click(); }, `layer-icon ${cls}`);
-    b.title = label; b.setAttribute("aria-label", label); b.append(icon(glyph));
+    if(typeof label==="function"){bindCopy(b,label,"title");bindCopy(b,label,"ariaLabel");}else{b.title=label;b.setAttribute("aria-label",label);} b.append(icon(glyph));
     if (getAction) b.onpointerenter = () => { b.title = app.action_tooltip(b.getAttribute("aria-label"), { type: "layer", action: getAction() }); };
     return b;
   };
   const flags = element("div", "layer-flags"), toggles = [];
   for (const [glyph, label, property, op, capability] of [
-    ["alpha-lock", "Alpha lock", "alpha_locked", "alpha_lock", "alpha_lock"],
-    ["lock", "Lock editing", "locked", "lock", "edit_lock"],
-    ["clip", "Clip to layer below", "clipped", "clip", "clip"],
-    ["reference", "Use selected layers as references", "reference", "reference_selection", "reference"],
+    ["alpha-lock", ()=>copy.alpha_lock, "alpha_locked", "alpha_lock", "alpha_lock"],
+    ["lock", ()=>copy.lock_editing, "locked", "lock", "edit_lock"],
+    ["clip", ()=>copy.clip, "clipped", "clip", "clip"],
+    ["reference", ()=>copy.reference, "reference", "reference_selection", "reference"],
   ]) {
     const getAction = () => op === "reference_selection" ? { op } : { op, id: active().id, value: !active()[property] };
     const b = glyphButton(glyph, label, () => send(getAction()), "", getAction);
@@ -53,14 +55,14 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   };
   for (const group of [false, true]) {
     const getAction = () => ({ op: "new", group, clipped: false });
-    footer.append(glyphButton(group ? "folder" : "add-layer", group ? "New group" : "New layer", () => send(getAction()), "", getAction));
+    footer.append(glyphButton(group ? "folder" : "add-layer", ()=>group ? copy.new_group : copy.new_layer, () => send(getAction()), "", getAction));
   }
-  footer.append(glyphButton("selection-brush", "New Selection Layer", () => dispatch({type:"invoke",command:"new_selection_layer"})));
+  footer.append(glyphButton("selection-brush", ()=>copy.new_selection_layer, () => dispatch({type:"invoke",command:"new_selection_layer"})));
   const addMask = () => ({ op: "add_mask", id: active().id, replace: false });
-  const maskButton = glyphButton("mask", "Add layer mask", () => send(addMask()), "", addMask); footer.append(maskButton);
+  const maskButton = glyphButton("mask", ()=>copy.add_mask, () => send(addMask()), "", addMask); footer.append(maskButton);
   footer.append(glyphButton("image", "Import image as layer", () => dispatch({type:"invoke",command:"import_image"})));
   const deleteAction = () => ({ op: "delete_selected" });
-  const deleteButton = glyphButton("delete", "Delete selected layers", () => send(deleteAction()), "", deleteAction);
+  const deleteButton = glyphButton("delete", ()=>copy.delete_selected, () => send(deleteAction()), "", deleteAction);
   footer.append(deleteButton);
   const more = glyphButton("more", "Layer actions", () => more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true,
     clientX: more.getBoundingClientRect().left, clientY: more.getBoundingClientRect().top })));
@@ -241,7 +243,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       r.presentation=key;
       r.row.classList.toggle("selected", layer.selected);r.load.hidden=!layer.selection_layer;r.load.title=layer.load_selection_tooltip;r.load.setAttribute("aria-label",r.load.title);
       if (!layer.can_delete && !layer.can_alpha_lock) r.closeSwipe();
-      r.eye.replaceChildren(icon(layer.visible ? "eye" : "eye-hidden")); r.eye.title = r.eye.ariaLabel = layer.selection_layer?(layer.visible?"Hide selection overlay":"Show selection overlay"):(layer.visible?"Hide layer":"Show layer");
+      r.eye.replaceChildren(icon(layer.visible ? "eye" : "eye-hidden")); r.eye.title = r.eye.ariaLabel = layer.selection_layer?(layer.visible?copy.hide_selection:copy.show_selection):(layer.visible?copy.hide:copy.show);
       r.check.replaceChildren(icon(nameIcon(layer.selection_icon)));
       r.thumbnails.style.marginLeft = `${Math.min(layer.depth*8,24)}px`; r.clipping.style.opacity = layer.clipped ? 1 : 0;
       r.content.b.classList.toggle("editing-target", layer.editing && !layer.mask_selected);

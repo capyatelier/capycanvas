@@ -17,12 +17,14 @@ import SwiftUI
     private var gpuReady = false
     private var lastRequest: UInt64 = 0
     private var generation: UInt64 = 0
+    private enum Status { case copy(String), sampled(Double), error(String) }
+    private var statusSource = Status.copy("inspection_preparing")
     private var attempted: String?
     private var pending: Task<Void, Never>?
     private var task: NativeProjectTask?
     private var key: String { "\(epoch):\(revision)" }
     var stale: Bool { !result.isNull && (result["epoch"].uint != epoch || result["revision"].uint != revision) }
-    init(store: EditorStore) { self.store = store; setStatus(copy["inspection_preparing"].string) }
+    init(store: EditorStore) { self.store = store; setStatus(.copy("inspection_preparing")) }
 
     func receive(_ state: JSON, gpuReady: Bool) {
         let file = state["document_file"]
@@ -31,7 +33,7 @@ import SwiftUI
             if epoch != file["epoch"].uint { result = JSON() }
             epoch = file["epoch"].uint; revision = file["revision"].uint; self.gpuReady = gpuReady
             attempted = nil
-            if isOpen { setStatus(gpuReady ? copy["inspection_refresh"].string : copy["canvas_unavailable"].string) }
+            if isOpen { setStatus(.copy(gpuReady ? "inspection_refresh" : "canvas_unavailable")) }
             schedule()
         }
         if let request = state["requests"].array.first(where: { $0["kind"]["type"].string == "histogram" }),
@@ -64,7 +66,7 @@ import SwiftUI
         pending?.cancel(); pending = nil
         generation &+= 1
         let token = generation
-        attempted = key; busy = true; setStatus(copy["inspection_updating"].string)
+        attempted = key; busy = true; setStatus(.copy("inspection_updating"))
         native.projectTask(kind: .histogram, expected: (epoch, revision)) { [weak self] task, error in
             DispatchQueue.main.async {
                 guard let self, self.isOpen, self.generation == token else { task?.cancel(); return }
@@ -81,18 +83,23 @@ import SwiftUI
             }
         }
     }
-    private func setStatus(_ next: String) {
-        guard status != next else { return }
+    func refreshLanguage() {
+        let next: String
+        switch statusSource {
+        case .copy(let key): next = copy[key].string
+        case .sampled(let seconds): next = NativeTextContext.caption(["type": "inspection_sample", "seconds": seconds], language: store?.interfaceLanguage ?? "en")
+        case .error(let diagnostic): next = diagnostic
+        }
         status = next
-        staleStatus = NativeTextContext.caption(["type": "inspection_changed", "status": next])
+        staleStatus = NativeTextContext.caption(["type": "inspection_changed", "status": next], language: store?.interfaceLanguage ?? "en")
     }
+    private func setStatus(_ source: Status) { statusSource = source; refreshLanguage() }
     private func finish(_ token: UInt64, result: JSON?, error: String?) {
         guard isOpen, generation == token else { return }
         busy = false; task = nil
         if let result {
             self.result = result
-            setStatus(result["sampled_time"].isNull ? copy["inspection_current"].string
-                : NativeTextContext.caption(["type": "inspection_sample", "seconds": result["sampled_time"].number]))
-        } else { setStatus(error ?? self.copy["inspection_failed"].string) }
+            setStatus(result["sampled_time"].isNull ? .copy("inspection_current") : .sampled(result["sampled_time"].number))
+        } else { setStatus(error.map(Status.error) ?? .copy("inspection_failed")) }
     }
 }

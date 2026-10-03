@@ -276,6 +276,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         return uint64_t(value);
     }
     bool apply(J const& snapshot){
+        auto previousGpu=num(data->model,L"windows_gpu_generation");
+        bool relocalize=data->adoptLocalization(snapshot);
+        if(relocalize){measureHost.Children().Clear();offscreen.clear();}
         bool full=snapshot.HasKey(L"state");
         auto update=object(snapshot,L"workspace_update");
         // Workspace motion can also carry a camera. It is never a camera-only
@@ -301,7 +304,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         ++fullUpdates;movingGroup.reset();
         data->updating=true;
         struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
-        auto previousGpu=num(data->model,L"windows_gpu_generation");
         if(previousGpu>0&&num(snapshot,L"windows_gpu_generation")!=previousGpu){
             data->thumbnails=CreateLayerThumbnailCache(data->query);
             data->previews=CreateFilterPreviewCache(data->query);
@@ -342,10 +344,16 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             J signature=O({{L"geometry",structure},{L"panel",panelStructure(panel)}});
             A headers;for(auto member:array(geometry,L"panels")){
                 auto model=find(array(snapshot,L"panels"),L"id",member.GetString());
-                headers.Append(O({{L"title",S(str(model,L"title"))},{L"icon",S(str(model,L"icon"))},{L"tab",object(model,L"tab")}}));
+                headers.Append(O({{L"id",S(str(model,L"id"))},{L"icon",S(str(model,L"icon"))},{L"tab",object(model,L"tab")}}));
             }signature.Insert(L"headers",headers);signature.Insert(L"tab_style",S(str(object(snapshot,L"windows_tab_styles"),to_hstring(id).c_str())));
             std::wstring key=signature.Stringify().c_str();
             if(group.key!=key){group.key=std::move(key);build(group,geometry,panel);}
+            for(auto const& [panelId,tab]:group.tabs){
+                auto model=find(array(snapshot,L"panels"),L"id",hstring(panelId));auto title=str(model,L"title");
+                AutomationProperties::SetName(tab,title);tooltip(tab,title);
+                if(auto content=tab.Content().try_as<Panel>())for(auto child:content.Children())if(auto label=child.try_as<TextBlock>())label.Text(title);
+                for(auto& automatic:group.automatic)if(automatic.tab==tab)automatic.key=panelId+L"\n"+std::wstring(title)+L"\n"+std::to_wstring(data->textSize());
+            }
             bool hidden=flag(snapshot,L"chrome_hidden")&&!flag(geometry,L"floating");
             group.hidden=hidden;
             int z=flag(geometry,L"floating")?100+2*order:0;++order;
@@ -554,7 +562,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                     if(copy.body){uint32_t at=0;if(measureHost.Children().IndexOf(copy.body->Root(),at))measureHost.Children().RemoveAt(at);}
                     auto inert=std::make_shared<WorkspaceData>(*data);
                     inert->send=[](std::string){};inert->document=[](std::string){};inert->input=[](std::string){};
-                    inert->popupChanged=nullptr;inert->transients.clear();inert->colorViews.clear();
+                    inert->popupChanged=nullptr;inert->transients.clear();inert->colorViews.clear();inert->copyViews.clear();
                     copy.key=key;copy.body=std::make_unique<PanelBody>(inert,panel,O({{L"bounds",O({{L"width",N(width)}})}}),[]{},nullptr,false);
                     copy.body->Root().Width(width);measureHost.Children().Append(copy.body->Root());copy.body->Apply(true);
                 }

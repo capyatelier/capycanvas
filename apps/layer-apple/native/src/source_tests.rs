@@ -4,7 +4,8 @@ use layer_core::color::{ColorProfile, RgbSpace};
 #[test]
 fn shared_icc_library_bridge_keeps_bytes_summaries_and_invalid_entry_errors() {
     let call = |action: Value, bytes: &[u8]| {
-        let action = CString::new(action.to_string()).unwrap();
+        fixture_localization();
+        let action = CString::new(json!({"language":"en","request":action}).to_string()).unwrap();
         let text = unsafe { capy_profile_library(action.as_ptr(), bytes.as_ptr(), bytes.len()) };
         assert!(!text.is_null());
         let value: Value = serde_json::from_slice(unsafe { CStr::from_ptr(text) }.to_bytes()).unwrap();

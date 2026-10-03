@@ -14,7 +14,7 @@ pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
     color: JString,
 ) -> jobjectArray {
     let result = (|| {
-        let localization = crate::launch::active_localization()?;
+        let localization = &*crate::launch::active_localization()?;
         let bytes = env.convert_byte_array(bytes).map_err(error)?;
         let mut library = layer_ui::ExportPresets::restore(&bytes);
         let request = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
@@ -47,7 +47,7 @@ pub extern "system" fn Java_art_capycanvas_Native_profileLibrary(
     mut env: JNIEnv, _: JClass, request: JString, bytes: JByteArray,
 ) -> jni::sys::jstring {
     let result = (|| {
-        let localization = crate::launch::active_localization()?;
+        let localization = &*crate::launch::active_localization()?;
         let action: layer_ui::profile_library::ProfileLibraryAction = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
         let bytes = env.convert_byte_array(bytes).map_err(error)?;
         serde_json::to_string(&action.execute_localized(&bytes, localization).map_err(|reason| reason.profile_message(localization))?).map_err(error)

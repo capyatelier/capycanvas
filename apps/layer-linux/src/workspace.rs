@@ -902,7 +902,9 @@ pub(crate) fn system_appearance() -> (Theme, Option<HexColor>) {
 }
 
 pub struct Workspace {
-    pub(crate) localization: std::sync::Arc<layer_ui::Localizer>,
+    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
+    language_transition: RefCell<layer_ui::LanguageTransition>,
+    localization_callbacks: RefCell<Vec<Box<dyn Fn(&std::sync::Arc<layer_ui::Localizer>) -> bool>>>,
     pub window: adw::ApplicationWindow,
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
@@ -970,6 +972,7 @@ pub struct Workspace {
     pub(crate) image_drop: RefCell<Option<crate::files::drop::Incoming>>,
     pub(crate) image_drop_label: gtk::Label,
     initial_project: RefCell<Option<(layer_core::Project, Option<DocumentLocation>)>>,
+    initial_settings: RefCell<Option<Settings>>,
     customization: customization::Customization,
     pub(crate) drawer: Rc<drawers::Drawer>,
     columns: columns::Columns,
@@ -1000,10 +1003,68 @@ impl Drop for Workspace {
 
 impl Workspace {
     pub(crate) fn recovery(&self) -> Rc<crate::recovery::Recovery> { self.recovery.borrow().clone() }
+    pub(crate) fn localization(&self) -> std::sync::Arc<layer_ui::Localizer> { self.localization.borrow().clone() }
+
+    pub(crate) fn on_localization(&self, callback: impl Fn(&std::sync::Arc<layer_ui::Localizer>) -> bool + 'static) {
+        if callback(&self.localization()) { self.localization_callbacks.borrow_mut().push(Box::new(callback)); }
+    }
+
+    fn request_language(self: &Rc<Self>) {
+        let Some(preference) = self.gpu.borrow().as_ref().map(|g| g.session.state().settings.language) else { return; };
+        let languages = glib::language_names_with_category("LC_MESSAGES");
+        let tags = languages.iter().map(|tag| tag.as_str()).collect::<Vec<_>>();
+        let Some(request) = self.language_transition.borrow_mut().request(preference, &tags) else { return; };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || { let _ = sender.send(layer_ui::Localizer::shared(request.language)); });
+        let mut prepared = false;
+        glib::timeout_add_local(std::time::Duration::from_millis(10), glib::clone!(#[weak(rename_to=this)] self, #[upgrade_or] glib::ControlFlow::Break, move || {
+            if !prepared {
+                match receiver.try_recv() {
+                    Ok(localization) => {
+                        if !this.language_transition.borrow_mut().prepared(request, localization) { return glib::ControlFlow::Break; }
+                        prepared = true;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return glib::ControlFlow::Break,
+                }
+            }
+            let busy = this.input.has_pending() || crate::input::localization_input_busy(&this.window)
+                || this.command_bar.composition_busy()
+                || this.gpu.borrow().as_ref().is_some_and(|g| g.session.localization_input_busy());
+            let localization = this.language_transition.borrow_mut().publish(busy);
+            if let Some(localization) = localization {
+                this.adopt_language(localization);
+                glib::ControlFlow::Break
+            } else if this.language_transition.borrow().pending() { glib::ControlFlow::Continue }
+            else { glib::ControlFlow::Break }
+        }));
+    }
+
+    fn adopt_language(self: &Rc<Self>, localization: std::sync::Arc<layer_ui::Localizer>) {
+        if let Some(g) = self.gpu.borrow_mut().as_mut() { g.session.set_localization(localization.clone()); }
+        *self.localization.borrow_mut() = localization.clone();
+        self.layer_panel.set_localization(localization.clone());
+        self.color_panel.set_localization(localization.clone());
+        self.command_bar.set_localization(localization.clone());
+        self.tool_settings.set_localization(localization.clone());
+        for window in crate::text_language::owned_windows(&self.window) {
+            crate::text_language::visit(window.upcast_ref(), &mut |widget| {
+                if let Some(control) = widget.downcast_ref::<crate::number_control::NumberControl>() { control.update_localization(localization.clone()); }
+            });
+        }
+        self.workspaces.set_localization(self, localization.clone());
+        self.documents.set_localization(&localization);
+        self.localization_callbacks.borrow_mut().retain(|callback| callback(&localization));
+        self.reset_workspace_publication();
+        self.refresh(regions::ALL);
+        crate::text_language::update(&self.window, &localization);
+        self.wake();
+    }
+
     pub(crate) fn refresh_document_view(self: &Rc<Self>) { self.refresh(regions::ALL); }
     pub(crate) fn document_canvas_error(self: &Rc<Self>, error: &str) {
         self.gpu_error(error);
-        self.status.set_text(&layer_ui::bootstrap_view(&self.localization).canvas_init_failed); self.status.set_visible(true);
+        self.status.set_text(&layer_ui::bootstrap_view(&self.localization()).canvas_init_failed); self.status.set_visible(true);
         self.restart_canvas.set_visible(true);
     }
     #[cfg(test)]
@@ -1165,7 +1226,9 @@ impl Workspace {
         content.add_overlay(&image_drop_label);
         window.set_content(Some(&crate::squircle::Squircles::new(&content)));
         let this = Rc::new(Self {
-            localization: localization.clone(),
+            localization: RefCell::new(localization.clone()),
+            language_transition: RefCell::new(layer_ui::LanguageTransition::new(localization.clone())),
+            localization_callbacks: RefCell::new(Vec::new()),
             window,
             area,
             gpu: RefCell::new(None),
@@ -1254,6 +1317,7 @@ impl Workspace {
             histogram: RefCell::new(None),
             open_document: RefCell::new(None),
             initial_project: RefCell::new(project),
+            initial_settings: RefCell::new(None),
             customization: customization::Customization::new(),
             drawer: drawers::Drawer::new(0),
             columns: columns::Columns::default(),
@@ -1307,6 +1371,11 @@ impl Workspace {
             this,
             move |_| this.restart_gpu()
         ));
+        this.layer_panel.set_localization(localization.clone());
+        this.color_panel.set_localization(localization.clone());
+        this.command_bar.set_localization(localization.clone());
+        this.tool_settings.set_localization(localization.clone());
+        crate::text_language::update(&this.window, &localization);
         this.documents.bind(&this);
         this.install_document_close();
         crate::recovery::install(&this);
@@ -1628,12 +1697,13 @@ impl Workspace {
     }
 
     fn chrome_menu(self: &Rc<Self>, id: ApplicationMenu) -> gtk::MenuButton {
-        let label = id.localized_label(&self.localization);
+        let label = id.localized_label(&self.localization());
         let menu = gtk::MenuButton::builder()
             .label(label.as_ref())
             .tooltip_text(label.as_ref())
             .build();
         menu.add_css_class("flat");
+        menu.set_widget_name(&format!("application-menu-{id:?}"));
         menu.add_css_class("chrome-control");
         menu.set_direction(gtk::ArrowType::None);
         let root = gtk::gio::Menu::new();
@@ -1657,6 +1727,13 @@ impl Workspace {
         ));
         self.watch_popover(popover.upcast_ref());
         menu.set_popover(Some(&popover));
+        self.on_localization(glib::clone!(#[weak] menu, #[upgrade_or] false, move |localization| {
+            let label = id.localized_label(localization);
+            if id != ApplicationMenu::Primary { menu.set_label(&label); }
+            menu.set_tooltip_text(Some(&label));
+            menu.update_property(&[gtk::accessible::Property::Label(&label)]);
+            true
+        }));
         menu
     }
 
@@ -2029,6 +2106,12 @@ impl Workspace {
         if self.refreshing.get() {
             return;
         }
+        if self.gpu.borrow().is_none() {
+            if let UiAction::RestoreSettings { settings } = &action {
+                *self.initial_settings.borrow_mut() = Some(settings.clone());
+                return;
+            }
+        }
         self.remember_command_focus();
         // Display-wide settings arrive from the host, including while another
         // window owns this workspace or its layout is still loading.
@@ -2115,6 +2198,7 @@ impl Workspace {
     pub fn changed(self: &Rc<Self>, result: Result<UiChange, String>) {
         match result {
             Ok(mut change) => {
+                if change.regions & regions::SETTINGS != 0 { self.request_language(); }
                 if let Some(g) = self.gpu.borrow_mut().as_mut() {
                     let hdr = g.session.engine().document().color.depth.is_float();
                     let rendition = hdr.then(|| g.session.effective_sdr_rendition());
@@ -2464,7 +2548,7 @@ impl Workspace {
                     this.wake();
                     return;
                 }
-                match GpuCanvas::with_project_localized(area, this.initial_project.borrow_mut().take(), this.localization.clone()) {
+                match GpuCanvas::with_project_localized(area, this.initial_project.borrow_mut().take(), this.localization(), this.initial_settings.borrow_mut().take()) {
                     Ok(mut gpu) => {
                         if this.recovery().recovered.get() {
                             gpu.session.mark_recovered();
@@ -2527,13 +2611,13 @@ impl Workspace {
                 Err(error) => {
                     eprintln!("Canvas recovery failed: {error}");
                     self.refresh(regions::ALL);
-                    self.status.set_text(&layer_ui::bootstrap_view(&self.localization).canvas_recovery_failed);
+                    self.status.set_text(&layer_ui::bootstrap_view(&self.localization()).canvas_recovery_failed);
                     self.status.set_visible(true);
                     return;
                 }
             }
         }
-        let copy = layer_ui::bootstrap_view(&self.localization);
+        let copy = layer_ui::bootstrap_view(&self.localization());
         self.status.set_text(if self.gpu.borrow().is_some() { &copy.canvas_stopped } else { &copy.canvas_init_failed });
         self.status.set_visible(true);
     }
@@ -2554,7 +2638,7 @@ impl Workspace {
             Some(Err(error)) => {
                 eprintln!("Canvas restart failed: {error}");
                 self.status
-                    .set_text(&layer_ui::bootstrap_view(&self.localization).canvas_restart_failed);
+                    .set_text(&layer_ui::bootstrap_view(&self.localization()).canvas_restart_failed);
             }
             None => (),
         }
@@ -2844,7 +2928,7 @@ impl Workspace {
                     // again after a successful resize, palette change or restart.
                     self.window.remove_css_class("native-canvas-background");
                     eprintln!("Canvas background unavailable: {error}");
-                    self.status.set_text(&layer_ui::bootstrap_view(&self.localization).canvas_init_failed);
+                    self.status.set_text(&layer_ui::bootstrap_view(&self.localization()).canvas_init_failed);
                     self.status.set_visible(true);
                 }
             }
@@ -3025,7 +3109,7 @@ impl Workspace {
                 if group.tabs_visible {
                     for &panel in &group.panels {
                         let title = layout.panel(panel).expect("validated panel")
-                            .title_localized(&self.localization);
+                            .title_localized(&self.localization());
                         let tab = self.action_button(
                             &title,
                             UiAction::SelectPanelTab {
@@ -3057,7 +3141,7 @@ impl Workspace {
                         .child(&tab_bar)
                         .build());
                     header.append(&scroll);
-                    let grip = tiles::grip(&self.localization.text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
+                    let grip = tiles::grip(&self.localization().text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
                     grip.set_size_request(20, 24);
                     grip.set_halign(gtk::Align::End);
                     grip.set_valign(gtk::Align::Center);
@@ -3082,7 +3166,7 @@ impl Workspace {
                     footer.add_css_class("panel-footer");
                     footer.set_widget_name(&format!("panel-footer-grip-{}", group.id));
                     footer.set_height_request(bounds.height as i32);
-                    let grip = tiles::grip(&self.localization.text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
+                    let grip = tiles::grip(&self.localization().text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
                     grip.set_hexpand(true);
                     grip.set_halign(gtk::Align::Center);
                     grip.set_valign(gtk::Align::Center);
@@ -3231,7 +3315,7 @@ impl Workspace {
             }
             for (panel, button) in &view.tabs {
                 let config = layout.panel(*panel).expect("validated panel");
-                let title = config.title_localized(&self.localization);
+                let title = config.title_localized(&self.localization());
                 let tab = layout.tab_presentation(*panel);
                 let content = button.child().unwrap();
                 let icon = content.first_child().and_downcast::<gtk::Image>().unwrap();

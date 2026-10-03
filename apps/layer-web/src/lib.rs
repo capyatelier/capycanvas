@@ -28,8 +28,12 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WebApp {
+    language_transition: layer_ui::LanguageTransition,
+    language_preparation: Option<(layer_ui::LanguageRequest, layer_ui::LocalizerPreparation)>,
+    preferred_tags: Vec<String>,
+    published_language: Option<u64>,
     state_cache: std::collections::BTreeMap<&'static str, Vec<u8>>,
-    preferences_cache: Option<(Vec<u8>, JsValue)>,
+    preferences_cache: Option<(u64, JsValue)>,
     tone: hdr::ToneState,
     proof: layer_ui::proof_workflow::ProofView,
     workspaces: Option<layer_workspace::WorkspaceController<workspaces::BrowserStore>>,
@@ -322,6 +326,10 @@ impl WebApp {
             .map_err(js)?;
         let documents = layer_ui::DocumentSessions::localized(session.localization());
         Ok(Self {
+            language_transition: layer_ui::LanguageTransition::new(session.localization().clone()),
+            language_preparation: None,
+            preferred_tags: tags,
+            published_language: None,
             proof: Default::default(),
             tone: Default::default(),
             session,
@@ -662,7 +670,42 @@ impl WebApp {
         field!(host_error);
         field!(notice);
         field!(camera);
+        let generation = self.session.localization_generation();
+        if self.published_language != Some(generation) {
+            js_sys::Reflect::set(&result, &JsValue::from_str("localization"), &serialize(&serde_json::json!({"generation":generation,"tag":self.session.localization().language().tag()}))?)?;
+            self.published_language = Some(generation);
+        }
         Ok(result.into())
+    }
+    pub fn preferred_languages(&mut self, tags: JsValue) -> Result<(), JsValue> {
+        self.preferred_tags = serde_wasm_bindgen::from_value(tags).map_err(js)?;
+        self.request_language();
+        Ok(())
+    }
+    pub fn language_pending(&self) -> bool {
+        self.language_preparation.is_some() || self.language_transition.pending()
+    }
+    pub fn prepare_language(&mut self, input_busy: bool) -> Result<JsValue, JsValue> {
+        if let Some((_, preparation)) = &mut self.language_preparation {
+            let started = js_sys::Date::now();
+            let ready = loop {
+                if preparation.step(1) { break true; }
+                if js_sys::Date::now() - started >= 2. { break false; }
+            };
+            if ready {
+                let (request, preparation) = self.language_preparation.take().unwrap();
+                if let Some(localization) = preparation.finish() { self.language_transition.prepared(request, localization); }
+            }
+        }
+        if let Some(localization) = self.language_transition.publish(input_busy || self.session.localization_input_busy()) {
+            if self.session.set_localization(localization.clone()) {
+                self.documents.set_localization(&localization);
+                if let Some(controller) = &mut self.workspaces { controller.set_localization(localization); }
+                self.preferences_cache = None;
+                return serialize(&layer_ui::UiChange { revision:self.session.state().revision, regions:layer_ui::regions::ALL, canvas_wake:false });
+            }
+        }
+        Ok(JsValue::NULL)
     }
     pub fn document_color(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.engine().document().color)
@@ -694,6 +737,10 @@ impl WebApp {
     }
     pub fn document_delivery_copy(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::DocumentDeliveryCopy::new(self.session.localization()))
+    }
+    pub fn native_caption(&self, request: JsValue) -> Result<String, JsValue> {
+        let request: layer_ui::NativeCaption = serde_wasm_bindgen::from_value(request).map_err(js)?;
+        Ok(request.message(self.session.localization()))
     }
     pub fn document_delivery_message(&self, request: JsValue) -> Result<String, JsValue> {
         let request: layer_ui::DocumentDeliveryMessage = serde_wasm_bindgen::from_value(request).map_err(js)?;
@@ -736,14 +783,14 @@ impl WebApp {
     /// Retained, read-only view for the DOM adapter. `preferences()` still
     /// returns an independent snapshot for callers that need ownership.
     pub fn preferences_cached(&mut self) -> Result<JsValue, JsValue> {
-        let Some(view) = self.session.preferences() else { return Ok(JsValue::UNDEFINED) };
-        let key = serde_json::to_vec(&view).map_err(js)?;
+        if !self.session.state().settings_open { return Ok(JsValue::UNDEFINED); }
+        let key = self.session.preferences_revision();
         if let Some((previous, value)) = &self.preferences_cache
             && *previous == key
         {
             return Ok(value.clone());
         }
-        let value = serialize(&view)?;
+        let value = serialize(&self.session.preferences().unwrap())?;
         self.preferences_cache = Some((key, value.clone()));
         Ok(value)
     }
@@ -830,7 +877,9 @@ impl WebApp {
     }
     pub fn dispatch(&mut self, action: JsValue) -> Result<JsValue, JsValue> {
         let action: UiAction = serde_wasm_bindgen::from_value(action).map_err(js)?;
-        serialize(&self.session.dispatch(action).map_err(js)?)
+        let change = self.session.dispatch(action).map_err(js)?;
+        self.request_language();
+        serialize(&change)
     }
     pub fn input(&mut self, input: JsValue) -> Result<JsValue, JsValue> {
         let input = serde_wasm_bindgen::from_value(input).map_err(js)?;
@@ -1191,4 +1240,13 @@ async fn request_device(instance: &wgpu::Instance, surface: Option<&wgpu::Surfac
             .await
             .map_err(|error| gpu_error("device", error))?;
         Ok((adapter, device, queue))
+}
+
+impl WebApp {
+    fn request_language(&mut self) {
+        let tags: Vec<&str> = self.preferred_tags.iter().map(String::as_str).collect();
+        if let Some(request) = self.language_transition.request(self.session.state().settings.language, &tags) {
+            self.language_preparation = Some((request, layer_ui::LocalizerPreparation::new(request.language)));
+        } else if !self.language_transition.pending() { self.language_preparation = None; }
+    }
 }

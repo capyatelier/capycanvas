@@ -20,7 +20,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     if(numericLabels.HasKey(L"error"))throw hresult_invalid_argument(str(numericLabels,L"error"));
     auto local=std::make_shared<NumberState>();local->value=get();
     if(presentation.identity)local->identity=presentation.identity();
-    local->resolve=presentation.resolve?presentation.resolve:decltype(local->resolve)([localization=data->localization](J const& spec,double value,J const& operation){return numeric(localization.get(),spec,value,operation);});
+    local->resolve=presentation.resolve?presentation.resolve:decltype(local->resolve)([data](J const& spec,double value,J const& operation){return numeric(data->localization.get(),spec,value,operation);});
     bool ranged=str(spec,L"kind")==L"slider",preference=presentation.preference;
     double valueHeight=preference?34.:(ranged?24.:32.),stepSize=ranged&&!preference?24.:32.;
     StackPanel root;root.Spacing(0);
@@ -70,10 +70,23 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         });
     }else header.Children().Append(entry);
     AutomationProperties::SetName(entry,str(numericLabels,L"edit"));if(!identifier.empty())AutomationProperties::SetAutomationId(entry,identifier);
+    Slider slider;
+    auto currentTitle=presentation.title?presentation.title:std::function<hstring()>([title]{return title;});
+    data->copyView([source=std::weak_ptr<WorkspaceData>(data),currentTitle,root=make_weak(root),text=make_weak(text),entry=make_weak(entry),slider=make_weak(slider)]{
+        auto data=source.lock();auto control=entry.get();if(!data||!control)return false;
+        auto title=currentTitle();auto input=to_string(O({{L"label",S(title)}}).Stringify());
+        std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_numeric_labels(data->localization.get(),input.c_str()),capy_string_free);
+        if(!raw)throw hresult_error(E_OUTOFMEMORY);auto labels=J::Parse(to_hstring(raw.get()));
+        AutomationProperties::SetName(control,str(labels,L"edit"));
+        if(auto view=root.get())AutomationProperties::SetName(view,title);
+        if(auto view=text.get()){view.Text(title);tooltip(view,title);}
+        if(auto view=slider.get())AutomationProperties::SetName(view,title);
+        return true;
+    });
     auto measureText=[data,local](hstring const& value){
         // Routine model updates retain the measured extent of unchanged text.
         if(local->measuredWidth>=0&&local->measuredText==value)return local->measuredWidth;
-        auto measure=label(data,value);measure.UseLayoutRounding(false);
+        auto measure=label(data,value,false,false);measure.UseLayoutRounding(false);
         measure.Measure({std::numeric_limits<float>::infinity(),32});
         local->measuredText=value;local->measuredWidth=double(measure.DesiredSize().Width);return local->measuredWidth;
     };
@@ -105,7 +118,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             control.Foreground(data->brush(L"text"));if(!inlineTrack)control.Width(92);
         }
     });
-    Slider slider;slider.Minimum(0);slider.Maximum(1);slider.StepFrequency(0.001);slider.MinHeight(0);slider.Height(stepSize);
+    slider.Minimum(0);slider.Maximum(1);slider.StepFrequency(0.001);slider.MinHeight(0);slider.Height(stepSize);
     // The adjacent field displays shared units; the default thumb tooltip
     // exposes only normalized 0..1 positions.
     slider.IsThumbToolTipEnabled(false);
@@ -244,6 +257,13 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             local->value=num(next,L"value");set(local->value);
         });
         step.Width(stepSize);step.Height(stepSize);step.Content(icon(direction<0?L"minus":L"plus",data->theme()));
+        data->copyView([source=std::weak_ptr<WorkspaceData>(data),currentTitle,weak=make_weak(step),direction]{
+            auto data=source.lock();auto view=weak.get();if(!data||!view)return false;
+            auto input=to_string(O({{L"label",S(currentTitle())}}).Stringify());
+            std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_numeric_labels(data->localization.get(),input.c_str()),capy_string_free);
+            if(!raw)throw hresult_error(E_OUTOFMEMORY);auto labels=J::Parse(to_hstring(raw.get()));
+            AutomationProperties::SetName(view,str(labels,direction<0?L"decrease":L"increase"));return true;
+        });
         AutomationProperties::SetAutomationId(step,numberId+(direction<0?L"-decrease":L"-increase"));
         step.IsEnabledChanged([](Windows::Foundation::IInspectable const& sender,DependencyPropertyChangedEventArgs const& args){
             sender.as<Button>().Opacity(unbox_value<bool>(args.NewValue())?1.:.36);

@@ -44,6 +44,7 @@ import SwiftUI
     deinit {
         if let observer { NotificationCenter.default.removeObserver(observer) }
     }
+    func receiveLanguage(_ next: JSON) { view = next }
     func tick() { send(["type": "tick"]) }
     @discardableResult func send(_ input: [String: Any]) -> Int {
         sent += 1

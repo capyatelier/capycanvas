@@ -228,7 +228,7 @@ private struct PaletteFooter: View {
     var measuring = false
     @Environment(\.editorPalette) private var palette
     @FocusState private var editorFocused: Bool
-    private func refreshCaption() { chooseCaption = NativeTextContext.caption(["type": "choose_palette", "name": view["name"].string]) }
+    private func refreshCaption() { chooseCaption = NativeTextContext.caption(["type": "choose_palette", "name": view["name"].string], language: controller.interfaceLanguage) }
     var body: some View {
         let selection = controller.selection(view)
         let name = selection?["name"].string ?? view["color_name"].string
@@ -267,7 +267,7 @@ private struct PaletteFooter: View {
                     .help("sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity")
                     .accessibilityIdentifier("palette-color-detail")
             }
-        }.accessibilityElement(children: .contain).accessibilityIdentifier("palette-footer").onAppear { refreshCaption() }.onChange(of: view["name"].string) { _, _ in refreshCaption() }
+        }.accessibilityElement(children: .contain).accessibilityIdentifier("palette-footer").onAppear { refreshCaption() }.onChange(of: view["name"].string) { _, _ in refreshCaption() }.onChange(of: controller.interfaceLanguage) { _, _ in refreshCaption() }
     }
 }
 

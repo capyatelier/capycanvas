@@ -786,6 +786,67 @@ pub extern "system" fn Java_art_capycanvas_Native_bootstrap(
     string(&mut env, result)
 }
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_languageRequest(
+    mut env: JNIEnv, _: JClass, handle: jlong, locales: JObjectArray,
+) -> jstring {
+    let result = (|| {
+        let locales = locale_tags(&mut env, &locales)?;
+        let a = unsafe { app(handle) };
+        let preference = a.host.session.state().settings.language;
+        if preference != a.language_preference {
+            crate::launch::preference(preference);
+        } else if let Some(preference) = crate::launch::current_preference()
+            && preference != a.language_preference {
+            let mut settings = a.host.session.state().settings.clone();
+            settings.language = preference;
+            a.host.dispatch(layer_ui::UiAction::RestoreSettings { settings })?;
+        }
+        a.language_preference = a.host.session.state().settings.language;
+        let tags = locales.iter().map(String::as_str).collect::<Vec<_>>();
+        Ok(a.language.request(a.language_preference, &tags).map(|request|
+            serde_json::json!({"generation": request.generation, "language": request.language}).to_string()))
+    })();
+    match result {
+        Ok(Some(value)) => string(&mut env, Ok(value)),
+        Ok(None) => std::ptr::null_mut(),
+        Err(message) => string(&mut env, Err(message)),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_prepareLanguage(
+    mut env: JNIEnv, _: JClass, language: JString,
+) -> jlong {
+    let result = read(&mut env, &language).and_then(|tag| {
+        let language = serde_json::from_value(serde_json::Value::String(tag)).map_err(error)?;
+        Ok(Box::into_raw(Box::new(layer_ui::Localizer::shared(language))) as jlong)
+    });
+    or_throw(&mut env, result, 0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_publishLanguage(
+    _: JNIEnv, _: JClass, handle: jlong, generation: jlong, context: jlong, busy: jboolean,
+) {
+    let a = unsafe { app(handle) };
+    if context != 0 {
+        let context = unsafe { Box::from_raw(context as *mut std::sync::Arc<layer_ui::Localizer>) };
+        a.language.prepared(layer_ui::LanguageRequest { generation: generation as u64, language: context.language() }, *context);
+    }
+    let busy = busy != 0 || a.host.session.localization_input_busy();
+    if let Some(context) = crate::launch::publish(a.language_preference, || a.language.publish(busy)) {
+        a.host.set_localization(context.clone());
+        a.window.set_localization(context.clone());
+        if let Some(controller) = &mut a.workspaces { controller.set_localization(context); }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_freeLanguage(_: JNIEnv, _: JClass, context: jlong) {
+    if context != 0 { drop(unsafe { Box::from_raw(context as *mut std::sync::Arc<layer_ui::Localizer>) }); }
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_destroy(_: JNIEnv, _: JClass, handle: jlong) {
     if handle != 0 {
         unsafe { drop(Box::from_raw(handle as *mut App)) };
@@ -1092,10 +1153,23 @@ pub extern "system" fn Java_art_capycanvas_Native_modelUpdate(
     _: JClass,
     handle: jlong,
 ) -> jstring {
-    match unsafe { app(handle) }.host.take_model_update_bytes() {
-        Ok(Some(bytes)) => string(&mut env, String::from_utf8(bytes).map_err(error)),
+    let result = (|| {
+        let a = unsafe { app(handle) };
+        let Some(bytes) = a.host.take_model_update_bytes().map_err(error)? else { return Ok(None); };
+        if a.published_language == a.host.localization_generation() {
+            return String::from_utf8(bytes).map(Some).map_err(error);
+        }
+        let mut packet: serde_json::Value = serde_json::from_slice(&bytes).map_err(error)?;
+        packet["bootstrap"] = serde_json::to_value(a.host.bootstrap_view()).map_err(error)?;
+        packet["catalog"] = a.host.query(serde_json::json!({"type": "catalog"}))?;
+        packet["localization_generation"] = a.host.localization_generation().into();
+        a.published_language = a.host.localization_generation();
+        Ok(Some(packet.to_string()))
+    })();
+    match result {
+        Ok(Some(value)) => string(&mut env, Ok(value)),
         Ok(None) => std::ptr::null_mut(),
-        Err(e) => string(&mut env, Err(error(e))),
+        Err(message) => string(&mut env, Err(message)),
     }
 }
 #[unsafe(no_mangle)]
@@ -1211,6 +1285,13 @@ pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
     or_throw(&mut env, result, std::ptr::null_mut())
 }
 
+fn localized_context(env: &mut JNIEnv, language: &JString) -> Result<std::sync::Arc<layer_ui::Localizer>, String> {
+    let tag = read(env, language)?;
+    if tag.is_empty() { return crate::launch::active_localization().map_err(error); }
+    let language = serde_json::from_value(serde_json::Value::String(tag)).map_err(error)?;
+    layer_ui::Localizer::prepared(language).ok_or_else(|| "android_language_not_prepared".to_owned())
+}
+
 /// Stateless numeric math is independent of the render-owned session. Safe to
 /// call on the UI thread; no renderer lock, I/O or expression compilation loop.
 #[unsafe(no_mangle)]
@@ -1218,10 +1299,12 @@ pub extern "system" fn Java_art_capycanvas_Native_number(
     mut env: JNIEnv,
     _: JClass,
     request: JString,
+    language: JString,
 ) -> jstring {
+    let context = localized_context(&mut env, &language);
     let result = read(&mut env, &request)
         .and_then(|s| serde_json::from_str::<layer_ui::NumericRequest>(&s).map_err(error))
-        .and_then(|request| { let localization = crate::launch::active_localization().map_err(error)?; request.resolve().map_err(|reason| reason.message(localization)) })
+        .and_then(|request| { let localization = context.as_ref().map_err(|reason| reason.clone())?; request.resolve().map_err(|reason| reason.message(localization)) })
         .and_then(|value| serde_json::to_string(&value).map_err(error));
     string(&mut env, result)
 }
@@ -1231,10 +1314,12 @@ pub extern "system" fn Java_art_capycanvas_Native_numericLabels(
     mut env: JNIEnv,
     _: JClass,
     label: JString,
+    language: JString,
 ) -> jstring {
+    let context = localized_context(&mut env, &language);
     let result = read(&mut env, &label)
         .and_then(|label| {
-            let localization = crate::launch::active_localization().map_err(error)?;
+            let localization = context.as_ref().map_err(|reason| reason.clone())?;
             serde_json::to_string(&layer_ui::NumericLabels::new(&label, localization)).map_err(error)
         });
     string(&mut env, result)
@@ -1245,10 +1330,12 @@ pub extern "system" fn Java_art_capycanvas_Native_toolbarUi(
     mut env: JNIEnv,
     _: JClass,
     request: JString,
+    language: JString,
 ) -> jstring {
+    let context = localized_context(&mut env, &language);
     let result = read(&mut env, &request)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|request| { let localization = crate::launch::active_localization().map_err(error)?; layer_ui::toolbar_ui(request, localization) })
+        .and_then(|request| { let localization = context.as_ref().map_err(|reason| reason.clone())?; layer_ui::toolbar_ui(request, localization) })
         .and_then(|value| serde_json::to_string(&value).map_err(error));
     string(&mut env, result)
 }
@@ -1310,10 +1397,12 @@ fn color_shape(env: &mut JNIEnv, shape: &JString) -> Result<layer_ui::ColorShape
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_colorUi(
     mut env: JNIEnv, _: JClass, request: JString,
+    language: JString,
 ) -> jstring {
+    let context = localized_context(&mut env, &language);
     let result = read(&mut env, &request)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|request| layer_ui::color_ui_localized(request, crate::launch::active_localization()?))
+        .and_then(|request| layer_ui::color_ui_localized(request, context.as_ref().map_err(|reason| reason.clone())?))
         .and_then(|value| serde_json::to_string(&value).map_err(error));
     string(&mut env, result)
 }
@@ -1321,10 +1410,12 @@ pub extern "system" fn Java_art_capycanvas_Native_colorUi(
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_nativeCaption(
     mut env: JNIEnv, _: JClass, request: JString,
+    language: JString,
 ) -> jstring {
+    let context = localized_context(&mut env, &language);
     let result = read(&mut env, &request).and_then(|source| {
         let request: layer_ui::NativeCaption = serde_json::from_str(&source).map_err(error)?;
-        let text = request.message(crate::launch::active_localization()?);
+        let text = request.message(context.as_ref().map_err(|reason| reason.clone())?);
         Ok(serde_json::json!({"text": text}).to_string())
     });
     string(&mut env, result)
@@ -1333,10 +1424,12 @@ pub extern "system" fn Java_art_capycanvas_Native_nativeCaption(
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_documentAppearance(
     mut env: JNIEnv, _: JClass, options: JString,
+    language: JString,
 ) -> jstring {
+    let context = localized_context(&mut env, &language);
     let result = read(&mut env, &options).and_then(|source| {
         let options: layer_ui::NewDocumentOptions = serde_json::from_str(&source).map_err(error)?;
-        serde_json::to_string(&options.appearance(crate::launch::active_localization()?)).map_err(error)
+        serde_json::to_string(&options.appearance(context.as_ref().map_err(|reason| reason.clone())?)).map_err(error)
     });
     string(&mut env, result)
 }
@@ -1351,7 +1444,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorHueStops(
     let result = color_shape(&mut env, &shape).and_then(|shape| {
         let mut state = layer_ui::ColorState::default();
         state.set_rgb_space(serde_json::from_value(serde_json::Value::String(read(&mut env, &space)?)).map_err(error)?)?;
-        let localization = crate::launch::active_localization()?;
+        let localization = &*crate::launch::active_localization()?;
         state.apply(layer_ui::ColorAction::Shape { shape }).map_err(|reason| reason.message(layer_ui::ColorInputModel::DocumentRgb, localization))?;
         serde_json::to_string(state.wheel_hue_stops()).map_err(error)
     });

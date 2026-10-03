@@ -51,6 +51,34 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal var bootstrap by mutableStateOf<JSONObject?>(null)
         private set
     private var bootstrapForOwner: JSONObject? = null
+    internal val languageTag get() = bootstrap?.getString("active_tag").orEmpty()
+    private val languageWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private var preferredLocales = emptyArray<String>()
+    private fun refreshLanguage() {
+        Native.languageRequest(handle, preferredLocales)?.let { serialized ->
+            val request = JSONObject(serialized)
+            languageWorker.execute {
+                val started = System.nanoTime()
+                val prepared = runCatching { Native.prepareLanguage(request.getString("language")) }
+                if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) Log.i("CapyLanguage",
+                    "language=${request.getString("language")} prepare_ms=${(System.nanoTime() - started) / 1e6}")
+                if (!worker.post {
+                    prepared.onSuccess { context ->
+                        if (disposed || handle == 0L) Native.freeLanguage(context)
+                        else {
+                            Native.publishLanguage(handle, request.getLong("generation"), context, textComposition.active)
+                            publish(true)
+                        }
+                    }.onFailure { Log.e("CapyCanvas", "Could not prepare UI language", it) }
+                }) prepared.getOrNull()?.let { Native.freeLanguage(it) }
+            }
+        }
+        Native.publishLanguage(handle, 0L, 0L, textComposition.active)
+    }
+    internal fun systemLocalesChanged(locales: android.os.LocaleList) {
+        val tags = Array(locales.size()) { locales[it].toLanguageTag() }
+        post { preferredLocales = tags; refreshLanguage(); publish(true) }
+    }
     var snapshot by mutableStateOf<JSONObject?>(null)
         private set
     internal var workspaceManager by mutableStateOf<JSONObject?>(null)
@@ -59,7 +87,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val workspaceTick = object : Runnable {
         override fun run() {
             if (disposed || handle == 0L) return
-            attempt(canvas = false) { updateWorkspaceManager(obj("type" to "tick")); publish(false) }
+            attempt(canvas = false) { refreshLanguage(); updateWorkspaceManager(obj("type" to "tick")); publish(false) }
             worker.postDelayed(this, 100)
         }
     }
@@ -284,6 +312,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 val locales = application.resources.configuration.locales.let { languages ->
                     Array(languages.size()) { languages[it].toLanguageTag() }
                 }
+                preferredLocales = locales
                 val launch = JSONObject(Native.bootstrap(savedSettings, locales))
                 bootstrapForOwner = launch
                 main.post { bootstrap = launch }
@@ -367,6 +396,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 Native.dispatch(handle, action.toString())
             }
             finally { if (tracing) android.os.Trace.endSection() }
+            refreshLanguage()
             refreshChrome()
             publish(true)
             wake()
@@ -805,6 +835,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             lastStartupStage = stage
             Log.i("CapyStartup", "stage=$stage boot_ns=$now")
         }
+        val localization = next.objectOrNull("bootstrap")
+        if (localization != null) bootstrapForOwner = localization
         val state = next.getJSONObject("state")
         val epoch = state.getJSONObject("document_file").optLong("epoch")
         if (epoch != documentEpoch) {
@@ -828,7 +860,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
         if (measuredPublications != null && contentChanged(previousModel, next)) panelContentChanges++
         recordPublication()
-        main.post {
+        main.post { androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+            localization?.let { bootstrap = it }
+            next.objectOrNull("catalog")?.let { catalog = it }
             colorPreview = next.objectOrNull("color_preview")
             commandSearch = state.objectOrNull("command_search")
             (snapshot as? ObservedModel ?: ObservedModel(listOf("state", "state.document_file", "state.layer_tools", "state.brush",
@@ -840,7 +874,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             workspaceModelRevision = geometry?.modelRevision ?: -1L
             if (geometry != null) applyWorkspaceGeometry(geometry) else workspaceGeometry = null
             updateCameraReadout(state.getJSONObject("camera"))
-        }
+        } }
     }
     private fun applyWorkspaceGeometry(next: WorkspaceGeometry) {
         if (next.modelRevision != workspaceModelRevision || next.revision < (workspaceGeometry?.revision ?: -1L)) return
@@ -896,6 +930,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         recovery.close()
         worker.post {
             disposed = true
+            languageWorker.shutdown()
             worker.removeCallbacks(workspaceTick)
             attached = false
             if (handle != 0L) attempt(canvas = false) { updateWorkspaceManager(obj("type" to "close")) }

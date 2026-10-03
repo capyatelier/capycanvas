@@ -617,3 +617,4 @@ workspace-storage-write-failed = 无法保存工作区更改。请重试。
 workspace-storage-full = 工作区存储空间已满。请释放磁盘空间后重试。
 workspace-storage-unavailable = 无法打开工作区存储。请重试。
 workspace-unreadable-name = 无法读取的工作区
+workspace-backup-saved = 工作区备份已保存。

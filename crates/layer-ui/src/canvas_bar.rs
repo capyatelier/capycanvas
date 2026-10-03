@@ -232,6 +232,7 @@ impl CanvasBarCaption {
 
 #[derive(Clone, PartialEq)]
 pub(super) struct CanvasBarKey {
+    language: UiLanguage,
     visible: bool,
     kind: CanvasBarKind,
     toolbar: ToolbarContext,
@@ -552,6 +553,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             plan.items.clear();
         }
         let key = CanvasBarKey {
+            language: self.localization().language(),
             visible,
             kind: plan.kind,
             toolbar: ToolbarContext { generation: 0, ..self.state.toolbar_context() },

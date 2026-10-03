@@ -591,3 +591,4 @@ workspace-storage-write-failed = Workspace changes couldn't be saved. Try again.
 workspace-storage-full = Workspace storage is full. Free disk space and try again.
 workspace-storage-unavailable = Workspace storage couldn't be opened. Try again.
 workspace-unreadable-name = Unreadable workspace
+workspace-backup-saved = Workspace backup saved.

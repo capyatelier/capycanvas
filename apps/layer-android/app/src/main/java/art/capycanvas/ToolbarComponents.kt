@@ -44,8 +44,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 
-private fun toolbarUi(request: JSONObject) = JSONObject(Native.toolbarUi(request.toString()))
-private fun formatted(control: JSONObject, value: Float, units: Boolean = true) = toolbarUi(obj("type" to "number",
+private fun toolbarUi(language: String, request: JSONObject) = JSONObject(Native.toolbarUi(request.toString(), language))
+private fun formatted(language: String, control: JSONObject, value: Float, units: Boolean = true) = toolbarUi(language, obj("type" to "number",
     "request" to obj("control" to control, "value" to value, "operation" to obj("type" to "format")), "compact" to true, "units" to units))
 
 /** Native contacts use the same normalized scale as the Rust numeric control. */
@@ -91,7 +91,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
     val item = obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to id)
     val style = presentation.getString("tile_style")
     val iconSize = presentation.getInt("tile_icon_size")
-    val dimensions = remember(style) { toolbarUi(obj("type" to "style", "style" to style)) }
+    val dimensions = remember(style) { toolbarUi(host.languageTag, obj("type" to "style", "style" to style)) }
     val tileWidth = dimensions.array("size").getDouble(0).toFloat()
     val tileHeight = dimensions.array("size").getDouble(1).toFloat()
     val density = LocalDensity.current.density
@@ -102,14 +102,14 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
         if (control.getString("kind") != "tool_options") {
             val field = model.objectOrNull("numeric")
             val opacity = control.getString("kind") == "brush_opacity_slider"
-            val spec = field?.getJSONObject("numeric") ?: remember(control.toString()) { toolbarUi(obj("type" to "slider_spec", "control" to control)) }
+            val spec = field?.getJSONObject("numeric") ?: remember(control.toString()) { toolbarUi(host.languageTag, obj("type" to "slider_spec", "control" to control)) }
             val value = field?.number("value") ?: spec.number("min")
             val label = field?.getString("label") ?: tile.getString("label")
             val setting = field?.getString("id") ?: if (opacity) "opacity" else "size"
-            val shown = formatted(spec, value)
+            val shown = formatted(host.languageTag, spec, value)
             val marks = model.array("bookmarks").objects()
             val geometry = remember(width, height, vertical) { JSONArray(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
-                "height" to height, "axis" to if (vertical) "vertical" else "horizontal").toString())) }
+                "height" to height, "axis" to if (vertical) "vertical" else "horizontal").toString(), host.languageTag)) }
             var preview by remember { mutableStateOf(false) }
             var stamp by remember { mutableStateOf<JSONObject?>(null) }
             DisposableEffect(preview) {
@@ -125,8 +125,8 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                     Modifier.placed(geometry.getJSONObject(1), density).testTag("component-slider-$id"),
                     contact = { down, moved -> preview = down || !moved }) { fill, snap, travel ->
                     val next = if (snap) org.json.JSONTokener(Native.toolbarUi(obj("type" to "slider_bookmark_value", "control" to control,
-                        "values" to JSONArray(marks.map { it.number("value") }), "position" to fill, "travel" to travel).toString())).nextValue() as Number
-                    else JSONObject(Native.number(obj("control" to spec, "value" to value, "operation" to obj("type" to "position", "position" to fill)).toString())).number("value")
+                        "values" to JSONArray(marks.map { it.number("value") }), "position" to fill, "travel" to travel).toString(), host.languageTag)).nextValue() as Number
+                    else JSONObject(Native.number(obj("control" to spec, "value" to value, "operation" to obj("type" to "position", "position" to fill)).toString(), host.languageTag)).number("value")
                     edit(obj("type" to "set_tool_setting", "id" to setting, "value" to next.toFloat()))
                 }
                 if (preview && field != null) stamp?.let { brush ->
@@ -148,10 +148,10 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
                 else -> "action"
             } }.toString()
             val sizes = remember(measureKey, preferences.toString(), style, vertical, width, textStyle, density) {
-                options.map { toolOptionSize(it, vertical, width, tileWidth, tileHeight, preferences, ::textWidth) }
+                options.map { toolOptionSize(it, vertical, width, tileWidth, tileHeight, preferences, ::textWidth, language = host.languageTag) }
             }
             val layoutKey = sizes.toString()
-            val layout = remember(width, height, vertical, layoutKey, style) { toolbarUi(obj("type" to "options_layout", "width" to width, "height" to height,
+            val layout = remember(width, height, vertical, layoutKey, style) { toolbarUi(host.languageTag, obj("type" to "options_layout", "width" to width, "height" to height,
                 "axis" to if (vertical) "vertical" else "horizontal", "sizes" to JSONArray(sizes.map(::JSONArray)),
                 "button" to dimensions.array("size"), "gap" to if (vertical) dimensions.number("gap") else 10f)) }
             Box(modifier.pointerInput(item.toString()) {
@@ -180,7 +180,7 @@ private fun formatted(control: JSONObject, value: Float, units: Boolean = true) 
 }
 
 internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float, tileWidth: Float, tileHeight: Float,
-    preferences: JSONObject, textWidth: (String) -> Float, caption: String? = null): List<Float> = when {
+    preferences: JSONObject, textWidth: (String) -> Float, caption: String? = null, language: String = ""): List<Float> = when {
     option.has("Range") -> listOf(if (preferences.getBoolean("sliders")) 280f else 100f, 28f)
     option.has("Choice") && option.getJSONObject("Choice").getBoolean("segmented") -> {
         val items = option.getJSONObject("Choice").array("items").objects()
@@ -195,7 +195,7 @@ internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float,
     option.has("Choice") -> listOf(168f, 24f)
     else -> {
         val field = option.getJSONObject("Numeric")
-        val samples = toolbarUi(obj("type" to "numeric_info", "id" to field.getString("id"), "control" to field.getJSONObject("numeric"), "compact" to true, "units" to true)).array("samples")
+        val samples = toolbarUi(language, obj("type" to "numeric_info", "id" to field.getString("id"), "control" to field.getJSONObject("numeric"), "compact" to true, "units" to true)).array("samples")
         val valueWidth = (0 until samples.length()).maxOf { textWidth(samples.getString(it).replace(Regex("[0-9]"), "8")) } + 14f
         listOf((if (preferences.getBoolean("text")) textWidth(field.getString("label")) else 16f) + 4f + valueWidth + if (preferences.getBoolean("sliders")) 60f else 0f, 24f)
     }
@@ -290,26 +290,27 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
 
 @Composable private fun ToolbarNumber(field: JSONObject, vertical: Boolean, style: String,
     labeled: Boolean, preferences: JSONObject, edit: (JSONObject) -> Unit) {
+    val host = LocalCanvasHost.current
     val id = field.getString("id"); val label = field.getString("label"); val control = field.getJSONObject("numeric"); val value = field.number("value")
-    val info = remember(id, control.toString()) { toolbarUi(obj("type" to "numeric_info", "id" to id, "control" to control, "compact" to true, "units" to true)) }
+    val info = remember(id, control.toString(), host.languageTag) { toolbarUi(host.languageTag, obj("type" to "numeric_info", "id" to id, "control" to control, "compact" to true, "units" to true)) }
     val change: (Float) -> Unit = { edit(obj("type" to "set_tool_setting", "id" to id, "value" to it)) }
     val reset = { edit(obj("type" to "reset_tool_setting", "id" to id)) }
-    val shown = formatted(control, value, style != "small")
+    val shown = formatted(host.languageTag, control, value, style != "small")
     var open by remember { mutableStateOf(false) }
     if (vertical) Box(Modifier.fillMaxSize().testTag("toolbar-setting-$id")) {
         val face = Modifier.fillMaxSize().clip(ControlShape).toolbarNumberScrub(control, shown.number("fill"), true,
-            { change(JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to obj("type" to "position", "position" to it)).toString())).number("value")) },
-            { change(JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to obj("type" to "step", "steps" to it)).toString())).number("value")) })
+            { change(JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to obj("type" to "position", "position" to it)).toString(), host.languageTag)).number("value")) },
+            { change(JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to obj("type" to "step", "steps" to it)).toString(), host.languageTag)).number("value")) })
             .clickable { open = true }.padding(horizontal = if (labeled) 8.dp else 2.dp, vertical = if (style == "small") 1.dp else 3.dp)
         if (labeled) Row(face, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             SharedIcon(info.getString("icon"), label, Modifier.size(16.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
                 Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                ToolbarFaceValue(shown.getString("text"), formatted(control, value, false).getString("text"), false)
+                ToolbarFaceValue(shown.getString("text"), formatted(host.languageTag, control, value, false).getString("text"), false)
             }
         } else Column(face, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             SharedIcon(info.getString("icon"), label, Modifier.size(16.dp))
-            ToolbarFaceValue(shown.getString("text"), formatted(control, value, false).getString("text"), style == "small")
+            ToolbarFaceValue(shown.getString("text"), formatted(host.languageTag, control, value, false).getString("text"), style == "small")
         }
         var typing by remember { mutableStateOf(false) }
         LaunchedEffect(open) { if (!open) typing = false }
@@ -471,9 +472,10 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
 
 @Composable private fun BrushSliderPreview(stamp: JSONObject, control: JSONObject, style: String, value: Float, length: Float,
     vertical: Boolean, selected: Boolean, dismiss: () -> Unit, bookmark: () -> Unit) {
+    val host = LocalCanvasHost.current
     val density = LocalDensity.current.density
     val colors = LocalPalette.current
-    val layout = toolbarUi(obj("type" to "slider_preview", "control" to control, "style" to style, "value" to value, "length" to length, "extent" to stamp.number("extent")))
+    val layout = toolbarUi(host.languageTag, obj("type" to "slider_preview", "control" to control, "style" to style, "value" to value, "length" to length, "extent" to stamp.number("extent")))
     val bitmap = remember(stamp) {
         val alpha = stamp.array("alpha"); val size = stamp.getInt("size")
         android.graphics.Bitmap.createBitmap(IntArray(alpha.length()) { (alpha.getInt(it) shl 24) or 0x00ffffff }, size, size, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()

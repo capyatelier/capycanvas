@@ -54,15 +54,20 @@ Setup, build, run and test commands are in the
   Errors and Rust unwinds are contained at each ABI call.
 - **Interface language.** The persistence I/O queue reads saved settings before
   the serial owner creates its native session or starts GPU work. Rust resolves
-  the first launch from those bytes and Foundation's ordered preferred languages;
-  later windows, documents and workspaces retain that process context. A saved
-  Language edit applies after restarting the app. The launch bridge returns only
-  the shared bootstrap view, including failure copy when session creation fails.
-  Bundle language metadata follows the shared shipping inventory. System date
-  formats, keyboard selection and artist-entered text keep their native behavior.
+  each scene from those bytes and Foundation's ordered preferred languages.
+  Language edits prepare an immutable context on a separate worker, then update
+  the existing editor at a safe input boundary. Captured input, composition and
+  app popovers defer that scene's transition until they finish. Accepted settings
+  reach existing and new scenes even when their disk write fails. Each control
+  carries its published language tag; bootstrap, catalog, workspace views and
+  generation arrive together. System date formats, keyboard selection and
+  artist-entered text keep their native behavior. Apple runtime and performance
+  qualification requires the Mac and physical iPad checks in the developer guide.
 - **Snapshot publication.** Request 7 returns `NativeHost::take_layout_update_bytes`
   serialized straight to UTF-8, with `display_status` and `document_tabs`
-  appended by `layer_host::extend_update`. A full snapshot sets
+  appended by `layer_host::extend_update`. A language publication also includes
+  matching `bootstrap`, `catalog`, `language_generation` and, when managed,
+  `workspace_view`. A full snapshot sets
   `workspace_update.model_revision`; later motion packets must match it and
   only move geometry, tab previews and drop hints. `EditorSnapshotState` keeps
   one immutable snapshot and exposes live field, command, panel and menu

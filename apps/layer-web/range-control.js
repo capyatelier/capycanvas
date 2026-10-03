@@ -12,7 +12,7 @@ export function createRangeControl({ app, bounds, label, icon, onChange, prefix 
   let values = bounds.map(f => f.value), domain, contact, retired = false;
   const spec = bounds[0].numeric;
   const inputs = bounds.map((f, i) => {
-    const input = createNumberField({ control: f.numeric, label: `${f.label} — ${label}`, labels:app.numeric_labels(`${f.label} — ${label}`), icon, inline: true, valueOnly: true,
+    const input = createNumberField({ control: f.numeric, label: `${f.label} — ${label}`, labels:next=>app.numeric_labels(next), icon, inline: true, valueOnly: true,
       resolve: request => app.number_input(request), onChange: value => { if (!retired) onChange(i, value); } });
     input.dataset[`${prefix}Setting`] = f.id;
     return input;
@@ -74,6 +74,7 @@ export function createRangeControl({ app, bounds, label, icon, onChange, prefix 
   for (const type of ['pointercancel','lostpointercapture']) track.addEventListener(type, e => { if (contact?.id === e.pointerId) end(true); });
   root.addEventListener('keydown', e => { if (e.key === 'Escape' && contact) { e.preventDefault(); e.stopPropagation(); end(true); } });
   const blur = () => end(true); window.addEventListener('blur', blur);
+  root.relabel = (bounds,next) => {label=next;root.title=next;bounds.forEach((field,i)=>{const title=`${field.label} — ${next}`;inputs[i].relabel(title);handles[i].input.setAttribute('aria-label',title);handles[i].input.title=title;});};
   root.update = next => { values = [...next]; paint(); };
   root.dispose = () => { retired = true; contact = null; inputs.forEach(n => n.cancelEditing()); window.removeEventListener('blur', blur); };
   paint(); return root;

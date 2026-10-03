@@ -63,8 +63,7 @@ pub(super) use picker::{ProfileChooser, ProfilePicker};
 pub(super) async fn preserve_replaced_proof(
     previous: Option<&layer_core::color::ProofRecipe>,
     next: &layer_core::color::ProofRecipe,
-    localizer: &layer_ui::Localizer,
-) -> Result<(), String> {
+) -> Result<(), layer_ui::ColorFeatureError> {
     let Some(previous) = previous.filter(|p| p.profile != next.profile) else {
         return Ok(());
     };
@@ -75,8 +74,7 @@ pub(super) async fn preserve_replaced_proof(
     let name = previous.name.clone();
     gio::spawn_blocking(move || library::store(&library::directory(), &bytes, &name).map(|_| ()))
         .await
-        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile library worker failed".into()).profile_message(localizer))?
-        .map_err(|reason| reason.profile_message(localizer))
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile library worker failed".into()))?
 }
 
 pub(super) fn describe(profile: ColorProfile) -> Result<ExportProfile, layer_ui::ColorFeatureError> {

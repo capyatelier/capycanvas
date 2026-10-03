@@ -77,7 +77,7 @@ import { checkFullscreen } from "./fullscreen.test.mjs";
 import { checkParity } from "./parity.mjs";
 import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
 import { checkAdjustments } from "./effects.test.mjs";
-import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
+import { checkPreferences, checkSettingsParity, checkLiveLanguage } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
 import { checkStagedStartup } from "./startup.test.mjs";
@@ -311,6 +311,7 @@ try {
     }, checkErrors],
     [process.argv.includes("--prediction"), () => checkPrediction({call, evaluate, settle}), checkErrors],
     [packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity") && !process.argv.includes("--smoke"), () => checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost, storageOnly: process.argv.includes("--package-offline") }), checkErrors],
+    [process.argv.includes("--language-switching"), () => checkLiveLanguage({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--preferences"), () => checkPreferences({ call, evaluate, settle, errors }), checkErrors],
     [process.argv.includes("--parity"), () => checkParity({ call, evaluate, settle }), checkErrors],
   ])) {

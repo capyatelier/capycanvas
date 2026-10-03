@@ -17,14 +17,15 @@ pub(crate) struct WorkspaceStatus<'a> {
     view: &'a WorkspaceView,
     can_switch: bool,
     close_attempt: u32,
-    notice: Option<&'a str>,
+    notice: Option<String>,
 }
 
 pub(crate) struct WorkspaceService<S: WorkspaceStore + 'static> {
     controller: WorkspaceController<S>,
     directory: std::path::PathBuf,
-    export: AsyncTask<std::result::Result<(), String>>,
+    export: AsyncTask<Result<()>>,
     notice: Option<String>,
+    notice_source: Option<Result<()>>,
     close_attempt: u32,
     owner_lost: bool,
     published: String,
@@ -43,6 +44,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             directory,
             export: AsyncTask::new(wake),
             notice: None,
+            notice_source: None,
             close_attempt: 0,
             owner_lost: false,
             published: String::new(),
@@ -57,7 +59,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             can_switch: self.accepts_input(now_ms())
                 && native.session.require_workspace_idle().is_ok(),
             close_attempt: self.close_attempt,
-            notice: self.notice.as_deref(),
+            notice: self.notice.clone(),
         }
     }
     pub(crate) fn input(&mut self, native: &mut NativeHost, input: WorkspaceInput) -> Result<()> {
@@ -76,8 +78,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         result
     }
     pub(crate) fn report_error(&mut self, native: &mut NativeHost, error: StoreError) {
-        self.controller.view.error = Some(error.localized_message(native.session.localization()));
+        self.controller.set_error(error);
         self.publish(native);
+    }
+    fn refresh_notice(&mut self, native: &NativeHost) {
+        self.notice = self.notice_source.as_ref().map(|result| match result {
+            Ok(()) => native.session.localization().text(layer_ui::MessageId::WORKSPACE_BACKUP_SAVED).to_string(),
+            Err(error) => error.localized_message(native.session.localization()),
+        });
     }
     fn publish(&mut self, native: &mut NativeHost) {
         let status = serde_json::to_string(&self.status(native)).unwrap_or_default();
@@ -89,6 +97,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     /// Called after accepted changes and on the host's idle service deadline.
     /// This never waits for a reply or repeatedly polls an unwoken future.
     pub(crate) fn poll(&mut self, native: &mut NativeHost, wall_ms: u64) {
+        let relocalize = self.controller.set_localization(native.session.localization().clone());
         let changed = native.take_service_changes();
         self.controller
             .observe_regions(&mut native.session, changed, wall_ms);
@@ -99,11 +108,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             native.apply_change(before, change);
         }
         if let Some(result) = self.export.poll() {
-            self.notice = Some(match result {
-                Ok(()) => "Workspace backup saved.".into(),
-                Err(error) => error,
-            });
+            self.notice_source = Some(result);
+            self.refresh_notice(native);
         }
+        if relocalize { self.refresh_notice(native); }
         let lost = self.controller.view.owner_lost;
         if lost && !self.owner_lost {
             let _ = native.input(layer_ui::UiInput::Blur);
@@ -173,21 +181,20 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             .current()
             .ok_or_else(|| StoreError::invalid("No workspace is open."))?;
         let database = self.directory.join("workspaces.sqlite3");
-        let localization = native.session.localization().clone();
         let job = crate::workspace_async::BlockingTask::start(move || {
             layer_workspace::validate_database_export_destination(&database, Path::new(&path))
-                .map_err(|e| e.to_string())?;
-            let bytes = layer_workspace::export_package(&entity).map_err(|e| e.localized_message(&localization))?;
+                ?;
+            let bytes = layer_workspace::export_package(&entity)?;
             crate::document_io::atomic_write(Path::new(&path), &AtomicBool::new(false), |file| {
                 file.write_all(&bytes)
                     .map_err(|_| "Could not write the workspace backup.".into())
-            })
+            }).map_err(|error| StoreError::new(ErrorKind::FailedWrite, error))
         })
         .map_err(|_| {
             StoreError::new(ErrorKind::Unavailable, "Could not start workspace export.")
         })?;
-        self.notice = None;
-        let _ = self.export.start(async move { job.await.and_then(|r| r) });
+        self.notice = None;self.notice_source = None;
+        let _ = self.export.start(async move { job.await.map_err(|error| StoreError::new(ErrorKind::Unavailable,error)).and_then(|r| r) });
         self.publish(native);
         Ok(())
     }
@@ -197,15 +204,14 @@ impl WorkspaceService<layer_workspace::StoreWorker> {
         self.require_idle()?;
         crate::document_io::location(&path).map_err(StoreError::invalid)?;
         let manager = self.controller.manager.clone();
-        let localization = native.session.localization().clone();
-        self.notice = None;
+        self.notice = None;self.notice_source = None;
         let _ = self.export.start(async move {
             manager
                 .store
                 .backup_database(std::path::Path::new(&path))
                 .await
                 .map(|_| ())
-                .map_err(|e| e.localized_message(&localization))
+
         });
         self.publish(native);
         Ok(())

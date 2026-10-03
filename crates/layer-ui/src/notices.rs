@@ -20,9 +20,22 @@ pub struct NoticeAction {
     pub label: String,
 }
 
+#[derive(Clone, Copy)]
+enum NoticeCopy { Drawing(DrawingRefusal), Stroke(StrokeRefusal) }
+
+impl NoticeCopy {
+    fn text(self, localization: &Localizer) -> String {
+        match self {
+            Self::Drawing(reason) => drawing_refusal_text(reason, localization),
+            Self::Stroke(reason) => stroke_refusal_text(reason, localization),
+        }.to_string()
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Notices {
     last_id: u64,
+    copy: Option<NoticeCopy>,
     action: Option<UiAction>,
     epoch: u64,
     changed: bool,
@@ -70,6 +83,25 @@ fn stroke_refusal_text(refusal: StrokeRefusal, l: &Localizer) -> std::sync::Arc<
 pub(super) const NO_REFERENCE_BELOW: MessageId = MessageId::COMMANDS_REFUSAL_NOTICES_NO_VISIBLE_PHOTO_OR_PAINT_LAYER_BELOW;
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn refresh_notice_localization(&mut self) {
+        if let (Some(copy), Some(notice)) = (self.notices.copy, &mut self.state.notice) {
+            notice.text = copy.text(&self.state.localization);
+            if matches!(copy, NoticeCopy::Stroke(StrokeRefusal::NoCloneSource)) {
+                notice.action = Some(NoticeAction { label: CommandId::CloneSourceArm.localized_label(&self.state.localization).to_string() });
+            }
+            self.notices.changed = true;
+        }
+    }
+
+    pub fn update_notice_text(&mut self, id: u64, text: String) -> bool {
+        let Some(notice) = self.state.notice.as_mut().filter(|notice| notice.id == id) else { return false; };
+        if notice.text != text {
+            notice.text = text;
+            self.notices.changed = true;
+        }
+        true
+    }
+
     pub fn notify(&mut self, text: impl Into<String>) {
         self.raise_notice(text.into(), None);
     }
@@ -81,6 +113,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         notices.epoch = self.state.document_file.epoch;
         notices.changed = true;
         notices.action = action;
+        notices.copy = None;
         self.state.notice = Some(Notice {
             id: notices.last_id,
             text,
@@ -91,6 +124,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn dismiss_notice(&mut self) {
         if self.state.notice.take().is_some() {
             self.notices.action = None;
+            self.notices.copy = None;
             self.notices.changed = true;
         }
     }
@@ -148,11 +182,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         match refusal {
             Some(StrokeRefusal::EmptySource(RetouchSource::References)) if self.reference_below().is_some() => self
                 .offer_reference_below("This layer is empty, and no reference layer below it is marked"),
-            Some(StrokeRefusal::NoCloneSource) => self.raise_notice(
-                stroke_refusal_text(StrokeRefusal::NoCloneSource, self.localization()).to_string(),
-                Some((CommandId::CloneSourceArm.localized_label(self.localization()).to_string(), UiAction::Invoke { command: CommandId::CloneSourceArm })),
-            ),
-            Some(refusal) => self.notify(stroke_refusal_text(refusal, self.localization()).to_string()),
+            Some(refusal) => {
+                let action = (refusal == StrokeRefusal::NoCloneSource).then(|| (
+                    CommandId::CloneSourceArm.localized_label(self.localization()).to_string(),
+                    UiAction::Invoke { command: CommandId::CloneSourceArm },
+                ));
+                self.raise_notice(stroke_refusal_text(refusal, self.localization()).to_string(), action);
+                self.notices.copy = Some(NoticeCopy::Stroke(refusal));
+            }
             None => {}
         }
     }
@@ -169,6 +206,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn notify_drawing_refusal(&mut self) {
         if let Some(refusal) = self.engine.document().drawing_refusal() {
             self.notify(drawing_refusal_text(refusal, self.localization()).to_string());
+            self.notices.copy = Some(NoticeCopy::Drawing(refusal));
         }
     }
 
@@ -217,5 +255,40 @@ impl<R: CanvasRenderer> UiSession<R> {
             let label = format!("Use {} as Reference", layer.name);
             self.raise_notice(text.into(), Some((label, UiAction::Invoke { command: CommandId::UseReferenceBelow })));
         }
+    }
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use super::*;
+    use crate::session::test_support::session;
+
+    #[test]
+    fn notice_language_refresh_preserves_identity_action_and_dry_mask_lifetime() {
+        let mut session = session(Platform::Gtk);
+        session.raise_notice(stroke_refusal_text(StrokeRefusal::NoCloneSource, session.localization()).to_string(),
+            Some((CommandId::CloneSourceArm.localized_label(session.localization()).to_string(), UiAction::Invoke { command: CommandId::CloneSourceArm })));
+        session.notices.copy = Some(NoticeCopy::Stroke(StrokeRefusal::NoCloneSource));
+        session.notices.dry_mask = Some(LayerId(17));
+        let before = session.state.notice.clone().unwrap();
+        let epoch = session.notices.epoch;
+        assert!(session.set_localization(Localizer::shared(UiLanguage::Japanese)));
+        let after = session.state.notice.as_ref().unwrap();
+        assert_eq!(after.id, before.id);
+        assert_ne!(after.text, before.text);
+        assert_ne!(after.action, before.action);
+        assert_eq!(session.notices.epoch, epoch);
+        assert_eq!(session.notices.dry_mask, Some(LayerId(17)));
+        assert!(matches!(session.notices.action, Some(UiAction::Invoke { command: CommandId::CloneSourceArm })));
+        session.notify("literal { $name } 🖌");
+        assert!(session.set_localization(Localizer::shared(UiLanguage::English)));
+        assert_eq!(session.state.notice.as_ref().unwrap().text, "literal { $name } 🖌");
+        let id = session.state.notice.as_ref().unwrap().id;
+        assert!(!session.update_notice_text(id - 1, "stale result".into()));
+        assert!(session.update_notice_text(id, "current result".into()));
+        assert_eq!(session.state.notice.as_ref().unwrap().id, id);
+        assert_eq!(session.state.notice.as_ref().unwrap().text, "current result");
+        session.dismiss_notice();
+        assert!(!session.update_notice_text(id, "late result".into()));
     }
 }

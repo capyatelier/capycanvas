@@ -14,6 +14,14 @@ native frontend. Pointer batches preserve the view revision from the moment thei
 samples were collected. UI snapshots are refreshed when relevant state changes,
 with camera updates tracked separately.
 
+`NativeHost::set_localization` adopts a prepared immutable language context on
+the session owner and replaces retained UI publication baselines and catalog
+copy. Its localization generation belongs to the window and survives drawing
+switches. It does not wake the canvas or change document/request generations.
+Hosts also call `DocumentWindow::set_localization` to refresh generated tab
+captions. Parked sessions catch up when selected, and prepared Open/New sessions
+adopt the current window language before publication without repeating GPU work.
+
 `layer_render_wgpu::AttachedRenderer` wraps an optional `WgpuRasterizer`. This allows a host to create editor
 state before attaching the GPU renderer and preparing its shaders. Pixel operations
 require the attached GPU; the wrapper does not provide a CPU painting fallback.

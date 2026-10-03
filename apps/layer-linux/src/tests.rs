@@ -1005,7 +1005,7 @@ fn native_document_files() {
     // The title-bar customization bank also owns a hidden Cancel button.
     // Target the current native dialog rather than the first label in the window.
     let dialog = w.window.visible_dialog().unwrap();
-    click(&find_button(dialog.upcast_ref(), &layer_ui::new_document_spec(&w.localization).cancel).unwrap());
+    click(&find_button(dialog.upcast_ref(), &layer_ui::new_document_spec(&w.localization()).cancel).unwrap());
     finish();
     assert!(created.borrow().is_none());
     let reopened = Workspace::with_project(&app, Some((project, Some(location))));
@@ -1041,7 +1041,7 @@ fn native_document_files() {
                 .unwrap(),
             1.,
         );
-        click(&find_button(w.window.upcast_ref(), &layer_ui::new_document_spec(&w.localization).cancel).unwrap());
+        click(&find_button(w.window.upcast_ref(), &layer_ui::new_document_spec(&w.localization()).cancel).unwrap());
         pump(180);
         assert!(w.window.is_visible());
         assert!(state(&w).document_file.modified);
@@ -13197,4 +13197,271 @@ fn native_numeric_size_apply_refuses_uncommitted_text() {
         w.window.close();
         pump(60);
     }
+}
+
+
+#[test]
+#[ignore = "private display and hardware GPU live language switching"]
+fn native_live_language_switching() {
+    let (application, active) = crate::application("art.capycanvas.LiveLanguageSwitching");
+    let app = NativeTestApp(application);
+    app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    app.activate_action("new-window", None);
+    until(|| !active.borrow().is_empty(), "new language window created");
+    let w = active.borrow().last().unwrap().clone();
+    new_photo::ready(&w);
+    until(|| find_named(w.window.upcast_ref(), "application-menu-File").is_some(), "language workspace menu ready");
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::OpenSettings { page: SettingsPage::Appearance });
+        pump(100);
+        let choice = named::<adw::ComboRow>(w.preferences.dialog.upcast_ref(), "setting-language");
+        let menus = ApplicationMenu::ALL.map(|id| (id, named::<gtk::MenuButton>(w.window.upcast_ref(), &format!("application-menu-{id:?}"))));
+        let session = ui_session(&w).engine() as *const _ as usize;
+        let document_revision = ui_session(&w).engine().document().revision;
+        for language in UiLanguage::ALL {
+            let selected = 1 + UiLanguage::ALL.iter().position(|candidate| *candidate == language).unwrap() as u32;
+            choice.set_selected(selected);
+            until(|| w.localization().language() == language, "language choice visible");
+            assert_eq!(ui_session(&w).localization().language(), language);
+            assert_eq!(w.preferences.dialog.title().as_str(), w.localization().text(MessageId::SETTINGS_TITLE).as_ref());
+            assert_eq!(choice.title().as_str(), ui_session(&w).preferences().unwrap().pages.iter().flat_map(|page| &page.groups).flat_map(|group| &group.rows).find(|row| row.id == PreferenceId::Language).unwrap().title);
+            assert_eq!(named::<adw::ComboRow>(w.preferences.dialog.upcast_ref(), "setting-language"), choice);
+            for (id, menu) in &menus {
+                assert_eq!(menu.label().as_deref(), Some(id.localized_label(&w.localization()).as_ref()));
+                assert_eq!(named::<gtk::MenuButton>(w.window.upcast_ref(), &format!("application-menu-{id:?}")), *menu);
+            }
+            assert_eq!(ui_session(&w).engine() as *const _ as usize, session);
+            assert_eq!(ui_session(&w).engine().document().revision, document_revision);
+            assert_eq!(choice.pango_context().language().map(|language| language.to_string()), Some(gtk::pango::Language::from_string(language.tag()).to_string()));
+        }
+        choice.set_selected(0);
+        let languages = glib::language_names_with_category("LC_MESSAGES");
+        let tags = languages.iter().map(|tag| tag.as_str()).collect::<Vec<_>>();
+        let system_language = layer_ui::resolve_launch_language(LanguagePreference::System, &tags);
+        until(|| w.localization().language() == system_language, "system language visible");
+        w.dispatch(UiAction::Preferences { action: PreferenceAction::ToggleSearch { open: true } });
+        let settings_search = named::<gtk::SearchEntry>(w.preferences.dialog.upcast_ref(), "settings-search");
+        settings_search.set_text("language 日本語 draft");
+        settings_search.select_region(1, 4);
+        let selection = settings_search.selection_bounds();
+        choice.set_selected(1 + UiLanguage::ALL.iter().position(|language| *language == UiLanguage::Japanese).unwrap() as u32);
+        until(|| w.localization().language() == UiLanguage::Japanese, "pending settings search language visible");
+        assert_eq!(settings_search.text(), "language 日本語 draft");
+        assert_eq!(settings_search.selection_bounds(), selection);
+        assert_eq!(ui_session(&w).preferences().unwrap().query, "language 日本語 draft");
+        w.dispatch(UiAction::CloseSettings);
+        w.dispatch(UiAction::Invoke { command: CommandId::CanvasSize });
+        pump(100);
+        let field = find_named(w.canvas_size.dialog.upcast_ref(), "canvas-size-width").unwrap();
+        let number = descendant::<crate::number_control::NumberControl>(&field).unwrap();
+        let spin = descendant::<gtk::SpinButton>(&number).unwrap();
+        spin.grab_focus();
+        pump(350);
+        spin.set_text("１２＋漢字 abc");
+        spin.select_region(1, 5);
+        let selection = spin.selection_bounds();
+        let revision = ui_session(&w).engine().document().revision;
+        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(1 + UiLanguage::ALL.iter().position(|candidate| *candidate == language).unwrap() as u32) } });
+            until(|| w.localization().language() == language, "dirty dialog language visible");
+            assert_eq!(descendant::<gtk::SpinButton>(&number).unwrap(), spin);
+            assert_eq!(spin.text(), "１２＋漢字 abc");
+            assert_eq!(spin.selection_bounds(), selection);
+            assert!(!number.input_valid());
+            assert!(!w.canvas_size.dialog.is_response_enabled("apply"));
+            assert_eq!(ui_session(&w).engine().document().revision, revision);
+            assert_eq!(w.canvas_size.dialog.heading().as_deref(), Some(state(&w).layer_tools.canvas_size.as_ref().unwrap().title.as_ref()));
+        }
+        w.dispatch(UiAction::CanvasSize { action: CanvasSizeAction::Cancel });
+        let switch = |language| {
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(1 + UiLanguage::ALL.iter().position(|candidate| *candidate == language).unwrap() as u32) } });
+            until(|| w.localization().language() == language, "retained workflow language visible");
+        };
+        w.dispatch(UiAction::OpenSettings { page: SettingsPage::Shortcuts });
+        pump(100);
+        let shortcut_search = named::<gtk::SearchEntry>(w.preferences.dialog.upcast_ref(), "shortcuts-search");
+        shortcut_search.set_text("literal 日本語 🖌");
+        shortcut_search.select_region(1, 4);
+        let shortcut_selection = shortcut_search.selection_bounds();
+        switch(UiLanguage::Korean);
+        assert_eq!(shortcut_search.text(), "literal 日本語 🖌");
+        assert_eq!(ui_session(&w).preferences().unwrap().shortcut_query, "literal 日本語 🖌");
+        w.dispatch(UiAction::Preferences { action: PreferenceAction::BeginShortcut { id: CommandId::Redo.shortcut_id() } });
+        for pressed in [true, false] {
+            w.interact(UiInput::Key { key: "z".into(), pressed, repeat: false, modifiers: Modifiers { command: true, ..Default::default() }, editing: false, divider: None });
+        }
+        pump(100);
+        let recording = named::<adw::ActionRow>(w.window.upcast_ref(), "shortcut-recording");
+        let confirm = named::<gtk::Button>(recording.upcast_ref(), "confirm-shortcut");
+        let cancel = named::<gtk::Button>(recording.upcast_ref(), "cancel-shortcut");
+        assert!(confirm.is_sensitive());
+        confirm.grab_focus();
+        let focus = confirm.root().and_then(|root| root.focus());
+        let chord = ui_session(&w).preferences().unwrap().capture.unwrap().chord;
+        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+            switch(language);
+            let view = ui_session(&w).preferences().unwrap();
+            let capture = view.capture.unwrap();
+            assert_eq!(capture.chord, chord);
+            assert_eq!(capture.conflict.as_deref(), Some(CommandId::Undo.localized_label(&w.localization()).as_ref()));
+            assert_eq!(named::<adw::ActionRow>(w.window.upcast_ref(), "shortcut-recording"), recording);
+            assert_eq!(named::<gtk::Button>(recording.upcast_ref(), "confirm-shortcut"), confirm);
+            assert_eq!(named::<gtk::Button>(recording.upcast_ref(), "cancel-shortcut"), cancel);
+            assert_eq!(recording.title().as_str(), capture.shortcut);
+            assert_eq!(recording.subtitle().as_deref(), Some(capture.notice.as_str()));
+            assert_eq!(confirm.label().as_deref(), Some(w.localization().text(MessageId::NATIVE_SHORTCUTS_REASSIGN).as_ref()));
+            assert_eq!(cancel.label().as_deref(), Some(w.localization().text(MessageId::COMMON_CANCEL).as_ref()));
+            assert_eq!(confirm.root().and_then(|root| root.focus()), focus);
+            assert_eq!(named::<gtk::SearchEntry>(w.preferences.dialog.upcast_ref(), "shortcuts-search"), shortcut_search);
+            assert_eq!(shortcut_search.text(), "literal 日本語 🖌");
+            assert_eq!(shortcut_search.selection_bounds(), shortcut_selection);
+            assert_eq!(view.shortcut_query, "literal 日本語 🖌");
+        }
+        click(&cancel);
+        w.dispatch(UiAction::Preferences { action: PreferenceAction::CloseShortcutEditor });
+        w.dispatch(UiAction::Preferences { action: PreferenceAction::OpenActionPicker { trigger: "touch.tap.2".into() } });
+        pump(100);
+        let picker_search = named::<gtk::SearchEntry>(w.window.upcast_ref(), "action-picker-search");
+        picker_search.set_text("Undo");
+        switch(UiLanguage::Japanese);
+        assert_eq!(picker_search.text(), "Undo");
+        assert_eq!(ui_session(&w).preferences().unwrap().shortcut_page.picker.unwrap().query, "Undo");
+        picker_search.grab_focus();
+        picker_search.select_region(1, 3);
+        let selection = picker_search.selection_bounds();
+        let focus = picker_search.root().and_then(|root| root.focus());
+        let action = named::<adw::ActionRow>(w.window.upcast_ref(), "action-command.Undo");
+        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+            switch(language);
+            assert_eq!(named::<gtk::SearchEntry>(w.window.upcast_ref(), "action-picker-search"), picker_search);
+            assert_eq!(picker_search.text(), "Undo");
+            assert_eq!(picker_search.selection_bounds(), selection);
+            assert_eq!(picker_search.root().and_then(|root| root.focus()), focus);
+            assert_eq!(ui_session(&w).preferences().unwrap().shortcut_page.picker.unwrap().query, "Undo");
+            assert_eq!(named::<adw::ActionRow>(w.window.upcast_ref(), "action-command.Undo"), action);
+            assert_eq!(action.title().as_str(), CommandId::Undo.localized_label(&w.localization()).as_ref());
+        }
+        w.dispatch(UiAction::Preferences { action: PreferenceAction::CloseActionPicker });
+        w.dispatch(UiAction::CloseSettings);
+        w.dispatch(UiAction::Customize { action: CustomizationAction::NewToolbar { group: None } });
+        until(|| w.window.visible_dialog().is_some_and(|dialog| dialog.widget_name() == "tool-picker" && dialog.is_mapped()), "customization picker visible");
+        let picker = w.window.visible_dialog().unwrap();
+        let name = named::<adw::EntryRow>(picker.upcast_ref(), "toolbar-name");
+        let search = named::<gtk::SearchEntry>(picker.upcast_ref(), "tool-search");
+        let confirm = named::<gtk::Button>(picker.upcast_ref(), "confirm-tools");
+        name.set_text("Artist 日本語 draft");
+        search.set_text("pencil");
+        switch(UiLanguage::Japanese);
+        assert_eq!(search.text(), "pencil");
+        assert_eq!(ui_session(&w).tool_picker().unwrap().query, "pencil");
+        search.grab_focus();
+        pump(350);
+        search.select_region(1, 4);
+        let selection = search.selection_bounds();
+        let control = ui_session(&w).tool_picker().unwrap().choices[0].control;
+        let choice_name = format!("tool-choice-{}", serde_json::to_string(&control).unwrap());
+        let choice = named::<gtk::CheckButton>(picker.upcast_ref(), &choice_name);
+        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+            switch(language);
+            let view = ui_session(&w).tool_picker().unwrap();
+            assert_eq!(picker.title().as_str(), view.title.as_ref());
+            assert_eq!(confirm.label().as_deref(), Some(view.confirm_label.as_ref()));
+            assert_eq!(name.text(), "Artist 日本語 draft");
+            assert_eq!(search.text(), "pencil");
+            assert_eq!(search.selection_bounds(), selection);
+            assert_eq!(named::<gtk::CheckButton>(picker.upcast_ref(), &choice_name), choice);
+        }
+        w.dispatch(UiAction::Customize { action: CustomizationAction::CancelTools });
+        w.dispatch(UiAction::Customize { action: CustomizationAction::ManageToolbars });
+        until(|| w.window.visible_dialog().is_some_and(|dialog| dialog.widget_name() == "toolbar-manager" && dialog.is_mapped()), "customization manager visible");
+        let manager = w.window.visible_dialog().unwrap();
+        let list = named::<gtk::ListBox>(manager.upcast_ref(), "managed-toolbars");
+        let row = list.row_at_index(0).unwrap().downcast::<adw::ActionRow>().unwrap();
+        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+            switch(language);
+            let view = ui_session(&w).toolbar_manager().unwrap();
+            assert_eq!(manager.title().as_str(), view.title.as_ref());
+            assert_eq!(list.row_at_index(0).unwrap().downcast::<adw::ActionRow>().unwrap(), row);
+            assert_eq!(row.title().as_str(), view.toolbars[0].title);
+            assert_eq!(row.subtitle().as_deref(), Some(view.toolbars[0].subtitle.as_str()));
+        }
+        w.dispatch(UiAction::Customize { action: CustomizationAction::CloseToolbarManager });
+        new_photo::invoke(&w, CommandId::NewDocument);
+        let dialog = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+        let width = named::<adw::SpinRow>(dialog.upcast_ref(), "new-document-width");
+        width.grab_focus();
+        pump(350);
+        width.set_text("0034");
+        width.select_region(1, 3);
+        assert_eq!(width.text(), "0034");
+        let selection = width.selection_bounds();
+        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+            switch(language);
+            assert_eq!(named::<adw::SpinRow>(dialog.upcast_ref(), "new-document-width"), width);
+            assert_eq!(width.text(), "0034");
+            assert_eq!(width.selection_bounds(), selection);
+            assert_eq!(dialog.heading().as_deref(), Some(layer_ui::new_document_spec(&w.localization()).title.as_ref()));
+        }
+        new_photo::response(&w, "cancel");
+        new_photo::finish(&w);
+        new_photo::invoke(&w, CommandId::ExportDocument);
+        let export = w.window.visible_dialog().unwrap();
+        let size = named::<adw::ComboRow>(export.upcast_ref(), "export-size");
+        size.set_selected(1);
+        new_photo::export_page(&w, "size");
+        let width = named::<crate::number_control::NumberControl>(export.upcast_ref(), "export-width");
+        let entry = descendant::<gtk::Entry>(&width).unwrap();
+        descendant::<gtk::Stack>(&width).unwrap().set_visible_child_name("entry");
+        entry.grab_focus();
+        pump(350);
+        entry.set_text("２３＋draft");
+        entry.select_region(1, 4);
+        let selection = entry.selection_bounds();
+        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+            switch(language);
+            assert_eq!(named::<crate::number_control::NumberControl>(export.upcast_ref(), "export-width"), width);
+            assert_eq!(entry.text(), "２３＋draft");
+            assert_eq!(entry.selection_bounds(), selection);
+            assert_eq!(size.selected(), 1);
+            assert_eq!(named::<adw::NavigationView>(export.upcast_ref(), "export-navigation").visible_page_tag().as_deref(), Some("size"));
+        }
+        entry.set_text("640");
+        assert!(width.commit_text());
+        new_photo::export_page(&w, "main");
+        new_photo::export_page(&w, "presets");
+        named::<adw::ButtonRow>(export.upcast_ref(), "export-preset-save").emit_by_name::<()>("activated", &[]);
+        pump(100);
+        let name_dialog = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+        let name = named::<adw::EntryRow>(name_dialog.upcast_ref(), "export-preset-name");
+        name.grab_focus();
+        pump(350);
+        name.set_text("私のdraft");
+        name.select_region(1, 3);
+        let selection = name.selection_bounds();
+        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+            switch(language);
+            assert_eq!(named::<adw::EntryRow>(name_dialog.upcast_ref(), "export-preset-name"), name);
+            assert_eq!(name.text(), "私のdraft");
+            assert_eq!(name.selection_bounds(), selection);
+            assert_eq!(name_dialog.response_label("cancel").as_str(), w.localization().text(MessageId::COMMON_CANCEL).as_ref());
+        }
+        new_photo::response(&w, "cancel");
+        new_photo::response(&w, "cancel");
+        new_photo::finish(&w);
+        assert_eq!(ui_session(&w).engine() as *const _ as usize, session);
+        assert_eq!(ui_session(&w).engine().document().revision, document_revision);
+        switch(UiLanguage::Japanese);
+        let previous = active.borrow().last().map(|workspace| workspace.window.clone());
+        app.activate_action("new-window", None);
+        until(|| active.borrow().last().is_some_and(|workspace| previous.as_ref() != Some(&workspace.window)), "new window follows current language");
+        let other = active.borrow().last().unwrap().clone();
+        assert_eq!(other.localization().language(), UiLanguage::Japanese);
+        until(|| other.gpu.borrow().is_some(), "new window initialized");
+        assert_eq!(ui_session(&other).localization().language(), UiLanguage::Japanese);
+        other.window.close();
+        pump(100);
+    }
+    w.window.close();
+    pump(100);
 }

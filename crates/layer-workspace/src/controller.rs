@@ -208,9 +208,28 @@ impl Startup {
         }
     }
 }
-type Selection = (Option<ManagerDetails>, Option<DockLayout>);
+enum StartupNoticeCopy {
+    Reset,
+    Volatile(StoreError),
+}
+impl StartupNoticeCopy {
+    fn text(&self, localization: &layer_ui::Localizer) -> String {
+        match self {
+            Self::Reset => localization.text(layer_ui::MessageId::WORKSPACE_STORAGE_RESET_NOTICE).to_string(),
+            Self::Volatile(error) => message(localization, layer_ui::MessageId::WORKSPACE_STORAGE_VOLATILE_NOTICE,
+                &[("detail", error.localized_message(localization))]),
+        }
+    }
+}
+struct StartupNotice {
+    id: u64,
+    generation: u64,
+    copy: StartupNoticeCopy,
+}
+type Selection = (Option<StoredEntity>, Option<DockLayout>);
 pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     localization: Arc<layer_ui::Localizer>,
+    localization_generation: u64,
     pub manager: Rc<WorkspaceManager<S>>,
     pub view: WorkspaceView,
     wake: WakeSlot,
@@ -227,9 +246,9 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     terminating: bool,
     discard: bool,
     resume_key: Option<String>,
-    renew: Option<Task<Vec<(String, String)>>>,
+    renew: Option<Task<Vec<manager::InterruptedChange>>>,
     preview: Option<(u64, Task<Selection>)>,
-    interrupted: Vec<(String, String)>,
+    interrupted: Vec<manager::InterruptedChange>,
     selection_generation: u64,
     generation: Option<u64>,
     last_renew: u64,
@@ -242,10 +261,15 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     binding_key: Option<String>,
     pending_binding: Option<layer_ui::ManagedWorkspace>,
     selected_elsewhere: bool,
-    renew_error: Option<String>,
+    error: Option<StoreError>,
+    switcher_error: Option<StoreError>,
+    renew_error: Option<StoreError>,
+    details_source: Option<StoredEntity>,
+    prompt_source: Option<Metadata>,
     routed: UiChange,
     startup: Option<Startup>,
     startup_error: Option<StoreError>,
+    startup_notice: Option<StartupNotice>,
 }
 impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     pub fn new_localized(store: S, platform: Platform, now: u64, localization: Arc<layer_ui::Localizer>) -> Self {
@@ -254,11 +278,71 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     pub fn localization(&self) -> &Arc<layer_ui::Localizer> {
         &self.localization
     }
+    pub fn set_localization(&mut self, localization: Arc<layer_ui::Localizer>) -> bool {
+        if self.localization.language() == localization.language() {
+            return false;
+        }
+        self.manager.set_localization(localization.clone());
+        self.localization = localization;
+        self.localization_generation = self.localization_generation.wrapping_add(1);
+        let now = self.manager.clock.get();
+        self.refresh_details(now);
+        if let (Some(action), Some(previous)) = (&self.view.prompt_action, &self.view.prompt) {
+            let refreshed = match action {
+                ManagerAction::RecoverInterrupted => recover_prompt(&self.localization, self.interrupted_choices()),
+                _ => self.manager.form_prompt(action, self.prompt_source.as_ref()),
+            };
+            if let Ok(mut prompt) = refreshed {
+                prompt.name = previous.name.clone();
+                prompt.description = previous.description.clone();
+                prompt.selected = previous.selected.clone();
+                self.view.prompt = Some(prompt);
+            }
+        }
+        if let Some(error) = &self.error {
+            self.view.error = Some(error.localized_message(&self.localization));
+        }
+        if let Some(error) = &self.switcher_error {
+            self.view.switcher_error = Some(error.localized_message(&self.localization));
+        }
+        self.pending_binding = self.manager.binding();
+        self.present(now);
+        true
+    }
+    pub fn set_error(&mut self, error: StoreError) {
+        self.view.error = Some(error.localized_message(&self.localization));
+        self.error = Some(error);
+    }
+    fn clear_error(&mut self) {
+        self.view.error = None;
+        self.error = None;
+    }
+    fn set_switcher_error(&mut self, error: Option<StoreError>) {
+        self.view.switcher_error = error.as_ref().map(|error| error.localized_message(&self.localization));
+        self.switcher_error = error;
+    }
+    fn interrupted_choices(&self) -> Vec<(String, String)> {
+        self.interrupted.iter().map(|change| (change.id.clone(), change.label(&self.localization))).collect()
+    }
+    fn refresh_details(&mut self, now: u64) {
+        self.view.details = if self.view.page == Some(ManagerPage::ThisWorkspace) {
+            self.view.selected.as_ref().and_then(|id| serde_json::from_str(id).ok())
+                .and_then(|panel| self.manager.toolbar_details(panel, true).ok())
+        } else {
+            self.details_source.as_ref().map(|stored| {
+                let mut details = self.manager.details(stored, true, now);
+                details.preview = None;
+                details
+            })
+        };
+    }
     pub fn new_owned_localized(store: S, platform: Platform, owner: Owner, now: u64, localization: Arc<layer_ui::Localizer>) -> Self {
         let mut manager = WorkspaceManager::new_localized(store, platform, localization.clone());
         manager.owner = owner;
+        manager.clock.set(now);
         let mut c = Self {
             localization,
+            localization_generation: 0,
             manager: Rc::new(manager),
             view: Default::default(),
             wake: Default::default(),
@@ -290,10 +374,15 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             binding_key: None,
             pending_binding: None,
             selected_elsewhere: false,
+            error: None,
+            switcher_error: None,
             renew_error: None,
+            details_source: None,
+            prompt_source: None,
             routed: UiChange::default(),
             startup: None,
             startup_error: None,
+            startup_notice: None,
         };
         c.view.owner = c.manager.owner.id.clone();
         c.initialize(now);
@@ -390,13 +479,22 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.start(next, now);
         true
     }
-    fn startup_notice(&self) -> Option<String> {
+    fn startup_notice_copy(&self) -> Option<StartupNoticeCopy> {
         match self.startup? {
             Startup::Stored => None,
-            Startup::Replaced => {
-                Some(self.localization.text(layer_ui::MessageId::WORKSPACE_STORAGE_RESET_NOTICE).to_string())
+            Startup::Replaced => Some(StartupNoticeCopy::Reset),
+            Startup::InMemory => Some(StartupNoticeCopy::Volatile(self.startup_error.clone()?)),
+        }
+    }
+    fn refresh_startup_notice<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>) {
+        if let Some(notice) = &mut self.startup_notice
+            && notice.generation != self.localization_generation
+        {
+            if session.update_notice_text(notice.id, notice.copy.text(&self.localization)) {
+                notice.generation = self.localization_generation;
+            } else {
+                self.startup_notice = None;
             }
-            Startup::InMemory => Some(message(&self.localization, layer_ui::MessageId::WORKSPACE_STORAGE_VOLATILE_NOTICE, &[("detail", self.startup_error.as_ref()?.localized_message(&self.localization))])),
         }
     }
     pub fn observe<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) {
@@ -457,12 +555,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     fn close_prompt(&mut self) {
         self.view.prompt = None;
         self.view.prompt_action = None;
+        self.prompt_source = None;
     }
     fn dismiss<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>) -> UiChange {
         let change = self.stop_preview(session);
         self.close_prompt();
         self.view.page = None;
         self.view.details = None;
+        self.details_source = None;
         self.view.selected = None;
         self.view.query.clear();
         if self.task.is_none() && self.incoming.is_none() && self.install.is_none() {
@@ -639,11 +739,12 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         &mut self,
         session: &mut UiSession<R>,
         id: Option<String>,
-        now: u64,
+        _now: u64,
     ) -> Result<UiChange> {
         let change = self.stop_preview(session);
         self.view.selected = id.clone();
         self.view.details = None;
+        self.details_source = None;
         self.view.enabled = false;
         let (Some(id), Some(page)) = (id, self.view.page) else {
             return Ok(change);
@@ -680,9 +781,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     Some(stored) => stored,
                     None => m.load(&id).await?,
                 };
-                let mut details = m.details(&stored, true, now);
-                let layout = details.preview.take();
-                Ok((Some(details), layout))
+                let layout = match &stored.entity.content {
+                    ItemContent::Workspace { history, .. } => Some(history.layout().clone()),
+                    ItemContent::Toolbar { .. } => None,
+                };
+                Ok((Some(stored), layout))
             })
             .map(|task| (self.selection_generation, task));
         Ok(change)
@@ -712,11 +815,12 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 | WorkspaceInput::FocusFailed { .. }
         ) && (self.view.ready || !matches!(input, WorkspaceInput::Close))
         {
-            self.view.error = if matches!(input, WorkspaceInput::Cancel | WorkspaceInput::Dismiss) {
-                self.manager.error().map(|error| error.localized_message(&self.localization))
-            } else {
-                None
-            };
+            self.clear_error();
+            if matches!(input, WorkspaceInput::Cancel | WorkspaceInput::Dismiss)
+                && let Some(error) = self.manager.error()
+            {
+                self.set_error(error);
+            }
         }
         self.view.focus_window = None;
         let mut change = UiChange::default();
@@ -725,11 +829,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 if !self.view.ready || self.terminating {
                     return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::OpenAWorkspaceBeforeEditingItsSwitcher));
                 }
-                self.view.switcher_error = None;
+                self.set_switcher_error(None);
                 self.preference_edits.push_back(edit);
             }
             WorkspaceInput::RefreshSwitcher => self.refresh_preferences = true,
-            WorkspaceInput::FocusFailed { error } => self.view.error = Some(error),
+            WorkspaceInput::FocusFailed { error } => {
+                self.error = None;
+                self.view.error = Some(error);
+            },
             WorkspaceInput::Search { query } => {
                 if self.view.page.is_some() && self.view.prompt.is_none() {
                     self.view.query = query;
@@ -808,7 +915,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 {
                     // Adoption may have failed after publication. Retry that
                     // validated capture without queuing behind itself.
-                    self.view.error = None;
+                    self.clear_error();
                     return Ok(change);
                 }
                 if self.task.is_some() || self.incoming.is_some() || self.install.is_some() {
@@ -883,6 +990,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         }
         self.view.page = Some(page);
         self.view.details = None;
+        self.details_source = None;
         self.view.selected = match page {
             ManagerPage::Workspaces => self.manager.active_id(),
             ManagerPage::History => history,
@@ -920,7 +1028,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             _ => None,
         };
         let prompt = match &action {
-            ManagerAction::RecoverInterrupted => recover_prompt(&self.localization, self.interrupted.clone())?,
+            ManagerAction::RecoverInterrupted => recover_prompt(&self.localization, self.interrupted_choices())?,
             _ => self.manager.form_prompt(&action, source.as_ref())?,
         };
         self.start_transition(session)?;
@@ -937,6 +1045,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     .map_err(StoreError::invalid)?,
             );
         }
+        self.prompt_source = source;
         self.view.prompt = Some(prompt);
         self.view.prompt_action = Some(action);
         Ok(change)
@@ -1299,6 +1408,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             match session.dispatch(UiAction::CompleteRequest { id, error: None }) {
                 Ok(c) => merge(&mut self.routed, c),
                 Err(error) => {
+                    self.error = None;
                     self.view.error = Some(error);
                     continue;
                 }
@@ -1313,7 +1423,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     None => Ok(UiChange::default()),
                 }) {
                 Ok(c) => merge(&mut self.routed, c),
-                Err(error) => self.view.error = Some(error.localized_message(&self.localization)),
+                Err(error) => self.set_error(error),
             }
         }
     }
@@ -1345,6 +1455,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     }
     pub fn tick<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) -> UiChange {
         self.manager.clock.set(now);
+        self.refresh_startup_notice(session);
         self.route_requests(session, now);
         let mut change = std::mem::take(&mut self.routed);
         let mut presentation_changed = false;
@@ -1358,13 +1469,13 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             presentation_changed = true;
             match result {
                 Ok(()) => {
-                    self.view.switcher_error = None;
+                    self.set_switcher_error(None);
                     if self.preferences_edited {
                         self.view.switcher_revision = self.view.switcher_revision.wrapping_add(1);
                     }
                     self.pending_binding = self.manager.binding();
                 }
-                Err(error) => self.view.switcher_error = Some(error.localized_message(&self.localization)),
+                Err(error) => self.set_switcher_error(Some(error)),
             }
             self.preferences_edited = false;
         }
@@ -1430,7 +1541,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         if self.view.page.is_some() && !self.suspended {
                             match self.select(session, self.view.selected.clone(), now) {
                                 Ok(c) => merge(&mut change, c),
-                                Err(e) => self.view.error = Some(e.localized_message(&self.localization)),
+                                Err(e) => self.set_error(e),
                             }
                         }
                     }
@@ -1442,7 +1553,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }
                 Err(e) => {
                     if !self.restart(e.clone(), now) {
-                        self.view.error = Some(e.localized_message(&self.localization));
+                        self.set_error(e);
                         if self.view.page.is_none() && self.view.prompt.is_none() {
                             self.end_transition(session);
                         }
@@ -1461,7 +1572,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 match self.install_toolbar(session, install, now) {
                     Ok(c) => merge(&mut change, c),
                     Err(e) => {
-                        self.view.error = Some(e.localized_message(&self.localization));
+                        self.set_error(e);
                         if self.view.page.is_none() && self.view.prompt.is_none() {
                             self.end_transition(session);
                         }
@@ -1475,7 +1586,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Ok(incoming) => self.incoming = Some(incoming),
                 Err(e) => {
                     if !self.restart(e.clone(), now) {
-                        self.view.error = Some(e.localized_message(&self.localization));
+                        self.set_error(e);
                     }
                 }
             }
@@ -1532,9 +1643,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .capture()
                 .and_then(|c| PreparedWorkspace::new(c).map_err(StoreError::workspace));
             if prepared.is_ok()
-                && let Some(notice) = self.startup_notice()
+                && let Some(copy) = self.startup_notice_copy()
             {
-                session.notify(notice);
+                session.notify(copy.text(&self.localization));
+                self.startup_notice = session.state().notice.as_ref().map(|notice| StartupNotice {
+                    id: notice.id,
+                    generation: self.localization_generation,
+                    copy,
+                });
             }
             match prepared.and_then(|p| session.adopt_workspace(p).map_err(StoreError::invalid)) {
                 Ok(c) => {
@@ -1563,10 +1679,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         self.last_renew = 0;
                     }
                     self.view.ready = true;
-                    self.view.error = None;
+                    self.clear_error();
                     self.view.owner_lost = false;
                     self.view.page = None;
                     self.view.details = None;
+                    self.details_source = None;
                     self.view.selected = None;
                     self.view.query.clear();
                     self.close_prompt();
@@ -1578,7 +1695,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Err(e) => {
                     if !self.restart(e.clone(), now) {
                         self.incoming = Some(incoming);
-                        self.view.error = Some(e.localized_message(&self.localization));
+                        self.set_error(e);
                     }
                 }
             }
@@ -1592,7 +1709,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             presentation_changed = true;
             if generation == self.selection_generation && self.view.page.is_some() {
                 let shown = result.and_then(|(details, layout)| {
-                    self.view.details = details;
+                    self.details_source = details;
+                    self.refresh_details(now);
                     match layout.filter(|_| self.preview_open) {
                         Some(layout) => session
                             .preview_workspace_layout(&layout)
@@ -1603,7 +1721,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 match shown {
                     Ok(c) => merge(&mut change, c),
                     Err(e) => {
-                        self.view.error = Some(e.localized_message(&self.localization));
+                        self.set_error(e);
                         self.view.selected = None;
                     }
                 }
@@ -1618,9 +1736,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     self.view.owner_lost = false;
                     session.set_workspace_read_only(self.suspended);
                     if let Some(error) = self.renew_error.take()
-                        && self.view.error.as_ref() == Some(&error)
+                        && self.error.as_ref() == Some(&error)
                     {
-                        self.view.error = None;
+                        self.clear_error();
                     }
                 }
                 Err(e) => {
@@ -1630,8 +1748,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         self.view.owner_lost = true;
                         session.set_workspace_read_only(true);
                     }
-                    self.renew_error = Some(e.localized_message(&self.localization));
-                    self.view.error = self.renew_error.clone();
+                    self.renew_error = Some(e.clone());
+                    self.set_error(e);
                 }
             }
         }
@@ -1649,7 +1767,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             }
             self.renew = self.spawn(async move {
                 m.revalidate_owner(now).await?;
-                Ok(m.interrupted_changes(now).await.unwrap_or_default())
+                Ok(m.interrupted_change_sources(now).await.unwrap_or_default())
             });
         }
         if (self.view.ready || self.discard) && self.task.is_none() && self.incoming.is_none() {
@@ -1691,7 +1809,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         {
             match self.input(session, input, now) {
                 Ok(c) => merge(&mut change, c),
-                Err(e) => self.view.error = Some(e.localized_message(&self.localization)),
+                Err(e) => self.set_error(e),
             }
         }
         if presentation_changed {
@@ -1706,7 +1824,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             {
                 match self.select(session, None, now) {
                     Ok(c) => merge(&mut change, c),
-                    Err(error) => self.view.error = Some(error.localized_message(&self.localization)),
+                    Err(error) => self.set_error(error),
                 }
             }
         }
@@ -1723,7 +1841,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         self.binding_key = Some(key);
                         merge(&mut change, c);
                     }
-                    Err(e) => self.view.error = Some(e),
+                    Err(e) => {
+                        self.error = None;
+                        self.view.error = Some(e);
+                    },
                 }
             }
         }
@@ -1734,3 +1855,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         change
     }
 }
+
+#[cfg(test)]
+#[path = "controller_localization_tests.rs"]
+mod localization_tests;

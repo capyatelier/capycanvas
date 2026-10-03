@@ -3,11 +3,12 @@ import { composingKey } from "./text-input.js";
 // range-mapping, unit-formatting or rounding rules are duplicated here.
 export function createNumberField({ control, label, labels: captions, resolve, onChange, icon, inline = false, widthSamples, valueOnly = false }) {
   const node = (tag, cls) => { const el = document.createElement(tag); el.className = cls; return el; };
+  const initialCaptions = typeof captions === "function" ? captions(label) : captions;
   const root = node("div", `number-control number-${control.kind}`);
   const header = node("div", "number-header"), labels = node("div", "number-labels");
   const title = node("span", "number-title"); title.textContent = label; title.title = label; labels.append(title);
   const valueButton = node("button", "number-value"); valueButton.type = "button";
-  valueButton.setAttribute("aria-label", captions.edit);
+  valueButton.setAttribute("aria-label", initialCaptions.edit);
   const entry = node("input", "number-entry"); entry.type = "text"; entry.inputMode = "decimal";
   entry.spellcheck = false; entry.autocomplete = "off"; entry.setAttribute("aria-label", label);
   const valueBox = node("div", "number-value-box"); valueBox.append(valueButton, entry);
@@ -21,7 +22,7 @@ export function createNumberField({ control, label, labels: captions, resolve, o
     button.addEventListener("click", () => { if (finish()) apply({ type: "step", steps }); });
     return button;
   };
-  const minus = step(-1, "minus", captions.decrease), plus = step(1, "plus", captions.increase);
+  const minus = step(-1, "minus", initialCaptions.decrease), plus = step(1, "plus", initialCaptions.increase);
   const ranged = control.kind === "slider";
   const buttonValue = ranged || valueOnly;
   if (ranged) { track.append(minus, slider, plus); root.append(track); }
@@ -87,6 +88,19 @@ export function createNumberField({ control, label, labels: captions, resolve, o
   root.setDescription = text => {
     labels.querySelector('.number-description')?.remove();
     if (text) { const p = node("p", "number-description"); p.textContent = text; labels.append(p); }
+  };
+  root.relabel = next => {
+    label = next;
+    const text = typeof captions === "function" ? captions(next) : captions;
+    title.textContent = title.title = next;
+    if (inline) root.title = next;
+    entry.setAttribute("aria-label", next); slider.setAttribute("aria-label", next);
+    valueButton.setAttribute("aria-label", text.edit);
+    minus.setAttribute("aria-label", text.decrease); plus.setAttribute("aria-label", text.increase);
+    if (root.classList.contains("error")) {
+      try { resolve({control, value, operation:{type:"expression",text:entry.value}}); }
+      catch (error) { entry.title = String(error); }
+    }
   };
   root.entry = entry;
   root.valueButton = valueButton;

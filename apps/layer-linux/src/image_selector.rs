@@ -49,6 +49,13 @@ impl ImageSelector {
         Self { widget, buttons }
     }
 
+    pub fn set_labels(&self, labels: &[String]) {
+        for (button, label) in self.buttons.iter().zip(labels) {
+            button.set_tooltip_text(Some(label));
+            button.update_property(&[gtk::accessible::Property::Label(label)]);
+        }
+    }
+
     pub fn set_selected(&self, selected: u32) {
         if let Some(button) = self.buttons.get(selected as usize) {
             button.set_active(true);

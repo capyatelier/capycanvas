@@ -47,12 +47,29 @@ and `files.rs` supplies native dialogs and project/photo transport.
 
 ## Native text input
 
-Editable submission paths use `input::guard_entry_activation` before attaching
-activate callbacks or enabling a default dialog action. It preserves native IME
+Editable submission paths use `input::guard_entry_activation` for entries and
+`input::guard_editable_activation` for editable rows before attaching activate
+callbacks or enabling a default dialog action. The guard preserves native IME
 delivery and retains the physical key through commit, activation and release.
 Candidate confirmation or cancellation must not also submit or dismiss the app
 view. Existing Escape handlers consult the same ownership state; focus loss and
 unmapping retire it.
+
+## Language changes
+
+The GTK window prepares language catalogs on a worker, then adopts the shared
+localization snapshot between canvas interactions, menu selections and native
+composition key sequences. Existing numeric editors, layer rename fields and command search
+entries retain their widgets and drafts. Each window has its own published
+snapshot; the application's settings action delivers the current preference to
+other windows before persistence completes. Mapped and future widgets use the
+window's current Pango language. Shared search queries are forwarded from the
+native editable change signal so a projection cannot overwrite an edit while
+GTK's delayed search signal is pending.
+
+`native_live_language_switching` exercises the Language preference in both
+themes and verifies retained editors, document revisions and numeric refusals.
+Run it on the private display with the same command used for other native tests.
 
 ## Tests
 

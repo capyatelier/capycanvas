@@ -77,7 +77,7 @@ private class BarFrame {
     fun textWidth(text: String) = measurer.measure(text, textStyle).size.width / density
     fun width(item: JSONObject) = if (!item.isNull("menu")) menuButtonWidth(item.getString("label"), ::textWidth)
         else toolOptionSize(item.getJSONObject("option"), false, 0f, BarItemHeight, BarItemHeight, BarItemStyle, ::textWidth,
-            item.getString("label"))[0]
+            item.getString("label"), language = host.languageTag)[0]
     val itemWidths = remember(view.opt("items"), textStyle, density) { items.map(::width) }
     val completionWidths = remember(view.opt("completion"), textStyle, density) { completion.map(::width) }
     val labelWidth = remember(label, textStyle, density) { label?.let { ceil(textWidth(it)) + 2 * BarLabelPadding } ?: 0f }

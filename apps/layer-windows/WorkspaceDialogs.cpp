@@ -208,6 +208,7 @@ struct WorkspaceDialogs::Impl:std::enable_shared_from_this<Impl>{
     }
     void hide(){if(showing&&!closing){programmatic=true;closing=true;dialog.Hide();}}
     void apply(J const& snapshot,bool blocked){
+        data->adoptLocalization(snapshot);
         if(!snapshot.HasKey(L"state"))return;
         data->model=snapshot;data->state=object(snapshot,L"state");data->refreshPalette();
         auto next=desiredKind(),nextIdentity=identity(next);

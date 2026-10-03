@@ -1,9 +1,11 @@
+import {liveCopy,bindCopy} from './localization.js';
 // Retained DOM projection of Rust's title bar. DOM measurements are inputs;
 // allocation, overflow, drag slots, validation and publication stay in Rust.
 import { pickerButtonAction } from './color-controls.js';
 import { workspaceSwitcherMenu } from './workspace-switcher.js';
 
 export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
+  const copy=liveCopy(app,"catalog").native_copy.header;
   const root = document.querySelector('#header');
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
   const title = documents.title;
@@ -14,12 +16,12 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   root.replaceChildren(); root.tabIndex = -1;
   customization.target(root, {kind:'header', id:null});
   const bank = element('div', 'header-editor chrome'); bank.id = 'header-editor'; bank.hidden = true;
-  bank.setAttribute('aria-label', 'Customize Title Bar'); workspace.append(bank);
+  bindCopy(bank,()=>copy.customize,"ariaLabel"); workspace.append(bank);
   const records = new Map(), chips = new Map(), bars = [];
   const zones = ['left','center','right'].map(zone => {
     const node = element('div', 'header-zone'); node.dataset.zone = zone; root.append(node); return node;
   });
-  let view, modelKey, geometry, metrics, insets = [0,0], size, editing = false, selected = null;
+  let menuModels, view, modelKey, geometry, metrics, insets = [0,0], size, editing = false, selected = null;
   let contact, ghost, frame = 0, measured = '', suppressed = null;
   let buttonContact, measurementTheme, refreshKey;
   function clearButtonPress(e) {
@@ -55,7 +57,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     node.addEventListener('toggle', () => {if(node.open)node.refreshMenu(true); updateZen();});
     return node;
   }
-  const application = id => app.editor_models(0,0).application_menus.find(m=>m.id===id).model;
+  const application = id => menuModels.find(m=>m.id===id).model;
   const primary = () => app.header_view().primary_menu;
   const workspaceChoices = () => workspaceSwitcherMenu(JSON.parse(app.workspace_view()));
   const recoveryMenu = menu(primary, 'Title bar recovery: menus and customization', 'menu');
@@ -113,7 +115,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     } else if(kind==='menu') content.append(menu(primary,'Main Menu','menu','header-menu-overflow'));
     else if(kind==='menu_labels') {
       const labels=element('div','header-menu-labels');
-      for(const spec of app.editor_models(0,0).application_menus) {
+      for(const spec of menuModels) {
         const m=menu(()=>application(spec.id),spec.label); m.dataset.menu=spec.id;
         if(spec.id==='window')m.querySelector('.popover').id='workspace-menu'; labels.append(m);
       }
@@ -159,6 +161,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     const nextKey=JSON.stringify([view,state().theme,state().commands,state().workspace.layout.canvas_info.visible]);
     if(nextKey===refreshKey)return;
     refreshKey=nextKey;
+    menuModels=app.application_menus();
     size=view.sizes.find(s=>s.id===view.model.size);
     const key=JSON.stringify([view.model,view.editing]);
     const remeasure=key!==modelKey || measurementTheme!==state().theme;
@@ -198,6 +201,10 @@ export function createHeader({app, state, workspace, element, button, icon, plac
         r.button.disabled=!editing&&(!spec.enabled||(kind==='fullscreen'&&!document.fullscreenEnabled));
         r.button.setAttribute('aria-pressed',String(spec.selected));
         r.button.classList.toggle('brush-color',r.entry.item.control?.kind==='color');
+      }
+      if(r.full)for(const menu of r.full.querySelectorAll('[data-menu]')) {
+        const label=menuModels.find(m=>m.id===menu.dataset.menu)?.label;
+        if(label){const summary=menu.querySelector('summary');summary.textContent=label;summary.setAttribute('aria-label',label);}
       }
       if(r.status)r.placeholder.hidden=!editing||!r.status.hidden;
     }

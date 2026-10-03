@@ -7,8 +7,8 @@ fn switch(w: &Rc<Workspace>, id: u64) {
         .block_on(w.documents.activate(w, id))
         .unwrap();
     new_photo::ready(w);
-    assert!(std::sync::Arc::ptr_eq(ui_session(w).localization(), &w.localization));
-    assert_eq!(ui_session(w).localization().language(), w.localization.language());
+    assert!(std::sync::Arc::ptr_eq(ui_session(w).localization(), &w.localization()));
+    assert_eq!(ui_session(w).localization().language(), w.localization().language());
 }
 
 #[test]

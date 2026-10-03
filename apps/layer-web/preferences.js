@@ -1,12 +1,13 @@
 import { composingKey } from "./text-input.js";
 import {chooseProfileLibrary} from './export-controls.js';
+import { liveCopy } from './localization.js';
 import {createShortcutPage} from './shortcut-page.js';
 // DOM adapter for the same PreferencesView as GTK. Definitions, dependencies,
 // validation, search, recording and conflicts are all resolved in Rust.
 export function createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view, nativeCopy }) {
   const dialog = document.getElementById("settings");
-  const bootstrap = app.bootstrap_view();
-  const profileCopy = app.profile_copy();
+  const bootstrap = liveCopy(app, "bootstrap_view");
+  const profileCopy = liveCopy(app, "profile_copy");
   const send = (action) => dispatch({ type: "preferences", action });
   const close = () => dispatch({ type: "close_settings" });
   const context = element("div", "panel-context-menu preference-context-menu");
@@ -39,7 +40,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
           } catch (failure) { console.error(failure); error.textContent = app.document_delivery_message({type:"clipboard_shared",detail:String(failure)}); }
         });
         item.setAttribute("role", "menuitem");
-        item.append(element("span", "command-label", label), element("span", "shortcut-hint", shortcut));
+        item.append(element("span", "command-label", ()=>view()?.text_edit_menu.find(item=>item.action===operation)?.label??""), element("span", "shortcut-hint", shortcut));
         item.disabled = ["cut", "copy"].includes(operation) ? start === end : operation === "select_all" && !original;
         context.append(item);
       }
@@ -52,7 +53,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
     });
     reset.dataset.reset = row.id; reset.setAttribute("role", "menuitem");
     reset.disabled = !row.reset.enabled;
-    reset.append(element("span", "command-label", row.reset.label), element("span", "shortcut-hint", row.reset.hint));
+    reset.append(element("span", "command-label", ()=>modelRow(row.id)?.reset?.label??""), element("span", "shortcut-hint", row.reset.hint));
     context.append(reset); context.showPopover();
     const rect = context.getBoundingClientRect();
     context.style.left = `${Math.max(6, Math.min(x, innerWidth - rect.width - 6))}px`;
@@ -169,7 +170,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   dialog.addEventListener("cancel", (e) => { e.preventDefault(); if (view() && shortcutPage.title(view())) shortcutPage.back(view()); else close(); });
 
   let searchSignature = "", searchFocus = 0, revealed = null;
-  const shortcutPage = createShortcutPage({ element, button, icon, send, view, scroller: pages, settingsGroup, dropdown });
+  const shortcutPage = createShortcutPage({ app, element, button, icon, send, view, scroller: pages, settingsGroup, dropdown, copy:nativeCopy.shortcuts, common:bootstrap.common });
 
   const fields = new Map(), pageNodes = new Map(), tabs = new Map(), groups = [];
   function paintSwatches(widget, input, kind) {
@@ -211,7 +212,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       const container = shortcutPage.container(page.id, node);
       for (const group of page.groups) {
         const { section, list } = settingsGroup(group.title); container.append(section);
-        groups.push([group.rows.map((r) => r.id), section]);
+        groups.push([group.rows.map((r) => r.id), section, page.id]);
         for (const row of group.rows) {
           const line = element("div", "preference-row"), text = element("div", "preference-text");
           if (row.reset) line.dataset.preference = row.id;
@@ -304,7 +305,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
           line.append(widget); list.append(line); fields.set(row.id, { line, input, widget, controls: [input, ...widget.querySelectorAll("button")] });
         }
       }
-      if(page.id==="color")node.append(button(profileCopy.manage,()=>chooseProfileLibrary({app,element,button,manage:true})));
+      if(page.id==="color")node.append(button(() => profileCopy.manage,()=>chooseProfileLibrary({app,element,button,manage:true})));
     }
   }
   return function refresh(model) {
@@ -328,7 +329,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
     if (contextId) {
       const row = model.pages.find(p => p.id === model.page)?.groups.flatMap(g => g.rows).find(r => r.id === contextId);
       if (!row?.visible) dismissContext();
-      else context.querySelector("[data-reset]").disabled = !row.reset.enabled;
+      else { context.setAttribute("aria-label",row.title); context.querySelector("[data-reset]").disabled = !row.reset.enabled; }
     }
     if (empty.hidden !== !model.empty) empty.hidden = !model.empty;
     const subpage = shortcutPage.title(model);
@@ -359,11 +360,30 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       }
       searchSignature = resultsSignature;
     }
+    subpageBack.setAttribute("aria-label",bootstrap.common.back);
+    for (const page of model.pages) {
+      tabs.get(page.id).querySelector("span").textContent=page.title;
+      pageNodes.get(page.id).setAttribute("aria-label",page.title);
+      for (const [ids,section,pageId] of groups) if(pageId===page.id) {
+        const group=page.groups.find(g=>g.rows.some(r=>ids.includes(r.id)));
+        const heading=section.querySelector("h3");if(heading&&group)heading.textContent=group.title;
+      }
+    }
     for (const [id, node] of pageNodes) if (node.hidden !== (id !== model.page)) node.hidden = id !== model.page;
     for (const [id, tab] of tabs) if (tab.getAttribute("aria-selected") !== String(id === model.page)) tab.setAttribute("aria-selected", String(id === model.page));
     const visible = new Set();
     for (const row of model.pages.flatMap((p) => p.groups.flatMap((g) => g.rows))) {
       const field = fields.get(row.id), { line, input, widget, controls } = field;
+      const text=line.querySelector(".preference-text");
+      if(text){text.querySelector("label").textContent=row.title;const description=text.querySelector("p");if(description)description.textContent=row.description??"";}
+      input.setAttribute("aria-label",row.title);widget.querySelector("summary")?.setAttribute("aria-label",row.title);
+      for(const choice of widget.querySelectorAll("[data-choice],[data-swatch]")) {
+        const label=choice.dataset.swatch!=null?row.kind.swatches[Number(choice.dataset.swatch)].label:row.kind.options[Number(choice.dataset.choice)];
+        choice.title=label;choice.setAttribute("aria-label",label);
+      }
+      if(row.kind.type==="number"){input.relabel(row.title);input.setDescription(row.description);}
+      else if(row.kind.type==="info")input.textContent=row.kind.value;
+      else if(row.kind.type==="link")input.textContent=row.kind.label;
       if (line.hidden !== !row.visible) line.hidden = !row.visible;
       if (row.visible) visible.add(row.id);
       line.classList.toggle("disabled", !row.enabled);

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct WorkspaceSwitcherRows: View {
+    @Environment(\.capyInterfaceLanguage) private var interfaceLanguage
     @Environment(\.capyNativeCopy) private var nativeCopy
     // Match the web manager's 55-point content plus divider and Android's
     // 56dp row minimum. Keep the actual controls tall, not just their spacing.
@@ -24,10 +25,10 @@ struct WorkspaceSwitcherRows: View {
         for row in rows {
             let id = row["id"].string, title = row["title"].string
             titles[id] = title
-            reorder[id] = optionTitles[id] == title ? reorderCaptions[id] : NativeTextContext.caption(["type": "reorder", "title": title])
-            switches[id] = optionTitles[id] == title ? switchCaptions[id] : NativeTextContext.caption(["type": "switch_workspace", "title": title])
+            reorder[id] = optionTitles[id] == title ? reorderCaptions[id] : NativeTextContext.caption(["type": "reorder", "title": title], language: interfaceLanguage)
+            switches[id] = optionTitles[id] == title ? switchCaptions[id] : NativeTextContext.caption(["type": "switch_workspace", "title": title], language: interfaceLanguage)
             captions[id] = optionTitles[id] == title ? optionCaptions[id]
-                : NativeTextContext.caption(["type": "options_for", "title": title])
+                : NativeTextContext.caption(["type": "options_for", "title": title], language: interfaceLanguage)
         }
         optionTitles = titles; optionCaptions = captions; reorderCaptions = reorder; switchCaptions = switches
     }
@@ -35,6 +36,7 @@ struct WorkspaceSwitcherRows: View {
         EditorScrollView { content }
             .accessibilityIdentifier("workspace-manager-rows")
             .onAppear { refreshCaptions() }
+            .onChange(of: interfaceLanguage) { _, _ in optionTitles = [:]; refreshCaptions() }
             .onChange(of: workspaces.view["rows"].stableKey) { _, _ in refreshCaptions() }
             .onScrollPhaseChange { _, phase in
                 if phase != .idle && !interaction.contact.held && !interaction.contact.dragging { interaction.cancel() }

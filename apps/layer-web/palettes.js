@@ -1,9 +1,11 @@
+import {liveCopy,bindCopy} from './localization.js';
 const GAP = 4, CELL = 44, SLOP = 8;
 const plain = (_, value) => typeof value === "bigint" ? Number(value) : value;
 const css = rgba => `rgba(${rgba.slice(0, 3).map(v => Math.round(Math.min(1, Math.max(0, v)) * 255)).join(",")},${rgba[3] ?? 1})`;
 const paint = (node, rgba) => { node.style.background = `linear-gradient(${css(rgba)},${css(rgba)}),repeating-conic-gradient(#ccc 0 25%,#8c8c8c 0 50%) 0 0 / 10px 10px`; };
 
 export function createPalettes({ app, state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker, dismissContext, contentChanged }) {
+  const copy=liveCopy(app,"catalog").native_copy.palettes;
   const chevron = up => { const glyph = icon("chevron-down"); glyph.classList.toggle("palette-chevron-up", up); return glyph; };
   const instances = new Set();
   let view = null, viewKey = "", seen = [];
@@ -60,12 +62,12 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
   }
   function form({ title, text, value, confirm, destructive, check, submit }) {
     const root = element("dialog", "workspace-form palette-form"), error = element("p", "workspace-error"), footer = element("footer");
-    root.append(element("h2", "", title)); root.setAttribute("aria-label", title);
+    root.append(element("h2", "", title)); if(typeof title==="function")bindCopy(root,title,"ariaLabel");else root.setAttribute("aria-label",title);
     if (text) root.append(element("p", "", text));
     let input;
     if (value != null) {
       const label = element("label", "", "Name"); input = element("input"); input.value = value; input.maxLength = 64;
-      input.setAttribute("aria-label", "Name"); input.dataset.paletteName = ""; label.append(input); root.append(label);
+      bindCopy(input,()=>copy.name,"ariaLabel"); input.dataset.paletteName = ""; label.append(input); root.append(label);
     }
     const ok = button(confirm, () => {
       const message = submit(input?.value ?? "");
@@ -86,17 +88,17 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     scroll.append(grid); normal.append(history, divider(), panelFrame(scroll));
     const expanded = element("div", "palette-grid palette-expanded palette-cover"), chooser = element("div", "palette-chooser palette-cover");
     expanded.hidden = chooser.hidden = true;
-    const search = element("input", "palette-entry palette-search"); search.type = "search"; search.placeholder = "Find a palette";
-    search.setAttribute("aria-label", "Find a palette");
+    const search = element("input", "palette-entry palette-search"); search.type = "search"; bindCopy(search,()=>copy.find,"placeholder");
+    bindCopy(search,()=>copy.find,"ariaLabel");
     const more = button("", () => {
       const r = more.getBoundingClientRect();
       more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: r.left, clientY: r.bottom + 2 }));
     }, "palette-icon palette-library-add");
-    more.append(icon("plus")); more.title = "New or import palette"; more.setAttribute("aria-label", more.title);
+    more.append(icon("plus")); bindCopy(more,()=>copy.new_import,"title"); bindCopy(more,()=>copy.new_import,"ariaLabel");
     more.dataset.context = "{}"; more.menuModel = () => ({ title: "Palettes", sections: app.palette_menu({ kind: "library" }) }); more.menuCommand = run;
     const searchRow = element("div", "palette-search-row"); searchRow.append(search, more);
     const list = element("div", "palette-list"), empty = element("p", "palette-no-results", "No matching palettes");
-    list.setAttribute("role", "listbox"); list.setAttribute("aria-label", "Palettes"); empty.hidden = true;
+    list.setAttribute("role", "listbox"); bindCopy(list,()=>copy.title,"ariaLabel"); empty.hidden = true;
     const results = panelFrame(list); results.append(empty); chooser.append(searchRow, results);
     chooser.addEventListener("mousedown", e => { if (e.target.closest("button")) e.preventDefault(); });
     body.append(normal, expanded, chooser);
@@ -223,7 +225,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
         };
         return node;
       });
-      if (!nodes.length) for (let i = 0; i < 5; i++) { const node = element("div", "palette-empty"); node.title = "Colors appear here after painting"; nodes.push(node); }
+      if (!nodes.length) for (let i = 0; i < 5; i++) { const node = element("div", "palette-empty"); bindCopy(node,()=>copy.history_empty,"title"); nodes.push(node); }
       const toggle = button("", () => expand(!expandedGrid), "palette-toggle");
       toggle.append(chevron(expandedGrid));
       toggle.title = expandedGrid ? "Collapse color history" : "Expand color history"; toggle.setAttribute("aria-label", toggle.title);

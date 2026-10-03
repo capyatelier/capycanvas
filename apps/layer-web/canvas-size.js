@@ -28,10 +28,11 @@ export function createCanvasSizeUi({state,element,button,icon,numberField,resolv
     const v=view();
     if(!v){shell?.close();shell=null;return;}
     if(!shell)open(v);
-    shell.title.textContent=v.title;
+    shell.title.textContent=v.title;shell.relabel(v);unit.relabel(v.units);
     for(const axis of [0,1])fields.show(axis,v.numeric[axis],v.labels[axis],v.values[axis],()=>view().values[axis]);
     unit.value=v.unit;unit.setAttribute('aria-label',v.units.find(choice=>choice.unit===v.unit).label);relative.input.checked=v.relative;relative.text.textContent=v.relative_label;anchorLabel.textContent=v.anchor_label;
     for(const cell of anchors) {
+      const choice=v.anchors.find(a=>a.anchor===cell.dataset.anchor);cell.title=choice.label;cell.setAttribute("aria-label",choice.label);
       const chosen=cell.dataset.anchor===v.anchor;
       cell.setAttribute('aria-pressed',String(chosen));cell.classList.toggle('selected',chosen);
     }

@@ -617,3 +617,4 @@ workspace-storage-write-failed = ワークスペースの変更を保存でき�
 workspace-storage-full = ワークスペースの保存領域がいっぱいです。ディスクの空き容量を増やして、もう一度お試しください。
 workspace-storage-unavailable = ワークスペースの保存データを開けませんでした。もう一度お試しください。
 workspace-unreadable-name = 読み取れないワークスペース
+workspace-backup-saved = ワークスペースのバックアップを保存しました。

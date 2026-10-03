@@ -30,6 +30,7 @@ import SwiftUI
     }
     private var chromeKey = ""
     private var popovers = Set<UUID>()
+    var languageInputBusy: Bool { !popovers.isEmpty }
     private struct Drag {
         let token = UUID()
         let item: JSON

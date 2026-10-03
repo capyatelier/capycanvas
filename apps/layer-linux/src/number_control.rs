@@ -1,14 +1,14 @@
 //! Touch-first native numeric presentation; all numeric policy lives in layer-ui.
 use gtk::{glib, prelude::*, subclass::prelude::*};
 use layer_ui::{NumericControl, NumericKind, NumericOperation};
-use std::cell::{Cell, OnceCell};
+use std::cell::{Cell, OnceCell, RefCell};
 
 mod imp {
     use super::*;
     #[derive(Default)]
     pub struct NumberControl {
         pub spec: OnceCell<NumericControl>,
-        pub localization: OnceCell<std::sync::Arc<layer_ui::Localizer>>,
+        pub localization: RefCell<Option<std::sync::Arc<layer_ui::Localizer>>>,
         pub value: Cell<f64>,
         pub updating: Cell<bool>,
         pub composing: Cell<bool>,
@@ -33,7 +33,11 @@ mod imp {
         pub separate_unit: Cell<bool>,
         pub show_units: Cell<bool>,
         pub popover_enabled: Cell<bool>,
-        pub editor_title: OnceCell<String>,
+        pub editor_title: RefCell<String>,
+        pub caption: OnceCell<gtk::Label>,
+        pub inline_caption: OnceCell<gtk::Label>,
+        pub caption_description: RefCell<String>,
+        pub description: OnceCell<gtk::Label>,
         pub width_reserve: OnceCell<gtk::Widget>,
         pub popover: OnceCell<gtk::Popover>,
         pub popover_control: OnceCell<super::NumberControl>,
@@ -70,6 +74,48 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Orientable;
 }
 impl NumberControl {
+    pub(crate) fn composing(&self) -> bool { self.imp().composing.get() || self.imp().composition_keys.active() }
+
+    pub(crate) fn set_caption(&self, title: &str, description: &str, localization: std::sync::Arc<layer_ui::Localizer>) {
+        let imp = self.imp();
+        if imp.localization.borrow().as_ref().is_some_and(|current| current.language() == localization.language())
+            && *imp.editor_title.borrow() == title && *imp.caption_description.borrow() == description { return; }
+        *imp.localization.borrow_mut() = Some(localization.clone());
+        *imp.editor_title.borrow_mut() = title.to_string();
+        *imp.caption_description.borrow_mut() = description.to_string();
+        if let Some(label) = imp.inline_caption.get() {
+            label.set_text(title);
+            label.set_tooltip_text(Some(if description.is_empty() { title } else { description }));
+            label.update_property(&[gtk::accessible::Property::Description(description)]);
+        }
+        self.update_property(&[gtk::accessible::Property::Label(title), gtk::accessible::Property::Description(description)]);
+        if let Some(label) = imp.caption.get() { label.set_text(title); label.set_tooltip_text(Some(title)); }
+        if let Some(label) = imp.description.get() { label.set_text(description); }
+        let captions = layer_ui::NumericLabels::new(title, &localization);
+        if let Some(display) = imp.display.get() { display.set_tooltip_text(Some(&captions.edit)); }
+        if let Some(steps) = imp.steps.get() {
+            for (button, caption) in steps.iter().zip([&captions.decrease, &captions.increase]) {
+                button.set_tooltip_text(Some(caption));
+                button.update_property(&[gtk::accessible::Property::Label(caption)]);
+            }
+        }
+        self.update_localization(localization);
+    }
+
+    pub(crate) fn update_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
+        *self.imp().localization.borrow_mut() = Some(localization.clone());
+        if !self.imp().input_valid.get() {
+            let text = self.imp().entry.get().map(|entry| entry.text().to_string())
+                .or_else(|| self.imp().spin.get().map(|spin| spin.text().to_string()));
+            if let Some(text) = text {
+                if let Err(error) = self.spec().resolve(self.value(), NumericOperation::Expression { text }) {
+                    self.feedback(Some(error));
+                }
+            }
+        }
+        if let Some(control) = self.imp().popover_control.get() { control.update_localization(localization); }
+    }
+
     pub fn new(spec: NumericControl, title: &str, description: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
         Self::build(spec, title, description, false, false, localization)
     }
@@ -98,6 +144,7 @@ impl NumberControl {
         labels.add_widget(&label);
         values.add_widget(&row.last_child().unwrap());
         row.prepend(&label);
+        control.imp().inline_caption.set(label).unwrap();
         control
     }
     /// Fit a grouped value to its current readout; the editor shares that width.
@@ -258,8 +305,9 @@ impl NumberControl {
         let control: Self = glib::Object::new();
         control.imp().spec.set(spec.clone()).unwrap();
         control.imp().input_valid.set(true);
-        control.imp().localization.set(localization).unwrap_or_else(|_| unreachable!());
-        control.imp().editor_title.set(title.to_string()).unwrap();
+        *control.imp().localization.borrow_mut() = Some(localization);
+        *control.imp().editor_title.borrow_mut() = title.to_string();
+        *control.imp().caption_description.borrow_mut() = description.to_string();
         control.imp().compact.set(compact);
         if compact {
             control.add_css_class("number-compact");
@@ -285,6 +333,7 @@ impl NumberControl {
         label.set_tooltip_text(Some(title));
         label.add_css_class("number-title");
         labels.append(&label);
+        control.imp().caption.set(label).unwrap();
         if !inline {
             header.append(&labels);
         }
@@ -296,6 +345,7 @@ impl NumberControl {
             description.add_css_class("dim-label");
             description.add_css_class("subtitle");
             labels.append(&description);
+            control.imp().description.set(description).unwrap();
         }
         if spec.kind == NumericKind::Number && !compact {
             let spin = gtk::SpinButton::with_range(
@@ -383,7 +433,7 @@ impl NumberControl {
             control.imp().value_label.set(value_label.clone()).unwrap();
             display.add_css_class("number-value");
             display.add_css_class("flat");
-            let captions = layer_ui::NumericLabels::new(title, control.imp().localization.get().unwrap());
+            let captions = layer_ui::NumericLabels::new(title, control.imp().localization.borrow().as_ref().unwrap());
             display.set_tooltip_text(Some(&captions.edit));
             let entry = gtk::Entry::builder()
                 .has_frame(false)
@@ -557,7 +607,7 @@ impl NumberControl {
         let imp = self.imp();
         let popover = imp.popover.get_or_init(|| {
             let editor =
-                NumberControl::new(self.spec().clone(), imp.editor_title.get().unwrap(), "", imp.localization.get().unwrap().clone());
+                NumberControl::new(self.spec().clone(), &imp.editor_title.borrow(), "", imp.localization.borrow().as_ref().unwrap().clone());
             editor.set_size_request(240, -1);
             editor.set_margin_start(12);
             editor.set_margin_end(12);
@@ -686,7 +736,7 @@ impl NumberControl {
             slider.set_value(result.fill);
         }
         if let Some(spin) = imp.spin.get() {
-            spin.set_value(value * self.spec().scale);
+            if spin.value() != value * self.spec().scale { spin.set_value(value * self.spec().scale); }
         }
         if let Some([minus, plus]) = imp.steps.get() {
             minus.set_sensitive(value > self.spec().min);
@@ -780,7 +830,7 @@ impl NumberControl {
         let valid = error.is_none();
         if let Some(error) = error {
             self.add_css_class("error");
-            self.set_tooltip_text(Some(&error.message(self.imp().localization.get().unwrap())));
+            self.set_tooltip_text(Some(&error.message(self.imp().localization.borrow().as_ref().unwrap())));
         } else {
             self.remove_css_class("error");
             self.set_tooltip_text(None);

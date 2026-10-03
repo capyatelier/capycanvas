@@ -260,6 +260,39 @@ mod tests {
     }
 
     #[test]
+    fn language_adoption_replaces_retained_models_without_waking_the_canvas() {
+        use layer_ui::{CommandId, Localizer, Platform, UiAction, UiLanguage};
+        let mut host = NativeHost::new(Platform::Android).unwrap();
+        host.dispatch(UiAction::Invoke { command: CommandId::NewDocument }).unwrap();
+        let initial = read(&mut host);
+        let document = host.session.engine().document().clone();
+        let camera = host.session.state().camera.clone();
+        let checkpoint = host.session.engine().checkpoint();
+        let epoch = host.session.state().document_file.epoch;
+        let requests = serde_json::to_value(&host.session.state().requests).unwrap();
+        host.dirty = false;
+        for (generation, language) in [(1, UiLanguage::Japanese), (2, UiLanguage::Korean)] {
+            let localization = Localizer::shared(language);
+            assert!(host.set_localization(localization.clone()));
+            let published = read(&mut host);
+            assert!(published.get("state").is_some());
+            assert!(published.get("model_update").is_none());
+            assert_ne!(published["document_options"]["new_title"], initial["document_options"]["new_title"]);
+            assert_eq!(host.localization_generation(), generation);
+            assert_eq!(host.bootstrap_view().active_tag, language.tag());
+            assert_eq!(host.query(json!({"type": "catalog"})).unwrap(), json!(layer_ui::ui_catalog_localized(&localization)));
+            assert_eq!(host.session.engine().document(), &document);
+            assert_eq!(host.session.engine().checkpoint(), checkpoint);
+            assert_eq!(host.session.state().camera, camera);
+            assert_eq!(host.session.state().document_file.epoch, epoch);
+            assert_eq!(serde_json::to_value(&host.session.state().requests).unwrap(), requests);
+            assert!(!host.dirty);
+            assert!(!host.set_localization(localization));
+            assert!(host.take_model_update_bytes().unwrap().is_none());
+        }
+    }
+
+    #[test]
     fn camera_messages_between_models_keep_the_update_baseline() {
         use layer_ui::{CommandId, Platform, UiAction};
         let mut host = NativeHost::new(Platform::Android).unwrap();

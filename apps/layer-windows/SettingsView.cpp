@@ -58,7 +58,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     double searchFocus=-1;
     bool showing=false,closing=false,built=false,stopping=false,showFailed=false;
     void init(){
-        dialog.XamlRoot(xamlRoot);inheritLanguage(dialog,data);dialog.Title(box_value(data->caption(L"shortcuts",L"preferences")));dialog.CloseButtonText(data->common(L"close"));
+        dialog.XamlRoot(xamlRoot);dialog.Language(data->language());dialog.Title(box_value(data->caption(L"shortcuts",L"preferences")));dialog.CloseButtonText(data->common(L"close"));
         dialog.Resources().Insert(box_value(L"ContentDialogMaxWidth"),box_value(920.));
         dialog.Resources().Insert(box_value(L"ContentDialogMinWidth"),box_value(0.));
         dialog.Closing([weak=weak_from_this()](auto&&,ContentDialogClosingEventArgs const& e){
@@ -86,6 +86,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         sidebar=StackPanel();sidebar.Spacing(6);sidebar.Margin({0,0,16,0});
         auto toggle=actionButton(data,data->caption(L"shortcuts",L"search_preferences"),O({{L"type",S(L"toggle_search")},{L"open",B(true)}}));
         sidebar.Children().Append(toggle);
+        bindings.emplace_back([data=data,toggle]{auto text=data->caption(L"shortcuts",L"search_preferences");toggle.Content(box_value(text));AutomationProperties::SetName(toggle,text);});
         search=TextBox();search.PlaceholderText(data->caption(L"shortcuts",L"search_preferences"));search.Margin({0,0,0,6});
         AutomationProperties::SetName(search,data->caption(L"shortcuts",L"search_preferences"));
         search.TextChanged([data=data](auto&& sender,auto&&){
@@ -105,22 +106,32 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         scroller=ScrollViewer();scroller.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
         StackPanel sections;sections.Children().Append(pages);sections.Children().Append(editor);scroller.Content(sections);
         content.Children().Append(scroller);
+        bindings.emplace_back([this]{
+            dialog.Language(data->language());dialog.Title(box_value(data->caption(L"shortcuts",L"preferences")));dialog.CloseButtonText(data->common(L"close"));
+            for(auto entry:{search,shortcutSearch}){if(entry)entry.Language(data->language());}
+            search.PlaceholderText(data->caption(L"shortcuts",L"search_preferences"));AutomationProperties::SetName(search,search.PlaceholderText());
+            shortcutSearch.PlaceholderText(data->caption(L"shortcuts",L"search_shortcuts"));AutomationProperties::SetName(shortcutSearch,shortcutSearch.PlaceholderText());
+            empty.Text(data->caption(L"shortcuts",L"no_matching_preferences"));
+        });
         for(auto pageValue:array(model,L"pages")){
             auto page=pageValue.GetObject();auto id=str(page,L"id");
             auto tab=actionButton(data,str(page,L"title"),O({{L"type",S(L"page")},{L"page",S(id)}}));
             StackPanel tabContent;tabContent.Orientation(Orientation::Horizontal);tabContent.Spacing(8);
-            ContentControl tabIcon;tabIcon.IsTabStop(false);tabContent.Children().Append(tabIcon);tabContent.Children().Append(label(data,str(page,L"title")));
+            ContentControl tabIcon;tabIcon.IsTabStop(false);tabContent.Children().Append(tabIcon);auto tabLabel=label(data,str(page,L"title"));tabContent.Children().Append(tabLabel);
+            bindings.emplace_back([data=data,id,tab,tabLabel]{auto page=find(array(preferences(data),L"pages"),L"id",id);auto text=str(page,L"title");tabLabel.Text(text);AutomationProperties::SetName(tab,text);});
             themeBindings.emplace_back([data=data,tabIcon,glyph=str(page,L"icon")]{tabIcon.Content(glyph.empty()?nullptr:icon(glyph,data->theme()));});
             tab.Content(tabContent);AutomationProperties::SetName(tab,str(page,L"title"));
             tab.HorizontalContentAlignment(HorizontalAlignment::Left);sidebar.Children().Append(tab);tabs.emplace(id.c_str(),tab);
             StackPanel node;node.Spacing(16);AutomationProperties::SetName(node,str(page,L"title"));
             pageNodes.emplace(id.c_str(),node);pages.Children().Append(node);
-            if(id==L"color")node.Children().Append(button(data,data->caption(L"color",L"manage_profiles"),[data=data]{
+            if(id==L"color")node.Children().Append(button(data,data->copyCaption(L"color",L"manage_profiles"),[data=data]{
                 data->dispatch(O({{L"type",S(L"close_settings")}}));data->document(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(0)}}).Stringify()));
             }));
+            uint32_t sectionIndex=0;
             for(auto groupValue:array(page,L"groups")){
                 auto group=groupValue.GetObject();StackPanel section;section.Spacing(8);
-                section.Children().Append(label(data,str(group,L"title"),true));
+                auto groupLabel=label(data,str(group,L"title"),true);section.Children().Append(groupLabel);
+                bindings.emplace_back([data=data,pageId=id,groupIndex=sectionIndex++,groupLabel]{auto page=find(array(preferences(data),L"pages"),L"id",pageId);groupLabel.Text(str(array(page,L"groups").GetObjectAt(groupIndex),L"title"));});
                 Border card;card.Background(data->brush(L"card"));card.CornerRadius({8,8,8,8});
                 StackPanel list;card.Child(list);section.Children().Append(card);node.Children().Append(section);
                 A ids;
@@ -152,15 +163,20 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         ColumnDefinition controlColumn;controlColumn.Width({1,GridUnitType::Auto});
         line.ColumnDefinitions().Append(textColumn);line.ColumnDefinitions().Append(controlColumn);
         StackPanel text;text.Spacing(4);auto heading=label(data,titleText);heading.TextWrapping(TextWrapping::Wrap);text.Children().Append(heading);
-        if(!str(row,L"description").empty())text.Children().Append(description(data,str(row,L"description")));
+        bindings.emplace_back([data=data,id,heading]{heading.Text(str(rowFor(data,id),L"title"));});
+        if(!str(row,L"description").empty()){
+            auto detail=description(data,str(row,L"description"));text.Children().Append(detail);
+            bindings.emplace_back([data=data,id,detail]{detail.Text(str(rowFor(data,id),L"description"));});
+        }
         line.Children().Append(text);
         FrameworkElement widget{nullptr};
         if(type==L"number"){
             text.Children().Clear();
+            NumberPresentation presentation{true,str(row,L"description")};presentation.title=[source=std::weak_ptr<WorkspaceData>(data),id]{if(auto data=source.lock())return str(rowFor(data,id),L"title");return hstring();};
             auto numericField=number(data,titleText,object(kind,L"control"),
                 [data=data,id]{return num(object(rowFor(data,id),L"kind"),L"value");},
                 [data=data,id](double value){edit(data,id,N(value));},bindings,&commits,false,L"",false,
-                NumberPresentation{true,str(row,L"description")});
+                presentation);
             text.Children().InsertAt(0,numericField);Grid::SetColumnSpan(text,2);
         }else if(type==L"switch"){
             ToggleSwitch control;control.MinWidth(0);control.OnContent(box_value(L""));control.OffContent(box_value(L""));
@@ -226,7 +242,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             }
             widget=strip;
         }else if(type==L"choice"){
-            ComboBox control;control.MinWidth(132);control.MaxWidth(220);
+            ComboBox control;AutomationProperties::SetAutomationId(control,L"preference-choice-"+id);control.MinWidth(132);control.MaxWidth(220);
             auto options=array(kind,L"options"),icons=array(kind,L"icons");
             for(uint32_t i=0;i<options.Size();++i){
                 StackPanel option;option.Orientation(Orientation::Horizontal);option.Spacing(8);
@@ -234,9 +250,11 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                     ContentControl glyph;glyph.IsTabStop(false);option.Children().Append(glyph);
                     themeBindings.emplace_back([data=data,glyph,id=icons.GetStringAt(i)]{glyph.Content(icon(id,data->theme()));});
                 }
-                option.Children().Append(label(data,options.GetStringAt(i)));
+                auto optionLabel=label(data,options.GetStringAt(i));option.Children().Append(optionLabel);
+                bindings.emplace_back([data=data,id,i,optionLabel]{auto options=array(object(rowFor(data,id),L"kind"),L"options");if(i<options.Size())optionLabel.Text(options.GetStringAt(i));});
                 ComboBoxItem choice;choice.Content(option);AutomationProperties::SetName(choice,options.GetStringAt(i));
                 control.Items().Append(choice);
+                bindings.emplace_back([data=data,id,i,choice]{auto options=array(object(rowFor(data,id),L"kind"),L"options");if(i<options.Size())AutomationProperties::SetName(choice,options.GetStringAt(i));});
             }
             control.SelectionChanged([data=data,id](auto&& sender,auto&&){
                 auto index=sender.template as<ComboBox>().SelectedIndex();
@@ -311,6 +329,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             auto control=label(data,str(kind,L"value"));control.TextWrapping(TextWrapping::Wrap);control.MaxWidth(240);control.IsTextSelectionEnabled(true);widget=control;
         }
         if(widget){
+            bindings.emplace_back([data=data,id,widget]{AutomationProperties::SetName(widget,str(rowFor(data,id),L"title"));widget.Language(data->language());});
             widget.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(widget,1);
             AutomationProperties::SetName(widget,titleText);line.Children().Append(widget);
         }
@@ -358,7 +377,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         bool editing=capture.Size()||editModel.Size();editor.Visibility(editing?Visibility::Visible:Visibility::Collapsed);pages.Visibility(editing?Visibility::Collapsed:Visibility::Visible);
         if(signature!=editorKey){editorKey=signature;editor.Children().Clear();
             if(capture.Size()){
-                editor.Children().Append(label(data,data->caption(L"shortcuts",L"set_shortcut"),true));editor.Children().Append(label(data,str(capture,L"label")));
+                editor.Children().Append(label(data,data->copyCaption(L"shortcuts",L"set_shortcut"),true));editor.Children().Append(label(data,str(capture,L"label")));
                 editor.Children().Append(description(data,data->caption(L"shortcuts",L"press_shortcut")));
                 editor.Children().Append(label(data,str(capture,L"shortcut")));
                 editor.Children().Append(description(data,str(capture,L"notice")));
@@ -400,6 +419,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         changed();
     }
     void apply(J const& snapshot){
+        data->adoptLocalization(snapshot);
         if(!snapshot.HasKey(L"state"))return;
         data->state=object(snapshot,L"state");data->refreshPalette();data->model=snapshot;auto model=preferences(data);
         if(!model.Size()){showFailed=false;if(showing&&!closing)dialog.Hide();return;}

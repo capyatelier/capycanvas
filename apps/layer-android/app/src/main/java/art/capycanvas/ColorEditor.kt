@@ -40,7 +40,7 @@ private fun colorEpoch(host: CanvasHost): Long =
 @Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, trailing: @Composable RowScope.() -> Unit = {}, onChange: (JSONObject) -> Unit) {
     var editing by remember { mutableStateOf<JSONObject?>(null) }
     val preview = remember(value.toString()) {
-        JSONArray(Native.colorUi(obj("type" to "preview", "colors" to JSONArray().put(value)).toString())).getJSONObject(0)
+        JSONArray(Native.colorUi(obj("type" to "preview", "colors" to JSONArray().put(value)).toString(), host.languageTag)).getJSONObject(0)
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f))
@@ -59,15 +59,18 @@ private fun colorEpoch(host: CanvasHost): Long =
     var form by remember {
         mutableStateOf(JSONObject(Native.colorUi(obj("type" to "form", "request" to obj(
             "color" to initial, "document_depth" to host.snapshot?.objectOrNull("state")?.displayColors()?.optString("hdr_depth"), "document_space" to documentRgbSpace(host), "model" to (if(hdr)"linear_rgb" else "document_rgb"), "intensity" to initialIntensity, "rendition" to host.snapshot?.objectOrNull("color_panel")?.objectOrNull("rendition")
-        )).toString())))
+        )).toString(), host.languageTag)))
     }
     var intensityText by remember {mutableStateOf(if(form.getJSONObject("draft").isNull("intensity"))"" else form.getJSONObject("draft").getDouble("intensity").toString())}
     var transportError by remember { mutableStateOf<String?>(null) }
     fun change(draft: JSONObject) {
         try {
             if(hdr){val stops=intensityText.trim().toFloatOrNull();require(stops!=null&&stops.isFinite()){"Enter a finite EV value"};draft.put("change_intensity",stops)}
-            form = JSONObject(Native.colorUi(obj("type" to "form", "request" to draft).toString())); transportError = null }
+            form = JSONObject(Native.colorUi(obj("type" to "form", "request" to draft).toString(), host.languageTag)); transportError = null }
         catch (e: Exception) { transportError = e.message ?: host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("read_failed") }
+    }
+    LaunchedEffect(host.languageTag) {
+        form = JSONObject(Native.colorUi(obj("type" to "form", "request" to form.getJSONObject("draft")).toString(), host.languageTag))
     }
     val draft = form.getJSONObject("draft")
     val labels = form.getJSONArray("labels")

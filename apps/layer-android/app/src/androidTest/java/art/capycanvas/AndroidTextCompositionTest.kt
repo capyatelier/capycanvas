@@ -209,6 +209,17 @@ class AndroidTextCompositionTest {
             assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_ENTER)))
         }
     }
+    @Test fun languageBoundaryWaitsUntilCandidateKeyRelease() {
+        val state = TextComposition()
+        val owner = Any()
+        state.update(owner, TextFieldValue("日本", composition = TextRange(0, 2)), true)
+        assertTrue(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+        state.update(owner, TextFieldValue("日本"), true)
+        assertTrue(state.active)
+        assertTrue(state.owns(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
+        assertFalse(state.active)
+        assertFalse(state.owns(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+    }
     @Test fun imeKeysAndRetiredFieldsCannotBeClaimedByEditorCaptures() {
         val state=TextComposition()
         val first=Any();val second=Any()

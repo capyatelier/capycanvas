@@ -18,6 +18,7 @@ fn service_over(worker: Worker) -> SettingsService {
         load_error: None,
         save_error: None,
         close: CloseStatus::default(),
+        localization_input_busy: false,
     }
 }
 fn edited(gamma: f32) -> Settings {
@@ -681,11 +682,11 @@ fn prepared_launch_restores_before_views_and_keeps_the_profile_context() {
     assert_eq!(fs::read_to_string(directory.path.join("settings.json")).unwrap(), saved);
     let active = first.session.localization().clone();
     drop(first);drop(prepared);
-    let (reopened, _) = shared::Hub::with_launch(storage(&directory), |_| panic!("Closing all windows must retain the launch context")).unwrap();
+    let (reopened, _) = shared::Hub::with_launch(storage(&directory), &["ja-JP"], |_| panic!("Closing all windows must retain the launch context")).unwrap();
     assert!(Arc::ptr_eq(reopened.session.localization(), &active));
     let japanese = TempDir::new();
     fs::write(japanese.path.join("settings.json"), &saved).unwrap();
-    let (native, hub) = shared::Hub::with_launch(storage(&japanese), |saved| NativeHost::launch_localized(layer_ui::Platform::Windows, saved.unwrap_or_default(), layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese))).unwrap();
+    let (native, hub) = shared::Hub::with_launch(storage(&japanese), &["ja"], |saved| NativeHost::launch_localized(layer_ui::Platform::Windows, saved.unwrap_or_default(), layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese))).unwrap();
     let retained = native.session.localization().clone();
     assert!(!Arc::ptr_eq(&active, &retained));
     let mut subscriber = shared::Subscription::new(hub.clone(), || {});
@@ -699,4 +700,41 @@ fn prepared_launch_restores_before_views_and_keeps_the_profile_context() {
     assert_eq!(later.session.state().settings.language, layer_ui::LanguagePreference::System);
     assert_eq!(later.session.state().settings.pressure_gamma, 1.5);
     assert_eq!(later.session.state().settings.new_document.presets[0].name, literal);
+}
+
+#[test]
+fn profile_language_publication_survives_write_failure_and_defers_an_input_owner() {
+    let directory = TempDir::new();
+    let (mut first, prepared) = SettingsService::launch_at(Ok(storage(&directory)), &["ja-JP", "en"]).unwrap();
+    let mut service = prepared.start(&mut first, || {});
+    let (mut second, prepared) = SettingsService::launch_at(Ok(storage(&directory)), &["en"]).unwrap();
+    let mut other = prepared.start(&mut second, || {});
+    other.localization_input(true);
+    fs::create_dir(directory.path.join("settings.json")).unwrap();
+    let checkpoint = first.session.state().document_file.clone();
+    let generation = first.localization_generation();
+    let mut settings = first.session.state().settings.clone();
+    settings.language = layer_ui::LanguagePreference::Explicit(layer_ui::UiLanguage::TraditionalChinese);
+    first.dispatch(UiAction::RestoreSettings { settings }).unwrap();
+    let bytes = service.subscription.as_mut().unwrap().edit(&first.session.state().settings).unwrap();
+    assert!(service.subscription.as_ref().unwrap().hub.write(&bytes).is_err());
+    service.sync(&mut first).unwrap();other.sync(&mut second).unwrap();
+    assert_eq!(first.session.localization().language(), layer_ui::UiLanguage::TraditionalChinese);
+    assert_eq!(second.session.localization().language(), layer_ui::UiLanguage::Japanese);
+    assert_eq!(first.session.state().document_file.epoch, checkpoint.epoch);
+    assert_eq!(first.session.state().document_file.revision, checkpoint.revision);
+    assert_eq!(first.localization_generation(), generation + 1);
+    other.localization_input(false);other.sync(&mut second).unwrap();
+    assert!(Arc::ptr_eq(first.session.localization(), second.session.localization()));
+    let (later, _) = SettingsService::launch_at(Ok(storage(&directory)), &["en"]).unwrap();
+    assert!(Arc::ptr_eq(later.session.localization(), first.session.localization()));
+    let mut desired = first.session.state().settings.clone();desired.language = layer_ui::LanguagePreference::System;
+    let bytes = service.subscription.as_mut().unwrap().edit(&desired).unwrap();
+    assert!(service.subscription.as_ref().unwrap().hub.write(&bytes).is_err());
+    service.sync(&mut first).unwrap();other.sync(&mut second).unwrap();
+    let tags=shared::system_tags(&["ja-JP".into(),"en".into()]);
+    let system_language=layer_ui::resolve_launch_language(layer_ui::LanguagePreference::System,&tags.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(first.session.localization().language(),system_language);
+    assert!(Arc::ptr_eq(first.session.localization(), second.session.localization()));
+    service.finish(&mut first).unwrap();other.finish(&mut second).unwrap();
 }

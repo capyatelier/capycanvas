@@ -1,10 +1,12 @@
+import {liveCopy,bindCopy} from './localization.js';
 // DOM input/measurement only. Drawing identity, order, drop validation, width
 // policy and undo belong to Rust; this is separate from docked panel tabs.
 export function createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy}) {
+  const copy=liveCopy(app,'catalog').native_copy.header,common=liveCopy(app,'bootstrap_view').common;
   const root=element('div','drawing-title'),plain=document.querySelector('#document-title');
   root.id='drawing-title';plain.replaceWith(root);root.append(plain);
-  const strip=element('div','drawing-tabs');strip.setAttribute('role','tablist');strip.setAttribute('aria-label','Drawings');
-  const compact=button('',()=>showSelector(),'drawing-selector');compact.setAttribute('aria-label','Select drawing');
+  const strip=element('div','drawing-tabs');strip.setAttribute('role','tablist');bindCopy(strip,()=>copy.drawings,"ariaLabel");
+  const compact=button('',()=>showSelector(),'drawing-selector');bindCopy(compact,()=>copy.choose_drawing,"ariaLabel");
   root.append(strip,compact);
   const rows=new Map();let model,signature='',popup=null,contact=null,rowMenu=null,suppress=false;
   const same=(a,b)=>String(a)===String(b);
@@ -15,12 +17,12 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
   function dismissRowMenu(){rowMenu?.remove();rowMenu=null;}
   function showRowMenu(tabId){
     dismissRowMenu();if(!popup)return;
-    rowMenu=element('div','drawing-row-menu');rowMenu.setAttribute('role','group');rowMenu.setAttribute('aria-label','Drawing actions');
+    rowMenu=element('div','drawing-row-menu');rowMenu.setAttribute('role','group');bindCopy(rowMenu,()=>copy.toolbar_actions,"ariaLabel");
     const action=(label,fn)=>rowMenu.append(button(label,()=>{dismissRowMenu();invoke(fn);}));
     action('Select',()=>{dismiss();return select(id(tabId));});
-    action('Move earlier',()=>{applyChange(app.step_document(id(tabId),false));refresh(true);});
-    action('Move later',()=>{applyChange(app.step_document(id(tabId),true));refresh(true);});
-    action('Close',()=>{dismiss();return close(id(tabId));});
+    action(()=>copy.move_earlier,()=>{applyChange(app.step_document(id(tabId),false));refresh(true);});
+    action(()=>copy.move_later,()=>{applyChange(app.step_document(id(tabId),true));refresh(true);});
+    action(()=>common.close,()=>{dismiss();return close(id(tabId));});
     popup.append(rowMenu);
   }
   function cancelDrag(){
@@ -122,18 +124,18 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
   function dismiss(){cancelDrag();dismissRowMenu();if(popup){popup.close();popup=null;}}
   function showSelector(focusId){
     if(editing()||busy())return;dismiss();refresh();
-    const dialog=element('dialog','drawing-list document-dialog');dialog.setAttribute('aria-label','Drawings');popup=dialog;
-    const heading=element('header');heading.append(element('h2','','Drawings'),button('Done',dismiss));dialog.append(heading);
+    const dialog=element('dialog','drawing-list document-dialog');bindCopy(dialog,()=>copy.drawings,"ariaLabel");popup=dialog;
+    const heading=element('header');heading.append(element('h2','',()=>copy.drawings),button(()=>common.done,dismiss));dialog.append(heading);
     const list=element('div','drawing-list-rows');list.setAttribute('role','list');dialog.append(list);
     for(const tab of model.tabs){
       const row=element('div','drawing-list-row');row.dataset.drawingId=tab.id;row.setAttribute('role','listitem');
-      const grip=button('',()=>{});grip.className='drawing-grip';grip.setAttribute('aria-label',`Reorder ${tab.title}`);grip.append(icon('grip'));
+      const grip=button('',()=>{});grip.className='drawing-grip';bindCopy(grip,()=>app.native_caption({type:'reorder',title:model.tabs.find(t=>same(t.id,tab.id))?.title??tab.title}),'ariaLabel');grip.append(icon('grip'));
       const pick=button('',()=>{});pick.className='drawing-list-pick';pick.append(element('strong','',`${tab.modified?'● ':''}${tab.title}`),element('small','',tab.location));pick.setAttribute('aria-current',String(same(tab.id,model.selected)));
-      const remove=button('',()=>{dismiss();invoke(()=>close(id(tab.id)));});remove.append(icon('close-document'));remove.setAttribute('aria-label',`Close ${tab.title}`);
+      const remove=button('',()=>{dismiss();invoke(()=>close(id(tab.id)));});remove.append(icon('close-document'));bindCopy(remove,()=>app.native_caption({type:'close_drawing',title:model.tabs.find(t=>same(t.id,tab.id))?.title??tab.title}),'ariaLabel');
       row.append(grip,pick,remove);list.append(row);bind(grip,tab.id,list,true,true);bind(pick,tab.id,list,true);
     }
     const footer=element('footer');
-    for(const [redo,label,enabled] of [[false,'Undo Reorder',model.can_undo],[true,'Redo Reorder',model.can_redo]]){const b=button(label,()=>{applyChange(app.document_order_history(redo));dismiss();showSelector(focusId);});b.disabled=!enabled;footer.append(b);}
+    for(const [redo,label,enabled] of [[false,()=>copy.undo_order,model.can_undo],[true,()=>copy.redo_order,model.can_redo]]){const b=button(label,()=>{applyChange(app.document_order_history(redo));dismiss();showSelector(focusId);});b.disabled=!enabled;footer.append(b);}
     dialog.append(footer);dialog.addEventListener('close',()=>{if(popup===dialog)popup=null;dialog.remove();dismissRowMenu();cancelDrag();});
     document.body.append(dialog);dialog.showModal();
     [...list.children].find(n=>same(n.dataset.drawingId,focusId??model.selected))?.querySelector('.drawing-list-pick').focus();
@@ -154,13 +156,14 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
         node.append(pick,remove);row={root:node,select:pick,close:remove};rows.set(key,row);bind(pick,tab.id,strip);}
       row.select.textContent=`${tab.modified?'● ':''}${tab.title}`;row.select.title=`${tab.title}\n${tab.location}`;
       row.select.setAttribute('aria-selected',String(same(tab.id,model.selected)));row.select.tabIndex=same(tab.id,model.selected)?0:-1;
-      row.close.setAttribute('aria-label',`Close ${tab.title}`);row.close.disabled=busy();
+      row.close.setAttribute('aria-label',app.native_caption({type:'close_drawing',title:tab.title}));row.close.disabled=busy();
       if(strip.children[i]!==row.root)strip.insertBefore(row.root,strip.children[i]??null);
     }
     if(popup){
       const list=popup.querySelector('.drawing-list-rows');
       for(const [i,tab]of model.tabs.entries()){
         const row=[...list.children].find(n=>same(n.dataset.drawingId,tab.id));
+        if(row){row.querySelector('strong').textContent=`${tab.modified?'● ':''}${tab.title}`;row.querySelector('small').textContent=tab.location;}
         if(row&&list.children[i]!==row)list.insertBefore(row,list.children[i]??null);
       }
       const actions=popup.querySelectorAll('footer button');actions[0].disabled=!model.can_undo;actions[1].disabled=!model.can_redo;

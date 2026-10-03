@@ -526,12 +526,13 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await click('[data-preference=language] [data-choice="1"]');
   await action({ type:'close_settings' });
   assert.deepEqual(await evaluate("JSON.parse(localStorage.getItem('layer.preferences.v1')).language"), { Explicit:'en' });
-  assert.equal(await evaluate("layerApp.app.language_tag()"), launchTag, 'language preferences leave the active launch context unchanged');
+  await evaluate('new Promise(r=>{function wait(){if(layerApp.app.language_pending())setTimeout(wait,10);else r();}wait();})');
+  assert.equal(await evaluate("layerApp.app.language_tag()"), 'en', 'language preferences update the active context');
   await reload('ready');
   assert.deepEqual(await evaluate("layerApp.state().settings.language"), { Explicit:'en' });
-  assert.equal(await evaluate("document.documentElement.lang"), 'en', 'unshipped browser languages cannot change launch metadata');
+  assert.equal(await evaluate("document.documentElement.lang"), 'en', 'an explicit choice determines document language');
   await evaluate('window.dispatchEvent(new Event("languagechange"))');
-  assert.equal(await evaluate("layerApp.app.language_tag()"), 'en', 'OS language notifications leave the launch context unchanged');
+  assert.equal(await evaluate("layerApp.app.language_tag()"), 'en', 'an explicit choice survives browser language notifications');
   await action({ type:'open_settings', page:'appearance' });
   await click('[data-preference=language] summary');
   await click('[data-preference=language] [data-choice="0"]');
@@ -632,4 +633,75 @@ export async function checkSettingsParity({ call, evaluate, settle }) {
   }
   assert.deepEqual(differences, [], 'GTK/web settings geometry and typography');
   console.log('PASS: all settings pages match measured GTK row geometry and subtitle fonts in both themes');
+}
+
+export async function checkLiveLanguage({call,evaluate,settle}) {
+  const dir=process.env.LAYER_TEST_ARTIFACTS||"artifacts/localization-live-switching/web";await mkdir(dir,{recursive:true});
+  await evaluate(`window.languageTiming={quanta:[],publications:[],methods:{},longTasks:[]};for(const method of ['state_update','catalog','bootstrap_view','document_delivery_copy','preferences_cached','panel_view','workspace_update','layout_update','editor_models','application_menus','document_tabs']){const original=layerApp.app[method].bind(layerApp.app);layerApp.app[method]=function(...args){const started=performance.now();try{return original(...args);}finally{(languageTiming.methods[method]??=[]).push(performance.now()-started);}};}const prepare=layerApp.app.prepare_language.bind(layerApp.app);layerApp.app.prepare_language=function(...args){const start=performance.now();try{const result=prepare(...args);if(result)queueMicrotask(()=>languageTiming.publications.push({start,duration:performance.now()-start}));return result;}finally{languageTiming.quanta.push(performance.now()-start);}};window.languageObserver=new PerformanceObserver(list=>{for(const task of list.getEntries())languageTiming.longTasks.push({start:task.startTime,duration:task.duration});});languageObserver.observe({type:'longtask',buffered:false});`);
+  const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
+  const ready=async(tag,session)=>{
+    const expression=`new Promise((resolve,reject)=>{const end=performance.now()+20000;function poll(){if(window.layerApp&&!layerApp.app.language_pending()&&document.documentElement.lang===${JSON.stringify(tag)})resolve(true);else if(performance.now()>end)reject(Error('Language publication '+document.documentElement.lang));else setTimeout(poll,10);}poll();})`;
+    if(session){const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true},session);if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description);}
+    else await evaluate(expression);
+  };
+  const choice=async(index,tag)=>{await evaluate(`document.querySelector('[data-preference=language] summary').click();document.querySelector('[data-preference=language] [data-choice="${index}"]').click()`);await ready(tag);await settle();};
+  await send({type:'invoke',command:'new_document'});
+  await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function poll(){const create=document.querySelector('[data-document-action=create]');if(create){for(const entry of document.querySelectorAll('[data-document-field=width],[data-document-field=height]')){entry.value='96';entry.dispatchEvent(new Event('input',{bubbles:true}));}create.click();resolve();}else if(performance.now()>end)reject(Error('New drawing'));else setTimeout(poll,20);}poll();})`);
+  await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function poll(){if(layerApp.app.document_tabs(0).tabs.length===2&&!layerApp.documents.busy()&&layerApp.app.brush_ready())resolve();else if(performance.now()>end)reject(Error('Second drawing'));else setTimeout(poll,20);}poll();})`);
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    await send({type:'open_settings',page:'appearance'});
+    await evaluate('window.languageOwner={app:layerApp.app,canvas:layerApp.canvas,settings:document.querySelector("#settings"),language:document.querySelector("#setting-language"),time:performance.timeOrigin};');
+    for(const [index,tag] of [[1,'en'],[2,'ja'],[3,'zh-Hans'],[4,'zh-Hant'],[5,'ko'],[1,'en']]) {
+      await choice(index,tag);
+      assert.equal(await evaluate('languageOwner.app===layerApp.app&&languageOwner.canvas===layerApp.canvas&&languageOwner.settings===document.querySelector("#settings")&&languageOwner.language===document.querySelector("#setting-language")&&languageOwner.time===performance.timeOrigin'),true);
+      assert.equal(await evaluate('document.querySelector("#settings-title").textContent===layerApp.app.preferences().pages.find(p=>p.id==="appearance").title'),true);
+      const numbered={en:id=>`Untitled ${id}`,ja:id=>`無題 ${id}`,'zh-Hans':id=>`未命名${id}`,'zh-Hant':id=>`未命名${id}`,ko:id=>`제목 없음 ${id}`};
+      const tabs=await evaluate('layerApp.app.document_tabs(0).tabs.map(t=>({id:String(t.id),title:t.title}))');
+      assert.deepEqual(tabs.map(t=>t.title),tabs.map(t=>numbered[tag](t.id)),'active and parked generated captions use the published language');
+
+    }
+    await send({type:'close_settings'});
+    await send({type:'invoke',command:'canvas_size'});
+    await evaluate(`(()=>{const n=document.querySelector('[data-canvas-size=width]');n.entry.focus();n.entry.value='１２+invalid';n.entry.dispatchEvent(new Event('input',{bubbles:true}));n.entry.setSelectionRange(1,4);window.languageDraft={number:n,entry:n.entry,value:n.entry.value,start:n.entry.selectionStart,end:n.entry.selectionEnd,history:layerApp.state().document_file.epoch};})()`);
+    const before=await evaluate('layerApp.state().tabs.map(t=>[t.width,t.height])');
+    const saved=await evaluate('JSON.stringify({...layerApp.state().settings,language:{Explicit:"ja"}})');
+    await evaluate(`localStorage.setItem('layer.preferences.v1',${JSON.stringify(saved)})`);
+    await evaluate(`languageDraft.entry.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:'１２'}))`);
+    await send({type:'restore_saved_settings',saved});
+    await new Promise(resolve=>setTimeout(resolve,200));
+    assert.equal(await evaluate('document.documentElement.lang'),'en','Publication waits for an active preedit');
+    assert.equal(await evaluate('languageDraft.entry.value'), '１２+invalid');
+    await evaluate(`languageDraft.entry.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'１２'}))`);
+    await ready('ja');await settle();
+    assert.deepEqual(await evaluate('layerApp.state().tabs.map(t=>[t.width,t.height])'),before);
+    assert.equal(await evaluate(`languageDraft.number===document.querySelector('[data-canvas-size=width]')&&languageDraft.entry===document.activeElement&&languageDraft.entry.value===languageDraft.value&&languageDraft.entry.selectionStart===languageDraft.start&&languageDraft.entry.selectionEnd===languageDraft.end`),true,'switch preserves dirty numeric entry, focus and selection');
+    assert.equal(await evaluate('document.querySelector("#canvas-size-title").textContent===layerApp.state().layer_tools.canvas_size.title'),true);
+    const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/${theme}-ja-size.png`,Buffer.from(shot.data,'base64'));
+    await send({type:'canvas_size',action:{op:'cancel'}});
+  }
+  const {targetId}=await call('Target.createTarget',{url:await evaluate('location.href')},null);
+  const {sessionId}=await call('Target.attachToTarget',{targetId,flatten:true},null);
+  try {
+    await ready('ja',sessionId);
+    await send({type:'open_settings',page:'appearance'});
+    await choice(4,'zh-Hant');await ready('zh-Hant',sessionId);
+    await evaluate(`layerApp.dispatch({type:'preferences',action:{type:'edit',id:'language',value:2}});layerApp.dispatch({type:'preferences',action:{type:'edit',id:'language',value:5}})`);
+    await ready('ko');await ready('ko',sessionId);
+    await call('Runtime.evaluate',{expression:"layerApp.dispatch({type:'open_settings',page:'appearance'})"},sessionId);
+    await Promise.all([
+      evaluate("layerApp.dispatch({type:'preferences',action:{type:'edit',id:'language',value:2}})"),
+      call('Runtime.evaluate',{expression:"layerApp.dispatch({type:'preferences',action:{type:'edit',id:'language',value:4}})"},sessionId),
+    ]);
+    const latest=await evaluate("JSON.parse(localStorage.getItem('layer.preferences.v1')).language.Explicit");
+    await ready(latest);await ready(latest,sessionId);
+    await call('Page.bringToFront',{},sessionId);await call('Page.bringToFront');
+    await ready(latest);await ready(latest,sessionId);
+    await evaluate('Object.defineProperty(navigator,"languages",{configurable:true,value:["fr","ja-JP","ko"]});window.dispatchEvent(new Event("languagechange"));');
+    await call('Runtime.evaluate',{expression:'Object.defineProperty(navigator,"languages",{configurable:true,value:["fr","ja-JP","ko"]});window.dispatchEvent(new Event("languagechange"));'},sessionId);
+    await choice(0,'ja');await ready('ja',sessionId);
+    await choice(1,'en');await ready('en',sessionId);
+  } finally {await call('Target.closeTarget',{targetId},null);}
+  await send({type:'close_settings'});
+  await writeFile(`${dir}/timing.json`,JSON.stringify(await evaluate('languageObserver.disconnect();({maximumQuantum:Math.max(...languageTiming.quanta),quanta:languageTiming.quanta.length,publications:languageTiming.publications,methods:Object.fromEntries(Object.entries(languageTiming.methods).map(([key,values])=>[key,{calls:values.length,total:values.reduce((a,b)=>a+b,0),maximum:Math.max(...values)}])),longTasks:languageTiming.longTasks,memory:performance.memory?{used:performance.memory.usedJSHeapSize,total:performance.memory.totalJSHeapSize}:null})'),null,2));
 }

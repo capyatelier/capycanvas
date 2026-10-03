@@ -28,6 +28,7 @@ import { createPalettes } from "./palettes.js";
 import { createEffectPanels } from "./effects.js";
 import { installTooltips } from "./tooltips.js";
 import { installPenScrolling } from "./pen-scroll.js";
+import { bindCopy, liveCopy, refreshBindings, refreshCopy } from "./localization.js";
 
 // The static packager fills this map with fingerprinted resource filenames.
 const assetPaths = {};
@@ -102,7 +103,8 @@ function applyTheme(theme, palette) {
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  if (text != null) node.textContent = text;
+  if (typeof text === "function") bindCopy(node, text);
+  else if (text != null) node.textContent = text;
   return node;
 }
 function message(error) {
@@ -123,7 +125,10 @@ function button(text, action, className = "") {
   return node;
 }
 function numberField(control, label, onChange, inline = false) {
-  return createNumberField({ control, label, labels:app.numeric_labels(label), onChange, inline, icon, resolve: request => app.number_input(request) });
+  const read = typeof label === "function" ? label : null;
+  const number = createNumberField({ control, label:read ? read() : label, labels:next => app.numeric_labels(next), onChange, inline, icon, resolve: request => app.number_input(request) });
+  if(read){Object.defineProperty(number,"localizedLabel",{set:next=>number.relabel(next)});bindCopy(number,read,"localizedLabel");}
+  return number;
 }
 // Overlay scrollbars do not take width away from previews or tiles. Scrolling
 // itself stays in the browser; this one thumb also supports pointer dragging.
@@ -225,7 +230,7 @@ function draggable(node, item, pickup = item.kind === "tile" ? "hold" : "immedia
 }
 function grip(item) {
   const node = button("", () => {}, "panel-grip");
-  node.title = delivery.drag_panel;
+  bindCopy(node,()=>delivery.drag_panel,"title");
   if (item.kind === "panel") {
     let retainedTitle;
     node.updatePanelTitle = title => {
@@ -234,7 +239,7 @@ function grip(item) {
       node.setAttribute("aria-label", app.document_delivery_message({type:"move_panel",name:title}));
     };
     node.updatePanelTitle(customization.view(item.panel).title);
-  } else node.setAttribute("aria-label", item.kind === "column" ? delivery.move_column : delivery.move_group);
+  } else bindCopy(node,()=>item.kind === "column" ? delivery.move_column : delivery.move_group,"ariaLabel");
   node.append(icon("grip"));
   return draggable(node, item);
 }
@@ -267,7 +272,30 @@ function dispatch(action) {
     message(error);
   }
 }
+let languageTimer;
+function queueLanguage() {
+  if (languageTimer) return;
+  languageTimer = setTimeout(() => {
+    languageTimer = null;
+    const change = app.prepare_language(composingKey({target:document.activeElement}) || !!workspaceGesture || chromeHeld || compilerContacts.size > 0);
+    if (change) applyChange(change);
+    if (app.language_pending()) queueLanguage();
+  }, 4);
+}
+function publishLanguage(patch) {
+  if (!patch.localization) return false;
+  refreshCopy(app);
+  document.documentElement.lang = patch.localization.tag;
+  document.title = catalog.app_name;
+  for (const [id, key] of [["workspace","drawing_workspace"],["canvas","drawing_canvas"],["gpu-notice","canvas_availability"],["header-start","application_menus"],["header-end","workspace_controls"],["canvas-status","canvas_status"]]) $(id)?.setAttribute("aria-label", bootstrap[key]);
+  canvas.setAttribute("aria-description", bootstrap.drawing_canvas_help);
+  $("size-number")?.relabel(catalog.native_copy.color.brush_size);
+  documents?.localize();
+  refreshBindings();
+  return true;
+}
 function applyChange(change) {
+  if (app.language_pending()) queueLanguage();
   canvasBar?.hold(app.canvas_bar_hold());
   if (change.regions & 512) {
     state.command_search = app.command_search();
@@ -291,6 +319,7 @@ function applyChange(change) {
         const patch = app.state_update();
         const reopeningCanvas = state.settings_open && patch.settings_open === false;
         Object.assign(state, patch);
+        const languageChanged = publishLanguage(patch);
         // A concurrent model change rebases retained placement too.
         if (!moving && !(change.regions & ~(16 | 128)) &&
             Object.keys(patch).every(key => key === "revision" || key === "settings_open")) {
@@ -298,7 +327,7 @@ function applyChange(change) {
           // the workspace behind it. Keep its controls and geometry intact.
           refreshPreferences(app.preferences_cached());
           updateZen();
-        } else update(change.regions | (moving ? 1 : 0));
+        } else update(languageChanged ? 2047 : change.regions | (moving ? 1 : 0));
         if (reopeningCanvas) {
           deferOptionalCompiler();
           wake();
@@ -1731,8 +1760,8 @@ try {
   catch (error) { restoreError = error; }
   const preferredLanguages = Array.from(navigator.languages ?? []);
   app = WebApp.create(canvas, savedPreferences, preferredLanguages);
-  bootstrap = app.bootstrap_view();
-  delivery = app.document_delivery_copy();
+  bootstrap = liveCopy(app, "bootstrap_view");
+  delivery = liveCopy(app, "document_delivery_copy");
   document.documentElement.lang = bootstrap.active_tag;
   for (const [id, label] of [["workspace", bootstrap.drawing_workspace], ["canvas", bootstrap.drawing_canvas], ["gpu-notice", bootstrap.canvas_availability], ["header-start", bootstrap.application_menus], ["header-end", bootstrap.workspace_controls], ["canvas-status", bootstrap.canvas_status]]) $(id).setAttribute("aria-label", label);
   $("canvas").setAttribute("aria-description", bootstrap.drawing_canvas_help);
@@ -1745,13 +1774,20 @@ try {
   });
   app.dispatch(themeAction());
   window.addEventListener("storage", (event) => {
-    if (event.key !== settingsKey || !event.newValue) return;
-    try { dispatch({ type: "restore_saved_settings", saved: event.newValue }); }
+    if (event.key !== settingsKey) return;
+    try { dispatch({ type: "restore_saved_settings", saved: localStorage.getItem(settingsKey) ?? "{}" }); }
     catch (error) { console.error(error); message(app.document_delivery_message({type:"restore_preferences",detail:String(error)})); }
   });
   systemTheme.addEventListener("change", () => dispatch(themeAction()));
+  window.addEventListener("languagechange", () => { app.preferred_languages(Array.from(navigator.languages ?? [])); queueLanguage(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    app.preferred_languages(Array.from(navigator.languages ?? []));
+    try { const saved = localStorage.getItem(settingsKey); if (saved) dispatch({type:"restore_saved_settings",saved}); } catch {}
+    queueLanguage();
+  });
   state = app.state_update();
-  catalog = app.catalog();
+  catalog = liveCopy(app, "catalog");
   performance.mark("capy.startup.model");
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
   document.title = catalog.app_name;
@@ -1763,7 +1799,7 @@ try {
   workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message });
   selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,numberField,dispatch,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
   const separate=action=>dispatch({type:'frequency_separation',action});
-  frequencySeparationUi = createPreviewPanel({name:'frequency-separation',view:()=>state.layer_tools.frequency_separation,kind:v=>v.label,
+  frequencySeparationUi = createPreviewPanel({app,name:'frequency-separation',view:()=>state.layer_tools.frequency_separation,kind:v=>v.label,
     value:radius=>separate({op:'radius',radius}),apply:()=>separate({op:'apply'}),cancel:()=>separate({op:'cancel'}),
     element,button,numberField,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
   canvasSizeUi = createCanvasSizeUi({state:()=>state,element,button,icon,numberField,resolve:request=>app.number_input(request),dispatch});

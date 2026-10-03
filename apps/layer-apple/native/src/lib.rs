@@ -28,6 +28,8 @@ pub struct CapyApple {
     chrome_facts: layer_ui::ChromeFacts,
     dismissed_contacts: std::collections::BTreeSet<u64>,
     workspaces: Option<layer_workspace::WorkspaceController<layer_workspace::StoreWorker>>,
+    language: layer_ui::LanguageTransition,
+    published_language: Option<u64>,
 }
 impl CapyApple {
     fn perform<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Option<T> {
@@ -57,25 +59,26 @@ impl CapyApple {
         result
     }
 }
-fn control_localization() -> Result<&'static std::sync::Arc<layer_ui::Localizer>, String> {
-    active_localization().map_err(str::to_owned)
-}
-
 #[cfg(test)]
-fn fixture_localization() -> &'static std::sync::Arc<layer_ui::Localizer> {
-    LOCALIZATION.get_or_init(|| layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
+fn fixture_localization() -> std::sync::Arc<layer_ui::Localizer> {
+    layer_ui::Localizer::shared(layer_ui::UiLanguage::English)
 }
 
-/// # Safety
-/// Returned handle must have one serial owner and be destroyed exactly once.
 #[cfg(test)]
 #[unsafe(no_mangle)]
 pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
-    apple_launch_localized(platform, "", fixture_localization().clone())
+    apple_launch_localized(platform, "", fixture_localization())
 }
-static LOCALIZATION: std::sync::OnceLock<std::sync::Arc<layer_ui::Localizer>> = std::sync::OnceLock::new();
-fn active_localization() -> Result<&'static std::sync::Arc<layer_ui::Localizer>, &'static str> {
-    LOCALIZATION.get().ok_or("apple_launch_not_initialized")
+
+#[derive(serde::Deserialize)]
+struct ControlRequest<T> {
+    language: layer_ui::UiLanguage,
+    request: T,
+}
+fn control_request<T: serde::de::DeserializeOwned>(source: &str) -> Result<(std::sync::Arc<layer_ui::Localizer>, T), String> {
+    let request: ControlRequest<T> = serde_json::from_str(source).map_err(|e| e.to_string())?;
+    let localization = layer_ui::Localizer::prepared(request.language).ok_or("apple_language_not_prepared")?;
+    Ok((localization, request.request))
 }
 #[derive(serde::Deserialize)]
 struct AppleLaunch {
@@ -93,9 +96,8 @@ pub unsafe extern "C" fn capy_apple_launch(platform: u32, json: *const c_char, b
         let Ok(source) = (unsafe { CStr::from_ptr(json) }).to_str() else { return std::ptr::null_mut(); };
         let Ok(launch) = serde_json::from_str::<AppleLaunch>(source) else { return std::ptr::null_mut(); };
         let tags: Vec<&str> = launch.preferred_languages.iter().map(String::as_str).collect();
-        let localization = if platform <= 1 {
-            LOCALIZATION.get_or_init(|| layer_ui::launch_localization(&launch.saved, &tags)).clone()
-        } else { layer_ui::launch_localization(&launch.saved, &tags) };
+        let localization = layer_ui::launch_localization(&launch.saved, &tags);
+        layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
         if !bootstrap.is_null() {
             let Ok(view) = serde_json::to_string(&layer_ui::bootstrap_view(&localization)) else { return std::ptr::null_mut(); };
             let Ok(view) = CString::new(view) else { return std::ptr::null_mut(); };
@@ -120,6 +122,8 @@ fn apple_launch_localized(platform: u32, saved: &str, localization: std::sync::A
         host.session.set_document_replacement(false);
         let window = document_tabs::Window::localized(host.session.localization());
         Some(Box::into_raw(Box::new(CapyApple {
+            language: layer_ui::LanguageTransition::new(host.session.localization().clone()),
+            published_language: None,
             host,
             window,
             metal: metal::MetalHost::default(),
@@ -132,6 +136,58 @@ fn apple_launch_localized(platform: u32, saved: &str, localization: std::sync::A
     .ok()
     .flatten()
     .unwrap_or(std::ptr::null_mut())
+}
+pub struct CapyLanguageTask {
+    request: layer_ui::LanguageRequest,
+    prepared: Option<std::sync::Arc<layer_ui::Localizer>>,
+}
+/// # Safety
+/// Serial owner only. JSON is an ordered array of preferred system-language tags.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_language_request(app: *mut CapyApple, json: *const c_char) -> *mut CapyLanguageTask {
+    let Some(app) = (unsafe { app.as_mut() }) else { return std::ptr::null_mut(); };
+    app.perform(|a| {
+        if json.is_null() { return Err("Missing preferred languages".into()); }
+        let tags: Vec<String> = serde_json::from_str(unsafe { CStr::from_ptr(json) }.to_str().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let tags: Vec<&str> = tags.iter().map(String::as_str).collect();
+        Ok(a.language.request(a.host.session.state().settings.language, &tags)
+            .map(|request| Box::into_raw(Box::new(CapyLanguageTask { request, prepared: None }))))
+    }).flatten().unwrap_or(std::ptr::null_mut())
+}
+/// # Safety
+/// Preparation worker only; task has no concurrent caller or borrowed editor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_language_prepare(task: *mut CapyLanguageTask) {
+    if let Some(task) = unsafe { task.as_mut() } {
+        layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        task.prepared = Some(layer_ui::Localizer::shared(task.request.language));
+    }
+}
+/// # Safety
+/// Serial owner only after worker preparation; task remains owned by the caller.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_language_prepared(app: *mut CapyApple, task: *mut CapyLanguageTask) -> bool {
+    let (Some(app), Some(task)) = (unsafe { app.as_mut() }, unsafe { task.as_mut() }) else { return false; };
+    task.prepared.take().is_some_and(|localization| app.language.prepared(task.request, localization))
+}
+/// # Safety
+/// Serial owner only. Native input capture/composition is supplied by the UI owner.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_language_publish(app: *mut CapyApple, input_busy: bool) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else { return -1; };
+    app.perform(|a| {
+        let busy = input_busy || a.host.session.localization_input_busy() || a.chrome_facts.held || a.chrome_facts.dragging;
+        let Some(localization) = a.language.publish(busy) else { return Ok(if a.language.pending() { 0 } else { -1 }); };
+        a.window.set_localization(localization.clone());
+        if let Some(workspaces) = &mut a.workspaces { workspaces.set_localization(localization.clone()); }
+        Ok(i32::from(a.host.set_localization(localization)))
+    }).unwrap_or(-1)
+}
+/// # Safety
+/// Task must be released exactly once, after every preparation/owner call ends.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_language_free(task: *mut CapyLanguageTask) {
+    if !task.is_null() { unsafe { drop(Box::from_raw(task)); } }
 }
 /// # Safety
 /// Handle must come from create, with no outstanding calls or borrowed strings.
@@ -167,9 +223,8 @@ pub unsafe extern "C" fn capy_apple_string_free(text: *mut c_char) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_numeric(json: *const c_char) -> *mut c_char {
     unsafe { stateless_json(json, "Missing numeric request", |source| {
-        let request: layer_ui::NumericRequest = serde_json::from_str(source).map_err(|e| e.to_string())?;
-        let localization = control_localization()?;
-        serde_json::to_value(request.resolve().map_err(|reason| reason.message(localization))?).map_err(|e| e.to_string())
+        let (localization, request) = control_request::<layer_ui::NumericRequest>(source)?;
+        serde_json::to_value(request.resolve().map_err(|reason| reason.message(&localization))?).map_err(|e| e.to_string())
     }) }
 }
 /// Shared tagged color forms, display previews and sampled gradient ramps.
@@ -179,7 +234,8 @@ pub unsafe extern "C" fn capy_apple_numeric(json: *const c_char) -> *mut c_char 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_color_ui(json: *const c_char) -> *mut c_char {
     unsafe { stateless_json(json, "Missing color request", |source| {
-        layer_ui::color_ui_localized(serde_json::from_str(source).map_err(|e| e.to_string())?, control_localization()?)
+        let (localization, request) = control_request(source)?;
+        layer_ui::color_ui_localized(request, &localization)
     }) }
 }
 /// # Safety
@@ -188,7 +244,8 @@ pub unsafe extern "C" fn capy_apple_color_ui(json: *const c_char) -> *mut c_char
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_toolbar_ui(json: *const c_char) -> *mut c_char {
     unsafe { stateless_json(json, "Missing toolbar request", |source| {
-        layer_ui::toolbar_ui(serde_json::from_str(source).map_err(|e| e.to_string())?, control_localization()?)
+        let (localization, request) = control_request(source)?;
+        layer_ui::toolbar_ui(request, &localization)
     }) }
 }
 /// # Safety
@@ -196,8 +253,8 @@ pub unsafe extern "C" fn capy_apple_toolbar_ui(json: *const c_char) -> *mut c_ch
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_native_caption(json: *const c_char) -> *mut c_char {
     unsafe { stateless_json(json, "Missing caption request", |source| {
-        let request: layer_ui::NativeCaption = serde_json::from_str(source).map_err(|e| e.to_string())?;
-        Ok(serde_json::json!({"text": request.message(control_localization()?)}))
+        let (localization, request) = control_request::<layer_ui::NativeCaption>(source)?;
+        Ok(serde_json::json!({"text": request.message(&localization)}))
     }) }
 }
 /// # Safety
@@ -208,8 +265,8 @@ pub unsafe extern "C" fn capy_apple_numeric_labels(json: *const c_char) -> *mut 
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Request { label: String }
-        let request: Request = serde_json::from_str(source).map_err(|e| e.to_string())?;
-        serde_json::to_value(layer_ui::NumericLabels::new(&request.label, control_localization()?)).map_err(|e| e.to_string())
+        let (localization, request) = control_request::<Request>(source)?;
+        serde_json::to_value(layer_ui::NumericLabels::new(&request.label, &localization)).map_err(|e| e.to_string())
     }) }
 }
 /// # Safety
@@ -217,8 +274,8 @@ pub unsafe extern "C" fn capy_apple_numeric_labels(json: *const c_char) -> *mut 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_document_appearance(json: *const c_char) -> *mut c_char {
     unsafe { stateless_json(json, "Missing document options", |source| {
-        let options: layer_ui::NewDocumentOptions = serde_json::from_str(source).map_err(|e| e.to_string())?;
-        serde_json::to_value(options.appearance(control_localization()?)).map_err(|e| e.to_string())
+        let (localization, options) = control_request::<layer_ui::NewDocumentOptions>(source)?;
+        serde_json::to_value(options.appearance(&localization)).map_err(|e| e.to_string())
     }) }
 }
 unsafe fn stateless_json(json: *const c_char, missing: &str,
@@ -336,10 +393,21 @@ pub unsafe extern "C" fn capy_apple_request(
             let Some(bytes) = a.host.take_layout_update_bytes().map_err(|e| e.to_string())? else {
                 return Ok(None);
             };
-            let extension = serde_json::to_vec(&serde_json::json!({
+            let mut extension = serde_json::json!({
                 "display_status": a.metal.display_status(&a.host),
                 "document_tabs": a.window.view(&a.host, a.host.logical[0]),
-            }))
+            });
+            let generation = a.host.localization_generation();
+            if a.published_language != Some(generation) {
+                extension["language_generation"] = generation.into();
+                extension["bootstrap"] = serde_json::to_value(a.host.bootstrap_view()).map_err(|e| e.to_string())?;
+                extension["catalog"] = a.host.query(serde_json::json!({"type":"catalog"}))?;
+                if let Some(workspaces) = &a.workspaces {
+                    extension["workspace_view"] = serde_json::to_value(&workspaces.view).map_err(|e| e.to_string())?;
+                }
+                a.published_language = Some(generation);
+            }
+            let extension = serde_json::to_vec(&extension)
             .map_err(|e| e.to_string())?;
             return CString::new(layer_host::extend_update(bytes, &extension))
                 .map(|snapshot| Some(snapshot.into_raw()))

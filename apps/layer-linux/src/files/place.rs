@@ -78,6 +78,7 @@ async fn spool(clipboard: &gdk::Clipboard) -> Result<TemporaryImage, String> {
 /// application put on the clipboard.
 pub(super) async fn run(w: &Rc<Workspace>, mode: Option<layer_ui::PasteMode>) -> Result<bool, String> {
     let paste = mode.is_some();
+    let request = mode.map_or(layer_ui::DocumentRequest::Place, |mode| layer_ui::DocumentRequest::Paste { mode });
     let incoming = if paste { None } else { w.image_drop.borrow_mut().take() };
     let (context, policy, working) = {
         let gpu = w.gpu.borrow();
@@ -94,18 +95,25 @@ pub(super) async fn run(w: &Rc<Workspace>, mode: Option<layer_ui::PasteMode>) ->
             .collect::<Result<Vec<_>, _>>()?
     } else {
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some(&format!("Images ({})", layer_color::photo::format_names())));
+        filter.set_name(Some(&layer_ui::DocumentDeliveryCopy::new(&w.localization()).images));
         for suffix in layer_color::photo::extensions() {
             filter.add_suffix(suffix);
         }
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title("Import images as layers")
-            .accept_label("Import")
+            .title(request.title(&w.localization()).as_ref())
+            .accept_label(request.accept_label(&w.localization()).as_ref())
             .filters(&filters)
             .default_filter(&filter)
             .build();
+        let weak = dialog.downgrade(); let filter = filter.downgrade(); let request = request.clone();
+        w.on_localization(move |localization| {
+            let Some(dialog) = weak.upgrade() else { return false };
+            dialog.set_title(&request.title(localization)); dialog.set_accept_label(Some(&request.accept_label(localization)));
+            if let Some(filter) = filter.upgrade() { filter.set_name(Some(&layer_ui::DocumentDeliveryCopy::new(localization).images)); }
+            true
+        });
         match super::chooser::open_multiple(&dialog, &w.window, super::chooser::Folder::Artwork).await {
             Ok(files) => files.iter::<gio::File>().map(|file|
                 file.map_err(|e| e.to_string())?.path().ok_or("Choose images on this device".into())
@@ -120,16 +128,19 @@ pub(super) async fn run(w: &Rc<Workspace>, mode: Option<layer_ui::PasteMode>) ->
         }
     };
     let dialog = adw::AlertDialog::builder()
-        .heading(if paste {
-            "Pasting image…"
-        } else {
-            "Importing images…"
-        })
-        .body("Keeping the original color profile and bit depth.")
+        .heading(request.title(&w.localization()).as_ref())
+        .body(layer_ui::bootstrap_view(&w.localization()).preparing_document.as_ref())
         .build();
     dialog.set_widget_name("image-import-progress");
-    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("cancel", &layer_ui::CommonCopy::new(&w.localization()).cancel);
     dialog.set_close_response("cancel");
+    let weak = dialog.downgrade();
+    w.on_localization(move |localization| {
+        let Some(dialog) = weak.upgrade() else { return false };
+        dialog.set_heading(Some(&request.title(localization))); dialog.set_body(&layer_ui::bootstrap_view(localization).preparing_document);
+        dialog.set_response_label("cancel", &layer_ui::CommonCopy::new(localization).cancel);
+        true
+    });
     let cancelled = Arc::new(AtomicBool::new(false));
     let transfer = gio::Cancellable::new();
     let signal = dialog.connect_response(

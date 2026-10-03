@@ -1,31 +1,32 @@
+import { liveCopy, bindCopy } from './localization.js';
 // The shared recipe describes a delivery copy, independent of the master.
 export const SDR_FORMATS=["Png","Tiff","Jpeg","Webp"];
 export async function chooseExport({app,dialog,element,button,numberField,gpuOperation,id}) {
   let control,running,closed=false;
-  const model=app.export_form(),copy=model.copy,profilesCopy=app.profile_copy();
+  const model=app.export_form(),copy=liveCopy(app,"export_copy"),profilesCopy=liveCopy(app,"profile_copy");
   let library=await app.export_presets({type:"get",index:0});
-  try { const result=await dialog(copy.title,(form,finish)=>{
+  try { const result=await dialog(()=>copy.title,(form,finish)=>{
     let recipe=library.recipe,currentPreset=0;
-    const field=(label,node)=>{const root=element("label","document-size",label);node.setAttribute("aria-label",label);root.append(node);form.append(root);return node;};
+    const field=(label,node)=>{const root=element("label","document-size",label);if(typeof label==="function")bindCopy(node,label,"ariaLabel");else node.setAttribute("aria-label",label);root.append(node);form.append(root);return node;};
     const select=(label,choices)=>{const node=element("select");for(const[id,name]of choices){const option=element("option","",name);option.value=id;node.append(option);}return field(label,node);};
     const number=(label,value,control)=>{
       const node=numberField(control,label,next=>{node.numericValue=next;});node.numericValue=value;node.update(value);return field(label,node);
     };
     const setNumber=(node,value)=>{node.cancelEditing();node.numericValue=value;node.update(value);};
-    form.append(element("p","",copy.help));
-    const destination=select(copy.destination,library.names.map((name,i)=>[i,name]));
-    const range=select(copy.range,["F16","F32"].includes(app.document_color().depth)?[["sdr",copy.sdr_rendition],["jpeg",copy.jpeg_gainmap],["avif",copy.avif_gainmap],["hdr",copy.format_pq],["exr",copy.format_exr]]:[["sdr","SDR"]]);
-    const clip=field(copy.clip_hdr,element("input"));clip.type="checkbox";
-    const format=select(copy.format,SDR_FORMATS.map(id=>[id,({Png:copy.format_png,Tiff:copy.format_tiff,Jpeg:copy.format_jpeg,Webp:copy.format_webp})[id]]));
-    const profile=select(copy.profile,model.profiles.map((p,i)=>[i,p.name]));
-    const depth=select(copy.depth,[["U8",copy.depth_8],["U16",copy.depth_16],["F32",copy.depth_float32]]);
-    const background=select(copy.transparency,[["Preserve",copy.preserve],["White",copy.white_background],["Black",copy.black_background]]);
-    const intent=select(copy.intent,[["RelativeColorimetric",copy.relative],["Perceptual",copy.perceptual],["Saturation",copy.saturation],["AbsoluteColorimetric",copy.absolute]]);
-    const dither=select(copy.dither,[["None",copy.dither_none],["Stochastic8",copy.dither_stochastic]]);
-    const quality=number(copy.quality,90,model.numeric.quality);
-    const size=select(copy.pixel_size,[["Original",copy.original_size],["Fit",copy.fit_bounds]]);
-    const width=number(copy.maximum_width,2048,model.numeric.dimension),height=number(copy.maximum_height,2048,model.numeric.dimension);
-    const resolution=select(copy.resolution,[["Master",copy.keep_resolution],["Ppi",copy.ppi],["Omit",copy.omit]]),ppi=number(copy.ppi,300,model.numeric.ppi);
+    form.append(element("p","",()=>copy.help));
+    const destination=select(()=>copy.destination,library.names.map((name,i)=>[i,name]));
+    const range=select(()=>copy.range,["F16","F32"].includes(app.document_color().depth)?[["sdr",()=>copy.sdr_rendition],["jpeg",()=>copy.jpeg_gainmap],["avif",()=>copy.avif_gainmap],["hdr",()=>copy.format_pq],["exr",()=>copy.format_exr]]:[["sdr","SDR"]]);
+    const clip=field(()=>copy.clip_hdr,element("input"));clip.type="checkbox";
+    const format=select(()=>copy.format,SDR_FORMATS.map(id=>[id,({Png:copy.format_png,Tiff:copy.format_tiff,Jpeg:copy.format_jpeg,Webp:copy.format_webp})[id]]));
+    const profile=select(()=>copy.profile,model.profiles.map((p,i)=>[i,p.name]));
+    const depth=select(()=>copy.depth,[["U8",()=>copy.depth_8],["U16",()=>copy.depth_16],["F32",()=>copy.depth_float32]]);
+    const background=select(()=>copy.transparency,[["Preserve",()=>copy.preserve],["White",()=>copy.white_background],["Black",()=>copy.black_background]]);
+    const intent=select(()=>copy.intent,[["RelativeColorimetric",()=>copy.relative],["Perceptual",()=>copy.perceptual],["Saturation",()=>copy.saturation],["AbsoluteColorimetric",()=>copy.absolute]]);
+    const dither=select(()=>copy.dither,[["None",()=>copy.dither_none],["Stochastic8",()=>copy.dither_stochastic]]);
+    const quality=number(()=>copy.quality,90,model.numeric.quality);
+    const size=select(()=>copy.pixel_size,[["Original",()=>copy.original_size],["Fit",()=>copy.fit_bounds]]);
+    const width=number(()=>copy.maximum_width,2048,model.numeric.dimension),height=number(()=>copy.maximum_height,2048,model.numeric.dimension);
+    const resolution=select(()=>copy.resolution,[["Master",()=>copy.keep_resolution],["Ppi",()=>copy.ppi],["Omit",()=>copy.omit]]),ppi=number(()=>copy.ppi,300,model.numeric.ppi);
     let metadataView=app.export_draft(recipe,{type:"refresh"}).metadata;
     const metadata=select(metadataView.label,metadataView.choices.map(c=>[c.value,c.label]));
     const removeLocation=field(metadataView.remove_location,element("input"));removeLocation.type="checkbox";
@@ -59,24 +60,24 @@ export async function chooseExport({app,dialog,element,button,numberField,gpuOpe
     metadata.onchange=removeLocation.onchange=()=>updateDraft({type:"metadata",value:readMetadata()});
     size.onchange=resolution.onchange=visible;load();
     const error=element("p","error-message");form.append(error);
-    form.append(button(profilesCopy.import,async()=>{
+    form.append(button(()=>profilesCopy.import,async()=>{
       try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});error.textContent="";}
       catch(e){error.textContent=String(e);}
     }));
-    form.append(button(profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});invalidate();}catch(e){error.textContent=String(e);}}));
+    form.append(button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});invalidate();}catch(e){error.textContent=String(e);}}));
     const readRecipe=()=>({format:rangeFormat(),profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:quality.numericValue,
       size:size.value==="Original"?"Original":{Fit:{bounds:[width.numericValue,height.numericValue],enlarge:recipe.size.Fit?.enlarge??false}},
       resolution:resolution.value==="Ppi"?{Ppi:ppi.numericValue}:resolution.value,metadata:readMetadata()});
     const selected=()=>app.export_validate(app.export_draft(readRecipe(),{type:"refresh"}).recipe);
     updateDraft({type:"refresh"});
-    const presetName=field(copy.preset_name,element("input"));presetName.maxLength=80;
+    const presetName=field(()=>copy.preset_name,element("input"));presetName.maxLength=80;
     const presetButtons=element("div","document-size");
     const presetAction=type=>{if(!commitNumbers()||!form.reportValidity())return;try{preference(type==="save"?{type,name:presetName.value,recipe:selected()}:{type,index:Number(destination.value),recipe:selected()});}catch(e){error.textContent=String(e);}};
-    const savePreset=button(copy.save_preset,()=>presetAction("save"));
-    const updatePreset=button(copy.update_preset,()=>presetAction("update"));
-    const removePreset=button(copy.delete_preset,()=>preference({type:"remove",index:Number(destination.value)}));
-    const resetPreset=button(copy.reset_destination,()=>preference({type:"reset",index:Number(destination.value)}));
+    const savePreset=button(()=>copy.save_preset,()=>presetAction("save"));
+    const updatePreset=button(()=>copy.update_preset,()=>presetAction("update"));
+    const removePreset=button(()=>copy.delete_preset,()=>preference({type:"remove",index:Number(destination.value)}));
+    const resetPreset=button(()=>copy.reset_destination,()=>preference({type:"reset",index:Number(destination.value)}));
     const presetAvailability=()=>{updatePreset.disabled=removePreset.disabled=Number(destination.value)<4;resetPreset.disabled=Number(destination.value)>=4;};
     presetButtons.append(savePreset,updatePreset,removePreset,resetPreset);form.append(presetButtons);presetAvailability();
     let preferenceBusy=false;
@@ -86,7 +87,7 @@ export async function chooseExport({app,dialog,element,button,numberField,gpuOpe
       catch(e){destination.value=String(currentPreset);error.textContent=String(e);}finally{preferenceBusy=false;inputs.forEach(n=>n.disabled=false);presetAvailability();}
     }
     const comparison=element("div","color-comparison"),status=element("p"),footer=element("footer");
-    const previewMode=select(copy.preview_rendition,[["hdr",copy.hdr_preview],["sdr",copy.sdr_base]]);previewMode.closest("label").hidden=true;
+    const previewMode=select(()=>copy.preview_rendition,[["hdr",()=>copy.hdr_preview],["sdr",()=>copy.sdr_base]]);previewMode.closest("label").hidden=true;
     let rangeBlocked=false,completed;
     const invalidate=()=>{completed=null;comparison.replaceChildren();previewMode.closest("label").hidden=true;status.textContent="";rangeBlocked=false;choose.disabled=false;};
     const invalidateInput=e=>{if(e.target!==previewMode)invalidate();};
@@ -102,10 +103,10 @@ export async function chooseExport({app,dialog,element,button,numberField,gpuOpe
         figure.append(canvas,element("figcaption","",caption));comparison.append(figure);});
     };
     previewMode.onchange=()=>{if(completed)drawComparison();};
-    const cancel=button(copy.common.cancel,()=>{control?.cancel();finish(null);});
+    const cancel=button(()=>copy.common.cancel,()=>{control?.cancel();finish(null);});
     const commitNumbers=()=>[quality,width,height,ppi].filter(node=>!node.closest("label").hidden).every(node=>node.commit());
-    const choose=button(copy.choose_file,()=>{if(!commitNumbers()||!form.reportValidity())return;try{finish({recipe:selected(),destination:Number(destination.value)});}catch(e){error.textContent=String(e);}},"suggested-action");
-    const preview=button(copy.preview,()=>{
+    const choose=button(()=>copy.choose_file,()=>{if(!commitNumbers()||!form.reportValidity())return;try{finish({recipe:selected(),destination:Number(destination.value)});}catch(e){error.textContent=String(e);}},"suggested-action");
+    const preview=button(()=>copy.preview,()=>{
       if(running||!commitNumbers()||!form.reportValidity())return;
       let recipe;try{recipe=selected();}catch(e){error.textContent=String(e);return;}
       invalidate();control?.free();control=app.capture_control();status.textContent=copy.preparing_comparison;error.textContent="";
@@ -129,7 +130,7 @@ export async function chooseExport({app,dialog,element,button,numberField,gpuOpe
 }
 
 export function importProfile(app,element) {
-  const copy=app.profile_copy();
+  const copy=liveCopy(app,"profile_copy");
   return new Promise((resolve,reject)=>{
     const input=element("input");input.type="file";input.accept=".icc,.icm";input.hidden=true;document.body.append(input);
     input.oncancel=()=>{input.remove();resolve(null);};
@@ -139,44 +140,44 @@ export function importProfile(app,element) {
 }
 
 export function chooseSourceProfile({app,dialog,element,button}) {
-  const copy=app.profile_copy();
-  return dialog(copy.interpret_title,(form,finish)=>{
-    form.append(element("p","",copy.interpret_help));
+  const copy=liveCopy(app,"profile_copy");
+  return dialog(()=>copy.interpret_title,(form,finish)=>{
+    form.append(element("p","",()=>copy.interpret_help));
     const profiles=["Srgb","DisplayP3","AdobeRgb","ProPhoto"].map(space=>({Builtin:space}));
-    const select=element("select");select.setAttribute("aria-label",copy.interpret_as);
+    const select=element("select");bindCopy(select,()=>copy.interpret_as,"ariaLabel");
     ["sRGB","Display P3","Adobe RGB (1998)","ProPhoto RGB"].forEach((name,i)=>{const option=element("option","",name);option.value=i;select.append(option);});form.append(select);
     const error=element("p","error-message");form.append(error);
-    form.append(button(copy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;error.textContent="";}catch(e){error.textContent=String(e);}}));
-    form.append(button(copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;}catch(e){error.textContent=String(e);}}));
-    const footer=element("footer");footer.append(button(copy.common.cancel,()=>finish(null)),button(copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action"));form.append(footer);
+    form.append(button(()=>copy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;error.textContent="";}catch(e){error.textContent=String(e);}}));
+    form.append(button(()=>copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;}catch(e){error.textContent=String(e);}}));
+    const footer=element("footer");footer.append(button(()=>copy.common.cancel,()=>finish(null)),button(()=>copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action"));form.append(footer);
   });
 }
 
 export function chooseProfileLibrary({app,element,button,manage=false}) {
-  const copy=app.profile_copy();
+  const copy=liveCopy(app,"profile_copy");
   return new Promise(resolve=>{
     const root=element("dialog","document-dialog profile-library"),form=element("form"),list=element("div"),error=element("p","error-message");
     form.method="dialog";let result=null,closed=false;
     const finish=value=>{result=value;root.close();};
     root.addEventListener("close",()=>{closed=true;root.remove();resolve(result);},{once:true});
-    form.append(element("h2","",copy.library_title),element("p","",copy.library_help),list,error);
-    const done=button(copy.common.done,()=>finish(null));
+    form.append(element("h2","",()=>copy.library_title),element("p","",()=>copy.library_help),list,error);
+    const done=button(()=>copy.common.done,()=>finish(null));
     const run=async action=>{
       const inputs=[...form.querySelectorAll('button')];inputs.forEach(b=>b.disabled=true);error.textContent="";
       try{await action();}catch(e){if(!closed)error.textContent=String(e);}finally{if(!closed)inputs.forEach(b=>b.disabled=false);}
     };
     const refresh=async()=>{
       const entries=await app.profile_library("list");if(closed)return;
-      list.replaceChildren();if(!entries.length)list.append(element("p","",copy.empty));
+      list.replaceChildren();if(!entries.length)list.append(element("p","",()=>copy.empty));
       for(const entry of entries){
         const row=element("section","profile-entry"),actions=element("div","document-size");
         row.append(element("h3","",entry.name),element("p","",entry.issue??entry.details));
-        if(!manage&&!entry.issue)actions.append(button(copy.use_profile,()=>run(async()=>{const profile=await app.profile_library("get",entry.id);if(!closed)finish(profile);})));
+        if(!manage&&!entry.issue)actions.append(button(()=>copy.use_profile,()=>run(async()=>{const profile=await app.profile_library("get",entry.id);if(!closed)finish(profile);})));
         actions.append(button(entry.visible===false?copy.show:copy.hide,()=>run(async()=>{await app.profile_library(entry.visible===false?"show":"hide",entry.id);await refresh();})));
-        actions.append(button(copy.remove,()=>run(async()=>{await app.profile_library("remove",entry.id);await refresh();})));row.append(actions);list.append(row);
+        actions.append(button(()=>copy.remove,()=>run(async()=>{await app.profile_library("remove",entry.id);await refresh();})));row.append(actions);list.append(row);
       }
     };
-    form.append(button(copy.import,()=>run(async()=>{const profile=await importProfile(app,element);if(profile&&!manage&&!closed)finish(profile);else await refresh();})),done);
+    form.append(button(()=>copy.import,()=>run(async()=>{const profile=await importProfile(app,element);if(profile&&!manage&&!closed)finish(profile);else await refresh();})),done);
     form.onsubmit=e=>e.preventDefault();root.append(form);document.body.append(root);root.showModal();run(refresh);
   });
 }

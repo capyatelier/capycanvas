@@ -182,7 +182,7 @@ impl NativeWorkspaces {
         let Some(store) = self.store.borrow_mut().take() else {
             return;
         };
-        let mut controller = Controller::new_localized(store, Platform::Gtk, now_ms(), w.localization.clone());
+        let mut controller = Controller::new_localized(store, Platform::Gtk, now_ms(), w.localization().clone());
         let owner = controller.manager.owner.id.clone();
         let pending = Arc::new(AtomicBool::new(false));
         let target = owner.clone();
@@ -223,6 +223,16 @@ impl NativeWorkspaces {
     pub fn starting(&self) -> bool {
         self.controller.borrow().is_some() && !self.view.borrow().ready
     }
+    pub(crate) fn set_localization(&self, w: &Rc<Workspace>, localization: std::sync::Arc<layer_ui::Localizer>) {
+        if let Some(controller) = self.controller.borrow_mut().as_mut() {
+            controller.set_localization(localization);
+            *self.view.borrow_mut() = controller.view.clone();
+        }
+        self.status_key.borrow_mut().take();
+        self.ui.invalidate_localization();
+        self.render(w);
+    }
+
     pub fn observe(&self, w: &Workspace, regions: u32) {
         if let Ok(mut controller) = self.controller.try_borrow_mut()
             && let Some(controller) = controller.as_mut()
@@ -274,7 +284,7 @@ impl NativeWorkspaces {
             match controller.input(session, input.take().unwrap(), now_ms()) {
                 Ok(change) => change,
                 Err(error) => {
-                    controller.view.error = Some(error.localized_message(session.localization()));
+                    controller.set_error(error);
                     UiChange::default()
                 }
             }
@@ -353,7 +363,7 @@ impl NativeWorkspaces {
                                 w.workspaces.send(
                                 &w,
                                 WorkspaceInput::FocusFailed {
-                                    error: w.localization.text(layer_ui::MessageId::WORKSPACE_REFUSAL_THIS_WORKSPACE_IS_OPEN_IN_ANOTHER_WINDOW).to_string(),
+                                    error: w.localization().text(layer_ui::MessageId::WORKSPACE_REFUSAL_THIS_WORKSPACE_IS_OPEN_IN_ANOTHER_WINDOW).to_string(),
                                 },
                             )
                             }
@@ -379,14 +389,14 @@ impl NativeWorkspaces {
         if self.status_key.borrow().as_ref().is_some_and(|key| key.0 == view.ready && key.1 == view.busy && key.2 == view.interrupted as usize && key.3 == view.name && key.4 == view.error) { return; }
         *self.status_key.borrow_mut() = Some((view.ready, view.busy, view.interrupted as usize, view.name.clone(), view.error.clone()));
         if let Some(error) = &view.error {
-            self.recovery.set_label(&w.localization.text(layer_ui::MessageId::WORKSPACE_ACTION_SAVE_AS_NEW_WORKSPACE));
+            self.recovery.set_label(&w.localization().text(layer_ui::MessageId::WORKSPACE_ACTION_SAVE_AS_NEW_WORKSPACE));
             self.root.set_visible(true);
             self.label.set_text(error);
             self.label.add_css_class("error");
             self.retry.set_visible(true);
             self.recovery.set_visible(true);
         } else if view.interrupted > 0 && !view.busy {
-            let caption = w.localization.text(layer_ui::MessageId::WORKSPACE_ACTION_RECOVER_INTERRUPTED_CHANGES);
+            let caption = w.localization().text(layer_ui::MessageId::WORKSPACE_ACTION_RECOVER_INTERRUPTED_CHANGES);
             self.recovery.set_label(&caption);
             self.root.set_visible(true);
             self.retry.set_visible(false);
@@ -398,7 +408,7 @@ impl NativeWorkspaces {
             self.label.remove_css_class("error");
             self.retry.set_visible(false);
             self.recovery.set_visible(false);
-            if view.ready { self.label.set_text(""); } else { self.label.set_text(&w.localization.text(layer_ui::MessageId::NATIVE_DIALOG_LOADING)); }
+            if view.ready { self.label.set_text(""); } else { self.label.set_text(&w.localization().text(layer_ui::MessageId::NATIVE_DIALOG_LOADING)); }
         }
     }
     /// Return true while the close must wait for acknowledged workspace writes.

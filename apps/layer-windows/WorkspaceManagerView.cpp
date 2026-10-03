@@ -9,6 +9,7 @@
 using namespace CapyUi;
 struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     Dispatch send;
+    std::shared_ptr<WorkspaceData> copyData=std::make_shared<WorkspaceData>();
     J catalog;
     std::shared_ptr<CapyLocalization> localization;
     hstring copy(wchar_t const* group,wchar_t const* key)const{return str(object(object(catalog,L"native_copy"),group),key);}
@@ -311,7 +312,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         }
         toolbarActions.Visibility(toolbars&&!naming&&toolbarMenu.Items().Size()?Visibility::Visible:Visibility::Collapsed);
         toolbarActions.IsEnabled(!busy&&!flag(model,L"loading"));
-        auto key=naming?str(details,L"title")+L":"+str(details,L"confirm"):L"";
+        auto key=naming?object(model,L"prompt_action").Stringify():L"";
         if(key!=promptKey){promptKey=key;nameDraft.reset();choicesKey=L"";}
         title.Text(naming?str(details,L"title"):str(model,L"title"));
         auto theme=str(object(snapshot,L"state"),L"theme",L"dark");
@@ -404,6 +405,21 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         return L"";
     }
     void apply(J const& value,bool unavailable) {
+        if(copyData->adoptLocalization(value)){
+            catalog=copyData->catalog;localization=copyData->localization;
+            thisWorkspace.Content(box_value(copy(L"header",L"this_workspace")));savedToolbars.Content(box_value(copy(L"header",L"saved_toolbars")));
+            toolbarActions.Content(box_value(copy(L"header",L"toolbar_actions")));retry.Content(box_value(copy(L"header",L"retry")));
+            progress.Text(recovery(L"loading"));search.PlaceholderText(copy(L"header",L"search"));
+            name.Header(box_value(common(L"name")));name.Language(copyData->language());search.Language(copyData->language());
+            if(dialog)dialog.Language(copyData->language());
+            for(auto& [id,row]:rows){row.captionTitle=L"";
+                row.rename.Text(recovery(L"rename"));row.remove.Text(common(L"delete"));row.show.Text(copy(L"header",L"show_top"));
+                row.up.Text(copy(L"header",L"move_up"));row.down.Text(copy(L"header",L"move_down"));
+                AutomationProperties::SetName(row.pinned,copy(L"header",L"shown_top"));tooltip(row.pinned,copy(L"header",L"shown_top"));
+                AutomationProperties::SetName(row.current,copy(L"header",L"current_workspace"));tooltip(row.current,copy(L"header",L"current_workspace"));
+                AutomationProperties::SetHelpText(row.grip,copy(L"header",L"drag_to_reorder"));
+            }
+        }
         snapshot=value;model=object(snapshot,L"windows_workspace");blocked=unavailable;
         if(stopping)return;
         auto focus=object(model,L"focus_window");
@@ -426,7 +442,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     }
 };
 WorkspaceManagerView::WorkspaceManagerView(Dispatch send,Json catalog,std::shared_ptr<CapyLocalization> localization,XamlRoot root,std::function<void()> changed):impl(std::make_shared<Impl>()){
-    impl->send=std::move(send);impl->catalog=catalog;impl->localization=std::move(localization);impl->root=root;impl->changed=std::move(changed);impl->init();
+    impl->copyData->catalog=catalog;impl->copyData->localization=localization;impl->send=std::move(send);impl->catalog=catalog;impl->localization=std::move(localization);impl->root=root;impl->changed=std::move(changed);impl->init();
 }
 WorkspaceManagerView::~WorkspaceManagerView()=default;
 void WorkspaceManagerView::Apply(Json const& snapshot,bool blocked){impl->apply(snapshot,blocked);}

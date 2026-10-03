@@ -18,7 +18,7 @@ pub(crate) fn current() -> Option<PixelClip> {
     CLIP.with_borrow(Clone::clone)
 }
 
-pub(super) async fn copy(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
+pub(super) async fn copy(w: &Rc<Workspace>, id: u32, request: &layer_ui::DocumentRequest) -> Result<bool, String> {
     let task = {
         let gpu = w.snapshot_gpu()?;
         let mut owner = w.gpu.borrow_mut();
@@ -27,12 +27,21 @@ pub(super) async fn copy(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     };
     let details = task.capture_details();
     let progress = details.large.then(|| {
-        let dialog = adw::AlertDialog::builder().heading(details.progress).build();
+        let dialog = adw::AlertDialog::builder().heading(request.title(&w.localization()).as_ref()).build();
         dialog.set_widget_name("clipboard-progress");
-        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("cancel", &layer_ui::CommonCopy::new(&w.localization()).cancel);
         dialog.set_close_response("cancel");
         dialog
     });
+    if let Some(dialog) = &progress {
+        let weak = dialog.downgrade(); let request = request.clone();
+        w.on_localization(move |localization| {
+            let Some(dialog) = weak.upgrade() else { return false };
+            dialog.set_heading(Some(&request.title(localization)));
+            dialog.set_response_label("cancel", &layer_ui::CommonCopy::new(localization).cancel);
+            true
+        });
+    }
     let control = CaptureControl::default();
     let signal = progress.as_ref().map(|dialog| {
         let control = control.clone();

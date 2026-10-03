@@ -37,9 +37,9 @@ pub struct CanvasBar {
 fn same_schema(a: &CanvasBarView, b: &CanvasBarView) -> bool {
     let same = |x: &[CanvasBarItem], y: &[CanvasBarItem]| {
         x.len() == y.len()
-            && x.iter().zip(y).all(|(x, y)| x.label == y.label && x.menu == y.menu && x.option.same_schema(&y.option))
+            && x.iter().zip(y).all(|(x, y)| x.menu == y.menu && x.option.same_schema(&y.option))
     };
-    a.context == b.context && a.label == b.label && same(&a.items, &b.items) && same(&a.completion, &b.completion)
+    a.context == b.context && same(&a.items, &b.items) && same(&a.completion, &b.completion)
 }
 
 impl CanvasBar {
@@ -142,9 +142,26 @@ impl CanvasBar {
             self.rebuild(workspace, view);
         }
         if let Some(view) = view {
+            self.label.set_label(view.label.as_deref().unwrap_or_default());
+            self.label.set_visible(view.label.is_some());
+            let localization = workspace.localization();
+            let more = localization.text(layer_ui::MessageId::COMMON_MORE);
+            self.more.set_tooltip_text(Some(&more));
+            self.more.update_property(&[gtk::accessible::Property::Label(&more)]);
             for ((_, field), item) in self.fields.borrow().iter().zip(view.items.iter().chain(&view.completion)) {
                 if let Some(field) = field {
-                    field.update(&item.option);
+                    field.update(&item.option, &localization);
+                    match field {
+                        Field::Menu(button, _, text) => {
+                            button.set_tooltip_text(Some(&item.label));
+                            button.update_property(&[gtk::accessible::Property::Label(&item.label)]);
+                            if item.menu.is_some() { text.set_text(&item.label); }
+                        }
+                        Field::Action(button) => {
+                            if let Some(label) = button.child().and_then(|row| row.last_child()).and_downcast::<gtk::Label>() { label.set_text(&item.label); }
+                        }
+                        _ => (),
+                    }
                 }
             }
         }

@@ -164,6 +164,12 @@ struct Entry {
     category: EntryCategory,
 }
 
+enum CommandSearchError {
+    Numeric(NumericError),
+    Message(MessageId),
+    Disabled(String),
+}
+
 #[derive(Default)]
 pub(super) struct CommandSearch {
     pub(super) revision: u64,
@@ -171,6 +177,7 @@ pub(super) struct CommandSearch {
     recent: Vec<String>,
     epoch: u64,
     focus: CommandFocus,
+    error_copy: Option<CommandSearchError>,
 }
 
 /// Existing snake_case action tags and parameter names are the public wire
@@ -1361,6 +1368,30 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         reason.unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string().into())
     }
+    pub(super) fn refresh_command_search_localization(&mut self) {
+        if self.state.command_search.is_none() { return; }
+        self.command_search.entries = self.catalog_entries();
+        let view = self.state.command_search.as_mut().unwrap();
+        let descriptor = |id: &str| self.command_search.entries.iter().find(|entry| entry.descriptor.id == id).map(|entry| entry.descriptor.clone());
+        let selected = view.results.get(view.selected).map(|entry| entry.id.clone());
+        view.results = view.results.iter().filter_map(|entry| descriptor(&entry.id)).collect();
+        view.selected = selected.and_then(|id| view.results.iter().position(|entry| entry.id == id)).unwrap_or(0);
+        if let Some(parameter) = &mut view.parameter {
+            if let Some(mut current) = descriptor(&parameter.id) {
+                current.parameter = parameter.parameter.clone();
+                *parameter = current;
+            }
+        }
+        if let Some(error) = &self.command_search.error_copy {
+            view.error = match error {
+                CommandSearchError::Numeric(error) => Some(error.message(&self.state.localization)),
+                CommandSearchError::Message(message) => Some(self.state.localization.text(*message).to_string()),
+                CommandSearchError::Disabled(id) => descriptor(id).and_then(|entry| entry.disabled_reason),
+            };
+        }
+        view.refresh_detail();
+    }
+
     pub(super) fn open_command_search(&mut self) -> Result<(), String> {
         self.require_idle()?;
         self.command_search.entries = self.catalog_entries();
@@ -1375,6 +1406,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn search_commands(&mut self, query: String) {
+        self.command_search.error_copy = None;
         let terms = crate::search::normalize(&query);
         let brush_query = crate::search::normalize(&CommandId::DrawingBrush.localized_label(self.localization()));
         let brush_category_query = crate::search::normalize(&self.localization().text(MessageId::COMMANDS_BRUSHES));
@@ -1443,24 +1475,39 @@ impl<R: CanvasRenderer> UiSession<R> {
         id: &str,
         value: Option<String>,
     ) -> Result<UiChange, String> {
-        let l = self.localization();
+        let l = self.localization().clone();
+        self.command_search.error_copy = None;
         let entry = self
             .catalog_entries()
             .into_iter()
             .find(|e| e.descriptor.id == id)
-            .ok_or(l.text(MessageId::COMMANDS_THIS_COMMAND_IS_NO_LONGER_AVAILABLE).to_string())?;
+            .ok_or_else(|| {
+                self.command_search.error_copy = Some(CommandSearchError::Message(MessageId::COMMANDS_THIS_COMMAND_IS_NO_LONGER_AVAILABLE));
+                l.text(MessageId::COMMANDS_THIS_COMMAND_IS_NO_LONGER_AVAILABLE).to_string()
+            })?;
         if !entry.descriptor.enabled {
+            self.command_search.error_copy = Some(CommandSearchError::Disabled(entry.descriptor.id));
             return Err(entry.descriptor.disabled_reason.unwrap_or_default());
         }
-        let mut action = entry.action.ok_or(l.text(MessageId::COMMANDS_THIS_COMMAND_REQUIRES_A_HELD_INPUT).to_string())?;
+        let mut action = entry.action.ok_or_else(|| {
+            self.command_search.error_copy = Some(CommandSearchError::Message(MessageId::COMMANDS_THIS_COMMAND_REQUIRES_A_HELD_INPUT));
+            l.text(MessageId::COMMANDS_THIS_COMMAND_REQUIRES_A_HELD_INPUT).to_string()
+        })?;
         if let Some(parameter) = entry.descriptor.parameter {
-            let text = value.ok_or(l.text(MessageId::COMMANDS_ENTER_A_VALUE_FOR_THIS_COMMAND).to_string())?;
+            let text = value.ok_or_else(|| {
+                self.command_search.error_copy = Some(CommandSearchError::Message(MessageId::COMMANDS_ENTER_A_VALUE_FOR_THIS_COMMAND));
+                l.text(MessageId::COMMANDS_ENTER_A_VALUE_FOR_THIS_COMMAND).to_string()
+            })?;
             let number = parameter
                 .numeric
                 .resolve(
                     parameter.value as f64,
                     NumericOperation::Expression { text },
-                ).map_err(|reason| reason.message(l))?
+                ).map_err(|reason| {
+                    let message = reason.message(&l);
+                    self.command_search.error_copy = Some(CommandSearchError::Numeric(reason));
+                    message
+                })?
                 .value as f32;
             match &mut action {
                 UiAction::SetToolSetting { value, .. } => *value = number,
@@ -1543,6 +1590,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             A::Back => {
+                self.command_search.error_copy = None;
                 let view = self.state.command_search.as_mut().unwrap();
                 if view.parameter.is_none() {
                     return self.command_search_action(A::Close);
@@ -1712,4 +1760,48 @@ fn panel_visibility_label(l: &Localizer, panel: Panel) -> String {
         Panel::CustomToolbar(_) => MessageId::COMMANDS_CUSTOM_TOOLBAR,
     };
     l.text(message).to_string()
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use super::*;
+    use crate::session::test_support::{session, invoke};
+
+    #[test]
+    fn command_search_language_refresh_reprojects_disabled_error() {
+        let mut session = session(Platform::Gtk);
+        invoke(&mut session, CommandId::SearchCommands);
+        session.command_search_action(CommandSearchAction::Query { text: "Undo".into() }).unwrap();
+        session.command_search_action(CommandSearchAction::Execute { id: "command.undo".into(), value: None }).unwrap();
+        let before = session.state.command_search.as_ref().unwrap().error.clone().unwrap();
+        assert!(session.set_localization(Localizer::shared(UiLanguage::Japanese)));
+        let view = session.state.command_search.as_ref().unwrap();
+        let descriptor = view.results.iter().find(|entry| entry.id == "command.undo").unwrap();
+        assert_ne!(view.error.as_ref().unwrap(), &before);
+        assert_eq!(view.error, descriptor.disabled_reason);
+    }
+
+    #[test]
+    fn command_search_language_refresh_retains_query_selection_recents_and_numeric_error() {
+        let mut session = session(Platform::Gtk);
+        invoke(&mut session, CommandId::SearchCommands);
+        session.command_search_action(CommandSearchAction::Query { text: "size".into() }).unwrap();
+        let entry = session.command_search.entries.iter().find(|entry| entry.descriptor.id == "tool_setting.size").unwrap().descriptor.clone();
+        session.command_search_action(CommandSearchAction::Select { id: entry.id.clone() }).unwrap();
+        session.command_search_action(CommandSearchAction::Execute { id: entry.id.clone(), value: None }).unwrap();
+        session.command_search_action(CommandSearchAction::Execute { id: entry.id.clone(), value: Some("１２".into()) }).unwrap();
+        session.command_search.recent = vec!["command.fit_canvas".into()];
+        let before = session.state.command_search.clone().unwrap();
+        let selected = before.results[before.selected].id.clone();
+        let epoch = session.command_search.epoch;
+        assert!(session.set_localization(Localizer::shared(UiLanguage::Japanese)));
+        let after = session.state.command_search.as_ref().unwrap();
+        assert_eq!(after.query, before.query);
+        assert_eq!(after.results[after.selected].id, selected);
+        assert_ne!(after.parameter.as_ref().unwrap().label, before.parameter.as_ref().unwrap().label);
+        assert_eq!(after.parameter.as_ref().unwrap().parameter.as_ref().unwrap().text, before.parameter.as_ref().unwrap().parameter.as_ref().unwrap().text);
+        assert_ne!(after.error, before.error);
+        assert_eq!(session.command_search.epoch, epoch);
+        assert_eq!(session.command_search.recent, ["command.fit_canvas"]);
+    }
 }

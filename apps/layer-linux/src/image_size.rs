@@ -156,6 +156,7 @@ impl ImageSizeDialog {
         if let Some((current, number)) = &self.numbers.borrow()[index]
             && current == spec
         {
+            number.set_caption(label, "", localization.clone());
             return number.clone();
         }
         let number = NumberControl::new(spec.clone(), label, "", localization.clone());
@@ -194,7 +195,7 @@ impl ImageSizeDialog {
             return;
         };
         self.updating.set(true);
-        if !self.shown.get() {
+        {
             self.dialog.set_response_label("apply", &view.apply_label);
             self.dialog.set_response_label("cancel", &view.cancel_label);
             let units: Vec<_> = view.units.iter().map(|choice| choice.label.as_ref()).collect();
@@ -202,7 +203,7 @@ impl ImageSizeDialog {
             let labels: Vec<_> = view.resamples.iter().map(|choice| choice.label.as_ref()).collect();
             self.resample.set_model(Some(&gtk::StringList::new(&labels)));
         }
-        self.present(view, &w.localization);
+        self.present(view, &w.localization());
         self.updating.set(false);
         if !self.shown.replace(true) {
             self.dialog.present(Some(&w.window));

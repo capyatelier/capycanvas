@@ -126,6 +126,31 @@ CAPY_APPLE_PHOTO_JPEG=/path/to/photo.jpg cargo test -p layer-apple --lib \
   --ignored --nocapture --test-threads=1
 ```
 
+### Live interface language
+
+Language changes use the same `NativeOwner` and `EditorStore`. Rust's shared
+transition rejects superseded preparation; a separate language queue warms the
+immutable context and English command aliases. The drawing owner publishes
+bootstrap, catalog, language generation and changed editor views together after
+native composition and captured input end. The Metal surface and document undo
+history keep their owners. Stateless numeric, caption, color and toolbar requests
+carry a language tag from the control's published snapshot and use prepared
+contexts only.
+
+`EditorPersistence` broadcasts accepted settings before its atomic disk write.
+Existing scenes and newly opened scenes therefore receive the accepted language
+when storage fails; the initiating scene still exposes its failure and retry
+state. Its in-memory settings cache lives only for that persistence owner's
+lifetime. System language resolves `Locale.preferredLanguages` when a request is
+made, including selecting System again.
+
+The portable regression `apple_language_publication_is_atomic_deferred_and_window_local`
+checks coalescing, deferred publication, complete matching copy, independent
+windows and unchanged document/camera state. On Apple hardware, also switch
+while editing color/numeric drafts, renaming with marked text, drawing, dragging,
+using open dialogs, and activating parked drawings in both themes. Run
+`tests/persistence.swift` for cross-scene delivery after a failed write.
+
 ### Swift fixtures
 
 The fixtures in `apps/layer-apple/tests` run the production Swift sources on the

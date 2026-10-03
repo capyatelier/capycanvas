@@ -4,11 +4,15 @@ import android.view.Surface
 
 /** Only CanvasHost's render Looper can access a native session handle. */
 internal object Native {
-    @JvmStatic external fun nativeCaption(request: String): String
-    @JvmStatic external fun documentAppearance(options: String): String
+    @JvmStatic external fun nativeCaption(request: String, language: String = ""): String
+    @JvmStatic external fun documentAppearance(options: String, language: String = ""): String
     @JvmStatic external fun shaderInput(handle: Long)
     init { System.loadLibrary("layer_android") }
     @JvmStatic external fun bootstrap(saved: String, locales: Array<String>): String
+    @JvmStatic external fun languageRequest(handle: Long, locales: Array<String>): String?
+    @JvmStatic external fun prepareLanguage(language: String): Long
+    @JvmStatic external fun publishLanguage(handle: Long, generation: Long, context: Long, busy: Boolean)
+    @JvmStatic external fun freeLanguage(context: Long)
     @JvmStatic external fun create(saved: String, locales: Array<String>, profiling: Boolean): Long
     @JvmStatic external fun destroy(handle: Long)
     @JvmStatic external fun attach(handle: Long, surface: Surface, cacheDirectory: String)
@@ -39,7 +43,7 @@ internal object Native {
     @JvmStatic external fun strokeRecordingData(handle: Long): ByteArray
     @JvmStatic external fun query(handle: Long, query: String): String
     /** Stateless shared color forms/previews; safe without a session handle. */
-    @JvmStatic external fun colorUi(request: String): String
+    @JvmStatic external fun colorUi(request: String, language: String = ""): String
     @JvmStatic external fun workspace(handle: Long, request: String): String
     @JvmStatic external fun navigatorPlacements(handle: Long, placements: String)
     @JvmStatic external fun glassRegions(handle: Long, glass: String)
@@ -126,9 +130,9 @@ internal object Native {
     @JvmStatic external fun projectExportOptions(task: Long, recipe: String)
     @JvmStatic external fun projectExportTask(handle: Long, request: Int, now: Long, cancel: Long = 0): Long
     /** Pure shared number-field math; no native session handle or GPU work. */
-    @JvmStatic external fun number(request: String): String
-    @JvmStatic external fun numericLabels(label: String): String
-    @JvmStatic external fun toolbarUi(request: String): String
+    @JvmStatic external fun number(request: String, language: String = ""): String
+    @JvmStatic external fun numericLabels(label: String, language: String = ""): String
+    @JvmStatic external fun toolbarUi(request: String, language: String = ""): String
     @JvmStatic external fun automaticTabNames(request: String): String
     /** Pure shared color-wheel hit geometry, independent of the render thread. */
     @JvmStatic external fun colorWheelHit(request: String): String

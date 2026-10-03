@@ -12,14 +12,14 @@ int main() {
 
     for(uint32_t key:{13u,27u,40u}) {
         TextCompositionKeys input;
-        input.Update(true,10);
+        assert(!input.Busy());input.Update(true,10);assert(input.Busy());
         input.Update(true,20);
         input.Update(false,30);
         assert(input.Owns(key,30,false,false));
         assert(input.Owns(key,30,false,false));
-        assert(input.Owns(key,40,false,true));
-        assert(input.Owns(key,50,true,true));
-        assert(input.Owns(key,50,true,true));
+        assert(input.Owns(key,40,false,true));assert(input.Busy());
+        assert(input.Owns(key,50,true,true));assert(!input.Busy());
+        assert(input.Owns(key,50,true,true));assert(!input.Busy());
         assert(!input.Owns(key,60,false,false));
         input.Update(true,70);input.Update(false,80);
         assert(!input.Owns(key,90,false,false));
@@ -142,6 +142,14 @@ int main() {
     shown=snapshots.Take();
     assert(shown.full.empty()&&shown.workspace.empty()&&shown.camera.empty());
     std::cout<<"Canvas presentation: retained models, independent motion/camera coalescing and completion boundaries passed\n";
+    snapshots.Push("translated models",true,true,{},false,"Japanese context");
+    snapshots.Push("newer models",true,true);
+    shown=snapshots.Take();
+    assert(shown.full=="newer models"&&shown.localization=="Japanese context");
+    snapshots.Push("Chinese models",true,true,{},false,"Chinese context");
+    snapshots.Push("Korean models",true,true,{},false,"Korean context");
+    shown=snapshots.Take();assert(shown.localization=="Korean context");
+    assert(snapshots.Take().localization.empty());
     CanvasWorkBuffer queue;
     // Saturation must not consume the caller's rejected command. Every
     // accepted boundary and command remains in the original order.

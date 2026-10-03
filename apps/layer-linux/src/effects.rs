@@ -30,6 +30,9 @@ pub struct EffectPanels {
     search_entry: gtk::SearchEntry,
     picker_bound: Cell<bool>,
     picker_revision: Cell<Option<u64>>,
+    picker_localization: RefCell<Option<std::sync::Arc<layer_ui::Localizer>>>,
+    picker_headings: RefCell<HashMap<std::sync::Arc<str>, gtk::Label>>,
+    picker_empty: RefCell<Option<gtk::Label>>,
     picker_categories: RefCell<Vec<layer_ui::FilterCategoryChoice>>,
     picker_updating: Cell<bool>,
     picker_visible: RefCell<Vec<std::sync::Arc<str>>>,
@@ -46,7 +49,12 @@ pub struct EffectPanels {
     title: gtk::Label,
     body: gtk::Box,
     schema: RefCell<Option<LayerPropertiesView>>,
+    property_localization: RefCell<Option<std::sync::Arc<layer_ui::Localizer>>>,
     fields: RefCell<Vec<Field>>,
+    property_labels: RefCell<Vec<(usize, gtk::Label)>>,
+    section_labels: RefCell<Vec<(usize, gtk::Label)>>,
+    curve_chooser: RefCell<Option<gtk::DropDown>>,
+    property_updating: Rc<Cell<bool>>,
     stats_labels: RefCell<Vec<gtk::Label>>,
     stats_plot: gtk::DrawingArea,
     stats_samples: Rc<RefCell<Vec<f32>>>,
@@ -200,6 +208,9 @@ impl EffectPanels {
             search_entry,
             picker_bound: Cell::new(false),
             picker_revision: Cell::new(None),
+            picker_localization: RefCell::new(None),
+            picker_headings: RefCell::default(),
+            picker_empty: RefCell::default(),
             picker_categories: RefCell::new(Vec::new()),
             picker_updating: Cell::new(false),
             picker_visible: RefCell::new(Vec::new()),
@@ -216,7 +227,12 @@ impl EffectPanels {
             title,
             body,
             schema: RefCell::new(None),
+            property_localization: RefCell::new(None),
             fields: RefCell::new(Vec::new()),
+            property_labels: RefCell::default(),
+            section_labels: RefCell::default(),
+            curve_chooser: RefCell::default(),
+            property_updating: Rc::new(Cell::new(false)),
             stats_labels: RefCell::new(Vec::new()),
             stats_plot,
             stats_samples,
@@ -302,11 +318,11 @@ impl EffectPanels {
                 }
             }
         ));
-        self.search_entry.connect_search_changed(glib::clone!(
+        self.search_entry.connect_changed(glib::clone!(
             #[weak]
             w,
             move |entry| {
-                if entry.is_visible() {
+                if entry.is_visible() && !w.effects.picker_updating.get() {
                     w.dispatch(UiAction::FilterPicker {
                         action: FilterPickerAction::Search {
                             query: entry.text().to_string(),
@@ -325,6 +341,14 @@ impl EffectPanels {
     }
     fn refresh_picker(&self, w: &Rc<Workspace>, state: &UiState) {
         self.picker_updating.set(true);
+        let localization = w.localization();
+        let language_changed = self.picker_localization.borrow().as_ref().is_none_or(|old| !std::sync::Arc::ptr_eq(old, &localization));
+        *self.picker_localization.borrow_mut() = Some(localization.clone());
+        self.cancel_filter.set_label(&layer_ui::CommonCopy::new(&localization).cancel);
+        self.search_entry.set_placeholder_text(Some(&state.filter_picker.search_label));
+        self.search_entry.update_property(&[gtk::accessible::Property::Label(&state.filter_picker.search_label)]);
+        self.search_button.set_tooltip_text(Some(&state.filter_picker.search_label));
+        self.search_button.update_property(&[gtk::accessible::Property::Label(&state.filter_picker.search_label)]);
         if self
             .picker_revision
             .replace(Some(state.filter_catalog_revision))
@@ -358,6 +382,26 @@ impl EffectPanels {
                     .collect::<Vec<_>>(),
             )));
         }
+        if language_changed {
+            *self.picker_categories.borrow_mut() = state.filter_categories.clone();
+            for (button, choice) in self.type_buttons.borrow().iter().zip(&state.filter_categories) {
+                if let Some(label) = button.child().and_then(|row| row.last_child()).and_downcast::<gtk::Label>() { label.set_label(&choice.label); label.set_tooltip_text(Some(&choice.label)); }
+                button.set_tooltip_text(Some(&choice.label));
+                button.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
+            }
+            if let Some(model) = self.category.model().and_downcast::<gtk::StringList>() {
+                model.splice(0, model.n_items(), &state.filter_categories.iter().map(|choice| choice.label.as_ref()).collect::<Vec<_>>());
+            }
+            for choice in &state.adjustments {
+                if let Some((button, _)) = self.picker_rows.borrow().get(&choice.id) {
+                    if let Some(label) = button.child().and_then(|body| body.last_child()).and_then(|caption| caption.last_child()).and_downcast::<gtk::Label>() { label.set_label(&choice.label); label.set_tooltip_text(Some(&choice.label)); }
+                    button.set_tooltip_text(Some(&choice.tooltip));
+                    button.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
+                }
+                if let Some(label) = self.picker_headings.borrow().get(&choice.category) { label.set_label(&choice.category_label); label.set_tooltip_text(Some(&choice.category_label)); }
+            }
+            if let Some(empty) = self.picker_empty.borrow().as_ref() { empty.set_label(&state.filter_picker.empty_label); }
+        }
         let picker = &state.filter_picker;
         for (button, choice) in self.type_buttons.borrow().iter().zip(&state.filter_categories) {
             if choice.id == picker.category { button.add_css_class("selected-tool"); }
@@ -386,12 +430,12 @@ impl EffectPanels {
                 .position(|c| c.id == picker.category)
                 .unwrap_or(0) as u32,
         );
-        self.picker_updating.set(false);
         self.search_entry.set_visible(picker.search.is_some());
         let query = picker.search.as_deref().unwrap_or("");
         if self.search_entry.text() != query {
             self.search_entry.set_text(query);
         }
+        self.picker_updating.set(false);
         let ids: Vec<_> = state.adjustments.iter().map(|c| c.id.clone()).collect();
         if *self.picker_visible.borrow() == ids {
             return;
@@ -399,6 +443,8 @@ impl EffectPanels {
         while let Some(child) = self.picker_body.first_child() {
             self.picker_body.remove(&child);
         }
+        self.picker_headings.borrow_mut().clear();
+        self.picker_empty.borrow_mut().take();
         let mut category = None;
         let mut rows = self.picker_rows.borrow_mut();
         for choice in &state.adjustments {
@@ -406,6 +452,7 @@ impl EffectPanels {
                 let heading =
                     crate::tool_panels::icon_label(&choice.category_label, choice.category_icon);
                 heading.add_css_class("filter-category");
+                self.picker_headings.borrow_mut().insert(choice.category.clone(), heading.last_child().and_downcast::<gtk::Label>().unwrap());
                 self.picker_body.append(&heading);
                 category = Some(choice.category.clone());
             }
@@ -446,6 +493,9 @@ impl EffectPanels {
                 ));
                 (button, picture)
             });
+            if let Some(label) = row.0.child().and_then(|body| body.last_child()).and_then(|caption| caption.last_child()).and_downcast::<gtk::Label>() { label.set_label(&choice.label); label.set_tooltip_text(Some(&choice.label)); }
+            row.0.set_tooltip_text(Some(&choice.tooltip));
+            row.0.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
             self.picker_body.append(&row.0);
             if picker.selected.as_ref() == Some(&choice.id) { row.0.add_css_class("selected-tool"); }
             else { row.0.remove_css_class("selected-tool"); }
@@ -454,6 +504,7 @@ impl EffectPanels {
             let empty = gtk::Label::new(Some(&picker.empty_label));
             empty.add_css_class("dim-label");
             self.picker_body.append(&empty);
+            self.picker_empty.replace(Some(empty));
         }
         *self.picker_visible.borrow_mut() = ids;
     }
@@ -536,6 +587,9 @@ impl EffectPanels {
         if self.properties.parent().is_none() {
             return;
         }
+        let localization = w.localization();
+        let language_changed = self.property_localization.borrow().as_ref().is_none_or(|old| !std::sync::Arc::ptr_eq(old, &localization));
+        *self.property_localization.borrow_mut() = Some(localization);
         let view = &state.layer_properties;
         self.title.set_text(&view.title);
         self.title.set_tooltip_text(Some(&view.description));
@@ -545,9 +599,7 @@ impl EffectPanels {
                 || old.controls.len() != view.controls.len()
                 || old.controls.iter().zip(&view.controls).any(|(a, b)| {
                     a.key != b.key
-                        || a.kind != b.kind
-                        || a.label != b.label
-                        || a.section != b.section
+                        || !same_property_kind(&a.kind, &b.kind)
                         || a.section_id != b.section_id
                 })
         });
@@ -556,6 +608,9 @@ impl EffectPanels {
                 self.body.remove(&child);
             }
             self.fields.borrow_mut().clear();
+            self.property_labels.borrow_mut().clear();
+            self.section_labels.borrow_mut().clear();
+            self.curve_chooser.borrow_mut().take();
             let curves: Vec<_> = view
                 .controls
                 .iter()
@@ -578,6 +633,7 @@ impl EffectPanels {
                     }
                 ));
                 self.body.append(&chooser);
+                self.curve_chooser.replace(Some(chooser));
                 self.body.append(&curve_stack);
             }
             if let Some(layer) = view.layer {
@@ -596,6 +652,7 @@ impl EffectPanels {
                             heading.add_css_class("heading");
                             heading.add_css_class("property-section");
                             self.body.append(&heading);
+                            self.section_labels.borrow_mut().push((index, heading));
                         }
                     }
                     let key = control.key.clone();
@@ -612,7 +669,7 @@ impl EffectPanels {
                     ));
                     let field = match &control.kind {
                         PropertyKind::Number { numeric } => {
-                            let input = NumberControl::new(numeric.clone(), &control.label, "", w.localization.clone());
+                            let input = NumberControl::new(numeric.clone(), &control.label, "", w.localization().clone());
                             input.set_widget_name(&format!("property-{}", control.key));
                             input.connect_value_changed(move |i| {
                                 dispatch(EffectValue::Number(i.value() as f32))
@@ -626,17 +683,18 @@ impl EffectPanels {
                             input.connect_active_notify(move |i| {
                                 dispatch(EffectValue::Toggle(i.is_active()))
                             });
-                            self.body.append(&row(&control.label, &input));
+                            self.append_property_row(index, &control.label, &input);
                             Field::Toggle(input)
                         }
                         PropertyKind::Choice { options } => {
                             let input = gtk::DropDown::from_strings(
                                 &options.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
                             );
+                            let updating = self.property_updating.clone();
                             input.connect_selected_notify(move |i| {
-                                dispatch(EffectValue::Choice(i.selected()))
+                                if !updating.get() { dispatch(EffectValue::Choice(i.selected())); }
                             });
-                            self.body.append(&row(&control.label, &input));
+                            self.append_property_row(index, &control.label, &input);
                             Field::Choice(input)
                         }
                         PropertyKind::Color => {
@@ -650,8 +708,8 @@ impl EffectPanels {
                                 bucket.set_widget_name(&format!("{}-bucket", control.key.replace('_', "-")));
                                 crate::icons::set_button(&bucket, "layer-fill-symbolic");
                                 line.append(&bucket);
-                                self.body.append(&row(&control.label, &line));
-                            } else { self.body.append(&row(&control.label, &input.widget)); }
+                                self.append_property_row(index, &control.label, &line);
+                            } else { self.append_property_row(index, &control.label, &input.widget); }
                             Field::Color(input)
                         }
                         PropertyKind::Curve => {
@@ -669,7 +727,40 @@ impl EffectPanels {
                 }
             }
         }
-        for (field, c) in self.fields.borrow().iter().zip(&view.controls) {
+        self.property_updating.set(true);
+        for (index, label) in self.property_labels.borrow().iter() {
+            label.set_label(&view.controls[*index].label); label.set_tooltip_text(Some(&view.controls[*index].label));
+        }
+        for (index, heading) in self.section_labels.borrow().iter() { heading.set_label(view.controls[*index].section.as_deref().unwrap_or("")); }
+        if let Some(chooser) = self.curve_chooser.borrow().as_ref() {
+            let labels: Vec<_> = view.controls.iter().filter(|c| matches!(c.kind, PropertyKind::Curve)).map(|c| c.label.as_str()).collect();
+            if let Some(model) = chooser.model().and_downcast::<gtk::StringList>() {
+                if model.n_items() as usize != labels.len() || labels.iter().enumerate().any(|(index, label)| model.string(index as u32).as_deref() != Some(*label)) {
+                    let selected = chooser.selected(); model.splice(0, model.n_items(), &labels); chooser.set_selected(selected);
+                }
+            }
+        }
+        let old_schema = self.schema.borrow();
+        for (index, (field, c)) in self.fields.borrow().iter().zip(&view.controls).enumerate() {
+            if language_changed {
+                let widget: &gtk::Widget = match field {
+                    Field::Number(input) => input.upcast_ref(), Field::Toggle(input) => input.upcast_ref(), Field::Choice(input) => input.upcast_ref(),
+                    Field::Color(input) => input.widget.upcast_ref(), Field::Curve(input) => input.area.upcast_ref(), Field::Gradient(input) => input.root.upcast_ref(),
+                };
+                widget.update_property(&[gtk::accessible::Property::Label(&c.label)]);
+            }
+            if language_changed || old_schema.as_ref().is_none_or(|old| old.controls.get(index).is_none_or(|old| old.label != c.label || old.kind != c.kind)) {
+                match (field, &c.kind) {
+                    (Field::Number(input), _) => input.set_caption(&c.label, "", w.localization()),
+                    (Field::Choice(input), PropertyKind::Choice { options }) => {
+                        if let Some(model) = input.model().and_downcast::<gtk::StringList>() {
+                            let selected = input.selected(); model.splice(0, model.n_items(), &options.iter().map(|label| label.as_ref()).collect::<Vec<_>>()); input.set_selected(selected);
+                        }
+                    }
+                    (Field::Gradient(input), _) => input.position.update_localization(w.localization()),
+                    _ => {}
+                }
+            }
             match (field, &c.value) {
                 (Field::Number(i), EffectValue::Number(v)) => i.set_value(*v as f64),
                 (Field::Toggle(i), EffectValue::Toggle(v)) => i.set_active(*v),
@@ -688,7 +779,14 @@ impl EffectPanels {
                 _ => {}
             }
         }
+        drop(old_schema);
+        self.property_updating.set(false);
         *self.schema.borrow_mut() = Some(view.clone());
+    }
+    fn append_property_row(&self, index: usize, title: &str, input: &impl IsA<gtk::Widget>) {
+        let row = row(title, input);
+        self.property_labels.borrow_mut().push((index, row.first_child().and_downcast::<gtk::Label>().unwrap()));
+        self.body.append(&row);
     }
     fn recording_error(w: &Rc<Workspace>, message: &str) {
         let dialog = adw::AlertDialog::builder()
@@ -839,6 +937,13 @@ impl EffectPanels {
         self.stats_plot.queue_draw();
     }
 }
+fn same_property_kind(a: &PropertyKind, b: &PropertyKind) -> bool {
+    match (a, b) {
+        (PropertyKind::Number { numeric: a }, PropertyKind::Number { numeric: b }) => a == b,
+        (PropertyKind::Choice { options: a }, PropertyKind::Choice { options: b }) => a.len() == b.len(),
+        _ => std::mem::discriminant(a) == std::mem::discriminant(b),
+    }
+}
 fn row(title: &str, input: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let label = gtk::Label::new(Some(title));
@@ -855,6 +960,7 @@ fn row(title: &str, input: &impl IsA<gtk::Widget>) -> gtk::Box {
 struct GradientEditor {
     root: gtk::Box,
     stops: Rc<RefCell<Vec<layer_core::GradientStop>>>,
+    position: NumberControl,
     sync: Rc<dyn Fn()>,
 }
 impl GradientEditor {
@@ -868,7 +974,7 @@ impl GradientEditor {
         let updating = Rc::new(Cell::new(false));
         let color = crate::color_editor::ColorButton::new();
         color.widget.set_widget_name("effect-gradient-color");
-        let position = NumberControl::new(layer_ui::NumericControl::percent(), "Position", "", w.localization.clone());
+        let position = NumberControl::new(layer_ui::NumericControl::percent(), "Position", "", w.localization().clone());
         let remove = crate::icons::button("layer-minus-symbolic");
         remove.set_tooltip_text(Some("Remove color stop"));
         let reset = crate::icons::button("layer-reset-symbolic");
@@ -1027,6 +1133,7 @@ impl GradientEditor {
         Self {
             root,
             stops,
+            position,
             sync: update,
         }
     }

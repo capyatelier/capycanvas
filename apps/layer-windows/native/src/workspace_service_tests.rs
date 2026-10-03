@@ -94,7 +94,7 @@ fn export_backup_waits_for_idle_and_reports_notice() {
 }
 
 #[test]
-fn workspace_service_keeps_launch_context_for_prompts_and_literal_names() {
+fn workspace_service_refreshes_open_prompts_and_preserves_literal_names() {
     let mut f = Fixture::localized(layer_ui::UiLanguage::Japanese);
     let active = f.native.session.localization().clone();
     assert!(Arc::ptr_eq(f.service.controller.localization(), &active));
@@ -103,10 +103,14 @@ fn workspace_service_keeps_launch_context_for_prompts_and_literal_names() {
     let prompt = f.service.view().prompt.as_ref().unwrap();
     assert_eq!(prompt.title, "新規ワークスペース");
     assert_eq!(prompt.confirm, "作成して切り替え");
+    let english = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    f.native.set_localization(english.clone());f.service.poll(&mut f.native, now_ms());
+    assert!(Arc::ptr_eq(f.service.controller.localization(), &english));
+    assert_ne!(f.service.view().prompt.as_ref().unwrap().title, "新規ワークスペース");
     let literal = "HDR 日本語 中文 한국어 🖌️ { $name }\u{2068}literal\u{2069}";
     f.service.input(&mut f.native, WorkspaceInput::Submit { name: literal.into(), description: None, choice: None }).unwrap();
     f.pump(|f| f.service.view().name == literal && !f.service.view().busy);
-    assert!(Arc::ptr_eq(f.service.controller.localization(), &active));
+    assert!(Arc::ptr_eq(f.service.controller.localization(), &english));
     assert_eq!(f.service.controller.manager.current().unwrap().metadata.name, literal);
     f.service.stop();
 }

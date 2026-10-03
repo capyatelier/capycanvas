@@ -1,8 +1,14 @@
 import Foundation
+import Synchronization
 
 /// Call on NativeProjectTask.io: every window shares ordered, atomic preferences.
 final class ColorPreferencesStore: @unchecked Sendable {
     private let root: URL?
+    private let language = Mutex("en")
+    func setLanguage(_ tag: String) { language.withLock { $0 = tag } }
+    private func localized(_ request: JSON) -> JSON {
+        JSON(["language": language.withLock { $0 }, "request": request.raw])
+    }
     init(root: URL?) { self.root = root }
     var canSave: Bool { root != nil }
 
@@ -20,7 +26,7 @@ final class ColorPreferencesStore: @unchecked Sendable {
         catch let error as NSError where Self.missing(error) { file = nil }
         defer { try? file?.close() }
         func operate(_ output: Int32) throws -> JSON {
-            try request.encoded().withCString { action in
+            try localized(request).encoded().withCString { action in
                 try color.encoded().withCString { color in
                     try result(capy_export_presets(file?.fileDescriptor ?? -1, output, action, color))
                 }
@@ -75,11 +81,11 @@ final class ColorPreferencesStore: @unchecked Sendable {
     }
     func exportDraft(recipe: JSON, action: JSON = JSON(["type": "refresh"])) throws -> JSON {
         try recipe.encoded().withCString { recipe in
-            try action.encoded().withCString { try result(capy_export_draft(recipe, $0)) }
+            try localized(action).encoded().withCString { try result(capy_export_draft(recipe, $0)) }
         }
     }
     private func library(_ action: JSON, bytes: Data = Data()) throws -> JSON {
-        try action.encoded().withCString { action in
+        try localized(action).encoded().withCString { action in
             try bytes.withUnsafeBytes { buffer in
                 try result(capy_profile_library(action, buffer.bindMemory(to: UInt8.self).baseAddress, bytes.count))
             }

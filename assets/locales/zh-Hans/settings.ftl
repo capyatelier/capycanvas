@@ -1,6 +1,5 @@
 settings-language = 语言
 settings-language-system = 使用系统语言
-settings-language-restart = 重启后生效。
 
 settings-reset-to-default = 恢复默认值
 settings-pressure-response = 压感响应

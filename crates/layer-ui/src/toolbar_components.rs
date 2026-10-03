@@ -135,15 +135,15 @@ pub enum ToolOption {
 }
 
 impl ToolOption {
-    /// Values and selection do not invalidate retained native editors.
+    /// Values, selection and presentation copy do not invalidate native editors.
     pub fn same_schema(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Numeric(a), Self::Numeric(b)) => {
-                a.id == b.id && a.label == b.label && a.numeric == b.numeric
+                a.id == b.id && a.numeric == b.numeric
             }
-            (Self::Range { id: a, label: x, bounds: p }, Self::Range { id: b, label: y, bounds: q }) => {
-                a == b && x == y && p.iter().zip(q).all(|(a, b)| {
-                    a.id == b.id && a.label == b.label && a.numeric == b.numeric
+            (Self::Range { id: a, bounds: p, .. }, Self::Range { id: b, bounds: q, .. }) => {
+                a == b && p.iter().zip(q).all(|(a, b)| {
+                    a.id == b.id && a.numeric == b.numeric
                 })
             }
             (
@@ -165,7 +165,7 @@ impl ToolOption {
                     && x.len() == y.len()
                     && x.iter()
                         .zip(y)
-                        .all(|(a, b)| a.label == b.label && a.action == b.action)
+                        .all(|(a, b)| a.action == b.action)
             }
             (
                 Self::Action {
@@ -176,7 +176,7 @@ impl ToolOption {
                     state: b,
                     checkable: y,
                 },
-            ) => a.id == b.id && a.label == b.label && x == y,
+            ) => a.id == b.id && x == y,
             _ => false,
         }
     }

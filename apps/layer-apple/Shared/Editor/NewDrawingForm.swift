@@ -12,6 +12,7 @@ struct NewDrawingChoice {
 /// Native controls present shared presets and independent space/depth choices.
 /// Rust validates the candidate document and any saved creation settings.
 struct NewDrawingForm: View {
+    @Environment(\.capyInterfaceLanguage) private var interfaceLanguage
     let spec: JSON
     let error: String?
     let busy: Bool
@@ -98,8 +99,9 @@ struct NewDrawingForm: View {
                     .keyboardShortcut(.defaultAction).disabled(selectedOptions == nil)
                     .accessibilityIdentifier("new-document-create")
             }
-        }.onAppear { appearance = NativeTextContext.appearance(options) }
-            .onChange(of: options.stableKey) { _, _ in appearance = NativeTextContext.appearance(options) }.disabled(busy).padding(24).frame(minWidth: 320, idealWidth: 400, maxWidth: 500,
+        }.onAppear { appearance = NativeTextContext.appearance(options, language: interfaceLanguage) }
+            .onChange(of: interfaceLanguage) { _, _ in appearance = NativeTextContext.appearance(options, language: interfaceLanguage) }
+            .onChange(of: options.stableKey) { _, _ in appearance = NativeTextContext.appearance(options, language: interfaceLanguage) }.disabled(busy).padding(24).frame(minWidth: 320, idealWidth: 400, maxWidth: 500,
             minHeight: 440, idealHeight: 540)
     }
     private func create() {

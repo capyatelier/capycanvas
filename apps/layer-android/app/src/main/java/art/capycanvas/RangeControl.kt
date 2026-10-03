@@ -49,7 +49,7 @@ private data class RangeContact(val index: Int, val before: Float, val domain: P
     val focus = remember { List(2) { FocusRequester() } }
     var focused by remember { mutableIntStateOf(-1) }
     fun resolve(index: Int, op: JSONObject, control: JSONObject = spec) = JSONObject(Native.number(
-        obj("control" to control, "value" to values[index], "operation" to op).toString())).number("value")
+        obj("control" to control, "value" to values[index], "operation" to op).toString(), host.languageTag)).number("value")
     fun change(index: Int, value: Float) {
         if (!live) return
         val next = if (index == 0) minOf(value, values[1]) else maxOf(value, values[0])
@@ -137,7 +137,7 @@ private data class RangeContact(val index: Int, val before: Float, val domain: P
                     }.semantics {
                         contentDescription="${bounds[i].getString("label")} — $label"
                         progressBarRangeInfo=ProgressBarRangeInfo(values[i],(if(i==0) spec.number("min") else values[0])..(if(i==0) values[1] else spec.number("max")))
-                        stateDescription=JSONObject(Native.number(obj("control" to spec,"value" to values[i],"operation" to obj("type" to "format")).toString())).getString("text")
+                        stateDescription=JSONObject(Native.number(obj("control" to spec,"value" to values[i],"operation" to obj("type" to "format")).toString(), host.languageTag)).getString("text")
                         setProgress { change(i,resolve(i,obj("type" to "value","value" to it)));true }
                     }.focusable())
             }

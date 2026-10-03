@@ -58,9 +58,9 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
             [weak](J color){if(auto self=weak.lock())self->change(self->selected,num(self->stop(),L"position"),color);},fields,
             [weak]{if(auto self=weak.lock())return self->context();return hstring{};}));
         StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(6);
-        auto add=button(data,data->caption(L"color",L"add_stop"),[weak]{if(auto self=weak.lock())self->addMiddle();});
-        remove=button(data,data->caption(L"color",L"remove_stop"),[weak]{if(auto self=weak.lock()){int index=self->selected;self->selected=std::max(0,index-1);self->change(index,0,JsonValue::CreateNullValue(),true);}});
-        auto reset=button(data,data->caption(L"color",L"reset_gradient"),[weak]{if(auto self=weak.lock()){self->selected=0;++self->generation;self->property->reset();self->refresh();}});
+        auto add=button(data,data->copyCaption(L"color",L"add_stop"),[weak]{if(auto self=weak.lock())self->addMiddle();});
+        remove=button(data,data->copyCaption(L"color",L"remove_stop"),[weak]{if(auto self=weak.lock()){int index=self->selected;self->selected=std::max(0,index-1);self->change(index,0,JsonValue::CreateNullValue(),true);}});
+        auto reset=button(data,data->copyCaption(L"color",L"reset_gradient"),[weak]{if(auto self=weak.lock()){self->selected=0;++self->generation;self->property->reset();self->refresh();}});
         int i=0;for(auto pick:{add,remove,reset}){
             pick.Height(28);pick.Width(28);pick.Content(icon(std::array<hstring,3>{L"plus",L"minus",L"undo"}[i],data->theme()));
             CapyUi::tooltip(pick,AutomationProperties::GetName(pick));

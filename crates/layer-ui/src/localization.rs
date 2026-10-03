@@ -167,7 +167,7 @@ pub fn file_open_failure(l: &Localizer, name: &str) -> String {
     l.format(MessageId::COMMON_OPEN_FILE_FAILED, &args)
 }
 
-/// Immutable launch context. Arguments are literal text without bidi isolation marks.
+/// Immutable language context. Arguments are literal text without bidi isolation marks.
 pub struct Localizer {
     language: UiLanguage,
     active: FluentBundle<FluentResource>,
@@ -175,6 +175,7 @@ pub struct Localizer {
     labels: BTreeMap<MessageId, Arc<str>>,
 }
 
+#[cfg(test)]
 fn bundle(language: UiLanguage) -> FluentBundle<FluentResource> {
     let sources = CATALOGS.iter().find(|(tag, _)| *tag == language.tag()).unwrap().1;
     let mut bundle = FluentBundle::new_concurrent(vec![language.tag().parse().unwrap()]);
@@ -200,18 +201,27 @@ impl std::fmt::Debug for Localizer {
 }
 
 impl Localizer {
-    pub fn shared(language: UiLanguage) -> Arc<Self> {
+    fn cache(language: UiLanguage) -> &'static OnceLock<Arc<Self>> {
         static EN: OnceLock<Arc<Localizer>> = OnceLock::new();
         static JA: OnceLock<Arc<Localizer>> = OnceLock::new();
         static HANS: OnceLock<Arc<Localizer>> = OnceLock::new();
         static HANT: OnceLock<Arc<Localizer>> = OnceLock::new();
         static KO: OnceLock<Arc<Localizer>> = OnceLock::new();
-        let slot = match language { UiLanguage::English => &EN, UiLanguage::Japanese => &JA, UiLanguage::SimplifiedChinese => &HANS, UiLanguage::TraditionalChinese => &HANT, UiLanguage::Korean => &KO };
-        Arc::clone(slot.get_or_init(|| Arc::new(Self::new(language))))
+        match language { UiLanguage::English => &EN, UiLanguage::Japanese => &JA, UiLanguage::SimplifiedChinese => &HANS, UiLanguage::TraditionalChinese => &HANT, UiLanguage::Korean => &KO }
+    }
+    pub fn shared(language: UiLanguage) -> Arc<Self> {
+        if language != UiLanguage::English { Self::shared(UiLanguage::English); }
+        Arc::clone(Self::cache(language).get_or_init(|| Arc::new(Self::new(language))))
+    }
+    pub fn prepared(language: UiLanguage) -> Option<Arc<Self>> {
+        Self::cache(language).get().cloned()
     }
     pub fn new(language: UiLanguage) -> Self {
-        Self::from_bundles(language, bundle(language), bundle(UiLanguage::English))
+        let mut preparation = LocalizerPreparation::cold(language);
+        preparation.step(usize::MAX);
+        preparation.localizer.unwrap()
     }
+    #[cfg(test)]
     fn from_bundles(language: UiLanguage, active: FluentBundle<FluentResource>, english: FluentBundle<FluentResource>) -> Self {
         let mut localizer = Self { language, active, english, labels: BTreeMap::new() };
         for &id in MessageId::STATIC {
@@ -256,9 +266,224 @@ impl Localizer {
     }
 }
 
+pub struct LocalizerPreparation {
+    canonical: Option<Box<LocalizerPreparation>>,
+    localizer: Option<Localizer>,
+    prepared: Option<Arc<Localizer>>,
+    catalog: usize,
+    label: usize,
+}
+
+impl LocalizerPreparation {
+    pub fn new(language: UiLanguage) -> Self {
+        let mut preparation = match Localizer::prepared(language) {
+            Some(prepared) => Self { canonical: None, localizer: None, prepared: Some(prepared), catalog: 0, label: 0 },
+            None => Self::cold(language),
+        };
+        if language != UiLanguage::English && Localizer::prepared(UiLanguage::English).is_none() {
+            preparation.canonical = Some(Box::new(Self::cold(UiLanguage::English)));
+        }
+        preparation
+    }
+    fn cold(language: UiLanguage) -> Self {
+        let mut active = FluentBundle::new_concurrent(vec![language.tag().parse().unwrap()]);
+        let mut english = FluentBundle::new_concurrent(vec!["en".parse().unwrap()]);
+        active.set_use_isolating(false);
+        english.set_use_isolating(false);
+        let localizer = Some(Localizer { language, active, english, labels: BTreeMap::new() });
+        Self { canonical: None, localizer, prepared: None, catalog: 0, label: 0 }
+    }
+    pub fn step(&mut self, budget: usize) -> bool {
+        if let Some(canonical) = &mut self.canonical {
+            if !canonical.step(budget) { return false; }
+            self.canonical.take().unwrap().finish().unwrap();
+            return self.prepared.is_some();
+        }
+        if self.prepared.is_some() { return true; }
+        let l = self.localizer.as_mut().unwrap();
+        let active = CATALOG_CHUNKS.iter().find(|(tag, _)| *tag == l.language.tag()).unwrap().1;
+        let english = CATALOG_CHUNKS.iter().find(|(tag, _)| *tag == "en").unwrap().1;
+        for _ in 0..budget {
+            if self.catalog < active.len() + english.len() {
+                let (target, (domain, source)) = if self.catalog < active.len() {
+                    (&mut l.active, active[self.catalog])
+                } else { (&mut l.english, english[self.catalog - active.len()]) };
+                let resource = FluentResource::try_new(source.to_owned())
+                    .unwrap_or_else(|(_, errors)| panic!("Invalid {domain} catalog: {errors:?}"));
+                target.add_resource(resource).unwrap_or_else(|errors| panic!("Duplicate {domain} catalog entries: {errors:?}"));
+                self.catalog += 1;
+            } else if let Some(&id) = MessageId::STATIC.get(self.label) {
+                let text = render(&l.active, id, None).unwrap_or_else(|error| {
+                    eprintln!("Localization {} {}: {error}", l.language.tag(), id.key());
+                    render(&l.english, id, None).expect("English static message must format")
+                });
+                l.labels.insert(id, Arc::from(text));
+                self.label += 1;
+            } else { return true; }
+        }
+        self.catalog == active.len() + english.len() && self.label == MessageId::STATIC.len()
+    }
+    pub fn finish(self) -> Option<Arc<Localizer>> {
+        if self.canonical.is_some() { return None; }
+        if self.prepared.is_some() { return self.prepared; }
+        let l = self.localizer?;
+        if self.label != MessageId::STATIC.len() { return None; }
+        Some(Arc::clone(Localizer::cache(l.language).get_or_init(|| Arc::new(l))))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LanguageRequest {
+    pub generation: u64,
+    pub language: UiLanguage,
+}
+
+pub struct LanguageTransition {
+    active: Arc<Localizer>,
+    generation: u64,
+    next_generation: u64,
+    requested: Option<LanguageRequest>,
+    prepared: Option<Arc<Localizer>>,
+}
+
+impl LanguageTransition {
+    pub fn new(active: Arc<Localizer>) -> Self {
+        Self { active, generation: 0, next_generation: 0, requested: None, prepared: None }
+    }
+    pub fn request(&mut self, preference: LanguagePreference, tags: &[&str]) -> Option<LanguageRequest> {
+        let language = resolve_launch_language(preference, tags);
+        if self.requested.is_some_and(|request| request.language == language) { return None; }
+        self.requested = None;
+        self.prepared = None;
+        if self.active.language() == language { return None; }
+        self.next_generation += 1;
+        let request = LanguageRequest { generation: self.next_generation, language };
+        self.requested = Some(request);
+        Some(request)
+    }
+    pub fn prepared(&mut self, request: LanguageRequest, localization: Arc<Localizer>) -> bool {
+        if self.requested != Some(request) || request.language != localization.language() { return false; }
+        self.prepared = Some(localization);
+        true
+    }
+    pub fn publish(&mut self, input_busy: bool) -> Option<Arc<Localizer>> {
+        if input_busy { return None; }
+        let localization = self.prepared.take()?;
+        self.generation = self.requested.take().unwrap().generation;
+        self.active = localization.clone();
+        Some(localization)
+    }
+    pub fn generation(&self) -> u64 { self.generation }
+    pub fn pending(&self) -> bool { self.requested.is_some() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_transition_coalesces_requests_and_waits_for_input() {
+        let en = Localizer::shared(UiLanguage::English);
+        let ja = Localizer::shared(UiLanguage::Japanese);
+        let ko = Localizer::shared(UiLanguage::Korean);
+        let mut transition = LanguageTransition::new(en.clone());
+        assert!(transition.request(LanguagePreference::System, &["en-US"]).is_none());
+        let first = transition.request(LanguagePreference::Explicit(UiLanguage::Japanese), &[]).unwrap();
+        assert!(transition.request(LanguagePreference::Explicit(UiLanguage::Japanese), &[]).is_none());
+        let latest = transition.request(LanguagePreference::System, &["fr", "ko-KR"]).unwrap();
+        assert!(!transition.prepared(first, ja.clone()));
+        assert!(!transition.prepared(latest, ja.clone()));
+        assert!(transition.prepared(latest, ko.clone()));
+        assert!(transition.publish(true).is_none());
+        assert_eq!(transition.generation(), 0);
+        assert!(transition.pending());
+        assert!(Arc::ptr_eq(&transition.publish(false).unwrap(), &ko));
+        assert_eq!(transition.generation(), latest.generation);
+        let canceled = transition.request(LanguagePreference::System, &["ja"]).unwrap();
+        assert!(transition.request(LanguagePreference::System, &["ko"]).is_none());
+        assert!(!transition.prepared(canceled, ja));
+        assert!(!transition.pending());
+        assert!(transition.publish(false).is_none());
+        let back = transition.request(LanguagePreference::System, &["unsupported"]).unwrap();
+        assert!(transition.prepared(back, en.clone()));
+        assert!(Arc::ptr_eq(&transition.publish(false).unwrap(), &en));
+        assert!(transition.generation() > latest.generation);
+    }
+
+    #[test]
+    fn incremental_language_preparation_matches_every_static_label() {
+        for language in UiLanguage::ALL {
+            let mut preparation = LocalizerPreparation::cold(language);
+            assert!(!preparation.step(0));
+            let mut quanta = 0;
+            while !preparation.step(1) { quanta += 1; }
+            assert!(quanta >= MessageId::STATIC.len());
+            let complete = preparation.localizer.as_ref().unwrap();
+            let baseline = Localizer::from_bundles(language, bundle(language), bundle(UiLanguage::English));
+            for &id in MessageId::STATIC { assert_eq!(complete.text(id), baseline.text(id), "{} {}", language.tag(), id.key()); }
+            let prepared = preparation.finish().unwrap();
+            let mut warm = LocalizerPreparation::new(language);
+            assert!(warm.step(0));
+            assert!(Arc::ptr_eq(&prepared, &warm.finish().unwrap()));
+        }
+        let mut canceled = LocalizerPreparation::cold(UiLanguage::English);
+        assert!(!canceled.step(1));
+        assert!(canceled.finish().is_none());
+    }
+
+    #[test]
+    fn preparation_chunks_preserve_all_message_values_and_attributes() {
+        use crate::localization_inventory::{inventory, requirements};
+        use std::collections::BTreeSet;
+        fn formatted(bundle: &FluentBundle<FluentResource>, key: &str, args: &FluentArgs<'_>) -> String {
+            let (id, attribute) = key.split_once('.').map_or((key, None), |(id, attribute)| (id, Some(attribute)));
+            let message = bundle.get_message(id).unwrap();
+            let pattern = attribute.map(|attribute| message.get_attribute(attribute).unwrap().value()).or_else(|| message.value()).unwrap();
+            let mut errors = Vec::new();
+            let text = bundle.format_pattern(pattern, Some(args), &mut errors).into_owned();
+            assert!(errors.is_empty(), "{key}: {errors:?}");
+            text
+        }
+        for language in UiLanguage::ALL {
+            let sources = CATALOGS.iter().find(|(tag, _)| *tag == language.tag()).unwrap().1;
+            let chunks = CATALOG_CHUNKS.iter().find(|(tag, _)| *tag == language.tag()).unwrap().1;
+            assert!(chunks.len() > sources.len());
+            for (_, source) in chunks {
+                assert!(source.len() <= 4096);
+                assert!(fluent_syntax::parser::parse(*source).unwrap().body.len() <= 32);
+            }
+            let patterns = inventory(sources).unwrap();
+            assert_eq!(inventory(chunks).unwrap(), patterns, "{}", language.tag());
+            let mut preparation = LocalizerPreparation::cold(language);
+            while !preparation.step(1) {}
+            let complete = &preparation.localizer.as_ref().unwrap().active;
+            let baseline = bundle(language);
+            for key in patterns.keys().filter(|key| !key.starts_with('-')) {
+                let variables = requirements(key, &patterns, &mut BTreeSet::new()).unwrap();
+                for count in [0, 1, 37] {
+                    let mut args = FluentArgs::new();
+                    for variable in &variables { args.set(variable, "作品🎨{draft}\" 한글 日本語"); }
+                    args.set("count", count);
+                    assert_eq!(formatted(complete, key, &args), formatted(&baseline, key, &args), "{} {key}", language.tag());
+                    for variable in &variables { args.set(variable, count); }
+                    assert_eq!(formatted(complete, key, &args), formatted(&baseline, key, &args), "{} {key}", language.tag());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn incremental_language_preparation_warms_canonical_search_copy() {
+        let mut preparation = LocalizerPreparation::cold(UiLanguage::Japanese);
+        preparation.canonical = Some(Box::new(LocalizerPreparation::cold(UiLanguage::English)));
+        while preparation.canonical.is_some() {
+            assert!(!preparation.step(32));
+            assert_eq!(preparation.label, 0);
+        }
+        assert!(Localizer::prepared(UiLanguage::English).is_some());
+        while !preparation.step(32) {}
+        assert_eq!(preparation.finish().unwrap().language(), UiLanguage::Japanese);
+    }
 
     #[test]
     fn bootstrap_copy_uses_warmed_text_and_literal_file_names() {

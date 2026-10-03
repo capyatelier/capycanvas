@@ -296,7 +296,7 @@ struct ReadoutCache {
 }
 type Changed = Box<dyn Fn(ContactPhase, SdrRendition)>;
 pub(crate) struct ProofDial {
-    localization: std::sync::Arc<layer_ui::Localizer>,
+    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     pub root: DialLayout,
     pub field: gtk::DrawingArea,
     pub arcs: [ArcScale; 2],
@@ -316,6 +316,19 @@ pub(crate) struct ProofDial {
     readout_builds: Cell<[u64; 4]>,
 }
 impl ProofDial {
+    pub(crate) fn set_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
+        *self.localization.borrow_mut() = localization.clone();
+        let copy = layer_ui::color_feature_copy::ProofCopy::new(&localization);
+        self.field.update_property(&[gtk::accessible::Property::Label(&copy.contrast_scale), gtk::accessible::Property::Description(&copy.tone_help)]);
+        for (index, arc) in self.arcs.iter().enumerate() {
+            arc.update_property(&[gtk::accessible::Property::Label(if index == 0 { &copy.brightness } else { &copy.highlight_color })]);
+        }
+        self.reset.set_tooltip_text(Some(&copy.reset_sdr));
+        self.reset.update_property(&[gtk::accessible::Property::Label(&copy.reset_sdr)]);
+        *self.readouts.borrow_mut() = std::array::from_fn(|_| None);
+        self.root.queue_draw();
+    }
+
     pub fn new(localization: &std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
         let copy = layer_ui::color_feature_copy::ProofCopy::new(localization);
         let root: DialLayout = glib::Object::new();
@@ -371,7 +384,7 @@ impl ProofDial {
         let recipe = SdrRendition::default();
         let pad = sdr_pad_values(recipe);
         let p = Rc::new(Self {
-            localization: localization.clone(),
+            localization: RefCell::new(localization.clone()),
             root,
             field,
             arcs,
@@ -482,7 +495,7 @@ impl ProofDial {
                 format!("{:.0}%", r.highlight_color * 100.)
             })]);
         }
-        let text = layer_ui::color_feature_copy::proof_dial_value(r, &self.localization);
+        let text = layer_ui::color_feature_copy::proof_dial_value(r, &self.localization.borrow());
         self.field.update_property(&[gtk::accessible::Property::ValueText(&text)]);
         self.root.queue_draw();
         self.updating.set(false);

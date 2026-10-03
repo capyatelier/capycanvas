@@ -124,7 +124,7 @@ impl ProofView {
             .as_ref()
             .is_some_and(|d| d.enabled || d.gamut)
         {
-            self.label.set_text(&layer_ui::color_feature_copy::ProofCopy::new(&w.localization).preparing);
+            self.label.set_text(&layer_ui::color_feature_copy::ProofCopy::new(&w.localization()).preparing);
         }
         if self.paused.get() || self.running.replace(true) {
             return;
@@ -141,13 +141,13 @@ impl ProofView {
                 match result {
                     Ok(()) => {
                         let label = if desired.enabled || desired.gamut {
-                            layer_ui::color_feature_copy::proof_status(&w.localization, name, desired.enabled, desired.gamut)
-                        } else { layer_ui::color_feature_copy::ProofCopy::new(&w.localization).normal.to_string() };
+                            layer_ui::color_feature_copy::proof_status(&w.localization(), name, desired.enabled, desired.gamut)
+                        } else { layer_ui::color_feature_copy::ProofCopy::new(&w.localization()).normal.to_string() };
                         state.label.set_text(&label);
                         state.label.set_tooltip_text(Some(&label));
                     }
                     Err(error) => {
-                        state.label.set_text(&layer_ui::color_feature_copy::ProofCopy::new(&w.localization).unavailable);
+                        state.label.set_text(&layer_ui::color_feature_copy::ProofCopy::new(&w.localization()).unavailable);
                         state.label.set_tooltip_text(Some(&error));
                         eprintln!("Soft proof: {error}");
                     }

@@ -1,6 +1,5 @@
 settings-language = 語言
 settings-language-system = 使用系統語言
-settings-language-restart = 重新啟動後生效。
 
 settings-reset-to-default = 恢復預設值
 settings-pressure-response = 筆壓反應

@@ -67,11 +67,14 @@ impl ExtraField {
         field
     }
     pub fn refresh(&self, option: &ToolOption) {
-        let ToolOption::Choice { items, .. } = option else {
+        let ToolOption::Choice { label, items, .. } = option else {
             return;
         };
+        self.root.update_property(&[gtk::accessible::Property::Label(label)]);
         self.updating.set(true);
         for (button, item) in self.buttons.iter().zip(items) {
+            button.set_tooltip_text(Some(&item.label));
+            button.update_property(&[gtk::accessible::Property::Label(&item.label)]);
             button.set_active(item.selected);
         }
         self.updating.set(false);

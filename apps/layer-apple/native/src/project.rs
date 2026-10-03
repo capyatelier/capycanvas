@@ -67,9 +67,10 @@ pub struct CapyProjectTask {
     epoch: u64,
     revision: u64,
     save_request: Option<u32>,
+    localization: std::sync::Arc<layer_ui::Localizer>,
 }
 impl CapyProjectTask {
-    fn new(payload: Payload, epoch: u64, revision: u64, save_request: Option<u32>) -> *mut Self {
+    fn new(payload: Payload, epoch: u64, revision: u64, save_request: Option<u32>, localization: std::sync::Arc<layer_ui::Localizer>) -> *mut Self {
         Box::into_raw(Box::new(Self {
             state: Mutex::new(State {
                 payload,
@@ -80,6 +81,7 @@ impl CapyProjectTask {
             epoch,
             revision,
             save_request,
+            localization,
         }))
     }
     fn check_cancelled(&self) -> Result<(), String> {
@@ -223,6 +225,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
             epoch,
             session.engine().document().revision,
             save_request,
+            session.localization().clone(),
         ))
     })
     .unwrap_or(std::ptr::null_mut())
@@ -236,7 +239,7 @@ pub unsafe extern "C" fn capy_apple_document_recovery(app:*mut CapyApple,id:u64)
     app.perform(|a| {
         let s=a.window.session(&a.host,id)?;
         Ok(CapyProjectTask::new(Payload::Save {snapshot:Some(s.capture_project_recovery()?),project:None},
-            s.state().document_file.epoch,s.engine().document().revision,None))
+            s.state().document_file.epoch,s.engine().document().revision,None,s.localization().clone()))
     }).unwrap_or(std::ptr::null_mut())
 }
 
@@ -336,7 +339,7 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
         }
         let file = host_file(fd);
         let stream = layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() };
-        let localization = control_localization()?;
+        let localization = &task.localization;
         match payload {
             Payload::Save { snapshot, project } => {
                 if let Some(snapshot) = snapshot.take() {
@@ -777,6 +780,7 @@ pub unsafe extern "C" fn capy_apple_export_task(
             epoch,
             revision,
             None,
+            session.localization().clone(),
         );
         Ok(1)
     })

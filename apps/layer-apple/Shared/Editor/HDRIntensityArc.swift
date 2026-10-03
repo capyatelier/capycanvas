@@ -15,7 +15,7 @@ struct HDRIntensityArc: View {
         let viewing = store.colorViewing
         let arc = ColorUI.resolve(["type": "intensity_arc", "size": size, "stops": model["intensity"].number,
             "base": model["base"].raw, "document_space": model["rgb_space"].raw,
-            "recipe": viewing["recipe"].raw, "headroom": viewing["headroom"].number, "depth": model["document_depth"].raw])
+            "recipe": viewing["recipe"].raw, "headroom": viewing["headroom"].number, "depth": model["document_depth"].raw], language: store.interfaceLanguage)
         ZStack(alignment: .topLeading) {
             Canvas(colorMode: .extendedLinear) { graphics, _ in
                 let points = geometry["points"].array, colors = arc["colors"].array
@@ -42,7 +42,7 @@ struct HDRIntensityArc: View {
                 if phase == "cancel" { if let original { set(original) }; original = nil; range = nil; return }
                 if phase == "down" { original = model["intensity"].number; range = [arc["minimum"].number, arc["maximum"].number] }
                 let range = range ?? [arc["minimum"].number, arc["maximum"].number]
-                let value = ColorUI.resolve(["type": "intensity_point", "size": side, "point": [p.x, p.y], "minimum": range[0], "maximum": range[1]])
+                let value = ColorUI.resolve(["type": "intensity_point", "size": side, "point": [p.x, p.y], "minimum": range[0], "maximum": range[1]], language: store.interfaceLanguage)
                 if !value.isNull { set(value.number) }
                 if phase == "up" { original = nil; self.range = nil }
             }.accessibilityHidden(true)
@@ -56,7 +56,7 @@ struct HDRIntensityArc: View {
                 .accessibilityAdjustableAction { set(model["intensity"].number + ($0 == .increment ? 0.1 : -0.1)) }
                 .popover(isPresented: $editing) {
                     let draft = ColorUI.resolve(["type": "form", "request": ["color": model["definition"].raw,
-                        "document_space": model["rgb_space"].raw, "intensity": model["intensity"].number, "document_depth": model["document_depth"].raw, "change_intensity_text": input]])
+                        "document_space": model["rgb_space"].raw, "intensity": model["intensity"].number, "document_depth": model["document_depth"].raw, "change_intensity_text": input]], language: store.interfaceLanguage)
                     VStack(spacing: 12) {
                         Text(store.catalog["native_copy"]["color"]["intensity_ev"].string).font(.headline)
                         TextField(store.catalog["native_copy"]["color"]["intensity_ev"].string, text: $input).textFieldStyle(.roundedBorder)

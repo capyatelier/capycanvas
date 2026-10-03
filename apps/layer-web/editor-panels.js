@@ -1,9 +1,11 @@
+import {liveCopy,bindCopy} from './localization.js';
 import { createRasterWorker } from './raster-worker-client.js';
 import { chooseColor } from './color-controls.js';
 import { createRangeControl } from './range-control.js';
 const selectionModes = new Set(['selection_new', 'selection_add', 'selection_subtract', 'selection_intersect']);
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ selectionUi, app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
+  const copy=liveCopy(app,"catalog").native_copy;
   const updates = new Map(), navigators = new Set(), pendingPaints = new Set();
   let positioning = 0, nextNavigator = 1;
   const fieldWorker = createRasterWorker();
@@ -79,7 +81,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
           value=>dispatch({type:'set_color_sample_size',width:Number(value)}));
         contentChanged('tool_settings');return;
       }
-      const next = JSON.stringify([String(s.toolbar_context_generation),String(s.document_file.epoch),s.layer_tools.editing_layer,s.tool_settings.map(({value,...field})=>field),s.tool_actions,s.tool_extra.map(o=>({...o,Choice:{...o.Choice,items:o.Choice.items.map(i=>({...i,selected:false}))}}))],(_,v)=>typeof v==='bigint'?String(v):v);
+      const next = JSON.stringify([String(s.document_file.epoch),s.layer_tools.editing_layer,s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])])],(_,v)=>typeof v==='bigint'?String(v):v);
       if (next !== key) {
         key = next; root.disposeSettings(); range=null; root.replaceChildren(); numbers=[]; actions=[]; choices=[]; let group="";
         const modes = element("div", "selection-modes");
@@ -102,10 +104,10 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
               onChange:(index,value)=>dispatch({type:'set_tool_setting',id:bounds[index].id,value})});
             root.append(range);continue;
           }
-          if (field.group && field.group !== group) root.append(element("h3", "", field.group)); group=field.group;
-          const node=numberField(field.numeric,field.label,value=>dispatch({type:"set_tool_setting",id:field.id,value}),compact);
+          if (field.group && field.group !== group) root.append(element("h3", "", ()=>state().tool_settings.find(f=>f.id===field.id)?.group??"")); group=field.group;
+          const node=numberField(field.numeric,()=>state().tool_settings.find(f=>f.id===field.id)?.label??"",value=>dispatch({type:"set_tool_setting",id:field.id,value}),compact);
           node.dataset.toolSetting=field.id;
-          if(compact){const row=element('label','tonal-numeric-row');row.append(element('span','',field.label),node);root.append(row);}else root.append(node);
+          if(compact){const row=element('label','tonal-numeric-row');row.append(element('span','',()=>state().tool_settings.find(f=>f.id===field.id)?.label??''),node);root.append(row);}else root.append(node);
           numbers.push([field.id,node]);
         }
         for (const spec of s.tool_actions) {
@@ -117,14 +119,15 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         contentChanged("tool_settings");
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
-      if(range) range.update(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id).value));
-      for(const [id,index,node] of choices) {const selected=s.tool_extra.find(o=>o.Choice.id===id).Choice.items[index].selected;node.setAttribute('aria-checked',selected);node.setAttribute('aria-pressed',selected);}
+      if(range) {range.relabel(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id)),copy.tool_controls.range_hint);range.update(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id).value));}
+      for(const [id,index,node] of choices) {const item=s.tool_extra.find(o=>o.Choice.id===id).Choice.items[index];node.title=item.label;node.setAttribute('aria-label',item.label);const selected=item.selected;node.setAttribute('aria-checked',selected);node.setAttribute('aria-pressed',selected);}
       for (const [spec,node] of actions) {
         const c=s.commands.find(c=>c.id===spec.command);
         if(!node.firstChild) {
           node.append(icon(c.icon));
           if (!selectionModes.has(spec.command)) node.append(element("span","",c.label));
         }
+        const text=node.querySelector("span");if(text)text.textContent=c.label;
         node.setAttribute("aria-label", c.label);
         node.disabled=!c.enabled; node.title=c.tooltip;
         if(spec.checkable) node.setAttribute("aria-pressed",String(c.selected));
@@ -138,8 +141,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       let intensity;const selected=await chooseColor({app,color:displayColors()[slot],element,button,intensity:app.color_panel().hdr?app.color_panel().intensity:null,onIntensity:v=>intensity=v});
       if(selected)color(intensity==null?{op:"set_slot",slot,color:selected}:{op:"set_slot_intensity",slot,color:selected,stops:intensity});
     },"color-edit color-utility");
-    edit.title="Edit Color…";edit.setAttribute("aria-label","Edit Color");edit.append(icon("pencil"));stage.append(edit);
-    const wheel=element("canvas","color-wheel");wheel.setAttribute("aria-label","Color wheel");stage.append(wheel);
+    bindCopy(edit,()=>copy.color.edit_menu,"title");bindCopy(edit,()=>copy.color.edit,"ariaLabel");edit.append(icon("pencil"));stage.append(edit);
+    const wheel=element("canvas","color-wheel");bindCopy(wheel,()=>copy.color.wheel,"ariaLabel");stage.append(wheel);
     // Paint order also controls hit testing in the intentional swatch overlap.
     const quickColors=[true,false].map(white=>{
       const node=button("",()=>color({op:"quick_color",white}),"color-swatch");node.dataset.quickColor=white?"white":"black";
@@ -151,11 +154,11 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     });
     const shapes=[0,1].map(i=>{const node=button("",()=>color({op:"shape",shape:view.other_shapes[i]}),"color-shape");stage.append(node);return node;});
     const swap=button("",()=>color({op:"swap"}),"color-swap color-utility");
-    swap.title="Swap foreground and background";swap.setAttribute("aria-label",swap.title);swap.append(icon("color-swap"));stage.append(swap);
+    bindCopy(swap,()=>copy.color.swap,"title");bindCopy(swap,()=>copy.color.swap,"ariaLabel");swap.append(icon("color-swap"));stage.append(swap);
     const arc=document.createElementNS("http://www.w3.org/2000/svg","svg"),track=document.createElementNS(arc.namespaceURI,"path"),markerShadow=document.createElementNS(arc.namespaceURI,"circle"),marker=document.createElementNS(arc.namespaceURI,"circle");
     // Chrome arbitrates touch scrolling on the SVG viewport, not its path.
     arc.classList.add('color-intensity');arc.style.cssText='position:absolute;inset:0;overflow:visible;pointer-events:none;touch-action:none';
-    track.setAttribute('fill','none');track.setAttribute('stroke','transparent');track.setAttribute('stroke-linecap','round');track.style.pointerEvents='stroke';track.style.touchAction='none';track.setAttribute('tabindex','0');track.setAttribute('role','slider');track.setAttribute('aria-label','Color intensity');
+    track.setAttribute('fill','none');track.setAttribute('stroke','transparent');track.setAttribute('stroke-linecap','round');track.style.pointerEvents='stroke';track.style.touchAction='none';track.setAttribute('tabindex','0');track.setAttribute('role','slider');bindCopy(track,()=>copy.color.intensity,"ariaLabel");
     const ramp=document.createElementNS(arc.namespaceURI,'g'),caption=document.createElementNS(arc.namespaceURI,'text');ramp.style.pointerEvents='none';caption.style.pointerEvents='none';caption.setAttribute('fill','currentColor');arc.append(ramp);
     // Match the wheel marker: the white ring and dark edge stay visible on every ramp color.
     markerShadow.setAttribute('fill','none');markerShadow.setAttribute('stroke','rgba(0,0,0,.5)');markerShadow.setAttribute('stroke-width','4');

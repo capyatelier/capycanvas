@@ -31,7 +31,7 @@ using V=IJsonValue;
 }
 namespace CapyUi {
 struct StrokeRecording;
-void captureTextComposition(TextBox const& entry);
+void captureTextComposition(TextBox const& entry,std::function<void(bool)> localizationInput={});
 bool textComposing(DependencyObject element);
 bool focusedTextComposing(XamlRoot const& root);
 bool composingKey(KeyRoutedEventArgs const& event);
@@ -108,8 +108,33 @@ inline J numeric(CapyLocalization const* localization,J const& spec,double value
 }
 using Bindings=std::vector<std::function<void()>>;
 using NumericAdmissions=std::vector<std::function<bool(bool)>>;
-struct WorkspaceData {
+struct LocalizedCopy : hstring {
+    std::function<hstring()> current;
+    LocalizedCopy(hstring value,std::function<hstring()> resolve):hstring(value),current(std::move(resolve)){}
+};
+struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     std::shared_ptr<CapyLocalization> localization;
+    uint64_t localizationGeneration=uint64_t(-1);
+    std::vector<std::function<bool()>> copyViews;
+    size_t copyCleanup=64;
+    void copyView(std::function<bool()> update){
+        if(copyViews.size()>=copyCleanup){std::erase_if(copyViews,[](auto const& refresh){return !refresh();});copyCleanup=std::max(size_t(64),copyViews.size()*2);}
+        copyViews.emplace_back(std::move(update));
+    }
+    bool adoptLocalization(J const& snapshot){
+        auto presentation=object(snapshot,L"localization");
+        if(!presentation.Size())return false;
+        auto generation=uint64_t(num(presentation,L"generation"));
+        if(localizationGeneration==generation)return false;
+        auto nextCatalog=object(presentation,L"catalog"),bootstrap=object(presentation,L"bootstrap");
+        auto tag=to_string(str(bootstrap,L"active_tag"));
+        std::shared_ptr<CapyLocalization> next(capy_localization_for_tag(tag.c_str()),capy_localization_free);
+        if(!next)throw hresult_invalid_argument(L"Invalid localization presentation");
+        if(snapshot.HasKey(L"state")){model=snapshot;state=object(snapshot,L"state");}
+        nextCatalog.Insert(L"bootstrap",bootstrap);catalog=nextCatalog;localization=std::move(next);localizationGeneration=generation;
+        std::erase_if(copyViews,[](auto const& update){return !update();});
+        return true;
+    }
     J state,catalog,model;
     std::shared_ptr<FilterPreviewCache> previews;
     std::shared_ptr<LayerThumbnailCache> thumbnails;
@@ -165,8 +190,23 @@ struct WorkspaceData {
         if(result.HasKey(L"error"))throw hresult_invalid_argument(str(result,L"error"));
         return str(result,L"text");
     }
+    LocalizedCopy copyCaption(J const& request)const{
+        auto resolve=[weak=weak_from_this(),request]{if(auto data=weak.lock())return data->caption(request);return hstring();};return {resolve(),resolve};
+    }
     hstring caption(wchar_t const* group,wchar_t const* key)const{return str(object(object(catalog,L"native_copy"),group),key);}
+    LocalizedCopy copyCaption(wchar_t const* group,wchar_t const* key)const{
+        auto resolve=[weak=weak_from_this(),group=std::wstring(group),key=std::wstring(key)]{
+            if(auto data=weak.lock())return str(object(object(data->catalog,L"native_copy"),group.c_str()),key.c_str());return hstring();
+        };
+        return {resolve(),resolve};
+    }
     hstring common(wchar_t const* key)const{return str(object(object(catalog,L"bootstrap"),L"common"),key);}
+    LocalizedCopy copyCommon(wchar_t const* key)const{
+        auto resolve=[weak=weak_from_this(),key=std::wstring(key)]{
+            if(auto data=weak.lock())return str(object(object(data->catalog,L"bootstrap"),L"common"),key.c_str());return hstring();
+        };
+        return {resolve(),resolve};
+    }
     void dispatch(J const& action) const {send(to_string(action.Stringify()));}
     void dispatchDocument(J const& action,hstring const& epoch) const {
         dispatch(O({{L"windows_epoch",S(epoch)},{L"action",action}}));
@@ -192,6 +232,9 @@ struct WorkspaceData {
 };
 inline void inheritLanguage(FrameworkElement const& element,std::shared_ptr<WorkspaceData> const& data) {
     auto language=data->language();if(!language.empty())element.Language(language);
+    data->copyView([weak=make_weak(element),source=std::weak_ptr<WorkspaceData>(data)]{
+        auto owner=weak.get();auto data=source.lock();if(!owner||!data)return false;owner.Language(data->language());return true;
+    });
 }
 inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"button",13);}
 inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){return data->glass(L"chip");}
@@ -201,11 +244,16 @@ inline J displayColors(J const& state){
     return masked.Size()?masked:object(state,L"colors");
 }
 inline SolidColorBrush accent(std::shared_ptr<WorkspaceData> const& data){return data->brush(L"accent");}
-inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false){
+inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false,bool retained=true){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
-    inheritLanguage(result,data);result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
+    if(retained)inheritLanguage(result,data);else result.Language(data->language());result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
     result.LineHeight(18);result.LineStackingStrategy(LineStackingStrategy::BlockLineHeight);
     if(bold)result.FontWeight(Windows::UI::Text::FontWeights::Bold());
+    return result;
+}
+inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,LocalizedCopy const& text,bool bold=false){
+    auto result=label(data,static_cast<hstring const&>(text),bold);
+    data->copyView([weak=make_weak(result),resolve=text.current]{if(auto view=weak.get()){view.Text(resolve());return true;}return false;});
     return result;
 }
 template<typename T>
@@ -229,6 +277,14 @@ inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,s
     result.Background(clear());AutomationProperties::SetName(result,text);
     buttonColors(data,result);
     result.Click([action=std::move(action)](auto&&,auto&&){action();});
+    return result;
+}
+template<typename T=Button>
+inline T button(std::shared_ptr<WorkspaceData> const& data,LocalizedCopy const& text,std::function<void()> action){
+    auto result=button<T>(data,static_cast<hstring const&>(text),std::move(action));
+    data->copyView([weak=make_weak(result),resolve=text.current]{
+        if(auto view=weak.get()){auto text=resolve();view.Content(box_value(text));AutomationProperties::SetName(view,text);return true;}return false;
+    });
     return result;
 }
 inline bool& touchContact(){thread_local bool touch=false;return touch;}
@@ -313,7 +369,7 @@ struct DoublePress : std::enable_shared_from_this<DoublePress> {
 };
 struct NumberPresentation {
     bool preference=false;hstring description;std::function<hstring()> identity;
-    std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;
+    std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;std::function<hstring()> title;
 };
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L"",bool inlineTrack=false,NumberPresentation const& presentation={},NumericAdmissions* admissions=nullptr);

@@ -136,7 +136,7 @@ impl Launcher {
                 .upgrade()
                 .and_then(|v| active(app, &v.borrow())),
         };
-        let localization = target.as_ref().map_or_else(|| crate::launch_localization().clone(), |w| w.localization.clone());
+        let localization = target.as_ref().map_or_else(|| crate::application_localization(app).borrow().localization.clone(), |w| w.localization());
         let copy = layer_ui::bootstrap_view(&localization);
         let closed = Rc::new(Cell::new(false));
         let placeholder = if target.is_none() {
@@ -217,6 +217,7 @@ impl Launcher {
                 .unwrap_or_else(|| file.uri().into());
             let result = super::open::prepare(
                 parent,
+                target.as_ref(),
                 file,
                 settings.photo_open,
                 settings.new_document.defaults.color.space,
@@ -224,7 +225,7 @@ impl Launcher {
                     let mut names = self.names.clone();
                     if !name.is_empty() { names.paint = name.clone().into(); }
                     names
-                }, |w| layer_ui::photo_document_names(&name, &w.localization)),
+                }, |w| layer_ui::photo_document_names(&name, &w.localization())),
                 &localization,
             )
             .await;

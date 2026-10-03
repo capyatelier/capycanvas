@@ -41,7 +41,7 @@ bool LayerRow::loadThumbnail(bool isMask){
 }
 void LayerRow::init(){
     auto weak=weak_from_this();root.Child(swipeFrame);
-    swipeDelete=button(data,data->common(L"delete"),[weak]{if(auto self=weak.lock()){self->swipe(0);self->action(O({{L"op",S(L"delete")},{L"id",N(self->id)}}));}});
+    swipeDelete=button(data,data->copyCommon(L"delete"),[weak]{if(auto self=weak.lock()){self->swipe(0);self->action(O({{L"op",S(L"delete")},{L"id",N(self->id)}}));}});
     swipeDelete.HorizontalAlignment(HorizontalAlignment::Right);swipeDelete.VerticalAlignment(VerticalAlignment::Stretch);
     swipeDelete.MinWidth(0);swipeDelete.Padding({0});swipeDelete.CornerRadius({0});swipeDelete.Background(fill({255,192,28,40}));swipeDelete.Foreground(fill({255,255,255,255}));
     AutomationProperties::SetAutomationId(swipeDelete,L"layer-"+to_hstring(uint64_t(id))+L"-swipe-delete");
@@ -99,7 +99,7 @@ void LayerRow::init(){
     content.CornerRadius({3,3,3,3});mask.CornerRadius({3,3,3,3});
     link=pick(data->caption(L"layers",L"link_mask"),6,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"link_mask")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"mask_linked"))}}));});
     link.Content(icon(L"link",data->theme(),12));
-    name=button(data,data->caption(L"layers",L"layer"),[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));});
+    name=button(data,data->copyCaption(L"layers",L"layer"),[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));});
     name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.Padding({0});name.Margin({6,0,2,0});
     StackPanel caption;title=label(data,L"");title.TextTrimming(TextTrimming::CharacterEllipsis);caption.Children().Append(title);

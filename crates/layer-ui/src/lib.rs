@@ -20,7 +20,7 @@ pub(crate) use variants;
 
 pub mod localization;
 pub use fluent_bundle::FluentArgs;
-pub use localization::{LanguagePreference, Localizer, MessageId, UiLanguage, resolve_language, resolve_launch_language, launch_localization, BootstrapView, bootstrap_view, file_open_failure};
+pub use localization::{LanguagePreference, LanguageRequest, LanguageTransition, Localizer, LocalizerPreparation, MessageId, UiLanguage, resolve_language, resolve_launch_language, launch_localization, BootstrapView, bootstrap_view, file_open_failure};
 #[cfg(test)]
 mod localization_catalog_tests;
 #[cfg(test)]
@@ -117,7 +117,7 @@ pub use session::{
     AdjustmentChoice, ApplicationLink, ApplicationMenu, ClipboardCapture, CloseDecision,
     LARGE_CLIP_PIXELS, PasteMode, PixelClip,
     DEFAULT_DOCUMENT_EXTENT,
-    DocumentColorOperation, DocumentHostError, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
+    DocumentColorOperation, DocumentHostError, DocumentHostErrorCopy, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
     FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
     MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, new_drawing, new_document_spec,
 };

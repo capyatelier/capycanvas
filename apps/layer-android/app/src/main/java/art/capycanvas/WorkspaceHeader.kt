@@ -377,6 +377,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 }
 
 @Composable private fun HeaderGrip(title: String) {
-    val caption = remember(title) { JSONObject(Native.nativeCaption(obj("type" to "move_panel", "title" to title).toString())).getString("text") }
+    val host = LocalCanvasHost.current
+    val caption = remember(title, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "move_panel", "title" to title).toString(), host.languageTag)).getString("text") }
     PanelGrip(caption)
 }

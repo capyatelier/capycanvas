@@ -5,17 +5,18 @@ export function openSizeDialog({element,button,host,name,body,copy,apply,cancel}
   const title=element('h2');title.id=`${name}-title`;title.tabIndex=-1;title.autofocus=true;dialog.setAttribute('aria-labelledby',title.id);
   const message=element('p','size-dialog-message');message.setAttribute('role','status');
   const footer=element('footer'),applyButton=button(copy.apply_label,apply,'suggested-action');
-  footer.append(button(copy.cancel_label,cancel),applyButton);
+  const cancelButton=button(copy.cancel_label,cancel);footer.append(cancelButton,applyButton);
   form.append(title,...body,message,footer);
   form.addEventListener('submit',e=>{e.preventDefault();apply();});
   dialog.addEventListener('cancel',e=>{e.preventDefault();cancel();});
   dialog.append(form);host().append(dialog);dialog.showModal();
-  return {dialog,title,message,apply:applyButton,close(){dialog.close();dialog.remove();}};
+  return {dialog,title,message,apply:applyButton,relabel(copy){applyButton.textContent=copy.apply_label;cancelButton.textContent=copy.cancel_label;},close(){dialog.close();dialog.remove();}};
 }
 
 export function sizeSelect({element,label,choices,key,act}) {
   const select=element('select','size-dialog-select');select.setAttribute('aria-label',label);
   for(const choice of choices){const option=element('option','',choice.label);option.value=choice[key];select.append(option);}
+  select.relabel=choices=>{for(const choice of choices){const option=[...select.options].find(o=>o.value===choice[key]);if(option)option.textContent=choice.label;}};
   select.addEventListener('change',()=>{const next=select.value;act({op:key,[key]:next});});
   return select;
 }
@@ -44,6 +45,7 @@ export function sizeFields({element,numberField,resolve,key,names,send}) {
       });
       nodes[index].replaceWith(number);nodes[index]=number;specs[index]=spec;
     }
+    nodes[index].relabel?.(label);
     nodes[index].update(value);
   }
   return {nodes,show,commit:()=>nodes.every(node=>node.commit())};

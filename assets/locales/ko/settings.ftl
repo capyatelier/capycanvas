@@ -1,6 +1,5 @@
 settings-language = 언어
 settings-language-system = 시스템 언어 사용
-settings-language-restart = 다시 시작하면 적용됩니다.
 
 settings-reset-to-default = 기본값으로 재설정
 settings-pressure-response = 필압 반응

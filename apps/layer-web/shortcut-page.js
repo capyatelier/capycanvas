@@ -1,5 +1,6 @@
+import { bindCopy } from './localization.js';
 import { composingKey } from "./text-input.js";
-export function createShortcutPage({ element, button, icon, send, view, scroller, settingsGroup: group, dropdown }) {
+export function createShortcutPage({ app, element, button, icon, send, view, scroller, settingsGroup: group, dropdown, copy, common }) {
   const panes = new Map(), active = new Map(), rows = new Map();
   let keymapChoice, keymapOutdated, contextChoice, showChoice, shortcutSearch, categoryList, emptyStatus;
   let rootResults, categoryResults, modifierMain, modifierCategory, inputRoot;
@@ -8,7 +9,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
   const chevron = () => { const glyph = icon("go-next"); glyph.classList.add("row-chevron"); return glyph; };
   const flatButton = (glyph, label, onClick, id) => {
     const node = button("", onClick, "icon-button"); node.append(icon(glyph));
-    node.setAttribute("aria-label", label); node.title = label; if (id) node.id = id; return node;
+    if(typeof label==="function"){bindCopy(node,label,"ariaLabel");bindCopy(node,label,"title");}else{node.setAttribute("aria-label",label);node.title=label;} if (id) node.id = id; return node;
   };
   const navRow = (label, subtitle, value, onClick) => {
     const row = button("", onClick, "preference-row nav-row");
@@ -51,9 +52,9 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     if (capture.notice && !capture.existing) glyph.classList.add("warning");
     const text = element("span", "preference-text"); text.append(element("span", "", capture.shortcut));
     if (capture.notice) text.append(element("p", "", capture.notice));
-    const cancel = button("Cancel", () => send({ type: "cancel_shortcut" })); cancel.id = "cancel-shortcut";
+    const cancel = button(()=>common.cancel, () => send({ type: "cancel_shortcut" })); cancel.id = "cancel-shortcut";
     const replace = !!capture.conflict;
-    const confirm = button(capture.existing ? "Open" : replace ? "Reassign" : "Add", () => send({ type: "confirm_shortcut", replace }), "suggested-action");
+    const confirm = button(()=>capture.existing ? copy.open : replace ? copy.reassign : copy.add, () => send({ type: "confirm_shortcut", replace }), "suggested-action");
     confirm.id = "confirm-shortcut"; confirm.disabled = !capture.chord || !!capture.error;
     row.append(glyph, text, cancel, confirm);
     return row;
@@ -63,7 +64,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     const node = element("dialog", "sheet"); node.id = id;
     const header = element("header", "dialog-header"), title = element("h2");
     const exit = button("", () => onDismiss(), "dialog-close"); exit.append(icon("window-close"));
-    exit.id = `${id}-close`; exit.setAttribute("aria-label", "Close"); exit.title = "Close";
+    exit.id = `${id}-close`; bindCopy(exit,()=>common.close,"ariaLabel"); bindCopy(exit,()=>common.close,"title");
     header.append(title, exit);
     const body = element("div", "sheet-body");
     node.append(header, body); document.body.append(node);
@@ -77,12 +78,12 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
   const modifierSheet = sheet("modifier-key", () => send({ type: "cancel_shortcut" }));
   const picker = sheet("action-picker", () => send({ type: "close_action_picker" }));
   picker.node.classList.add("picker");
-  const pickerReset = button("Reset", () => { const trigger = view()?.shortcut_page.picker?.trigger; if (trigger) send({ type: "reset_trigger", trigger }); });
+  const pickerReset = button(()=>common.reset, () => { const trigger = view()?.shortcut_page.picker?.trigger; if (trigger) send({ type: "reset_trigger", trigger }); });
   pickerReset.id = "action-picker-reset"; pickerReset.classList.add("sheet-start");
   picker.header.prepend(pickerReset);
   const pickerDescription = element("p", "settings-description"); pickerDescription.id = "action-picker-description";
   const pickerSearch = element("input", "preferences-search"); pickerSearch.type = "search"; pickerSearch.id = "action-picker-search";
-  pickerSearch.placeholder = "Search actions"; pickerSearch.setAttribute("aria-label", "Search actions");
+  bindCopy(pickerSearch,()=>copy.search_actions,"placeholder"); bindCopy(pickerSearch,()=>copy.search_actions,"ariaLabel");
   pickerSearch.addEventListener("input", () => send({ type: "search_action_picker", query: pickerSearch.value }));
   pickerSearch.addEventListener("keydown", e => { if (!composingKey(e) && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); send({ type: "close_action_picker" }); } });
   const pickerList = element("div", "picker-list");
@@ -103,20 +104,21 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     const root = pane("shortcuts", "root", node), category = pane("shortcuts", "category", node), modifier = pane("shortcuts", "modifier", node);
     category.hidden = modifier.hidden = true;
     active.set("shortcuts", { name: "root", depth: 0 });
-    const keymap = group("Keymap"); keymap.section.id = "keymap";
+    const keymap = group(()=>copy.keymap); keymap.section.id = "keymap";
     const presetRow = element("div", "preference-row");
-    const presetText = element("span", "preference-text"); presetText.append(element("span", "", "Preset"));
-    keymapOutdated = element("p", "", "Updated since you chose it"); keymapOutdated.hidden = true; presetText.append(keymapOutdated);
-    keymapChoice = dropdown("Keymap preset", index => send({ type: "select_keymap", id: view().keymap.presets[index].id }));
+    const presetText = element("span", "preference-text"); presetText.append(element("span", "", ()=>copy.preset));
+    keymapOutdated = element("p", "", ()=>copy.updated); keymapOutdated.hidden = true; presetText.append(keymapOutdated);
+    keymapChoice = dropdown("", index => send({ type: "select_keymap", id: view().keymap.presets[index].id }));
+    bindCopy(keymapChoice.querySelector("summary"),()=>copy.keymap_preset,"ariaLabel");
     keymapChoice.id = "keymap-preset";
     const menu = element("details", "preference-choice keymap-menu"); menu.id = "keymap-menu";
-    const summary = element("summary"); summary.setAttribute("aria-label", "Keymap options"); summary.title = "Keymap options"; summary.append(icon("more"));
+    const summary = element("summary"); bindCopy(summary,()=>copy.keymap_options,"ariaLabel"); bindCopy(summary,()=>copy.keymap_options,"title"); summary.append(icon("more"));
     const options = element("div", "preference-options"); options.setAttribute("role", "menu");
     for (const [label, action, id] of [
-      ["Import…", { type: "choose_keymap_file" }, "keymap-import-button"],
-      ["Export…", { type: "export_keymap" }, "keymap-export-button"],
-      ["Differences…", { type: "keymap_details", open: true }, "keymap-details-button"],
-      ["Reset All Shortcuts", { type: "reset_all_shortcuts" }, "reset-all-shortcuts"],
+      [()=>copy.import_menu, { type: "choose_keymap_file" }, "keymap-import-button"],
+      [()=>copy.export_menu, { type: "export_keymap" }, "keymap-export-button"],
+      [()=>copy.differences, { type: "keymap_details", open: true }, "keymap-details-button"],
+      [()=>copy.reset_all, { type: "reset_all_shortcuts" }, "reset-all-shortcuts"],
     ]) {
       const item = button(label, () => { menu.open = false; send(action); }); item.id = id; item.setAttribute("role", "menuitem"); options.append(item);
     }
@@ -125,11 +127,11 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     root.append(keymap.section);
 
     const shortcuts = element("section", "settings-group"); shortcuts.id = "shortcuts";
-    shortcuts.append(element("h3", "", "Shortcuts"));
+    shortcuts.append(element("h3", "", ()=>copy.title));
     const filters = element("div", "shortcut-filters"); filters.id = "shortcut-filters";
     const searchBox = element("div", "shortcut-search");
     shortcutSearch = element("input", "preferences-search"); shortcutSearch.type = "search"; shortcutSearch.id = "shortcuts-search";
-    shortcutSearch.placeholder = "Search or press a shortcut"; shortcutSearch.setAttribute("aria-label", "Search shortcuts");
+    bindCopy(shortcutSearch,()=>copy.search_or_press,"placeholder"); bindCopy(shortcutSearch,()=>copy.search_shortcuts,"ariaLabel");
     shortcutSearch.addEventListener("input", () => send({ type: "search_shortcuts", query: shortcutSearch.value }));
     shortcutSearch.addEventListener("keydown", e => {
       if (composingKey(e)) return;
@@ -142,19 +144,19 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     });
     searchBox.append(icon("search"), shortcutSearch);
     contextChoice = dropdown("Show what shortcuts do with a kind of tool", index => send({ type: "shortcut_context", category: view().shortcut_page.contexts[index].category }));
-    contextChoice.id = "shortcut-context"; contextChoice.title = "Show what shortcuts do with a kind of tool";
+    contextChoice.id = "shortcut-context"; bindCopy(contextChoice.querySelector("summary"),()=>copy.tool_kind,"ariaLabel"); bindCopy(contextChoice,()=>copy.tool_kind,"title");
     showChoice = dropdown("Choose which actions to list", index => send({ type: "shortcut_show", show: view().shortcut_page.shows[index].show }));
-    showChoice.id = "shortcut-show"; showChoice.title = "Choose which actions to list";
+    showChoice.id = "shortcut-show"; bindCopy(showChoice.querySelector("summary"),()=>copy.choose_actions,"ariaLabel"); bindCopy(showChoice,()=>copy.choose_actions,"title");
     filters.append(searchBox, contextChoice, showChoice);
     categoryList = element("div", "preference-group"); categoryList.id = "shortcut-categories";
     emptyStatus = element("div", "status-page"); emptyStatus.id = "shortcut-empty"; emptyStatus.hidden = true;
     emptyStatus.append(icon("search"), element("strong"), element("p"));
     shortcuts.append(filters, categoryList, emptyStatus);
     root.append(shortcuts);
-    modifierMain = group("Modifier keys"); modifierMain.section.id = "modifier-results"; modifierMain.section.hidden = true;
+    modifierMain = group(()=>view()?.shortcut_page.categories.find(c=>c.id==="Modifier keys")?.label??""); modifierMain.section.id = "modifier-results"; modifierMain.section.hidden = true;
     rootResults = element("div", "shortcut-results");
     root.append(modifierMain.section, rootResults);
-    modifierCategory = group("", "Hold a key to use a tool or mode until you let go."); modifierCategory.section.id = "modifier-keys";
+    modifierCategory = group("", ()=>copy.hold_key_help); modifierCategory.section.id = "modifier-keys";
     categoryResults = element("div", "shortcut-results");
     category.append(modifierCategory.section, categoryResults);
     modifier.dataset.prefix = "modifier";
@@ -176,16 +178,17 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
       const text = element("span", "preference-text"), detail = element("p");
       text.append(element("span", "", spec.label), detail);
       const binding = element("span", "shortcut-hint"); choose.append(text, binding);
-      const reset = flatButton("reset", "Reset to default", () => send({ type: "reset_shortcut", id: spec.id }), `shortcut-reset-${spec.id}`);
+      const reset = flatButton("reset", ()=>copy.reset_default, () => send({ type: "reset_shortcut", id: spec.id }), `shortcut-reset-${spec.id}`);
       row.append(choose, reset);
       entry = { row, detail, binding, reset, signature: "" };
       rows.set(spec.id, entry);
     }
-    const scope = spec.scope === "" ? "" : spec.scope === "Canvas" ? "On the canvas" : `With ${spec.scope.toLowerCase()} tools`;
+    const scope = spec.scope_caption;
     const subtitle = [spec.detail, scope].filter(Boolean).join(" · ");
-    const signature = JSON.stringify([subtitle, spec.shortcut, spec.modified]);
+    const signature = JSON.stringify([spec.label, subtitle, spec.shortcut, spec.modified]);
     if (entry.signature !== signature) {
       entry.signature = signature;
+      entry.row.querySelector(".preference-text > span").textContent=spec.label;
       entry.detail.textContent = subtitle; entry.detail.hidden = !subtitle;
       entry.binding.textContent = spec.shortcut; entry.reset.hidden = !spec.modified;
       entry.row.classList.toggle("modified", spec.modified);
@@ -229,7 +232,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     }));
     if (onCategory) {
       const add = button("", () => send({ type: "add_modifier_key" }), "preference-row button-row"); add.id = "add-modifier-key";
-      add.append(icon("plus"), element("span", "", "Add Modifier Key")); list.append(add);
+      add.append(icon("plus"), element("span", "", ()=>copy.add_modifier)); list.append(add);
     }
   }
 
@@ -239,11 +242,11 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     if (signature !== categorySignature) {
       categorySignature = signature; categoryRows.clear();
       categoryList.replaceChildren(...page.categories.map(category => {
-        const row = navRow(category.id, "", String(category.count), () => send({ type: "shortcut_category", id: category.id }));
+        const row = navRow(category.label, "", String(category.count), () => send({ type: "shortcut_category", id: category.id }));
         row.dataset.category = category.id; categoryRows.set(category.id, row); return row;
       }));
     }
-    for (const category of page.categories) categoryRows.get(category.id)?.update(category.id, "", String(category.count));
+    for (const category of page.categories) categoryRows.get(category.id)?.update(category.label, "", String(category.count));
     categoryList.hidden = page.filtering;
     emptyStatus.hidden = !page.empty;
     if (page.empty) { emptyStatus.querySelector("strong").textContent = page.empty.title; emptyStatus.querySelector("p").textContent = page.empty.description; }
@@ -255,12 +258,12 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     paneNode.signature = signature;
     const prefix = paneNode.dataset.prefix;
     const section = group("", summary);
-    if (editor.modified) section.section.querySelector(".settings-heading").append(flatButton("reset", "Reset to default", () => send(reset), `${prefix}-reset`));
+    if (editor.modified) section.section.querySelector(".settings-heading").append(flatButton("reset", ()=>copy.reset_default, () => send(reset), `${prefix}-reset`));
     const sameRow = element("label", "preference-row");
     const toggle = element("input", "settings-switch"); toggle.type = "checkbox"; toggle.setAttribute("role", "switch");
     toggle.id = `${prefix}-same`; toggle.checked = !editor.per_tool;
     toggle.addEventListener("change", () => send(same(!toggle.checked)));
-    sameRow.append(element("span", "preference-text", "Same for every tool"), toggle);
+    sameRow.append(element("span", "preference-text", ()=>copy.same_all_tools), toggle);
     section.list.append(sameRow);
     for (const action of editor.actions) {
       const row = navRow(action.label, "", action.action, () => send(pick(action.category)));
@@ -289,7 +292,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
           const section = group(trigger.section); section.section.id = `triggers-${trigger.section.toLowerCase().replaceAll(" ", "-")}`;
           triggerGroups.set(trigger.section, section); inputRoot.append(section.section);
         }
-        const pen = trigger.section === "Pen buttons";
+        const pen = trigger.id.startsWith("pen.button.");
         const row = navRow(trigger.label, trigger.detail, trigger.action, () => send(pen ? { type: "edit_pen_button", trigger: trigger.id } : { type: "open_action_picker", trigger: trigger.id }));
         row.dataset.trigger = trigger.id; triggerGroups.get(trigger.section).list.append(row); triggerRows.set(trigger.id, row);
       }
@@ -308,20 +311,20 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
       editor.title.textContent = spec.label;
       const description = element("p", "settings-description sheet-summary", spec.description);
       const section = group("", [`Default: ${spec.defaults.join(" / ") || "none"}`, ...spec.overlaps].join("\n"));
-      if (spec.modified) section.section.querySelector(".settings-heading").append(flatButton("reset", "Reset to default", () => send({ type: "reset_shortcut", id: spec.id }), "shortcut-editor-reset"));
+      if (spec.modified) section.section.querySelector(".settings-heading").append(flatButton("reset", ()=>copy.reset_default, () => send({ type: "reset_shortcut", id: spec.id }), "shortcut-editor-reset"));
       spec.bindings.forEach((binding, index) => {
         const row = element("div", "preference-row");
-        row.append(element("span", "preference-text", binding), flatButton("delete", "Remove shortcut", () => send({ type: "remove_shortcut", id: spec.id, index }), `remove-shortcut-${index}`));
+        row.append(element("span", "preference-text", binding), flatButton("delete", ()=>copy.remove_shortcut, () => send({ type: "remove_shortcut", id: spec.id, index }), `remove-shortcut-${index}`));
         section.list.append(row);
       });
       if (capture) section.list.append(recordingRow(capture));
       else if (spec.can_add) {
         const add = button("", () => send({ type: "begin_shortcut", id: spec.id }), "preference-row button-row"); add.id = "add-shortcut";
-        add.append(icon("plus"), element("span", "", "Add Shortcut")); section.list.append(add);
+        add.append(icon("plus"), element("span", "", ()=>copy.add_shortcut)); section.list.append(add);
       }
       const nodes = [description, element("p", "preferences-error", error || ""), section.section];
       if (spec.gestures.length) {
-        const gestures = group("Pen and Touch", "Change these on the Pen & Input page.");
+        const gestures = group(()=>copy.pen_touch, ()=>copy.pen_page_help);
         gestures.list.append(...spec.gestures.map(g => { const row = element("div", "preference-row"); row.append(element("span", "preference-text", g)); return row; }));
         nodes.push(gestures.section);
       }
@@ -343,9 +346,9 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     const signature = JSON.stringify(capture);
     if (modifierSheet.signature !== signature) {
       modifierSheet.signature = signature;
-      modifierSheet.title.textContent = "New Modifier Key";
+      bindCopy(modifierSheet.title,()=>copy.new_modifier);
       const section = group(); section.list.append(recordingRow(capture));
-      modifierSheet.body.replaceChildren(element("p", "settings-description sheet-summary", "Press the key or button to hold."), section.section);
+      modifierSheet.body.replaceChildren(element("p", "settings-description sheet-summary", ()=>copy.press_hold_key), section.section);
     }
     present(modifierSheet, true);
     focusRecording(modifierSheet, capture);
@@ -358,7 +361,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     pickerDescription.textContent = spec.description;
     pickerReset.hidden = !spec.modified;
     if (pickerSearch.value !== spec.query) pickerSearch.value = spec.query;
-    const signature = JSON.stringify([spec.nothing, spec.query, spec.sections]);
+    const signature = JSON.stringify([spec.nothing, spec.nothing_label, spec.nothing_visible, spec.query, spec.sections, copy.no_results]);
     if (picker.signature !== signature) {
       picker.signature = signature;
       const choice = (id, label, detail, selected) => {
@@ -369,13 +372,13 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
         row.append(text, check); return row;
       };
       const sections = [];
-      if ("nothing".includes(spec.query.trim().toLowerCase())) { const none = group(); none.list.append(choice("", "Nothing", "", spec.nothing)); sections.push(none.section); }
+      if (spec.nothing_visible) { const none = group(); none.list.append(choice("", spec.nothing_label, "", spec.nothing)); sections.push(none.section); }
       for (const section of spec.sections) {
         const list = group(section.title);
         list.list.append(...section.actions.map(a => choice(a.id, a.label, a.detail, a.selected)));
         sections.push(list.section);
       }
-      if (!sections.length) { const none = element("div", "status-page"); none.append(icon("search"), element("strong", "", "No Results Found"), element("p", "", "Try a different search.")); sections.push(none); }
+      if (!sections.length) { const none = element("div", "status-page"); none.append(icon("search"), element("strong", "", ()=>copy.no_results), element("p", "", ()=>copy.search_help)); sections.push(none); }
       pickerList.replaceChildren(...sections);
     }
     const opening = !picker.node.open;
@@ -387,7 +390,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     const keymap = model.keymap;
     keymapChoice.update(keymap.presets.map(p => p.title), keymap.presets.findIndex(p => p.id === keymap.selected));
     keymapOutdated.hidden = !keymap.outdated;
-    const signature = JSON.stringify([keymap.selected, keymap.differences, keymap.source, keymap.links]);
+    const signature = JSON.stringify([keymap.title, keymap.selected, keymap.differences, keymap.source, keymap.links, copy.no_differences]);
     if (details.signature !== signature) {
       details.signature = signature;
       details.title.textContent = keymap.title;
@@ -397,24 +400,24 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
         const anchor = element("a", "settings-link", name); anchor.href = link; anchor.target = "_blank"; anchor.rel = "noopener noreferrer"; links.append(anchor);
       }
       const list = group();
-      const rowsOrEmpty = keymap.differences.length ? keymap.differences : [{ trigger: "No differences", note: "This keymap uses the CapyCanvas defaults." }];
+      const rowsOrEmpty = keymap.differences.length ? keymap.differences : [{ trigger: copy.no_differences, note: copy.defaults_help }];
       list.list.append(...rowsOrEmpty.map(d => { const row = element("div", "preference-row"); const text = element("span", "preference-text"); text.append(element("span", "", d.trigger), element("p", "", d.note)); row.append(text); return row; }));
       details.body.replaceChildren(element("p", "settings-description", keymap.source), links, list.section);
     }
     present(details, keymap.details);
     const preview = keymap.import, signatureImport = JSON.stringify(preview);
     if (preview && signatureImport !== importSignature) {
-      const header = element("header", "dialog-header"); header.append(element("h2", "", `Import ${preview.title}?`));
+      const header = element("header", "dialog-header"); header.append(element("h2", "", preview.heading));
       const body = element("div", "sheet-body");
-      for (const [title, items] of [["Added", preview.added], ["Changed", preview.changed], ["Removed", preview.removed], ["Not available", preview.unavailable]]) {
+      for (const [title, items] of [[copy.added, preview.added], [copy.changed, preview.changed], [copy.removed, preview.removed], [copy.not_available, preview.unavailable]]) {
         if (!items.length) continue;
         body.append(element("h3", "", `${title} (${items.length})`));
         const list = element("ul", "keymap-preview"); list.append(...items.map(item => element("li", "", item))); body.append(list);
       }
-      if (!body.children.length) body.append(element("p", "", "No shortcuts change."));
+      if (!body.children.length) body.append(element("p", "", ()=>copy.no_changes));
       const footer = element("footer");
-      const confirmImport = button("Import", () => send({ type: "confirm_keymap_import" }), "suggested-action"); confirmImport.id = "confirm-keymap-import";
-      footer.append(button("Cancel", () => send({ type: "cancel_keymap_import" })), confirmImport);
+      const confirmImport = button(()=>common.import, () => send({ type: "confirm_keymap_import" }), "suggested-action"); confirmImport.id = "confirm-keymap-import";
+      footer.append(button(()=>common.cancel, () => send({ type: "cancel_keymap_import" })), confirmImport);
       importDialog.replaceChildren(header, body, footer);
     }
     importSignature = preview ? signatureImport : "";
@@ -436,7 +439,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
       return node;
     },
     title(model) {
-      if (model.page === "shortcuts") return model.modifier_editor?.label ?? model.shortcut_page.category ?? null;
+      if (model.page === "shortcuts") return model.modifier_editor?.label ?? model.shortcut_page.categories.find(c=>c.id===model.shortcut_page.category)?.label ?? null;
       if (model.page === "input") return model.pen_button_editor?.label ?? null;
       return null;
     },
@@ -447,6 +450,7 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
     },
     refresh(model) {
       if (!keymapChoice) return;
+      if (!['shortcuts','input'].includes(model.page)) return;
       refreshKeymap(model);
       refreshFilters(model);
       refreshCategories(model);
@@ -456,16 +460,16 @@ export function createShortcutPage({ element, button, icon, send, view, scroller
       const shortcutPanes = panes.get("shortcuts");
       const modifierEditor = model.modifier_editor;
       if (modifierEditor) renderPerTool(shortcutPanes.get("modifier"), modifierEditor, {
-        summary: `Hold ${modifierEditor.label} to use an action until you let go.`,
+        summary: app.native_caption({type:"modifier_hold",label:modifierEditor.label}),
         reset: { type: "reset_modifier_key", key: modifierEditor.key },
         same: per_tool => ({ type: "modifier_key_per_tool", key: modifierEditor.key, per_tool }),
         pick: category => ({ type: "open_modifier_picker", key: modifierEditor.key, category }),
-        remove: { label: "Remove Modifier Key", action: { type: "remove_modifier_key", key: modifierEditor.key } },
+        remove: { label: copy.remove_modifier, action: { type: "remove_modifier_key", key: modifierEditor.key } },
       });
       if (model.page === "shortcuts") showPane("shortcuts", modifierEditor ? "modifier" : model.shortcut_page.category ? "category" : "root", modifierEditor ? 2 : model.shortcut_page.category ? 1 : 0);
       const pen = model.pen_button_editor;
       if (pen && panes.has("input")) renderPerTool(panes.get("input").get("pen"), pen, {
-        summary: "Tools, brushes and modes last while the button is held. Other actions run once.",
+        summary: copy.pen_action_help,
         reset: { type: "reset_trigger", trigger: pen.trigger },
         same: per_tool => ({ type: "pen_button_per_tool", trigger: pen.trigger, per_tool }),
         pick: category => ({ type: "open_pen_button_picker", trigger: pen.trigger, category }),

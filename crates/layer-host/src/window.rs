@@ -127,6 +127,9 @@ impl<P> DocumentWindow<P> {
     pub fn localized(localization: &layer_ui::Localizer) -> Self {
         Self { documents: DocumentSessions::localized(localization), gpu: None }
     }
+    pub fn set_localization(&mut self, localization: std::sync::Arc<layer_ui::Localizer>) -> bool {
+        self.documents.set_localization(&localization)
+    }
 }
 
 impl<P: Parked> DocumentWindow<P> {
@@ -632,6 +635,53 @@ mod tests {
             host.session.engine().configured_brush().color_rgba_linear,
             brush
         );
+        finish(host, window);
+    }
+
+    #[test]
+    fn language_adoption_keeps_open_candidates_save_completions_and_parked_documents() {
+        use layer_ui::{Localizer, UiLanguage};
+        let mut host = host();
+        let mut window = Window::default();
+        let mut next = candidate(&window, &host);
+        let candidate_document = next.as_ref().unwrap().engine().document().clone();
+        let open = opened(&host);
+        let epoch = host.session.state().document_file.epoch;
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        assert!(host.set_localization(japanese.clone()));
+        assert!(window.set_localization(japanese.clone()));
+        assert_eq!(host.session.state().document_file.epoch, epoch);
+        drop(window.adopt(&mut host, &mut next, open, || true, |s| s).unwrap());
+        assert_eq!(host.session.engine().document().layers, candidate_document.layers);
+        assert_eq!(host.session.localization().language(), UiLanguage::Japanese);
+        assert_eq!(host.localization_generation(), 1);
+        settle(&mut host);
+        invoke(&mut host, CommandId::SaveDocument);
+        let request = host.session.state().requests[0].id;
+        let location = DocumentLocation { uri: "save-result".into(), name: "Untitled.capy".into() };
+        host.session.capture_project_save(request, location.clone()).unwrap();
+        let epoch = host.session.state().document_file.epoch;
+        let korean = Localizer::shared(UiLanguage::Korean);
+        assert!(host.set_localization(korean.clone()));
+        assert!(window.set_localization(korean.clone()));
+        assert_eq!(host.session.state().document_file.epoch, epoch);
+        assert_eq!(window.documents.parked_owner_mut(1).unwrap().localization().language(), UiLanguage::Japanese);
+        host.session.complete_document_request(request, Ok(true)).unwrap();
+        assert_eq!(host.session.state().document_file.location, Some(location));
+        assert!(!host.session.state().document_file.modified);
+        let titles = window.view(&host, 800.);
+        assert_eq!(titles["tabs"][1]["title"], "Untitled.capy");
+        let mut activation = switch(&mut window, &mut host, 1);
+        assert_eq!(host.session.localization().language(), UiLanguage::Korean);
+        assert_eq!(host.localization_generation(), 2);
+        activation.work().unwrap();
+        let epoch = host.session.state().document_file.epoch;
+        let chinese = Localizer::shared(UiLanguage::SimplifiedChinese);
+        assert!(host.set_localization(chinese.clone()));
+        assert!(window.set_localization(chinese));
+        assert_eq!(host.session.state().document_file.epoch, epoch);
+        resume(&mut window, &mut host, &mut activation);
+        assert_eq!(host.localization_generation(), 3);
         finish(host, window);
     }
 }

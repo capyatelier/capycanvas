@@ -42,7 +42,7 @@ impl CapyApple {
             let before = self.host.session.state().revision;
             match c.input(&mut self.host.session, input, time) {
                 Ok(change) => self.host.apply_change(before, change),
-                Err(error) => c.view.error = Some(error.localized_message(self.host.session.localization())),
+                Err(error) => c.set_error(error),
             }
         }
         let before = self.host.session.state().revision;

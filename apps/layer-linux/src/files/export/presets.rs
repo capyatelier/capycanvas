@@ -30,8 +30,7 @@ fn read(path: &std::path::Path) -> Result<ExportPresets, String> {
 }
 pub(super) async fn load(
     document: layer_core::color::DocumentColor,
-    localization: &layer_ui::Localizer,
-) -> Result<ExportPresets, String> {
+) -> Result<ExportPresets, layer_ui::ColorFeatureError> {
     gio::spawn_blocking(move || {
         let library = read(&path())?;
         let mut checked = Vec::new();
@@ -50,7 +49,7 @@ pub(super) async fn load(
         Ok::<_,layer_ui::ColorFeatureError>(library)
     })
     .await
-    .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Export preset reader failed".into()).preset_message(localization))?.map_err(|reason|reason.preset_message(localization))
+    .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Export preset reader failed".into()))?
 }
 fn write(
     path: &std::path::Path,
@@ -69,27 +68,26 @@ fn write(
         file.write_all(&bytes).map_err(|e| e.to_string())
     }).map_err(layer_ui::ColorFeatureError::from)
 }
-pub(super) async fn save(expected: ExportPresets, next: ExportPresets, localization: &layer_ui::Localizer) -> Result<(), String> {
+pub(super) async fn save(expected: ExportPresets, next: ExportPresets) -> Result<(), layer_ui::ColorFeatureError> {
     gio::spawn_blocking(move || write(&path(), &expected, &next))
         .await
-        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Export preset writer failed".into()).preset_message(localization))?.map_err(|reason|reason.preset_message(localization))
+        .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Export preset writer failed".into()))?
 }
 
 /// Editing a destination changes temporary controls; saving a named preset is an
 /// explicit application preference action and does not depend on exporting a file.
 pub(super) fn install(
-    parent: &adw::ApplicationWindow,
-    localization: &std::sync::Arc<layer_ui::Localizer>,
+    workspace: &Rc<Workspace>,
     hdr_document: bool,
     group: &gtk::Box,
     preset: &adw::ComboRow,
     library: Rc<std::cell::RefCell<ExportPresets>>,
     destination: Rc<std::cell::Cell<usize>>,
     updating: Rc<std::cell::Cell<bool>>,
-    read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, String>>,
+    read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, layer_ui::ColorFeatureError>>,
 ) {
-    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::ExportCopy::new(localization));
-    let localization = localization.clone();
+    let parent = &workspace.window;
+    let copy = layer_ui::color_feature_copy::ExportCopy::new(&workspace.localization());
     let buttons = adw::PreferencesGroup::new();
     group.append(&buttons);
     let status = adw::ActionRow::builder()
@@ -98,7 +96,7 @@ pub(super) fn install(
         .build();
     status.set_widget_name("export-presets-status");
     buttons.add(&status);
-    let refresh: Rc<dyn Fn(usize)> = Rc::new(glib::clone!( #[strong] localization,
+    let refresh: Rc<dyn Fn(usize)> = Rc::new(glib::clone!( #[weak] workspace,
         #[weak]
         preset,
         #[strong]
@@ -106,6 +104,8 @@ pub(super) fn install(
         #[strong]
         updating,
         move |selected| {
+            let localization = workspace.localization();
+            preset.set_title(&layer_ui::color_feature_copy::ExportCopy::new(&localization).preset);
             let library = library.borrow();
             let color = layer_core::color::DocumentColor { depth: if hdr_document {layer_core::color::SampleDepth::F16} else {layer_core::color::SampleDepth::U8}, ..Default::default() };
             let names = library.localized_names(color, &localization);
@@ -117,6 +117,26 @@ pub(super) fn install(
         }
     ));
     refresh(0);
+    let outcome = Rc::new(std::cell::RefCell::new(None::<Result<usize, layer_ui::ColorFeatureError>>));
+    let refresh_status: Rc<dyn Fn()> = Rc::new(glib::clone!(#[weak] workspace, #[weak] status, #[strong] outcome, move || {
+        let localization = workspace.localization();
+        let copy = layer_ui::color_feature_copy::ExportCopy::new(&localization);
+        let outcome = outcome.borrow();
+        let Some(outcome) = outcome.as_ref() else { return; };
+        status.set_title(&match outcome {
+            Ok(2) => copy.preset_removed.to_string(),
+            Ok(3) => copy.preset_reset.to_string(),
+            Ok(_) => copy.preset_saved.to_string(),
+            Err(error) => error.preset_message(&localization),
+        });
+        status.set_visible(true);
+        if outcome.is_err() { status.add_css_class("error"); } else { status.remove_css_class("error"); }
+    }));
+    workspace.on_localization(glib::clone!(#[weak] preset, #[strong] refresh, #[strong] refresh_status, #[upgrade_or] false, move |_| {
+        refresh(preset.selected() as usize);
+        refresh_status();
+        true
+    }));
     for (operation, label) in [(0, copy.save_new_preset.as_ref()), (1, copy.update_saved_preset.as_ref()), (2, copy.remove_saved_preset.as_ref()), (3, copy.restore_original.as_ref())] {
         let button = adw::ButtonRow::builder().title(label).use_markup(false).build();
         button.set_widget_name(
@@ -137,12 +157,15 @@ pub(super) fn install(
         ));
         if operation == 2 { button.add_css_class("destructive-action"); }
         buttons.add(&button);
-        let refresh_button = glib::clone!( #[strong] copy, #[strong] localization,
+        let refresh_button = glib::clone!( #[weak] workspace,
             #[weak]
             button,
             #[strong]
             destination,
             move |preset: &adw::ComboRow| {
+                let localization = workspace.localization();
+                let copy = layer_ui::color_feature_copy::ExportCopy::new(&localization);
+                button.set_tooltip_text(Some([copy.save_preset_help.as_ref(), copy.update_preset_help.as_ref(), copy.remove_preset_help.as_ref(), copy.reset_preset_help.as_ref()][operation]));
                 if let Some(value) = preset.model().and_then(|model| model.item(destination.get() as u32)).and_downcast::<gtk::StringObject>() {
                     let name = value.string();
                     button.set_title(&match operation {
@@ -160,16 +183,18 @@ pub(super) fn install(
             }
         );
         refresh_button(preset);
-        preset.connect_selected_notify(refresh_button);
-        button.connect_activated(glib::clone!( #[strong] copy,
+        preset.connect_selected_notify(refresh_button.clone());
+        workspace.on_localization(glib::clone!(#[weak] preset, #[strong] refresh_button, #[upgrade_or] false, move |_| {
+            refresh_button(&preset);
+            true
+        }));
+        button.connect_activated(glib::clone!( #[weak] workspace,
             #[weak]
             parent,
             #[weak]
             preset,
             #[weak]
             buttons,
-            #[weak]
-            status,
             #[strong]
             library,
             #[strong]
@@ -178,29 +203,28 @@ pub(super) fn install(
             read_recipe,
             #[strong]
             refresh,
-            #[strong]
-            localization,
+            #[strong] outcome,
+            #[strong] refresh_status,
             move |_| {
                 buttons.set_sensitive(false);
                 let index = destination.get();
                 let recipe = read_recipe();
-                glib::MainContext::default().spawn_local(glib::clone!( #[strong] copy,
+                glib::MainContext::default().spawn_local(glib::clone!( #[weak] workspace,
                     #[weak]
                     parent,
                     #[weak]
                     preset,
                     #[weak]
                     buttons,
-                    #[weak]
-                    status,
                     #[strong]
                     library,
                     #[strong]
                     refresh,
-                    #[strong]
-                    localization,
+                    #[strong] outcome,
+                    #[strong] refresh_status,
                     async move {
-                        let result: Result<Option<(ExportPresets, usize)>, String> = async {
+                        let result: Result<Option<(ExportPresets, usize)>, layer_ui::ColorFeatureError> = async {
+                            let copy = layer_ui::color_feature_copy::ExportCopy::new(&workspace.localization());
                             let name = if operation == 0 {
                                 // Validate first; an unavailable ICC is never saved as a fallback.
                                 recipe.as_ref().map_err(Clone::clone)?;
@@ -229,6 +253,14 @@ pub(super) fn install(
                                         !entry.text().trim().is_empty()
                                     )
                                 ));
+                                workspace.on_localization(glib::clone!(#[weak] entry, #[weak] dialog, #[upgrade_or] false, move |localization| {
+                                    let copy = layer_ui::color_feature_copy::ExportCopy::new(localization);
+                                    entry.set_title(&copy.preset_name);
+                                    dialog.set_heading(Some(&copy.save_preset_title));
+                                    dialog.set_response_label("cancel", &copy.common.cancel);
+                                    dialog.set_response_label("save", &copy.common.save);
+                                    true
+                                }));
                                 if crate::alert::choose(dialog, &parent).await != "save" {
                                     return Ok(None);
                                 }
@@ -239,21 +271,21 @@ pub(super) fn install(
                             let expected = library.borrow().clone();
                             let mut next = expected.clone();
                             let selected = match operation {
-                                0 => next.save(name.as_deref().unwrap(), recipe?).map_err(|reason|reason.preset_message(&localization))?,
+                                0 => next.save(name.as_deref().unwrap(), recipe?)?,
                                 1 => {
-                                    next.update(index, recipe?).map_err(|reason|reason.preset_message(&localization))?;
+                                    next.update(index, recipe?)?;
                                     index
                                 }
                                 2 => {
-                                    next.remove(index).map_err(|reason|reason.preset_message(&localization))?;
+                                    next.remove(index)?;
                                     3
                                 }
                                 _ => {
-                                    next.reset_destination(index).map_err(|reason|reason.preset_message(&localization))?;
+                                    next.reset_destination(index)?;
                                     index
                                 }
                             };
-                            save(expected, next.clone(), &localization).await?;
+                            save(expected, next.clone()).await?;
                             Ok(Some((next, selected)))
                         }
                         .await;
@@ -262,19 +294,13 @@ pub(super) fn install(
                                 *library.borrow_mut() = next;
                                 refresh(selected);
                                 preset.notify("selected");
-                                status.set_title(match operation {
-                                    2 => copy.preset_removed.as_ref(),
-                                    3 => copy.preset_reset.as_ref(),
-                                    _ => copy.preset_saved.as_ref(),
-                                });
-                                status.set_visible(true);
-                                status.remove_css_class("error");
+                                *outcome.borrow_mut() = Some(Ok(operation));
+                                refresh_status();
                             }
                             Ok(None) => (),
                             Err(error) => {
-                                status.set_title(&error);
-                                status.set_visible(true);
-                                status.add_css_class("error");
+                                *outcome.borrow_mut() = Some(Err(error));
+                                refresh_status();
                             }
                         }
                         buttons.set_sensitive(true);

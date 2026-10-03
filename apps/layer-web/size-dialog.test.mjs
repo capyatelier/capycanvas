@@ -10,6 +10,7 @@ class FakeElement extends SharedElement {
     this.tagName = tag.toUpperCase(); this.className = className; this.children = []; this.parentNode = null;
     this.attributes = new Map(); this.dataset = {}; this.listeners = {}; this.textContent = ""; this.disabled = false; this.open = false;
   }
+  get options() { return this.children.filter(n=>n.tagName==="OPTION"); }
   get classList() {
     const names = () => new Set(this.className.split(/\s+/).filter(Boolean));
     return {
@@ -66,6 +67,7 @@ function harness({ create = createCanvasSizeUi, key = "canvas_size", data = "can
     const root = element("div", "number-control"), entry = element("input", "number-entry");
     Object.assign(root, { control, label, entry, value: null, pending: null });
     root.update = value => { root.value = value; };
+    root.relabel = label => { root.label = label; };
     root.commit = () => {
       if (root.pending == null) return true;
       const value = Number(root.pending);
@@ -315,3 +317,9 @@ test("Image Size rebuilds each field only when its numeric range changes", () =>
 });
 
 cancelTest("Image Size", imageHarness);
+
+for(const [name,create] of [["Canvas Size",harness],["Image Size",imageHarness]])test(`${name} relabels without replacing dirty fields`,()=>{
+  const h=create();h.ui.refresh();const width=h.field("width");width.pending="１２+";
+  h.set({title:"サイズ",labels:["幅","高さ"],apply_label:"適用",cancel_label:"キャンセル",units:[{unit:"pixels",label:"ピクセル"},{unit:"percent",label:"割合"}]});
+  assert.equal(h.field("width"),width);assert.equal(width.pending,"１２+");assert.equal(width.label,"幅");assert.equal(h.title().textContent,"サイズ");assert.equal(h.unit().options[0].textContent,"ピクセル");
+});

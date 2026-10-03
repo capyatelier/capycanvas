@@ -41,6 +41,30 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         if(!raw)throw hresult_error(E_OUTOFMEMORY);auto result=J::Parse(to_hstring(raw.get()));
         if(result.HasKey(L"error"))throw hresult_invalid_argument(str(result,L"error"));return object(result,L"recipe");
     }
+    void relocalize(std::shared_ptr<CapyLocalization> context,J const& details,hstring const& tag){
+        localization=std::move(context);copy=object(object(details,L"form"),L"copy");root.Language(tag);
+        for(auto const& [control,key]:std::initializer_list<std::pair<ComboBox,wchar_t const*>>{{format,L"format"},{profile,L"profile"},{depth,L"depth"},{background,L"background"},{dither,L"dither"},{intent,L"intent"},{resolution,L"resolution"}}){
+            control.Header(box_value(text(key)));AutomationProperties::SetName(control,text(key));
+        }
+        for(auto const& [control,key]:std::initializer_list<std::pair<NumberBox,wchar_t const*>>{{quality,L"quality"},{width,L"maximum_width"},{height,L"maximum_height"},{ppi,L"ppi"}}){
+            control.Header(box_value(text(key)));AutomationProperties::SetName(control,text(key));control.Language(tag);
+        }
+        resize.Content(box_value(text(L"fit_bounds")));enlarge.Content(box_value(text(L"enlarge")));
+        updating=true;struct Reset{bool& updating;~Reset(){updating=false;}}reset{updating};
+        auto selected=profile.SelectedIndex();
+        for(uint32_t i=0;i<profiles.Size();++i){auto entry=profiles.GetObjectAt(i);auto id=str(entry,L"library");if(id.empty())continue;
+            auto current=find(array(details,L"profiles"),L"id",id);if(current.Size()){entry.Insert(L"name",S(str(current,L"name")));entry.Insert(L"channels",S(str(current,L"channels")));profile.Items().SetAt(i,box_value(str(current,L"name")));}
+        }profile.SelectedIndex(selected);
+        uint32_t i=0;for(auto key:{L"relative",L"perceptual",L"saturation",L"absolute"})intent.Items().SetAt(i++,box_value(text(key)));
+        i=0;for(auto key:{L"keep_resolution",L"omit",L"ppi"})resolution.Items().SetAt(i++,box_value(text(key)));
+        auto input=to_string(O({{L"recipe",recipe},{L"action",O({{L"type",S(L"refresh")}})},{L"color",color}}).Stringify());
+        std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_export_draft(localization.get(),input.c_str()),capy_string_free);
+        if(!raw)throw hresult_error(E_OUTOFMEMORY);draft=J::Parse(to_hstring(raw.get()));
+        for(auto const& [control,key]:std::initializer_list<std::pair<ComboBox,wchar_t const*>>{{format,L"formats"},{depth,L"depths"},{background,L"backgrounds"},{dither,L"dithers"}}){
+            auto values=array(object(draft,L"choices"),key);
+            for(uint32_t optionIndex=0;optionIndex<std::min(values.Size(),control.Items().Size());++optionIndex)control.Items().SetAt(optionIndex,box_value(str(values.GetObjectAt(optionIndex),L"label")));
+        }
+    }
     void init(J const& details){
         color=object(details,L"color");extent=array(details,L"extent");root.Spacing(8);recipe=J::Parse(object(details,L"recipe").Stringify());auto form=object(details,L"form");copy=object(form,L"copy");profiles=A::Parse(array(form,L"profiles").Stringify());
         auto original=object(recipe,L"profile");bool contains=false;for(auto item:profiles)contains|=item.Stringify()==original.Stringify();if(!contains)profiles.Append(original);

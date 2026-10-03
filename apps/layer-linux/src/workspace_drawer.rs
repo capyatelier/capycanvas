@@ -254,7 +254,7 @@ impl View {
                         Body::Navigator(v)
                     }
                     Panel::Layers => {
-                        let v = Rc::new(LayerPanel::new(w.localization.clone()));
+                        let v = Rc::new(LayerPanel::new(w.localization().clone()));
                         margins(&v.root, PANEL_CONTENT_INSET as i32);
                         v.bind(w);
                         v.root.set_height_request(360);
@@ -317,7 +317,7 @@ impl View {
                     let config = layout.panel(*panel).unwrap();
                     let presentation = layout.tab_presentation(*panel);
                     let button = w.action_button(
-                        &config.title_localized(&w.localization),
+                        &config.title_localized(&w.localization()),
                         UiAction::SelectPanelTab {
                             group: tabs.group,
                             panel: *panel,
@@ -329,7 +329,7 @@ impl View {
                     let icon = crate::icons::image(&format!("layer-{}-symbolic", config.icon()));
                     icon.set_visible(presentation.show_icon);
                     content.append(&icon);
-                    let label = gtk::Label::new(Some(&config.title_localized(&w.localization)));
+                    let label = gtk::Label::new(Some(&config.title_localized(&w.localization())));
                     label.set_visible(presentation.show_name);
                     content.append(&label);
                     if !presentation.show_name {
@@ -350,7 +350,7 @@ impl View {
                     .build());
                 header.append(&header_clip);
                 tab_clip = Some(header_clip);
-                let grip = tiles::grip(&w.localization.text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
+                let grip = tiles::grip(&w.localization().text(layer_ui::MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL));
                 grip.set_widget_name("column-drawer-grip");
                 grip.set_size_request(20, 24);
                 grip.set_halign(gtk::Align::End);

@@ -600,9 +600,10 @@ its GPU worker; web and Android use the same renderer interface.
 ## Localization context
 
 `UiSession` and `WorkspaceController` receive an immutable, shared
-`Arc<Localizer>` for the application launch. Prepared and replacement drawings
-retain that context. The session stores its sole context privately in
+`Arc<Localizer>` for the current presentation. Prepared and replacement drawings
+adopt the window's current context before publication. The session stores its context privately in
 `UiState`; clones share the same allocation and serialized views omit it.
-Saved language edits apply on the next launch. Embedded Fluent catalogs and cached parameterless labels
+Language edits prepare a new immutable context and refresh retained copy at an
+input-safe boundary, preserving artwork and native editing state. Embedded Fluent catalogs and cached parameterless labels
 live in `layer-ui`; see [localization](localization.md) for the message and
 argument contract. Hosts receive resolved text through feature views.

@@ -1370,12 +1370,46 @@ pub enum ToolDestination {
         before: Option<u32>,
     },
 }
+#[derive(Clone, Debug, PartialEq)]
+enum CustomizationErrorSource {
+    ToolbarName(ToolbarNameRefusal),
+    Message(MessageId),
+    Layout(String),
+}
+impl CustomizationErrorSource {
+    fn message(&self, localization: &Localizer) -> String {
+        match self {
+            Self::ToolbarName(reason) => reason.message(localization).to_string(),
+            Self::Message(id) => localization.text(*id).to_string(),
+            Self::Layout(_) => localization.text(MessageId::WORKSPACE_REFUSAL_INVALID_WORKSPACE).to_string(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct CustomizationError {
+    source: CustomizationErrorSource,
+    text: String,
+}
+impl Serialize for CustomizationError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text)
+    }
+}
+impl CustomizationError {
+    fn new(source: CustomizationErrorSource, localization: &Localizer) -> Self {
+        let text = source.message(localization);
+        Self { source, text }
+    }
+    fn set_localization(&mut self, localization: &Localizer) {
+        self.text = self.source.message(localization);
+    }
+}
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ToolPicker {
     pub destination: ToolDestination,
     pub query: String,
     pub selected: Vec<ToolbarControl>,
-    pub error: Option<String>,
+    pub error: Option<CustomizationError>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolPickerView {
@@ -1532,34 +1566,37 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
 }
 impl ToolPicker {
     pub(crate) fn validate(&self, layout: &DockLayout, localization: &Localizer) -> Result<(), String> {
+        self.validate_refusal(layout).map_err(|reason| reason.message(localization))
+    }
+    fn validate_refusal(&self, layout: &DockLayout) -> Result<(), CustomizationErrorSource> {
         match &self.destination {
             ToolDestination::NewToolbar { group, name } => {
                 if let Some(group) = group {
-                    layout.group_panels(*group)?;
+                    layout.group_panels(*group).map_err(CustomizationErrorSource::Layout)?;
                 }
-                layout.toolbar_name_refusal(name, None).map_err(|reason| reason.message(localization).to_string())?;
+                layout.toolbar_name_refusal(name, None).map_err(CustomizationErrorSource::ToolbarName)?;
             }
             ToolDestination::Insert { panel, before } => {
-                let p = layout.panel(*panel)?;
+                let p = layout.panel(*panel).map_err(CustomizationErrorSource::Layout)?;
                 if panel.kind() != PanelKind::Tiles {
-                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR).to_string());
+                    return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR));
                 }
                 if before.is_some_and(|id| !p.tiles().iter().any(|t| t.id == id)) {
-                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TARGET_TOOL_NO_LONGER_EXISTS).to_string());
+                    return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TARGET_TOOL_NO_LONGER_EXISTS));
                 }
             }
             ToolDestination::Header { zone, before } => {
                 if self.selected.iter().any(|c| c.is_component()) {
-                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_PLACE_THIS_COMPONENT_IN_A_TOOLBAR).to_string());
+                    return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_PLACE_THIS_COMPONENT_IN_A_TOOLBAR));
                 }
-                layout.header.insertion(*zone, *before)?;
+                layout.header.insertion(*zone, *before).map_err(CustomizationErrorSource::Layout)?;
                 if layout.header.entries().count() + self.selected.len() > 128 {
-                    return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_TOO_MANY_TITLE_BAR_ITEMS).to_string());
+                    return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_TOO_MANY_TITLE_BAR_ITEMS));
                 }
             }
         }
         if self.selected.is_empty() {
-            return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_SELECT_AT_LEAST_ONE_TOOL).to_string());
+            return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_SELECT_AT_LEAST_ONE_TOOL));
         }
         Ok(())
     }
@@ -1605,7 +1642,7 @@ impl ToolPicker {
             choices,
             selected_count: self.selected.len(),
             can_confirm: self.validate(layout, localization).is_ok(),
-            error: self.error.clone().or_else(|| match &self.destination {
+            error: self.error.as_ref().map(|error| error.source.message(localization)).or_else(|| match &self.destination {
                 ToolDestination::NewToolbar { name, .. } => {
                     layout.toolbar_name_refusal(name, None).err().map(|reason| reason.message(localization).to_string())
                 }
@@ -1629,7 +1666,7 @@ pub struct ToolbarPrompt {
     panel: Panel,
     operation: ToolbarOperation,
     name: String,
-    error: Option<String>,
+    error: Option<CustomizationError>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolbarPromptView {
@@ -1645,13 +1682,16 @@ pub struct ToolbarPromptView {
 }
 impl ToolbarPrompt {
     fn validate(&self, layout: &DockLayout, localization: &Localizer) -> Result<(), String> {
-        layout.panel(self.panel)?;
+        self.validate_refusal(layout).map_err(|reason| reason.message(localization))
+    }
+    fn validate_refusal(&self, layout: &DockLayout) -> Result<(), CustomizationErrorSource> {
+        layout.panel(self.panel).map_err(CustomizationErrorSource::Layout)?;
         if self.panel.kind() != PanelKind::Tiles {
-            return Err(localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR).to_string());
+            return Err(CustomizationErrorSource::Message(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_CHOOSE_A_TOOLBAR));
         }
         match self.operation {
-            ToolbarOperation::Rename => layout.toolbar_name_refusal(&self.name, Some(self.panel)).map_err(|reason| reason.message(localization).to_string()),
-            ToolbarOperation::Duplicate => layout.toolbar_name_refusal(&self.name, None).map_err(|reason| reason.message(localization).to_string()),
+            ToolbarOperation::Rename => layout.toolbar_name_refusal(&self.name, Some(self.panel)).map_err(CustomizationErrorSource::ToolbarName),
+            ToolbarOperation::Duplicate => layout.toolbar_name_refusal(&self.name, None).map_err(CustomizationErrorSource::ToolbarName),
             ToolbarOperation::Delete => Ok(()),
         }
     }
@@ -1673,13 +1713,13 @@ impl ToolbarPrompt {
             message: if destructive {
                 customization_text(localization,
                     if undo_shortcut.is_empty() { MessageId::WORKSPACE_TOOLBAR_DELETE_MESSAGE } else { MessageId::WORKSPACE_TOOLBAR_DELETE_SHORTCUT_MESSAGE },
-                    &[("name", self.name.clone()), ("shortcut", undo_shortcut.to_owned())])
+                    &[("name", layout.panel(self.panel).map(|panel| panel.title_localized(localization)).unwrap_or_else(|_| self.name.clone())), ("shortcut", undo_shortcut.to_owned())])
             } else {
                 String::new()
             },
             name: (!destructive).then(|| self.name.clone()),
             can_confirm: self.validate(layout, localization).is_ok(),
-            error: self.error.clone().or_else(|| self.validate(layout, localization).err()),
+            error: self.error.as_ref().map(|error| error.source.message(localization)).or_else(|| self.validate(layout, localization).err()),
         }
     }
 }
@@ -1764,6 +1804,14 @@ pub struct CustomizationState {
     pub toolbar_manager: Option<ToolbarManager>,
 }
 impl CustomizationState {
+    pub(crate) fn set_localization(&mut self, localization: &Localizer) {
+        if let Some(error) = self.picker.as_mut().and_then(|picker| picker.error.as_mut()) {
+            error.set_localization(localization);
+        }
+        if let Some(error) = self.toolbar_prompt.as_mut().and_then(|prompt| prompt.error.as_mut()) {
+            error.set_localization(localization);
+        }
+    }
     pub(crate) fn begin_header(&mut self, layout: &DockLayout) {
         if !self.header_editing {
             self.header_original = Some((layout.header.clone(), layout.canvas_info.clone()));
@@ -1988,13 +2036,13 @@ impl CustomizationState {
                     .toolbar_prompt
                     .as_mut()
                     .ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOLBAR_DIALOG_IS_CLOSED).to_string())?;
-                let result = draft.validate(layout, localization).and_then(|_| match draft.operation {
+                let result = draft.validate_refusal(layout).and_then(|_| (match draft.operation {
                     ToolbarOperation::Rename => layout.rename_toolbar(draft.panel, &draft.name),
                     ToolbarOperation::Duplicate => layout
                         .duplicate_toolbar(draft.panel, &draft.name)
                         .map(|_| ()),
                     ToolbarOperation::Delete => layout.delete_toolbar(draft.panel),
-                });
+                }).map_err(CustomizationErrorSource::Layout));
                 match result {
                     Ok(()) => {
                         if matches!(draft.operation, ToolbarOperation::Delete)
@@ -2005,7 +2053,7 @@ impl CustomizationState {
                         self.toolbar_prompt = None;
                         changed |= regions::LAYOUT;
                     }
-                    Err(error) => draft.error = Some(error),
+                    Err(error) => draft.error = Some(CustomizationError::new(error, localization)),
                 }
             }
             CancelToolbar => self.toolbar_prompt = None,
@@ -2261,8 +2309,8 @@ impl CustomizationState {
             ConfirmTools => {
                 let picker = self.picker.as_mut().ok_or_else(|| localization.text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TOOL_PICKER_IS_CLOSED).to_string())?;
                 let result = picker
-                    .validate(layout, localization)
-                    .and_then(|_| match &picker.destination {
+                    .validate_refusal(layout)
+                    .and_then(|_| (match &picker.destination {
                         ToolDestination::NewToolbar { group, name } => layout
                             .add_toolbar(*group, name, &picker.selected)
                             .map(|_| ()),
@@ -2278,9 +2326,9 @@ impl CustomizationState {
                                 .map(|control| HeaderItem::Tool { control: *control })
                                 .collect::<Vec<_>>(),
                         ),
-                    });
+                    }).map_err(CustomizationErrorSource::Layout));
                 if let Err(error) = result {
-                    picker.error = Some(error);
+                    picker.error = Some(CustomizationError::new(error, localization));
                 } else {
                     self.picker = None;
                     changed |= regions::LAYOUT;
@@ -2303,6 +2351,79 @@ mod tests {
     const ERASE: ToolbarControl = ToolbarControl::Command {
         command: CommandId::Eraser,
     };
+
+    #[test]
+    fn live_customization_errors_preserve_refusal_identity_and_uncommitted_names() {
+        for name in ["", "invalid\nname", "Existing 日本語 {name} 🎨"] {
+            let mut layout = DockLayout::default();
+            layout.add_toolbar(None, "Existing 日本語 {name} 🎨", &[PEN]).unwrap();
+            let original = layout.clone();
+            let mut state = CustomizationState::default();
+            state.edit(&mut layout, CustomizationAction::RenameToolbar { panel: Panel::Toolbar }, Platform::Gtk, VIEWPORT).unwrap();
+            state.edit(&mut layout, CustomizationAction::ToolbarName { name: name.into() }, Platform::Gtk, VIEWPORT).unwrap();
+            state.edit(&mut layout, CustomizationAction::ConfirmToolbar, Platform::Gtk, VIEWPORT).unwrap();
+            let source = state.toolbar_prompt.as_ref().unwrap().error.as_ref().unwrap().source.clone();
+            for language in UiLanguage::ALL {
+                let localization = Localizer::shared(language);
+                state.set_localization(&localization);
+                let draft = state.toolbar_prompt.as_ref().unwrap();
+                let error = draft.error.as_ref().unwrap();
+                assert_eq!(error.source, source);
+                assert_eq!(draft.name, name);
+                let view = draft.view_localized(&layout, "Ctrl+Z", &localization);
+                assert_eq!(view.error.as_deref(), Some(source.message(&localization).as_str()));
+                assert_eq!(serde_json::to_value(error).unwrap(), serde_json::json!(view.error.unwrap()));
+                assert!(!view.can_confirm);
+                assert_eq!(layout, original);
+            }
+        }
+    }
+
+    #[test]
+    fn live_picker_failure_preserves_selection_search_and_name_without_applying() {
+        let mut layout = DockLayout::default();
+        let original = layout.clone();
+        let mut state = CustomizationState::default();
+        state.edit(&mut layout, CustomizationAction::NewToolbar { group: None }, Platform::Gtk, VIEWPORT).unwrap();
+        state.edit(&mut layout, CustomizationAction::PickerName { name: "Untitled 日本語 {draft} 🎨".into() }, Platform::Gtk, VIEWPORT).unwrap();
+        state.edit(&mut layout, CustomizationAction::PickerSearch { query: "ＷＡＴＥＲＣＯＬＯＲ".into() }, Platform::Gtk, VIEWPORT).unwrap();
+        state.edit(&mut layout, CustomizationAction::ConfirmTools, Platform::Gtk, VIEWPORT).unwrap();
+        let source = state.picker.as_ref().unwrap().error.as_ref().unwrap().source.clone();
+        for language in UiLanguage::ALL {
+            let localization = Localizer::shared(language);
+            state.set_localization(&localization);
+            let picker = state.picker.as_ref().unwrap();
+            let error = picker.error.as_ref().unwrap();
+            assert_eq!(error.source, source);
+            let view = picker.view_localized(&layout, Platform::Gtk, &localization);
+            assert_eq!(view.error.as_deref(), Some(source.message(&localization).as_str()));
+            assert_eq!(serde_json::to_value(error).unwrap(), serde_json::json!(view.error.unwrap()));
+            assert_eq!(view.name.as_deref(), Some("Untitled 日本語 {draft} 🎨"));
+            assert_eq!(view.query, "ＷＡＴＥＲＣＯＬＯＲ");
+            assert_eq!(view.selected_count, 0);
+            assert_eq!(layout, original);
+        }
+    }
+
+    #[test]
+    fn live_delete_toolbar_caption_projects_builtin_titles_and_keeps_literal_names() {
+        for name in [None, Some("Untitled 日本語 {name} 🎨")] {
+            let mut layout = DockLayout::default();
+            if let Some(name) = name { layout.rename_toolbar(Panel::Toolbar, name).unwrap(); }
+            let original = layout.clone();
+            let mut state = CustomizationState::default();
+            state.edit(&mut layout, CustomizationAction::DeleteToolbar { panel: Panel::Toolbar }, Platform::Gtk, VIEWPORT).unwrap();
+            for language in UiLanguage::ALL {
+                let localization = Localizer::shared(language);
+                state.set_localization(&localization);
+                let prompt = state.toolbar_prompt.as_ref().unwrap().view_localized(&layout, "Ctrl+Z", &localization);
+                let title = name.map_or_else(|| Panel::Toolbar.localized_label(&localization).to_string(), str::to_owned);
+                assert!(prompt.message.contains(&title));
+                assert!(prompt.destructive);
+                assert_eq!(layout, original);
+            }
+        }
+    }
 
     #[test]
     fn localized_customization_views_preserve_literal_titles_and_layout_data() {

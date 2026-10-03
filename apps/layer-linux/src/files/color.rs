@@ -15,7 +15,9 @@ struct Choice {
     flattened: bool,
 }
 struct Conversion {
-    copy: layer_ui::color_feature_copy::DocumentColorCopy,
+    copy: RefCell<layer_ui::color_feature_copy::DocumentColorCopy>,
+    localizing: Cell<bool>,
+    detail_kind: Cell<u8>,
     workspace: std::rc::Weak<Workspace>,
     gpu: layer_render_wgpu::snapshot::SnapshotGpu,
     original: Project,
@@ -30,10 +32,16 @@ struct Conversion {
     closed: Cell<bool>,
 }
 impl Conversion {
+    fn refresh_detail(&self) {
+        let copy = self.copy.borrow();
+        self.detail.set_label(match self.detail_kind.get() {
+            1 => &copy.clipped_comparison, 2 => &copy.layered_open, 3 => &copy.compare_before_apply, _ => &copy.choose_destination,
+        });
+    }
     fn request(self: &Rc<Self>, choice: Choice) {
         self.workflow.borrow_mut().candidate = None;
         self.comparison
-            .invalidate(self.copy.preparing_comparison.as_ref());
+            .invalidate(self.copy.borrow().preparing_comparison.as_ref());
         self.pending.set(Some(choice));
         if let Some(active) = self.active.borrow().as_ref() {
             active.cancel();
@@ -45,7 +53,7 @@ impl Conversion {
         glib::MainContext::default().spawn_local(glib::clone!(#[strong(rename_to = state)] self, async move {
             while let Some(choice) = state.pending.take().filter(|_| !state.closed.get()) {
                 if !choice.flattened && choice.change.target(state.original.document.color) == state.original.document.color {
-                    state.comparison.invalidate(state.copy.choose_different.as_ref());
+                    state.comparison.invalidate(state.copy.borrow().choose_different.as_ref());
                     continue;
                 }
                 let plan = match state.workflow.borrow_mut().select(Some(choice.change), choice.flattened) {
@@ -74,10 +82,8 @@ impl Conversion {
                     let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
                     state.workflow.borrow().identity.validate(session, control.is_cancelled(), state.gpu.same_device(&w.snapshot_gpu()?))?;
                     let project = prepared.project;
-                    state.detail.set_label(if prepared.statistics.clipped_channels > 0 {
-                        state.copy.clipped_comparison.as_ref()
-                    } else if choice.flattened { state.copy.layered_open.as_ref() }
-                    else { state.copy.compare_before_apply.as_ref() });
+                    state.detail_kind.set(if prepared.statistics.clipped_channels > 0 { 1 } else if choice.flattened { 2 } else { 3 });
+                    state.refresh_detail();
                     let mut brush = session.engine().configured_brush().clone();
                     let mut view = session.engine().view();
                     layer_render::remap_document_colors(state.original.document.color.space, project.document.color.space, &mut brush, &mut view);
@@ -124,8 +130,8 @@ pub(super) async fn run(
     id: u32,
     operation: DocumentColorOperation,
 ) -> Result<bool, String> {
-    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization));
-    let export_copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization);
+    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()));
+    let export_copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization());
     let (workflow, background, time) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
@@ -137,7 +143,8 @@ pub(super) async fn run(
     };
     let project = workflow.original.clone();
     let color = project.document.color;
-    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project.clone(), w.view_color(), &w.localization);
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project.clone(), w.view_color(), &w.localization());
+    comparison.bind_localization(w);
     let detail = gtk::Label::builder()
         .wrap(true)
         .xalign(0.)
@@ -201,7 +208,7 @@ pub(super) async fn run(
     content.append(&detail);
     content.append(&comparison.widget);
     let request = DocumentRequest::ChangeColor { operation };
-    let dialog = adw::AlertDialog::builder().heading(request.title(&w.localization).as_ref()).body(match operation {
+    let dialog = adw::AlertDialog::builder().heading(request.title(&w.localization()).as_ref()).body(match operation {
         DocumentColorOperation::Assign => copy.assign_native_help.as_ref(),
         DocumentColorOperation::Convert => copy.convert_native_help.as_ref(),
         DocumentColorOperation::Depth => copy.depth_native_help.as_ref(),
@@ -218,7 +225,8 @@ pub(super) async fn run(
         move |ready| dialog.set_response_enabled("apply", ready)
     )));
     let state = Rc::new(Conversion {
-        copy: copy.as_ref().clone(),
+        copy: RefCell::new(copy.as_ref().clone()),
+        localizing: Cell::new(false), detail_kind: Cell::new(0),
         gpu: w.snapshot_gpu()?,
         workspace: Rc::downgrade(w),
         original: project,
@@ -232,7 +240,7 @@ pub(super) async fn run(
         running: Cell::new(false),
         closed: Cell::new(false),
     });
-    let refresh: Rc<dyn Fn()> = Rc::new(glib::clone!( #[strong] copy,
+    let refresh: Rc<dyn Fn()> = Rc::new(glib::clone!(
         #[strong]
         state,
         #[weak]
@@ -248,6 +256,8 @@ pub(super) async fn run(
         #[weak]
         dialog,
         move || {
+            if state.localizing.get() { return; }
+            let copy = state.copy.borrow().clone();
             let depth = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32][depth.selected() as usize];
             let intent = [
                 RenderingIntent::RelativeColorimetric,
@@ -282,6 +292,33 @@ pub(super) async fn run(
             });
         }
     ));
+    let weak = Rc::downgrade(&state); let dialog_weak = dialog.downgrade();
+    let space_weak = space.downgrade(); let depth_weak = depth.downgrade(); let result_weak = result.downgrade(); let intent_weak = intent.downgrade(); let dither_weak = dither.downgrade();
+    w.on_localization(move |localization| {
+        let (Some(state), Some(dialog)) = (weak.upgrade(), dialog_weak.upgrade()) else { return false };
+        state.localizing.set(true);
+        let copy = layer_ui::color_feature_copy::DocumentColorCopy::new(localization);
+        let export = layer_ui::color_feature_copy::ExportCopy::new(localization);
+        dialog.set_heading(Some(&request.title(localization)));
+        dialog.set_body(match operation { DocumentColorOperation::Assign => &copy.assign_native_help, DocumentColorOperation::Convert => &copy.convert_native_help, DocumentColorOperation::Depth => &copy.depth_native_help });
+        dialog.set_response_label("cancel", &copy.common.cancel);
+        dialog.set_response_label("apply", if result_weak.upgrade().is_some_and(|row| operation == DocumentColorOperation::Convert && row.selected() == 1) { &copy.create_copy } else { &copy.common.apply });
+        if let Some(space) = space_weak.upgrade() { space.set_title(&export.profile); }
+        for (row, title, labels) in [
+            (depth_weak.upgrade(), &export.depth, vec![&copy.depth_8, &copy.depth_16, &copy.depth_float16, &copy.depth_float32]),
+            (result_weak.upgrade(), &copy.result, vec![&copy.convert_layers, &copy.create_flattened]),
+            (intent_weak.upgrade(), &export.intent, vec![&export.relative, &export.perceptual, &export.saturation, &export.absolute]),
+        ] {
+            if let Some(row) = row {
+                row.set_title(title); let selected = row.selected();
+                if let Some(model) = row.model().and_downcast::<gtk::StringList>() { model.splice(0, model.n_items(), &labels.iter().map(|text| text.as_ref()).collect::<Vec<_>>()); row.set_selected(selected); }
+            }
+        }
+        if let Some(dither) = dither_weak.upgrade() { dither.set_title(&export.reduce_banding); dither.set_subtitle(&export.dither_gradients); }
+        *state.copy.borrow_mut() = copy;
+        state.refresh_detail(); state.localizing.set(false);
+        true
+    });
     for row in [&space, &depth, &result, &intent] {
         row.connect_selected_notify({
             let refresh = refresh.clone();
@@ -324,7 +361,7 @@ async fn adopt(
     workflow: &mut ColorWorkflow,
     original_gpu: &layer_render_wgpu::snapshot::SnapshotGpu,
 ) -> Result<bool, String> {
-    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization));
+    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()));
     {
         let mut gpu = w.gpu.borrow_mut();
         let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
@@ -347,6 +384,14 @@ async fn adopt(
     dialog.set_widget_name("document-color-progress");
     dialog.add_response("cancel", copy.common.cancel.as_ref());
     dialog.set_close_response("cancel");
+    let weak = dialog.downgrade();
+    w.on_localization(move |localization| {
+        let Some(dialog) = weak.upgrade() else { return false };
+        let copy = layer_ui::color_feature_copy::DocumentColorCopy::new(localization);
+        dialog.set_heading(Some(&copy.preparing_title)); dialog.set_body(&copy.preparing_help);
+        dialog.set_response_label("cancel", &copy.common.cancel);
+        true
+    });
     let cancelled = Rc::new(Cell::new(false));
     dialog.connect_response(None, {
         let cancelled = cancelled.clone();

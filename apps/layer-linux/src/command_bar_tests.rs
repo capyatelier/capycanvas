@@ -283,7 +283,7 @@ fn native_command_bar_glass() {
 #[ignore = "isolated native-input.js --native-test=native_command_bar_preedit_guard --native-storage"]
 fn native_command_bar_preedit_guard() {
     let d = Driver::managed("art.capycanvas.CommandPreedit");
-    assert!(std::sync::Arc::ptr_eq(&d.w.localization, crate::launch_localization()));
+    assert!(std::sync::Arc::ptr_eq(&d.w.localization(), crate::launch_localization()));
     for theme in [Theme::Light, Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for preedit in ["にほんご", "简体", "繁體", "한국어"] {

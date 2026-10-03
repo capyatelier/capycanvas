@@ -291,7 +291,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
             out.get_ref().sync_all().map_err(error)
         }
         Payload::Export { export, control } => {
-            let localization = crate::launch::active_localization()?;
+            let localization = &*crate::launch::active_localization()?;
             let out = input.ok_or("Missing export output")?;
             export.write(&out, control.clone()).map_err(|reason| reason.message(localization))?;
             out.sync_all().map_err(error)
@@ -454,7 +454,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportOptions(
     value: JString,
 ) {
     let result = (|| {
-        let localization = crate::launch::active_localization()?;
+        let localization = &*crate::launch::active_localization()?;
         let selected: layer_ui::ExportRecipe =
             serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
         let Payload::Export { export, .. } = &mut unsafe { crate::inspection::borrow::<Task>(handle) }.payload else {

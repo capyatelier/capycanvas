@@ -162,7 +162,7 @@ fn native_tooltip_input() {
                 },
             },
             current.platform,
-            &w.localization,
+            &w.localization(),
         );
         assert_eq!(
             popup()

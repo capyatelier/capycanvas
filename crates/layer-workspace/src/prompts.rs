@@ -90,23 +90,23 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .filter(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
             .map(|p| ManagerChoice {
                 id: serde_json::to_string(&p.id).unwrap(),
-                label: p.title_localized(&self.localization),
+                label: p.title_localized(&self.localization()),
             })
             .collect())
     }
     pub fn new_toolbar_prompt(&self) -> ManagerPrompt {
         let mut choices = vec![ManagerChoice {
             id: String::new(),
-            label: self.localization.text(layer_ui::MessageId::WORKSPACE_EMPTY_TOOLBAR).to_string(),
+            label: self.localization().text(layer_ui::MessageId::WORKSPACE_EMPTY_TOOLBAR).to_string(),
         }];
         choices.extend(self.choices_for(ItemKind::Toolbar));
         let mut p = ManagerPrompt::confirm(
-            self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR).to_string(),
-            self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR_CONFIRM).to_string(),
-            self.localization.text(layer_ui::MessageId::WORKSPACE_ADD_TO_WORKSPACE).to_string(),
+            self.localization().text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR).to_string(),
+            self.localization().text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR_CONFIRM).to_string(),
+            self.localization().text(layer_ui::MessageId::WORKSPACE_ADD_TO_WORKSPACE).to_string(),
         )
-        .choices(self.localization.text(layer_ui::MessageId::WORKSPACE_START_WITH).to_string(), choices, None);
-        p.name = Some(self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR).to_string());
+        .choices(self.localization().text(layer_ui::MessageId::WORKSPACE_START_WITH).to_string(), choices, None);
+        p.name = Some(self.localization().text(layer_ui::MessageId::WORKSPACE_NEW_TOOLBAR).to_string());
         p
     }
 
@@ -120,18 +120,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Ok(match action {
             A::New => {
                 let mut p = ManagerPrompt::confirm(
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE).to_string(),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_CONFIRM).to_string(),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_CREATE_AND_SWITCH).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_NEW_CONFIRM).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_CREATE_AND_SWITCH).to_string(),
                 );
-                p.name = Some(self.localization.text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE).to_string());
+                p.name = Some(self.localization().text(layer_ui::MessageId::WORKSPACE_NEW_WORKSPACE).to_string());
                 p
             }
             A::ResetBrushes => {
                 let mut p = ManagerPrompt::confirm(
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESET_ALL_BRUSHES).to_string(),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESET_BRUSHES_CONFIRM).to_string(),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESET_BRUSHES).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RESET_ALL_BRUSHES).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RESET_BRUSHES_CONFIRM).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RESET_BRUSHES).to_string(),
                 );
                 p.destructive = true;
                 p
@@ -140,13 +140,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let s = source()?;
                 let reusable = s.kind == ItemKind::Toolbar;
                 let mut p = ManagerPrompt::confirm(
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_RENAME).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RENAME).to_string(),
                     if reusable {
-                        self.localization.text(layer_ui::MessageId::WORKSPACE_RENAME_TOOLBAR_MESSAGE).to_string()
+                        self.localization().text(layer_ui::MessageId::WORKSPACE_RENAME_TOOLBAR_MESSAGE).to_string()
                     } else {
                         String::new()
                     },
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_RENAME).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RENAME).to_string(),
                 );
                 p.name = Some(s.name.clone());
                 p.description = reusable.then(|| s.description.clone());
@@ -162,13 +162,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .layout()
                     .panel(*panel)
                     .map_err(StoreError::invalid)?;
-                ToolbarDefinition::capture(toolbar, &self.localization)?;
+                ToolbarDefinition::capture(toolbar, &self.localization())?;
                 let mut p = ManagerPrompt::confirm(
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_TO_TOOLBAR_LIBRARY).to_string(),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_TOOLBAR_CONFIRM).to_string(),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_TO_LIBRARY).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_SAVE_TO_TOOLBAR_LIBRARY).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_SAVE_TOOLBAR_CONFIRM).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_SAVE_TO_LIBRARY).to_string(),
                 );
-                p.name = Some(toolbar.title_localized(&self.localization));
+                p.name = Some(toolbar.title_localized(&self.localization()));
                 p
             }
             A::Reset(id) => {
@@ -177,17 +177,17 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace));
                 }
                 ManagerPrompt::confirm(
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESTORE_STARTING_LAYOUT).to_string(),
-                    message(&self.localization, if s.builtin && is_default_item(id) { layer_ui::MessageId::WORKSPACE_RESET_DEFAULT_CONFIRM } else { layer_ui::MessageId::WORKSPACE_RESET_SAVED_CONFIRM }, &[("menu", self.localization.text(layer_ui::MessageId::WORKSPACE_MENU).to_string())]),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_RESTORE).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RESTORE_STARTING_LAYOUT).to_string(),
+                    message(&self.localization(), if s.builtin && is_default_item(id) { layer_ui::MessageId::WORKSPACE_RESET_DEFAULT_CONFIRM } else { layer_ui::MessageId::WORKSPACE_RESET_SAVED_CONFIRM }, &[("menu", self.localization().text(layer_ui::MessageId::WORKSPACE_MENU).to_string())]),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_RESTORE).to_string(),
                 )
             }
             A::Delete(id) => {
                 let s = source()?;
                 let mut p = ManagerPrompt::confirm(
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_DELETE).to_string(),
-                    message(&self.localization, if self.active_id().as_deref() == Some(id) { layer_ui::MessageId::WORKSPACE_DELETE_ACTIVE_CONFIRM } else { layer_ui::MessageId::WORKSPACE_DELETE_CONFIRM }, &[("name", self.display_name(id, s))]),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_DELETE).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_DELETE).to_string(),
+                    message(&self.localization(), if self.active_id().as_deref() == Some(id) { layer_ui::MessageId::WORKSPACE_DELETE_ACTIVE_CONFIRM } else { layer_ui::MessageId::WORKSPACE_DELETE_CONFIRM }, &[("name", self.display_name(id, s))]),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_DELETE).to_string(),
                 );
                 p.destructive = true;
                 p
@@ -197,24 +197,24 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 if choices.is_empty() {
                     return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::SaveAToolbarToTheLibraryFirst));
                 }
-                ManagerPrompt::confirm(self.localization.text(layer_ui::MessageId::WORKSPACE_REPLACE_FROM_LIBRARY).to_string(),self.localization.text(layer_ui::MessageId::WORKSPACE_REPLACE_TOOLBAR_CONFIRM).to_string(),self.localization.text(layer_ui::MessageId::WORKSPACE_REPLACE_TOOLBAR).to_string())
-                    .choices(self.localization.text(layer_ui::MessageId::WORKSPACE_SAVED_TOOLBAR).to_string(),choices,None)
+                ManagerPrompt::confirm(self.localization().text(layer_ui::MessageId::WORKSPACE_REPLACE_FROM_LIBRARY).to_string(),self.localization().text(layer_ui::MessageId::WORKSPACE_REPLACE_TOOLBAR_CONFIRM).to_string(),self.localization().text(layer_ui::MessageId::WORKSPACE_REPLACE_TOOLBAR).to_string())
+                    .choices(self.localization().text(layer_ui::MessageId::WORKSPACE_SAVED_TOOLBAR).to_string(),choices,None)
             }
             A::UpdateToolbar(_) => {
                 let current = self
                     .current()
                     .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
-                ManagerPrompt::confirm(self.localization.text(layer_ui::MessageId::WORKSPACE_UPDATE_SAVED_TOOLBAR).to_string(),message(&self.localization, layer_ui::MessageId::WORKSPACE_UPDATE_TOOLBAR_CONFIRM, &[("workspace", self.display_name(&current.id, &current.metadata)), ("toolbar", source()?.name.clone())]),self.localization.text(layer_ui::MessageId::WORKSPACE_UPDATE).to_string())
-                    .choices(self.localization.text(layer_ui::MessageId::WORKSPACE_TOOLBAR).to_string(),self.current_toolbar_choices()?,None)
+                ManagerPrompt::confirm(self.localization().text(layer_ui::MessageId::WORKSPACE_UPDATE_SAVED_TOOLBAR).to_string(),message(&self.localization(), layer_ui::MessageId::WORKSPACE_UPDATE_TOOLBAR_CONFIRM, &[("workspace", self.display_name(&current.id, &current.metadata)), ("toolbar", source()?.name.clone())]),self.localization().text(layer_ui::MessageId::WORKSPACE_UPDATE).to_string())
+                    .choices(self.localization().text(layer_ui::MessageId::WORKSPACE_TOOLBAR).to_string(),self.current_toolbar_choices()?,None)
             }
             A::NewToolbar(_) => self.new_toolbar_prompt(),
             A::SaveAsNew => {
                 let mut p = ManagerPrompt::confirm(
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_AS_NEW_WORKSPACE).to_string(),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_AS_NEW_CONFIRM).to_string(),
-                    self.localization.text(layer_ui::MessageId::WORKSPACE_SAVE_AND_SWITCH).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_SAVE_AS_NEW_WORKSPACE).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_SAVE_AS_NEW_CONFIRM).to_string(),
+                    self.localization().text(layer_ui::MessageId::WORKSPACE_SAVE_AND_SWITCH).to_string(),
                 );
-                p.name = Some(self.localization.text(layer_ui::MessageId::WORKSPACE_RECOVERED_WORKSPACE).to_string());
+                p.name = Some(self.localization().text(layer_ui::MessageId::WORKSPACE_RECOVERED_WORKSPACE).to_string());
                 p
             }
             _ => {

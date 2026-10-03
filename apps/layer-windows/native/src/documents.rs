@@ -69,7 +69,7 @@ pub(crate) fn recovery_environment(session: &UiSession<Renderer>) -> Result<Open
         Default::default(),
     )
 }
-struct Opening { environment: OpenEnvironment, imported: layer_ui::ImportedDocument, profiles: Vec<layer_ui::profile_library::ProfileEntry> }
+struct Opening { environment: OpenEnvironment, imported: layer_ui::ImportedDocument, profiles: Vec<layer_ui::profile_library::ProfileEntry>, profile_view: serde_json::Value, language: layer_ui::UiLanguage }
 enum Source {
     Create(layer_ui::NewDocumentOptions),
     Recovery(PathBuf),
@@ -97,6 +97,7 @@ enum Completed {
     Workflow(Box<crate::document_workflows::Task>),
     Cancelled,
     Interpretation(Box<Opening>),
+    ProfileFailure(layer_ui::ColorFeatureError),
     PhotoPrepared(Box<UiSession<Renderer>>),
     Saved,
     Prepared(Box<UiSession<Renderer>>),
@@ -253,7 +254,10 @@ fn prepare(
         Source::Create(options) => layer_ui::ImportedDocument { project: options.project(&environment.localization)?, source: layer_ui::ImportSource::Master },
         Source::Recovery(path) => environment.read(layer_core::Cancellable { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancelled: || cancel.load(Ordering::Acquire) },
             layer_ui::ImportIntent::Recovery, "Recovered drawing", cancel)?,
-        Source::Interpret(mut imported, profile) => { imported.interpret(profile.resolve(cancel, &environment.localization)?)?; *imported },
+        Source::Interpret(mut imported, profile) => {
+            let profile=match profile.resolve(cancel, &environment.localization) { Ok(profile)=>profile,Err(reason)=>return Ok(Completed::ProfileFailure(reason)) };
+            imported.interpret(profile)?; *imported
+        },
         Source::Open(path) => {
             let file = File::open(&path).map_err(|e| io_error("open", e))?;
             environment.read(layer_core::Cancellable { inner: BufReader::new(file), cancelled: || cancel.load(Ordering::Acquire) }, layer_ui::ImportIntent::Open,
@@ -261,7 +265,10 @@ fn prepare(
         }
     };
     if imported.interpretation_required(environment.photo_policy).is_some() {
-        return Ok(Completed::Interpretation(Box::new(Opening { environment, imported, profiles: crate::color_storage::list(cancel)? })));
+        let profiles=crate::color_storage::list(cancel)?;
+        let profile_view=serde_json::json!(profiles.iter().map(|entry|entry.localized_view(&environment.localization)).collect::<Vec<_>>());
+        let language=environment.localization.language();
+        return Ok(Completed::Interpretation(Box::new(Opening { environment, imported, profiles, profile_view, language })));
     }
     let kind = imported.source;
     let candidate = environment.prepare(imported.project, || cancel.load(Ordering::Acquire))?;
@@ -303,6 +310,17 @@ pub(crate) struct DocumentService {
     recording_save: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
 impl DocumentService {
+    pub(crate) fn set_localization(&mut self, localization: Arc<layer_ui::Localizer>) -> Result<(), String> {
+        if self.window.set_localization(localization.clone()) {
+            self.profile_copy = serde_json::json!(layer_ui::color_feature_copy::ProfileCopy::new(&localization));
+        }
+        if let Some(opening)=&mut self.opening && opening.language!=localization.language() {
+            opening.profile_view=serde_json::json!(opening.profiles.iter().map(|entry|entry.localized_view(&localization)).collect::<Vec<_>>());
+            opening.language=localization.language();
+        }
+        if let Some(task) = &mut self.workflow { task.set_localization(localization)?; }
+        Ok(())
+    }
     #[cfg(test)]
     pub(crate) fn open(wake: impl Fn() + Send + Sync + 'static) -> Result<Self, String> {
         Self::open_localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English), wake)
@@ -340,7 +358,7 @@ impl DocumentService {
         self.opening.as_ref().map(|opening| serde_json::json!({
             "type": "interpret", "id": self.active.as_ref().map(|a| a.id), "copy":self.profile_copy,
             "spaces": layer_core::color::RgbSpace::ALL.map(|s| (s, s.name())),
-            "profiles": opening.profiles,
+            "profiles": opening.profile_view,
             "channels": opening.imported.project.document.layers.iter().find_map(|l| l.source.as_ref()).map(|s| s.interpretation.channels),
         }))
     }
@@ -769,6 +787,11 @@ impl DocumentService {
                 }
             }
             Ok(Completed::Prepared(candidate)) => return self.append_candidate(host, active, candidate),
+            Ok(Completed::ProfileFailure(reason)) => {
+                let previous=host.session.state().revision;
+                let change=host.session.complete_document_request_failed(active.id,layer_ui::DocumentHostErrorCopy::Profile(reason))?;
+                host.apply_change(previous,change);return Ok(());
+            },
             Err(error) => Err(error),
         };
         Self::complete(host, active.id, result)

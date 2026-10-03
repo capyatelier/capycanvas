@@ -97,8 +97,12 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             setLocales(android.os.LocaleList.forLanguageTags(activeTag))
         }
     }
-    val context = remember(source, localized) {
+    val context = remember(source) {
         android.view.ContextThemeWrapper(source, source.theme).apply { applyOverrideConfiguration(localized) }
+    }
+    @Suppress("DEPRECATION")
+    if (context.resources.configuration != localized) {
+        context.resources.updateConfiguration(localized, context.resources.displayMetrics)
     }
     CompositionLocalProvider(LocalContext provides context, LocalConfiguration provides localized) {
         CapyWorkspace(host, launch)

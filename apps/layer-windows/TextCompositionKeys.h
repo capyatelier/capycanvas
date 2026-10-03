@@ -15,6 +15,11 @@ class TextCompositionKeys {
     std::unordered_map<uint32_t,Event> presses;
 public:
     bool Active() const { return composing; }
+    bool Busy() const {
+        if(composing)return true;
+        for(auto const& [key,event]:presses)if(!event.released)return true;
+        return false;
+    }
     void Update(bool active,uint32_t time) {
         if(composing&&!active){
             ended=time;

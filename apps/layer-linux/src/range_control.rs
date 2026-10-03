@@ -136,6 +136,12 @@ impl RangeControl {
         control.set_values(fields.map(|f| f.value as f64));
         control
     }
+    pub(crate) fn set_captions(&self, tooltip: &str, fields: [&ToolSetting; 2], localization: &std::sync::Arc<layer_ui::Localizer>) {
+        self.root.set_tooltip_text(Some(tooltip));
+        self.track.set_tooltip_text(Some(tooltip));
+        for (number, field) in self.inputs.iter().zip(fields) { number.set_caption(&field.label, &field.tooltip_localized(localization), localization.clone()); }
+    }
+
     pub fn set_values(&self, values: [f64; 2]) {
         self.updating.set(true);
         // Keep the track's scale steady throughout capture; typed extreme values

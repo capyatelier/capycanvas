@@ -1,6 +1,20 @@
 use crate::WorkspaceRefusal;
 use super::*;
 
+#[derive(Clone)]
+pub(crate) struct InterruptedChange {
+    pub id: String,
+    names: Vec<Option<(String, Metadata)>>,
+}
+impl InterruptedChange {
+    pub fn label(&self, localization: &layer_ui::Localizer) -> String {
+        let names = self.names.iter().map(|name| match name {
+            Some((id, metadata)) => workspace_display_name(id, metadata, localization),
+            None => localization.text(layer_ui::MessageId::WORKSPACE_CHANGES).to_string(),
+        }).collect::<Vec<_>>();
+        name_list(localization, &names)
+    }
+}
 impl<S: WorkspaceStore> WorkspaceManager<S> {
     async fn interrupted_batches(&self) -> Result<Vec<CommitBatch>> {
         let StoreResponse::Pending(mut batches) = self.execute(StoreRequest::Pending).await? else {
@@ -19,6 +33,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Ok(batches)
     }
     pub async fn interrupted_changes(&self, now: u64) -> Result<Vec<(String, String)>> {
+        Ok(self.interrupted_change_sources(now).await?.into_iter()
+            .map(|change| (change.id.clone(), change.label(&self.localization()))).collect())
+    }
+    pub(crate) async fn interrupted_change_sources(&self, now: u64) -> Result<Vec<InterruptedChange>> {
         let batches = self.interrupted_batches().await?;
         let superseded: std::collections::BTreeSet<_> = batches
             .iter()
@@ -61,26 +79,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .await;
                 continue;
             }
-            let names: Vec<_> = batch
-                .writes
-                .iter()
+            let names: Vec<_> = batch.writes.iter()
                 .filter(|w| !w.delete && !(w.create && model::is_default_item(&w.id)))
-                .map(|write| {
-                    write
-                        .metadata
-                        .as_ref()
-                        .map(|m| self.display_name(&write.id, m))
-                        .or_else(|| {
-                            self.items()
-                                .iter()
-                                .find(|i| i.id == write.id)
-                                .map(|i| self.summary_display_name(&i))
-                        })
-                        .unwrap_or_else(|| self.localization.text(layer_ui::MessageId::WORKSPACE_CHANGES).to_string())
-                })
+                .map(|write| write.metadata.clone().or_else(|| self.items().into_iter()
+                    .find(|item| item.id == write.id).map(|item| item.metadata))
+                    .map(|metadata| (write.id.clone(), metadata)))
                 .collect();
             if !names.is_empty() {
-                choices.push((batch.operation_id, name_list(&self.localization, &names)));
+                choices.push(InterruptedChange { id: batch.operation_id, names });
             }
         }
         Ok(choices)
@@ -117,7 +123,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 } else {base.as_ref().ok_or_else(||StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::TheInterruptedItemIsMissingItsLayout))?.content.clone()},
                 working:if let Some(working)=&write.working_json {Some(serde_json::from_str(working)?)} else {base.as_ref().and_then(|e|e.working.clone())},
             };
-            entity.metadata.name = message(&self.localization, layer_ui::MessageId::WORKSPACE_RECOVERED_NAME,
+            entity.metadata.name = message(&self.localization(), layer_ui::MessageId::WORKSPACE_RECOVERED_NAME,
                 &[("name", self.display_name(&write.id, &entity.metadata).chars().take(90).collect())])
                 .chars().take(100).collect();
             entity.metadata.builtin = false;
@@ -153,6 +159,28 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         match incoming {
             Some(id) => self.load(&id).await.map(Some),
             None => Ok(None),
+        }
+    }
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use super::*;
+    #[test]
+    fn interrupted_labels_reproject_names_without_changing_recovery_identity() {
+        let english = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let source = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, Platform::Web, 1000, &english).unwrap();
+        let change = InterruptedChange {
+            id: "operation-id".into(),
+            names: vec![Some((source.id.clone(), source.metadata.clone())), None],
+        };
+        let label = change.label(&english);
+        for language in layer_ui::UiLanguage::ALL.into_iter().filter(|language| *language != layer_ui::UiLanguage::English) {
+            let localization = layer_ui::Localizer::shared(language);
+            assert_ne!(change.label(&localization), label);
+            assert!(change.label(&localization).contains(&workspace_display_name(&source.id, &source.metadata, &localization)));
+            assert_eq!(change.id, "operation-id");
+            assert_eq!(change.names[0].as_ref().unwrap().1, source.metadata);
         }
     }
 }

@@ -7,17 +7,15 @@ use super::*;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_profile_library(request: *const c_char, bytes: *const u8, count: usize) -> *mut c_char {
     let result = (|| -> Result<serde_json::Value, String> {
-        let localization = control_localization()?;
+        let (localization, action) = control_request::<layer_ui::profile_library::ProfileLibraryAction>(unsafe { read_title(request) }?)?;
         // The storage adapter reads one extra byte to detect an oversized file.
         // Inspect turns that shared validation failure into an unavailable row.
-        if count > layer_ui::profile_library::PROFILE_READ_LIMIT + 1 { return Err(layer_ui::ColorFeatureError::ProfileReadLimit.profile_message(localization)); }
+        if count > layer_ui::profile_library::PROFILE_READ_LIMIT + 1 { return Err(layer_ui::ColorFeatureError::ProfileReadLimit.profile_message(&localization)); }
         let bytes = if count == 0 { &[] } else {
             if bytes.is_null() { return Err("Profile bytes are unavailable".into()); }
             unsafe { std::slice::from_raw_parts(bytes, count) }
         };
-        let action: layer_ui::profile_library::ProfileLibraryAction =
-            serde_json::from_str(unsafe { read_title(request) }?).map_err(|e| e.to_string())?;
-        action.execute_localized(bytes, localization).map_err(|reason| reason.profile_message(localization))
+        action.execute_localized(bytes, &localization).map_err(|reason| reason.profile_message(&localization))
     })();
     CString::new(result.unwrap_or_else(|error| serde_json::json!({"error":error})).to_string()).unwrap().into_raw()
 }
@@ -50,10 +48,9 @@ pub unsafe extern "C" fn capy_palette_file(request: *const c_char, bytes: *const
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_export_draft(recipe: *const c_char, action: *const c_char) -> *mut c_char {
     let result = (|| -> Result<serde_json::Value, String> {
-        let localization = control_localization()?;
+        let (localization, action) = control_request(unsafe { read_title(action) }?)?;
         let recipe: layer_ui::ExportRecipe = serde_json::from_str(unsafe { read_title(recipe) }?).map_err(|e| e.to_string())?;
-        let action = serde_json::from_str(unsafe { read_title(action) }?).map_err(|e| e.to_string())?;
-        let draft=recipe.draft_localized(action, localization);
+        let draft=recipe.draft_localized(action, &localization);
         serde_json::to_value(draft).map_err(|e| e.to_string())
     })();
     CString::new(result.unwrap_or_else(|error| serde_json::json!({"error":error})).to_string()).unwrap().into_raw()
@@ -66,7 +63,7 @@ pub unsafe extern "C" fn capy_export_draft(recipe: *const c_char, action: *const
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_export_presets(input: i32, output: i32, request: *const c_char, color: *const c_char) -> *mut c_char {
     let result = (|| -> Result<serde_json::Value, String> {
-        let localization = control_localization()?;
+        let (localization, request) = control_request(unsafe { read_title(request) }?)?;
         let mut library = if input < 0 { layer_ui::ExportPresets::default() } else {
             let file = ManuallyDrop::new(unsafe { File::from_raw_fd(input) });
             let mut bytes = Vec::new();
@@ -75,13 +72,12 @@ pub unsafe extern "C" fn capy_export_presets(input: i32, output: i32, request: *
             layer_ui::ExportPresets::restore(&bytes)
         };
         let color = serde_json::from_str(unsafe { read_title(color) }?).map_err(|e| e.to_string())?;
-        let action = serde_json::from_str(unsafe { read_title(request) }?).map_err(|e| e.to_string())?;
-        let mut view = library.operate(action, color).map_err(|reason| reason.preset_message(localization))?;
-        view.localize_names(color, localization);
+        let mut view = library.operate(request, color).map_err(|reason| reason.preset_message(&localization))?;
+        view.localize_names(color, &localization);
         if view.changed {
             if output < 0 { return Err("No export preferences output is open".into()); }
             let mut file = ManuallyDrop::new(unsafe { File::from_raw_fd(output) });
-            file.write_all(&library.encode().map_err(|reason| reason.preset_message(localization))?).map_err(|e| e.to_string())?;
+            file.write_all(&library.encode().map_err(|reason| reason.preset_message(&localization))?).map_err(|e| e.to_string())?;
         }
         serde_json::to_value(view).map_err(|e| e.to_string())
     })();

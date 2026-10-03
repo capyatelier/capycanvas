@@ -94,7 +94,7 @@ impl PreviewDialog {
         use adw::prelude::*;
         if let Some(view) = view {
             self.dialog.set_heading(Some(view.title));
-            self.number(&view, &w.localization).set_value(view.value);
+            self.number(&view, &w.localization()).set_value(view.value);
             if !self.shown.replace(true) {
                 w.window.add_css_class(Self::PREVIEW_CLASS);
                 self.dialog.present(Some(&w.window));

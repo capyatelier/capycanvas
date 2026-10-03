@@ -567,6 +567,10 @@ pub struct PreferencesState {
     pub capture: Option<ShortcutCapture>,
     pub error: Option<String>,
     #[serde(skip)]
+    error_source: Option<PreferenceErrorSource>,
+    #[serde(skip)]
+    capture_key: Option<KeyChord>,
+    #[serde(skip)]
     pub(crate) keymap_import: Option<crate::keymaps::KeymapImport>,
     #[serde(skip)]
     pub(crate) keymap_details: bool,
@@ -578,6 +582,50 @@ pub struct PreferencesState {
     /// The open pen button and whether it lists every kind of tool.
     #[serde(skip)]
     pub(crate) pen_editor: Option<(String, bool)>,
+}
+#[derive(Clone, Debug)]
+enum PreferenceErrorSource {
+    Message(MessageId),
+    KeymapImport(crate::keymaps::KeymapImportError),
+    Action(Box<PreferenceErrorAction>),
+}
+enum PreferenceEditError {
+    Localized(String),
+    KeymapImport(crate::keymaps::KeymapImportError),
+}
+impl From<String> for PreferenceEditError {
+    fn from(message: String) -> Self { Self::Localized(message) }
+}
+impl PreferenceEditError {
+    fn message(&self, localizer: &Localizer) -> String {
+        match self {
+            Self::Localized(message) => message.clone(),
+            Self::KeymapImport(reason) => reason.message(localizer),
+        }
+    }
+}
+#[derive(Clone, Debug)]
+struct PreferenceErrorAction {
+    action: PreferenceAction,
+    settings: Settings,
+    capture: Option<ShortcutCapture>,
+    editing_shortcut: Option<String>,
+    shortcut_page: crate::shortcut_page::ShortcutPageState,
+}
+impl PreferenceErrorSource {
+    fn message(&self, platform: Platform, localizer: &Localizer) -> Option<String> {
+        let source = match self {
+            Self::Message(id) => return Some(localizer.text(*id).to_string()),
+            Self::KeymapImport(reason) => return Some(reason.message(localizer)),
+            Self::Action(source) => source,
+        };
+        PreferencesState {
+            capture: source.capture.clone(),
+            editing_shortcut: source.editing_shortcut.clone(),
+            shortcut_page: source.shortcut_page.clone(),
+            ..Default::default()
+        }.try_edit(&mut source.settings.clone(), source.action.clone(), platform, localizer).err().map(|error| error.message(localizer))
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferencesView {
@@ -989,7 +1037,7 @@ impl Settings {
                     row(
                         Language,
                         &localizer.text(MessageId::SETTINGS_LANGUAGE),
-                        &localizer.text(MessageId::SETTINGS_LANGUAGE_RESTART),
+                        "",
                         PreferenceKind::Choice {
                             presentation: ChoicePresentation::Dropdown,
                             icons: Vec::new(),
@@ -1449,6 +1497,22 @@ fn reset_binding(settings: &mut Settings, id: &str, platform: Platform, localize
     Ok(())
 }
 impl PreferencesState {
+    pub(crate) fn set_error(&mut self, id: MessageId, localizer: &Localizer) {
+        self.error_source = Some(PreferenceErrorSource::Message(id));
+        self.error = Some(localizer.text(id).to_string());
+    }
+    pub(crate) fn set_localization(&mut self, settings: &Settings, platform: Platform, localizer: &Localizer) {
+        if let Some(source) = &self.error_source {
+            self.error = source.message(platform, localizer);
+        }
+        self.refresh_capture(settings, platform, localizer);
+        if let Some(key) = &self.shortcut_page.key {
+            self.shortcut_query = key.localized_label(platform, localizer);
+        }
+        if let Some(import) = &mut self.keymap_import {
+            import.set_localization(localizer);
+        }
+    }
     pub(crate) fn view(
         &self,
         settings: &Settings,
@@ -1659,8 +1723,37 @@ impl PreferencesState {
         action: PreferenceAction,
         platform: Platform,
         localizer: &Localizer,
-    ) {
-        self.error = self.try_edit(settings, action, platform, localizer).err();
+    ) -> bool {
+        let language = matches!(action, PreferenceAction::Edit { id: PreferenceId::Language, .. } | PreferenceAction::Reset { id: PreferenceId::Language });
+        let error = self.try_edit(settings, action.clone(), platform, localizer).err();
+        let accepted = error.is_none();
+        if error.is_some() || !language {
+            self.error_source = error.as_ref().map(|reason| match reason {
+                PreferenceEditError::KeymapImport(reason) => PreferenceErrorSource::KeymapImport(reason.clone()),
+                PreferenceEditError::Localized(_) => match action {
+                    PreferenceAction::Search { .. } | PreferenceAction::SearchShortcuts { .. } | PreferenceAction::SearchActionPicker { .. } => PreferenceErrorSource::Message(MessageId::SETTINGS_SEARCH_IS_TOO_LONG),
+                    PreferenceAction::Reveal { .. } => PreferenceErrorSource::Message(MessageId::SETTINGS_THIS_SETTING_ISN_T_AVAILABLE_ON_THIS_DEVICE),
+                    PreferenceAction::ShortcutCategory { .. } => PreferenceErrorSource::Message(MessageId::SETTINGS_UNKNOWN_SHORTCUT_CATEGORY),
+                    PreferenceAction::OpenActionPicker { .. } | PreferenceAction::ResetTrigger { .. } => PreferenceErrorSource::Message(MessageId::SETTINGS_UNKNOWN_GESTURE_OR_PEN_BUTTON),
+                    PreferenceAction::EditPenButton { .. } | PreferenceAction::OpenPenButtonPicker { .. } => PreferenceErrorSource::Message(MessageId::SETTINGS_UNKNOWN_PEN_BUTTON),
+                    PreferenceAction::EditModifierKey { .. } | PreferenceAction::OpenModifierPicker { .. } | PreferenceAction::ResetModifierKey { .. } => PreferenceErrorSource::Message(MessageId::SETTINGS_UNKNOWN_MODIFIER_KEY),
+                    PreferenceAction::ConfirmKeymapImport => PreferenceErrorSource::Message(MessageId::SETTINGS_CHOOSE_A_KEYMAP_FILE_FIRST),
+                    PreferenceAction::ExportKeymap | PreferenceAction::ChooseKeymapFile => PreferenceErrorSource::Message(MessageId::SETTINGS_KEYMAP_FILES_NEED_THE_APP_S_FILE_CHOOSER),
+                    action => PreferenceErrorSource::Action(Box::new(PreferenceErrorAction {
+                        action,
+                        settings: settings.clone(),
+                        capture: self.capture.clone(),
+                        editing_shortcut: self.editing_shortcut.clone(),
+                        shortcut_page: self.shortcut_page.clone(),
+                    })),
+                },
+            });
+            self.error = error.map(|reason| reason.message(localizer));
+        }
+        if self.capture.is_none() {
+            self.capture_key = None;
+        }
+        accepted
     }
     fn try_edit(
         &mut self,
@@ -1668,7 +1761,7 @@ impl PreferencesState {
         action: PreferenceAction,
         platform: Platform,
         localizer: &Localizer,
-    ) -> Result<(), String> {
+    ) -> Result<(), PreferenceEditError> {
         match action {
             PreferenceAction::Reveal { id } => {
                 let page = settings
@@ -1693,7 +1786,7 @@ impl PreferencesState {
             }
             PreferenceAction::Search { query } => {
                 if query.len() > 256 {
-                    return Err(localizer.text(MessageId::SETTINGS_SEARCH_IS_TOO_LONG).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_SEARCH_IS_TOO_LONG).to_string()));
                 }
                 self.query = query;
                 self.searching = true;
@@ -1706,7 +1799,7 @@ impl PreferencesState {
             }
             PreferenceAction::SearchShortcuts { query } => {
                 if query.len() > 256 {
-                    return Err(localizer.text(MessageId::SETTINGS_SEARCH_IS_TOO_LONG).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_SEARCH_IS_TOO_LONG).to_string()));
                 }
                 if query != self.shortcut_query {
                     self.shortcut_page.key = None;
@@ -1723,7 +1816,7 @@ impl PreferencesState {
                     .iter()
                     .any(|(d, _)| d.id == id)
                 {
-                    return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_SHORTCUT_ACTION).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_SHORTCUT_ACTION).to_string()));
                 }
                 self.page = SettingsPage::Shortcuts;
                 self.query.clear();
@@ -1738,11 +1831,11 @@ impl PreferencesState {
             PreferenceAction::RemoveShortcut { id, index } => {
                 let target = crate::shortcuts::hold_target(&id).unwrap_or_else(|| id.clone());
                 if self.editing_shortcut.as_ref() != Some(&target) {
-                    return Err(localizer.text(MessageId::SETTINGS_SHORTCUT_EDITOR_IS_NOT_OPEN).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_SHORTCUT_EDITOR_IS_NOT_OPEN).to_string()));
                 }
                 let mut keys = settings.keys(&id);
                 if index >= keys.len() {
-                    return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_SHORTCUT_BINDING).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_SHORTCUT_BINDING).to_string()));
                 }
                 keys.remove(index);
                 settings.shortcuts.insert(id, keys);
@@ -1753,9 +1846,10 @@ impl PreferencesState {
                     .find(|(d, _)| d.id == id)
                     .ok_or(localizer.text(MessageId::SETTINGS_UNKNOWN_SHORTCUT_ACTION).to_string())?;
                 if settings.keys(&id).len() >= crate::shortcuts::MAX_SHORTCUTS {
-                    return Err(localizer.text(MessageId::SETTINGS_REMOVE_A_SHORTCUT_BEFORE_ADDING_ANOTHER).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_REMOVE_A_SHORTCUT_BEFORE_ADDING_ANOTHER).to_string()));
                 }
                 self.editing_shortcut = Some(crate::shortcuts::hold_target(&id).unwrap_or_else(|| id.clone()));
+                self.capture_key = None;
                 self.capture = Some(ShortcutCapture {
                     id,
                     label: definition.label.resolve(localizer),
@@ -1780,23 +1874,23 @@ impl PreferencesState {
                     .ok_or(localizer.text(MessageId::SETTINGS_PRESS_A_KEY_COMBINATION_FIRST).to_string())?;
                 let modifier = capture.id == crate::shortcuts::MODIFIER_CAPTURE;
                 if modifier && !chord.holdable() {
-                    return Err(localizer.text(MessageId::SETTINGS_CHOOSE_ANOTHER_KEY_FOR_THIS_MODIFIER_KEY).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_CHOOSE_ANOTHER_KEY_FOR_THIS_MODIFIER_KEY).to_string()));
                 } else if !modifier {
                     chord.validate_for_localized(settings.held_shortcut(&capture.id, platform), localizer)?;
                 }
                 if !chord.available(platform) {
-                    return Err(localizer.text(MessageId::SETTINGS_THIS_SHORTCUT_IS_RESERVED_BY_THE_BROWSER).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_THIS_SHORTCUT_IS_RESERVED_BY_THE_BROWSER).to_string()));
                 }
                 let mut keys = settings.keys(&capture.id);
                 if !modifier && keys.contains(&chord) {
-                    return Err(localizer.text(MessageId::SETTINGS_THIS_SHORTCUT_IS_ALREADY_ASSIGNED_TO_THIS_ACTION).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_THIS_SHORTCUT_IS_ALREADY_ASSIGNED_TO_THIS_ACTION).to_string()));
                 }
                 if !modifier && keys.len() >= crate::shortcuts::MAX_SHORTCUTS {
-                    return Err(localizer.text(MessageId::SETTINGS_REMOVE_A_SHORTCUT_BEFORE_ADDING_ANOTHER).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_REMOVE_A_SHORTCUT_BEFORE_ADDING_ANOTHER).to_string()));
                 }
                 let conflicts = settings.conflicts(&capture.id, &chord, platform);
                 if let Some(conflict) = conflicts.first().filter(|_| !replace) {
-                    return Err({ let mut args = crate::localization::FluentArgs::new(); args.set("action", conflict.label.resolve(localizer)); localizer.format(MessageId::SETTINGS_ALREADY_ASSIGNED, &args) });
+                    return Err(PreferenceEditError::Localized({ let mut args = crate::localization::FluentArgs::new(); args.set("action", conflict.label.resolve(localizer)); localizer.format(MessageId::SETTINGS_ALREADY_ASSIGNED, &args) }));
                 }
                 for conflict in conflicts {
                     if conflict.id.starts_with(crate::shortcuts::MODIFIER_PREFIX) {
@@ -1835,7 +1929,7 @@ impl PreferencesState {
             }
             PreferenceAction::EditModifierKey { key } => {
                 if !settings.hold_keys(platform).iter().any(|h| h.key == key) {
-                    return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_MODIFIER_KEY).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_MODIFIER_KEY).to_string()));
                 }
                 self.page = SettingsPage::Shortcuts;
                 self.capture = None;
@@ -1851,6 +1945,7 @@ impl PreferencesState {
             PreferenceAction::AddModifierKey => {
                 self.editing_shortcut = None;
                 self.modifier_editor = None;
+                self.capture_key = None;
                 self.capture = Some(ShortcutCapture {
                     id: crate::shortcuts::MODIFIER_CAPTURE.into(),
                     label: localizer.text(MessageId::SETTINGS_NEW_MODIFIER_KEY).to_string(),
@@ -1871,7 +1966,7 @@ impl PreferencesState {
             }
             PreferenceAction::OpenModifierPicker { key, category } => {
                 if !settings.hold_keys(platform).iter().any(|h| h.key == key) {
-                    return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_MODIFIER_KEY).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_MODIFIER_KEY).to_string()));
                 }
                 self.shortcut_page.modifier_picker = Some((key, category));
                 self.shortcut_page.picker = Some((crate::shortcuts::MODIFIER_CAPTURE.into(), String::new()));
@@ -1891,13 +1986,13 @@ impl PreferencesState {
                         table.remove(index);
                         self.modifier_editor = None;
                     }
-                    (None, _) => return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_MODIFIER_KEY).to_string()),
+                    (None, _) => return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_MODIFIER_KEY).to_string())),
                 }
                 crate::shortcut_page::store_modifiers(settings, platform, table);
             }
             PreferenceAction::SelectKeymap { id } => crate::keymaps::select(settings, &id)?,
             PreferenceAction::ImportKeymap { text } => {
-                self.keymap_import = Some(crate::keymaps::import(settings, &text, platform, localizer)?);
+                self.keymap_import = Some(crate::keymaps::import_typed(settings, &text, platform, localizer).map_err(PreferenceEditError::KeymapImport)?);
             }
             PreferenceAction::ConfirmKeymapImport => {
                 *settings = self.keymap_import.take().ok_or(localizer.text(MessageId::SETTINGS_CHOOSE_A_KEYMAP_FILE_FIRST).to_string())?.settings;
@@ -1909,7 +2004,7 @@ impl PreferencesState {
                 if id.as_deref().is_some_and(|id| {
                     id != crate::shortcut_page::MODIFIER_SECTION && !crate::shortcuts::SHORTCUT_SECTIONS.iter().any(|section| section.id() == id)
                 }) {
-                    return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_SHORTCUT_CATEGORY).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_SHORTCUT_CATEGORY).to_string()));
                 }
                 self.shortcut_page.category = id;
             }
@@ -1923,26 +2018,28 @@ impl PreferencesState {
             PreferenceAction::ShortcutShow { show } => self.shortcut_page.show = show,
             PreferenceAction::OpenActionPicker { trigger } => {
                 if !crate::GESTURE_TRIGGERS.iter().any(|t| t.id == trigger) {
-                    return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_GESTURE_OR_PEN_BUTTON).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_GESTURE_OR_PEN_BUTTON).to_string()));
                 }
                 self.shortcut_page.picker = Some((trigger, String::new()));
             }
             PreferenceAction::SearchActionPicker { query } => {
                 if query.len() > 256 {
-                    return Err(localizer.text(MessageId::SETTINGS_SEARCH_IS_TOO_LONG).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_SEARCH_IS_TOO_LONG).to_string()));
                 }
                 if let Some((_, current)) = &mut self.shortcut_page.picker {
                     *current = query;
                 }
             }
             PreferenceAction::ChooseAction { id } => {
-                if let Some((trigger, category)) = self.shortcut_page.pen_picker.take() {
+                if let Some((trigger, category)) = self.shortcut_page.pen_picker.clone() {
                     crate::shortcut_page::set_pen_button_localized(settings, platform, &trigger, category, &id, localizer)?;
+                    self.shortcut_page.pen_picker = None;
                     self.shortcut_page.picker = None;
                     return Ok(());
                 }
-                if let Some((key, category)) = self.shortcut_page.modifier_picker.take() {
+                if let Some((key, category)) = self.shortcut_page.modifier_picker.clone() {
                     crate::shortcut_page::set_modifier_localized(settings, platform, &key, category, &id, localizer)?;
+                    self.shortcut_page.modifier_picker = None;
                     self.shortcut_page.picker = None;
                     return Ok(());
                 }
@@ -1952,7 +2049,7 @@ impl PreferencesState {
             }
             PreferenceAction::ResetTrigger { trigger } => {
                 if !crate::GESTURE_TRIGGERS.iter().any(|t| t.id == trigger) {
-                    return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_GESTURE_OR_PEN_BUTTON).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_GESTURE_OR_PEN_BUTTON).to_string()));
                 }
                 settings.gestures.remove(&trigger);
                 settings.pen_buttons.remove(&trigger);
@@ -1965,7 +2062,7 @@ impl PreferencesState {
             }
             PreferenceAction::EditPenButton { trigger } => {
                 if !GESTURE_TRIGGERS.iter().any(|t| t.id == trigger && t.held) {
-                    return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_PEN_BUTTON).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_PEN_BUTTON).to_string()));
                 }
                 self.page = SettingsPage::Input;
                 self.pen_editor = Some((trigger, false));
@@ -1982,20 +2079,21 @@ impl PreferencesState {
             }
             PreferenceAction::OpenPenButtonPicker { trigger, category } => {
                 if !GESTURE_TRIGGERS.iter().any(|t| t.id == trigger && t.held) {
-                    return Err(localizer.text(MessageId::SETTINGS_UNKNOWN_PEN_BUTTON).to_string());
+                    return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_UNKNOWN_PEN_BUTTON).to_string()));
                 }
                 self.shortcut_page.pen_picker = Some((trigger.clone(), category));
                 self.shortcut_page.modifier_picker = None;
                 self.shortcut_page.picker = Some((trigger, String::new()));
             }
             PreferenceAction::ExportKeymap | PreferenceAction::ChooseKeymapFile => {
-                return Err(localizer.text(MessageId::SETTINGS_KEYMAP_FILES_NEED_THE_APP_S_FILE_CHOOSER).to_string());
+                return Err(PreferenceEditError::Localized(localizer.text(MessageId::SETTINGS_KEYMAP_FILES_NEED_THE_APP_S_FILE_CHOOSER).to_string()));
             }
         }
         Ok(())
     }
     pub(crate) fn record(&mut self, settings: &Settings, chord: KeyChord, platform: Platform, localizer: &Localizer) {
         self.error = None;
+        self.error_source = None;
         let modifier = self.capture.as_ref().is_some_and(|c| c.id == crate::shortcuts::MODIFIER_CAPTURE);
         let held = self.capture.as_ref().is_some_and(|c| settings.held_shortcut(&c.id, platform));
         if KeyChord::modifier(&chord.key)
@@ -2006,9 +2104,26 @@ impl PreferencesState {
         }
         if chord.key == "escape" {
             self.capture = None;
+            self.capture_key = None;
             return;
         }
+        self.capture_key = Some(chord);
+        self.refresh_capture(settings, platform, localizer);
+    }
+    fn refresh_capture(&mut self, settings: &Settings, platform: Platform, localizer: &Localizer) {
         if let Some(capture) = &mut self.capture {
+            let modifier = capture.id == crate::shortcuts::MODIFIER_CAPTURE;
+            capture.label = if modifier {
+                localizer.text(MessageId::SETTINGS_NEW_MODIFIER_KEY).to_string()
+            } else {
+                crate::shortcuts::definitions(platform).into_iter().find(|(d, _)| d.id == capture.id)
+                    .map_or_else(|| capture.label.clone(), |(d, _)| d.label.resolve(localizer))
+            };
+            let Some(chord) = self.capture_key.as_ref().or(capture.chord.as_ref()).cloned() else {
+                capture.shortcut = localizer.text(if modifier { MessageId::SETTINGS_PRESS_A_KEY_OR_BUTTON } else { MessageId::SETTINGS_PRESS_A_NEW_KEY_COMBINATION }).to_string();
+                return;
+            };
+            let held = settings.held_shortcut(&capture.id, platform);
             let valid = if modifier {
                 (!chord.holdable()).then(|| localizer.text(MessageId::SETTINGS_CHOOSE_ANOTHER_KEY_FOR_THIS_MODIFIER_KEY).to_string())
             } else {
@@ -2456,6 +2571,7 @@ mod copy_tests {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let settings = Settings::default();
             for id in [
+                PreferenceId::Language,
                 PreferenceId::Theme,
                 PreferenceId::DarkBase,
                 PreferenceId::LightBase,
@@ -2602,6 +2718,172 @@ mod restore_tests {
 #[cfg(test)]
 mod localization_tests {
     use super::*;
+
+    #[test]
+    fn refused_keymap_language_refresh_retains_reason_and_existing_candidate() {
+        let english = Localizer::shared(UiLanguage::English);
+        let mut settings = Settings::default();
+        let mut state = PreferencesState::default();
+        let text = crate::keymaps::export(&settings);
+        assert!(state.edit(&mut settings, PreferenceAction::ImportKeymap { text }, Platform::Gtk, &english));
+        let candidate = state.keymap_import.as_ref().unwrap().settings.clone();
+        let before = settings.clone();
+        for text in [format!("{}{{broken 日本語", " ".repeat(1024 * 1024)), r#"{"format":"unsupported","version":1}"#.into(), r#"{"format":"capycanvas-keymap","version":999}"#.into()] {
+            assert!(!state.edit(&mut settings, PreferenceAction::ImportKeymap { text }, Platform::Gtk, &english));
+            let Some(PreferenceErrorSource::KeymapImport(reason)) = state.error_source.clone() else { panic!("keymap refusal must retain its reason"); };
+            for &language in SHIPPED_LANGUAGES {
+                let localizer = Localizer::shared(language);
+                state.set_localization(&settings, Platform::Gtk, &localizer);
+                assert_eq!(state.error.as_ref(), Some(&reason.message(&localizer)));
+                assert_eq!(state.keymap_import.as_ref().unwrap().settings, candidate);
+                assert_eq!(settings, before);
+            }
+        }
+    }
+
+    #[test]
+    fn language_refresh_preserves_validation_and_search_drafts() {
+        let english = Localizer::shared(UiLanguage::English);
+        let mut state = PreferencesState {
+            page: SettingsPage::Input,
+            reveal: Some(PreferenceId::Pressure),
+            query: "Literal 日本語 🖌".into(),
+            searching: true,
+            search_focus: 12,
+            shortcut_query: "User text 日本語".into(),
+            ..Default::default()
+        };
+        let mut settings = Settings::default();
+        let action = PreferenceAction::Edit { id: PreferenceId::Pressure, value: PreferenceValue::Text("１．５".into()) };
+        state.edit(&mut settings, action.clone(), Platform::Gtk, &english);
+        let error = state.error.clone().unwrap();
+        let before = settings.clone();
+        for language in [UiLanguage::Japanese, UiLanguage::Korean, UiLanguage::English] {
+            let l = Localizer::shared(language);
+            state.set_localization(&settings, Platform::Gtk, &l);
+            let mut expected = PreferencesState::default();
+            expected.edit(&mut settings.clone(), action.clone(), Platform::Gtk, &l);
+            assert_eq!(state.error, expected.error);
+            assert_eq!(settings, before);
+            assert_eq!(state.page, SettingsPage::Input);
+            assert_eq!(state.reveal, Some(PreferenceId::Pressure));
+            assert_eq!(state.query, "Literal 日本語 🖌");
+            assert!(state.searching);
+            assert_eq!(state.search_focus, 12);
+            assert_eq!(state.shortcut_query, "User text 日本語");
+        }
+        assert!(state.edit(&mut settings, PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(2) }, Platform::Gtk, &english));
+        assert_eq!(state.error.as_ref(), Some(&error));
+        state.set_error(MessageId::SETTINGS_NATIVE_PREDICTION_UNAVAILABLE, &english);
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        state.set_localization(&settings, Platform::Gtk, &japanese);
+        assert_eq!(state.error.as_ref().unwrap(), &japanese.text(MessageId::SETTINGS_NATIVE_PREDICTION_UNAVAILABLE).to_string());
+        let key = KeyChord::new("enter", Default::default());
+        state.edit(&mut settings, PreferenceAction::SearchShortcutKey { chord: key.clone() }, Platform::Gtk, &english);
+        state.shortcut_page.context = Some(ToolCategory::Drawing);
+        state.shortcut_page.show = crate::ShortcutShow::Customized;
+        state.set_localization(&settings, Platform::Gtk, &japanese);
+        assert_eq!(state.shortcut_query, key.localized_label(Platform::Gtk, &japanese));
+        assert_eq!(state.shortcut_page.key, Some(key));
+        assert_eq!(state.shortcut_page.context, Some(ToolCategory::Drawing));
+        assert_eq!(state.shortcut_page.show, crate::ShortcutShow::Customized);
+    }
+
+    #[test]
+    fn language_refresh_keeps_shortcut_conflicts_and_confirmation() {
+        let english = Localizer::shared(UiLanguage::English);
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows] {
+            let mut settings = Settings::default();
+            let mut state = PreferencesState::default();
+            state.edit(&mut settings, PreferenceAction::BeginShortcut { id: CommandId::Redo.shortcut_id() }, platform, &english);
+            let chord = settings.keys(&CommandId::Undo.shortcut_id()).first().unwrap().clone();
+            state.record(&settings, chord.clone(), platform, &english);
+            state.edit(&mut settings, PreferenceAction::ConfirmShortcut { replace: false }, platform, &english);
+            let before = settings.clone();
+            for &language in SHIPPED_LANGUAGES {
+                let l = Localizer::shared(language);
+                state.set_localization(&settings, platform, &l);
+                let capture = state.capture.as_ref().unwrap();
+                assert_eq!(capture.chord.as_ref(), Some(&chord));
+                assert_eq!(capture.label, CommandId::Redo.localized_label(&l).to_string());
+                assert_eq!(capture.conflict.as_ref().unwrap(), &CommandId::Undo.localized_label(&l).to_string());
+                let view = state.view(&settings, platform, true, None, &l);
+                assert_eq!(view.capture.unwrap().notice, state.error.clone().unwrap());
+                assert_eq!(settings, before);
+            }
+            state.edit(&mut settings, PreferenceAction::ConfirmShortcut { replace: true }, platform, &english);
+            assert!(state.error.is_none());
+            assert!(state.capture.is_none());
+            assert!(settings.keys(&CommandId::Redo.shortcut_id()).contains(&chord));
+            assert!(!settings.keys(&CommandId::Undo.shortcut_id()).contains(&chord));
+        }
+    }
+
+    #[test]
+    fn language_refresh_keeps_rejected_keys_and_enter_escape_behavior() {
+        let english = Localizer::shared(UiLanguage::English);
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        let mut settings = Settings::default();
+        let mut state = PreferencesState::default();
+        let id = CommandId::Undo.shortcut_id();
+        state.edit(&mut settings, PreferenceAction::BeginShortcut { id: id.clone() }, Platform::Web, &english);
+        state.set_localization(&settings, Platform::Web, &japanese);
+        assert_eq!(state.capture.as_ref().unwrap().shortcut, japanese.text(MessageId::SETTINGS_PRESS_A_NEW_KEY_COMBINATION).to_string());
+        let reserved = KeyChord::new("w", crate::Modifiers { command: true, ..Default::default() });
+        state.record(&settings, reserved.clone(), Platform::Web, &english);
+        state.set_localization(&settings, Platform::Web, &japanese);
+        let capture = state.capture.as_ref().unwrap();
+        assert!(capture.chord.is_none());
+        assert_eq!(capture.error.as_ref().unwrap(), &japanese.text(MessageId::SETTINGS_THIS_SHORTCUT_IS_RESERVED_BY_THE_BROWSER).to_string());
+        assert_eq!(capture.shortcut, reserved.localized_label(Platform::Web, &japanese));
+        let enter = KeyChord::new("enter", Default::default());
+        state.record(&settings, enter.clone(), Platform::Web, &japanese);
+        state.set_localization(&settings, Platform::Web, &english);
+        assert_eq!(state.capture.as_ref().unwrap().chord.as_ref(), Some(&enter));
+        state.edit(&mut settings, PreferenceAction::ConfirmShortcut { replace: true }, Platform::Web, &english);
+        assert!(settings.keys(&id).contains(&enter));
+        state.edit(&mut settings, PreferenceAction::BeginShortcut { id }, Platform::Web, &english);
+        state.set_localization(&settings, Platform::Web, &japanese);
+        state.record(&settings, KeyChord::new("escape", Default::default()), Platform::Web, &japanese);
+        assert!(state.capture.is_none());
+    }
+
+    #[test]
+    fn language_refresh_preserves_refused_picker_and_modifier_drafts() {
+        let english = Localizer::shared(UiLanguage::English);
+        let japanese = Localizer::shared(UiLanguage::Japanese);
+        let mut settings = Settings::default();
+        let mut state = PreferencesState::default();
+        let action = PreferenceAction::ChooseAction { id: "literal unknown action 日本語".into() };
+        for pen in [true, false] {
+            if pen {
+                state.edit(&mut settings, PreferenceAction::OpenPenButtonPicker { trigger: "pen.button.primary".into(), category: Some(ToolCategory::Drawing) }, Platform::Gtk, &english);
+            } else {
+                let key = settings.hold_keys(Platform::Gtk).first().unwrap().key.clone();
+                state.edit(&mut settings, PreferenceAction::OpenModifierPicker { key, category: Some(ToolCategory::Drawing) }, Platform::Gtk, &english);
+            }
+            state.edit(&mut settings, PreferenceAction::SearchActionPicker { query: "literal 日本語".into() }, Platform::Gtk, &english);
+            state.edit(&mut settings, action.clone(), Platform::Gtk, &english);
+            assert!(state.error.is_some());
+            let picker = state.shortcut_page.picker.clone();
+            let pen_picker = state.shortcut_page.pen_picker.clone();
+            let modifier_picker = state.shortcut_page.modifier_picker.clone();
+            state.set_localization(&settings, Platform::Gtk, &japanese);
+            assert_eq!(state.shortcut_page.picker, picker);
+            assert_eq!(state.shortcut_page.pen_picker, pen_picker);
+            assert_eq!(state.shortcut_page.modifier_picker, modifier_picker);
+            state.edit(&mut settings, PreferenceAction::CloseActionPicker, Platform::Gtk, &japanese);
+        }
+        state.edit(&mut settings, PreferenceAction::AddModifierKey, Platform::Gtk, &english);
+        let key = settings.hold_keys(Platform::Gtk).first().unwrap().key.clone();
+        state.record(&settings, key.clone(), Platform::Gtk, &english);
+        state.set_localization(&settings, Platform::Gtk, &japanese);
+        let capture = state.capture.as_ref().unwrap();
+        assert!(capture.existing);
+        assert_eq!(capture.chord.as_ref(), Some(&key));
+        assert_eq!(capture.label, japanese.text(MessageId::SETTINGS_NEW_MODIFIER_KEY).to_string());
+        assert_eq!(state.view(&settings, Platform::Gtk, true, None, &japanese).capture.unwrap().notice, japanese.text(MessageId::SETTINGS_ALREADY_A_MODIFIER_KEY).to_string());
+    }
 
     #[test]
     fn language_preferences_restore_only_shipped_choices() {

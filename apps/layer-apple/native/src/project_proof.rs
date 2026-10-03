@@ -33,6 +33,7 @@ pub unsafe extern "C" fn capy_apple_proof_task(
             session.state().document_file.epoch,
             session.engine().document().revision,
             None,
+            session.localization().clone(),
         ))
     })
     .unwrap_or(std::ptr::null_mut())

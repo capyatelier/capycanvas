@@ -4,6 +4,17 @@ use super::place_source::snapshot;
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 
+trait NumericEdit {
+    fn edit_value(&self, value: f64);
+}
+impl NumericEdit for crate::number_control::NumberControl {
+    fn edit_value(&self, value: f64) {
+        descendant::<gtk::Stack>(self).unwrap().set_visible_child_name("entry");
+        descendant::<gtk::Entry>(self).unwrap().set_text(&value.to_string());
+        assert!(self.commit_text());
+    }
+}
+
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 #[allow(deprecated)]
@@ -96,17 +107,17 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
         size.set_selected(1);
         let dialog = w.window.visible_dialog().unwrap();
         for (name, value) in ["export-width", "export-height"].into_iter().zip(bounds) {
-            let row = named::<adw::SpinRow>(dialog.upcast_ref(), name);
+            let row = named::<crate::number_control::NumberControl>(dialog.upcast_ref(), name);
             assert!(row.is_visible());
-            row.set_value(f64::from(value));
+            row.edit_value(f64::from(value));
         }
         let allow = named::<adw::SwitchRow>(dialog.upcast_ref(), "export-enlarge");
         allow.set_active(enlarge);
         // Physical density remains independent of delivery pixel dimensions.
         combo(&w, "export-resolution").set_selected(format);
         if format == 1 {
-            named::<adw::SpinRow>(dialog.upcast_ref(), "export-ppi")
-                .set_value(300.);
+            named::<crate::number_control::NumberControl>(dialog.upcast_ref(), "export-ppi")
+                .edit_value(300.);
         }
         let note = named::<gtk::Label>(dialog.upcast_ref(), "export-size-description");
         assert!(
@@ -150,8 +161,8 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
             format == 2
         );
         if format == 2 {
-            named::<adw::SpinRow>(dialog.upcast_ref(), "export-jpeg-quality")
-                .set_value(55.);
+            named::<crate::number_control::NumberControl>(dialog.upcast_ref(), "export-jpeg-quality")
+                .edit_value(55.);
             pump(50);
             assert_eq!(
                 after
@@ -388,14 +399,14 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     assert_eq!(combo(&w, "export-resolution").selected(), 1);
     assert_eq!(
         widget("export-ppi")
-            .downcast::<adw::SpinRow>()
+            .downcast::<crate::number_control::NumberControl>()
             .unwrap()
             .value(),
         240.
     );
     assert_eq!(
         widget("export-width")
-            .downcast::<adw::SpinRow>()
+            .downcast::<crate::number_control::NumberControl>()
             .unwrap()
             .value(),
         37.
@@ -410,9 +421,9 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     wait_saved();
     assert_eq!(combo(&w, "export-preset").selected(), 5);
     widget("export-width")
-        .downcast::<adw::SpinRow>()
+        .downcast::<crate::number_control::NumberControl>()
         .unwrap()
-        .set_value(21.);
+        .edit_value(21.);
     assert_eq!(combo(&w, "export-preset").selected(), 3);
     press("export-preset-update");
     wait_saved();
@@ -438,7 +449,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     combo(&w, "export-preset").set_selected(5);
     assert_eq!(
         widget("export-width")
-            .downcast::<adw::SpinRow>()
+            .downcast::<crate::number_control::NumberControl>()
             .unwrap()
             .value(),
         21.
@@ -459,9 +470,9 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     combo(&w, "export-size").set_selected(1);
     for name in ["export-width", "export-height"] {
         widget(name)
-            .downcast::<adw::SpinRow>()
+            .downcast::<crate::number_control::NumberControl>()
             .unwrap()
-            .set_value(31.);
+            .edit_value(31.);
     }
     response(&w, "export");
     let file = chooser();
@@ -561,7 +572,7 @@ fn native_export_webp_to_a_prechosen_file() {
     let size = combo(&w, "export-size");
     size.set_selected(1);
     for name in ["export-width", "export-height"] {
-        widget(name).downcast::<adw::SpinRow>().unwrap().set_value(20000.);
+        widget(name).downcast::<crate::number_control::NumberControl>().unwrap().edit_value(20000.);
     }
     widget("export-enlarge").downcast::<adw::SwitchRow>().unwrap().set_active(true);
     pump(100);

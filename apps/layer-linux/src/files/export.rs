@@ -136,6 +136,17 @@ fn choice(title: &str, name: &str, values: &[&str]) -> adw::ComboRow {
     row
 }
 
+fn relabel_choice(row: &adw::ComboRow, title: &str, values: &[&str]) {
+    let selected = row.selected();
+    let frozen = row.freeze_notify();
+    row.set_title(title);
+    if let Some(model) = row.model().and_downcast::<gtk::StringList>() {
+        model.splice(0, model.n_items(), values);
+    }
+    row.set_selected(selected);
+    drop(frozen);
+}
+
 struct Choice {
     recipe: ExportRecipe,
     destination: usize,
@@ -143,11 +154,12 @@ struct Choice {
 }
 
 async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<Option<Choice>, String> {
-    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::ExportCopy::new(&w.localization));
-    let localization = w.localization.clone();
     let document = snapshot.project.document.color;
     let master_resolution = snapshot.project.document.resolution;
-    let library = Rc::new(std::cell::RefCell::new(presets::load(document, &w.localization).await?));
+    let library = Rc::new(std::cell::RefCell::new(presets::load(document).await.map_err(|reason| reason.preset_message(&w.localization()))?));
+    let localization = w.localization();
+    let copy = layer_ui::color_feature_copy::ExportCopy::new(&localization);
+    let updating = Rc::new(std::cell::Cell::new(false));
     let destination = Rc::new(std::cell::Cell::new(0usize));
     let extent = [
         snapshot.project.document.width,
@@ -245,7 +257,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         }
     });
     let refresh_size: Rc<dyn Fn()> = Rc::new({
-        let copy = copy.clone(); let localization = localization.clone();
+        let workspace = Rc::downgrade(w);
         let size_note = size_note.downgrade();
         let size_link = size_link.downgrade();
         let output_size = output_size.clone();
@@ -254,6 +266,9 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         let dimensions = dimensions.each_ref().map(|row| row.downgrade());
         let enlarge = enlarge.downgrade();
         move || {
+            let Some(w) = workspace.upgrade() else { return; };
+            let localization = w.localization();
+            let copy = layer_ui::color_feature_copy::ExportCopy::new(&localization);
             let Some(size_note) = size_note.upgrade() else {
                 return;
             };
@@ -345,6 +360,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     let space = profile.row.clone();
     color_group.add(&space);
     let selected_profile = profile.selected.clone();
+    let selected_profile_typed = profile.selected_typed.clone();
     let depth = combo(
         &color_group,
         copy.depth.as_ref(),
@@ -362,9 +378,10 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         #[weak] background, #[strong] backgrounds, #[upgrade_or] ExportBackground::Preserve,
         move || backgrounds.borrow().get(background.selected() as usize).copied().unwrap_or(ExportBackground::Preserve)
     ));
-    let apply_background: Rc<dyn Fn(&layer_ui::ExportDraft)> = Rc::new(glib::clone!( #[strong] copy,
+    let apply_background: Rc<dyn Fn(&layer_ui::ExportDraft)> = Rc::new(glib::clone!( #[weak] w,
         #[weak] background, #[strong] backgrounds,
         move |draft: &layer_ui::ExportDraft| {
+            let copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization());
             if *backgrounds.borrow() != draft.backgrounds {
                 *backgrounds.borrow_mut() = draft.backgrounds.clone();
                 let names: Vec<_> = draft.backgrounds.iter().map(|b| match b {
@@ -432,7 +449,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             intent.set_selected(match proof.conversion.intent {RenderingIntent::RelativeColorimetric=>0,RenderingIntent::Perceptual=>1,RenderingIntent::Saturation=>2,RenderingIntent::AbsoluteColorimetric=>3});
             choose(proof.profile.clone(),proof.name.clone());
         }));
-        space.connect_subtitle_notify(glib::clone!(#[weak] print_delivery,#[strong] selected_profile,move |_|print_delivery.set_sensitive(selected_profile().is_ok())));
+        profile.connect_changed(glib::clone!(#[weak] print_delivery,#[strong] selected_profile,move ||print_delivery.set_sensitive(selected_profile().is_ok())));
     }
     let dither = adw::SwitchRow::builder()
         .title(copy.reduce_banding.as_ref())
@@ -454,7 +471,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         .visible(false)
         .build();
     jpeg_hint.add_css_class("dim-label");
-    format.connect_selected_notify(glib::clone!( #[strong] localization,
+    format.connect_selected_notify(glib::clone!( #[weak] w, #[strong] updating,
         #[weak]
         depth,
         #[weak]
@@ -463,6 +480,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         jpeg_hint,
         #[strong] read_background, #[strong] apply_background, #[strong] selected_profile, #[strong] read_format,
         move |_| {
+            if updating.get() { return; }
+            let localization = w.localization();
             let recipe = ExportRecipe {
                 depth: if depth.selected() == 0 { SampleDepth::U8 } else { SampleDepth::U16 },
                 profile: selected_profile().unwrap_or_else(|_| ExportRecipe::web_share().profile),
@@ -477,12 +496,13 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             apply_background(&draft);
         }
     ));
-    let sync_range: Rc<dyn Fn()> = Rc::new(glib::clone!( #[strong] localization,
+    let sync_range: Rc<dyn Fn()> = Rc::new(glib::clone!( #[weak] w,
         #[weak] range, #[weak] format, #[weak] flatten, #[weak] rendition_view, #[weak] space,
         #[weak] depth, #[weak] background, #[weak] quality, #[weak] jpeg_hint,
         #[weak] intent, #[weak] dither, #[weak] color_link, #[weak] advanced_group, #[weak] print_delivery,
         #[strong] read_format,
         move || {
+            let localization = w.localization();
             let choice=range.selected();
             let hdr = choice != 0;
             let jpeg = read_format() == ExportFormat::Jpeg;
@@ -510,9 +530,10 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             _ => read_format(),
         }
     ));
-    let sync_metadata: Rc<dyn Fn()> = Rc::new(glib::clone!( #[strong] localization,
+    let sync_metadata: Rc<dyn Fn()> = Rc::new(glib::clone!( #[weak] w,
         #[weak] metadata, #[weak] remove_location, #[weak] metadata_note, #[strong] read_output_format, #[strong] read_metadata,
         move || {
+            let localization = w.localization();
             let recipe = ExportRecipe { format: read_output_format(), metadata: read_metadata(), ..ExportRecipe::web_share() };
             let view = recipe.draft_localized(ExportDraftAction::Refresh, &localization).metadata;
             metadata.set_visible(photo_metadata && view.available);
@@ -530,13 +551,15 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         .build();
     validation.add_css_class("error");
     validation.set_widget_name("export-validation");
-    space.connect_subtitle_notify(glib::clone!( #[strong] localization,
+    profile.connect_changed(glib::clone!( #[weak] w, #[strong] updating,
         #[weak]
         background,
         #[strong]
         selected_profile,
         #[strong] read_background, #[strong] apply_background, #[strong] read_format, #[strong] select_format,
-        move |_| {
+        move || {
+            if updating.get() { return; }
+            let localization = w.localization();
             if let Ok(profile) = selected_profile() {
                 let recipe = ExportRecipe {
                     format: read_format(),
@@ -557,11 +580,10 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             background.notify("selected");
         }
     ));
-    let updating = Rc::new(std::cell::Cell::new(false));
     let apply_recipe: Rc<dyn Fn(&ExportRecipe)> = Rc::new({
         let restore_profile = profile.restore.clone();
         let dimensions = dimensions.each_ref().map(|r| r.downgrade());
-        glib::clone!( #[strong] localization,
+        glib::clone!( #[weak] w,
             #[weak]
             resolution,
             #[weak]
@@ -593,6 +615,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             #[weak] remove_location,
             #[strong] metadata_choices,
             move |recipe: &ExportRecipe| {
+                let localization = w.localization();
                 updating.set(true);
                 metadata.set_selected(metadata_choices.iter().position(|k| *k == recipe.metadata.keep).unwrap_or(0) as u32);
                 remove_location.set_active(recipe.metadata.remove_location);
@@ -682,7 +705,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             }
         ));
     }
-    space.connect_subtitle_notify(glib::clone!(#[weak] preset, #[strong] updating, move |_| {
+    profile.connect_changed(glib::clone!(#[weak] preset, #[strong] updating, move || {
         if !updating.get() { updating.set(true); preset.set_selected(3); updating.set(false); }
     }));
     for row in [&dither, &enlarge, &clip_hdr, &flatten, &remove_location] {
@@ -718,16 +741,19 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     let note = gtk::Label::builder().wrap(true).xalign(0.).build();
     note.add_css_class("dim-label");
     let update_note =
-        glib::clone!( #[strong] copy,
+        glib::clone!( #[weak] w,
             #[weak]
             note,
             #[strong]
             selected_profile,
             move |depth: &adw::ComboRow| {
+                let localization = w.localization();
+                let copy = layer_ui::color_feature_copy::ExportCopy::new(&localization);
+                let prophoto_note = localization.text(layer_ui::MessageId::DOCUMENTS_PROPHOTO_NOTE);
                 note.set_label(if depth.selected() == 0 && document.depth == SampleDepth::U16 {
                 copy.precision_note.as_ref()
             } else if depth.selected() == 0 && selected_profile().is_ok_and(|p| p.profile == layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::ProPhoto)) {
-                "16-bit is recommended for ProPhoto RGB gradients and further editing."
+                prophoto_note.as_ref()
             } else {
                 ""
             });
@@ -735,15 +761,15 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             }
         );
     update_note(&depth);
-    depth.connect_selected_notify(update_note);
-    space.connect_subtitle_notify(glib::clone!(
+    depth.connect_selected_notify(update_note.clone());
+    profile.connect_changed(glib::clone!(
         #[weak]
         depth,
-        move |_| {
+        move || {
             depth.notify("selected");
         }
     ));
-    let read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, String>> = Rc::new(glib::clone!( #[strong] localization,
+    let read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, layer_ui::ColorFeatureError>> = Rc::new(glib::clone!( #[weak] w,
         #[weak]
         range,
         #[weak]
@@ -757,7 +783,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         #[weak]
         dither,
         #[strong]
-        selected_profile,
+        selected_profile_typed,
         #[strong]
         output_size,
         #[strong]
@@ -766,14 +792,15 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         #[strong] read_output_format,
         #[strong] read_metadata,
         #[upgrade_or]
-        Err("Export options closed".into()),
+        Err(layer_ui::ColorFeatureError::Diagnostic("Export options closed".into())),
         move || {
+            let localization = w.localization();
             let recipe = ExportRecipe {
                 size: output_size(),
                 resolution: chosen_resolution(),
                 format: read_output_format(),
                 metadata: read_metadata(),
-                profile: if range.selected() == exr_index { ExportProfile::builtin(document.space) } else if range.selected() != 0 { ExportProfile::builtin(layer_core::color::RgbSpace::Srgb) } else { selected_profile()? },
+                profile: if range.selected() == exr_index { ExportProfile::builtin(document.space) } else if range.selected() != 0 { ExportProfile::builtin(layer_core::color::RgbSpace::Srgb) } else { selected_profile_typed()? },
                 depth: if depth.selected() == 0 {
                     SampleDepth::U8
                 } else {
@@ -799,21 +826,21 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                 },
             };
             let recipe = if recipe.format.is_hdr() {
-                if !document.depth.is_float() { return Err(layer_ui::ColorFeatureError::HdrDocument.message(&localization)); }
+                if !document.depth.is_float() { return Err(layer_ui::ColorFeatureError::HdrDocument); }
                 recipe.draft_localized(ExportDraftAction::Refresh, &localization).recipe
             } else { recipe };
-            recipe.validate().map_err(|reason| reason.message(&localization))?;
-            recipe.output_extent(extent).map_err(|reason| reason.message(&localization))?;
-            recipe.output_resolution(master_resolution).map_err(|reason| reason.message(&localization))?;
+            recipe.validate()?;
+            recipe.output_extent(extent)?;
+            recipe.output_resolution(master_resolution)?;
             Ok(recipe)
         }
     ));
     let comparison =
-        super::preview::Comparison::for_output(w.snapshot_gpu()?, snapshot.project.clone(), w.view_color(), &w.localization);
+        super::preview::Comparison::for_output(w.snapshot_gpu()?, snapshot.project.clone(), w.view_color(), &w.localization());
     comparison.set_headroom(w.picker_headroom());
     rendition_view.connect_active_name_notify(glib::clone!(#[weak] comparison, move |group| comparison.show_fallback(group.active_name().as_deref()==Some("sdr"))));
     let recommend=Rc::new(std::cell::Cell::new(false));
-    range.connect_selected_notify(glib::clone!(#[strong] recommend, move |_| recommend.set(false)));
+    range.connect_selected_notify(glib::clone!(#[strong] recommend, #[strong] updating, move |_| if !updating.get() { recommend.set(false); }));
     // A user may explicitly choose the already selected HDR-native entry while
     // coverage is still being analysed. That produces no selected notification.
     // Any interaction with this chooser takes precedence over late recommendations.
@@ -833,6 +860,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         if numeric_inputs_ready(&numeric_rows, true) { response.set("export"); dialog.close(); }
     }));
     let validate: Rc<dyn Fn()> = Rc::new(glib::clone!(
+        #[weak] w,
         #[strong] numeric_rows,
         #[weak]
         export,
@@ -844,7 +872,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         move || {
             let result = read_recipe();
             export.set_sensitive(numeric_inputs_ready(&numeric_rows, false) && result.as_ref().is_ok_and(|recipe| !recipe.format.is_hdr() || comparison.ready.get()));
-            validation.set_label(result.as_ref().err().map_or("", String::as_str));
+            validation.set_label(&result.as_ref().err().map(|error| error.message(&w.localization())).unwrap_or_default());
             validation.set_visible(result.is_err());
         }
     ));
@@ -875,7 +903,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             move |_| validate()
         });
     }
-    space.connect_subtitle_notify({ let validate = validate.clone(); move |_| validate() });
+    profile.connect_changed({ let validate = validate.clone(); move || validate() });
     for row in [&dither, &enlarge, &clip_hdr, &flatten, &remove_location] {
         row.connect_active_notify({
             let validate = validate.clone();
@@ -895,7 +923,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     let compression_note = gtk::Label::builder().wrap(true).xalign(0.).build();
     compression_note.set_widget_name("export-preview-compression");
     compression_note.add_css_class("dim-label");
-    let preview_note = glib::clone!( #[strong] copy,#[weak] range, #[strong] read_format, #[weak] compression_note, #[weak] note, move || {
+    let preview_note = glib::clone!( #[weak] w,#[weak] range, #[strong] read_format, #[weak] compression_note, #[weak] note, move || {
+        let copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization());
         let hdr = range.selected() != 0;
         compression_note.set_label(copy.compression_note.as_ref());
         compression_note.set_visible(!hdr && read_format() == ExportFormat::Jpeg);
@@ -918,7 +947,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                 }
                 match read_recipe() {
                     Ok(recipe) => comparison.request_output(&snapshot, recipe),
-                    Err(error) => comparison.invalidate(&error),
+                    Err(error) => comparison.invalidate_error(error),
                 }
             }
         )
@@ -938,7 +967,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             move |_| refresh()
         });
     }
-    space.connect_subtitle_notify({ let refresh = refresh_preview.clone(); move |_| refresh() });
+    profile.connect_changed({ let refresh = refresh_preview.clone(); move || refresh() });
     for row in [&dither, &enlarge, &clip_hdr, &flatten] {
         row.connect_active_notify({
             let refresh = refresh_preview.clone();
@@ -1003,7 +1032,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     preset.connect_selected_notify(glib::clone!(#[weak] preset_link, move |preset| {
         if let Some(value) = preset.selected_item().and_downcast::<gtk::StringObject>() { preset_link.set_subtitle(&value.string()); }
     }));
-    let summarize_color = glib::clone!( #[strong] copy,#[weak] color_link, #[weak] depth, #[weak] range, #[weak] flatten, #[strong] read_background, #[strong] selected_profile, move || {
+    let summarize_color = glib::clone!( #[weak] w,#[weak] color_link, #[weak] depth, #[weak] range, #[weak] flatten, #[strong] read_background, #[strong] selected_profile, move || {
+        let copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization());
         if range.selected()==2 && range.selected()!=exr_index {color_link.set_title(copy.background.as_ref()); color_link.set_subtitle(if flatten.is_active(){match read_background(){ExportBackground::Black=>copy.black.as_ref(),_=>copy.white.as_ref()}}else{copy.no_flatten.as_ref()});return;}
         color_link.set_title(copy.color_transparency.as_ref());
         if let Ok(profile) = selected_profile() {
@@ -1012,9 +1042,9 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         }
     });
     for row in [&depth, &background, &range] { let update = summarize_color.clone(); row.connect_selected_notify(move |_| update()); }
-    space.connect_subtitle_notify(move |_| summarize_color());
+    profile.connect_changed({ let update = summarize_color.clone(); move || update() });
     presets::install(
-        &w.window, &w.localization,
+        w,
         document.depth.is_float(),
         &presets_body,
         &preset,
@@ -1023,6 +1053,65 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         updating.clone(),
         read_recipe.clone(),
     );
+    let dimension_labels = dimensions.each_ref().map(|row| row.downgrade());
+    w.on_localization(glib::clone!(
+        #[weak] dialog, #[weak] nav, #[weak] export, #[weak] cancel,
+        #[weak] size, #[weak] resolution, #[weak] range, #[weak] format,
+        #[weak] space, #[weak] depth, #[weak] background, #[weak] metadata,
+        #[weak] intent, #[weak] enlarge, #[weak] flatten, #[weak] clip_hdr,
+        #[weak] remove_location, #[weak] advanced, #[weak] print_delivery,
+        #[weak] dither, #[weak] jpeg_hint, #[weak] quality, #[weak] ppi,
+        #[weak] size_link, #[weak] preset_link,
+        #[strong] formats, #[strong] backgrounds, #[strong] updating,
+        #[strong] read_output_format, #[strong] read_metadata, #[strong] refresh_size,
+        #[strong] sync_metadata, #[strong] preview_note, #[strong] summarize_color,
+        #[strong] update_note, #[strong] validate,
+        #[upgrade_or] false,
+        move |localization| {
+            let copy = layer_ui::color_feature_copy::ExportCopy::new(localization);
+            updating.set(true);
+            dialog.set_title(&copy.title);
+            export.set_label(&copy.choose_file);
+            cancel.set_label(&copy.common.cancel);
+            for (tag, title) in [("main", &copy.title), ("size", &copy.image_size), ("color", &copy.color_transparency), ("presets", &copy.presets)] {
+                if let Some(page) = nav.find_page(tag) { page.set_title(title); }
+            }
+            size_link.set_title(&copy.size);
+            preset_link.set_title(&copy.preset);
+            relabel_choice(&size, &copy.size, &[&copy.original_size, &copy.fit_bounds]);
+            relabel_choice(&resolution, &copy.resolution, &[&copy.keep_resolution, &copy.custom, &copy.omit]);
+            relabel_choice(&range, &copy.output, &["SDR", &copy.hdr_native, &copy.format_jpeg_hdr, &copy.format_avif_hdr, &copy.format_exr]);
+            let labels = formats.iter().map(|format| format_label(*format, localization)).collect::<Vec<_>>();
+            relabel_choice(&format, &copy.format, &labels.iter().map(AsRef::as_ref).collect::<Vec<_>>());
+            relabel_choice(&depth, &copy.depth, &[&copy.depth_8, &copy.depth_16]);
+            let values = backgrounds.borrow();
+            let labels = values.iter().map(|value| match value { ExportBackground::Preserve => copy.keep_transparency.as_ref(), ExportBackground::White => copy.white.as_ref(), ExportBackground::Black => copy.black.as_ref() }).collect::<Vec<_>>();
+            relabel_choice(&background, &copy.background, &labels);
+            drop(values);
+            relabel_choice(&intent, &copy.intent, &[&copy.relative, &copy.perceptual, &copy.saturation, &copy.absolute]);
+            let view = ExportRecipe { format: read_output_format(), metadata: read_metadata(), ..ExportRecipe::web_share() }.draft_localized(ExportDraftAction::Refresh, localization).metadata;
+            relabel_choice(&metadata, &view.label, &view.choices.iter().map(|choice| choice.label.as_ref()).collect::<Vec<_>>());
+            remove_location.set_title(&view.remove_location);
+            space.set_title(&copy.profile);
+            enlarge.set_title(&copy.enlarge);
+            flatten.set_title(&copy.flatten);
+            clip_hdr.set_title(&copy.clip_hdr);
+            clip_hdr.set_subtitle(&copy.clip_help);
+            advanced.set_title(&copy.conversion);
+            print_delivery.set_title(&copy.use_print_profile);
+            dither.set_title(&copy.reduce_banding);
+            dither.set_subtitle(&copy.dither_gradients);
+            jpeg_hint.set_label(&copy.jpeg_note);
+            for (row, title) in dimension_labels.iter().zip([&copy.maximum_width, &copy.maximum_height]) {
+                if let Some(row) = row.upgrade() { row.set_caption(title, "", localization.clone()); }
+            }
+            quality.set_caption(&copy.quality, "", localization.clone());
+            ppi.set_caption(&copy.ppi, "", localization.clone());
+            updating.set(false);
+            refresh_size(); sync_metadata(); preview_note(); summarize_color(); update_note(&depth); validate();
+            true
+        }
+    ));
     // Loading the destination follows the same control and preview path as a click.
     preset.notify("selected");
     if document.depth.is_float() && preset.selected()==0 { range.set_selected(1); recommend.set(true); }
@@ -1034,14 +1123,13 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         return Ok(None);
     }
     Ok(Some(Choice {
-        recipe: read_recipe()?,
+        recipe: read_recipe().map_err(|error| error.message(&w.localization()))?,
         destination: destination.get(),
         library: library.borrow().clone(),
     }))
 }
 
 pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, String> {
-    let copy = std::rc::Rc::new(layer_ui::color_feature_copy::ExportCopy::new(&w.localization));
     w.proof_panel.finish_pending(w).await?;
     // The preview and final file share one immutable artwork revision and time.
     let snapshot = w
@@ -1053,7 +1141,8 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         .capture_project_export(id)?;
     let Some(choice) = choose_recipe(w, &snapshot).await? else { return Ok(false); };
     let recipe = choice.recipe;
-    recipe.validate().map_err(|reason| reason.message(&w.localization))?;
+    recipe.validate().map_err(|reason| reason.message(&w.localization()))?;
+    let copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization());
     let dialog = gtk::FileDialog::builder()
         .title(copy.title.as_ref())
         .accept_label(copy.export.as_ref())
@@ -1070,7 +1159,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         dialog.set_initial_folder(Some(&folder));
     }
     let filter = gtk::FileFilter::new();
-    filter.set_name(Some(&recipe.format.localized_name(&w.localization)));
+    filter.set_name(Some(&recipe.format.localized_name(&w.localization())));
     filter.add_suffix(recipe.format.extension());
     if recipe.format == ExportFormat::Tiff {
         filter.add_suffix("tiff");
@@ -1091,28 +1180,29 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         }
         Err(e) => return Err(e.to_string()),
     };
-    let path = file.path().ok_or_else(||layer_ui::DocumentHostError::ChooseDeviceFile.message(&w.localization))?;
+    let path = file.path().ok_or_else(||layer_ui::DocumentHostError::ChooseDeviceFile.message(&w.localization()))?;
     if w.gpu
         .borrow()
         .as_ref()
         .and_then(|g| g.session.state().document_file.location.as_ref())
         .is_some_and(|location| file.equal(&gio::File::for_uri(&location.uri)))
     {
-        return Err(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization).choose_different.to_string());
+        return Err(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()).choose_different.to_string());
     }
     let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
     if !extension.eq_ignore_ascii_case(recipe.format.extension())
         && !(recipe.format == ExportFormat::Tiff && extension.eq_ignore_ascii_case("tiff"))
         && !(recipe.format == ExportFormat::Jpeg && extension.eq_ignore_ascii_case("jpeg"))
     {
-        return Err(layer_ui::DocumentDeliveryMessage::ExportExtension {extension: recipe.format.extension().into()}.message(&w.localization));
+        return Err(layer_ui::DocumentDeliveryMessage::ExportExtension {extension: recipe.format.extension().into()}.message(&w.localization()));
     }
     let height = recipe.output_extent([
         snapshot.project.document.width,
         snapshot.project.document.height,
-    ]).map_err(|reason| reason.message(&w.localization))?[1];
+    ]).map_err(|reason| reason.message(&w.localization()))?[1];
     let gpu = w.snapshot_gpu()?;
     let job = ExportJob::default();
+    let copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization());
     let progress = gtk::ProgressBar::builder()
         .show_text(true)
         .text(copy.preparing.as_ref())
@@ -1130,11 +1220,20 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
             job.cancel();
         }
     });
+    let progress_copy = Rc::new(std::cell::RefCell::new(copy));
+    w.on_localization(glib::clone!(#[weak] dialog, #[weak] progress, #[strong] job, #[strong] progress_copy, #[upgrade_or] false, move |localization| {
+        *progress_copy.borrow_mut() = layer_ui::color_feature_copy::ExportCopy::new(localization);
+        let copy = progress_copy.borrow();
+        dialog.set_heading(Some(&copy.exporting));
+        dialog.set_response_label("cancel", &copy.common.cancel);
+        let rows = job.control.output_rows();
+        progress.set_text(Some(if rows == 0 { &copy.preparing } else if rows == height { &copy.finishing_file } else { &copy.writing_image }));
+        true
+    }));
     dialog.present(Some(&w.window));
-    let timer = glib::timeout_add_local(std::time::Duration::from_millis(50), {
-        let job = job.clone();
-        let copy = copy.clone();
+    let timer = glib::timeout_add_local(std::time::Duration::from_millis(50), glib::clone!(#[strong] progress_copy, #[strong] job, #[weak] progress, #[upgrade_or] glib::ControlFlow::Break,
         move || {
+            let copy = progress_copy.borrow();
             let rows = job.control.output_rows();
             if rows == 0 {
                 progress.pulse();
@@ -1148,26 +1247,26 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
             }
             glib::ControlFlow::Continue
         }
-    });
+    ));
     let remembered = recipe.clone();
     let result = gio::spawn_blocking({
         let job = job.clone();
         move || write_snapshot(gpu, snapshot, recipe, &path, &job)
     })
     .await
-    .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Image export worker failed".into()).message(&w.localization));
+    .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Image export worker failed".into()).message(&w.localization()));
     timer.remove();
     let cancelled = job.cancelled();
     dialog.force_close();
     if cancelled {
         Ok(false)
     } else {
-        result?.map_err(|reason| reason.message(&w.localization))?;
+        result?.map_err(|reason| reason.message(&w.localization()))?;
         let mut next = choice.library.clone();
-        next.remember(choice.destination.min(3), remembered).map_err(|reason| reason.preset_message(&w.localization))?;
+        next.remember(choice.destination.min(3), remembered).map_err(|reason| reason.preset_message(&w.localization()))?;
         if next != choice.library {
-            presets::save(choice.library, next, &w.localization).await.map_err(|e| {
-                layer_ui::DocumentDeliveryMessage::ExportPreferences {detail: e}.message(&w.localization)
+            presets::save(choice.library, next).await.map_err(|reason| {
+                layer_ui::DocumentDeliveryMessage::ExportPreferences {detail: reason.preset_message(&w.localization())}.message(&w.localization())
             })?;
         }
         Ok(true)

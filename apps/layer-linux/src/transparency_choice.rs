@@ -46,6 +46,13 @@ impl TransparencyChoice {
         Self { widget, buttons }
     }
 
+    pub fn set_labels(&self, labels: &[String]) {
+        for ((button, _, _), label) in self.buttons.iter().zip(labels) {
+            button.set_tooltip_text(Some(label));
+            button.update_property(&[gtk::accessible::Property::Label(label)]);
+        }
+    }
+
     pub fn set_selected(&self, selected: u32) {
         for (i, (button, preview, checked)) in self.buttons.iter().enumerate() {
             let active = i == selected as usize;

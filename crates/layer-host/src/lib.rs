@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 #[derive(Clone, PartialEq)]
 struct SnapshotKey {
     revision: u64,
+    localization_generation: u64,
     command_search_revision: u64,
     logical: [f32; 2],
     chrome_hidden: bool,
@@ -80,6 +81,8 @@ pub struct NativeHost {
     header_drag: Option<layer_ui::HeaderDrag>,
     preview_clock: std::time::Instant,
     filter_preview_image: Option<layer_render::FilterPreviewImage>,
+    catalog: layer_ui::UiCatalog,
+    localization_generation: u64,
 }
 
 impl NativeHost {
@@ -123,6 +126,21 @@ impl NativeHost {
     pub fn bootstrap_view(&self) -> layer_ui::BootstrapView {
         layer_ui::bootstrap_view(self.session.localization())
     }
+    pub fn localization_generation(&self) -> u64 {
+        self.localization_generation
+    }
+    pub fn set_localization(&mut self, localization: std::sync::Arc<layer_ui::Localizer>) -> bool {
+        if !self.session.set_localization(localization) {
+            return false;
+        }
+        self.catalog = layer_ui::ui_catalog_localized(self.session.localization());
+        self.localization_generation = self.localization_generation.saturating_add(1);
+        self.last_snapshot = None;
+        self.last_model_snapshot = None;
+        self.last_workspace_model_revision = None;
+        self.last_workspace_content_revision = None;
+        true
+    }
     pub fn new(platform: layer_ui::Platform) -> Result<Self, String> {
         Self::new_localized(platform, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
     }
@@ -130,6 +148,7 @@ impl NativeHost {
         platform: layer_ui::Platform,
         localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Result<Self, String> {
+        let catalog = layer_ui::ui_catalog_localized(&localization);
         let session = UiSession::blank_localized(Renderer::default(), [1, 1], platform, localization)?;
         Ok(Self {
             session,
@@ -159,6 +178,8 @@ impl NativeHost {
             header_drag: None,
             preview_clock: std::time::Instant::now(),
             filter_preview_image: None,
+            catalog,
+            localization_generation: 0,
         })
     }
     /// Regions changed since the platform service last observed accepted input.
@@ -776,7 +797,7 @@ impl NativeHost {
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Header { request } => self.header_request(request),
-            Query::Catalog => json!(layer_ui::ui_catalog_localized(self.session.localization())),
+            Query::Catalog => json!(self.catalog),
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),

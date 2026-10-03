@@ -166,8 +166,8 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
             rows.forEachIndexed { index, row -> key(row.getString("id")) {
                 val id = row.getString("id")
                 val title = row.getString("title")
-                val switchCaption=remember(title, workspaces) { if (workspaces) JSONObject(Native.nativeCaption(obj("type" to "switch_workspace", "title" to title).toString())).getString("text") else title }
-                val optionsCaption=remember(title) { JSONObject(Native.nativeCaption(obj("type" to "options_for", "title" to title).toString())).getString("text") }
+                val switchCaption=remember(title, workspaces, host.languageTag) { if (workspaces) JSONObject(Native.nativeCaption(obj("type" to "switch_workspace", "title" to title).toString(), host.languageTag)).getString("text") else title }
+                val optionsCaption=remember(title, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "options_for", "title" to title).toString(), host.languageTag)).getString("text") }
                 val selected = view.optString("selected") == id
                 DisposableEffect(id) { onDispose { drag.rows.remove(id); drag.grips.remove(id); drag.options.remove(id) } }
                 if (index > 0) HorizontalDivider(color = colors.divider)

@@ -53,6 +53,21 @@ Preferences live in `settings.json` and workspaces in `workspaces.sqlite3` under
 File workers use `color_storage::export_profile` for imported profiles in export
 options, export presets and print-proof setup.
 
+Language changes prepare shared copy on the profile worker, then update retained
+controls in every window using that private profile. Publication waits for native
+text composition keys, canvas contacts and shared gestures to retire. System
+resamples the OS preferred languages on the profile worker; launch tags are the
+fallback when the OS query is unavailable. Text drafts and selections,
+document history, HWNDs and swap chains stay with their existing owners. The
+`localization` snapshot envelope carries one generation of catalog and bootstrap
+copy; stateless native helpers borrow that same immutable context.
+
+`exercise-localization.ps1 -Executable <path> -Theme dark` checks actual preference
+choices for all five languages, retained numeric drafts and preference controls,
+and inactive and future windows. Repeat with `-Theme light`. The VM fixture
+runner selects these as `localization` and `localization:light`. Genuine TSF
+candidate handling and physical GPU presentation need Windows hardware.
+
 ### Environment switches
 
 Remove a switch with `Remove-Item Env:NAME`. An empty variable still counts as

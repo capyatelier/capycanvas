@@ -58,6 +58,12 @@ struct BinaryFileDocument: FileDocument {
 
 @MainActor final class PaletteController: ObservableObject {
     private weak var store: EditorStore?
+    var interfaceLanguage: String { store?.interfaceLanguage ?? "en" }
+    func refreshLanguage() {
+        if dialog?.kind == .remove, let name = dialog?.name {
+            removeCaption = NativeTextContext.caption(["type": "remove_palette", "name": name], language: interfaceLanguage)
+        }
+    }
     var common: JSON { store?.bootstrap["common"] ?? JSON() }
     var copy: JSON { store?.catalog["native_copy"]["palettes"] ?? JSON() }
     @Published var selected: UInt64?
@@ -69,7 +75,7 @@ struct BinaryFileDocument: FileDocument {
     @Published var dialog: PaletteDialog? {
         didSet {
             if dialog?.kind == .remove, let name = dialog?.name, oldValue?.kind != .remove || oldValue?.name != name {
-                removeCaption = NativeTextContext.caption(["type": "remove_palette", "name": name])
+                removeCaption = NativeTextContext.caption(["type": "remove_palette", "name": name], language: store?.interfaceLanguage ?? "en")
             }
         }
     }

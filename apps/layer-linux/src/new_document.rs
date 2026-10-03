@@ -7,7 +7,7 @@ use layer_ui::*;
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::Arc};
 
 struct Form {
-    localization: Arc<Localizer>,
+    localization: RefCell<Arc<Localizer>>,
     view: RefCell<NewDocumentForm>,
     dialog: adw::AlertDialog,
     preset: adw::ComboRow,
@@ -55,7 +55,7 @@ impl Form {
     }
     fn describe(&self) {
         let options = self.options();
-        let appearance = options.appearance(&self.localization);
+        let appearance = options.appearance(&self.localization.borrow());
         let updating = self.updating.replace(true);
         self.blending.set_selected(self.view.borrow().blending.choices.iter().position(|choice| choice.id == appearance.blending).unwrap() as u32);
         self.updating.set(updating);
@@ -83,7 +83,7 @@ impl Form {
     }
     fn presets(&self, settings: &NewDocumentSettings, selected: Option<NewDocumentPresetId>) {
         self.updating.set(true);
-        self.view.replace(settings.form(&self.localization));
+        self.view.replace(settings.form(&self.localization.borrow()));
         let view = self.view.borrow();
         let names: Vec<_> = std::iter::once(view.text.custom.as_ref()).chain(view.presets.iter().map(|preset| preset.name.as_str())).collect();
         self.preset.set_model(Some(&gtk::StringList::new(&names)));
@@ -101,7 +101,7 @@ pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<layer_core::Project>
 pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<Option<layer_core::Project>, String> {
     let (settings, localization) = {
         let gpu = w.gpu.borrow();
-        let session = &gpu.as_ref().ok_or_else(|| NewDocumentError::CanvasUnavailable.message(&w.localization))?.session;
+        let session = &gpu.as_ref().ok_or_else(|| NewDocumentError::CanvasUnavailable.message(&w.localization()))?.session;
         (session.state().settings.new_document.clone(), session.localization().clone())
     };
     let projection = settings.form(&localization);
@@ -127,6 +127,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         row.set_widget_name(name);
         row.set_snap_to_ticks(true);
         row.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
+        crate::input::guard_editable_activation(&row);
         group.add(&row);
         row
     };
@@ -203,7 +204,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
     dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);
     let selected = projection.selected;
     let form = Rc::new(Form {
-        localization,
+        localization: RefCell::new(localization),
         view: RefCell::new(projection),
         dialog: dialog.clone(),
         preset,
@@ -219,6 +220,42 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         remove,
         updating: Cell::new(false),
     });
+    let weak_form = Rc::downgrade(&form);
+    w.on_localization(glib::clone!(#[weak] w, #[weak] save, #[weak] remember, #[upgrade_or] false, move |localization| {
+        let Some(form) = weak_form.upgrade() else { return false; };
+        *form.localization.borrow_mut() = localization.clone();
+        let settings = w.gpu.borrow().as_ref().unwrap().session.state().settings.new_document.clone();
+        let selected = form.selected_preset().map(|preset| preset.id);
+        form.presets(&settings, selected);
+        let view = form.view.borrow();
+        form.updating.set(true);
+        form.dialog.set_heading(Some(if defaults_only { &view.text.defaults_title } else { &view.text.new_title }));
+        form.dialog.set_response_label("cancel", &view.text.cancel);
+        form.dialog.set_response_label("create", if defaults_only { &view.text.use_defaults } else { &view.text.create });
+        form.preset.set_title(&view.text.preset);
+        form.width.set_title(&view.text.width);
+        form.height.set_title(&view.text.height);
+        form.background.set_title(&view.text.background);
+        form.space.set_title(&view.text.space);
+        form.depth.set_title(&view.text.depth);
+        form.blending.set_title(&view.blending.label);
+        form.color.set_title(&view.text.color);
+        let background = form.background.selected();
+        let space = form.space.selected();
+        let depth = form.depth.selected();
+        let blending = form.blending.selected();
+        form.background.set_model(Some(&gtk::StringList::new(&view.backgrounds.iter().map(|choice| choice.1.as_ref()).collect::<Vec<_>>())));
+        form.space.set_model(Some(&gtk::StringList::new(&view.spaces.iter().map(|choice| choice.1).collect::<Vec<_>>())));
+        form.depth.set_model(Some(&gtk::StringList::new(&view.depths.iter().map(|choice| choice.1.as_ref()).collect::<Vec<_>>())));
+        form.blending.set_model(Some(&gtk::StringList::new(&view.blending.choices.iter().map(|choice| choice.label.as_ref()).collect::<Vec<_>>())));
+        form.background.set_selected(background); form.space.set_selected(space); form.depth.set_selected(depth); form.blending.set_selected(blending);
+        save.set_label(&view.text.save_preset);
+        remember.set_label(Some(&view.text.remember));
+        form.remove.set_tooltip_text(Some(&view.text.remove_preset));
+        form.remove.update_property(&[gtk::accessible::Property::Label(&view.text.remove_preset)]);
+        form.updating.set(false);
+        true
+    }));
     form.presets(&settings, selected);
     form.populate(settings.defaults);
     for row in [&form.width, &form.height] {
@@ -263,6 +300,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                 async move {
                     let name = adw::EntryRow::builder().title(form.view.borrow().text.preset_name.as_ref()).build();
                     name.set_widget_name("new-document-preset-name");
+                    crate::input::guard_editable_activation(&name);
                     let group = adw::PreferencesGroup::new();
                     group.add(&name);
                     let note = gtk::Label::builder().wrap(true).xalign(0.).build();
@@ -279,6 +317,16 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                     dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
                     dialog.set_response_enabled("save", false);
                     let options = form.options();
+                    w.on_localization(glib::clone!(#[weak] form, #[weak] dialog, #[weak] name, #[weak] note, #[weak] w, #[upgrade_or] false, move |_| {
+                        let view = form.view.borrow();
+                        dialog.set_heading(Some(&view.text.save_preset_title));
+                        dialog.set_response_label("cancel", &view.text.cancel);
+                        dialog.set_response_label("save", &view.text.save);
+                        name.set_title(&view.text.preset_name);
+                        let mut settings = w.gpu.borrow().as_ref().unwrap().session.state().settings.new_document.clone();
+                        note.set_text(&settings.save(&name.text(), options).err().map(|error| error.message(&form.localization.borrow())).unwrap_or_default());
+                        true
+                    }));
                     name.connect_changed(glib::clone!(
                         #[weak]
                         form,
@@ -301,7 +349,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                                 .clone();
                             let result = settings.save(&name.text(), options);
                             dialog.set_response_enabled("save", result.is_ok());
-                            note.set_text(&result.err().map(|error| error.message(&form.localization)).unwrap_or_default());
+                            note.set_text(&result.err().map(|error| error.message(&form.localization.borrow())).unwrap_or_default());
                         }
                     ));
                     if crate::alert::choose(dialog, &w.window).await == "save" {
@@ -316,7 +364,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                             .new_document
                             .clone();
                         if settings.save(&name.text(), options).is_ok() {
-                            let selected = settings.form(&form.localization).presets.last().map(|preset| preset.id);
+                            let selected = settings.form(&form.localization.borrow()).presets.last().map(|preset| preset.id);
                             w.dispatch(UiAction::NewDocumentPreferences {
                                 action: NewDocumentAction::Remember { options, name: name.text().into(), defaults: false },
                             });
@@ -363,7 +411,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         return Ok(None);
     }
     let options = form.options();
-    let project = options.project(&form.localization)?;
+    let project = options.project(&form.localization.borrow())?;
     if remember.is_active() {
         w.dispatch(UiAction::NewDocumentPreferences {
             action: NewDocumentAction::Remember { options, name: String::new(), defaults: true },

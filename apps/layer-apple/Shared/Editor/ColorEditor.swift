@@ -28,6 +28,7 @@ struct ManagedColorButton: View {
 /// The shared form retains the original tagged value across readout changes.
 /// Only Use Color publishes an edit; invalid drafts and cancellation do not.
 struct ColorEditor: View {
+    @Environment(\.capyInterfaceLanguage) private var interfaceLanguage
     @Environment(\.capyNativeCopy) private var nativeCopy
     @Environment(\.capyCommonCopy) private var commonCopy
     @Environment(\.dismiss) private var dismiss
@@ -42,7 +43,7 @@ struct ColorEditor: View {
         self.use = use; self.hdrUse = hdrUse; self.viewing = viewing
         _intensityText = State(initialValue: intensity.map { String(format: "%.2f", $0) } ?? "")
     }
-    private func update(_ draft: JSON) { form = ColorUI.resolve(["type": "form", "request": draft.raw]) }
+    private func update(_ draft: JSON) { form = ColorUI.resolve(["type": "form", "request": draft.raw], language: interfaceLanguage) }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(nativeCopy["color"]["edit"].string).font(.headline)
@@ -102,7 +103,8 @@ struct ColorEditor: View {
                 }.disabled(form["value"].isNull || !form["error"].isNull)
                     .keyboardShortcut(.defaultAction).accessibilityIdentifier("color-input-use")
             }
-        }.onAppear { if intensityText.isEmpty && !form["draft"]["intensity"].isNull { intensityText = String(format: "%.2f", form["draft"]["intensity"].number) } }
+        }.onChange(of: interfaceLanguage, initial: true) { _, _ in update(form["draft"]) }
+        .onAppear { if intensityText.isEmpty && !form["draft"]["intensity"].isNull { intensityText = String(format: "%.2f", form["draft"]["intensity"].number) } }
         .padding(20).frame(minWidth: 320, idealWidth: 380, maxWidth: 460, minHeight: 420, idealHeight: 520)
     }
 }

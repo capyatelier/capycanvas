@@ -398,18 +398,31 @@ pub(crate) enum Field {
     Action(gtk::Button),
 }
 impl Field {
-    pub(crate) fn update(&self, option: &ToolOption) {
+    pub(crate) fn update(&self, option: &ToolOption, localization: &std::sync::Arc<layer_ui::Localizer>) {
         match (self, option) {
-            (Field::Numeric(number), ToolOption::Numeric(f)) => number.set_value(f.value as f64),
-            (Field::Range(range), ToolOption::Range { bounds, .. }) => {
+            (Field::Numeric(number), ToolOption::Numeric(f)) => {
+                number.set_caption(&f.label, &f.tooltip_localized(localization), localization.clone());
+                number.set_value(f.value as f64);
+                if let Some(row) = number.parent() {
+                    if let Some(label) = row.first_child().and_downcast::<gtk::Label>() { label.set_text(&f.label); }
+                    row.set_tooltip_text(Some(&f.tooltip_localized(localization)));
+                }
+            },
+            (Field::Range(range), ToolOption::Range { label, bounds, .. }) => {
+                range.set_captions(label, bounds.each_ref(), localization);
                 range.set_values(bounds.each_ref().map(|f| f.value as f64));
             }
-            (Field::Choice(d), ToolOption::Choice { items, .. }) => d.set_selected(
-                items
-                    .iter()
-                    .position(|i| i.selected)
-                    .map_or(gtk::INVALID_LIST_POSITION, |i| i as u32),
-            ),
+            (Field::Choice(d), ToolOption::Choice { label, items, .. }) => {
+                d.set_tooltip_text(Some(label));
+                d.update_property(&[gtk::accessible::Property::Label(label)]);
+                if let Some(model) = d.model().and_downcast::<gtk::gio::ListStore>() {
+                    let changed = items.iter().enumerate().any(|(i, choice)| model.item(i as u32).and_downcast::<glib::BoxedAnyObject>().is_none_or(|item| item.borrow::<(String, String)>().1 != choice.label.as_ref()));
+                    if changed {
+                        model.splice(0, model.n_items(), &items.iter().map(|item| glib::BoxedAnyObject::new((item.icon.to_string(), item.label.to_string()))).collect::<Vec<_>>());
+                    }
+                }
+                d.set_selected(items.iter().position(|item| item.selected).map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
+            },
             (Field::Menu(_, image, text), ToolOption::Choice { items, .. }) => {
                 if let Some(selected) = items.iter().find(|i| i.selected)
                     && text.text().as_str() != selected.label.as_ref()
@@ -420,12 +433,16 @@ impl Field {
             }
             (Field::Segments(buttons), ToolOption::Choice { items, .. }) => {
                 for (button, item) in buttons.iter().zip(items) {
+                    button.set_tooltip_text(Some(&item.label));
+                    button.update_property(&[gtk::accessible::Property::Label(&item.label)]);
                     button.set_active(item.selected);
                 }
             }
             (Field::Menu(button, ..), ToolOption::Action { state, .. }) => show_availability(button.upcast_ref(), state),
             (Field::Action(b), ToolOption::Action { state, .. }) => {
                 show_availability(b.upcast_ref(), state);
+                b.update_property(&[gtk::accessible::Property::Label(&state.label)]);
+                if let Some(label) = b.child().and_then(|row| row.last_child()).and_downcast::<gtk::Label>() { label.set_text(&state.label); }
                 if let Some(b) = b.downcast_ref::<gtk::ToggleButton>() {
                     b.set_active(state.selected);
                 }
@@ -519,7 +536,7 @@ pub(super) struct Component {
     pub root: ComponentBody,
     pub button: gtk::Button,
     pub control: ToolbarControl,
-    localization: std::sync::Arc<layer_ui::Localizer>,
+    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     context: Cell<Option<ToolbarContext>>,
     contact_context: Cell<Option<ToolbarContext>>,
     updating: Cell<bool>,
@@ -585,8 +602,8 @@ impl Component {
                 .options
                 .set(tile.control.options_style().unwrap());
             button.set_child(Some(&crate::icons::image("layer-more-symbolic")));
-            button.set_tooltip_text(Some(&w.localization.text(layer_ui::MessageId::WORKSPACE_TOOLBAR_MORE_OPTIONS)));
-            button.update_property(&[gtk::accessible::Property::Label(&w.localization.text(layer_ui::MessageId::WORKSPACE_TOOLBAR_MORE_OPTIONS))]);
+            button.set_tooltip_text(Some(&w.localization().text(layer_ui::MessageId::WORKSPACE_TOOLBAR_MORE_OPTIONS)));
+            button.update_property(&[gtk::accessible::Property::Label(&w.localization().text(layer_ui::MessageId::WORKSPACE_TOOLBAR_MORE_OPTIONS))]);
             w.install_context(&root, target);
             None
         };
@@ -594,7 +611,7 @@ impl Component {
             root,
             button,
             control: tile.control,
-            localization: w.localization.clone(),
+            localization: RefCell::new(w.localization()),
             context: Cell::new(None),
             contact_context: Cell::new(None),
             updating: Cell::new(false),
@@ -676,6 +693,7 @@ impl Component {
     }
 
     pub fn refresh(self: &Rc<Self>, w: &Rc<Workspace>, state: &ToolbarComponentView) {
+        *self.localization.borrow_mut() = w.localization();
         self.updating.set(true);
         let context = state.context;
         let changed_context = self.context.replace(Some(context)) != Some(context);
@@ -700,7 +718,7 @@ impl Component {
                     .set(gpu.session.state().palette.panel.0);
             }
             self.root.queue_draw();
-            self.update_preview(&w.localization);
+            self.update_preview(&w.localization());
             let value = field
                 .numeric
                 .resolve(field.value as f64, NumericOperation::Format)
@@ -760,7 +778,7 @@ impl Component {
                 self.root.queue_allocate();
             }
             for (field, option) in self.fields.borrow().iter().zip(options) {
-                field.update(option);
+                field.update(option, &w.localization());
             }
             self.schema.borrow_mut().clone_from(options);
         }
@@ -927,7 +945,7 @@ impl Component {
                 selected: Cell::new(None),
             }));
         }
-        self.update_preview(&w.localization);
+        self.update_preview(&w.localization());
         if let Some(preview) = self.preview.borrow().as_ref() {
             preview.popover.popup();
             preview.popover.present();
@@ -940,7 +958,7 @@ impl Component {
             self.value.get(),
             self.root.width().max(self.root.height()) as f32,
             extent,
-         &self.localization)
+         &self.localization.borrow())
     }
     fn update_preview(&self, localization: &layer_ui::Localizer) {
         let preview = self.preview.borrow();
@@ -1143,7 +1161,7 @@ impl Component {
         } else {
             Vec::new()
         };
-        if let Ok(value) = slider_bookmark_value(self.control, &values, position, length, &self.localization) {
+        if let Ok(value) = slider_bookmark_value(self.control, &values, position, length, &self.localization.borrow()) {
             let number = self
                 .control
                 .slider()
@@ -1182,7 +1200,7 @@ impl Component {
                 let send = send.clone();
                 let range = RangeControl::new(&format!("toolbar-{id}"), label, bounds.each_ref(), move |index, value| {
                     send(UiAction::SetToolSetting { id: ids[index].into(), value: value as f32 })
-                }, w.localization.clone());
+                }, w.localization().clone());
                 row.add_css_class("option-range");
                 let sliders = self.root.imp().options.get().sliders;
                 range.set_slider_visible(sliders);
@@ -1205,7 +1223,7 @@ impl Component {
                 icon.add_css_class("option-icon");
                 icon.set_visible(false);
                 row.append(&icon);
-                let number = NumberControl::compact(f.numeric.clone(), &f.label, w.localization.clone());
+                let number = NumberControl::compact(f.numeric.clone(), &f.label, w.localization().clone());
                 number.set_icon(tool_setting_icon(f.id));
                 number.add_css_class("toolbar-number");
                 number.set_widget_name(&format!("toolbar-setting-{}", f.id));

@@ -68,7 +68,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     val report by rememberUpdatedState(onContent)
     Layout({}) { _, constraints ->
         val size = (constraints.maxWidth / density - 16f).coerceAtLeast(128f)
-        val height = JSONObject(Native.colorUi(obj("type" to "layout", "size" to size, "hdr" to hdr).toString())).number("height")
+        val height = JSONObject(Native.colorUi(obj("type" to "layout", "size" to size, "hdr" to hdr).toString(), host.languageTag)).number("height")
         report(PanelContentSize(((height * density).roundToInt() + 2 * (8 * density).roundToInt()) / density))
         layout(0, 0) {}
     }
@@ -90,7 +90,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         val hdr=view.optBoolean("hdr")
         val (side,layout,naturalHeight)=remember(maxWidth,availableHeight,hdr) {
-            fun layout(size:Float)=JSONObject(Native.colorUi(obj("type" to "layout","size" to size,"hdr" to hdr).toString()))
+            fun layout(size:Float)=JSONObject(Native.colorUi(obj("type" to "layout","size" to size,"hdr" to hdr).toString(), host.languageTag))
             val width=maxWidth.value.coerceAtLeast(128f)
             val natural=layout(width)
             var fitted=natural;var fittedWidth=width
@@ -134,7 +134,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                 }
                 view.array("other_shapes").values().forEachIndexed { index, value ->
                     val shape = value as String
-                    val caption = remember(shape) { JSONObject(Native.nativeCaption(obj("type" to "color_shape", "shape" to shape).toString())).getString("text") }
+                    val caption = remember(shape, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "color_shape", "shape" to shape).toString(), host.languageTag)).getString("text") }
                     ColorButton(caption, Modifier.place(layout.array("shapes").getJSONArray(index))
                         .testTag("color-shape-$shape"), onClick = { color(obj("op" to "shape", "shape" to shape)) }) { focused, hovered ->
                         SharedIcon("color-$shape", null, Modifier.size(16.dp).rotate(layout.array("shape_rotations").getDouble(index).toFloat()),
@@ -459,6 +459,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
 }
 
 @Composable private fun Modifier.hdrIntensityInput(view:JSONObject,color:(JSONObject)->Unit):Modifier {
+    val host = LocalCanvasHost.current
     val current by rememberUpdatedState(view)
     val action by rememberUpdatedState(color)
     val density=LocalDensity.current.density
@@ -467,7 +468,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
         var lastPoint=Offset.Zero
         awaitEachGesture {
             val down=awaitFirstDown(requireUnconsumed=true)
-            fun query(point:Offset)=JSONObject(Native.colorUi(obj("type" to "arc","size" to size.width/density,"point" to JSONArray(listOf(point.x/density,point.y/density))).toString()))
+            fun query(point:Offset)=JSONObject(Native.colorUi(obj("type" to "arc","size" to size.width/density,"point" to JSONArray(listOf(point.x/density,point.y/density))).toString(), host.languageTag))
             if(!query(down.position).getBoolean("hit"))return@awaitEachGesture
             val original=current.number("intensity");var complete=false
             val doubleTap=down.uptimeMillis-lastTap in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis && (down.position-lastPoint).getDistance()<viewConfiguration.touchSlop
@@ -487,7 +488,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
         // The surrounding layout uses dp. Query and paint in that same space;
         // shared geometry has fixed-size margins and cannot be queried in pixels.
         val side=size.width/density
-        val arc=JSONObject(Native.colorUi(obj("type" to "arc","size" to side,"fraction" to ((view.number("intensity")+2f)/8f)).toString()))
+        val arc=JSONObject(Native.colorUi(obj("type" to "arc","size" to side,"fraction" to ((view.number("intensity")+2f)/8f)).toString(), host.languageTag))
         scale(density,pivot=Offset.Zero) {
             val g=arc.getJSONObject("geometry")
             val path=arc.array("path");val ramp=view.array("intensity_ramp")

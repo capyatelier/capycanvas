@@ -602,7 +602,7 @@ private fun DrawScope.checker() {
     val colors = LocalPalette.current
     val name = selected?.getString("name") ?: view.getString("color_name")
     val paletteName=view.getString("name")
-    val chooseCaption=remember(paletteName) { JSONObject(Native.nativeCaption(obj("type" to "choose_palette", "name" to paletteName).toString())).getString("text") }
+    val chooseCaption=remember(paletteName, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "choose_palette", "name" to paletteName).toString(), host.languageTag)).getString("text") }
     Row(Modifier.fillMaxWidth().testTag("palette-footer"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         HoverTip(chooseCaption) {
             Row(Modifier.heightIn(min = 24.dp).widthIn(max = 150.dp).clip(ControlShape).paletteFocus(controller)
@@ -796,7 +796,7 @@ private fun DrawScope.checker() {
     val controller = host.palettes
     val close = { controller.dialog = null }
     if (dialog.kind == "remove") {
-        val removeCaption=remember(dialog.initial) { JSONObject(Native.nativeCaption(obj("type" to "remove_palette", "name" to dialog.initial).toString())).getString("text") }
+        val removeCaption=remember(dialog.initial, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "remove_palette", "name" to dialog.initial).toString(), host.languageTag)).getString("text") }
         AlertDialog(onDismissRequest = close, modifier = Modifier.testTag("palette-remove-dialog"),
             title = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("remove_title")) }, text = { Text(removeCaption) },
             dismissButton = { TextButton(close) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } },

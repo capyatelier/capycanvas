@@ -9,9 +9,9 @@ struct DisplayDetails: Equatable {
 
 /// Shared parsing and color transforms, independent of the renderer owner.
 enum ColorUI {
-    static func resolve(_ request: [String: Any]) -> JSON {
+    static func resolve(_ request: [String: Any], language: String = "en") -> JSON {
         do {
-            let text = try JSON(request).encoded()
+            let text = try JSON(["language": language, "request": request]).encoded()
             guard let response = text.withCString({ capy_apple_color_ui($0) }) else {
                 throw HostFailure(message: "Color input failed")
             }

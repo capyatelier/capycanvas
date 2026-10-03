@@ -10,6 +10,12 @@ private final class MetalLayerLease: @unchecked Sendable {
     init(_ value: CAMetalLayer) { self.value = value }
 }
 
+private final class LanguageJob: @unchecked Sendable {
+    let handle: OpaquePointer
+    init(_ handle: OpaquePointer) { self.handle = handle }
+    deinit { capy_language_free(handle) }
+}
+
 private final class PersistenceLoad: @unchecked Sendable {
     private let lock = NSLock()
     private var loaded = EditorPersistence.Loaded()
@@ -24,6 +30,12 @@ struct ScreenReport: Equatable {
 
 final class NativeOwner: @unchecked Sendable {
     private let queue: DispatchQueue
+    private let languageWorker = DispatchQueue(label: "art.capycanvas.language", qos: .userInitiated)
+    private var languageReady = false
+    private var languagePollScheduled = false
+    private var requestedLanguagePreference: String?
+    private var currentLanguagePreference = ""
+    var languageInputBusy: (@MainActor @Sendable () -> Bool)?
     private var handle: OpaquePointer?
     private var layer: CAMetalLayer?
     private var surfaceSize: (width: UInt32, height: UInt32, scale: Float)?
@@ -142,6 +154,9 @@ final class NativeOwner: @unchecked Sendable {
     }
     private func request(_ kind: UInt32, _ value: JSON = JSON()) throws -> JSON? {
         guard let handle else { throw HostFailure(message: "Native session is unavailable") }
+        if kind == 0 && value["type"].string == "preferences" && value["action"]["id"].string == "language" {
+            requestedLanguagePreference = nil
+        }
         let source = try value.encoded()
         let result = source.withCString { capy_apple_request(handle, kind, $0) }
         guard let result else {
@@ -165,6 +180,41 @@ final class NativeOwner: @unchecked Sendable {
             if !snapshot["shaders_ready"].isNull { shadersReady = snapshot["shaders_ready"].bool }
             try persist(snapshot)
             receive(snapshot, nil)
+        }
+        try prepareLanguage()
+    }
+    private func prepareLanguage() throws {
+        let preference = currentLanguagePreference
+        guard preference != requestedLanguagePreference else { return }
+        requestedLanguagePreference = preference
+        let tags = try JSON(Locale.preferredLanguages).encoded()
+        guard let pointer = tags.withCString({ capy_apple_language_request(handle, $0) }) else { return }
+        let job = LanguageJob(pointer)
+        languageWorker.async { [self, job] in
+            capy_language_prepare(job.handle)
+            queue.async { [self, job] in
+                if capy_apple_language_prepared(handle, job.handle) {
+                    languageReady = true
+                    publishLanguageWhenIdle()
+                }
+            }
+        }
+    }
+    private func publishLanguageWhenIdle() {
+        guard languageReady, !languagePollScheduled else { return }
+        languagePollScheduled = true
+        DispatchQueue.main.async { [self] in
+            let busy = NativeTextContext.inputBusy || languageInputBusy?() == true
+            queue.async { [self] in
+                languagePollScheduled = false
+                let result = capy_apple_language_publish(handle, busy)
+                if result != 0 { languageReady = false }
+                if result == 1 {
+                    do { try publish() } catch { receive(nil, error.localizedDescription) }
+                } else if languageReady {
+                    queue.asyncAfter(deadline: .now() + .milliseconds(50)) { [self] in publishLanguageWhenIdle() }
+                }
+            }
         }
     }
     func filterPreviews(_ query: JSON, completion: @escaping @Sendable (FilterPreviewReply) -> Void) {
@@ -212,6 +262,7 @@ final class NativeOwner: @unchecked Sendable {
     private func persist(_ snapshot: JSON) throws {
         guard !snapshot["state"].isNull else { return }
         currentSettings = snapshot["state"]["settings"]
+        currentLanguagePreference = currentSettings["language"].stableKey
         for request in snapshot["state"]["requests"].array where request["kind"]["type"].string == "save_settings" {
             let id = request["id"].uint
             guard !settingsRequests.contains(id) else { continue }

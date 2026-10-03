@@ -30,7 +30,7 @@ import kotlin.math.ln
     var cancel by remember { mutableStateOf(0L) }
     val file = host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")
     val key = "${file?.optLong("epoch")}:${file?.optLong("revision")}"
-    val staleCaption = remember(status) { JSONObject(Native.nativeCaption(obj("type" to "inspection_changed", "status" to status).toString())).getString("text") }
+    val staleCaption = remember(status, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "inspection_changed", "status" to status).toString(), host.languageTag)).getString("text") }
     fun refresh() {
         if (busy || host.drawingTabs.switching) return
         attempted = key; busy = true; status = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_updating")
@@ -44,7 +44,7 @@ import kotlin.math.ln
                     val task = host.withNative { Native.inspectionTask(it, control) }
                     withContext(Dispatchers.IO) { JSONObject(Native.inspectionHistogram(task)) }
                 }
-                ensureActive(); result = next; status = if (next.isNull("sampled_time")) host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_current") else JSONObject(Native.nativeCaption(obj("type" to "inspection_sample", "seconds" to next.getDouble("sampled_time")).toString())).getString("text")
+                ensureActive(); result = next; status = if (next.isNull("sampled_time")) host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_current") else JSONObject(Native.nativeCaption(obj("type" to "inspection_sample", "seconds" to next.getDouble("sampled_time")).toString(), host.languageTag)).getString("text")
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { status = e.message ?: host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_failed") }
             finally { host.drawingTabs.releaseInspection(control); cancel = 0; Native.captureFree(control); busy = false }

@@ -84,6 +84,7 @@ impl NativeHost {
     ) -> Result<Option<S::Ok>, S::Error> {
         let key = SnapshotKey {
             revision: self.session.state().revision,
+            localization_generation: self.localization_generation(),
             command_search_revision: self.session.command_search_revision(),
             logical: self.logical,
             chrome_hidden: self.chrome_hidden,

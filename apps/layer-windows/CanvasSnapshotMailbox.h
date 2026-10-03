@@ -8,9 +8,10 @@
 // latest-value slots, including a camera carried by a replaced motion packet.
 class CanvasSnapshotMailbox {
 public:
-    struct Batch { std::string full, workspace, camera, search; };
-    void Push(std::string snapshot,bool full,bool workspace,std::optional<std::string> camera={},bool search=false) {
-        if(full){pending={std::move(snapshot),{},{},{}};return;}
+    struct Batch { std::string full, workspace, camera, search, localization; };
+    void Push(std::string snapshot,bool full,bool workspace,std::optional<std::string> camera={},bool search=false,std::string localization={}) {
+        if(!localization.empty())pending.localization=std::move(localization);
+        if(full){auto presentation=std::move(pending.localization);pending={std::move(snapshot),{},{},{},std::move(presentation)};return;}
         if(workspace)pending.workspace=std::move(snapshot);
         else if(search)pending.search=std::move(snapshot);
         if(camera)pending.camera=std::move(*camera);

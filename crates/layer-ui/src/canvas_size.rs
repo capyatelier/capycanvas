@@ -170,6 +170,11 @@ impl CanvasSizeDraft {
         }
     }
 
+    pub(super) fn set_localization(&mut self, document: &Document, limits: layer_core::GeometryLimits, localization: &Localizer) {
+        self.view = Self::new(self.current, localization).view;
+        self.update(document, limits, localization);
+    }
+
     fn pixels(&self, axis: usize) -> Option<u32> {
         let current = f64::from(self.current[axis]);
         let value = self.values[axis];
@@ -240,6 +245,14 @@ impl CanvasSizeDraft {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn refresh_size_localization(&mut self) {
+        let document = self.engine.document();
+        let limits = self.engine.geometry_limits();
+        let localization = &self.state.localization;
+        if let Some(draft) = &mut self.canvas_size { draft.set_localization(document, limits, localization); }
+        if let Some(draft) = &mut self.image_size { draft.set_localization(document, limits, localization); }
+    }
+
     /// Why no geometry command can change the canvas right now.
     pub(super) fn canvas_geometry_refusal(&self) -> Option<std::sync::Arc<str>> {
         let l = self.localization();
@@ -356,6 +369,27 @@ pub(super) fn size_message(localization: &Localizer, message: MessageId, [width,
 mod tests {
     use super::*;
     use crate::session::test_support::{session, invoke};
+    #[test]
+    fn canvas_size_language_refresh_preserves_relative_draft_and_checkpoint() {
+        let mut session = session(Platform::Gtk);
+        invoke(&mut session, CommandId::CanvasSize);
+        session.canvas_size_action(CanvasSizeAction::Relative { relative: true }).unwrap();
+        session.canvas_size_action(CanvasSizeAction::Width { value: 17. }).unwrap();
+        session.canvas_size_action(CanvasSizeAction::Anchor { anchor: CanvasAnchor::BottomLeft }).unwrap();
+        let before = session.canvas_size_view().unwrap();
+        let checkpoint = session.engine.checkpoint();
+        assert!(session.set_localization(Localizer::shared(UiLanguage::Japanese)));
+        let after = session.canvas_size_view().unwrap();
+        assert_ne!(before.title, after.title);
+        assert_ne!(before.message, after.message);
+        assert_eq!(after.values, before.values);
+        assert_eq!(after.numeric, before.numeric);
+        assert_eq!(after.relative, before.relative);
+        assert_eq!(after.anchor, before.anchor);
+        assert_eq!(after.can_apply, before.can_apply);
+        assert_eq!(session.engine.checkpoint(), checkpoint);
+    }
+
     #[test]
     fn retained_canvas_size_status_survives_ordinary_publication() {
         let mut session = session(Platform::Gtk);

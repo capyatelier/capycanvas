@@ -1,16 +1,18 @@
+import {liveCopy} from './localization.js';
 import { noticePlacement } from "./notice.js";
 import { captureSliderContacts } from "./numeric.js";
 
 export const PREVIEW_PANEL_WIDTH = 360;
 
-export function createPreviewPanel({name,view,kind,value,apply,cancel,element,button,numberField,workspace,layout,bar}) {
+export function createPreviewPanel({app,name,view,kind,value,apply,cancel,element,button,numberField,workspace,layout,bar}) {
+  const common=liveCopy(app,'bootstrap_view').common;
   let panel=null,title,number=null,shown=null,below=null,bounds=null,transform='';
   function open() {
     panel=element('section','refine-panel');panel.id=`${name}-panel`;
     panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','false');panel.tabIndex=-1;
     title=element('h2','refine-title');title.id=`${name}-title`;panel.setAttribute('aria-labelledby',title.id);
     const actions=element('div','refine-actions');
-    actions.append(button('Cancel',cancel),button('Apply',apply,'suggested-action'));
+    actions.append(button(()=>common.cancel,cancel),button(()=>common.apply,apply,'suggested-action'));
     panel.append(title,actions);
     panel.addEventListener('mousedown',e=>{if(!e.target.closest('input'))e.preventDefault();});
     panel.addEventListener('contextmenu',e=>e.preventDefault());
@@ -44,10 +46,10 @@ export function createPreviewPanel({name,view,kind,value,apply,cancel,element,bu
     if(!v){if(panel)close();return;}
     if(!panel)open();
     title.textContent=v.title;
-    const rebuilt=shown!==kind(v);
+    const rebuilt=shown!==JSON.stringify([v.numeric,v.kind]);
     if(rebuilt) {
       const field=numberField(v.numeric,v.label,value);
-      field.id=`${name}-value`;field.dataset.kind=shown=kind(v);
+      field.id=`${name}-value`;field.dataset.kind=kind(v);shown=JSON.stringify([v.numeric,v.kind]);
       if(v.numeric.kind==='slider'){
         captureSliderContacts(field);
         field.slider.addEventListener('touchstart',e=>e.preventDefault(),{passive:false});
@@ -55,6 +57,7 @@ export function createPreviewPanel({name,view,kind,value,apply,cancel,element,bu
       if(number)number.replaceWith(field);else title.after(field);
       number=field;
     }
+    number.relabel?.(v.label);
     number.update(v.radius);
     if(rebuilt)place();
   }

@@ -20,7 +20,7 @@ GPU and platform crates that a given machine may not be able to run.
 | Renderer, shaders or runtime filters | `cargo test --locked -p layer-render-wgpu <filter>` and `-p layer-host` on a hardware GPU. If shader cache-key inputs changed, `python3 tools/build/test_shader_generation.py`. Frame-path changes need [measurements](#performance). |
 | Pen prediction or stroke placement | `cargo test --locked -p layer-engine --features prediction-bench`, then `cargo build --locked -p layer-engine --release --features prediction-bench --examples` and `python3 tools/prediction/replay-bank.py --output artifacts/strokes/bank --check`. |
 | GTK | `cargo test --locked -p layer-linux` for the model tests, then each affected journey on the private display: `bash tools/performance/workspace-motion.sh gtk --native-test=<name>`, adding `--tablet` for pen journeys ([Linux](linux.md#tests)). |
-| Web | `bash apps/layer-web/build.sh`, the pure tests `node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input}.test.mjs`, then the affected journeys with `bash tools/performance/workspace-motion.sh web --<journey>` (headed, hardware WebGPU) or `node apps/layer-web/test.mjs --headless --<journey>` against `run.sh`. Packaging changes: `node apps/layer-web/package.mjs && node apps/layer-web/test.mjs --package` ([Web](web.md#tests)). |
+| Web | `bash apps/layer-web/build.sh`, the pure tests `node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs`, then the affected journeys with `bash tools/performance/workspace-motion.sh web --<journey>` (headed, hardware WebGPU) or `node apps/layer-web/test.mjs --headless --<journey>` against `run.sh`. Packaging changes: `node apps/layer-web/package.mjs && node apps/layer-web/test.mjs --package` ([Web](web.md#tests)). |
 | Android | Without a device: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug -PcapyAbi=arm64-v8a` in `apps/layer-android`. On a reserved tablet, through `tools/devices/devices.py run`: install both APKs with `adb install -r`, then `am instrument -w -e class art.capycanvas.<Class>[#method] $CAPY_APPLICATION_ID.test/androidx.test.runner.AndroidJUnitRunner`. Read `OK` or `FAILURES!!!`, not the exit status ([Android](android.md#device-tests)). |
 | Apple | Anywhere: `cargo test --locked -p layer-apple --lib -- --test-threads=1` and `python3 apps/layer-apple/tests/test_icon_assets.py`. On a Mac: the Swift fixtures, the command audit, and the XCTest journeys in the [Apple guide](apple.md#tests); journeys that render the canvas need a physical iPad. |
 | Windows | From any OS: `cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib` and `cargo clippy --locked -p layer-windows --all-targets -- -D warnings`. On Windows: `apps/layer-windows/scripts/test-without-gpu.ps1`, then the `exercise-*.ps1` fixtures for the changed area; from Linux, `tools/windows-vm/windows-vm.py check` and `fixtures <name>`. Device-removal, HDR and performance checks need a hardware GPU ([Windows](windows.md)). |
@@ -92,6 +92,16 @@ dynamic messages with zero, one and many counts and literal CJK, emoji, quotes,
 braces and long filenames. Direct Fluent formatting checks expose errors before
 runtime English fallback can hide them.
 
+Live language changes use `cargo test --locked -p layer-ui language_`, followed
+by the full changed-crate suites. The host journeys are
+`workspace-motion.sh gtk --native-test=native_live_language_switching`,
+`workspace-motion.sh web --language-switching`, Android `AndroidLanguageTest`,
+and Windows `scripts/exercise-localization.ps1` in both themes. These check
+preference selection, retained editor identity and drafts, generated captions,
+and continued drawing ownership. Run the affected dialog and composition suites
+too. Synthetic composition and InputConnection coverage do not establish genuine
+CJK IME behavior.
+
 Catalog tests do not prove host coverage or linguistic quality. For an advertised
 language, walk every affected host in both themes, including search, rename with
 IME, Unicode save/reopen, export, unsaved close, validation errors, workspace
@@ -147,7 +157,8 @@ are your task, and remove an entry when you fix it.
   `native_workspace_motion_input`, and `native_workspace_switcher_input`
   (intermittent). `native_workspace_resize_input` presents below its rate
   threshold under the runner's `color-mgmt`.
-- GTK `native_toolbar_manager` cannot find its `toolbar-manager` dialog.
+- GTK `native_toolbar_manager` and `native_panel_customization` expect the older
+  customization dialogs where managed desktop menus now open the workspace manager.
 - Android: 7 of 15 `AndroidTitleBarTest` cases;
   `detachedPanelsKeepBodiesAndWiderResizeTargets`;
   `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` (light docked panels);

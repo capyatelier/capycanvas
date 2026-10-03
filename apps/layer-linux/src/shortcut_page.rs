@@ -145,13 +145,13 @@ impl Form {
     }
 
     fn present(&self, dialog: &adw::Dialog) {
-        self.sheet.show(true, dialog);
+        let opened = self.sheet.show(true, dialog);
         let (_, natural, _, _) = self.sheet.view.measure(gtk::Orientation::Vertical, self.sheet.dialog.content_width());
         if self.sheet.dialog.content_height() != natural {
             self.sheet.dialog.set_content_height(natural);
         }
         let focused = self.sheet.dialog.root().and_then(|root| root.focus()).is_some_and(|f| f.is_ancestor(&self.sheet.dialog));
-        if let Some(row) = self.recording.borrow().as_ref().filter(|row| !row.has_focus()) {
+        if let Some(row) = self.recording.borrow().as_ref().filter(|_| opened || !focused) {
             row.set_focusable(true);
             row.grab_focus();
         } else if !focused {
@@ -195,8 +195,9 @@ impl PerTool {
 
     fn render(&self, w: &Rc<Workspace>, view: PerToolView) {
         self.page.set_title(view.title);
-        let signature = serde_json::to_string(&(&view.summary, view.per_tool, view.actions, view.modified, view.remove.as_ref().map(|r| r.0))).unwrap();
+        let signature = serde_json::to_string(&(view.per_tool, view.actions.iter().map(|a| a.category).collect::<Vec<_>>(), view.modified, view.remove.is_some())).unwrap();
         if self.signature.replace(signature.clone()) == signature {
+            self.relabel(w, &view);
             return;
         }
         for group in self.groups.borrow_mut().drain(..) {
@@ -205,7 +206,7 @@ impl PerTool {
         let group = adw::PreferencesGroup::new();
         group.set_description(Some(&glib::markup_escape_text(&view.summary)));
         if view.modified {
-            let reset = icon_button("edit-undo-symbolic", "Reset to default", &format!("{}-reset", self.prefix));
+            let reset = icon_button("edit-undo-symbolic", "", &format!("{}-reset", self.prefix));
             let action = view.reset.clone();
             reset.connect_clicked(glib::clone!(
                 #[weak]
@@ -214,7 +215,7 @@ impl PerTool {
             ));
             group.set_header_suffix(Some(&reset));
         }
-        let same = adw::SwitchRow::builder().title("Same for every tool").active(!view.per_tool).build();
+        let same = adw::SwitchRow::builder().title("").active(!view.per_tool).build();
         same.set_widget_name(&format!("{}-same", self.prefix));
         let toggle = view.same.clone();
         same.connect_active_notify(glib::clone!(
@@ -229,6 +230,7 @@ impl PerTool {
             row.set_widget_name(&format!("{}-action-{category}", self.prefix));
             row.set_activatable(true);
             let value = gtk::Label::new(Some(&action.action));
+            value.set_widget_name(&format!("{}-value-{category}", self.prefix));
             value.add_css_class("dim-label");
             row.add_suffix(&value);
             row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
@@ -242,7 +244,8 @@ impl PerTool {
         }
         self.content.add(&group);
         self.groups.borrow_mut().push(group);
-        if let Some((title, action)) = view.remove {
+        if let Some((title, action)) = &view.remove {
+            let action = action.clone();
             let remove = adw::PreferencesGroup::new();
             let row = button_row(title, "user-trash-symbolic", &format!("{}-remove", self.prefix), glib::clone!(
                 #[weak]
@@ -253,6 +256,25 @@ impl PerTool {
             remove.add(&row);
             self.content.add(&remove);
             self.groups.borrow_mut().push(remove);
+        }
+        self.relabel(w, &view);
+    }
+
+    fn relabel(&self, w: &Workspace, view: &PerToolView) {
+        let localization = w.localization();
+        if let Some(group) = self.groups.borrow().first() {
+            group.set_description(Some(&glib::markup_escape_text(&view.summary)));
+        }
+        relabel_controls(self.content.upcast_ref(), &localization);
+        for action in view.actions {
+            let category = action.category.map_or("all".into(), |c| format!("{c:?}").to_lowercase());
+            crate::text_language::visit(self.content.upcast_ref(), &mut |widget| {
+                if widget.widget_name().as_str() == format!("{}-action-{category}", self.prefix) {
+                    if let Some(row) = widget.downcast_ref::<adw::ActionRow>() { row.set_title(&action.label); }
+                } else if widget.widget_name().as_str() == format!("{}-value-{category}", self.prefix) {
+                    if let Some(label) = widget.downcast_ref::<gtk::Label>() { label.set_text(&action.action); }
+                }
+            });
         }
     }
 }
@@ -325,12 +347,7 @@ fn current(w: &Workspace) -> Option<PreferencesView> {
 }
 
 fn subtitle(row: &ShortcutRow) -> String {
-    let scope = match row.scope.as_str() {
-        "" => String::new(),
-        "Canvas" => "On the canvas".into(),
-        tools => format!("With {} tools", tools.to_lowercase()),
-    };
-    [row.detail.as_str(), &scope].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
+    [row.detail.as_str(), &row.scope_caption].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
 }
 
 fn is_text_editing(key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType) -> bool {
@@ -367,6 +384,16 @@ fn dropdown(name: &str, tooltip: &str) -> gtk::DropDown {
     dropdown
 }
 
+fn refresh_options(dropdown: &gtk::DropDown, labels: &[&str]) {
+    if let Some(model) = dropdown.model().and_downcast::<gtk::StringList>() {
+        if model.n_items() as usize != labels.len() || labels.iter().enumerate().any(|(index, label)| model.string(index as u32).as_deref() != Some(*label)) {
+            model.splice(0, model.n_items(), labels);
+        }
+    } else {
+        dropdown.set_model(Some(&gtk::StringList::new(labels)));
+    }
+}
+
 fn button_row(title: &str, icon: &str, name: &str, activate: impl Fn() + 'static) -> adw::ButtonRow {
     let row = adw::ButtonRow::builder().title(title).start_icon_name(icon).build();
     row.set_widget_name(name);
@@ -375,18 +402,12 @@ fn button_row(title: &str, icon: &str, name: &str, activate: impl Fn() + 'static
 }
 
 fn recording_row(w: &Rc<Workspace>, capture: &ShortcutCapture) -> adw::ActionRow {
-    let row = text_row(&capture.shortcut, &capture.notice);
+    let row = text_row("", "");
     row.set_widget_name("shortcut-recording");
-    let icon = gtk::Image::from_icon_name(match (capture.existing, capture.notice.is_empty()) {
-        (true, _) => "dialog-information-symbolic",
-        (false, true) => "input-keyboard-symbolic",
-        (false, false) => "dialog-warning-symbolic",
-    });
-    if !capture.existing && !capture.notice.is_empty() {
-        icon.add_css_class("warning");
-    }
+    let icon = gtk::Image::new();
+    icon.set_widget_name("shortcut-recording-icon");
     row.add_prefix(&icon);
-    let cancel = gtk::Button::with_label("Cancel");
+    let cancel = gtk::Button::new();
     cancel.set_widget_name("cancel-shortcut");
     cancel.set_valign(gtk::Align::Center);
     cancel.connect_clicked(glib::clone!(
@@ -394,24 +415,63 @@ fn recording_row(w: &Rc<Workspace>, capture: &ShortcutCapture) -> adw::ActionRow
         w,
         move |_| send(&w, PreferenceAction::CancelShortcut)
     ));
-    let replace = capture.conflict.is_some();
-    let confirm = gtk::Button::with_label(match (capture.existing, replace) {
-        (true, _) => "Open",
-        (false, true) => "Reassign",
-        (false, false) => "Add",
-    });
+    let confirm = gtk::Button::new();
     confirm.set_widget_name("confirm-shortcut");
     confirm.set_valign(gtk::Align::Center);
     confirm.add_css_class("suggested-action");
-    confirm.set_sensitive(capture.chord.is_some() && capture.error.is_none());
     confirm.connect_clicked(glib::clone!(
         #[weak]
         w,
-        move |_| send(&w, PreferenceAction::ConfirmShortcut { replace })
+        move |_| send(&w, PreferenceAction::ConfirmShortcut { replace: current(&w).and_then(|view| view.capture).is_some_and(|capture| capture.conflict.is_some()) })
     ));
     row.add_suffix(&cancel);
     row.add_suffix(&confirm);
+    refresh_recording(&row, capture, &w.localization());
     row
+}
+
+fn refresh_recording(row: &adw::ActionRow, capture: &ShortcutCapture, localization: &Localizer) {
+    row.set_title(&capture.shortcut);
+    row.set_subtitle(&capture.notice);
+    crate::text_language::visit(row.upcast_ref(), &mut |widget| match widget.widget_name().as_str() {
+        "cancel-shortcut" => if let Some(button) = widget.downcast_ref::<gtk::Button>() { button.set_label(&localization.text(MessageId::COMMON_CANCEL)); },
+        "confirm-shortcut" => if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+            button.set_label(&localization.text(match (capture.existing, capture.conflict.is_some()) {
+                (true, _) => MessageId::NATIVE_SHORTCUTS_OPEN,
+                (false, true) => MessageId::NATIVE_SHORTCUTS_REASSIGN,
+                (false, false) => MessageId::NATIVE_SHORTCUTS_ADD,
+            }));
+            button.set_sensitive(capture.chord.is_some() && capture.error.is_none());
+        },
+        "shortcut-recording-icon" => if let Some(icon) = widget.downcast_ref::<gtk::Image>() {
+            icon.set_icon_name(Some(match (capture.existing, capture.notice.is_empty()) {
+                (true, _) => "dialog-information-symbolic",
+                (false, true) => "input-keyboard-symbolic",
+                (false, false) => "dialog-warning-symbolic",
+            }));
+            if !capture.existing && !capture.notice.is_empty() { icon.add_css_class("warning"); }
+            else { icon.remove_css_class("warning"); }
+        },
+        _ => {},
+    });
+}
+
+fn relabel_controls(widget: &gtk::Widget, localization: &Localizer) {
+    crate::text_language::visit(widget, &mut |widget| {
+        let message = match widget.widget_name().as_str() {
+            "shortcut-editor-reset" | "modifier-reset" | "pen-button-reset" => Some(MessageId::SETTINGS_RESET_TO_DEFAULT),
+            name if name.starts_with("remove-shortcut-") => Some(MessageId::NATIVE_SHORTCUTS_REMOVE_SHORTCUT),
+            "add-shortcut" => Some(MessageId::NATIVE_SHORTCUTS_ADD_SHORTCUT),
+            "add-modifier-key" => Some(MessageId::NATIVE_SHORTCUTS_ADD_MODIFIER),
+            "modifier-remove" => Some(MessageId::NATIVE_SHORTCUTS_REMOVE_MODIFIER),
+            "modifier-same" | "pen-button-same" => Some(MessageId::NATIVE_SHORTCUTS_SAME_ALL_TOOLS),
+            _ => None,
+        };
+        let Some(message) = message else { return; };
+        let text = localization.text(message);
+        if let Some(row) = widget.downcast_ref::<adw::PreferencesRow>() { row.set_title(&text); }
+        else if let Some(button) = widget.downcast_ref::<gtk::Button>() { button.set_tooltip_text(Some(&text)); }
+    });
 }
 
 impl Results {
@@ -421,10 +481,13 @@ impl Results {
 
     fn show(&self, owner: &ShortcutPage, w: &Rc<Workspace>, layout: &[(String, Vec<&ShortcutRow>)]) {
         let signature = serde_json::to_string(
-            &layout.iter().map(|(t, rows)| (t, rows.iter().map(|r| &r.id).collect::<Vec<_>>())).collect::<Vec<_>>(),
+            &layout.iter().map(|(_, rows)| rows.iter().map(|r| &r.id).collect::<Vec<_>>()).collect::<Vec<_>>(),
         )
         .unwrap();
         if self.layout.replace(signature.clone()) == signature {
+            for (group, (title, _)) in self.groups.borrow().iter().zip(layout) {
+                group.set_title(title);
+            }
             for spec in layout.iter().flat_map(|(_, specs)| specs) {
                 owner.shortcut_row(w, spec);
             }
@@ -455,27 +518,25 @@ impl Results {
 impl ShortcutPage {
     pub(super) fn new() -> Self {
         let back = gtk::Button::from_icon_name("go-previous-symbolic");
-        back.set_tooltip_text(Some("All shortcuts"));
         back.set_widget_name("shortcut-category-back");
         back.set_visible(false);
         let navigation = adw::NavigationView::new();
         navigation.set_widget_name("shortcut-navigation");
         let category_content = adw::PreferencesPage::new();
         category_content.set_widget_name("shortcut-category-page");
-        let category_page = adw::NavigationPage::with_tag(&category_content, "Shortcuts", "category");
-        let keymap_combo = adw::ComboRow::builder().title("Preset").build();
+        let category_page = adw::NavigationPage::with_tag(&category_content, "", "category");
+        let keymap_combo = adw::ComboRow::new();
         keymap_combo.set_widget_name("keymap-preset");
         let keymap_group = adw::PreferencesGroup::new();
-        keymap_group.set_title("Keymap");
         let details = Sheet::new("keymap-details", 600);
         let details_body = gtk::Box::new(gtk::Orientation::Vertical, 12);
         super::margins(&details_body, 12);
         details.view.set_content(Some(&details_body));
         let picker = Sheet::new("action-picker", 600);
-        let picker_reset = gtk::Button::with_label("Reset");
+        let picker_reset = gtk::Button::new();
         picker_reset.set_widget_name("action-picker-reset");
         picker.header.pack_start(&picker_reset);
-        let picker_search = gtk::SearchEntry::builder().placeholder_text("Search actions").hexpand(true).build();
+        let picker_search = gtk::SearchEntry::builder().hexpand(true).build();
         picker_search.set_widget_name("action-picker-search");
         let picker_description = gtk::Label::builder().wrap(true).justify(gtk::Justification::Center).build();
         picker_description.add_css_class("dim-label");
@@ -494,10 +555,8 @@ impl ShortcutPage {
         let editor = Form::new("shortcut-editor");
         let modifier = Form::new("modifier-key");
         let modifiers_main = adw::PreferencesGroup::new();
-        modifiers_main.set_title(MODIFIER_SECTION);
         modifiers_main.set_widget_name("modifier-results");
         let modifiers_category = adw::PreferencesGroup::new();
-        modifiers_category.set_description(Some("Hold a key to use a tool or mode until you let go."));
         modifiers_category.set_widget_name("modifier-keys");
         category_content.add(&modifiers_category);
         let categories = gtk::ListBox::new();
@@ -521,9 +580,9 @@ impl ShortcutPage {
             details_body,
             details_signature: RefCell::default(),
             import: RefCell::default(),
-            context: dropdown("shortcut-context", "Show what shortcuts do with a kind of tool"),
+            context: dropdown("shortcut-context", ""),
             contexts: RefCell::default(),
-            show: dropdown("shortcut-show", "Choose which actions to list"),
+            show: dropdown("shortcut-show", ""),
             shows: RefCell::default(),
             categories,
             category_rows: RefCell::default(),
@@ -590,7 +649,7 @@ impl ShortcutPage {
                 });
             }
         ));
-        let root = adw::NavigationPage::with_tag(content, "Shortcuts", "shortcuts");
+        let root = adw::NavigationPage::with_tag(content, "", "shortcuts");
         self.navigation.add(&root);
         *self.root.borrow_mut() = Some(root);
         self.navigation.connect_popped(glib::clone!(
@@ -620,13 +679,12 @@ impl ShortcutPage {
         ));
         let menu = gtk::gio::Menu::new();
         let actions = gtk::gio::SimpleActionGroup::new();
-        for (name, label, action) in [
-            ("import", "Import…", PreferenceAction::ChooseKeymapFile),
-            ("export", "Export…", PreferenceAction::ExportKeymap),
-            ("details", "Differences…", PreferenceAction::KeymapDetails { open: true }),
-            ("reset", "Reset All Shortcuts", PreferenceAction::ResetAllShortcuts),
+        for (name, action) in [
+            ("import", PreferenceAction::ChooseKeymapFile),
+            ("export", PreferenceAction::ExportKeymap),
+            ("details", PreferenceAction::KeymapDetails { open: true }),
+            ("reset", PreferenceAction::ResetAllShortcuts),
         ] {
-            menu.append(Some(label), Some(&format!("keymap.{name}")));
             let simple = gtk::gio::SimpleAction::new(name, None);
             simple.connect_activate(glib::clone!(
                 #[weak]
@@ -639,13 +697,11 @@ impl ShortcutPage {
         more.set_widget_name("keymap-menu");
         more.set_valign(gtk::Align::Center);
         more.add_css_class("flat");
-        more.set_tooltip_text(Some("Keymap options"));
         more.insert_action_group("keymap", Some(&actions));
         self.keymap_combo.add_suffix(&more);
         self.keymap_group.add(&self.keymap_combo);
         content.add(&self.keymap_group);
 
-        search.set_placeholder_text(Some("Search or press a shortcut"));
         search.set_hexpand(true);
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -711,11 +767,10 @@ impl ShortcutPage {
         body.append(&self.categories);
         body.append(&self.status);
         let group = adw::PreferencesGroup::new();
-        group.set_title("Shortcuts");
         group.add(&body);
         content.add(&group);
 
-        self.picker_search.connect_search_changed(glib::clone!(
+        self.picker_search.connect_changed(glib::clone!(
             #[weak]
             w,
             move |entry| {
@@ -822,12 +877,42 @@ impl ShortcutPage {
             }
         ));
         content.add(&self.modifiers_main);
+        w.on_localization(glib::clone!(
+            #[weak] w,
+            #[weak] menu,
+            #[weak] more,
+            #[weak] group,
+            #[weak] search,
+            #[upgrade_or] false,
+            move |localization| {
+                let copy = NativeCopy::new(localization).shortcuts;
+                let page = &w.preferences.shortcut_page;
+                if let Some(root) = page.root.borrow().as_ref() { root.set_title(&copy.title); }
+                page.back.set_tooltip_text(Some(&copy.title));
+                page.keymap_group.set_title(&copy.keymap);
+                page.keymap_combo.set_title(&copy.preset);
+                page.picker_reset.set_label(&localization.text(MessageId::COMMON_RESET));
+                page.picker_search.set_placeholder_text(Some(&copy.search_actions));
+                page.context.set_tooltip_text(Some(&copy.tool_shortcuts));
+                page.show.set_tooltip_text(Some(&copy.choose_actions));
+                page.modifiers_main.set_title(&localization.text(MessageId::SHORTCUT_MODIFIER_KEYS));
+                page.modifiers_category.set_description(Some(&copy.hold_key_help));
+                group.set_title(&copy.title);
+                search.set_placeholder_text(Some(&copy.search_or_press));
+                more.set_tooltip_text(Some(&copy.keymap_options));
+                menu.remove_all();
+                for (name, label) in [("import", &copy.import_menu), ("export", &copy.export_menu), ("details", &copy.differences), ("reset", &copy.reset_all)] {
+                    menu.append(Some(label), Some(&format!("keymap.{name}")));
+                }
+                true
+            }
+        ));
         self.navigation.clone()
     }
 
     pub(super) fn build_triggers(&self, w: &Rc<Workspace>, content: &adw::PreferencesPage) -> adw::NavigationView {
         *self.input_page.borrow_mut() = Some(content.clone());
-        let root = adw::NavigationPage::with_tag(content, "Pen & Input", "input");
+        let root = adw::NavigationPage::with_tag(content, "", "input");
         self.input_navigation.add(&root);
         *self.input_root.borrow_mut() = Some(root);
         self.input_navigation.connect_popped(glib::clone!(
@@ -866,20 +951,16 @@ impl ShortcutPage {
         let page = &view.shortcut_page;
         self.refresh_pages(w, view);
         let contexts: Vec<_> = page.contexts.iter().map(|c| c.category).collect();
-        if *self.contexts.borrow() != contexts {
-            let labels: Vec<_> = page.contexts.iter().map(|c| c.label.as_str()).collect();
-            self.context.set_model(Some(&gtk::StringList::new(&labels)));
-            *self.contexts.borrow_mut() = contexts;
-        }
+        let labels: Vec<_> = page.contexts.iter().map(|c| c.label.as_str()).collect();
+        refresh_options(&self.context, &labels);
+        *self.contexts.borrow_mut() = contexts;
         if let Some(index) = self.contexts.borrow().iter().position(|c| *c == page.context) {
             self.context.set_selected(index as u32);
         }
         let shows: Vec<_> = page.shows.iter().map(|s| s.show).collect();
-        if *self.shows.borrow() != shows {
-            let labels: Vec<_> = page.shows.iter().map(|s| s.label.as_str()).collect();
-            self.show.set_model(Some(&gtk::StringList::new(&labels)));
-            *self.shows.borrow_mut() = shows;
-        }
+        let labels: Vec<_> = page.shows.iter().map(|s| s.label.as_str()).collect();
+        refresh_options(&self.show, &labels);
+        *self.shows.borrow_mut() = shows;
         if let Some(index) = self.shows.borrow().iter().position(|s| *s == page.show) {
             self.show.set_selected(index as u32);
         }
@@ -901,30 +982,34 @@ impl ShortcutPage {
     }
 
     fn refresh_pages(&self, w: &Rc<Workspace>, view: &PreferencesView) {
+        let localization = w.localization();
         let page = &view.shortcut_page;
+        if let Some(root) = self.root.borrow().as_ref() { root.set_title(&SettingsPage::Shortcuts.localized_title(&localization)); }
+        if let Some(root) = self.input_root.borrow().as_ref() { root.set_title(&SettingsPage::Input.localized_title(&localization)); }
         if let Some(category) = &page.category {
-            self.category_page.set_title(category);
+            self.category_page.set_title(&page.categories.iter().find(|c| &c.id == category).map_or_else(|| category.clone(), |c| c.label.clone()));
         }
+        let remove_modifier = localization.text(MessageId::NATIVE_SHORTCUTS_REMOVE_MODIFIER);
         if let Some(editor) = &view.modifier_editor {
             let key = editor.key.clone();
             let (same, pick) = (key.clone(), key.clone());
             self.modifier_page.render(w, PerToolView {
                 title: &editor.label,
-                summary: format!("Hold {} to use an action until you let go.", editor.label),
+                summary: modifier_hold_help(&localization, &editor.label),
                 per_tool: editor.per_tool,
                 actions: &editor.actions,
                 modified: editor.modified,
                 reset: PreferenceAction::ResetModifierKey { key: key.clone() },
                 same: Rc::new(move |per_tool| PreferenceAction::ModifierKeyPerTool { key: same.clone(), per_tool }),
                 pick: Rc::new(move |category| PreferenceAction::OpenModifierPicker { key: pick.clone(), category }),
-                remove: Some(("Remove Modifier Key", PreferenceAction::RemoveModifierKey { key })),
+                remove: Some((&remove_modifier, PreferenceAction::RemoveModifierKey { key })),
             });
         }
         if let Some(editor) = &view.pen_button_editor {
             let (same, pick) = (editor.trigger.clone(), editor.trigger.clone());
             self.pen_page.render(w, PerToolView {
                 title: &editor.label,
-                summary: "Tools, brushes and modes last while the button is held. Other actions run once.".into(),
+                summary: localization.text(MessageId::SHORTCUT_PEN_ACTION_HELP).to_string(),
                 per_tool: editor.per_tool,
                 actions: &editor.actions,
                 modified: editor.modified,
@@ -955,7 +1040,7 @@ impl ShortcutPage {
             sync_stack(&self.input_navigation, &desired);
         }
         let title = match view.page {
-            SettingsPage::Shortcuts => view.modifier_editor.as_ref().map(|e| e.label.clone()).or_else(|| page.category.clone()),
+            SettingsPage::Shortcuts => view.modifier_editor.as_ref().map(|e| e.label.clone()).or_else(|| page.category.as_ref().map(|category| page.categories.iter().find(|c| &c.id == category).map_or_else(|| category.clone(), |c| c.label.clone()))),
             SettingsPage::Input => view.pen_button_editor.as_ref().map(|e| e.label.clone()),
             _ => None,
         };
@@ -989,7 +1074,8 @@ impl ShortcutPage {
                 self.category_rows.borrow_mut().push((category.id.clone(), row, count));
             }
         }
-        for ((_, _, count), category) in self.category_rows.borrow().iter().zip(categories) {
+        for ((_, row, count), category) in self.category_rows.borrow().iter().zip(categories) {
+            row.set_title(&category.label);
             count.set_text(&category.count.to_string());
         }
     }
@@ -1009,7 +1095,7 @@ impl ShortcutPage {
             let keys = gtk::Label::builder().ellipsize(gtk::pango::EllipsizeMode::End).max_width_chars(24).build();
             keys.add_css_class("dim-label");
             row.add_suffix(&keys);
-            let reset = icon_button("edit-undo-symbolic", "Reset to default", &format!("shortcut-reset-{}", spec.id));
+            let reset = icon_button("edit-undo-symbolic", "", &format!("shortcut-reset-{}", spec.id));
             let id = spec.id.clone();
             reset.connect_clicked(glib::clone!(
                 #[weak]
@@ -1019,12 +1105,15 @@ impl ShortcutPage {
             row.add_suffix(&reset);
             ShortcutWidget { row, keys, reset, signature: RefCell::default() }
         });
-        let signature = serde_json::to_string(&(&spec.shortcut, &spec.detail, &spec.scope, spec.modified)).unwrap();
+        widget.reset.set_tooltip_text(Some(&w.localization().text(MessageId::SETTINGS_RESET_TO_DEFAULT)));
+        let signature = serde_json::to_string(&(&spec.label, &spec.shortcut, &spec.detail, &spec.scope_caption, spec.modified)).unwrap();
         if widget.signature.replace(signature.clone()) != signature {
+            widget.row.set_title(&spec.label);
             widget.reset.set_visible(spec.modified);
             widget.row.set_subtitle(&subtitle(spec));
             let disabled = spec.shortcut.is_empty() && spec.modified;
-            widget.keys.set_text(if disabled { "Disabled" } else { &spec.shortcut });
+            let disabled_label = w.localization().text(MessageId::SHORTCUT_DISABLED);
+            widget.keys.set_text(if disabled { &disabled_label } else { &spec.shortcut });
         }
         widget.row.clone()
     }
@@ -1052,6 +1141,7 @@ impl ShortcutPage {
     }
 
     fn refresh_editor(&self, w: &Rc<Workspace>, dialog: &adw::Dialog, view: &PreferencesView) {
+        let localization = w.localization();
         let capture = view.capture.as_ref();
         self.recording.set(capture.is_some());
         let Some(editor) = view.shortcut_editor.as_ref() else {
@@ -1061,13 +1151,13 @@ impl ShortcutPage {
         let capture = capture.filter(|c| c.id == editor.id);
         let error = view.error.as_ref().filter(|_| capture.is_none());
         self.editor.texts(&editor.label, &editor.description, error.map(String::as_str));
-        let signature = serde_json::to_string(&(&editor.id, &editor.bindings, &editor.defaults, &editor.overlaps, &editor.gestures, editor.modified, editor.can_add, capture)).unwrap();
+        let signature = w.gpu.borrow().as_ref().map(|g| serde_json::to_string(&(&editor.id, &g.session.state().settings.shortcuts, &g.session.state().settings.keymap, &g.session.state().settings.gestures, &g.session.state().settings.pen_buttons, editor.modified, editor.can_add, capture.is_some())).unwrap()).unwrap_or_default();
         self.editor.rebuild(signature, || {
             let keys = adw::PreferencesGroup::new();
-            let default = format!("Default: {}", if editor.defaults.is_empty() { "none".into() } else { editor.defaults.join(" / ") });
+            let default = shortcut_default_caption(&localization, &editor.defaults);
             let description: Vec<_> = std::iter::once(default).chain(editor.overlaps.iter().cloned()).collect();
             keys.set_description(Some(&glib::markup_escape_text(&description.join("\n"))));
-            let reset = icon_button("edit-undo-symbolic", "Reset to default", "shortcut-editor-reset");
+            let reset = icon_button("edit-undo-symbolic", "", "shortcut-editor-reset");
             reset.set_visible(editor.modified);
             let id = editor.id.clone();
             reset.connect_clicked(glib::clone!(
@@ -1078,7 +1168,8 @@ impl ShortcutPage {
             keys.set_header_suffix(Some(&reset));
             for (index, binding) in editor.bindings.iter().enumerate() {
                 let row = text_row(binding, "");
-                let remove = icon_button("user-trash-symbolic", "Remove shortcut", &format!("remove-shortcut-{index}"));
+                row.set_widget_name(&format!("shortcut-binding-{index}"));
+                let remove = icon_button("user-trash-symbolic", "", &format!("remove-shortcut-{index}"));
                 let id = editor.id.clone();
                 remove.connect_clicked(glib::clone!(
                     #[weak]
@@ -1096,7 +1187,7 @@ impl ShortcutPage {
                 }
                 None if editor.can_add => {
                     let id = editor.id.clone();
-                    keys.add(&button_row("Add Shortcut", "list-add-symbolic", "add-shortcut", glib::clone!(
+                    keys.add(&button_row("", "list-add-symbolic", "add-shortcut", glib::clone!(
                         #[weak]
                         w,
                         move || send(&w, PreferenceAction::BeginShortcut { id: id.clone() })
@@ -1107,15 +1198,35 @@ impl ShortcutPage {
             let mut groups = vec![keys];
             if !editor.gestures.is_empty() {
                 let gestures = adw::PreferencesGroup::new();
-                gestures.set_title("Pen and Touch");
-                gestures.set_description(Some(&glib::markup_escape_text("Change these on the Pen & Input page.")));
-                for gesture in &editor.gestures {
-                    gestures.add(&text_row(gesture, ""));
+                gestures.set_widget_name("shortcut-editor-gestures");
+                for (index, gesture) in editor.gestures.iter().enumerate() {
+                    let row = text_row(gesture, "");
+                    row.set_widget_name(&format!("shortcut-gesture-{index}"));
+                    gestures.add(&row);
                 }
                 groups.push(gestures);
             }
             groups
         });
+        if let Some(group) = self.editor.groups.borrow().first() {
+            let description: Vec<_> = std::iter::once(shortcut_default_caption(&localization, &editor.defaults)).chain(editor.overlaps.iter().cloned()).collect();
+            group.set_description(Some(&glib::markup_escape_text(&description.join("\n"))));
+        }
+        relabel_controls(self.editor.body.upcast_ref(), &localization);
+        crate::text_language::visit(self.editor.body.upcast_ref(), &mut |widget| {
+            let name = widget.widget_name();
+            if let Some(index) = name.strip_prefix("shortcut-binding-").and_then(|index| index.parse::<usize>().ok()) {
+                if let (Some(row), Some(label)) = (widget.downcast_ref::<adw::ActionRow>(), editor.bindings.get(index)) { row.set_title(label); }
+            } else if let Some(index) = name.strip_prefix("shortcut-gesture-").and_then(|index| index.parse::<usize>().ok()) {
+                if let (Some(row), Some(label)) = (widget.downcast_ref::<adw::ActionRow>(), editor.gestures.get(index)) { row.set_title(label); }
+            } else if name.as_str() == "shortcut-editor-gestures" {
+                if let Some(group) = widget.downcast_ref::<adw::PreferencesGroup>() {
+                    group.set_title(&localization.text(MessageId::NATIVE_SHORTCUTS_PEN_TOUCH));
+                    group.set_description(Some(&glib::markup_escape_text(&localization.text(MessageId::NATIVE_SHORTCUTS_PEN_PAGE_HELP))));
+                }
+            }
+        });
+        if let (Some(row), Some(capture)) = (self.editor.recording.borrow().as_ref(), capture) { refresh_recording(row, capture, &localization); }
         self.editor.present(dialog);
     }
 
@@ -1124,8 +1235,9 @@ impl ShortcutPage {
             self.modifier.close(dialog);
             return;
         };
-        self.modifier.texts("New Modifier Key", "Press the key or button to hold.", None);
-        let signature = serde_json::to_string(capture).unwrap();
+        let localization = w.localization();
+        self.modifier.texts(&capture.label, &localization.text(MessageId::NATIVE_SHORTCUTS_PRESS_HOLD_KEY), None);
+        let signature = capture.id.clone();
         self.modifier.rebuild(signature, || {
             let group = adw::PreferencesGroup::new();
             let row = recording_row(w, capture);
@@ -1133,16 +1245,18 @@ impl ShortcutPage {
             *self.modifier.recording.borrow_mut() = Some(row);
             vec![group]
         });
+        if let Some(row) = self.modifier.recording.borrow().as_ref() { refresh_recording(row, capture, &localization); }
         self.modifier.present(dialog);
     }
 
     fn refresh_modifier_rows(&self, w: &Rc<Workspace>, page: &ShortcutPageView) {
         let visible: Vec<_> = page.modifiers.iter().filter(|m| m.visible).collect();
         let on_category = page.category.as_deref() == Some(MODIFIER_SECTION);
-        let signature = serde_json::to_string(&(&visible, on_category)).unwrap();
+        let signature = serde_json::to_string(&(visible.iter().map(|row| &row.key).collect::<Vec<_>>(), on_category)).unwrap();
         self.modifiers_main.set_visible(page.filtering && !visible.is_empty());
         self.modifiers_category.set_visible(on_category);
         if self.modifier_signature.replace(signature.clone()) == signature {
+            self.relabel_modifier_rows(w, &visible);
             return;
         }
         for row in self.modifier_rows.borrow_mut().drain(..) {
@@ -1153,9 +1267,10 @@ impl ShortcutPage {
         let group = if on_category { &self.modifiers_category } else { &self.modifiers_main };
         for modifier in &visible {
             let row = text_row(&modifier.label, &modifier.detail);
-            row.set_widget_name(&format!("modifier-{}", modifier.label));
+            row.set_widget_name(&format!("modifier-{}", modifier.key.label(Platform::Gtk)));
             row.set_activatable(true);
             let action = gtk::Label::new(Some(&modifier.action));
+            action.set_widget_name("modifier-action");
             action.add_css_class("dim-label");
             row.add_suffix(&action);
             row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
@@ -1169,7 +1284,7 @@ impl ShortcutPage {
             self.modifier_rows.borrow_mut().push(row.upcast());
         }
         if on_category {
-            let add = button_row("Add Modifier Key", "list-add-symbolic", "add-modifier-key", glib::clone!(
+            let add = button_row("", "list-add-symbolic", "add-modifier-key", glib::clone!(
                 #[weak]
                 w,
                 move || send(&w, PreferenceAction::AddModifierKey)
@@ -1177,6 +1292,20 @@ impl ShortcutPage {
             group.add(&add);
             self.modifier_rows.borrow_mut().push(add.upcast());
         }
+        self.relabel_modifier_rows(w, &visible);
+    }
+
+    fn relabel_modifier_rows(&self, w: &Workspace, rows: &[&ModifierKeyRow]) {
+        for (widget, spec) in self.modifier_rows.borrow().iter().zip(rows) {
+            widget.set_title(&spec.label);
+            if let Some(row) = widget.downcast_ref::<adw::ActionRow>() { row.set_subtitle(&spec.detail); }
+            crate::text_language::visit(widget.upcast_ref(), &mut |widget| {
+                if widget.widget_name().as_str() == "modifier-action" {
+                    if let Some(label) = widget.downcast_ref::<gtk::Label>() { label.set_text(&spec.action); }
+                }
+            });
+        }
+        relabel_controls(self.modifiers_category.upcast_ref(), &w.localization());
     }
 
     fn refresh_triggers(&self, w: &Rc<Workspace>, triggers: &[TriggerRow]) {
@@ -1222,9 +1351,15 @@ impl ShortcutPage {
             }
         }
         for ((_, row, action), trigger) in self.trigger_rows.borrow().iter().zip(triggers) {
+            row.set_title(&trigger.label);
             action.set_text(&trigger.action);
             row.set_subtitle(&trigger.detail);
         }
+        let mut sections = Vec::new();
+        for trigger in triggers {
+            if !sections.contains(&trigger.section.as_str()) { sections.push(trigger.section.as_str()); }
+        }
+        for ((_, group), section) in self.trigger_groups.borrow().iter().zip(sections) { group.set_title(section); }
     }
 
     fn refresh_picker(&self, w: &Rc<Workspace>, dialog: &adw::Dialog, picker: Option<&ActionPickerView>) {
@@ -1232,13 +1367,18 @@ impl ShortcutPage {
             self.picker.show(false, dialog);
             return;
         };
+        let localization = w.localization();
+        self.picker.dialog.set_title(&picker.title);
         self.picker.title.set_title(&picker.title);
         self.picker_description.set_text(&picker.description);
         if self.picker_search.text().as_str() != picker.query {
             self.picker_search.set_text(&picker.query);
         }
         self.picker_reset.set_visible(picker.modified);
-        let signature = serde_json::to_string(&(picker.nothing, &picker.query, &picker.sections)).unwrap();
+        let query = picker.query.trim().to_lowercase();
+        let nothing = localization.text(MessageId::SHORTCUT_NOTHING);
+        let show_nothing = "nothing".contains(&query);
+        let signature = serde_json::to_string(&(show_nothing, picker.sections.iter().map(|section| section.actions.iter().map(|action| &action.id).collect::<Vec<_>>()).collect::<Vec<_>>())).unwrap();
         if self.picker_signature.replace(signature.clone()) != signature {
             for group in self.picker_groups.borrow_mut().drain(..) {
                 self.picker_page.remove(&group);
@@ -1248,6 +1388,7 @@ impl ShortcutPage {
                 row.set_widget_name(&format!("action-{id}"));
                 row.set_activatable(true);
                 let check = gtk::Image::from_icon_name("object-select-symbolic");
+                check.set_widget_name(&format!("action-selected-{id}"));
                 check.set_visible(selected);
                 row.add_suffix(&check);
                 row.connect_activated(glib::clone!(
@@ -1257,10 +1398,9 @@ impl ShortcutPage {
                 ));
                 row
             };
-            let query = picker.query.trim().to_lowercase();
-            if "nothing".contains(&query) {
+            if show_nothing {
                 let group = adw::PreferencesGroup::new();
-                group.add(&choose(String::new(), "Nothing", "", picker.nothing));
+                group.add(&choose(String::new(), &nothing, "", picker.nothing));
                 self.picker_page.add(&group);
                 self.picker_groups.borrow_mut().push(group);
             }
@@ -1277,21 +1417,45 @@ impl ShortcutPage {
                 let group = adw::PreferencesGroup::new();
                 let status = adw::StatusPage::builder()
                     .icon_name("edit-find-symbolic")
-                    .title("No Results Found")
-                    .description("Try a different search.")
+                    .title(localization.text(MessageId::SHORTCUT_SEARCH_EMPTY_TITLE).as_ref())
+                    .description(localization.text(MessageId::SHORTCUT_SEARCH_EMPTY_HELP).as_ref())
                     .build();
+                status.set_widget_name("action-picker-empty");
                 status.add_css_class("compact");
                 group.add(&status);
                 self.picker_page.add(&group);
                 self.picker_groups.borrow_mut().push(group);
             }
         }
+        let groups = self.picker_groups.borrow();
+        for (group, section) in groups.iter().skip(usize::from(show_nothing)).zip(&picker.sections) { group.set_title(&section.title); }
+        crate::text_language::visit(self.picker_page.upcast_ref(), &mut |widget| {
+            let name = widget.widget_name();
+            if let Some(id) = name.strip_prefix("action-selected-") {
+                if let Some(check) = widget.downcast_ref::<gtk::Image>() { check.set_visible(if id.is_empty() { picker.nothing } else { picker.sections.iter().flat_map(|section| &section.actions).any(|action| action.id == id && action.selected) }); }
+            } else if let Some(id) = name.strip_prefix("action-") {
+                if let Some(row) = widget.downcast_ref::<adw::ActionRow>() {
+                    if id.is_empty() { row.set_title(&nothing); }
+                    else if let Some(action) = picker.sections.iter().flat_map(|section| &section.actions).find(|action| action.id == id) {
+                        row.set_title(&action.label);
+                        row.set_subtitle(&action.detail);
+                    }
+                }
+            }
+            if name.as_str() == "action-picker-empty" {
+                if let Some(status) = widget.downcast_ref::<adw::StatusPage>() {
+                    status.set_title(&localization.text(MessageId::SHORTCUT_SEARCH_EMPTY_TITLE));
+                    status.set_description(Some(&localization.text(MessageId::SHORTCUT_SEARCH_EMPTY_HELP)));
+                }
+            }
+        });
         if self.picker.show(true, dialog) {
             self.picker_search.grab_focus();
         }
     }
 
     fn refresh_keymap(&self, w: &Rc<Workspace>, dialog: &adw::Dialog, keymap: &KeymapView) {
+        let localization = w.localization();
         let ids: Vec<_> = keymap.presets.iter().map(|p| p.id.clone()).collect();
         if *self.keymap_ids.borrow() != ids {
             let titles: Vec<_> = keymap.presets.iter().map(|p| p.title.as_str()).collect();
@@ -1301,7 +1465,8 @@ impl ShortcutPage {
         if let Some(index) = self.keymap_ids.borrow().iter().position(|id| *id == keymap.selected) {
             self.keymap_combo.set_selected(index as u32);
         }
-        self.keymap_combo.set_subtitle(if keymap.outdated { "Updated since you chose it" } else { "" });
+        let updated = localization.text(MessageId::NATIVE_SHORTCUTS_UPDATED);
+        self.keymap_combo.set_subtitle(if keymap.outdated { &updated } else { "" });
         let signature = serde_json::to_string(&(&keymap.selected, &keymap.differences)).unwrap();
         if self.details_signature.replace(signature.clone()) != signature {
             while let Some(child) = self.details_body.first_child() {
@@ -1326,7 +1491,9 @@ impl ShortcutPage {
                 list.append(&text_row(&difference.trigger, &difference.note));
             }
             if keymap.differences.is_empty() {
-                list.append(&text_row("No differences", "This keymap uses the CapyCanvas defaults."));
+                let row = text_row(&localization.text(MessageId::NATIVE_SHORTCUTS_NO_DIFFERENCES), &localization.text(MessageId::NATIVE_SHORTCUTS_DEFAULTS_HELP));
+                row.set_widget_name("keymap-defaults");
+                list.append(&row);
             }
             let scroller = gtk::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk::PolicyType::Never)
@@ -1335,30 +1502,25 @@ impl ShortcutPage {
                 .build();
             self.details_body.append(&scroller);
         }
+        self.details.dialog.set_title(&keymap.title);
+        self.details.title.set_title(&keymap.title);
+        crate::text_language::visit(self.details_body.upcast_ref(), &mut |widget| {
+            if widget.widget_name().as_str() == "keymap-defaults" {
+                if let Some(row) = widget.downcast_ref::<adw::ActionRow>() {
+                    row.set_title(&localization.text(MessageId::NATIVE_SHORTCUTS_NO_DIFFERENCES));
+                    row.set_subtitle(&localization.text(MessageId::NATIVE_SHORTCUTS_DEFAULTS_HELP));
+                }
+            }
+        });
         self.details.show(keymap.details, dialog);
         let shown = self.import.borrow().clone();
         match (&keymap.import, shown) {
             (Some(preview), None) => {
-                let mut lines = Vec::new();
-                for (title, items) in [
-                    ("Added", &preview.added),
-                    ("Changed", &preview.changed),
-                    ("Removed", &preview.removed),
-                    ("Not available", &preview.unavailable),
-                ] {
-                    if !items.is_empty() {
-                        lines.push(format!("{title}: {}", items.len()));
-                        lines.extend(items.iter().take(6).map(|item| format!("  {item}")));
-                    }
-                }
-                if lines.is_empty() {
-                    lines.push("No shortcuts change.".into());
-                }
                 let alert = adw::AlertDialog::builder()
-                    .heading(format!("Import {}?", preview.title))
-                    .body(lines.join("\n"))
+                    .heading(&preview.heading)
+                    .body(&preview.body)
                     .build();
-                alert.add_responses(&[("cancel", "Cancel"), ("import", "Import")]);
+                alert.add_responses(&[("cancel", &preview.cancel_label), ("import", &preview.import_label)]);
                 alert.set_close_response("cancel");
                 alert.set_response_appearance("import", adw::ResponseAppearance::Suggested);
                 alert.connect_response(None, glib::clone!(
@@ -1372,6 +1534,12 @@ impl ShortcutPage {
                 ));
                 alert.present(Some(dialog));
                 *self.import.borrow_mut() = Some(alert);
+            }
+            (Some(preview), Some(alert)) => {
+                alert.set_heading(Some(&preview.heading));
+                alert.set_body(&preview.body);
+                alert.set_response_label("cancel", &preview.cancel_label);
+                alert.set_response_label("import", &preview.import_label);
             }
             (None, Some(alert)) => {
                 self.import.borrow_mut().take();

@@ -47,10 +47,12 @@ whole client area, including behind the custom title bar.
 - **Startup.** The render owner reads saved preferences before shared Rust
   creates the launch context and first UI view. It parks while the XAML thread
   adopts the prepared host and attaches the surface. The profile settings hub
-  retains that context for later windows; language edits apply at the next
-  process launch. Native controls receive its language tag and preserve IME
+  prepares the latest language on its worker and shares it with existing and
+  future windows before publishing coherent catalog, bootstrap and view updates.
+  An input owner defers publication until its composition keys and canvas
+  contacts retire. Native controls receive its language tag and preserve IME
   composition before forwarding candidate keys. Stateless numeric and toolbar
-  calls borrow an immutable context retained by their native view owners,
+  calls borrow the current immutable context retained by their native view owners,
   independently of the render-owned session.
 - **Three threads.** The XAML UI thread owns controls and the window. An
   independent input source collects mouse, pen and touch with full history and

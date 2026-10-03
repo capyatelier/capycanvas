@@ -1,6 +1,5 @@
 settings-language = 言語
 settings-language-system = システムの言語を使用
-settings-language-restart = 再起動後に適用されます。
 
 settings-reset-to-default = 初期設定に戻す
 settings-pressure-response = 筆圧の応答

@@ -1,3 +1,4 @@
+import { liveCopy, bindCopy } from './localization.js';
 import {importProfile,chooseProfileLibrary} from './export-controls.js';
 
 // A single package-rewritten URL for the illustration and print LUT workers.
@@ -6,7 +7,7 @@ const proofWorkerUrl=new URL("./proof-worker.js",import.meta.url);
 // One CPU worker per editor. Termination cancels synchronous Wasm immediately
 // and releases its high-water heap. A replacement never queues behind old work.
 export function createProof({app,element,button,icon,applyChange,wake,contentChanged}) {
-  const copy=app.proof_copy(),profilesCopy=app.profile_copy();
+  const copy=liveCopy(app,"proof_copy"),profilesCopy=liveCopy(app,"profile_copy");
   let paused=false;
   let work=null,setup=null,finishPending=async()=>{},hasPending=()=>false,refreshLibrary=()=>{};
   // The same immutable 512² Rust illustration as GTK, built off the UI thread.
@@ -119,18 +120,18 @@ export function createProof({app,element,button,icon,applyChange,wake,contentCha
     if(id!==null)applyChange(app.proof_control({type:"reveal"}));
     if(panel){refreshLibrary();if(sdr)applyChange(app.proof_control({type:'mode',mode:'sdr'}));refreshPanel();return;}
     setup={id};cancel();panelEpoch=app.state().document_file.epoch;
-    panel=element('div','proof-controls');panel.setAttribute('aria-label',copy.title);const owner=panel;
-    const mode=element('div','proof-modes');mode.setAttribute('aria-label',copy.mode);mode.setAttribute('role','group');
-    for(const[value,label]of[['off',copy.mode_off],['sdr','SDR'],['print',copy.mode_print]]){const o=button(label,()=>{mode.value=value;mode.onchange();});o.value=value;mode.append(o);}panel.append(mode);
+    panel=element('div','proof-controls');bindCopy(panel,()=>copy.title,"ariaLabel");const owner=panel;
+    const mode=element('div','proof-modes');bindCopy(mode,()=>copy.mode,"ariaLabel");mode.setAttribute('role','group');
+    for(const[value,label]of[['off',()=>copy.mode_off],['sdr','SDR'],['print',()=>copy.mode_print]]){const o=button(label,()=>{mode.value=value;mode.onchange();});o.value=value;mode.append(o);}panel.append(mode);
     const sdrPage=element('div','proof-sdr'),printPage=element('div','proof-print'),issue=element('p','error-message'),status=element('p');status.setAttribute('role','status');
     panel.append(sdrPage,printPage,issue,status);primary?.append(panel);
     const model=app.proof_form();let recipe=structuredClone(model.recipe),appliedRecipe=JSON.stringify(model.document_profile),profiles=[],selected='';
     const printSettings=model.print_settings;
     let valueBalance=null,valueContrast=null;
     const send=action=>{try{applyChange(app.proof_control(action));wake();refreshPanel();}catch(e){issue.textContent=String(e);}};
-    const field=(root,label,node)=>{node.setAttribute('aria-label',label);const row=element('label','document-size',label);row.append(node);root.append(row);return node;};
+    const field=(root,label,node)=>{if(typeof label==='function')bindCopy(node,label,'ariaLabel');else node.setAttribute('aria-label',label);const row=element('label','document-size',label);row.append(node);root.append(row);return node;};
     const select=(root,label,options,value)=>{const node=element('select');for(const[id,name]of options){const option=element('option','',name);option.value=id;node.append(option);}node.value=value;return field(root,label,node);};
-    const canvas=element('canvas','proof-tone-pad');canvas.width=canvas.height=256;canvas.tabIndex=0;canvas.setAttribute('role','slider');canvas.setAttribute('aria-description',copy.key_help);canvas.setAttribute('aria-label',copy.balance_contrast);sdrPage.append(canvas);
+    const canvas=element('canvas','proof-tone-pad');canvas.width=canvas.height=256;canvas.tabIndex=0;canvas.setAttribute('role','slider');canvas.setAttribute('aria-description',copy.key_help);bindCopy(canvas,()=>copy.balance_contrast,"ariaLabel");sdrPage.append(canvas);
     canvas.addEventListener('contextrestored',()=>refreshPanel());
     let padContact=null,keyContact=false,activePart=0,dialSize=256,lastTouch=null,pointerStart=null,pointerMoved=false;
     const dial=(point=null,part=null)=>app.color_ui({type:'proof_dial',size:dialSize,recipe:app.proof_form().rendition,point,part});
@@ -169,9 +170,9 @@ export function createProof({app,element,button,icon,applyChange,wake,contentCha
       input.onfocus=()=>{activePart=i+1;refreshPanel();};input.onblur=()=>{cancelDial();refreshPanel();};input.onkeydown=keyDown;input.onkeyup=keyUp;
       input.oninput=()=>{const r=app.proof_form().rendition;r[spec.key]=Number(input.value);atomic(r);};accessible.append(input);return{input,spec};
     });
-    const reset=button(copy.reset_sdr,()=>resetPart(3));reset.className='proof-dial-reset';reset.setAttribute('aria-label',copy.reset_sdr);reset.replaceChildren(icon('reset'));sdrPage.append(reset);
+    const reset=button(()=>copy.reset_sdr,()=>resetPart(3));reset.className='proof-dial-reset';bindCopy(reset,()=>copy.reset_sdr,"ariaLabel");reset.replaceChildren(icon('reset'));sdrPage.append(reset);
     const icons=['appearance','grain','brightness_contrast','hue_saturation'].map(name=>{const node=icon(name);node.classList.add('proof-dial-icon');sdrPage.append(node);return node;});
-    const profile=field(printPage,copy.profile,element('select'));profile.setAttribute('aria-label',copy.profile_choice);const placeholder=element('option','',profilesCopy.choose);placeholder.value='';placeholder.disabled=true;profile.append(placeholder);
+    const profile=field(printPage,()=>copy.profile,element('select'));bindCopy(profile,()=>copy.profile_choice,"ariaLabel");const placeholder=element('option','',()=>profilesCopy.choose);placeholder.value='';placeholder.disabled=true;profile.append(placeholder);
     const option=(group,p)=>{let index=p.id?profiles.findIndex(item=>item.id===p.id):-1;if(index<0)index=profiles.push(p)-1;else profiles[index]=p;const o=element('option','',p.name);o.value=index;group.append(o);return String(index);};
     const documentGroup=element('optgroup');documentGroup.label=profilesCopy.document;profile.append(documentGroup);let documentIndex=null;
     const documentProfile=p=>{documentGroup.replaceChildren();if(!p)return null;if(documentIndex===null)documentIndex=profiles.length;profiles[documentIndex]=p;const o=element('option','',p.name);o.value=documentIndex;documentGroup.append(o);return String(documentIndex);};
@@ -179,11 +180,11 @@ export function createProof({app,element,button,icon,applyChange,wake,contentCha
     const saved=element('optgroup');saved.label=profilesCopy.saved;profile.append(saved);
     const standard=element('optgroup');standard.label=profilesCopy.standard;profile.append(standard);
     for(const p of model.profiles)option(standard,p);
-    for(const[id,label]of[['add',profilesCopy.add_profile_dialog],['manage',profilesCopy.manage]]){const o=element('option','',label);o.value=id;profile.append(o);}profile.value=selected;
-    const simulation=select(printPage,copy.simulation,model.simulations.map(c=>[c.value,c.label]),printSettings.simulation);
-    const intent=select(printPage,copy.intent,model.intents.map(c=>[c.value,c.label]),printSettings.intent);
-    const bpc=field(printPage,copy.black_point_compensation,element('input'));bpc.type='checkbox';bpc.className='panel-check';bpc.checked=printSettings.bpc;bpc.disabled=intent.value==='AbsoluteColorimetric';
-    const gamut=field(printPage,copy.gamut_warning,element('input'));gamut.type='checkbox';gamut.className='panel-check';gamut.onchange=()=>applyChange(app.dispatch({type:'invoke',command:'gamut_warning'}));
+    for(const[id,label]of[['add',()=>profilesCopy.add_profile_dialog],['manage',()=>profilesCopy.manage]]){const o=element('option','',label);o.value=id;profile.append(o);}profile.value=selected;
+    const simulation=select(printPage,()=>copy.simulation,model.simulations.map(c=>[c.value,c.label]),printSettings.simulation);
+    const intent=select(printPage,()=>copy.intent,model.intents.map(c=>[c.value,c.label]),printSettings.intent);
+    const bpc=field(printPage,()=>copy.black_point_compensation,element('input'));bpc.type='checkbox';bpc.className='panel-check';bpc.checked=printSettings.bpc;bpc.disabled=intent.value==='AbsoluteColorimetric';
+    const gamut=field(printPage,()=>copy.gamut_warning,element('input'));gamut.type='checkbox';gamut.className='panel-check';gamut.onchange=()=>applyChange(app.dispatch({type:'invoke',command:'gamut_warning'}));
     let serial=0,preparing=null,lastMode=model.mode,shownMode=null;
     const sameRecipe=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
     const commit=value=>{committing=value;for(const node of owner.querySelectorAll('button,select,input'))node.disabled=value;if(!value){bpc.disabled=intent.value==='AbsoluteColorimetric';refreshPanel();}};
