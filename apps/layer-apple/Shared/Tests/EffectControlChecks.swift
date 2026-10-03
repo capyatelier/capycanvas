@@ -73,9 +73,9 @@ extension XCTestCase {
         removeFilter(brighter)
 
         addFilter("Curves", id: "curves"); expectPixels(blue, in: app)
-        workspaceActivate(app.buttons["property-channel"])
-        workspaceActivate(app.buttons["property-channel-option-1"])
-        expectValue(app.buttons["property-channel"], "Red")
+        workspaceActivate(app.buttons["properties-page"])
+        workspaceActivate(app.buttons["properties-page-option-1"])
+        expectValue(app.buttons["properties-page"], "Red")
         let curve = app.descendants(matching: .any)["effect-curve"].firstMatch
         // The plot can be taller than the panel. Its insertion point must be
         // visible; requiring the entire plot to fit cannot be met by scrolling.

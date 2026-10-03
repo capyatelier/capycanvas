@@ -7,6 +7,7 @@ struct NumberControl: View {
     let value: Double
     let control: JSON
     var identifier = ""
+    var presentedText: String? = nil
     var valueOnly = false
     var inline = false
     var entryWidth: CGFloat = 48
@@ -87,6 +88,7 @@ struct NumberControl: View {
         .onChange(of: store.interfaceLanguage) { _, _ in numericLabels = NativeTextContext.numericLabels(label, language: store.interfaceLanguage); format() }
         .onChange(of: label, initial: true) { _, next in numericLabels = NativeTextContext.numericLabels(next, language: store.interfaceLanguage) }
         .onChange(of: value) { _, next in field.receive(next); format(); registerAdmission?(key, admit) }
+        .onChange(of: presentedText) { _, _ in format() }
         .onChange(of: control.stableKey) { _, _ in registerAdmission?(key, admit) }
         .onChange(of: contact) { _, active in if !active { cancelDrag() } }
         .onChange(of: enabled) { _, active in if !active { cancelDrag() } }
@@ -195,6 +197,7 @@ struct NumberControl: View {
     private func format() {
         do {
             formatted = try resolveNumber(value: field.value, operation: ["type": "format"])
+            if let presentedText { formatted = formatted.replacing("text", with: JSON(presentedText)).replacing("edit", with: JSON(presentedText)) }
             if !field.dirty && !editing { field.text = formatted[slider ? "edit" : "text"].string }
         } catch { field.error = error.localizedDescription }
     }

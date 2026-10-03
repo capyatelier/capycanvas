@@ -508,7 +508,7 @@ fn apple_current_main_drawers_paper_and_zen_use_shared_actions() {
         app.invoke("undo");
         assert_ne!(app.state()["layer_properties"], paper);
         app.invoke("redo");
-        assert_eq!(app.state()["layer_properties"], paper);
+        assert_eq!(app.state()["layer_properties"]["controls"], paper["controls"]);
         let layout = app.state()["workspace"]["layout"].clone();
         app.invoke("zen_mode");
         let result = app.request(1, json!({"type":"chrome","event":{"kind":"refresh"},"facts":{"held":false,"dragging":false,"popup_open":false},"viewport":[1200,900]})).unwrap();

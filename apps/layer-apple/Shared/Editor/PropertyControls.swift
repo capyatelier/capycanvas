@@ -4,39 +4,35 @@ import SwiftUI
 /// These views only present controls and translate native editing gestures.
 struct LayerPropertiesPanel: View {
     @ObservedObject var store: EditorStore
-    @State private var selectedCurve = ""
     private var view: JSON { store.state["layer_properties"] }
     private var controls: [JSON] { view["controls"].array }
-    private var curves: [JSON] { controls.filter { $0["kind"]["kind"].string == "curve" } }
     var body: some View {
-        let epoch = store.state["document_file"]["epoch"].uint
+        let epoch = store.state["document_file"]["epoch"].uint, layer = view["layer"].uint, pages = view["pages"].array
         VStack(alignment: .leading, spacing: 6) {
             Text(view["title"].string).fontWeight(.bold).help(view["description"].string)
-            if let curve = curves.first(where: { $0["key"].string == selectedCurve }) ?? curves.first {
-                EditorChoice(label: store.catalog["native_copy"]["color"]["channel"].string, options: curves.map { $0["label"].string },
-                    selected: curves.firstIndex { $0["key"].string == curve["key"].string } ?? 0, identifier: "property-channel",
+            if pages.count > 1 {
+                EditorChoice(label: view["title"].string, options: pages.map { $0["label"].string },
+                    selected: pages.firstIndex { $0["id"].string == view["page"].string } ?? 0, identifier: "properties-page",
                     background: EditorPalette(source: store.state["palette"])["input"]) {
-                    selectedCurve = curves[$0]["key"].string
+                    store.dispatch(["type": "effect", "action": ["op": "select_page", "layer": layer, "page": pages[$0]["id"].string]])
                 }
-                CurveProperty(store: store, layer: view["layer"].uint, epoch: epoch, control: curve,
-                    maximum: view["curve_max"].isNull ? nil : view["curve_max"].number,
-                    white: view["curve_white"].isNull ? nil : view["curve_white"].number)
-                    .id("\(epoch):\(view["layer"].uint):\(curve["key"].string)")
             }
             ForEach(controls.indices, id: \.self) { index in
                 let control = controls[index]
-                if control["kind"]["kind"].string != "curve" {
-                    if index == 0 || control["section_id"].stableKey != controls[index - 1]["section_id"].stableKey {
-                        if index > 0 { Divider().padding(.vertical, 3) }
-                        if !control["section"].isNull { Text(control["section"].string).fontWeight(.bold).padding(.leading, 6) }
-                    }
-                    PropertyField(store: store, layer: view["layer"].uint, epoch: epoch, control: control)
-                        .id("\(epoch):\(view["layer"].uint):\(control["key"].string):\(control["kind"]["kind"].string)")
+                if index == 0 || control["section_id"].stableKey != controls[index - 1]["section_id"].stableKey {
+                    if index > 0 { Divider().padding(.vertical, 3) }
+                    if !control["section"].isNull { Text(control["section"].string).fontWeight(.bold).padding(.leading, 6) }
+                }
+                if control["kind"]["kind"].string == "curve" {
+                    CurveProperty(store: store, layer: layer, control: control)
+                        .id("\(epoch):\(layer):\(control["key"].string):\(control["curve"]["domain"].stableKey)")
+                } else {
+                    PropertyField(store: store, layer: layer, epoch: epoch, control: control)
+                        .id("\(epoch):\(layer):\(control["key"].string):\(control["kind"]["kind"].string)")
                 }
             }
         }.disabled(!view["enabled"].bool).opacity(view["enabled"].bool ? 1 : 0.4)
             .accessibilityElement(children: .contain).accessibilityIdentifier("layer-properties")
-            .onChange(of: view["layer"].uint) { _, _ in selectedCurve = "" }
     }
 }
 
@@ -61,8 +57,8 @@ private struct PropertyField: View {
     }
     private func change(_ value: Any, revision: UInt64, phase: String? = nil,
         completion: (@MainActor (String?) -> Void)? = nil) {
-        effect(["op": "set", "value": ["kind": kind, "value": value]], revision: revision,
-            phase: phase, completion: completion ?? { if let error = $0 { store.failure = error } })
+        effect(kind == "number" ? ["op": "number", "operation": ["type": "value", "value": value]] : ["op": "set", "value": ["kind": kind, "value": value]],
+            revision: revision, phase: phase, completion: completion ?? { if let error = $0 { store.failure = error } })
     }
     private func reset() {
         revision &+= 1
@@ -108,139 +104,177 @@ private struct PropertyField: View {
 }
 
 private struct CurveProperty: View {
-    @Environment(\.capyNativeCopy) private var nativeCopy
     @ObservedObject var store: EditorStore
     let layer: UInt64
-    let epoch: UInt64
     let control: JSON
-    let maximum: Double?
-    let white: Double?
     @Environment(\.isEnabled) private var enabled
-    @GestureState private var contact = false
-    @State private var selected: Int?
-    @State private var dragging = false
-    @State private var dragPoint: (index: Int, point: CGPoint, existing: Bool)?
+    @GestureState private var touching = false
+    @FocusState private var focused: Bool
+    @State private var contact: [String: Any]?
+    @State private var held: (key: String, owner: [String: Any])?
+    @State private var sequence: (time: Date, points: Int)?
+    @State private var removal: [String: Any]?
+    @State private var numberOwner: [String: Any]?
     private var key: String { control["key"].string }
+    private var curve: JSON { control["curve"] }
     private var points: [JSON] { control["value"]["value"].array }
-    private var modified: Bool { control["modified"].bool }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private func change(_ point: [Double], index: Int?, remove: Bool = false, phase: String? = nil) {
-        store.effect(layer, epoch: epoch, key: key, action: ["op": "curve_point", "index": index as Any? ?? NSNull(), "point": point, "remove": remove], phase: phase)
+    private var owner: [String: Any] { ["layer": layer, "key": key, "epoch": curve["epoch"].uint] }
+    private func send(_ owner: [String: Any], _ fields: [String: Any]) {
+        store.dispatch(["type": "effect", "action": owner.merging(fields) { $1 }])
     }
-    private func cancelDrag() {
-        if let point = dragPoint { change([0, 0], index: point.index, phase: "cancel") }
-        dragging = false; dragPoint = nil
+    private func send(_ owner: [String: Any], contact phase: String, at point: CGPoint = .zero, in size: CGSize = CGSize(width: 1, height: 1)) {
+        send(owner, ["op": "curve_contact", "phase": phase, "point": [point.x, point.y], "extent": [size.width, size.height]])
     }
-    var body: some View {
-        VStack(spacing: 6) {
-            GeometryReader { geometry in
-                Canvas(colorMode: .extendedLinear) { context, size in
-                    var grid = Path()
-                    for i in 1...3 {
-                        let fraction = CGFloat(i) / 4
-                        grid.move(to: CGPoint(x: size.width * fraction, y: 0)); grid.addLine(to: CGPoint(x: size.width * fraction, y: size.height))
-                        grid.move(to: CGPoint(x: 0, y: size.height * fraction)); grid.addLine(to: CGPoint(x: size.width, y: size.height * fraction))
-                    }
-                    context.stroke(grid, with: .color(palette["text"].opacity(0.2)), lineWidth: 1)
-                    let ink = palette["text"].opacity(0.7)
-                    if let maximum, let white, maximum > 0 {
-                        var reference = Path()
-                        reference.move(to: CGPoint(x: white * size.width, y: 0))
-                        reference.addLine(to: CGPoint(x: white * size.width, y: size.height))
-                        reference.move(to: CGPoint(x: 0, y: (1 - white) * size.height))
-                        reference.addLine(to: CGPoint(x: size.width, y: (1 - white) * size.height))
-                        context.stroke(reference, with: .color(ink), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                        context.draw(Text("SDR white · 0 EV").font(.system(size: 11)).foregroundColor(ink),
-                            at: CGPoint(x: 5, y: 5), anchor: .topLeading)
-                        context.draw(Text(String(format: "%.0f · %+.0f EV", maximum, log2(maximum))).font(.system(size: 11)).foregroundColor(ink),
-                            at: CGPoint(x: size.width - (modified ? 33 : 5), y: size.height - 5), anchor: .bottomTrailing)
-                    } else {
-                        context.draw(Text(nativeCopy["color"]["output"].string).font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: 5, y: 5), anchor: .topLeading)
-                        context.draw(Text(nativeCopy["color"]["input"].string).font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: size.width - (modified ? 33 : 5), y: size.height - 5), anchor: .bottomTrailing)
-                    }
-                    var curve = Path()
-                    for (index, p) in control["plot"].array.enumerated() {
-                        let point = CGPoint(x: p[0].number * size.width, y: (1 - p[1].number) * size.height)
-                        if index == 0 { curve.move(to: point) } else { curve.addLine(to: point) }
-                    }
-                    context.stroke(curve, with: .color(palette["text"]), lineWidth: 1.5)
-                    for (index, p) in points.enumerated() {
-                        let radius: CGFloat = selected == index ? 5 : 3.5
-                        context.fill(Path(ellipseIn: CGRect(x: p[0].number * size.width - radius,
-                            y: (1 - p[1].number) * size.height - radius, width: radius * 2, height: radius * 2)), with: .color(palette["text"]))
-                    }
-                }.background(palette["text"].opacity(0.12))
-                    .contentShape(CurvePlotHitShape(reset: modified ? 32 : 0), eoFill: true)
-                    .gesture(DragGesture(minimumDistance: 0).updating($contact) { _, active, _ in active = true }.onChanged { event in
-                        let size = geometry.size
-                        guard size.width > 0, size.height > 0 else { return }
-                        if !dragging {
-                            dragging = true
-                            let nearest = points.indices.min { a, b in distance(points[a], event.startLocation, size) < distance(points[b], event.startLocation, size) }
-                            if let index = nearest, distance(points[index], event.startLocation, size) <= 16 {
-                                let point = CGPoint(x: points[index][0].number, y: points[index][1].number)
-                                dragPoint = (index, point, true)
-                                change([point.x, point.y], index: index, phase: "down")
-                            } else {
-                                let point = CGPoint(x: event.startLocation.x / size.width, y: 1 - event.startLocation.y / size.height)
-                                dragPoint = (points.filter { $0[0].number < point.x }.count, point, false)
-                                change([point.x, point.y], index: nil, phase: "down")
-                            }
-                            selected = dragPoint?.index
-                        }
-                        if let point = dragPoint, event.translation != .zero {
-                            let next = CGPoint(x: point.point.x + event.translation.width / size.width,
-                                y: point.point.y - event.translation.height / size.height)
-                            selected = (-0.1...1.1).contains(next.x) && (-0.1...1.1).contains(next.y) ? point.index : nil
-                            change([next.x, next.y], index: point.index, phase: "move")
-                        }
-                    }.onEnded { event in
-                        guard dragging else { return }
-                        guard geometry.size.width > 0, geometry.size.height > 0 else { cancelDrag(); return }
-                        if let point = dragPoint {
-                            let next = CGPoint(x: point.point.x + event.translation.width / geometry.size.width,
-                                y: point.point.y - event.translation.height / geometry.size.height)
-                            change([next.x, next.y], index: point.index, phase: "up")
-                            if !((-0.1...1.1).contains(next.x) && (-0.1...1.1).contains(next.y)) { selected = nil }
-                        }
-                        dragging = false; dragPoint = nil
-                    })
-                    .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { tap in
-                        let size = geometry.size
-                        guard size.width > 0, size.height > 0, let index = points.indices.min(by: {
-                            distance(points[$0], tap.location, size) < distance(points[$1], tap.location, size)
-                        }), distance(points[index], tap.location, size) <= 16 else { return }
-                        cancelDrag(); selected = nil
-                        change([points[index][0].number, points[index][1].number], index: index, remove: true)
-                    })
-                    .allowsHitTesting(enabled)
-                    .onChange(of: contact) { _, active in if !active { cancelDrag() } }
-                    .onDisappear(perform: cancelDrag)
-                    .help(nativeCopy["color"]["curve_help"].string)
-                    .accessibilityLabel("\(control["label"].string), \(points.count) points")
-                    .accessibilityIdentifier("effect-curve")
-            }.frame(height: 200)
-                .overlay(alignment: .bottomTrailing) {
-                    if modified {
-                        Button { selected = nil; store.effect(layer, epoch: epoch, key: key, action: ["op": "reset"]) } label: {
-                            SharedIcon(name: "reset").frame(width: 28, height: 28).contentShape(Rectangle())
-                        }.buttonStyle(.plain).foregroundColor(palette["text"].opacity(0.7)).padding(2)
-                            .help(nativeCopy["color"]["reset_curve"].string).accessibilityLabel(nativeCopy["color"]["reset_curve"].string).accessibilityIdentifier("curve-reset")
-                    }
-                }
+    private func cancel() {
+        let captured = contact ?? held?.owner
+        contact = nil; held = nil
+        if let captured { send(captured, contact: "cancel") }
+    }
+    private func number(_ axis: String, phase: String?, value: Double) {
+        let request = (numberOwner ?? owner).merging(["op": "curve_number", "axis": axis, "operation": ["type": "value", "value": value]]) { $1 }
+        guard let phase else { store.dispatch(["type": "effect", "action": request]); return }
+        if phase == "down" { numberOwner = owner }
+        store.dispatch(["type": "effect", "action": ["op": "gesture", "phase": phase, "action": request]])
+        if phase != "down" { numberOwner = nil }
+    }
+    private func keyName(_ key: KeyEquivalent) -> String? {
+        switch key {
+        case .leftArrow: "ArrowLeft"
+        case .rightArrow: "ArrowRight"
+        case .upArrow: "ArrowUp"
+        case .downArrow: "ArrowDown"
+        case .delete: "Backspace"
+        case .deleteForward: "Delete"
+        case .escape: "Escape"
+        default: key.character == "\u{7F}" ? "Backspace" : nil
         }
     }
-    private func distance(_ point: JSON, _ location: CGPoint, _ size: CGSize) -> CGFloat {
-        hypot(point[0].number * size.width - location.x, (1 - point[1].number) * size.height - location.y)
+    private func press(_ press: KeyPress) -> KeyPress.Result {
+        guard let name = keyName(press.key), !NativeTextContext.composing else { return .ignored }
+        let pressed = press.phase != .up
+        if pressed && !press.modifiers.isDisjoint(with: [.command, .option, .control]) { return .ignored }
+        let target = held?.key == name ? held!.owner : owner
+        if pressed { held = (name, target) }
+        send(target, ["op": "curve_key", "key_event": name, "pressed": pressed, "repeat": press.phase == .repeat,
+            "modifiers": ["command": press.modifiers.contains(.command), "shift": press.modifiers.contains(.shift), "alt": press.modifiers.contains(.option)]])
+        if (!pressed && held?.key == name) || name == "Escape" { held = nil }
+        if name == "Escape" { contact = nil }
+        return .handled
     }
-}
-
-private struct CurvePlotHitShape: Shape {
-    let reset: CGFloat
-    func path(in rect: CGRect) -> Path {
-        var path = Path(rect)
-        if reset > 0 { path.addRect(CGRect(x: rect.maxX - reset, y: rect.maxY - reset, width: reset, height: reset)) }
-        return path
+    private func axisLabels(_ axis: JSON, reversed: Bool) -> [String] {
+        let labels = [axis["minimum"].string, axis["label"].string, axis["maximum"].string]
+        return reversed ? labels.reversed() : labels
+    }
+    var body: some View {
+        let axes = curve["axes"].array
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                VStack {
+                    ForEach(Array(axisLabels(axes[1], reversed: true).enumerated()), id: \.offset) { index, text in
+                        if index > 0 { Spacer(minLength: 0) }
+                        Text(text)
+                    }
+                }.font(.caption).foregroundStyle(palette["text"].opacity(0.7)).frame(height: 200)
+                VStack(spacing: 2) {
+                    plot
+                    HStack {
+                        ForEach(Array(axisLabels(axes[0], reversed: false).enumerated()), id: \.offset) { index, text in
+                            if index > 0 { Spacer(minLength: 0) }
+                            Text(text)
+                        }
+                    }.font(.caption).foregroundStyle(palette["text"].opacity(0.7))
+                }
+            }
+            ForEach(["input", "output"].indices, id: \.self) { index in
+                let axis = index == 0 ? "input" : "output", coordinate = curve[axis]
+                HStack(spacing: 6) {
+                    NumberControl(store: store, label: axes[index]["label"].string, value: coordinate["value"].number,
+                        control: curve["numeric"], identifier: "curve-" + axis, presentedText: coordinate.isNull ? "" : coordinate["text"].string,
+                        gestureChange: { phase, value, completion in number(axis, phase: phase, value: value); completion(nil) }) { value, completion in
+                        number(axis, phase: nil, value: value); completion(nil)
+                    }.disabled(coordinate.isNull || coordinate["read_only"].bool)
+                    if curve["domain"]["kind"].string == "log_hdr" {
+                        Text(coordinate["ev"].string).font(.caption).monospacedDigit().foregroundStyle(palette["text"].opacity(0.7))
+                    }
+                }
+            }
+        }.help(curve["help"].string)
+            .onChange(of: focused) { _, now in if !now { cancel() } }
+            .onDisappear(perform: cancel)
+    }
+    private var plot: some View {
+        GeometryReader { geometry in
+            Canvas(colorMode: .extendedLinear) { context, size in
+                var grid = Path()
+                for i in 1...3 {
+                    let fraction = CGFloat(i) / 4
+                    grid.move(to: CGPoint(x: size.width * fraction, y: 0)); grid.addLine(to: CGPoint(x: size.width * fraction, y: size.height))
+                    grid.move(to: CGPoint(x: 0, y: size.height * fraction)); grid.addLine(to: CGPoint(x: size.width, y: size.height * fraction))
+                }
+                context.stroke(grid, with: .color(palette["text"].opacity(0.2)), lineWidth: 1)
+                let whiteX = curve["axes"][0]["white"], whiteY = curve["axes"][1]["white"]
+                if !whiteX.isNull {
+                    var reference = Path()
+                    reference.move(to: CGPoint(x: whiteX.number * size.width, y: 0))
+                    reference.addLine(to: CGPoint(x: whiteX.number * size.width, y: size.height))
+                    reference.move(to: CGPoint(x: 0, y: (1 - whiteY.number) * size.height))
+                    reference.addLine(to: CGPoint(x: size.width, y: (1 - whiteY.number) * size.height))
+                    context.stroke(reference, with: .color(palette["text"].opacity(0.7)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                }
+                var line = Path()
+                for (index, p) in control["plot"].array.enumerated() {
+                    let point = CGPoint(x: p[0].number * size.width, y: (1 - p[1].number) * size.height)
+                    if index == 0 { line.move(to: point) } else { line.addLine(to: point) }
+                }
+                context.stroke(line, with: .color(palette["text"]), lineWidth: 1.5)
+                let selected = curve["selected"].isNull ? nil : Int(curve["selected"].uint)
+                for (index, p) in points.enumerated() {
+                    let radius: CGFloat = selected == index ? 5 : 3.5
+                    let dot = Path(ellipseIn: CGRect(x: p[0].number * size.width - radius, y: (1 - p[1].number) * size.height - radius,
+                        width: radius * 2, height: radius * 2))
+                    if selected == index { context.stroke(dot, with: .color(palette["text"]), lineWidth: 1.5) }
+                    else { context.fill(dot, with: .color(palette["text"])) }
+                }
+            }.background(palette["text"].opacity(0.12))
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).updating($touching) { _, active, _ in active = true }.onChanged { event in
+                    let size = geometry.size
+                    guard size.width > 0, size.height > 0 else { return }
+                    if let captured = contact { send(captured, contact: "move", at: event.location, in: size); return }
+                    focused = true
+                    cancel()
+                    let now = Date(), captured = owner
+                    if let last = sequence, now.timeIntervalSince(last.time) < 0.5 { sequence = (now, last.points) }
+                    else { sequence = (now, points.count) }
+                    contact = captured
+                    send(captured, contact: "down", at: event.startLocation, in: size)
+                    if event.location != event.startLocation { send(captured, contact: "move", at: event.location, in: size) }
+                }.onEnded { event in
+                    if let captured = contact { send(captured, contact: "up", at: event.location, in: geometry.size) }
+                    contact = nil
+                    if let removal { send(owner, removal); self.removal = nil }
+                })
+                .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { tap in
+                    let request: [String: Any] = ["op": "curve_remove_at", "point": [tap.location.x, tap.location.y],
+                        "extent": [geometry.size.width, geometry.size.height], "point_count": sequence?.points ?? points.count]
+                    if contact == nil { send(owner, request) } else { removal = request }
+                })
+                .allowsHitTesting(enabled)
+                .focusable(enabled).focused($focused).focusEffectDisabled()
+                .onKeyPress(phases: [.down, .repeat, .up], action: press)
+                .onChange(of: touching) { _, active in if !active, contact != nil { cancel() } }
+                .accessibilityLabel("\(control["label"].string), \(points.count) points")
+                .accessibilityIdentifier("effect-curve")
+        }.frame(height: 200)
+            .overlay(alignment: .bottomTrailing) {
+                if control["modified"].bool {
+                    Button { store.effect(layer, epoch: store.state["document_file"]["epoch"].uint, key: key, action: ["op": "reset"]) } label: {
+                        SharedIcon(name: "reset").frame(width: 28, height: 28).contentShape(Rectangle())
+                    }.buttonStyle(.plain).foregroundColor(palette["text"].opacity(0.7)).padding(2)
+                        .help(curve["reset_label"].string).accessibilityLabel(curve["reset_label"].string).accessibilityIdentifier("curve-reset")
+                }
+            }
     }
 }
 

@@ -52,7 +52,7 @@ extension XCTestCase {
         workspaceActivate(brightness)
         XCTAssertTrue(app.buttons["number-value-property-brightness"].waitForExistence(timeout: 10))
         workspaceActivate(curves)
-        XCTAssertTrue(app.buttons["property-channel"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["properties-page"].waitForExistence(timeout: 10))
         XCTAssertFalse(brightness.isSelected); XCTAssertTrue(curves.isSelected)
         workspaceActivate(app.buttons["Filters panel"])
         workspaceActivate(app.buttons["Filters panel"])

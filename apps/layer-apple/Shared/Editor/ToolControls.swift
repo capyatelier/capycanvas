@@ -121,16 +121,32 @@ struct ToolSettingsControls: View {
         let modes = actions.filter { SelectionModes.commands.contains($0["command"].string) }
         VStack(alignment: .leading, spacing: 8) {
             if !modes.isEmpty { SelectionModeGroup(store: store, actions: modes) }
-            ForEach(settings, id: \.settingID) { item in
-                let index = settings.firstIndex { $0.settingID == item.settingID } ?? 0
-                if !item["group"].string.isEmpty && (index == 0 || settings[index - 1]["group"].string != item["group"].string) {
-                    Text(item["group"].string).fontWeight(.bold).padding(.vertical, 4)
+            let choices = store.state["tool_extra"].array.map { $0["Choice"] }.filter { !$0.isNull }
+            ForEach(choices.filter { $0["beside"].isNull }, id: \.stableKey) { choice in
+                ToolOptionField(store: store, option: JSON(["Choice": choice.raw]), iconSize: 20, vertical: false, labeled: true,
+                    style: "", preferences: JSON(), stacked: false, prefix: "tool") { action, completion in
+                    store.edit(action as? [String: Any] ?? [:], completion: completion)
+                }.frame(height: 32)
+            }
+            ForEach(settingGroups.map { ($0[0].settingID, $0) }, id: \.0) { _, group in
+                let first = group[0], choice = choices.first { $0["beside"].string == first.settingID }
+                let title = choice?["label"].string ?? first["group"].string
+                if !title.isEmpty { Text(title).fontWeight(.bold).padding(.vertical, 4) }
+                if let choice {
+                    HStack(spacing: 12) {
+                        SegmentedChoiceBar(choice: choice, prefix: "tool", height: nil, iconSize: 6, palette: palette) { store.dispatch($0["action"]) }
+                        VStack(spacing: 2) {
+                            ForEach(group, id: \.settingID) { item in
+                                HStack(spacing: 6) {
+                                    Text(item["label"].string).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                    setting(item, editingContext: editingContext, valueOnly: true)
+                                }.frame(height: 26)
+                            }
+                        }
+                    }
+                } else {
+                    ForEach(group, id: \.settingID) { setting($0, editingContext: editingContext) }
                 }
-                NumberControl(store: store, label: item["label"].string, value: item["value"].number,
-                    control: item["numeric"], identifier: "tool-" + item.settingID) { value, completion in
-                    guard editingContext == context else { completion(nil); return }
-                    store.edit(["type": "set_tool_setting", "id": item.settingID, "value": value], completion: completion)
-                }.id(context + item.settingID + item["label"].string + item["numeric"].stableKey)
             }
             ForEach(actions.indices, id: \.self) { index in
                 let action = actions[index]
@@ -144,6 +160,23 @@ struct ToolSettingsControls: View {
             }
             if !modes.isEmpty { SelectionMenuButton(store: store, label: "Selection Actions…", kind: "selection") }
         }
+    }
+}
+
+private extension ToolSettingsControls {
+    var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    var settingGroups: [[JSON]] {
+        settings.reduce(into: [[JSON]]()) { groups, item in
+            if let last = groups.last?.last, last["group"].string == item["group"].string { groups[groups.count - 1].append(item) }
+            else { groups.append([item]) }
+        }
+    }
+    func setting(_ item: JSON, editingContext: String, valueOnly: Bool = false) -> some View {
+        NumberControl(store: store, label: item["label"].string, value: item["value"].number,
+            control: item["numeric"], identifier: "tool-" + item.settingID, valueOnly: valueOnly) { value, completion in
+            guard editingContext == context else { completion(nil); return }
+            store.edit(["type": "set_tool_setting", "id": item.settingID, "value": value], completion: completion)
+        }.id(context + item.settingID + item["label"].string + item["numeric"].stableKey)
     }
 }
 

@@ -36,7 +36,7 @@ struct SettingsView: View {
         } detail: {
             detail.navigationTitle(page["title"].string)
                 .toolbar { ToolbarItem(placement: .confirmationAction) {
-                    SettingsDoneButton(store: store)
+                    SettingsDoneButton(store: store, label: store.bootstrap["common"]["done"].string)
                 } }
         }.sheet(isPresented: Binding(get: { !model["shortcut_page"]["picker"].isNull },
             set: { if !$0 { action(["type": "close_action_picker"]) } })) {
@@ -209,11 +209,12 @@ struct SettingsView: View {
 
 private struct SettingsDoneButton: View {
     let store: EditorStore
+    let label: String
     // Observing a child's focused callback must not invalidate the form that
     // publishes it; a native text field can otherwise trigger a focus loop.
     @FocusedValue(\.editorTextCommit) private var commitText
     var body: some View {
-        Button(store.bootstrap["common"]["done"].string) {
+        Button(label) {
             commitText?()
             store.dispatch(["type": "close_settings"])
         }.accessibilityIdentifier("settings-done")

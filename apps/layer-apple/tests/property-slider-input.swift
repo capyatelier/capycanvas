@@ -162,17 +162,18 @@ import QuartzCore
                         store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]
                     }
                     let original = points().stableKey
-                    let top = geometry.choices["property-channel"]!.maxY + 6
+                    let top = geometry.choices["properties-page"]!.maxY + 6
                     try await click(CGPoint(x: 150, y: top + 50))
                     let inserted = points().stableKey
                     try require(points().array.count == 3 && inserted != original, "A native plot click must insert a curve point")
-                    let remove = CGPoint(x: 45, y: top + 200 + 6 + 10)
-                    try await click(remove)
-                    try require(points().stableKey == original, "Remove must act on a new curve point without another selection tap")
+                    func remove() async throws { try NativeWorkspaceInputFixture.key("\u{7F}", code: 51, window: window); try await drain(0.2) }
+                    try await remove()
+                    try require(points().stableKey == original, "Delete must remove a new curve point without another selection tap")
                     try await action(["type": "invoke", "command": "undo"])
                     try require(points().stableKey == inserted, "Undo must restore the removed curve point")
-                    try await click(remove)
-                    try require(points().stableKey == original, "A restored curve point must be selected for removal")
+                    try await click(CGPoint(x: 150, y: top + 50))
+                    try await remove()
+                    try require(points().stableKey == original, "A restored curve point must be selectable for removal")
                     try await action(["type": "invoke", "command": "undo"])
                     try await action(["type": "invoke", "command": "redo"])
                     try require(points().stableKey == original, "Curve removal must retain one-step Undo/Redo")

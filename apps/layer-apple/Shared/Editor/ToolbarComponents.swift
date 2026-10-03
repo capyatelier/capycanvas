@@ -422,13 +422,17 @@ private struct ToolOptionsMore: View {
 
 typealias ToolOptionEdit = (Any, @escaping @MainActor (String?) -> Void) -> Void
 
-private let captionPadding: CGFloat = 10, captionGap: CGFloat = 6, captionIcon: CGFloat = 20, choicePadding: CGFloat = 8
+private let captionPadding: CGFloat = 10, captionGap: CGFloat = 6, captionIcon: CGFloat = 20, choicePadding: CGFloat = 8, gridCell: CGFloat = 18
 
 @MainActor func toolOptionSize(_ option: JSON, vertical: Bool, width: CGFloat, tile: CGSize, preferences: JSON, textSize: CGFloat,
     caption: String? = nil, language: String = "en") -> CGSize {
     func captioned(_ text: String) -> CGFloat { captionPadding * 2 + captionIcon + captionGap + ceil(toolbarTextWidth(text, size: textSize)) }
     if !option["Range"].isNull { return CGSize(width: preferences["sliders"].bool ? 280 : 100, height: 28) }
     let choice = option["Choice"]
+    if choice["columns"].uint > 0 {
+        let columns = CGFloat(choice["columns"].uint), rows = (CGFloat(choice["items"].array.count) / columns).rounded(.up)
+        return CGSize(width: columns * gridCell, height: rows * gridCell)
+    }
     if !choice.isNull && choice["segmented"].bool {
         let items = choice["items"].array, count = CGFloat(items.count)
         if caption != nil { return CGSize(width: items.map { captioned($0["label"].string) }.reduce(0, +), height: tile.height) }
@@ -550,6 +554,30 @@ struct SegmentedChoiceBar: View {
     let palette: EditorPalette
     let send: (JSON) -> Void
     var body: some View {
+        if choice["columns"].uint > 0 { grid } else { bar }
+    }
+    private var grid: some View {
+        let items = choice["items"].array, columns = Int(choice["columns"].uint)
+        return Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+            ForEach(Array(stride(from: 0, to: items.count, by: columns)), id: \.self) { start in
+                GridRow {
+                    ForEach(start..<min(start + columns, items.count), id: \.self) { index in
+                        let item = items[index], selected = item["selected"].bool
+                        Button { send(item) } label: {
+                            SharedIcon(name: item["icon"].string, size: 6).opacity(selected ? 1 : 0.45)
+                                .frame(width: gridCell, height: gridCell)
+                                .background(selected ? surface.active : .clear, in: SquircleShape.control).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                            .accessibilityLabel(item["label"].string).help(item["label"].string)
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                            .accessibilityIdentifier("\(prefix)-segment-\(choice["id"].string)-\(index)")
+                    }
+                }
+            }
+        }.accessibilityElement(children: .contain)
+            .accessibilityLabel(choice["label"].string).accessibilityIdentifier("\(prefix)-segments-" + choice["id"].string)
+    }
+    private var bar: some View {
         let items = choice["items"].array
         let segments = ForEach(items.indices, id: \.self) { index in
             let item = items[index]
@@ -567,7 +595,7 @@ struct SegmentedChoiceBar: View {
                 .accessibilityAddTraits(item["selected"].bool ? .isSelected : [])
                 .accessibilityIdentifier("\(prefix)-segment-\(choice["id"].string)-\(index)")
         }
-        Group {
+        return Group {
             if stacked { VStack(spacing: 0) { segments } } else { HStack(spacing: 0) { segments } }
         }.frame(height: height)
             .accessibilityElement(children: .contain)

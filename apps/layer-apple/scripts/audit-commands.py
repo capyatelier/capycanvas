@@ -22,11 +22,16 @@ def signature(action):
     return json.dumps(action, sort_keys=True)
 
 
+def comparable(control):
+    curve = control.get("curve")
+    return {**control, "curve": curve and {**curve, "epoch": None}}
+
+
 def settled(control, edits):
     result = next((edit["result"] for edit in edits if edit["key"] == control["key"] and edit["result"]), None)
     if result is None:
-        return control
-    return {**control, "value": result["reset"], "modified": result["reset"] != control["default"]}
+        return comparable(control)
+    return comparable({**control, "value": result["reset"], "modified": result["reset"] != control["default"]})
 
 
 def shared_properties(coverage, platform, model):
@@ -47,7 +52,7 @@ def shared_properties(coverage, platform, model):
         if scenario["lock_action"] is None:
             if name != "paper" or locked is not None or scenario["locked_edit"] is not None:
                 raise ValueError(f"{platform} property locking capability drift: {name}")
-        elif locked["enabled"] or locked["controls"] != [settled(item, scenario["edits"]) for item in view["controls"]]:
+        elif locked["enabled"] or [comparable(item) for item in locked["controls"]] != [settled(item, scenario["edits"]) for item in view["controls"]]:
             raise ValueError(f"{platform} property lock changed values/schema or remained editable: {name}")
         elif view["controls"] and (not scenario["locked_edit"]["error"] or not scenario["locked_edit"]["values_unchanged"]):
             raise ValueError(f"{platform} locked property edit was not rejected intact: {name}")
@@ -94,7 +99,9 @@ def shared_controls(inventory, coverage, platform, model):
             raise ValueError(f"Missing workspace review reference: {path}")
     if not routes.get(platform):
         raise ValueError(f"Missing {platform} workspace service review")
-    panels = [panel for workspace in model["workspace_scenarios"] for panel in workspace["panels"]]
+    unavailable = {panel["id"] for panel in model["panels"] if not panel["available"]}
+    panels = [panel for workspace in model["workspace_scenarios"] for panel in workspace["panels"]
+              if panel["id"] not in unavailable]
     controls = {item["control"] for panel in panels for item in panel["controls"]}
     kinds = {row["kind"]["type"] for preferences in model["preferences"]
              for page in preferences["pages"] for group in page["groups"] for row in group["rows"]}

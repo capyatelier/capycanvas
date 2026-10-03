@@ -9,13 +9,13 @@ use std::{
     os::fd::AsRawFd,
 };
 
-const CORRECTIONS: [(&str, &str, f64); 6] = [
-    ("exposure", "exposure", 0.75),
-    ("white_balance", "temperature", 25.),
-    ("levels", "gamma", 0.9),
-    ("curves", "curve_0", 0.),
-    ("hue_saturation", "hue", 10.),
-    ("color_balance", "midtones_red", 12.),
+const CORRECTIONS: [(&str, &str, f64, Option<&str>); 6] = [
+    ("exposure", "exposure", 0.75, None),
+    ("white_balance", "temperature", 25., None),
+    ("levels", "gamma", 0.9, None),
+    ("curves", "curve_0", 0., None),
+    ("hue_saturation", "hue", 10., None),
+    ("color_balance", "midtones_red", 12., Some("midtones")),
 ];
 fn document(app: &App) -> Document {
     unsafe { &*app.0 }.host.session.engine().document().clone()
@@ -66,7 +66,7 @@ fn set(app: &App, layer: u64, key: &str, value: Value) {
     app.draw_until_idle();
 }
 fn value(index: usize, alternate: bool) -> Value {
-    let (_, key, amount) = CORRECTIONS[index];
+    let (_, key, amount, _) = CORRECTIONS[index];
     if key == "curve_0" {
         json!({"kind":"curve","value": if alternate { json!([[0.,0.],[0.4,0.7],[1.,1.]]) }
             else { json!([[0.,0.],[0.213,0.13],[0.79,0.9],[1.,1.]]) }})
@@ -188,12 +188,15 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
                 .as_ref()
                 .unwrap();
             let mut ids = Vec::new();
-            for (index, (effect, key, _)) in CORRECTIONS.into_iter().enumerate() {
+            for (index, (effect, key, _, page)) in CORRECTIONS.into_iter().enumerate() {
                 let before = samples(&app);
                 app.action(json!({"type":"effect","action":{"op":"insert","effect":effect}}));
                 app.draw_until_idle();
                 let layer = document(&app).active_layer.0;
                 ids.push(layer);
+                if let Some(page) = page {
+                    app.action(json!({"type":"effect","action":{"op":"select_page","layer":layer,"page":page}}));
+                }
                 let controls = app.state()["layer_properties"]["controls"]
                     .as_array()
                     .unwrap()

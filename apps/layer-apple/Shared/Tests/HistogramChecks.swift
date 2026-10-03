@@ -29,7 +29,7 @@ extension XCTestCase {
         }
         func text(_ element: XCUIElement) -> String { element.value as? String ?? element.label }
         func open() {
-            let button = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-commands-", "Histogram…")).firstMatch
+            let button = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-commands-", "Histogram")).firstMatch
             XCTAssertTrue(button.waitForExistence(timeout: 10)); workspaceActivate(button)
         }
         let status = app.staticTexts["histogram-status"]
@@ -56,7 +56,7 @@ extension XCTestCase {
         attachEditor(in: app, name: "histogram-luminance-log")
         workspaceActivate(app.checkBoxes["Auto update"])
         editorHistory("Undo", in: app)
-        expectation(for: NSPredicate { _,_ in text(status).contains("showing previous inspection") }, evaluatedWith: status)
+        expectation(for: NSPredicate { _,_ in text(status).hasPrefix("Drawing changed · ") }, evaluatedWith: status)
         waitForExpectations(timeout: 15)
         workspaceActivate(app.buttons["histogram-refresh"]); ready()
         workspaceActivate(app.buttons["histogram-close"])

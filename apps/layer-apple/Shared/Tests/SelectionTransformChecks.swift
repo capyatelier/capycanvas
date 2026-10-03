@@ -170,7 +170,8 @@ extension XCTestCase {
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
         let rotationHeight = bounds.width * originalFrame.width / originalFrame.height
-        let points = [CGPoint(x: bounds.minX + bounds.width * 0.1, y: center.y), center,
+        let points = [CGPoint(x: bounds.minX + bounds.width * 0.1, y: center.y),
+            CGPoint(x: center.x + bounds.width * 0.03, y: center.y + bounds.height * 0.03),
             CGPoint(x: center.x + bounds.width * 0.2, y: center.y + bounds.height * 0.06),
             CGPoint(x: center.x - bounds.width * 0.06, y: center.y - rotationHeight * 0.2),
             CGPoint(x: bounds.maxX - bounds.width * 0.1, y: center.y)]
@@ -226,22 +227,23 @@ extension XCTestCase {
             }, evaluatedWith: control)
             waitForExpectations(timeout: 5)
         }
+        let title = editorDocumentTitle(in: app)
+        let extent = (title.value as? String ?? title.label).components(separatedBy: " · ").last!
+        let dimensions = extent.components(separatedBy: " × ").compactMap(Double.init)
+        XCTAssertEqual(dimensions.count, 2)
+        let middle = (x: dimensions[0] / 2, y: dimensions[1] / 2)
         for (name, modifiers, width, height, x): (String, XCUIElement.KeyModifierFlags, Double, Double, Double) in [
             ("edge-scale", [], 75, 100, -256), ("shift-scale", .shift, 75, 75, -256),
             ("option-scale", .option, 50, 100, 0)] {
             begin()
             drag(CGPoint(x: bounds.maxX, y: center.y), CGPoint(x: center.x + bounds.width * 0.25, y: center.y), modifiers: modifiers)
-            near("width", width); near("height", height); near("x", x, tolerance: 6); near("y", 0)
+            near("width", width); near("height", height); near("x", middle.x + x, tolerance: 6); near("y", middle.y)
             let scaled = [name != "option-scale", true, true, true, false]
             expectInk(scaled); attachEditor(in: app, name: name)
             finish(true); history(scaled)
         }
         // Every corner must use the visible handle and keep the opposite
         // corner fixed. Sample all four quadrants independently of the fields.
-        let title = editorDocumentTitle(in: app)
-        let extent = (title.value as? String ?? title.label).components(separatedBy: " · ").last!
-        let dimensions = extent.components(separatedBy: " × ").compactMap(Double.init)
-        XCTAssertEqual(dimensions.count, 2)
         let corners = [CGPoint(x: -1, y: -1), CGPoint(x: 1, y: -1), CGPoint(x: -1, y: 1), CGPoint(x: 1, y: 1)]
         let quadrantSamples = corners.map {
             CGPoint(x: center.x + $0.x * bounds.width * 0.375, y: center.y + $0.y * bounds.height * 0.375)
@@ -251,8 +253,8 @@ extension XCTestCase {
             drag(CGPoint(x: center.x + corner.x * bounds.width * 0.5, y: center.y + corner.y * bounds.height * 0.5),
                 CGPoint(x: center.x + corner.x * bounds.width * 0.25, y: center.y + corner.y * bounds.height * 0.25))
             near("width", 75); near("height", 75)
-            near("x", -corner.x * dimensions[0] / 8, tolerance: 6)
-            near("y", -corner.y * dimensions[1] / 8, tolerance: 6)
+            near("x", middle.x - corner.x * dimensions[0] / 8, tolerance: 6)
+            near("y", middle.y - corner.y * dimensions[1] / 8, tolerance: 6)
             let scaled = corners.map { $0.x != corner.x && $0.y != corner.y }
             expectBluePaper(scaled, at: quadrantSamples, in: app)
             attachEditor(in: app, name: "corner-scale-\(Int(corner.x))-\(Int(corner.y))")
@@ -262,8 +264,9 @@ extension XCTestCase {
             editorHistory("Undo", in: app); expectInk(filled)
         }
         begin()
-        drag(center, CGPoint(x: center.x + bounds.width * 0.15, y: center.y + bounds.height * 0.1), modifiers: .shift)
-        near("x", 307.2, tolerance: 6); near("y", 0)
+        let grab = CGPoint(x: center.x - bounds.width * 0.1, y: center.y)
+        drag(grab, CGPoint(x: grab.x + bounds.width * 0.15, y: grab.y + bounds.height * 0.1), modifiers: .shift)
+        near("x", middle.x + 307.2, tolerance: 6); near("y", middle.y)
         expectInk([false, true, true, true, true]); attachEditor(in: app, name: "shift-move")
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         XCTAssertTrue(app.buttons["number-value-tool-transform_x"].waitForNonExistence(timeout: 5))
@@ -658,7 +661,7 @@ extension XCTestCase {
         let row = artworkRows(in: app).element(boundBy: 0)
         let rowID = row.identifier
         let current = artworkRows(in: app)[rowID]
-        workspaceActivate(app.buttons["layer-Add layer mask"])
+        workspaceActivate(app.buttons["layer-Add mask"])
         let mask = current.buttons["Edit layer mask"], content = current.buttons["Edit layer content"]
         XCTAssertTrue(mask.waitForExistence(timeout: 5))
         attachEditor(in: app, name: "mask-before-unlink")
@@ -734,8 +737,8 @@ extension XCTestCase {
         let frame = viewport.frame, rows = artworkRows(in: app)
         let firstID = rows.element(boundBy: 0).identifier
         // Two separated pieces on separate layers make a partial group move visible.
-        for x in [-512, 512] {
-            if x > 0 {
+        for x in [512, 1536] {
+            if x > 1024 {
                 workspaceActivate(app.buttons["layer-New layer"])
                 // Applying the first transform also transforms its selection.
                 editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
@@ -769,8 +772,8 @@ extension XCTestCase {
         waitForExpectations(timeout: 5); expectInk(baseline)
         editorHistory("Redo", in: app)
         XCTAssertTrue(group.waitForExistence(timeout: 5)); expectInk(baseline)
-        workspaceActivate(group.staticTexts["Group"])
-        let collapse = group.buttons["Collapse or expand group"]
+        workspaceActivate(group.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", "Group ", "Group ")).firstMatch)
+        let collapse = group.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-thumbnail-")).firstMatch
         expectation(for: NSPredicate(format: "selected == true"), evaluatedWith: collapse)
         waitForExpectations(timeout: 5)
         workspaceActivate(collapse)
@@ -782,6 +785,7 @@ extension XCTestCase {
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
             "tool-group-", "Move")).firstMatch.isSelected)
         #if os(macOS)
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
         viewport.coordinate(withNormalizedOffset: CGVector(dx: bounds.midX, dy: bounds.midY)).click(forDuration: 0.05,
             thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: bounds.midX + bounds.width * 0.125, dy: bounds.midY)))
         editorDocumentTitle(in: app).hover()
@@ -795,7 +799,7 @@ extension XCTestCase {
         editorHistory("Undo", in: app); expectInk(baseline)
         editorHistory("Redo", in: app); expectInk(blank)
         editorHistory("Undo", in: app); expectInk(baseline)
-        layerContext("Ungroup", on: group.staticTexts["Group"], in: app)
+        layerContext("Ungroup", on: group.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", "Group ", "Group ")).firstMatch, in: app)
         expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
         waitForExpectations(timeout: 5); expectInk(baseline)
         editorHistory("Undo", in: app)

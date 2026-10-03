@@ -27,7 +27,7 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: checked)
         waitForExpectations(timeout: 5)
         XCTAssertTrue(content.isSelected, "Checking another row must preserve the drawing target")
-        activate(container.buttons["layer-Add layer mask"])
+        activate(container.buttons["layer-Add mask"])
         let mask = currentRow.buttons["Edit layer mask"]
         XCTAssertTrue(mask.waitForExistence(timeout: 5))
         activate(mask)

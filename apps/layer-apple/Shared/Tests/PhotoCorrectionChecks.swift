@@ -62,13 +62,13 @@ extension XCTestCase {
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
         let rows = app.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         let initialCount = rows.count
-        let corrections = [("Exposure", "exposure", "exposure", "0.75"),
-            ("White Balance", "white_balance", "temperature", "25"),
-            ("Levels", "levels", "gamma", "0.9"), ("Curves", "curves", "", ""),
-            ("Hue", "hue_saturation", "hue", "10"),
-            ("Color Balance", "color_balance", "midtones_red", "12")]
+        let corrections: [(String, String, String, String, Int?)] = [("Exposure", "exposure", "exposure", "0.75", nil),
+            ("White Balance", "white_balance", "temperature", "25", nil),
+            ("Levels", "levels", "gamma", "0.9", nil), ("Curves", "curves", "", "", nil),
+            ("Hue", "hue_saturation", "hue", "10", nil),
+            ("Color Balance", "color_balance", "midtones_red", "12", 1)]
         var ids: [String] = []
-        for (index, (name, filterID, key, amount)) in corrections.enumerated() {
+        for (index, (name, filterID, key, amount, page)) in corrections.enumerated() {
             let before = pixels()
             workspaceActivate(app.buttons["panel-tab-adjustments"])
             if index > 0 { workspaceActivate(app.buttons["filter-search-toggle"]) }
@@ -85,7 +85,13 @@ extension XCTestCase {
             if key.isEmpty {
                 let curve = app.descendants(matching: .any)["effect-curve"].firstMatch
                 curve.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).click()
-            } else { edit(key, amount) }
+            } else {
+                if let page {
+                    workspaceActivate(app.buttons["properties-page"])
+                    workspaceActivate(app.buttons["properties-page-option-\(page)"])
+                }
+                edit(key, amount)
+            }
             let edited = changed(before)
             // Exercise the two native editor types once. The fast Metal test
             // covers every correction's reset, bypass, history and local mask.
@@ -102,7 +108,7 @@ extension XCTestCase {
                 workspaceActivate(row.buttons["Hide layer"]); expectPixels(before, in: app)
                 workspaceActivate(row.buttons["Show layer"]); expectPixels(edited, in: app)
             }
-            workspaceActivate(app.buttons["layer-Add layer mask"])
+            workspaceActivate(app.buttons["layer-Add mask"])
             let mask = row.buttons["Edit layer mask"]
             XCTAssertTrue(mask.waitForExistence(timeout: 5))
             if index == 0 {
@@ -134,7 +140,13 @@ extension XCTestCase {
             XCTAssertTrue(row.buttons["Edit layer mask"].exists)
             if corrections[index].2.isEmpty {
                 reveal(app.buttons["curve-reset"]); workspaceActivate(app.buttons["curve-reset"])
-            } else { edit(corrections[index].2, index == 2 ? "1.2" : "0") }
+            } else {
+                if let page = corrections[index].4 {
+                    workspaceActivate(app.buttons["properties-page"])
+                    workspaceActivate(app.buttons["properties-page-option-\(page)"])
+                }
+                edit(corrections[index].2, index == 2 ? "1.2" : "0")
+            }
             _ = changed(corrected); editorHistory("Undo", in: app); expectPixels(corrected, in: app)
         }
         XCTAssertEqual(try Data(contentsOf: photo), original)

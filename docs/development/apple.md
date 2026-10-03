@@ -146,7 +146,10 @@ made, including selecting System again.
 
 The portable regression `apple_language_publication_is_atomic_deferred_and_window_local`
 checks coalescing, deferred publication, complete matching copy, independent
-windows and unchanged document/camera state. On Apple hardware, also switch
+windows and unchanged document/camera state. `EditorLaunchTests/testLiveInterfaceLanguage`
+and `testLiveInterfaceLanguageDark` switch Settings to 日本語 and back and check that
+the open Settings sheet and the panel tabs relabel without a restart. On Apple
+hardware, also switch
 while editing color/numeric drafts, renaming with marked text, drawing, dragging,
 using open dialogs, and activating parked drawings in both themes. Run
 `tests/persistence.swift` for cross-scene delivery after a failed write.
