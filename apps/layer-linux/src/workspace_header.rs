@@ -116,6 +116,12 @@ pub(super) struct Header {
     insets: Cell<[f32; 2]>,
 }
 impl Header {
+    pub(super) fn switcher_context_at(&self, id: u32, widget: &gtk::Widget, x: f64, y: f64) -> bool {
+        self.items.borrow().iter().any(|item| item.entry.id == id
+            && item.entry.item == HeaderItem::Workspaces
+            && item.content.compute_bounds(widget).is_some_and(|bounds|
+                bounds.contains_point(&gtk::graphene::Point::new(x as f32, y as f32))))
+    }
     #[cfg(test)]
     pub fn geometry_for_test(&self) -> HeaderGeometry {
         self.geometry.borrow().clone()
@@ -708,6 +714,7 @@ impl Header {
                 menu.add_css_class("flat");
                 menu.add_css_class("chrome-control");
                 menu.set_widget_name("header-workspace-selector");
+                w.workspaces.install_switcher_context(w, &menu);
                 menu.set_create_popup_func(glib::clone!(
                     #[weak]
                     w,
@@ -802,6 +809,7 @@ impl Header {
         self.root.add(&root);
         w.install_context(&root, ContextTarget::Header { id: Some(entry.id) });
         let id = entry.id;
+        let workspaces = entry.item == HeaderItem::Workspaces;
         root.connect_has_focus_notify(glib::clone!(
             #[weak]
             w,
@@ -824,6 +832,10 @@ impl Header {
                 if key == gdk::Key::Menu
                     || (key == gdk::Key::F10 && modifiers.contains(gdk::ModifierType::SHIFT_MASK))
                 {
+                    if workspaces {
+                        w.workspaces.show_options(&w, root.upcast_ref(), 0., root.height() as f64, false);
+                        return glib::Propagation::Stop;
+                    }
                     w.show_context(
                         root.upcast_ref(),
                         ContextTarget::Header { id: Some(id) },

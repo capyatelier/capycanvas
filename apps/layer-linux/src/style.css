@@ -76,6 +76,8 @@ window, label, text { font-size: var(--ui-text-size); }
 .workspace-switcher button:hover { background: alpha(var(--window-fg-color), .08); }
 .workspace-switcher button:checked { background: var(--header-selection); color: var(--window-fg-color); }
 .workspace-switcher button:checked:hover { background: var(--header-selection-hover); }
+.workspace-switcher .workspace-options { margin: -5px 0; }
+.workspace-switcher .workspace-options > button { min-width: 26px; min-height: 36px; padding: 0; color: alpha(var(--window-fg-color), .7); }
 .workspace-manager-row > box.header:dir(ltr) { margin-left: 6px; }
 .workspace-manager-row > box.header:dir(rtl) { margin-right: 6px; }
 .workspace-manager-row .prefixes { margin-left: 0; margin-right: 0; }

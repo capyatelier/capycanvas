@@ -40,6 +40,9 @@ pub(crate) struct NativeWorkspaces {
     pub root: gtk::Box,
     pub label: gtk::Label,
     pub switcher: gtk::Box,
+    switch_options: gtk::MenuButton,
+    switch_context: gtk::PopoverMenu,
+    switch_context_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     switch_body: gtk::Box,
     switch_buttons: RefCell<Vec<(String, gtk::ToggleButton)>>,
     switch_owner: RefCell<std::rc::Weak<Workspace>>,
@@ -84,7 +87,7 @@ impl NativeWorkspaces {
         recovery.set_visible(false);
         root.append(&recovery);
         root.set_visible(store.is_some());
-        let (switcher, switch_body) = switcher::build();
+        let (switcher, switch_body, switch_options) = switcher::build();
         switcher.set_sensitive(false);
         Self {
             ui: dialog::ManagerUi::new(),
@@ -94,6 +97,9 @@ impl NativeWorkspaces {
             root,
             label,
             switcher,
+            switch_options,
+            switch_context: gtk::PopoverMenu::from_model(gtk::gio::MenuModel::NONE),
+            switch_context_focus: RefCell::new(None),
             switch_body,
             switch_buttons: RefCell::new(Vec::new()),
             switch_owner: RefCell::new(std::rc::Weak::new()),

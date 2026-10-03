@@ -1450,6 +1450,11 @@ impl Workspace {
                 if owns_context(&widget, x, y) {
                     if crate::input::touch_or_pen(gesture) {
                         gesture.set_state(gtk::EventSequenceState::Claimed);
+                        if let ContextTarget::Header { id: Some(id) } = target
+                            && w.header.switcher_context_at(id, &widget, x, y) {
+                            w.workspaces.show_options(&w, &widget, x, y, true);
+                            return;
+                        }
                         w.show_context(&widget, target, x, y);
                     } else if let Some(drag) = w.workspace_drag.borrow_mut().as_mut()
                         && drag.wait_for_hold
@@ -1466,6 +1471,18 @@ impl Workspace {
             }
         ));
         widget.add_controller(hold);
+        if matches!(target, ContextTarget::Header { id: Some(_) }) {
+            let release = gtk::EventControllerLegacy::new();
+            release.set_propagation_phase(gtk::PropagationPhase::Capture);
+            release.connect_event(glib::clone!(#[weak(rename_to = w)] self, #[upgrade_or] glib::Propagation::Proceed,
+                move |_, event| {
+                    if matches!(event.event_type(), gdk::EventType::TouchEnd | gdk::EventType::TouchCancel | gdk::EventType::ButtonRelease) {
+                        w.workspaces.finish_options_hold(event.event_type() == gdk::EventType::TouchCancel);
+                    }
+                    glib::Propagation::Proceed
+                }));
+            widget.add_controller(release);
+        }
     }
 
     pub(super) fn show_context(
@@ -1475,6 +1492,11 @@ impl Workspace {
         x: f64,
         y: f64,
     ) {
+        if let ContextTarget::Header { id: Some(id) } = target
+            && self.header.switcher_context_at(id, widget, x, y) {
+            self.workspaces.show_options(self, widget, x, y, false);
+            return;
+        }
         if let ContextTarget::Header { id: Some(id) } = target
             && self.header.is_editing()
         {

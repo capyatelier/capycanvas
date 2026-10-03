@@ -2153,11 +2153,12 @@ fn native_header_compact_switcher_input() {
     );
     let manager = d.w.workspaces.manager().unwrap();
     let settle = |input| {
+        let prompt = matches!(&input, layer_workspace::WorkspaceInput::Form { action: layer_workspace::ManagerAction::New });
         d.w.workspaces.send(&d.w, input);
         until(
             || {
                 let view = d.w.workspaces.view();
-                !view.busy && !view.switcher_busy && view.prompt.is_none()
+                !view.busy && !view.switcher_busy && view.prompt.is_some() == prompt
             },
             "workspace edit",
         );
@@ -2196,6 +2197,16 @@ fn native_header_compact_switcher_input() {
                 selector.downcast_ref::<gtk::MenuButton>().unwrap().label(),
                 manager.active_name().map(Into::into)
             );
+            let active = manager.active_id();
+            let point = d.point(&selector);
+            d.input.perform(serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]));
+            let context = d.named("workspace-switcher-options-context").downcast::<gtk::PopoverMenu>().unwrap();
+            assert!(context.is_visible());
+            assert_eq!(manager.active_id(), active);
+            let checklist = context.menu_model().unwrap().item_link(0, gtk::gio::MENU_LINK_SECTION).unwrap();
+            assert_eq!(checklist.n_items() as usize, manager.items().len());
+            d.input.key(0xff1b);
+            assert!(!context.is_visible());
             let mut overflow_count = 0;
             for zone in HeaderZone::ALL {
                 let button = d.named(&format!("header-overflow-{}", zone.index()));
@@ -2234,15 +2245,20 @@ fn native_header_compact_switcher_input() {
                 .menu_model()
                 .unwrap();
             let choices = manager.switcher_display_ids();
-            assert_eq!(model.n_items() as usize, choices.len());
-            for (index, id) in choices.iter().enumerate() {
+            assert_eq!(model.n_items(), 3);
+            let visibility = model.item_link(1, gtk::gio::MENU_LINK_SECTION).unwrap();
+            assert_eq!(visibility.item_attribute_value(0, "label", None).unwrap().get::<String>().as_deref(), Some("Show in top bar"));
+            assert_eq!(visibility.item_link(0, gtk::gio::MENU_LINK_SUBMENU).unwrap().item_link(0, gtk::gio::MENU_LINK_SECTION).unwrap().n_items() as usize, manager.items().len());
+            let switching = model.item_link(0, gtk::gio::MENU_LINK_SECTION).unwrap();
+            assert_eq!(switching.n_items() as usize, choices.len());
+            for (index, choice) in d.w.workspaces.view().switcher_display.iter().enumerate() {
                 assert_eq!(
-                    model
-                        .item_attribute_value(index as i32, "target", None)
+                    switching
+                        .item_attribute_value(index as i32, "label", None)
                         .unwrap()
                         .get::<String>()
                         .as_ref(),
-                    Some(id),
+                    Some(&choice.title),
                     "dropdown follows the pill's configured order"
                 );
             }

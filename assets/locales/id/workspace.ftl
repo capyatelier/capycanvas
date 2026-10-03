@@ -56,6 +56,10 @@ workspace-header-fullscreen = Layar Penuh
 
 workspace-header-workspaces = Pemilih Ruang Kerja
 
+workspace-switcher-options = Opsi Ruang Kerja
+
+workspace-show-in-top-bar = Tampilkan di bilah atas
+
 workspace-header-document-title = Judul Dokumen
 
 workspace-header-clock = Jam
@@ -236,6 +240,8 @@ workspace-action-new-toolbar = Bilah Alat Baru…
 workspace-action-recover-interrupted-changes = Pulihkan Perubahan yang Terputus…
 
 workspace-action-new-workspace = Ruang Kerja Baru…
+
+workspace-action-manage-workspaces = Kelola Ruang Kerja…
 
 workspace-action-reset-all-brushes = Atur Ulang Semua Kuas…
 

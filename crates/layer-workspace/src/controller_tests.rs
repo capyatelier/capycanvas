@@ -10,6 +10,7 @@ struct Backend {
     database: RefCell<BrowserDatabase>,
     now: Cell<u64>,
     fail: Cell<bool>,
+    fail_preferences: Cell<bool>,
     lose_reply: Cell<bool>,
     deliveries: RefCell<Vec<String>>,
     load_gate: RefCell<Option<async_channel::Receiver<()>>>,
@@ -21,6 +22,9 @@ struct Backend {
 struct Store(Rc<Backend>);
 impl WorkspaceStore for Store {
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse, StoreError> {
+        if self.0.fail_preferences.get() && matches!(request, StoreRequest::UpdateSwitcher { .. }) {
+            return Err(StoreError::new(ErrorKind::StorageFull, "Storage full"));
+        }
         if matches!(request, StoreRequest::Load { .. }) {
             let gate = self.0.load_gate.borrow_mut().take();
             if let Some(gate) = gate {
@@ -64,6 +68,108 @@ impl WorkspaceStore for Store {
         }
         result
     }
+}
+#[test]
+fn switcher_menu_toggles_saved_visibility_without_opening_or_editing_a_workspace() {
+    let mut f = Fixture::new();
+    let id = f.controller.view.switcher[0].id.clone();
+    f.input(serde_json::json!({"type":"switch","id":id}));
+    f.controller.observe(&mut f.host.session, f.backend.now.get());
+    f.pump();
+    let active = f.controller.view.id.clone().unwrap();
+    let original = f.controller.manager.current_record().unwrap();
+    let layout = f.host.session.state().workspace.layout.clone();
+    let order = f.controller.view.order.clone();
+    let options = &f.controller.view.switcher_options;
+    assert!(f.controller.view.page.is_none());
+    assert!(f.controller.view.rows.is_empty());
+    let ids: Vec<_> = options.sections[0].iter().map(|item| match item.action.as_ref().unwrap() {
+        UiAction::WorkspaceManager { command: layer_ui::WorkspaceCommand::ShowInSwitcher { id, .. } } => id.clone(),
+        action => panic!("{action:?}"),
+    }).collect();
+    assert_eq!(ids, order);
+    let index = ids.iter().position(|id| id == &active).unwrap();
+    assert_eq!(options.sections[0][index].selected, Some(true));
+    let hide = options.sections[0][index].action.clone().unwrap();
+    f.action(serde_json::to_value(hide).unwrap());
+    f.pump();
+    assert_eq!(f.controller.view.switcher_options.sections[0][index].selected, Some(false));
+    assert_eq!(f.controller.view.switcher_display[0].id, active);
+    assert_eq!(f.controller.view.order, order);
+    assert!(f.controller.view.page.is_none());
+    assert_eq!(f.host.session.state().workspace.layout, layout);
+    assert_eq!(f.controller.manager.current_record().unwrap(), original);
+    assert_eq!(f.controller.view.switcher_menu.sections[0][0].selected, Some(true));
+    assert_eq!(f.controller.view.switcher_menu.sections[1][0].sections[0][index].selected, Some(false));
+
+    let show = f.controller.view.switcher_options.sections[0][index].action.clone().unwrap();
+    f.action(serde_json::to_value(show).unwrap());
+    f.pump();
+    assert_eq!(f.controller.view.switcher_options.sections[0][index].selected, Some(true));
+    assert_eq!(f.controller.manager.current_record().unwrap(), original);
+    let manage = f.controller.view.switcher_options.sections.last().unwrap()[0].action.clone().unwrap();
+    f.action(serde_json::to_value(manage).unwrap());
+    f.pump();
+    assert_eq!(f.controller.view.page, Some(ManagerPage::Workspaces));
+    assert_eq!(f.controller.view.selected.as_deref(), Some(active.as_str()));
+}
+
+#[test]
+fn switcher_menu_preserves_confirmed_checks_during_pending_and_failed_writes() {
+    let mut f = Fixture::new();
+    let id = f.controller.view.switcher[0].id.clone();
+    let action = f.controller.view.switcher_options.sections[0][0].action.clone().unwrap();
+    let (release, gate) = async_channel::bounded(1);
+    *f.backend.switcher_gate.borrow_mut() = Some(gate);
+    f.backend.fail_preferences.set(true);
+    f.action(serde_json::to_value(action.clone()).unwrap());
+    f.pump();
+    assert!(f.controller.view.switcher_busy);
+    let item = &f.controller.view.switcher_options.sections[0][0];
+    assert_eq!(item.selected, Some(true));
+    assert!(!item.enabled);
+    release.try_send(()).unwrap();
+    f.pump();
+    assert!(!f.controller.view.switcher_busy);
+    assert!(f.controller.view.switcher_error.is_some());
+    assert_eq!(f.host.session.state().notice.as_ref().map(|notice| &notice.text), f.controller.view.switcher_error.as_ref());
+    let notice = f.host.session.state().notice.clone().unwrap();
+    let japanese = Localizer::shared(UiLanguage::Japanese);
+    f.host.session.set_localization(japanese.clone());
+    f.controller.set_localization(japanese);
+    f.pump();
+    let translated = f.host.session.state().notice.as_ref().unwrap();
+    assert_eq!(translated.id, notice.id);
+    assert_ne!(translated.text, notice.text);
+    assert_eq!(Some(&translated.text), f.controller.view.switcher_error.as_ref());
+    assert_eq!(f.controller.view.switcher_options.sections[0][0].selected, Some(true));
+    assert!(f.controller.view.switcher_options.sections[0][0].enabled);
+    assert!(f.controller.view.switcher.iter().any(|row| row.id == id));
+    f.backend.fail_preferences.set(false);
+    f.action(serde_json::to_value(action).unwrap());
+    f.pump();
+    assert!(f.controller.view.switcher_error.is_none());
+    assert_eq!(f.controller.view.switcher_options.sections[0][0].selected, Some(false));
+}
+
+#[test]
+fn switcher_menu_localizes_chrome_without_changing_custom_names_or_actions() {
+    let mut f = Fixture::new();
+    let original = f.controller.view.switcher_options.clone();
+    let order = f.controller.view.order.clone();
+    let japanese = Localizer::shared(UiLanguage::Japanese);
+    f.controller.set_localization(japanese.clone());
+    let translated = &f.controller.view.switcher_options;
+    assert_eq!(translated.title, japanese.text(layer_ui::MessageId::WORKSPACE_SHOW_IN_TOP_BAR).as_ref());
+    assert_ne!(translated.title, original.title);
+    assert_eq!(f.controller.view.switcher_options_label, japanese.text(layer_ui::MessageId::WORKSPACE_SWITCHER_OPTIONS).as_ref());
+    for (a, b) in original.sections.iter().flatten().zip(translated.sections.iter().flatten()) {
+        assert_eq!(a.action, b.action);
+        assert_eq!(a.selected, b.selected);
+    }
+    assert_eq!(translated.sections[0].last().unwrap().label, "My Workspace");
+    assert_eq!(f.controller.view.order, order);
+    assert!(f.controller.view.page.is_none());
 }
 #[test]
 fn controllers_begin_with_independent_languages() {

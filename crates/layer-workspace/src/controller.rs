@@ -116,6 +116,9 @@ pub struct WorkspaceView {
     pub switcher: Vec<WorkspaceRow>,
     /// Header choices, including the current workspace when it is unpinned.
     pub switcher_display: Vec<WorkspaceRow>,
+    pub switcher_options_label: String,
+    pub switcher_options: layer_ui::ContextMenu,
+    pub switcher_menu: layer_ui::ContextMenu,
     pub order: Vec<String>,
     pub switcher_busy: bool,
     pub switcher_error: Option<String>,
@@ -208,23 +211,25 @@ impl Startup {
         }
     }
 }
-enum StartupNoticeCopy {
+enum WorkspaceNoticeCopy {
     Reset,
     Volatile(StoreError),
+    SwitcherError(StoreError),
 }
-impl StartupNoticeCopy {
+impl WorkspaceNoticeCopy {
     fn text(&self, localization: &layer_ui::Localizer) -> String {
         match self {
+            Self::SwitcherError(error) => error.localized_message(localization),
             Self::Reset => localization.text(layer_ui::MessageId::WORKSPACE_STORAGE_RESET_NOTICE).to_string(),
             Self::Volatile(error) => message(localization, layer_ui::MessageId::WORKSPACE_STORAGE_VOLATILE_NOTICE,
                 &[("detail", error.localized_message(localization))]),
         }
     }
 }
-struct StartupNotice {
+struct WorkspaceNotice {
     id: u64,
     generation: u64,
-    copy: StartupNoticeCopy,
+    copy: WorkspaceNoticeCopy,
 }
 type Selection = (Option<StoredEntity>, Option<DockLayout>);
 pub struct WorkspaceController<S: WorkspaceStore + 'static> {
@@ -269,7 +274,7 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     routed: UiChange,
     startup: Option<Startup>,
     startup_error: Option<StoreError>,
-    startup_notice: Option<StartupNotice>,
+    notice: Option<WorkspaceNotice>,
 }
 impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     pub fn new_localized(store: S, platform: Platform, now: u64, localization: Arc<layer_ui::Localizer>) -> Self {
@@ -382,7 +387,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             routed: UiChange::default(),
             startup: None,
             startup_error: None,
-            startup_notice: None,
+            notice: None,
         };
         c.view.owner = c.manager.owner.id.clone();
         c.initialize(now);
@@ -479,21 +484,27 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.start(next, now);
         true
     }
-    fn startup_notice_copy(&self) -> Option<StartupNoticeCopy> {
+    fn startup_notice_copy(&self) -> Option<WorkspaceNoticeCopy> {
         match self.startup? {
             Startup::Stored => None,
-            Startup::Replaced => Some(StartupNoticeCopy::Reset),
-            Startup::InMemory => Some(StartupNoticeCopy::Volatile(self.startup_error.clone()?)),
+            Startup::Replaced => Some(WorkspaceNoticeCopy::Reset),
+            Startup::InMemory => Some(WorkspaceNoticeCopy::Volatile(self.startup_error.clone()?)),
         }
     }
-    fn refresh_startup_notice<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>) {
-        if let Some(notice) = &mut self.startup_notice
+    fn notify<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, copy: WorkspaceNoticeCopy) {
+        session.notify(copy.text(&self.localization));
+        self.notice = session.state().notice.as_ref().map(|notice| WorkspaceNotice {
+            id: notice.id, generation: self.localization_generation, copy,
+        });
+    }
+    fn refresh_notice<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>) {
+        if let Some(notice) = &mut self.notice
             && notice.generation != self.localization_generation
         {
             if session.update_notice_text(notice.id, notice.copy.text(&self.localization)) {
                 notice.generation = self.localization_generation;
             } else {
-                self.startup_notice = None;
+                self.notice = None;
             }
         }
     }
@@ -605,6 +616,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         };
         self.view.switcher = switcher_rows(m.switcher_ids());
         self.view.switcher_display = switcher_rows(m.switcher_display_ids());
+        self.view.present_switcher_menus(&self.localization, switcher_rows(self.view.order.clone()));
         let page = self.view.page;
         let (title, intro) = match page {
             Some(ManagerPage::History) => (message(&self.localization, layer_ui::MessageId::WORKSPACE_HISTORY_TITLE, &[("name", self.view.name.clone())]), String::new()),
@@ -968,6 +980,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.view.dirty = self.manager.dirty();
         self.view.saving = self.manager.saving();
         self.view.closing = self.terminating && !self.view.closed;
+        self.view.update_switcher_menu_availability();
     }
     fn open<R: CanvasRenderer>(
         &mut self,
@@ -1371,6 +1384,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 )?))
             }
             WorkspaceCommand::Switch { id } => Some(WorkspaceInput::Switch { id }),
+            WorkspaceCommand::ShowInSwitcher { id, visible } => Some(WorkspaceInput::EditSwitcher {
+                edit: SwitcherEdit::Show { id, visible },
+            }),
             WorkspaceCommand::SaveToolbar { panel } => form(ManagerAction::SaveToolbar(panel)),
             WorkspaceCommand::ManageToolbars if !simple => Some(WorkspaceInput::Open {
                 page: ManagerPage::ThisWorkspace,
@@ -1455,7 +1471,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     }
     pub fn tick<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) -> UiChange {
         self.manager.clock.set(now);
-        self.refresh_startup_notice(session);
+        self.refresh_notice(session);
         self.route_requests(session, now);
         let mut change = std::mem::take(&mut self.routed);
         let mut presentation_changed = false;
@@ -1475,7 +1491,12 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     }
                     self.pending_binding = self.manager.binding();
                 }
-                Err(error) => self.set_switcher_error(Some(error)),
+                Err(error) => {
+                    if self.preferences_edited && self.view.page.is_none() {
+                        self.notify(session, WorkspaceNoticeCopy::SwitcherError(error.clone()));
+                    }
+                    self.set_switcher_error(Some(error));
+                },
             }
             self.preferences_edited = false;
         }
@@ -1645,12 +1666,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             if prepared.is_ok()
                 && let Some(copy) = self.startup_notice_copy()
             {
-                session.notify(copy.text(&self.localization));
-                self.startup_notice = session.state().notice.as_ref().map(|notice| StartupNotice {
-                    id: notice.id,
-                    generation: self.localization_generation,
-                    copy,
-                });
+                self.notify(session, copy);
             }
             match prepared.and_then(|p| session.adopt_workspace(p).map_err(StoreError::invalid)) {
                 Ok(c) => {

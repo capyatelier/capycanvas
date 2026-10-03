@@ -103,10 +103,11 @@ it only on hover. Use existing native menu scrolling for long workspace lists.
    the enclosing title-bar context handler. This includes the rendered switcher
    during Customize Title Bar; preserve header placement and dragging gestures.
    Apply the same routing to the compact workspace selector.
-5. After GTK visual and interaction review, follow the existing
-   [host rollout](../ui/README.md#rules-for-ui-changes): obtain approval before
-   porting, then Web, then Android, Apple, and Windows. Reuse the shared
-   presentation and actions on each host.
+5. Build and validate GTK first, then Web and Android, using the attached,
+   reserved tablets for device journeys. Test Windows in a task-owned local VM
+   afterward when available. These ports are approved; defer Apple. Reuse the
+   shared presentation and actions on each host, and push each validated major
+   milestone to origin/main after fetching, rebasing, and rerunning checks.
 6. Update [Default workspaces](../ui/default-workspaces.md) when behavior lands.
    Remove this plan once implementation and validation are complete.
 
@@ -159,5 +160,5 @@ the sole reordering surface, and the applicable checks and host journeys pass.
 ## Deferred
 
 Workspace icons, custom icon metadata and pickers, icon-only display, custom
-colors, direct switcher reordering, and draggable popup lists are outside this
-feature.
+colors, direct switcher reordering, draggable popup lists, and the Apple
+presentation port are outside this feature.

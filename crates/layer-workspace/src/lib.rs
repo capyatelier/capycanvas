@@ -2,6 +2,7 @@
 //! Hosts provide asynchronous transport, lifecycle events and native controls.
 mod manager;
 mod presentation;
+mod switcher_presentation;
 pub use presentation::*;
 mod prompts;
 pub use prompts::*;

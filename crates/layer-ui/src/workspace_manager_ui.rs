@@ -12,6 +12,7 @@ pub enum WorkspaceCommand {
     ResetLayout,
     LayoutHistory,
     Switch { id: String },
+    ShowInSwitcher { id: String, visible: bool },
     ManageToolbars,
     SaveToolbar { panel: Panel },
     NewToolbar { group: Option<u32> },
@@ -66,7 +67,7 @@ impl ManagedWorkspace {
                 choices,
                 vec![
                     command(&localizer.text(MessageId::WORKSPACE_ACTION_NEW_WORKSPACE), WorkspaceCommand::New, idle),
-                    command(&localizer.text(MessageId::WORKSPACE_WORKSPACES), WorkspaceCommand::Manage, true),
+                    command(&localizer.text(MessageId::WORKSPACE_ACTION_MANAGE_WORKSPACES), WorkspaceCommand::Manage, true),
                 ],
                 vec![
                     command(&localizer.text(MessageId::WORKSPACE_ACTION_LAYOUT_HISTORY), WorkspaceCommand::LayoutHistory, idle),
@@ -110,7 +111,7 @@ mod tests {
         }
         let actions = [
             (1, 0, MessageId::WORKSPACE_ACTION_NEW_WORKSPACE, WorkspaceCommand::New),
-            (1, 1, MessageId::WORKSPACE_WORKSPACES, WorkspaceCommand::Manage),
+            (1, 1, MessageId::WORKSPACE_ACTION_MANAGE_WORKSPACES, WorkspaceCommand::Manage),
             (2, 0, MessageId::WORKSPACE_ACTION_LAYOUT_HISTORY, WorkspaceCommand::LayoutHistory),
             (2, 1, MessageId::WORKSPACE_ACTION_RESTORE_STARTING_LAYOUT, WorkspaceCommand::ResetLayout),
             (3, 0, MessageId::WORKSPACE_ACTION_RESET_ALL_BRUSHES, WorkspaceCommand::ResetBrushes),

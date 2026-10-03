@@ -6837,7 +6837,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec![
-                vec!["New Workspace…", "Workspaces"],
+                vec!["New Workspace…", "Manage Workspaces…"],
                 vec!["Layout History…", "Restore Starting Layout…"],
                 vec!["Reset All Brushes…"],
             ]

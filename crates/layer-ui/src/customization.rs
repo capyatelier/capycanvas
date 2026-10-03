@@ -626,7 +626,7 @@ pub enum CustomizationAction {
 #[derive(Clone, Debug, Serialize)]
 pub struct ContextMenuItem {
     pub label: String,
-    /// None is an ordinary command; a value is a radio-style choice.
+    /// None is an ordinary command; a value is a checked menu item.
     pub selected: Option<bool>,
     pub action: Option<UiAction>,
     pub enabled: bool,
@@ -662,7 +662,7 @@ impl ContextMenuItem {
         }
     }
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct ContextMenu {
     pub title: String,
     pub sections: Vec<Vec<ContextMenuItem>>,

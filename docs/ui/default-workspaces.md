@@ -209,6 +209,19 @@ like a slider track, with a subtle accent for the active choice, and scrolls
 horizontally when its choices overflow. By default it sits to the right of the
 document title; Sketch centers it, and the title-bar editor can move it.
 
+On GTK, a vertical **⋮** at the end of the switcher well opens **Workspace
+options**. The button stays fixed while the choices scroll. Its **Show in top
+bar** checklist includes every workspace in the saved order; checking a row
+changes its saved visibility without switching or previewing a workspace.
+**Manage Workspaces…** is the last entry and opens the full editor. Reordering
+stays in that editor. The compact workspace menu includes the same checklist
+under Show in top bar and ends with Manage Workspaces….
+
+Right-clicking a workspace choice, the dots, or unused switcher space opens the
+same visibility menu. Touch/pen hold and the keyboard context-menu action do
+the same, including in Customize Title Bar. Releasing a recognized hold does
+not switch workspaces. Ordinary clicks keep their switching behavior.
+
 Manage Workspaces keeps a single ordered list. Every row has a narrow, dimmed
 left grip; workspaces shown in the top bar also have a pin icon with the tooltip
 **Shown in top bar**, and the current workspace keeps its checkmark. The top bar
@@ -234,7 +247,8 @@ refreshing. Edits run in order, can complete during background autosave, and
 drain before closing releases the workspace. Hosts wait for the published
 switcher revision or error to acknowledge an edit.
 `StoreRequest::Switcher` returns optional visible IDs: `None` means the three
-defaults and `Some([])` hides the bar. Without a saved order, pins seed it and
+defaults and `Some([])` saves no pins. The active workspace still appears in
+the switcher. Without a saved order, pins seed it and
 new workspaces follow alphabetically. `UpdateSwitcher` and `UpdateWorkspaceOrder`
 compare the previously read list before replacing it, need no workspace claim,
 and change no workspace generation, settings, layout or history.
@@ -250,6 +264,8 @@ and shows a notice; see
 
 ```sh
 bash tools/performance/workspace-motion.sh gtk --workspace-switcher
+bash tools/performance/workspace-motion.sh gtk --native-test=native_workspace_switcher_options
+bash tools/performance/workspace-motion.sh gtk --native-test=native_header_compact_switcher_input
 bash tools/performance/workspace-motion.sh gtk --workspace-menus
 bash tools/performance/workspace-motion.sh gtk --native-test=native_paint_fitted_columns
 bash tools/performance/workspace-motion.sh gtk --native-test=native_brush_drawer_input

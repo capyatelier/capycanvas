@@ -520,13 +520,161 @@ fn click(w: &Workspace, input: &mut RemoteInput, widget: &gtk::Widget) {
     input.click(screen_point(widget, &w.window, [0.5, 0.5]));
 }
 fn switcher_buttons(w: &Workspace) -> Vec<gtk::ToggleButton> {
-    descendants(w.workspaces.switcher.upcast_ref())
+    descendants::<gtk::ToggleButton>(w.workspaces.switcher.upcast_ref())
+        .into_iter().filter(|button| button.widget_name().starts_with("workspace-switch-")).collect()
 }
 fn switcher_names(w: &Workspace) -> Vec<String> {
     switcher_buttons(w)
         .iter()
         .map(|button| button.widget_name().to_string())
         .collect()
+}
+fn wait_switcher(w: &Workspace) {
+    until(|| !w.workspaces.view().switcher_busy, "workspace order settled");
+    pump(250);
+}
+
+#[test]
+#[ignore = "isolated Mutter mouse/touch driver and SQLite; workspace-motion.sh gtk --native-test=native_workspace_switcher_options"]
+fn native_workspace_switcher_options() {
+    let mut input = switcher_input();
+    let app = native_test_app("art.capycanvas.WorkspaceSwitcherOptions");
+    let settings = gtk::Settings::default().unwrap();
+    settings.set_gtk_enable_animations(false);
+    settings.set_gtk_long_press_time(500);
+    let w = Workspace::new(&app);
+    w.window.maximize();
+    w.window.present();
+    wait_workspaces(&w);
+    pump(300);
+    input.ready();
+    let manager = w.workspaces.manager().unwrap();
+    let active = manager.active_id().unwrap();
+    let original = manager.current().unwrap().capture().unwrap();
+    let target = DEFAULT_WORKSPACES.iter().find(|(id, _)| *id != active).unwrap().0;
+    let target_name = w.workspaces.view().switcher_display.iter().find(|row| row.id == target).unwrap().title.clone();
+    let options = || named::<gtk::MenuButton>(w.window.upcast_ref(), "workspace-switcher-options");
+    let context = || named::<gtk::PopoverMenu>(w.window.upcast_ref(), "workspace-switcher-options-context");
+    let dismiss = |input: &mut RemoteInput| input.key(0xff1b);
+    let checklist = |popup: &gtk::PopoverMenu| {
+        let model = popup.menu_model().unwrap();
+        assert_eq!(model.n_items(), 2);
+        assert_eq!(model.item_attribute_value(0, "label", None).unwrap().get::<String>().as_deref(), Some("Show in top bar"));
+        let rows = model.item_link(0, gtk::gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(rows.n_items() as usize, manager.items().len());
+        assert_eq!(manager.active_id().as_ref(), Some(&active));
+        assert_eq!(manager.current().unwrap().capture().unwrap(), original);
+        assert!(mapped_label(w.window.upcast_ref(), "Customize Title Bar…").is_none());
+    };
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(200);
+        assert!(options().is_mapped());
+        assert!(options().width() >= 26);
+        assert_eq!(w.workspaces.switcher.measure(gtk::Orientation::Vertical, -1).1, 36);
+        assert_eq!(options().measure(gtk::Orientation::Vertical, -1).1, 26);
+        crate::capture(&w, input.dir.join(format!("workspace-header-{theme:?}.png")).to_str().unwrap());
+        click(&w, &mut input, options().upcast_ref());
+        let popup = options().popover().unwrap().downcast::<gtk::PopoverMenu>().unwrap();
+        checklist(&popup);
+        capture_popover(popup.upcast_ref(), input.dir.join(format!("workspace-options-{theme:?}.png")).to_str().unwrap());
+        let target_label = mapped_label(popup.upcast_ref(), &target_name).unwrap();
+        click(&w, &mut input, &target_label);
+        until(|| !w.workspaces.view().switcher_busy, "hide workspace");
+        assert!(!popup.is_visible());
+        assert!(!manager.switcher_ids().contains(&target.to_string()));
+        assert!(!manager.switcher_display_ids().contains(&target.to_string()));
+        click(&w, &mut input, options().upcast_ref());
+        let popup = options().popover().unwrap().downcast::<gtk::PopoverMenu>().unwrap();
+        checklist(&popup);
+        let target_label = mapped_label(popup.upcast_ref(), &target_name).unwrap();
+        click(&w, &mut input, &target_label);
+        until(|| !w.workspaces.view().switcher_busy, "restore workspace");
+        assert!(manager.switcher_ids().contains(&target.to_string()));
+
+        let mut points: Vec<_> = switcher_buttons(&w).iter().map(|button| screen_point(button.upcast_ref(), &w.window, [0.5, 0.5])).collect();
+        points.push(screen_point(options().upcast_ref(), &w.window, [0.5, 0.5]));
+        let bounds = w.workspaces.switcher.compute_bounds(&w.window).unwrap();
+        points.push([bounds.x() + bounds.width() - 2., bounds.y() + bounds.height() / 2.]);
+        for point in points {
+            input.perform(serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]));
+            let popup = context();
+            assert!(popup.is_visible());
+            checklist(&popup);
+            dismiss(&mut input);
+            assert!(!popup.is_visible());
+        }
+
+        let inactive = switcher_buttons(&w).into_iter().find(|button| !button.is_active()).unwrap();
+        let point = screen_point(inactive.upcast_ref(), &w.window, [0.5, 0.5]);
+        let devices = if std::env::var("WAYLAND_DISPLAY").is_ok_and(|display| display.ends_with("-tablet")) {
+            &["touch", "pen"][..]
+        } else { &["touch"][..] };
+        for device in devices {
+            let mut hold = vec![contact(device, "down", point)];
+            hold.extend((0..10).map(|_| serde_json::json!({})));
+            input.perform(serde_json::Value::Array(hold));
+            assert!(context().is_visible());
+            assert!(!context().is_autohide());
+            input.perform(serde_json::json!([contact(device, "up", point)]));
+            assert!(context().is_visible());
+            assert!(context().is_autohide());
+            checklist(&context());
+            dismiss(&mut input);
+            if *device == "pen" { input.perform(serde_json::json!([{"pen":"leave"}])); }
+        }
+        input.perform(serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]));
+        checklist(&context());
+        dismiss(&mut input);
+        assert!(inactive.grab_focus());
+        input.key(0xff67);
+        checklist(&context());
+        dismiss(&mut input);
+        assert!(inactive.has_focus());
+        input.perform(serde_json::json!([{"key":0xffe1,"down":true},{"key":0xffc7,"down":true},{"key":0xffc7,"down":false},{"key":0xffe1,"down":false}]));
+        assert!(context().is_visible());
+        if devices.contains(&"pen") { dismiss(&mut input); }
+        else { input.click([40., 30.]); }
+        assert!(!context().is_visible());
+        assert_eq!(manager.active_id().as_ref(), Some(&active));
+
+        w.dispatch(HeaderAction::Edit { editing: true }.action());
+        pump(200);
+        let bounds = w.workspaces.switcher.compute_bounds(&w.window).unwrap();
+        input.perform(serde_json::json!([{"point":[bounds.x()+bounds.width()/2., bounds.y()+bounds.height()/2.]},{"button":273,"down":true},{"button":273,"down":false}]));
+        checklist(&context());
+        dismiss(&mut input);
+        w.dispatch(HeaderAction::Edit { editing: false }.action());
+        pump(200);
+
+        click(&w, &mut input, options().upcast_ref());
+        let popup = options().popover().unwrap();
+        let manage = mapped_label(popup.upcast_ref(), "Manage Workspaces…").unwrap();
+        click(&w, &mut input, &manage);
+        assert!(!popup.is_visible());
+        assert!(w.window.visible_dialog().is_some());
+        w.workspaces.ui.close(&w);
+        pump(200);
+    }
+    for id in manager.switcher_ids() {
+        click(&w, &mut input, options().upcast_ref());
+        let popup = options().popover().unwrap();
+        let title = w.workspaces.view().switcher_options.sections[0].iter().find(|row|
+            matches!(&row.action, Some(UiAction::WorkspaceManager { command: layer_ui::WorkspaceCommand::ShowInSwitcher { id: target, .. } }) if target == &id)).unwrap().label.clone();
+        click(&w, &mut input, &mapped_label(popup.upcast_ref(), &title).unwrap());
+        until(|| !w.workspaces.view().switcher_busy, "clear workspace pins");
+    }
+    assert!(manager.switcher_ids().is_empty());
+    assert_eq!(switcher_buttons(&w).len(), 1);
+    assert!(options().is_mapped());
+    click(&w, &mut input, options().upcast_ref());
+    let popup = options().popover().unwrap().downcast::<gtk::PopoverMenu>().unwrap();
+    checklist(&popup);
+    assert!(w.workspaces.view().switcher_options.sections[0].iter().all(|row| row.selected == Some(false)));
+    dismiss(&mut input);
+    input.finish();
+    w.window.close();
+    pump(200);
 }
 fn menu_button(widget: &gtk::Widget) -> Option<gtk::MenuButton> {
     descendant(widget)
@@ -541,6 +689,7 @@ fn drag(
     handle: bool,
     hold: bool,
 ) {
+    wait_switcher(w);
     let source = if handle {
         find_named(
             w.window.upcast_ref(),
@@ -806,6 +955,7 @@ fn native_workspace_switcher_input() {
     pump(400);
     click(&w, &mut input, &row(&w, &f));
     let toggle_pin = |id: &str, input: &mut RemoteInput| {
+        wait_switcher(&w);
         let menu = menu_button(&row(&w, id)).unwrap();
         click(&w, input, menu.upcast_ref());
         let pin = find_named(
