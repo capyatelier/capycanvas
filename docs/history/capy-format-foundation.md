@@ -24,9 +24,10 @@ without understanding the referring type. Let composition types own their
 coordinate and evaluation rules, and outputs own delivery intent. Signal
 compatibility through the content itself rather than through capability lists.
 Keep today's raster layouts in a versioned resource type, rather than building
-an arbitrary channel schema now. Describe today's layer stack as one composition
-type, so later timelines, graphs and page collections can compose with existing
-content without changing the package foundation.
+an arbitrary channel schema now. Prefer one authored graph with layers and nodes
+as views of the same representation. The node/layer design remains undefined
+pending a dedicated research review before implementation; the composition
+sketches below do not settle that representation.
 
 The lasting commitment is **new readers preserve the meaning of old files**.
 Old readers cannot edit arbitrary future features correctly. They should show a
@@ -905,6 +906,10 @@ ordinary packages to private storage; only their publication and retention diffe
 
 ### Keep the file model small and independent
 
+The following layer-stack types and ordering examples describe semantic
+requirements, not a commitment to save layers separately from nodes. Their
+representation is subject to the [node/layer research review](#should-the-file-already-be-a-general-node-graph).
+
 The revised durable model needs five concepts:
 
 1. **Document envelope:** format identity and envelope version, a document ID, a
@@ -980,9 +985,10 @@ differ because one program serves many instances: store each program once as a
 resource, and let effect applications reference it with values keyed by stable
 parameter keys.
 
-Store ordered children in the layer-stack type, not both child lists and an
-independent authoritative parent/order table. Distinguish composition membership
-and stacking order from transform parenting, instancing, resource references and
+Store layer order once in the authored composition; the node/layer review must
+decide its representation. Do not add an independent authoritative parent/order
+table. Distinguish composition membership and stacking order from transform
+parenting, instancing, resource references and
 evaluation inputs. A future track matte can reference a sibling independently
 of z-order; a transform parent need not own the child or its compositing scope.
 Today's mask ownership and clipping rules remain rules of the stack type.
@@ -1135,10 +1141,16 @@ Self-contained remains the default; one file need not mean one project.
 
 ### Should the file already be a general node graph?
 
-**Recommendation: adopt a graph-capable object/reference model now, but do not
-make a general executable node graph the mandatory serialized artwork model yet.**
-A layer UI is fully compatible with a node-based engine. The reason to defer a
-universal evaluation schema is the semantic commitment, not the interface.
+**Preferred direction: one authoritative authored graph, with layer and node
+editing as views of that representation.** Avoid separate saved layer and node
+models that must be synchronized. This replaces the preference for a distinct
+layer-stack composition with graph compositions added alongside it later.
+
+**Design status: undefined pending a dedicated research review before
+implementation.** The review must assess the unified approach before the file
+model commits to either representation. Node vocabulary, ports, grouping,
+ordering, layer-view behavior and evaluation semantics remain open. No graph
+schema, conversion strategy or implementation sequence is adopted here.
 
 Graphite demonstrates the product direction: layers and nodes are two views of
 one document, and canvas edits modify the graph. Its developer guide describes
@@ -1156,17 +1168,12 @@ Three different graphs must not be conflated:
   instance uses content; a mask belongs to an occurrence; a composition contains
   occurrences. The recommended file can represent this from the start.
 - An **authored evaluation graph** is a program: named typed ports, connections,
-  parameter bindings, outputs and defined evaluation semantics. This can become
-  a versioned composition type when it is a designed feature.
+  parameter bindings, outputs and defined evaluation semantics. It is the
+  preferred common representation for layer and node editing; its design is
+  the subject of the pending review.
 - The **runtime execution graph** schedules tiles, passes, cache reuse and GPU
   work. It is derived and can change with optimizations; it should not be saved
   as the artwork's durable meaning.
-
-| Choice | Why choose it | Principal cost |
-| --- | --- | --- |
-| A single layer tree as the entire file model | Smallest mapping from the current runtime. | Repeats the current coupling and makes reuse, nested timelines and scene relationships awkward. Reject. |
-| A general evaluation graph now, with layers as its UI projection | Gives sharing, fan-out and arbitrary composition one authored representation from the beginning. Attractive if the engine is also being redesigned around it now. | Requires permanent port, value, scope, time and evaluation semantics before the relevant features are designed; preserving a layer projection is additional product work. |
-| Typed artwork/reference graph, with today's stack as one composition type | Separates durable identity/resources from current composition semantics and permits graph types later. | A future graph evaluator must still interpret or losslessly translate the old stack type. **Recommended for the current scope.** |
 
 A generic `{id, type, inputs, parameters}` record looks small, but the difficult
 decisions are what its edges mean. Is an image a finite raster, an unbounded field
@@ -1188,28 +1195,17 @@ pre-fill coverage and final appearance; representing every operation as one
 RGBA-in/RGBA-out shader is too restrictive.
 [Existing group semantics](../internals/documents.md#groups-and-pass-through).
 
-It is possible to define that graph correctly now. The strongest reason to do
-so would be a committed near-term node engine: the wire schema could then be
-tested against real evaluation, sharing, input validation and layer operations.
-It is not necessary merely to allow future graphs. A future `composition-graph/1`
-object can use the same IDs, resources, outputs and compatibility rules, and
-nest a `layer-stack/1` object as a semantic operation. Alternatively, proven
-conversion can expand old stacks into graph operations. Keep the old meaning
-supported either way; do not save both a layer tree and a graph as competing
-authorities. Node editor positions are optional presentation state.
+The research must also assess how the layer view handles sharing, fan-out and
+graphs without a single layer ordering, and what reorder, group and delete mean
+in those cases. The preference for a unified representation does not establish
+that every graph can be fully edited through a layer list.
 
-The five stress tests specifically support this middle choice. FX require
-evaluation contracts, Smart Objects require instancing, animation requires time
-and stable property targets, rigs require scoped solver rules, and pages require
-output views. None forces a universal socket/value system into the envelope.
-Simply adding generic nodes would not solve any of those semantic requirements.
-
-Before choosing the full-graph alternative, require one small executable
-demonstration of current masks, clipping, isolated/pass-through groups and live
-adjustments; shared content evaluated in two contexts; and a layer reorder that
-updates the graph without losing authored data. Validate pixel equivalence and
-bounded incremental rendering. This is an acceptance condition for that larger
-design decision, not extra implementation proposed by this report.
+Before landing an implementation, require evidence that it preserves current
+masks, clipping, isolated/pass-through groups and live adjustments; shared
+content evaluated in two contexts; and layer edits without lost authored data.
+Validate pixel equivalence and bounded incremental rendering. These are
+assessment criteria for the future design, not a request to implement it before
+the research review.
 
 ### Compatibility signalled by content
 
@@ -1494,9 +1490,11 @@ and per-block CRC-32s, the layer stack's frame and color on the stack, one outpu
 that owns delivery intent, content-signalled compatibility with ancillary and
 copy-safe records, and an optional current preview at a fixed location. Leave
 content/occurrence splits, composition interfaces, bindings, timeline schemas,
-vector geometry, 3D scenes, rigs, a universal node evaluation schema, linked resources, incremental archive
-updates and collaboration protocols to their respective features. The foundation
-is successful when adding one of those types no longer requires replacing the
+vector geometry, 3D scenes, rigs, linked resources, incremental archive updates
+and collaboration protocols to their respective features. Resolve the preferred
+unified node/layer representation through the dedicated research review before
+fixing its wire schema. The foundation is successful when adding one of those
+types no longer requires replacing the
 container or reinterpreting the meaning of existing artwork.
 
 ## 5. Adversarial review
@@ -1615,7 +1613,7 @@ matte graphs, 3D depth composition, inks and texture-set semantics to actual
 features. A generic object table permits these additions; it does not specify
 or prove their behavior.
 
-### Challenges considered and rejected
+### Other design choices
 
 | Proposal | Decision |
 | --- | --- |
@@ -1625,8 +1623,8 @@ or prove their behavior.
 | A literal-or-reference union in every property, as Figma stores a variable beside a fallback color | Rejected. The fallback literal is a second source of truth that an older editor would change without the binding. Binding records keep fields literal. |
 | Preserving unknown fields inside known records while editing | Deferred because preserving bytes does not establish edit safety. Open XML preprocessing illustrates possible loss on save, not a universal failure of unknown-field preservation. |
 | A mandatory full-resolution merged image, like Krita's `mergedimage.png` | Rejected as mandatory, since Krita's KRZ omits it to save space. Allowed as an optional saved representation. |
-| Fractional order keys on disk, as [Figma](https://www.figma.com/blog/realtime-editing-of-ordered-sequences/) and [Excalidraw](https://plus.excalidraw.com/docs/api/scene-content-schema) use for sync | Not needed. Child arrays are the saved order; a sync layer derives keys. |
-| A general executable node graph now | The section 4 recommendation stands. Harmony keeps a [node view and timeline](https://docs.toonboom.com/help/harmony-24/premium/rigging/order-layer-node-view.html) synchronized over one scene, which is consistent with a graph type added later beside the stack. |
+| Fractional order keys on disk, as [Figma](https://www.figma.com/blog/realtime-editing-of-ordered-sequences/) and [Excalidraw](https://plus.excalidraw.com/docs/api/scene-content-schema) use for sync | Not required by the package foundation. The authored ordering representation is pending the node/layer review; synchronization is a separate feature. |
+| A unified authored graph with layer and node views | Preferred direction; design remains undefined pending a dedicated research review before implementation. See [the node/layer decision](#should-the-file-already-be-a-general-node-graph). |
 | Opening `.capy` files in operating-system archive tools | Not promised; their ZIP64 support is unreliable. |
 
 ### Capy Canvas's own planned features
