@@ -71,6 +71,11 @@ GTK's delayed search signal is pending.
 themes and verifies retained editors, document revisions and numeric refusals.
 Run it on the private display with the same command used for other native tests.
 
+Numeric controls retain the shared refusal from the last edit. Language changes
+refresh that caption without parsing a draft or changing its selection, focus,
+value or input signals. `native_numeric_error_live_language` checks spin and slider
+editors in every shipped language and both themes; its preedit signals are synthetic.
+
 ## Tests
 
 Model tests run with `cargo test --locked -p layer-linux`. Native tests are

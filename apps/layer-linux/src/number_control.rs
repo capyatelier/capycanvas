@@ -14,7 +14,7 @@ mod imp {
         pub updating: Cell<bool>,
         pub composing: Cell<bool>,
         pub(super) composition_keys: crate::input::CompositionKeys,
-        pub input_valid: Cell<bool>,
+        pub error: RefCell<Option<layer_ui::NumericError>>,
         pub editing: Cell<bool>,
         pub entry: OnceCell<gtk::Entry>,
         pub display: OnceCell<gtk::Button>,
@@ -73,6 +73,99 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adw::prelude::*;
+
+    #[test]
+    #[ignore = "private GTK display; synthetic preedit"]
+    fn native_numeric_error_live_language() {
+        use crate::workspace::tests::{native_test_app, pump, until, RemoteInput, screen_point};
+        let app = native_test_app("art.capycanvas.NumericRetainedError");
+        let window = adw::ApplicationWindow::builder().application(&*app).default_width(640).default_height(360).build();
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        window.set_content(Some(&content));
+        window.maximize();
+        window.present();
+        let mut input = RemoteInput::new();
+        input.ready();
+        until(|| window.is_maximized() && content.is_mapped() && content.width() > 0, "native numeric window allocated");
+        input.click(screen_point(content.upcast_ref(), &window, [0.5, 0.5]));
+        until(|| window.is_active(), "native numeric window activated");
+        for scheme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
+            adw::StyleManager::default().set_color_scheme(scheme);
+            for kind in [NumericKind::Number, NumericKind::Slider] {
+                let control = NumberControl::new(NumericControl { kind, ..NumericControl::number(0., 16., 1., 0) }, "Value", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+                control.set_value(4.);
+                content.append(&control);
+                let editable: gtk::Editable = if let Some(spin) = control.imp().spin.get() { spin.clone().upcast() } else {
+                    let display = control.imp().display.get().unwrap();
+                    until(|| display.is_mapped() && display.width() > 0 && display.height() > 0, "native numeric value allocated");
+                    input.click(screen_point(display.upcast_ref(), &window, [0.5, 0.5]));
+                    control.imp().entry.get().unwrap().clone().upcast()
+                };
+                let text = editable.delegate().and_downcast::<gtk::Text>().unwrap();
+                until(|| window.is_maximized() && text.is_mapped() && text.width()>0 && text.height()>0, "native numeric editor allocated");
+                let point=screen_point(text.upcast_ref(), &window, [0.5, 0.5]);
+                input.click(point);
+                crate::snapshot_window(&window,1.).save_to_png(std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap()).join(format!("numeric-focus-{kind:?}-{scheme:?}.png"))).unwrap();
+                until(|| text.has_focus() || editable.property::<bool>("has-focus"), "native numeric editor focused");
+                let focus = gtk::prelude::GtkWindowExt::focus(&window);
+                let changes = std::rc::Rc::new(Cell::new(0));
+                let inputs = std::rc::Rc::new(Cell::new(0));
+                control.connect_value_changed(glib::clone!(#[strong] changes, move |_| changes.set(changes.get() + 1)));
+                control.connect_input_changed(glib::clone!(#[strong] inputs, move |_| inputs.set(inputs.get() + 1)));
+                for (draft, reason) in [("12+", layer_ui::NumericError::InvalidExpression), ("1/0", layer_ui::NumericError::FiniteNumber)] {
+                    editable.set_text(draft);
+                    editable.select_region(0, 2);
+                    assert!(!control.commit_text());
+                    let selection = editable.selection_bounds();
+                    let counts = (changes.get(), inputs.get());
+                    for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+                        let localization = layer_ui::Localizer::shared(language);
+                        control.update_localization(localization.clone());
+                        assert_eq!(control.tooltip_text().as_deref(), Some(reason.message(&localization).as_str()));
+                        assert_eq!(editable.text(), draft);
+                        assert_eq!(editable.selection_bounds(), selection);
+                        assert_eq!(gtk::prelude::GtkWindowExt::focus(&window), focus);
+                        assert_eq!(control.value(), 4.);
+                        assert!(!control.input_valid());
+                        assert_eq!((changes.get(), inputs.get()), counts);
+                    }
+                }
+                text.emit_by_name::<()>("preedit-changed", &[&"กำลังพิมพ์"]);
+                let draft = "tie\u{302}\u{301}ng ไทย １２＋";
+                editable.set_text(draft);
+                editable.select_region(1, 6);
+                let selection = editable.selection_bounds();
+                let counts = (changes.get(), inputs.get());
+                for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+                    let localization = layer_ui::Localizer::shared(language);
+                    control.update_localization(localization.clone());
+                    assert_eq!(control.tooltip_text().as_deref(), Some(layer_ui::NumericError::FiniteNumber.message(&localization).as_str()));
+                    assert_eq!(editable.text(), draft);
+                    assert_eq!(editable.selection_bounds(), selection);
+                    assert_eq!(gtk::prelude::GtkWindowExt::focus(&window), focus);
+                    assert!(!control.commit_text());
+                    assert_eq!(control.value(), 4.);
+                    assert_eq!((changes.get(), inputs.get()), counts);
+                    assert_eq!(editable.delegate().and_downcast::<gtk::Text>().unwrap(), text);
+                }
+                text.emit_by_name::<()>("preedit-changed", &[&""]);
+                editable.set_text("8");
+                assert!(control.commit_text());
+                assert_eq!(control.value(), 8.);
+                if let Some(display) = control.imp().display.get() { input.click(screen_point(display.upcast_ref(), &window, [0.5, 0.5])); }
+                editable.set_text("12+");
+                control.cancel_edit();
+                assert_eq!(control.value(), 8.);
+                content.remove(&control);
+                pump(20);
+            }
+        }
+        input.finish();
+        window.close();
+        pump(40);
+    }
+
 
     #[test]
     #[ignore = "private GTK display"]
@@ -176,15 +269,7 @@ impl NumberControl {
 
     pub(crate) fn update_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
         *self.imp().localization.borrow_mut() = Some(localization.clone());
-        if !self.imp().input_valid.get() {
-            let text = self.imp().entry.get().map(|entry| entry.text().to_string())
-                .or_else(|| self.imp().spin.get().map(|spin| spin.text().to_string()));
-            if let Some(text) = text {
-                if let Err(error) = self.spec().resolve(self.value(), NumericOperation::Expression { text }) {
-                    self.feedback(Some(error));
-                }
-            }
-        }
+        if self.imp().error.borrow().is_some() { self.refresh_feedback(); }
         if let Some(control) = self.imp().popover_control.get() { control.update_localization(localization); }
     }
 
@@ -376,7 +461,6 @@ impl NumberControl {
     ) -> Self {
         let control: Self = glib::Object::new();
         control.imp().spec.set(spec.clone()).unwrap();
-        control.imp().input_valid.set(true);
         *control.imp().localization.borrow_mut() = Some(localization);
         *control.imp().editor_title.borrow_mut() = title.to_string();
         *control.imp().caption_description.borrow_mut() = description.to_string();
@@ -912,7 +996,7 @@ impl NumberControl {
         } else if self.imp().editing.get() { self.finish(false) } else { true }
     }
     pub fn input_valid(&self) -> bool {
-        self.imp().input_valid.get() && !self.imp().composing.get() && !self.imp().composition_keys.active()
+        self.imp().error.borrow().is_none() && !self.imp().composing.get() && !self.imp().composition_keys.active()
             && self.imp().popover_control.get().filter(|_| self.imp().popover.get().is_some_and(|popover| popover.is_visible())).is_none_or(|editor| editor.input_valid())
     }
     pub fn connect_input_changed(&self, f: impl Fn(&Self) + 'static) {
@@ -976,14 +1060,19 @@ impl NumberControl {
     }
     fn feedback(&self, error: Option<layer_ui::NumericError>) {
         let valid = error.is_none();
-        if let Some(error) = error {
+        let previous = self.imp().error.replace(error).is_none();
+        self.refresh_feedback();
+        if previous != valid { self.emit_by_name::<()>("input-changed", &[]); }
+    }
+    fn refresh_feedback(&self) {
+        let message = self.imp().error.borrow().as_ref().map(|error| error.message(self.imp().localization.borrow().as_ref().unwrap()));
+        if let Some(message) = message {
             self.add_css_class("error");
-            self.set_tooltip_text(Some(&error.message(self.imp().localization.borrow().as_ref().unwrap())));
+            self.set_tooltip_text(Some(&message));
         } else {
             self.remove_css_class("error");
             self.set_tooltip_text(None);
         }
-        if self.imp().input_valid.replace(valid) != valid { self.emit_by_name::<()>("input-changed", &[]); }
     }
     fn text_input(&self, text: &str) -> Result<layer_ui::NumericValue, ()> {
         if self.imp().composing.get() || self.imp().composition_keys.active() { return Err(()); }

@@ -115,7 +115,7 @@ fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::SampleDepth
     .unwrap()
 }
 
-fn pump(ms: u64) {
+pub(crate) fn pump(ms: u64) {
     let until = Instant::now() + Duration::from_millis(ms);
     let context = glib::MainContext::default();
     while Instant::now() < until {
@@ -136,7 +136,7 @@ fn perform(w: &Rc<Workspace>, action: layer_workspace::ManagerAction) {
         "workspace action",
     );
 }
-fn until(mut ready: impl FnMut() -> bool, message: &str) {
+pub(crate) fn until(mut ready: impl FnMut() -> bool, message: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !ready() {
         assert!(Instant::now() < deadline, "{message}");
@@ -11905,14 +11905,14 @@ fn find_css(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
     widgets(root).find(|widget| widget.has_css_class(class))
 }
 
-struct RemoteInput {
+pub(crate) struct RemoteInput {
     dir: std::path::PathBuf,
     step: usize,
     settle_ms: u64,
     timeout: Duration,
 }
 impl RemoteInput {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             dir: std::env::var_os("LAYER_NATIVE_INPUT_DIR").unwrap().into(),
             step: 0,
@@ -11929,7 +11929,7 @@ impl RemoteInput {
             ..self
         }
     }
-    fn ready(&self) {
+    pub(crate) fn ready(&self) {
         std::fs::write(self.dir.join("ready"), "ready").unwrap();
     }
     fn perform(&mut self, events: serde_json::Value) {
@@ -11945,7 +11945,7 @@ impl RemoteInput {
         self.step += 1;
         pump(self.settle_ms);
     }
-    fn click(&mut self, point: [f32; 2]) {
+    pub(crate) fn click(&mut self, point: [f32; 2]) {
         self.perform(serde_json::json!([{ "point": point }, { "down": true }, { "down": false }]));
     }
     fn key(&mut self, key: u32) {
@@ -11953,12 +11953,12 @@ impl RemoteInput {
             serde_json::json!([{ "key": key, "down": true }, { "key": key, "down": false }]),
         );
     }
-    fn finish(&self) {
+    pub(crate) fn finish(&self) {
         std::fs::write(self.dir.join("finished"), "done").unwrap();
     }
 }
 
-fn screen_point(widget: &gtk::Widget, window: &impl IsA<gtk::Widget>, at: [f32; 2]) -> [f32; 2] {
+pub(crate) fn screen_point(widget: &gtk::Widget, window: &impl IsA<gtk::Widget>, at: [f32; 2]) -> [f32; 2] {
     let b = if let Some(popup) = widget.native().and_downcast::<gtk::Popover>() {
         let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
         let (dx, dy) = popup.surface_transform();
