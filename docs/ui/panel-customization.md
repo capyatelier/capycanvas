@@ -2,6 +2,53 @@
 
 [Workspace and UI](README.md) · [Drag convention](drag-and-reorder.md)
 
+## Tool variations
+
+Toolbar and title-bar controls can name a predefined `ToolSlotId` alongside
+individual commands and pinned brush presets. Shared definitions refer to the
+existing commands, figure shapes, ruler kinds and gradient variations. Workspaces
+choose which slots to expose; brush media (`ToolGroup`) and shortcut families
+(`ToolFamily`) keep their own meanings.
+
+Clicking an inactive slot selects its remembered variation immediately. Clicking
+an active slot opens its full drawer, and clicking again closes it; this does
+not wait for a double-click timer. With a tool drawer already open, selecting
+another slot switches the drawer. Eyedropper and Color Picker keep their existing
+return-to-paint behavior.
+
+Secondary click opens variations above the existing customization actions. The
+corner button opens only variations. Keyboard context-menu actions and touch or
+pen holds use the same shared choices. Mouse holds only arm reordering; a drag
+closes a held menu and suppresses the following click. Menus show icons, checked
+choices, availability and shortcut hints. An unavailable remembered tool keeps
+its variations reachable.
+
+The tile icon and accessible name follow the current variation. Brush size,
+opacity and individual presets do not change that identity. The full grouped
+drawer presents sibling variations, the active tool's media and presets or
+modes, and its settings. `ContentDrawer.tool_set` reuses `ToolSetView`; docked
+Tool Set panels keep their existing active-tool projection. Choosing a sibling
+updates the retained drawer at the same origin. Tool Options uses this same
+complete projection through More tool options.
+
+`WorkspaceWorkingState.tool_slots` remembers choices by stable tile or header
+identity, outside layout and document history. Moving keeps identity; duplicating
+copies remembered choices. Permanent selections through shortcuts, drawers and
+panels update matching slots. Temporary held tools do not replace these choices
+or the saved permanent tool. Layout undo restores removed controls; memory is
+retained for instances still present in layout history and invalid membership
+falls back to the group's first choice. Existing brush settings and preset
+memory remain authoritative.
+
+Add Tools offers both predefined groups and individual tools, so a variation can
+also have a dedicated command button. The initial groups are fixed definitions;
+there is no separate group editor. Opening an existing workspace preserves its
+layout. Fresh workspaces and Restore Starting Layout use the current defaults.
+
+GTK coverage is `workspace-motion.sh gtk --native-test=native_toolbar_variations_input`;
+Web uses `workspace-motion.sh web --tool-variations`. Run the native popup journey
+without `--tablet`, whose synthetic pen serials cannot authorize popup grabs.
+
 ## Interaction contract
 
 The Rust UI core owns customization and the complete serializable workspace.
@@ -233,7 +280,8 @@ no third-party code or assets are imported.
   atomically. The existing `WorkspaceState` wraps it and Zen mode.
 - Floating groups share IDs, tab selection, content, and move operations with
   docks. Native text/content measurements are transient geometry input, not
-  saved settings or undo entries. Hosts do not decide widths, heights, targets,
+  saved settings or undo entries. Queued header measurements containing removed
+  items are ignored after a layout or workspace change. Hosts do not decide widths, heights, targets,
   naming rules or menu availability. `DragWorkspace` owns tear-off, live movement,
   snapping, singleton/group semantics and Zen reveal state. `ResizeFloating`
   owns eight-edge resizing; `DoubleClickPanelHandle` toggles a docked lone

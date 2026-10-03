@@ -85,11 +85,44 @@ impl WorkspacePreset {
                     .expect("default active tab");
             }
         }
+        if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Windows) {
+            self.group_tools(&mut layout);
+        }
         let color = layout.panel_group(Panel::Color).unwrap();
         if !layout.fit_height_groups.contains(&color) {
             layout.fit_height_groups.push(color);
         }
         layout
+    }
+
+    fn group_tools(self, layout: &mut DockLayout) {
+        use crate::{CommandId as C, ToolSlotId as S};
+        use ToolbarControl::{Command, ToolSlot, Divider, Color};
+        if self == Self::Photographer {
+            let controls = [
+                ToolSlot {slot:S::Operation}, Command {command:C::Crop}, Divider,
+                ToolSlot {slot:S::Marquee}, ToolSlot {slot:S::Lasso}, ToolSlot {slot:S::AutomaticSelection}, Command {command:C::SelectionBrush}, Divider,
+                ToolSlot {slot:S::Drawing}, Command {command:C::Eraser}, Command {command:C::Clone}, ToolSlot {slot:S::Healing},
+                Command {command:C::Blend}, Command {command:C::Liquify}, ToolSlot {slot:S::PhotoFill}, Divider,
+                Command {command:C::Hand}, Command {command:C::Eyedropper}, Color,
+            ];
+            let tiles=controls.into_iter().map(|control| {
+                let id=layout.next_tile_id;
+                layout.next_tile_id+=1;
+                ToolbarTile {id,control}
+            }).collect();
+            *layout.panel_mut(Panel::Toolbar).unwrap().tiles_mut().unwrap()=tiles;
+        } else if self == Self::Illustrator {
+            for tile in layout.panel_mut(Panel::Toolbar).unwrap().tiles_mut().unwrap() {
+                let Command {command}=tile.control else {continue;};
+                let slot=match command {
+                    C::Blend=>S::Blend, C::Lasso=>S::ManualSelection, C::AutoSelect=>S::AutomaticSelection,
+                    C::Fill=>S::Fill, C::Gradient=>S::Gradient, C::Move=>S::Operation, C::Figure=>S::Figure, C::Ruler=>S::Ruler,
+                    _=>continue,
+                };
+                tile.control=ToolSlot {slot};
+            }
+        }
     }
 
     fn painter_layout(platform: crate::Platform) -> DockLayout {

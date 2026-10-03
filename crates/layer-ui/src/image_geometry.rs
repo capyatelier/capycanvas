@@ -269,6 +269,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn cancel_content_bounds(&mut self) -> bool {
+        self.pending_tool_drawer = None;
         self.content_bounds.moving = None;
         let job = self.content_bounds.job.take();
         let bake = self.content_bounds.bake.take().is_some();

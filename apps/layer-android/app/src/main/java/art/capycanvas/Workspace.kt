@@ -269,7 +269,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
     BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace").headerGestures(header).workspaceGestures(dock)
         .imageCanvasDropTarget(host) { point ->
-            dock.chromeRegions.values.any { it.contains(point) } || dock.regions.values.any { it.bounds.contains(point) }
+            dock.chromeRegions.values.any { it.bounds.contains(point) } || dock.regions.values.any { it.bounds.contains(point) }
         }
         .workspaceDragCursor(dock.dragCursor)
         .drawWithContent { drawContent(); host.recordUiDraw() }
@@ -277,7 +277,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         dock.viewport = JSONArray(listOf(maxWidth.value, maxHeight.value))
         AndroidView(factory = { CanvasSurfaceView(it, host) { x, y ->
             val point = androidx.compose.ui.geometry.Offset(x, y)
-            dock.chromeRegions.values.any { bounds -> bounds.contains(point) } || dock.regions.values.any { region -> region.bounds.contains(point) }
+            dock.chromeRegions.values.any { region -> region.bounds.contains(point) } || dock.regions.values.any { region -> region.bounds.contains(point) }
         } }, modifier = Modifier.fillMaxSize(), update = { view ->
             // AndroidView resolves its own icon outside Compose's descendant
             // override. Keep the active workspace cursor over bare canvas too.

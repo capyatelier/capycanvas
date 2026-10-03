@@ -10,6 +10,7 @@
 #include "ProofPanel.h"
 #include "WorkspaceQuery.h"
 #include "ColorPair.h"
+#include "NativeMenus.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 using namespace CapyUi;
@@ -53,7 +54,7 @@ Grid PanelBody::sizes(double width){
         return grid;
     }
 PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J const& geometry,
-    std::function<void()> layoutChanged,std::shared_ptr<WorkspaceGestures> const& gestures,bool scrollable):data(std::move(source)){
+    std::function<void()> layoutChanged,std::shared_ptr<WorkspaceGestures> const& gestures,bool scrollable,std::function<J()> tools):data(std::move(source)){
         auto tileGeometry=object(geometry,L"tiles");
         if(str(panel,L"id")==L"navigator"&&shows(panel,L"navigator")){
             navigator=std::make_unique<NavigatorView>(data,std::move(layoutChanged));
@@ -114,7 +115,10 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 if(presses)presses->listen(pick);
                 // A disabled command remains disabled and accessible as such;
                 // its surrounding tile still accepts customization gestures.
-                Border slot;slot.Background(clear());slot.Child(pick);attach(slot);
+                Border slot;slot.Background(clear());Grid tileContent;tileContent.Children().Append(pick);
+                auto variants=ToolVariantsButton(data,item,L"tile-variants-"+panelId+L"-"+to_hstring(uint32_t(id)));
+                tileContent.Children().Append(variants);slot.Child(tileContent);attach(slot);
+                if(gestures)gestures->Source(variants,J{},O({{L"kind",S(L"tool_variants")},{L"anchor",item}}));
                 tileControls.emplace(uint32_t(id),pick);
                 pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.VerticalAlignment(VerticalAlignment::Stretch);
                 double radius=num(tileGeometry,L"tile_corner_radius",SurfaceRadius);
@@ -139,14 +143,18 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     auto text=label(data,str(tile,L"label"),flag(tileGeometry,L"tile_label_bold"));text.TextWrapping(TextWrapping::Wrap);
                     text.MaxLines(int(num(tileGeometry,L"tile_label_lines")));text.TextTrimming(TextTrimming::CharacterEllipsis);text.Margin({0,0,4,0});
                     text.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(text,1);content.Children().Append(text);
+                    bindings.emplace_back([data=data,text,panelId,id]{auto current=findId(array(find(array(data->model,L"panels"),L"id",panelId),L"tiles"),id);text.Text(str(current,L"label"));text.Margin({0,0,flag(current,L"has_variants")?16.:4.,0});});
                     pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.Content(content);
                 }
-                bindings.emplace_back([data=data,pick,panelId,id,picker,tileIcon,tileIconName,radius]{
+                bindings.emplace_back([data=data,pick,variants,panelId,id,picker,tileIcon,tileIconName,radius]{
                     auto currentPanel=find(array(data->model,L"panels"),L"id",panelId);
                     auto current=findId(array(currentPanel,L"tiles"),id);
                     if(auto name=str(current,L"icon",L"brush");name!=*tileIconName){
                         *tileIconName=name;tileIcon.Source(icon(name,data->theme()).Source());
                     }
+                    variants.Visibility(flag(current,L"has_variants")?Visibility::Visible:Visibility::Collapsed);
+                    AutomationProperties::SetName(variants,str(current,L"label"));tooltip(variants,str(current,L"tooltip"));
+                    AutomationProperties::SetName(pick,str(current,L"label"));
                     bool enabled=flag(current,L"enabled");
                     pick.IsEnabled(enabled);pick.Opacity(enabled?1.:.36);
                     auto facing=drawerFacing(data,O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}}));
@@ -183,7 +191,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             for(auto value:array(panel,L"controls")){
                 auto control=value.GetObject();if(!flag(control,L"visible_in_panel"))continue;
                 auto kind=str(control,L"control");
-                if(kind==L"brushes"||kind==L"brush_sets"||kind==L"sculpt_sets"||kind==L"tools")content.Children().Append(ToolSetPanel(data,bindings,kind));
+                if(kind==L"brushes"||kind==L"brush_sets"||kind==L"sculpt_sets"||kind==L"tools")content.Children().Append(ToolSetPanel(data,bindings,kind,tools));
                 else if(kind==L"size_presets")content.Children().Append(sizes(num(object(geometry,L"bounds"),L"width")-16));
                 else if(kind==L"tool_settings")content.Children().Append(ToolSettingsPanel(data,bindings));
                 else if(kind==L"color_wheel"){

@@ -21,6 +21,164 @@ fn component_id(d: &Driver, control: ToolbarControl) -> u32 {
         .unwrap()
         .id
 }
+
+fn slot_anchor(d: &Driver, slot: ToolSlotId) -> DrawerAnchor {
+    let layout = state(&d.w).workspace.layout;
+    let (panel, tile) = layout.panels.iter().find_map(|panel| {
+        panel.tiles().iter().find(|tile| tile.control == ToolbarControl::ToolSlot { slot })
+            .map(|tile| (panel.id, tile.id))
+    }).unwrap();
+    DrawerAnchor::Tile { panel, tile }
+}
+
+fn variant_context(d: &Driver) -> gtk::Popover {
+    d.w.popovers.borrow().iter().filter_map(|popup| popup.upgrade())
+        .find(|popup| popup.has_css_class("panel-context-menu"))
+        .unwrap()
+}
+
+fn choose_variant(d: &mut Driver, anchor: DrawerAnchor, index: usize) {
+    let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+    let label = menu.sections.iter().flatten().nth(index).unwrap().label.clone();
+    let item = find_menu_item(variant_context(&d).upcast_ref(), &label).unwrap();
+    d.click(&item);
+    assert!(!variant_context(&d).is_visible());
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_variations_input"]
+fn native_toolbar_variations_input() {
+    let mut d = Driver::new("art.capycanvas.ToolVariations");
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for (preset, slot) in [
+            (WorkspacePreset::Photographer, ToolSlotId::Drawing),
+            (WorkspacePreset::Illustrator, ToolSlotId::ManualSelection),
+        ] {
+            restore(&d, preset);
+            let anchor = slot_anchor(&d, slot);
+            let DrawerAnchor::Tile { panel, tile } = anchor else { unreachable!() };
+            let name = format!("tile-{tile}");
+            let button = d.named(&name);
+            let panels = state(&d.w).workspace.layout.panels;
+            let history = ui_session_mut(&d.w).capture_workspace().unwrap().history.generation;
+            let revision = ui_session(&d.w).engine().document().revision;
+            let corner = screen_point(&button, &d.w.window, [0.9, 0.9]);
+            d.input.click(corner);
+            assert!(variant_context(&d).is_visible());
+            let icons = descendants::<gtk::Image>(variant_context(&d).upcast_ref())
+                .into_iter().filter(|image| crate::icons::name(image).is_some_and(|name| name.starts_with("layer-")))
+                .collect::<Vec<_>>();
+            assert!(!icons.is_empty() && icons.iter().all(|image| image.is_visible() && image.paintable().is_some_and(|paintable| paintable.is::<gtk::Svg>())));
+            capture_popover(&variant_context(&d), d.input.dir.join(format!("tool-variations-menu-{preset:?}-{theme:?}.png")).to_str().unwrap());
+            let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+            assert!(menu.sections.iter().flatten().all(|row| row.icon.is_some()));
+            choose_variant(&mut d, anchor, 1);
+            assert!(state(&d.w).customization.drawer.is_none());
+            assert_eq!(state(&d.w).workspace.layout.panels, panels);
+            assert_eq!(ui_session_mut(&d.w).capture_workspace().unwrap().history.generation, history);
+            assert_eq!(ui_session(&d.w).engine().document().revision, revision);
+            assert_eq!(d.named(&name), button, "variant switches retain the native tile");
+            let view = ui_session(&d.w).panel_view(panel).unwrap();
+            let choice = &view.tiles.iter().find(|view| view.id == tile).unwrap().choice;
+            let icon = descendant::<gtk::Image>(&button).unwrap();
+            assert_eq!(crate::icons::name(&icon).as_deref(), Some(format!("layer-{}-symbolic", choice.icon).as_str()));
+            assert!(choice.selected);
+            d.click(&button);
+            assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+            d.capture_canvas(&format!("tool-variations-drawer-{preset:?}-{theme:?}.png"));
+            let drawer = d.named("drawer-panel-Brushes");
+            let sibling = mapped_label(&drawer, &menu.sections[0][0].label).unwrap();
+            d.click(&sibling);
+            assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+            d.input.click(corner);
+            choose_variant(&mut d, anchor, 0);
+            assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+            d.click(&button);
+            assert!(state(&d.w).customization.drawer.is_none());
+            pump(350);
+            let p = d.point(&button);
+            d.input.perform(serde_json::json!([
+                {"point":p},{"button":273,"down":true},{"button":273,"down":false}
+            ]));
+            assert!(variant_context(&d).is_visible());
+            assert!(find_menu_item(variant_context(&d).upcast_ref(), "Remove Tool").is_some());
+            d.input.key(0xff1b);
+            let button = button.clone().downcast::<gtk::Button>().unwrap();
+            assert!(button.grab_focus());
+            d.input.key(0xff67);
+            assert!(variant_context(&d).is_visible(), "keyboard context action");
+            d.input.key(0xff1b);
+            assert!(button.has_focus(), "context menu restores its invoking button");
+            for device in ["mouse", "touch"] {
+                d.input.perform(serde_json::json!([
+                    contact(device,"down",p),{"wait_ms":800},contact(device,"up",p)
+                ]));
+                assert_eq!(variant_context(&d).is_visible(), device == "touch");
+                assert!(state(&d.w).customization.drawer.is_none(), "hold release must not click");
+                if device == "touch" { d.input.key(0xff1b); }
+            }
+            d.capture_canvas(&format!("tool-variations-{preset:?}-{theme:?}.png"));
+            d.w.dispatch(UiAction::Customize { action: CustomizationAction::SetTileStyle {
+                panel, style: TileStyle::MediumLabeled,
+            }});
+            d.w.dispatch(UiAction::MovePanel {
+                panel,
+                target: DockTarget::Float { position: [250., 180.] },
+                viewport: [d.w.surface.width() as f32, d.w.surface.height() as f32],
+            });
+            pump(350);
+            let floating = d.named(&name);
+            d.input.click(screen_point(&floating, &d.w.window, [0.95, 0.9]));
+            assert!(variant_context(&d).is_visible(), "labeled floating variation menu");
+            choose_variant(&mut d, anchor, 1);
+            d.capture_canvas(&format!("tool-variations-floating-{preset:?}-{theme:?}.png"));
+            if preset == WorkspacePreset::Photographer {
+                let control = ToolbarControl::ToolSlot { slot: ToolSlotId::Drawing };
+                d.w.dispatch(HeaderAction::Add {
+                    zone: HeaderZone::Left,
+                    before: None,
+                    item: HeaderItem::Tool { control },
+                }.action());
+                pump(250);
+                let header = d.named(&d.header_tool(control));
+                let id = state(&d.w).workspace.layout.header.entries()
+                    .find(|entry| entry.item == HeaderItem::Tool { control }).unwrap().id;
+                let anchor = DrawerAnchor::Header { id };
+                d.input.click(screen_point(&header, &d.w.window, [0.9, 0.9]));
+                assert!(variant_context(&d).is_visible());
+                choose_variant(&mut d, anchor, 2);
+                let view = ui_session(&d.w).header_view_with(false);
+                let item = view.items.iter().find(|item| item.id == id).unwrap();
+                assert!(item.selected && item.has_variants);
+                let icon = descendant::<gtk::Image>(&header).unwrap();
+                assert_eq!(crate::icons::name(&icon).as_deref(), Some(format!("layer-{}-symbolic", item.icon).as_str()));
+                d.click(&header);
+                assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+                d.click(&header);
+                assert!(state(&d.w).customization.drawer.is_none());
+                pump(350);
+                for (slot, index) in [(ToolSlotId::Healing, 1), (ToolSlotId::PhotoFill, 4)] {
+                    let anchor = slot_anchor(&d, slot);
+                    let DrawerAnchor::Tile { tile, .. } = anchor else { unreachable!() };
+                    let opener = d.named(&format!("tile-{tile}"));
+                    d.click(&opener);
+                    d.click(&opener);
+                    assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+                    let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+                    let label = &menu.sections[0][index].label;
+                    let drawer = d.named("drawer-panel-Brushes");
+                    d.click(&mapped_label(&drawer, label).unwrap());
+                    assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+                    d.click(&opener);
+                    assert!(state(&d.w).customization.drawer.is_none());
+                    pump(350);
+                }
+            }
+        }
+    }
+    d.finish();
+}
 pub(super) fn drag(d: &mut Driver, device: &str, a: [f32; 2], b: [f32; 2], held: bool) {
     if device == "pen" {
         d.input

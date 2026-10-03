@@ -250,7 +250,7 @@ impl SelectionTools {
 pub(crate) fn tool_set(active: SelectionTool, localizer: &crate::localization::Localizer) -> ToolSetView {
     let item = |tool: SelectionTool| {
         let command = tool.command();
-        ToolSetItem {
+        ToolSetItem { enabled: true,
             label: command.localized_label(localizer),
             icon: command.icon().unwrap(),
             action: UiAction::Invoke { command },
@@ -259,7 +259,7 @@ pub(crate) fn tool_set(active: SelectionTool, localizer: &crate::localization::L
         }
     };
     ToolSetView {
-        groups: vec![ToolSetItem {
+        groups: vec![ToolSetItem { enabled: true,
             label: CommandId::Select.localized_label(localizer),
             icon: "select",
             action: UiAction::Invoke {

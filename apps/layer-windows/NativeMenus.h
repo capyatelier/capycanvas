@@ -1,5 +1,6 @@
 #pragma once
 #include "UiControls.h"
+#include "WorkspaceQuery.h"
 #include <cwctype>
 
 namespace CapyUi {
@@ -38,11 +39,16 @@ inline void NativeMenuItems(Windows::Foundation::Collections::IVector<MenuFlyout
                     identifier=kind==L"switch"?L"workspace-switch-"+str(command,L"id"):
                         kind==L"show_in_switcher"?L"workspace-switcher-show-"+str(command,L"id"):menuSlug(text);
                 }
+                if(str(action,L"type")==L"choose_tool_variant")identifier=menuSlug(text);
                 auto checked=spec.GetNamedValue(L"selected",JsonValue::CreateNullValue());
                 auto add=[&](auto fresh){
                     auto [item,added]=retain(fresh);
                     item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));item.FontSize(data->textSize());item.MinHeight(34);
                     item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));AutomationProperties::SetAutomationId(item,identifier);
+                    if(auto name=str(spec,L"icon");!name.empty()){
+                        auto glyph=item.Icon().template try_as<ImageIcon>();if(!glyph){glyph=ImageIcon();item.Icon(glyph);}
+                        glyph.Source(icon(name,data->theme()).Source());
+                    }else item.Icon(nullptr);
                     item.Tag(action);
                     if(added)item.Click([dispatch](auto const& sender,auto&&){
                         auto action=sender.template as<FrameworkElement>().Tag().template as<J>();if(action.Size())dispatch(action);
@@ -62,4 +68,22 @@ inline void TrackPopup(Primitives::FlyoutBase const& popup,std::shared_ptr<Works
     popup.Opened([data,open](auto&&,auto&&){if(!std::exchange(*open,true))data->popup(true);});
     popup.Closed([data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
 }
+inline Button ToolVariantsButton(std::shared_ptr<WorkspaceData> const& data,J const& anchor,hstring const& identifier){
+    auto popup=std::make_shared<MenuFlyout>(nullptr);
+    auto pick=button(data,L"",[]{});pick.Width(16);pick.Height(16);pick.Padding({0});pick.Background(clear());
+    pick.HorizontalAlignment(HorizontalAlignment::Right);pick.VerticalAlignment(VerticalAlignment::Bottom);
+    pick.Content(icon(L"chevron-down",data->theme(),8));AutomationProperties::SetAutomationId(pick,identifier);
+    pick.Click([data,anchor,popup,owner=make_weak(pick)](auto&&,auto&&){
+        QueryWorkspace(data->query,O({{L"type",S(L"context")},{L"target",O({{L"kind",S(L"tool_variants")},{L"anchor",anchor}})}}),
+            [data,popup,owner](J reply){
+                auto target=owner.get();auto model=object(reply,L"result");
+                if(!target||!target.IsLoaded()||target.Visibility()!=Visibility::Visible||!array(model,L"sections").Size())return;
+                if(*popup)(*popup).Hide();*popup=MenuFlyout();TrackPopup(*popup,data);
+                NativeMenuItems((*popup).Items(),array(model,L"sections"),data,[data](J action){data->dispatch(action);});
+                (*popup).ShowAt(target);
+            });
+    });
+    return pick;
+}
+
 }

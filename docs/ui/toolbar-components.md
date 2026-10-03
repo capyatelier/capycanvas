@@ -97,7 +97,8 @@ visible insertion targets attached to their original tile IDs.
 Actions use the surrounding toolbar’s tile dimensions, centered beside the
 shorter form fields. Hosts supply natural sizes and theme spacing; Rust fits
 complete fields in order, reserving **More tool options** at the trailing end. That button always opens the complete tool/variant and settings drawer,
-including actions that did not fit. The drawer aligns to its right edge with a
+including actions that did not fit. Grouped tools include sibling variations and
+the active tool's presets through the shared drawer projection. The drawer aligns to its right edge with a
 standard gap, connector and corner treatment of other tool drawers. Multiple
 horizontal Tool Options components share remaining space in their lane. Vertical components shrink before moving to another column. Components stay
 atomic; child fields are never independent drop destinations.

@@ -56,6 +56,7 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Panel, tab, column or toolbar drag and docking | 120 | **Not met.** Toolbar or component drag 103–119 fps | `dc27e04d`, 2026-09-23 |
 | Panel or column resize | 120 | | |
 | Drawer open and close | 120 | | |
+| Grouped tool menus, drawer switching and tile drag | 120 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
 | Colour wheel or picker drag | 120 | Picker callback p95 3.8–4.5 ms; GTK 2× diagnostic below remains below 120 Hz | `3e521c63`, 2026-09-24; [GTK swatch diagnostic](#gtk-selected-swatch-diagnostic), 2026-10-03 |
 | Slider scrub: size, opacity, flow | 120 | | |
 | Canvas action bar show, hide and move | 120 | **Not met.** UI frame p50/p95: 63.2/90.0 ms moving the bar, 23.0/34.6 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |

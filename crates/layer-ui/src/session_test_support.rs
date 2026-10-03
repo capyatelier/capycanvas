@@ -313,22 +313,27 @@ pub(crate) fn invoke(session: &mut UiSession<Recorder>, command: CommandId) -> U
         && session.layer_interaction.tool == LayerCanvasTool::Move);
     if prepare_move { change.regions |= session.frame(1, 1).unwrap().regions; }
     if command == CommandId::ScaleRotate || prepare_move {
-        for tick in 1..=4 {
-            if !session.content_bounds.busy() { break; }
-            change.regions |= session.frame(tick, tick).unwrap().regions;
-            let request = session.engine.backend().bounds_requests.last().unwrap();
-            let layer_core::ContentScope::Target(target) = request.scope else { panic!("fixture target bounds"); };
-            let document = &request.document;
-            let bounds = document.selection.as_ref().map_or_else(
-                || layer_core::Rect::from_extent(document.target_extent(target)),
-                |selection| document.affine_edit_transform(target).unwrap().inverse().unwrap().bounds(selection.coverage_bounds()),
-            );
-            session.engine.backend_mut().bounds_reply = Some(Ok(bounds));
-            change.regions |= session.frame(tick + 1, tick + 1).unwrap().regions;
-        }
-        assert!(!session.content_bounds.busy(), "fixture bounds did not finish");
+        change.regions |= finish_fixture_content_bounds(session);
     }
     change
+}
+pub(crate) fn finish_fixture_content_bounds(session: &mut UiSession<Recorder>) -> u32 {
+    let mut regions = 0;
+    for tick in 1..=4 {
+        if !session.content_bounds.busy() { break; }
+        regions |= session.frame(tick, tick).unwrap().regions;
+        let request = session.engine.backend().bounds_requests.last().unwrap();
+        let layer_core::ContentScope::Target(target) = request.scope else { panic!("fixture target bounds"); };
+        let document = &request.document;
+        let bounds = document.selection.as_ref().map_or_else(
+            || layer_core::Rect::from_extent(document.target_extent(target)),
+            |selection| document.affine_edit_transform(target).unwrap().inverse().unwrap().bounds(selection.coverage_bounds()),
+        );
+        session.engine.backend_mut().bounds_reply = Some(Ok(bounds));
+        regions |= session.frame(tick + 1, tick + 1).unwrap().regions;
+    }
+    assert!(!session.content_bounds.busy(), "fixture bounds did not finish");
+    regions
 }
 pub(crate) fn layer(s: &mut UiSession<Recorder>, action: LayerAction) {
     s.dispatch(UiAction::Layer { action }).unwrap();

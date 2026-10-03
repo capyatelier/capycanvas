@@ -46,7 +46,9 @@ class AndroidTitleBarTest {
         return checkNotNull(result)
     }
     private fun waitFor(label: String, timeout: Long = 15000, condition: () -> Boolean) =
-        host.awaitMain(label, timeout, { shot("failure-${label.replace(Regex("[^A-Za-z0-9-]"), "-")}"); "${view()}" }) {
+        host.awaitMain(label, timeout, {
+            shot("failure-${label.replace(Regex("[^A-Za-z0-9-]"), "-")}")
+            "${view()}; customization=${state().getJSONObject("customization")}" }) {
             host.snapshot?.objectOrNull("state")?.let { assertTrue(it.optString("host_error"), it.isNull("host_error")) }
             condition()
         }
@@ -144,9 +146,11 @@ class AndroidTitleBarTest {
         var menuRoot: ViewRootForTest? = null
         var target: SemanticsNode? = null
         waitFor("$label row") {
-            fun row(node: SemanticsNode): SemanticsNode? = if (node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true) node
+            fun text(node: SemanticsNode): Boolean = node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true ||
+                node.children.filter { it.config.getOrNull(SemanticsActions.OnClick) == null }.any(::text)
+            fun row(node: SemanticsNode): SemanticsNode? = if (node.config.getOrNull(SemanticsActions.OnClick) != null && text(node)) node
                 else node.children.firstNotNullOfOrNull(::row)
-            semanticsRoots().any { root -> row(root.semanticsOwner.unmergedRootSemanticsNode)?.let { menuRoot = root; target = it; true } == true }
+            semanticsRoots().any { root -> root.find(hasTag("workspace-menu"))?.let(::row)?.let { menuRoot = root; target = it; true } == true }
         }
         pressed = menuRoot
         event(MotionEvent.ACTION_DOWN, target!!.boundsInRoot.center); event(MotionEvent.ACTION_UP)
@@ -735,11 +739,130 @@ class AndroidTitleBarTest {
         tap(select); assertTrue(command("color_select").getBoolean("selected"))
         tap(select)
         send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))
-        for (id in listOf("rectangle_select", "ellipse_select", "polygon_select", "color_select"))
-            assertTrue("Photo toolbar $id", layout().contains("\"$id\""))
+        for (slot in listOf("marquee", "lasso", "automatic_selection"))
+            assertTrue("Photo toolbar $slot", layout().contains("\"slot\":\"$slot\""))
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
         idle(); tap(select)
         assertTrue(command("color_select").getBoolean("selected"))
+    }
+
+    @Test fun toolVariantCornersAndContextMenusShareRememberedChoices() {
+        send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))
+        waitFor("Photo grouped tools published") {
+            view().optString("id") == "builtin:workspace:photographer" && snapshot().array("panels").objects()
+                .firstOrNull { it.getString("id") == "toolbar" }?.array("tiles")?.objects()
+                ?.any { it.getJSONObject("control").optString("slot") == "lasso" } == true
+        }
+        edit(obj("type" to "edit", "editing" to true))
+        for (entry in entries().filter { it.getJSONObject("item").getString("kind") !in listOf("capy", "settings") }) {
+            edit(obj("type" to "remove", "id" to entry.getInt("id")))
+        }
+        val headerId = model().getInt("next_id")
+        edit(obj("type" to "add", "zone" to "left", "before" to null,
+            "item" to obj("kind" to "tool", "control" to obj("kind" to "tool_slot", "slot" to "lasso"))))
+        edit(obj("type" to "set_size", "size" to "medium"))
+        edit(obj("type" to "edit", "editing" to false))
+        idle()
+        fun tile() = snapshot().array("panels").objects().first { it.getString("id") == "toolbar" }
+            .array("tiles").objects().first { it.getJSONObject("control").optString("slot") == "lasso" }
+        fun header() = snapshot().getJSONObject("header").array("items").objects().first { it.getInt("id") == headerId }
+        val tileId = tile().getInt("id")
+        val ribbonAnchor = obj("kind" to "tile", "panel" to "toolbar", "tile" to tileId)
+        val headerAnchor = obj("kind" to "header", "id" to headerId)
+        val stable = tile().getJSONObject("control").toString()
+        fun menu(anchor: JSONObject): JSONObject {
+            val done = java.util.concurrent.CountDownLatch(1)
+            var result: JSONObject? = null
+            instrumentation.runOnMainSync {
+                host.query(obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))) {
+                    result = it as? JSONObject; done.countDown()
+                }
+            }
+            assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            return checkNotNull(result)
+        }
+        fun rows(anchor: JSONObject) = menu(anchor).array("sections").values().flatMap { (it as JSONArray).objects() }
+        fun sameChoice() {
+            assertEquals(stable, tile().getJSONObject("control").toString())
+            assertEquals(tile().getString("tooltip"), header().getString("label"))
+            instrumentation.runOnMainSync {
+                assertTrue(node("header-variants-$headerId")!!.second.config[SemanticsProperties.ContentDescription].contains(header().getString("label")))
+            }
+            assertEquals(tile().getString("icon"), header().getString("icon"))
+            assertEquals(tile().getJSONObject("resolved_control").toString(), header().getJSONObject("resolved_control").toString())
+            assertEquals(1, rows(ribbonAnchor).count { it.optBoolean("selected") })
+            assertEquals(1, rows(headerAnchor).count { it.optBoolean("selected") })
+        }
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for ((index, nativeTool) in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS).withIndex()) {
+                tool = nativeTool
+                for ((anchor, tag) in listOf(ribbonAnchor to "tile-variants-toolbar-$tileId", headerAnchor to "header-variants-$headerId")) {
+                    assertTrue("Corner has a native hit region", bounds(tag).width >= 14 * density && bounds(tag).height >= 14 * density)
+                    val choices = rows(anchor)
+                    assertTrue(choices.size > 1)
+                    val alternatives = choices.filter { it.optBoolean("enabled", true) && !it.optBoolean("selected") }
+                    val choice = alternatives[index % alternatives.size]
+                    tap(tag)
+                    waitFor("variant popup") { node("workspace-menu") != null }
+                    tapMenuRow(choice.getString("label"))
+                    waitFor("variant popup closes") { node("workspace-menu") == null }
+                    idle(); sameChoice()
+                    assertEquals(choice.getString("label"), rows(anchor).first { it.optBoolean("selected") }.getString("label"))
+                    action(obj("type" to "invoke", "command" to "eraser"))
+                    tap(if (anchor === headerAnchor) "header-control-$headerId" else "tile-toolbar-$tileId")
+                    assertTrue(tile().getBoolean("selected")); assertTrue(header().getBoolean("selected"))
+                    sameChoice()
+                    val body = if (anchor === headerAnchor) "header-control-$headerId" else "tile-toolbar-$tileId"
+                    tap(body)
+                    fun drawer() = state().getJSONObject("customization").objectOrNull("drawer")
+                    waitFor("full grouped drawer") { node("tool-drawer") != null && drawer()?.objectOrNull("tool_set") != null }
+                    assertEquals("[[\"brushes\"],[\"tool_settings\"]]", drawer()!!.getJSONArray("columns").toString())
+                    assertEquals(anchor.toString(), drawer()!!.getJSONObject("anchor").toString())
+                    val sibling = drawer()!!.getJSONObject("tool_set").array("groups").objects().first { it.optBoolean("enabled", true) && !it.optBoolean("selected") }
+                    val siblingTag = "tool-group-${sibling.getString("label")}"
+                    waitFor("drawer sibling laid out") {
+                        val row = node("tool-drawer")?.second?.find(hasTag(siblingTag))
+                        (row?.boundsInRoot?.height ?: 0f) >= 42 * density
+                    }
+                    instrumentation.runOnMainSync {
+                        val drawerNode = checkNotNull(node("tool-drawer"))
+                        val row = checkNotNull(drawerNode.second.find(hasTag(siblingTag)))
+                            .find { it.config.getOrNull(SemanticsActions.OnClick) != null }!!
+                        pressed = drawerNode.first; point = row.boundsInRoot.center
+                    }
+                    event(MotionEvent.ACTION_DOWN); event(MotionEvent.ACTION_UP)
+                    waitFor("drawer sibling keeps its opener") {
+                        drawer()?.getJSONObject("anchor")?.toString() == anchor.toString() &&
+                            drawer()?.getJSONObject("tool_set")?.array("groups")?.objects()?.any { it.optBoolean("selected") && it.getString("label") == sibling.getString("label") } == true
+                    }
+                    idle(); sameChoice()
+                    tap(body)
+                    waitFor("grouped drawer closes") { node("tool-drawer") == null }
+                }
+                button = if (nativeTool == MotionEvent.TOOL_TYPE_MOUSE) MotionEvent.BUTTON_SECONDARY else MotionEvent.BUTTON_PRIMARY
+                down("header-control-$headerId")
+                if (nativeTool != MotionEvent.TOOL_TYPE_MOUSE) SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 150)
+                event(MotionEvent.ACTION_UP)
+                waitFor("full tool context") { node("workspace-menu") != null }
+                button = MotionEvent.BUTTON_PRIMARY
+                val selected = rows(headerAnchor).first { it.optBoolean("selected") }
+                tapMenuRow(selected.getString("label"))
+                waitFor("full context closes") { node("workspace-menu") == null }
+                button = MotionEvent.BUTTON_PRIMARY
+                idle(); sameChoice()
+            }
+            shot("tool-variants-$theme")
+        }
+        val remembered = tile().getString("label")
+        send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
+        send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))
+        waitFor("remembered Photo tools published") {
+            view().optString("id") == "builtin:workspace:photographer" && snapshot().array("panels").objects()
+                .firstOrNull { it.getString("id") == "toolbar" }?.array("tiles")?.objects()
+                ?.any { it.getJSONObject("control").optString("slot") == "lasso" && it.getString("label") == remembered } == true
+        }
+        assertEquals(remembered, tile().getString("label")); sameChoice()
     }
 
     @Test fun brushAndSculptDrawersKeepIndependentSelections() {

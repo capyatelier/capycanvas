@@ -63,6 +63,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Panel, tab, column or toolbar drag and docking | 60 | | |
 | Panel or column resize | 60 | | |
 | Drawer open and close | 60 | | |
+| Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
 | Colour wheel or picker drag | 60 | | |
 | Slider scrub: size, opacity, flow | 60 | | |
 | Canvas action bar show, hide and move | 60 | **Not met.** UI frame p50/p95: 32.9/41.7 ms moving the bar, 11.6/21.0 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |

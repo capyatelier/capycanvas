@@ -1234,6 +1234,7 @@ mod tests {
             .insert("size.48".into(), vec![key("i", true, true)]);
         let item = ContextMenuItem {
             label: "Translated size".into(),
+            icon: None,
             hint: "Default icon".into(),
             bindings: Vec::new(),
             selected: Some(false),
@@ -1245,6 +1246,7 @@ mod tests {
             title: "Context".into(),
             sections: vec![vec![ContextMenuItem {
                 label: "Submenu".into(),
+                icon: None,
                 bindings: Vec::new(),
                 hint: String::new(),
                 selected: None,

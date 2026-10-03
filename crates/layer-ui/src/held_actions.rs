@@ -79,13 +79,28 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    pub(super) fn release_spring(&mut self, key: &str) {
-        if self.interaction.spring.as_ref().is_some_and(|s| s.key == key)
-            && let Some(spring) = self.interaction.spring.take()
-            && spring.used
-        {
-            self.interaction.restores.push(spring.restore);
+    pub(super) fn dispatch_spring(&mut self, key: String, action: UiAction, repeat: bool) -> Result<UiChange, String> {
+        let restore = (!repeat).then(|| self.spring_restore(&action)).flatten();
+        let started = restore.is_some();
+        if let Some(restore) = restore {
+            self.interaction.spring = Some(crate::interaction::Spring { key, restore, used: false });
         }
+        let change = self.dispatch(action);
+        if started && change.is_err() { self.interaction.spring = None; }
+        change
+    }
+
+    pub(super) fn release_spring(&mut self, key: &str) -> UiChange {
+        if !self.interaction.spring.as_ref().is_some_and(|s| s.key == key) { return UiChange::default(); }
+        let spring = self.interaction.spring.take().unwrap();
+        if spring.used {
+            self.interaction.restores.push(spring.restore);
+            return UiChange::default();
+        }
+        let memory = self.state.tool_slots.clone();
+        self.remember_tool_slots();
+        if memory != self.state.tool_slots { self.changed(regions::BRUSH | regions::COMMANDS, false) }
+        else { UiChange::default() }
     }
 
     /// Put the modifier keys that are fully held into effect; more specific

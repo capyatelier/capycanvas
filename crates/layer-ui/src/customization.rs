@@ -453,6 +453,7 @@ pub(crate) fn validate_toolbar_name(name: &str) -> Result<(), String> {
 impl ToolbarControl {
     pub fn icon(self) -> &'static str {
         match self {
+            Self::ToolSlot {slot} => slot.variants()[0].icon(),
             Self::Command { command } => command.icon().unwrap_or(match command {
                 CommandId::ToggleTheme => "appearance", CommandId::KeyboardShortcuts => "keyboard", CommandId::About => "info", _ => "menu",
             }),
@@ -465,6 +466,7 @@ impl ToolbarControl {
     }
     pub fn action(self) -> Option<UiAction> {
         Some(match self {
+            Self::ToolSlot {..} => return None,
             Self::ColorPicker => UiAction::ColorPicker { action: crate::ColorPickerAction::Toggle },
             Self::Command { command } => UiAction::Invoke { command },
             Self::Brush { id } => UiAction::SelectBrush { id },
@@ -498,6 +500,7 @@ impl ToolbarControl {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextTarget {
+    ToolVariants { anchor: DrawerAnchor },
     Header { id: Option<u32> },
     Column { column: u32 },
     ZenMode,
@@ -625,6 +628,8 @@ pub enum CustomizationAction {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ContextMenuItem {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<&'static str>,
     pub label: String,
     /// None is an ordinary command; a value is a checked menu item.
     pub selected: Option<bool>,
@@ -638,6 +643,7 @@ impl ContextMenuItem {
     pub fn command(label: impl Into<String>, action: UiAction) -> Self {
         Self {
             label: label.into(),
+            icon: None,
             selected: None,
             action: Some(action),
             enabled: true,
@@ -653,6 +659,7 @@ impl ContextMenuItem {
         let sections: Vec<_> = sections.into_iter().filter(|s| !s.is_empty()).collect();
         Self {
             label: label.into(),
+            icon: None,
             selected: None,
             action: None,
             enabled: !sections.is_empty(),
@@ -675,6 +682,9 @@ impl ContextMenu {
         fn visit(sections: &mut [Vec<ContextMenuItem>], settings: &Settings, platform: Platform, localization: &Localizer) {
             for item in sections.iter_mut().flatten() {
                 if let Some(action) = &item.action {
+                    let action=if let UiAction::ChooseToolVariant {variant,..}=action {
+                        &UiAction::Invoke {command:variant.command()}
+                    } else {action};
                     item.bindings = settings.action_keys(action, platform);
                     let shortcut = item
                         .bindings
@@ -709,6 +719,7 @@ impl DockLayout {
     pub(crate) fn context_menu_localized_on(&self, target: ContextTarget, platform: Platform, localization: &Localizer) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
+            ContextTarget::ToolVariants { .. } => return Err("Tool variations require session state".into()),
             ContextTarget::Header { id } => {
                 return self.header.projected_for(platform).context_menu_localized(id, false, localization);
             }
@@ -1049,6 +1060,10 @@ pub fn canonical_tool_choice(control: ToolbarControl) -> ToolChoice {
 }
 pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) -> ToolChoice {
     let (label, description, icon) = match control {
+        ToolbarControl::ToolSlot {slot} => {
+            let label=slot.label(localization);
+            (label.clone(),label,slot.variants()[0].icon())
+        }
         ToolbarControl::Command { command } => {
             let label = command.localized_label(localization);
             (
@@ -1342,6 +1357,9 @@ pub(crate) fn tool_catalog_localized(platform: Platform, localization: &Localize
         .into_iter()
         .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
+        .chain(ToolSlotId::ALL.into_iter()
+            .filter(|_| matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows))
+            .map(|slot|ToolbarControl::ToolSlot {slot}))
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
         .chain([ToolbarControl::ColorPicker, ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider, ToolbarControl::TOOL_OPTIONS])
         .chain([ToolbarControl::Divider])
@@ -1440,6 +1458,8 @@ pub struct PanelControlView {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct TileView {
+    pub has_variants: bool,
+    pub resolved_control: ToolbarControl,
     pub id: u32,
     #[serde(flatten)]
     pub choice: ToolChoice,
@@ -1541,14 +1561,21 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
                 }
                 _ => false,
             };
+            let (choice,enabled,tooltip,resolved_control)=if let ToolbarControl::ToolSlot {slot}=tile.control {
+                state.resolve_slot(slot,DrawerAnchor::Tile {panel,tile:tile.id})
+            } else {
+                let tooltip=match tile.control {
+                    ToolbarControl::Command {command}=>state.commands.iter().find(|c|c.id==command).map_or_else(||tooltip.to_string(),|c|c.tooltip.clone()),
+                    _=>tooltip.to_string(),
+                };
+                (choice,enabled,tooltip,tile.control)
+            };
             Ok(TileView {
+                has_variants: matches!(tile.control,ToolbarControl::ToolSlot {..}),
+                resolved_control,
                 id: tile.id,
                 component: state.toolbar_component(tile.control),
-                tooltip: match tile.control {
-                    ToolbarControl::Command { command } => state.commands.iter().find(|entry| entry.id == command)
-                        .map_or_else(|| tooltip.to_string(), |entry| entry.tooltip.clone()),
-                    _ => tooltip.to_string(),
-                },
+                tooltip,
                 choice,
                 enabled,
             })

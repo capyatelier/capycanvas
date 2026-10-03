@@ -49,6 +49,7 @@ canvas is 6000 × 4000.
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms | `cbfad9e5`, 2026-09-26 |
 | Panel or column resize | 90 | | |
 | Drawer open and close | 90 | | |
+| Grouped tool menus, drawer switching and tile drag | 90 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
 | Colour wheel or picker drag | 90 | Huion: frame CPU p50 4.6–5.1 ms, p95 under 9.6 ms; XP-Pen swatch comparison below is diagnostic only | [Colour picker](../ui/color-picker.md); [swatch comparison](#selected-swatch-comparison), 2026-10-03 |
 | Slider scrub: size, opacity, flow | 90 | | |
 | Canvas action bar show, hide and move | 90 | **Not met.** UI frame p50: 22.8 ms show and hide, 34.8 ms moving the bar | `cbfad9e5`, 2026-09-26 |

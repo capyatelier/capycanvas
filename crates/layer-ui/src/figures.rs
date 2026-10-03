@@ -4,7 +4,7 @@ use layer_core::{Figure, LayerOperationKind, Point};
 use layer_render::CanvasRenderer;
 
 pub(crate) fn tool_set(shape: FigureShape, paint: FigurePaint, localizer: &crate::localization::Localizer) -> ToolSetView {
-    let item = |label, icon, shape, paint, selected| ToolSetItem {
+    let item = |label, icon, shape, paint, selected| ToolSetItem { enabled: true,
         label,
         icon,
         selected,

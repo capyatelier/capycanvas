@@ -103,6 +103,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.system_theme = previous.system_theme;
         self.system_accent = previous.system_accent;
         self.state.workspace = previous.state.workspace.clone();
+        self.state.tool_slots = previous.state.tool_slots.clone();
         self.workspace_history = previous.workspace_history.clone();
         self.workspace_read_only = previous.workspace_read_only;
         self.managed_workspace = previous.managed_workspace.clone();

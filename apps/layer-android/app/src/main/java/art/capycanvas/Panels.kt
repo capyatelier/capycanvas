@@ -50,10 +50,12 @@ import kotlin.math.roundToInt
                 val colors = LocalPalette.current
                 val source = dock.tileDrawerSource(panel.getString("id"), tile.getInt("id"))
                 val shape = drawerButtonShape(source?.direction)
-                val activate=pickerClick(host,control,obj("kind" to "tile","panel" to panel.getString("id"),"tile" to tile.getInt("id"))) {
+                val anchor = obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))
+                val activate=pickerClick(host,tile.getJSONObject("resolved_control"),anchor) {
                     host.dispatch(obj("type" to "activate_tile","panel" to panel.getString("id"),"tile" to tile.getInt("id")))
                 }
                 HoverTip(tile.getString("tooltip"), modifier) {
+                Box(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxSize().clip(shape).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
                     .background(when {
                         tile.optBoolean("selected") -> colors.active
@@ -68,9 +70,12 @@ import kotlin.math.roundToInt
                         if (kind == "color") PaintPairIcon(host.snapshot?.getJSONObject("state"), tile.getString("label"), glyph)
                         else SharedIcon(icon, tile.getString("label"), glyph)
                     }
-                    if (labelLines > 0) Text(tile.getString("label"), Modifier.weight(1f).padding(end = 4.dp).testTag("tile-label-${panel.getString("id")}-${tile.getInt("id")}"),
+                    if (labelLines > 0) Text(tile.getString("label"), Modifier.weight(1f).padding(end = if (tile.optBoolean("has_variants")) 16.dp else 4.dp).testTag("tile-label-${panel.getString("id")}-${tile.getInt("id")}"),
                         fontWeight = if (geometry.getBoolean("tile_label_bold")) FontWeight.Bold else FontWeight.Normal,
                         maxLines = labelLines, overflow = TextOverflow.Ellipsis)
+                }
+                if (tile.optBoolean("has_variants")) ToolVariantsButton(host, anchor, tile.getString("tooltip"),
+                    Modifier.align(Alignment.BottomEnd).testTag("tile-variants-${panel.getString("id")}-${tile.getInt("id")}"))
                 }
                 }
             }
@@ -94,7 +99,7 @@ import kotlin.math.roundToInt
     }
 }
 
-@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, splitFilters: Boolean = false, onContent: (PanelContentSize) -> Unit = {}, onHeight: (Float) -> Unit = {}) {
+@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, splitFilters: Boolean = false, toolSet: JSONObject? = null, onContent: (PanelContentSize) -> Unit = {}, onHeight: (Float) -> Unit = {}) {
     if(panel.getString("id")=="proof") {
         ProofPanel(host,modifier,scrollable){height->onContent(PanelContentSize(height,fixedHeight=0f));onHeight(height)}
         return
@@ -137,7 +142,7 @@ import kotlin.math.roundToInt
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             controls.forEach { item ->
                 when (item.getString("control")) {
-                    "brushes", "brush_sets", "sculpt_sets", "tools" -> ToolSetControls(host, state, item.getString("control"))
+                    "brushes", "brush_sets", "sculpt_sets", "tools" -> ToolSetControls(host, state, item.getString("control"), toolSet)
                     "tool_settings" -> ToolSettingsControls(host, state)
                     "color_wheel" -> ColorPanelControls(host, availableHeight - 16.dp) { natural, displayed -> deficits[0] = natural - displayed }
                     "navigator" -> NavigatorPanel(host, availableHeight) { natural, displayed -> deficits[1] = natural - displayed }

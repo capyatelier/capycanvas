@@ -65,7 +65,8 @@ internal class DockInteraction(val host: CanvasHost) {
     data class Region(val token: Any, val action: JSONObject, val bounds: Rect, val z: Int, val priority: Int,
         val context: JSONObject?, val cursor: Int, val holdToDrag: Boolean)
     val regions = mutableMapOf<Any, Region>()
-    val chromeRegions = mutableMapOf<Any, Rect>()
+    data class ChromeRegion(val bounds: Rect, val z: Int)
+    val chromeRegions = mutableMapOf<Any, ChromeRegion>()
     var zenButton: Rect? = null
     var drawer: JSONObject? = null
     val drawerSources = mutableStateMapOf<String, DrawerSource>()
@@ -193,8 +194,12 @@ internal class DockInteraction(val host: CanvasHost) {
             if (group is Number) host.dispatch(obj("type" to "double_click_panel_handle", "group" to group, "viewport" to viewport))
         }
     }
-    fun hit(point: Offset): Region? = if (!enabled || popupOpen || contextMenu != null) null else regions.values
-        .filter { it.bounds.contains(point) }.maxWithOrNull(compareBy<Region> { it.z }.thenBy { it.priority })
+    fun hit(point: Offset): Region? {
+        if (!enabled || popupOpen || contextMenu != null) return null
+        val z = chromeRegions.values.filter { it.bounds.contains(point) }.maxOfOrNull { it.z } ?: 0
+        return regions.values.filter { it.z >= z && it.bounds.contains(point) }
+            .maxWithOrNull(compareBy<Region> { it.z }.thenBy { it.priority })
+    }
     private fun send(phase: String, preview: Boolean = false) {
         val action = active ?: return
         if (action.getString("type") == "tile_drag") return
@@ -328,7 +333,7 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
         try {
             val previousTap = chromeTap
             chromeTap = null
-            if (dock.chromeRegions.values.any { it.contains(down.position) }) {
+            if (dock.chromeRegions.values.any { it.bounds.contains(down.position) }) {
                 val tab = dock.tabs.values.firstOrNull { it.getJSONObject("bounds").let { b ->
                     Rect(b.number("x"), b.number("y"), b.number("x") + b.number("width"), b.number("y") + b.number("height")).contains(down.position / dock.density)
                 } }?.optString("panel")
@@ -437,8 +442,10 @@ private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boo
 /** Only UI-covered contacts are sent here; CanvasHost gates bare canvas contacts. */
 @Composable internal fun Modifier.chromeRegion(dock: DockInteraction): Modifier {
     val token = remember { Any() }
+    val z = LocalWorkspaceZ.current
     DisposableEffect(dock, token) { onDispose { dock.chromeRegions.remove(token) } }
-    return onGloballyPositioned { dock.chromeRegions[token] = it.boundsInRoot().translate(-dock.origin) }
+    SideEffect { dock.chromeRegions[token]?.takeIf { it.z != z }?.let { dock.chromeRegions[token] = it.copy(z = z) } }
+    return onGloballyPositioned { dock.chromeRegions[token] = DockInteraction.ChromeRegion(it.boundsInRoot().translate(-dock.origin), z) }
 }
 @Composable internal fun Modifier.contextAnchor(dock: DockInteraction, target: JSONObject): Modifier {
     val key = dock.anchorKey(target)

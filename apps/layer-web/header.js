@@ -131,12 +131,13 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     const r={root:node,content,grip,entry};
     const kind=entry.item.kind;
     if(['capy','settings','fullscreen','tool'].includes(kind)) {
-      const b=button('',pickerButtonAction(entry.item.control,{kind:'header',id:entry.id},dispatch,()=>activate(entry)),'header-tool'); r.button=b;
+      const b=button('',pickerButtonAction(()=>r.spec?.resolved_control??entry.item.control,{kind:'header',id:entry.id},dispatch,()=>activate(entry)),'header-tool'); r.button=b;
       if(kind==='capy')b.id='zen-button';
       if(kind==='fullscreen')b.id='fullscreen';
       const command={capy:'zen_mode',settings:'settings',fullscreen:'fullscreen'}[kind];
       if(command)b.dataset.command=command;
       content.append(b);
+      if(kind==='tool'){r.variants=customization.variationButton({kind:'header',id:entry.id});content.append(r.variants);}
     } else if(kind==='menu') content.append(menu(primary,'Main Menu','menu','header-menu-overflow'));
     else if(kind==='menu_labels') {
       const labels=element('div','header-menu-labels');
@@ -217,7 +218,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     root.style.height=`${size.height}px`; bank.style.top=`${size.height+6}px`;
     bank.style.maxHeight=`${Math.max(1,workspace.clientHeight-size.height-12)}px`;
     for(const [id,r] of records) {
-      const spec=view.items.find(i=>i.id===id); r.root.setAttribute('aria-label',spec.label);
+      const spec=view.items.find(i=>i.id===id); r.spec=spec;r.root.setAttribute('aria-label',spec.label);
       r.root.tabIndex=editing?0:-1; r.content.inert=editing && r.entry.item.kind!=='workspaces'; r.grip.hidden=!editing;
       if(r.button) {
         const kind=r.entry.item.kind, command=state().commands.find(c=>c.id===r.button.dataset.command);
@@ -226,8 +227,9 @@ export function createHeader({app, state, workspace, element, button, icon, plac
         r.button.title=command?.tooltip||spec.label; r.button.setAttribute('aria-label',command?.label||spec.label);
         r.button.disabled=!editing&&(!spec.enabled||(kind==='fullscreen'&&!document.fullscreenEnabled));
         r.button.setAttribute('aria-pressed',String(spec.selected));
-        r.button.classList.toggle('brush-color',r.entry.item.control?.kind==='color');
+        r.button.classList.toggle('brush-color',(spec.resolved_control??r.entry.item.control)?.kind==='color');
       }
+      if(r.variants){r.variants.hidden=editing||!spec.has_variants;r.variants.title=spec.label;r.variants.setAttribute('aria-label',spec.label);}
       if(r.full)for(const menu of r.full.querySelectorAll('[data-menu]')) {
         const label=menuModels.find(m=>m.id===menu.dataset.menu)?.label;
         if(label){const summary=menu.querySelector('summary');summary.textContent=label;summary.setAttribute('aria-label',label);}

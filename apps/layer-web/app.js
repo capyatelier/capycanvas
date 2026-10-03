@@ -834,9 +834,11 @@ function buildPanels() {
   effectPanels = createEffectPanels({app,wake,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,message,
     contentChanged:panelContentChanged});
 }
-function contentPanel(id, splitPicker=false) {
+function contentPanel(id, splitPicker=false, readToolSet=null) {
   const panel=element("div",`panel ${id}-panel`);
-  if(id==="proof") {
+  if(id==="brushes"&&readToolSet) {
+    const control=editor.control("brushes",readToolSet);panel.append(control);panel.refreshPanel=control.refreshEditor;
+  } else if(id==="proof") {
     panel.disposePanel=documents.mountProof(panel);panel.refreshPanel=()=>{};
   } else if(id==="palettes") {
     const view=palettes.mount(panel);panel.refreshPanel=view.refresh;panel.disposePanel=view.dispose;
@@ -1641,8 +1643,10 @@ function keyInput(e, pressed, divider = null) {
     e.stopPropagation();
   }
 }
+window.addEventListener("keydown", e => {
+  if (!composingKey(e) && e.key === "Escape" && workspaceGesture) { endWorkspaceGesture(null, true); e.preventDefault(); e.stopPropagation(); }
+}, {capture:true});
 window.addEventListener("keydown", (e) => {
-  if (!composingKey(e) && e.key === "Escape" && workspaceGesture) { endWorkspaceGesture(null, true); e.preventDefault(); return; }
   if(!composingKey(e) && documents?.key(e))return;
   keyInput(e, true);
 });

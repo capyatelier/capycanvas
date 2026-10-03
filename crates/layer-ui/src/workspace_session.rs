@@ -14,6 +14,7 @@ impl WorkspaceWorkingState {
             version: 1,
             preset: layer_core::DefaultBrushPreset::GPen as u32,
             tools: WorkspaceToolMemory::default(),
+            tool_slots: ToolSlotMemory::default(),
             colors,
             canvas_tool: LayerCanvasTool::Paint,
             selection: SelectionOptions::default(),
@@ -50,8 +51,9 @@ pub struct PreparedWorkspace {
     region_tools: region_tools::RegionTools,
 }
 impl PreparedWorkspace {
-    pub fn new(capture: WorkspaceCapture) -> Result<Self, WorkspaceValidationError> {
+    pub fn new(mut capture: WorkspaceCapture) -> Result<Self, WorkspaceValidationError> {
         capture.history.validate()?;
+        capture.working.tool_slots.retain_history(&capture.history);
         let state = &capture.working;
         if state.version != 1 {
             return Err("Unsupported workspace working-state version".into());
@@ -199,17 +201,25 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn workspace_working_state(&self) -> WorkspaceWorkingState {
+        let restore_tool = |restore: crate::interaction::Restore| match restore {
+            crate::interaction::Restore::Tool(tool, preset) => Some((tool, preset)),
+            _ => None,
+        };
+        let base = self.interaction.hold_base
+            .or_else(|| self.interaction.spring.as_ref().and_then(|spring| restore_tool(spring.restore)))
+            .or_else(|| self.interaction.restores.iter().rev().find_map(|restore| restore_tool(*restore)));
+        let (canvas_tool, preset) = base.unwrap_or((self.eyedropper.picking.previous
+            .or(self.operation.crop.as_ref().map(|crop| crop.previous()))
+            .unwrap_or(self.layer_interaction.tool), self.state.brush.preset));
+        let mut tools = self.tools.clone();
+        if base.is_some() { tools.remember(preset); }
         WorkspaceWorkingState {
             version: 1,
-            preset: self.state.brush.preset,
-            tools: self.tools.clone(),
+            preset,
+            tools,
+            tool_slots: self.state.tool_slots.clone(),
             colors: self.state.colors.clone(),
-            canvas_tool: self
-                .eyedropper
-                .picking
-                .previous
-                .or(self.operation.crop.as_ref().map(|crop| crop.previous()))
-                .unwrap_or(self.layer_interaction.tool),
+            canvas_tool,
             selection: self.selection_tools.options.clone(),
             region_values: self
                 .region_tools
@@ -264,10 +274,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state
             .customization
             .committed_header(&mut committed.layout);
-        Ok(WorkspaceCapture {
-            history: self.workspace_history.capture(&committed),
-            working: self.workspace_working_state(),
-        })
+        let history=self.workspace_history.capture(&committed);
+        self.state.tool_slots.retain_history(&history);
+        Ok(WorkspaceCapture {history,working:self.workspace_working_state()})
     }
     pub fn workspace_layout_generation(&self) -> Option<u64> {
         self.workspace_history.generation()
@@ -364,6 +373,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.workspace.layout.header_presentation = header_presentation;
         self.workspace_history = workspace::WorkspaceHistory::restore(capture.history);
         self.tools = working.tools;
+        self.state.tool_slots = working.tool_slots;
         self.state.colors = working.colors;
         self.state.brush = BrushState {
             preset: working.preset,

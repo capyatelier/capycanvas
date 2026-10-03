@@ -164,7 +164,11 @@ behavior and high-refresh presentation need a real tablet.
   checks that a second native session cannot take an active workspace.
 - [`AndroidTitleBarTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidTitleBarTest.kt):
   the title-bar editor, compact menus, keyboard focus, Sketch drawers and
-  persistence.
+  persistence. `#toolVariantCornersAndContextMenusShareRememberedChoices` checks
+  toolbar and title-bar variant corners, mouse context menus, touch and pen holds,
+  full drawer sibling choices, retained openers and workspace switching in both
+  themes. Native drag capture respects panel stacking: a drawer blocks covered
+  resize handles while its own controls remain interactive.
 - `AndroidRasterTest`: document, file and GPU lifecycle.
   - `#navigationBuffersAndPenReturnsToFrontBuffer` and
     `#frontBufferSurfaceLifecycle` cover the switch between buffered navigation

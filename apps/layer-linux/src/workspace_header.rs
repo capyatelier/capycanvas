@@ -373,6 +373,7 @@ impl Header {
         w.window.add_controller(keys);
     }
     pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
+        let view = w.gpu.borrow().as_ref().unwrap().session.header_view_with(false);
         let projected = state.workspace.layout.header.projected_for(Platform::Gtk);
         let model = &projected;
         let editing = state.customization.header_editing;
@@ -483,7 +484,9 @@ impl Header {
             button.update_property(&[gtk::accessible::Property::Label(&caption)]);
         }
         for item in self.items.borrow().iter() {
-            let label = w.gpu.borrow().as_ref().unwrap().session.header_item_label(item.entry.item);
+            let projected = view.items.iter().find(|view| view.id == item.entry.id);
+            let label = projected.map(|view| view.label.clone())
+                .unwrap_or_else(|| w.gpu.borrow().as_ref().unwrap().session.header_item_label(item.entry.item));
             item.root.update_property(&[gtk::accessible::Property::Label(&label)]);
             if let Some(placeholder) = &item.placeholder { placeholder.set_label(&label); }
             if let Some(grip) = &item.grip {
@@ -494,21 +497,31 @@ impl Header {
             if let Some(button) = &item.button {
                 button.set_tooltip_text(Some(&label));
                 let (enabled, active) = match item.entry.item {
-                    HeaderItem::Tool { control } => tool_state(state, control),
+                    HeaderItem::Tool { control } => projected.map(|view| (view.enabled, view.selected))
+                        .unwrap_or_else(|| tool_state(state, control)),
                     HeaderItem::Capy => (true, state.workspace.zen_mode),
                     // Full Screen is an action, not a selected drawing tool.
                     HeaderItem::Fullscreen => (true, false),
                     _ => (true, false),
                 };
-                button.set_sensitive(enabled || editing);
+                let has_variants = projected.is_some_and(|view| view.has_variants);
+                button.set_sensitive(enabled || has_variants || editing);
+                if let Some(content) = customization::tool_button_content(button) {
+                    content.set_opacity(if enabled || editing { 1. } else { 0.45 });
+                }
                 selected(button, active);
+                if has_variants {
+                    button.update_state(&[gtk::accessible::State::Pressed(if active {
+                        gtk::AccessibleTristate::True
+                    } else { gtk::AccessibleTristate::False })]);
+                }
                 if let HeaderItem::Tool { control: control @ (ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) } = item.entry.item {
                     button.set_tooltip_text(Some(&w.gpu.borrow().as_ref().unwrap().session.color_picker_button_label(control)));
                 }
                 if let HeaderItem::Tool { control } = item.entry.item
-                    && let Some(image) = button.child().and_downcast::<gtk::Image>()
+                    && let Some(image) = customization::tool_button_content(button).and_downcast::<gtk::Image>()
                 {
-                    let icon = layer_ui::tool_icon(state, control);
+                    let icon = projected.map(|view| view.icon).unwrap_or_else(|| layer_ui::tool_icon(state, control));
                     let name = format!("layer-{icon}-symbolic");
                     if crate::icons::name(&image).as_deref() != Some(&name) {
                         crate::icons::set(&image, Some(&name));
@@ -657,6 +670,9 @@ impl Header {
                     b.set_child(Some(&line));
                 }
                 let id = entry.id;
+                if matches!(entry.item, HeaderItem::Tool { control: ToolbarControl::ToolSlot { .. } }) {
+                    customization::tool_variations_button(w, &b, layer_ui::DrawerAnchor::Header { id });
+                }
                 let command = match entry.item {
                     HeaderItem::Capy => Some(CommandId::ZenMode),
                     HeaderItem::Settings => Some(CommandId::Settings),
@@ -809,7 +825,6 @@ impl Header {
         self.root.add(&root);
         w.install_context(&root, ContextTarget::Header { id: Some(entry.id) });
         let id = entry.id;
-        let workspaces = entry.item == HeaderItem::Workspaces;
         root.connect_has_focus_notify(glib::clone!(
             #[weak]
             w,
@@ -819,35 +834,6 @@ impl Header {
                 }
             }
         ));
-        let keys = gtk::EventControllerKey::new();
-        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-        keys.connect_key_pressed(glib::clone!(
-            #[weak]
-            w,
-            #[weak]
-            root,
-            #[upgrade_or]
-            glib::Propagation::Proceed,
-            move |_, key, _, modifiers| {
-                if key == gdk::Key::Menu
-                    || (key == gdk::Key::F10 && modifiers.contains(gdk::ModifierType::SHIFT_MASK))
-                {
-                    if workspaces {
-                        w.workspaces.show_options(&w, root.upcast_ref(), 0., root.height() as f64, false);
-                        return glib::Propagation::Stop;
-                    }
-                    w.show_context(
-                        root.upcast_ref(),
-                        ContextTarget::Header { id: Some(id) },
-                        0.,
-                        root.height() as f64,
-                    );
-                    return glib::Propagation::Stop;
-                }
-                glib::Propagation::Proceed
-            }
-        ));
-        root.add_controller(keys);
         Item {
             entry: entry.clone(),
             root,
@@ -1176,21 +1162,29 @@ impl Header {
         let popover = gtk::Popover::new();
         popover.set_widget_name("header-overflow-popup");
         let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let view = w.gpu.borrow().as_ref().unwrap().session.header_view_with(false);
         if let Some(model) = self.model.borrow().as_ref() {
             for id in &self.geometry.borrow().hidden[zone] {
                 let Ok(entry) = model.entry(*id) else {
                     continue;
                 };
-                let button = gtk::Button::with_label(&w.gpu.borrow().as_ref().unwrap().session.header_item_label(entry.item));
+                let projected = view.items.iter().find(|view| view.id == entry.id);
+                let label = projected.map(|view| view.label.clone())
+                    .unwrap_or_else(|| w.gpu.borrow().as_ref().unwrap().session.header_item_label(entry.item));
+                let button = gtk::Button::with_label(&label);
                 button.set_widget_name(&format!("header-overflow-item-{id}"));
                 if let HeaderItem::Tool { control } = entry.item
                     && let Some(state) = w.gpu.borrow().as_ref().map(|g| g.session.state().clone())
                 {
-                    let (enabled, active) = tool_state(&state, control);
-                    button.set_sensitive(enabled || self.editing.get());
+                    let (enabled, active) = projected.map(|view| (view.enabled, view.selected))
+                        .unwrap_or_else(|| tool_state(&state, control));
+                    button.set_sensitive(enabled || projected.is_some_and(|view| view.has_variants) || self.editing.get());
                     selected(&button, active);
                 }
                 let id = *id;
+                if matches!(entry.item, HeaderItem::Tool { control: ToolbarControl::ToolSlot { .. } }) {
+                    customization::tool_variations_button(w, &button, layer_ui::DrawerAnchor::Header { id });
+                }
                 button.connect_clicked(glib::clone!(
                     #[weak]
                     w,

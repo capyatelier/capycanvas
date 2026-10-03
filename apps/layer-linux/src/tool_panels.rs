@@ -135,10 +135,12 @@ impl ToolSet {
         }
         for (button, item) in self.group_buttons.borrow().iter().zip(&view.groups) {
             selected(button, item.selected);
+            button.set_sensitive(item.enabled);
         }
         let theme_changed = self.theme.replace(Some(theme)) != Some(theme);
         for ((_, button, preview), item) in self.buttons.borrow().iter().zip(&view.subtools) {
             selected(button, item.selected);
+            button.set_sensitive(item.enabled);
             if (rebuild || theme_changed)
                 && let (Some(id), Some(preview)) = (item.preview, preview)
             {

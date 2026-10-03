@@ -8,7 +8,7 @@ using namespace CapyUi;
 namespace {
 hstring choiceId(J const& choice){
     auto control=object(choice,L"control");auto kind=str(control,L"kind");
-    auto value=str(control,L"command",str(control,L"panel"));
+    auto value=str(control,L"slot",str(control,L"command",str(control,L"panel")));
     if(value.empty())value=to_hstring(uint32_t(num(control,L"id",num(control,L"pixels"))));
     return kind+L"-"+value;
 }

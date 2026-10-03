@@ -100,6 +100,7 @@ mod tab_drag;
 pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
 mod session;
+pub use session::{ToolSlotId, ToolVariant, ToolSlotMemory, ToolSlotSelection};
 pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMenu, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandParameter, CommandSearchAction, CommandSearchView, ToolCategory};
 pub mod keymaps;
 mod settings;
@@ -210,6 +211,7 @@ pub struct BrushChoice {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolbarControl {
+    ToolSlot { slot: ToolSlotId },
     Command { command: CommandId },
     Brush { id: u32 },
     Size { pixels: u16 },
@@ -833,7 +835,9 @@ impl CommandId {
             Self::FrequencySeparation => "frequency-separation",
         })
     }
-    pub const TOOLS: [Self; 30] = [
+    pub const TOOLS: [Self; 32] = [
+        Self::SelectionBrush,
+        Self::TonalSelect,
         Self::DrawingBrush,
         Self::Sculpt,
         Self::Pen,
@@ -1184,6 +1188,8 @@ pub struct DocumentTab {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UiState {
+    #[serde(skip)]
+    pub tool_slots: ToolSlotMemory,
     pub histogram: HistogramView,
     pub tonal_histogram: HistogramView,
     #[serde(skip)]
@@ -1243,6 +1249,7 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    ChooseToolVariant { anchor: DrawerAnchor, variant: ToolVariant },
     Histogram { action: HistogramAction },
     CommandSearch { action: CommandSearchAction },
     Selection { action: SelectionAction },

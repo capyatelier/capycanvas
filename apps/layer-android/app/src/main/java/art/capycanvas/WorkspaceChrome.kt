@@ -171,22 +171,23 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     val model = current ?: retained
     val bodies = remember { mutableMapOf<String, JSONObject>() }.apply { putAll(panels) }
     val columns = model.array("columns").values().map { it as JSONArray }
-    val heights = remember(model.toString()) { mutableStateListOf<Float>().apply { repeat(columns.size) { add(0f) } } }
-    var geometry by remember { mutableStateOf<JSONObject?>(null) }
     val tabs = model.objectOrNull("tabs")
+    val heights = remember(model.array("columns").toString(), tabs?.toString()) { mutableStateListOf<Float>().apply { repeat(columns.size) { add(0f) } } }
+    var geometry by remember { mutableStateOf<JSONObject?>(null) }
+    val placementKey = listOf("anchor", "columns", "dismissal", "tabs", "compact").map { model.opt(it) }.toString().takeIf { current != null }
     val tabHeight = if (tabs == null) 0f else 36f
     val columnId = id.toIntOrNull()
     val tileOrigins = if (id == "tool") dock.drawerTileRevision else 0
     var lastModel by remember { mutableStateOf<String?>(null) }
     var lastAnchor by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(current?.toString(), snapshot.getJSONObject("layout").toString(), heights.toList(), tileOrigins) {
+    LaunchedEffect(placementKey, snapshot.getJSONObject("layout").toString(), heights.toList(), tileOrigins) {
         val from = geometry?.getJSONObject("placement")
         val anchor = current?.getJSONObject("anchor")?.toString()
         // Changing opener moves the body and connector together, so the new
         // button never has to join a drawer still positioned at the old one.
         val switching = anchor != null && lastAnchor != null && lastAnchor != anchor
-        val animate = !switching && lastModel != current?.toString()
-        lastModel = current?.toString()
+        val animate = !switching && lastModel != placementKey
+        lastModel = placementKey
         // An outside contact can start closing just before another opener is clicked.
         if (anchor != null) lastAnchor = anchor
         val start = withFrameNanos { it }
@@ -284,7 +285,8 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                         if (panel.array("tiles").length() > 0) DrawerToolbar(host, panel, dock, bounds.number("width"))
                                         else PanelControls(host, host.snapshot?.getJSONObject("state") ?: snapshot.getJSONObject("state"), panel,
                                             if (panelId in listOf("layers", "adjustments", "filter_types")) Modifier.height(480.dp).then(if(panelId=="layers") Modifier.padding(8.dp) else Modifier) else Modifier.fillMaxWidth().then(if(model.optBoolean("compact"))Modifier.padding(12.dp) else Modifier), scrollable = false,
-                                            splitFilters = columns.any { it.values().contains("filter_types") })
+                                            splitFilters = columns.any { it.values().contains("filter_types") },
+                                            toolSet = model.objectOrNull("tool_set").takeIf { panelId == "brushes" })
                                     }
                                 }
                             }

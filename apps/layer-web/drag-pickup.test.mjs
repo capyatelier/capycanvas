@@ -28,9 +28,9 @@ export async function checkDragPickup({call,evaluate,settle}) {
     else await call("Input.dispatchMouseEvent",{type:{down:"mousePressed",move:"mouseMoved",up:"mouseReleased"}[type],...p,button:"left",buttons:type==="up"?0:1,clickCount:1,pointerType:device});
     down=type!=="up";
   };
-  const clean=async()=>{
-    assert.equal(await evaluate("document.querySelectorAll('.drag-source,.tab-slide-overlay,.layer-drag-preview').length"),0);
-    assert.equal(await evaluate("document.querySelector('#workspace').dataset.workspaceCursor??null"),null);
+  const clean=async(label='')=>{
+    assert.equal(await evaluate("document.querySelectorAll('.drag-source,.tab-slide-overlay,.layer-drag-preview').length"),0,label);
+    assert.equal(await evaluate("document.querySelector('#workspace').dataset.workspaceCursor??null"),null,label);
   };
   try {
     await evaluate("window.__pickupPointer=e=>{window.__pickupPointerId=e.pointerId};document.addEventListener('pointerdown',window.__pickupPointer,true)");
@@ -95,7 +95,7 @@ export async function checkDragPickup({call,evaluate,settle}) {
                 await call("Input.dispatchKeyEvent",{type:"keyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
                 await call("Input.dispatchKeyEvent",{type:"keyUp",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
               }
-              await settle();await clean();
+              await settle();await clean(label);
               assert.equal(await menu(),false,`${label}: cancelling a hold dismisses its menu`);
               if(mode==="held-reparented")await evaluate("document.querySelector('#workspace > [data-drag-pickup=hold]').remove()");
             } else if(mode!=="release") {

@@ -340,7 +340,11 @@ mod selection_tools_checks {
                     .unwrap()
                     .tiles()
                     .iter()
-                    .any(|t| t.control == ToolbarControl::Command { command }));
+                    .any(|t| match t.control {
+                        ToolbarControl::Command { command: id } => id == command,
+                        ToolbarControl::ToolSlot { slot } => slot.variants().iter().any(|variant| variant.command() == command),
+                        _ => false,
+                    }));
             }
         }
     }

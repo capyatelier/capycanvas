@@ -128,7 +128,8 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     for(const drawer of [...state().customization.column_drawers,...(state().customization.drawer?[state().customization.drawer]:[])]) {
       const column=drawer.anchor.kind==="column"?drawer.anchor.column:null,id=column??"tool";
       live.add(id);
-      let record=drawers.get(id);const key=JSON.stringify([drawer,drawer.columns.flat().map(id=>state().workspace.layout.panels.find(p=>p.id===id))]);
+      const {tool_set,...structure}=drawer;
+      let record=drawers.get(id);const key=JSON.stringify([structure,!!tool_set,drawer.columns.flat().map(id=>state().workspace.layout.panels.find(p=>p.id===id))]);
       if(record?.key!==key) {
         // A new opener must move the body and connector together. Interpolating
         // from the old body leaves the new anchor disconnected during the move.
@@ -142,13 +143,14 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
             const view=customization.view(panel),toolbarPanel=state().workspace.layout.panels.find(p=>p.id===panel)?.content.kind==="toolbar";
             let child;
             if(toolbarPanel){child=toolbar(panel);child.dataset.drawerToolbar=panel;}
-            else child=contentPanel(panel,drawer.columns.flat().includes("filter_types"));
+            else child=contentPanel(panel,drawer.columns.flat().includes("filter_types"),panel==="brushes"&&tool_set?()=>state().customization.drawer?.tool_set:null);
             body.append(child);
           }
           root.append(body);return body;
         });
         record={key,root,shadow,bodies,column,drawer,from,started:performance.now()-(switching?160:0),placement:from};drawers.set(id,record);
       }
+      record.drawer=drawer;
       record.closing=false;
       record.root.inert=false;
       for(const body of record.bodies)for(const child of body.children)child.refreshPanel?.();

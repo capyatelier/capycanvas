@@ -74,6 +74,8 @@ pub enum DrawerDismissal {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ContentDrawer {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_set: Option<ToolSetView>,
     pub anchor: DrawerAnchor,
     /// Each column contains vertically stacked, undecorated panel bodies.
     pub columns: Vec<Vec<Panel>>,
@@ -327,8 +329,10 @@ impl ResolvedLayout {
 impl ToolbarControl {
     pub(crate) fn drawer_columns(self) -> Option<Vec<Vec<Panel>>> {
         match self {
+            Self::ToolSlot {..} => Some(vec![vec![Panel::Brushes],vec![Panel::ToolSettings]]),
             Self::ColorPicker => Some(vec![vec![Panel::ToolSettings]]),
-            Self::Command { command: CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
+            Self::Command { command: CommandId::Select | CommandId::SelectionBrush | CommandId::TonalSelect | CommandId::Lasso | CommandId::AutoSelect | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
+            Self::Command { command: CommandId::Crop | CommandId::LassoFill } => Some(vec![vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Eraser } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Sculpt } => Some(vec![vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::DrawingBrush } => Some(vec![vec![Panel::BrushSets], vec![Panel::Tools], vec![Panel::ToolSettings]]),
@@ -336,14 +340,13 @@ impl ToolbarControl {
                 if command.paint_tool().is_some()
                     || matches!(
                         command,
-                        CommandId::Lasso
+                        CommandId::ScaleRotate
                             | CommandId::Move
                             | CommandId::Hand
                             | CommandId::Eyedropper
                             | CommandId::Gradient
                             | CommandId::Figure
                             | CommandId::Ruler
-                            | CommandId::AutoSelect
                             | CommandId::Fill
                     ) =>
             {
@@ -360,7 +363,7 @@ impl ToolbarControl {
         }
     }
     pub(crate) fn selectable(self) -> bool {
-        matches!(self, Self::Brush { .. } | Self::Command { .. } | Self::ColorPicker)
+        matches!(self, Self::ToolSlot { .. } | Self::Brush { .. } | Self::Command { .. } | Self::ColorPicker)
     }
 }
 
@@ -377,6 +380,7 @@ impl ContentDrawer {
             dismissal: DrawerDismissal::OutsideContact,
             tabs: None,
             compact: false,
+            tool_set: None,
         })
     }
     pub(crate) fn for_tile(layout: &DockLayout, anchor: TileAnchor) -> Result<Self, String> {
@@ -393,6 +397,7 @@ impl ContentDrawer {
             dismissal: DrawerDismissal::OutsideContact,
             tabs: None,
             compact: false,
+            tool_set: None,
         })
     }
 
@@ -418,6 +423,7 @@ impl ContentDrawer {
             columns: vec![vec![active]],
             tabs: Some(DrawerTabs { group, panels: panels.to_vec(), active }),
             compact: false,
+            tool_set: None,
             dismissal: if layout.column_stack(column).auto_hide {
                 DrawerDismissal::OutsideContact
             } else {

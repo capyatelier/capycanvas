@@ -186,6 +186,17 @@ changes. The `d3d12_` tests read `CAPY_SETTINGS_DIRECTORY`;
 point it at a fresh absolute directory. In Debug builds the HDR test needs
 `RUST_MIN_STACK=8388608`, the native document worker's stack size.
 
+Grouped toolbar and header tools retain their shared slot identity while presenting
+`resolved_control`, label, icon and selection from the current snapshot. The corner
+button opens the shared `tool_variants` context menu; ordinary tile and header
+context menus include the same choices. Tool picker identifiers include the slot
+name so independent groups remain independently selectable.
+
+`exercise-tool-variations.ps1 -Executable <path> -Theme dark` walks grouped Paint
+and Photo selection tools, pinned Eraser, and a drawing group added to the header
+through customization, with injected mouse, pen and touch. Repeat with `-Theme light`.
+The VM fixture names are `tool-variations` and `tool-variations:light`.
+
 ### UI fixtures
 
 Each `apps/layer-windows/scripts/exercise-*.ps1` drives the real app through UI

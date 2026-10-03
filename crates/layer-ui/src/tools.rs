@@ -333,6 +333,7 @@ pub(crate) fn group(id: u32) -> ToolGroup {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolSetItem {
+    pub enabled: bool,
     pub label: Arc<str>,
     pub icon: &'static str,
     pub action: UiAction,
@@ -398,7 +399,7 @@ fn sets(brush: &BrushState, canvas_tool: LayerCanvasTool, includes: fn(Tool) -> 
     ToolGroup::ALL
         .into_iter()
         .filter(|set| includes(set.tool()))
-        .map(|set| ToolSetItem {
+        .map(|set| ToolSetItem { enabled: true,
             label: set.localized_label(localizer),
             icon: set.icon(),
             action: UiAction::SelectBrushSet { group: set },
@@ -435,7 +436,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
         };
         let icon = command.icon().unwrap();
         return ToolSetView {
-            groups: vec![ToolSetItem {
+            groups: vec![ToolSetItem { enabled: true,
                 label: command.localized_label(localizer),
                 icon,
                 action: UiAction::Invoke { command },
@@ -448,7 +449,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
                 (CommandId::SelectionReference, RegionSource::Reference),
             ]
             .into_iter()
-            .map(|(command, item_source)| ToolSetItem {
+            .map(|(command, item_source)| ToolSetItem { enabled: true,
                 label: command.localized_label(localizer),
                 icon: command.icon().unwrap(),
                 action: UiAction::Layer {
@@ -467,7 +468,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
     }
     if let LayerCanvasTool::Gradient { .. } = canvas_tool {
         return ToolSetView {
-            groups: vec![ToolSetItem {
+            groups: vec![ToolSetItem { enabled: true,
                 label: CommandId::Gradient.localized_label(localizer),
                 icon: "gradient",
                 action: UiAction::Invoke {
@@ -488,7 +489,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
                     radial,
                     transparent,
                 };
-                ToolSetItem {
+                ToolSetItem { enabled: true,
                     label: localizer.text(label),
                     icon: match (radial, transparent) {
                         (false, false) => "gradient",
@@ -523,7 +524,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
             LayerCanvasTool::Region { .. } => unreachable!(),
             LayerCanvasTool::Paint => unreachable!(),
         };
-        let item = ToolSetItem {
+        let item = ToolSetItem { enabled: true,
             label: localizer.text(label),
             icon,
             selected: true,
@@ -542,7 +543,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
         groups: ToolGroup::ALL
             .into_iter()
             .filter(|g| g.tool() == brush.tool)
-            .map(|g| ToolSetItem {
+            .map(|g| ToolSetItem { enabled: true,
                 label: g.localized_label(localizer),
                 icon: g.icon(),
                 action: UiAction::SelectToolGroup { group: g },
@@ -553,7 +554,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
         subtools: PRESETS
             .iter()
             .filter(|p| p.2 == active)
-            .map(|&(preset, label, group)| ToolSetItem {
+            .map(|&(preset, label, group)| ToolSetItem { enabled: true,
                 label: localizer.text(label),
                 icon: group.icon(),
                 action: UiAction::SelectBrush { id: preset as u32 },

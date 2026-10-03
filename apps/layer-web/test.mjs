@@ -5,6 +5,7 @@ import {checkColorPicker} from './color-picker.test.mjs';
 import {checkInputDevices} from './input-devices.test.mjs';
 import {checkCommandBar} from './command-bar.test.mjs';
 import {checkToolbarComponents} from "./toolbar-components.test.mjs";
+import {checkToolVariations} from "./tool-variations.test.mjs";
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkFilterPreviews} from "./filter-previews.test.mjs";
@@ -282,6 +283,7 @@ try {
     [process.argv.includes("--spatial-filter-windows"), () => checkSpatialFilterWindows({call,evaluate,settle,canvasPixels}), checkErrors],
     [process.argv.includes("--tonal-selection"), () => checkTonalSelections({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--toolbar-components"), () => checkToolbarComponents({call,evaluate,settle})],
+    [process.argv.includes("--tool-variations"), () => checkToolVariations({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--selection-tools"), () => checkSelectionTools({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--command-bar"), () => checkCommandBar({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--input-devices"), () => checkInputDevices({call,evaluate,settle}), checkErrors],

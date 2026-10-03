@@ -61,7 +61,7 @@ glib::wrapper! {
 
 enum Body {
     Toolbar(ToolbarBody),
-    Tools(ToolSet),
+    Tools(Panel, ToolSet),
     Settings(ToolSettings),
     Color(ColorPanel),
     Palettes(Rc<crate::color_library::PalettePanel>),
@@ -115,7 +115,7 @@ impl Body {
     fn widget(&self) -> gtk::Widget {
         match self {
             Self::Toolbar(v) => v.strip.clone().upcast(),
-            Self::Tools(v) => v.root.clone().upcast(),
+            Self::Tools(_, v) => v.root.clone().upcast(),
             Self::Settings(v) => v.root.clone().upcast(),
             Self::Color(v) => v.root.clone().upcast(),
             Self::Palettes(v) => v.root.clone().upcast(),
@@ -132,10 +132,10 @@ impl Body {
             },
         }
     }
-    fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32) -> bool {
+    fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32, tool_set: Option<&ToolSetView>) -> bool {
         let inputs = match self {
             Self::Toolbar(_) => regions::LAYOUT | regions::BRUSH | regions::COMMANDS,
-            Self::Tools(_) => regions::BRUSH | regions::SETTINGS | regions::DOCUMENT,
+            Self::Tools(_, _) => regions::BRUSH | regions::SETTINGS | regions::DOCUMENT | regions::COMMANDS,
             Self::Settings(_) => regions::BRUSH | regions::DOCUMENT | regions::COMMANDS,
             Self::Color(_) => regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS,
             Self::Palettes(_) => {
@@ -154,7 +154,8 @@ impl Body {
         }
         match self {
             Self::Toolbar(v) => v.refresh(w, state),
-            Self::Tools(v) => v.refresh_state(w, state),
+            Self::Tools(Panel::Brushes, v) if tool_set.is_some() => v.refresh(w, tool_set.unwrap(), state.theme),
+            Self::Tools(_, v) => v.refresh_state(w, state),
             Self::Settings(v) => v.refresh(w, state),
             Self::Color(v) => v.refresh(&state.preview_colors(), w.view_color(), w.picker_headroom()),
             Self::Palettes(v) => v.refresh(state, w.view_color(), w.picker_headroom()),
@@ -237,7 +238,7 @@ impl View {
                     Panel::Brushes | Panel::BrushSets | Panel::SculptSets | Panel::Tools => {
                         let v = ToolSet::for_panel(*panel);
                         margins(&v.root, PANEL_CONTENT_INSET as i32);
-                        Body::Tools(v)
+                        Body::Tools(*panel, v)
                     }
                     Panel::ToolSettings => Body::Settings(ToolSettings::new()),
                     Panel::Color => {
@@ -856,7 +857,7 @@ impl Drawer {
         let mut refreshed = false;
         if let Some(view) = self.view.borrow().as_ref() {
             for body in &view.bodies {
-                refreshed |= body.refresh(w, state, if rebuild { regions::ALL } else { regions });
+                refreshed |= body.refresh(w, state, if rebuild || changed { regions::ALL } else { regions }, next.tool_set.as_ref());
             }
         }
         if !changed && !refreshed && regions & regions::LAYOUT == 0 {

@@ -207,6 +207,13 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
       results.push(`${pointerType}: inert body click, device-specific hold menu, same-contact drag dismissal, hold release and Escape cleanup`);
     }
     console.log('PASS: title-bar hold/context ownership');
+    await send({type:'invoke',command:'drawing_brush'});await wait('layerApp.app.brush_ready()');
+    const paintRevision=await evaluate('String(layerApp.state().document_file.revision)');
+    device='pen';const paint=center(await rect('#canvas'));
+    assert.equal(await evaluate(`document.elementFromPoint(${paint.x},${paint.y})===layerApp.canvas`),true,'paint fixture has an unobstructed canvas');
+    await pointer('down',paint);
+    for(let i=1;i<=4;i++){await pointer('move',{x:paint.x+i*12,y:paint.y+i*3});await pause(16);}
+    await pointer('up');await settle();await wait(`String(layerApp.state().document_file.revision)!==${JSON.stringify(paintRevision)}&&layerApp.app.document_park_ready()`);
     // Title-bar tool families preserve toolbar activation and drawer switching.
     for(const pointerType of ['mouse','touch','pen']) {
       device=pointerType;
@@ -214,8 +221,10 @@ export async function checkTitleBar({call,evaluate,settle,reload}) {
         const entry=original.zones.flat().find(e=>e.item.control?.command===command),selector=`[data-header-item="${entry.id}"] .header-tool`;
         if(await evaluate(`document.querySelector(${JSON.stringify(selector)}).disabled`))continue;
         await click(selector);if(!await evaluate('!!layerApp.state().customization.drawer'))await click(selector);
+        try {await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.selected`);}
+        catch(error){throw Error(`${device}: ${command} activation: ${await evaluate(`JSON.stringify({tool:layerApp.state().layer_tools.tool,command:layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)}),document:layerApp.state().document_file,status:document.querySelector('#status').textContent,notices:document.querySelector('#notices')?.textContent},(_,v)=>typeof v==='bigint'?String(v):v)`)}`,{cause:error});}
         await wait('!!layerApp.state().customization.drawer');await pause(180);
-        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).getAttribute('aria-pressed')`),'true');
+        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).getAttribute('aria-pressed')`),'true',`${device}: ${command} family drawer marks originating header tool`);
         assert.equal(await evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).borderBottomRightRadius`),'0px');
       }
       const color=original.zones.flat().find(e=>e.item.control?.kind==='color');

@@ -19,8 +19,8 @@ Load Layout, and workspace changes save automatically.
   [Photoshop](https://helpx.adobe.com/photoshop/desktop/get-started/learn-the-basics/collapse-expand-icons.html)
   keeps frequent panels expanded and secondary ones as icons, which Photo follows.
 - **No inert controls.** Every button and menu item performs a real operation.
-  Do not add placeholders for missing features (clone, healing, crop, text,
-  comic frames, line correction). A delivered command that is unavailable in the
+  Do not add placeholders for missing features (text, comic frames, line
+  correction). A delivered command that is unavailable in the
   current state is disabled and publishes its reason.
 - **Menus.** The application menus are **File, Edit, Layer, Select, Filter,
   View, Window, Help**, in that order, and fit beside a centered title in a
@@ -55,12 +55,31 @@ arrangement and its initial working state, shared by all hosts.
 | --- | --- |
 | Sketch | Title bar with Capy, Main Menu, Filters, Select and Scale/rotate on the left, the workspace switcher in the center, and Brush, Sculpt, Eraser, Layers and Color on the right (Web adds Full Screen). A compact toolbar centered on the left edge holds the brush size and opacity sliders, the color picker, Undo and Redo. No docked panels; Medium tiles; no zoom readout. Starts with Brush. |
 | Paint | Tools toolbar on the left edge and Commands toolbar on top. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties/Filters and Layers, opened on load. |
-| Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and the extra selection tools. A permanently expanded far-right column of Color/Palettes, Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. Starts with Move, so a drag over a selection moves its pixels. |
+| Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Color/Palettes, Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. Starts with Move, so a drag over a selection moves its pixels. |
 
-The Paint Tools toolbar holds Pen, Pencil, Brush, Eraser, Airbrush, Decoration,
-Blend, Liquify; Lasso, Auto select, Fill, Gradient; Move, Figure, Ruler, Hand,
-Eyedropper and the color selector. Its Commands toolbar holds New, Open, Save;
-Undo, Redo; Clear, Fill selection, Scale/rotate; and Flip horizontal.
+On GTK, Web, Android and Windows, Paint keeps 17 tool positions: Pen, Pencil, Brush,
+Eraser, Airbrush, Decoration, Blend, Liquify; Selection, Auto select, Fill,
+Gradient; Operation, Figure, Ruler, Hand and Eyedropper. The color selector is
+separate. Selection contains Lasso, Rectangle, Ellipse, Polygon and Paint
+Selection; Auto select includes Select by Color; Fill includes Lasso Fill; Blend
+includes Clone. Operation, Figure, Ruler and Gradient expose their existing
+variations in the same positions. Pen and Pencil remain separate. Its Commands
+toolbar holds New, Open, Save; Undo, Redo; Clear, Fill selection, Scale/rotate;
+and Flip horizontal.
+
+Photo has 15 tool positions on these hosts: Operation, Crop; Marquee, Lasso,
+Auto select, Paint Selection; Drawing, Eraser, Clone, Healing, Blend, Liquify,
+Gradient/Fill; Hand and Eyedropper, followed by the color selector. Marquee holds
+Rectangle and Ellipse, Lasso holds Lasso and Polygon, and Drawing holds Brush,
+Pen, Pencil, Airbrush and Decoration. Healing starts with Spot Heal and includes
+Heal. Gradient/Fill includes all existing gradient variations, Fill and Lasso
+Fill. Figure and Ruler remain available in Add Tools. Tonal Selection and Quick
+Mask keep their existing selection entry points.
+
+These arrangements use shared tool slots described in
+[toolbar customization](panel-customization.md#tool-variations). Apple clients
+retain their existing individual-tool arrangements until they support the slot
+controls.
 
 In Paint, the Color and Navigator groups take their content height: Color
 follows its SDR or HDR wheel and footer, and Navigator follows the document
@@ -85,11 +104,9 @@ inserts it above the selected layer, or replaces the selected filter while
 keeping its identity, mask and clipping. Cancel deletes the selected filter and
 closes the drawer, as one undoable step.
 
-Photo adds the Crop tool after Operation, and Clone Stamp, Healing Brush and
-Spot Healing Brush after Liquify, in the Tools toolbar on every host (see the
-[crop bar](canvas-action-bar.md#crop) and
-[retouching](../internals/brushes.md#clone-stamp)). They are also sets in
-Sculpt's Sculpting panel, beside Blend and Liquify.
+Crop uses the existing [crop bar](canvas-action-bar.md#crop), while Clone and
+Healing retain their [retouching controls](../internals/brushes.md#clone-stamp).
+The retouching tools also remain available in Sketch's Sculpt drawer.
 
 ## Workspace behavior
 
@@ -108,8 +125,8 @@ Sculpt's Sculpting panel, beside Blend and Liquify.
   available workspace.
 - Seeding is idempotent. Upgrades keep existing workspaces and resume the active
   one. On a name collision the user's workspace keeps its name and the seeded
-  one gets a numeric suffix. Untouched built-in layouts upgrade to the current
-  default; customized ones keep their arrangement until Restore Starting Layout.
+  one gets a numeric suffix. Saved arrangements stay as they are until Restore
+  Starting Layout, including built-in workspaces that have not been customized.
 - Restore Starting Layout loads the latest shipped layout for built-ins and the
   saved starting arrangement for custom workspaces and copies. Its dialog
   previews exactly what it applies. It keeps working tool settings and document

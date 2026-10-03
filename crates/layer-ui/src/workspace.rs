@@ -323,6 +323,8 @@ impl WorkspaceHistory {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceWorkingState {
+    #[serde(default)]
+    pub tool_slots: crate::ToolSlotMemory,
     pub version: u32,
     pub preset: u32,
     pub tools: crate::WorkspaceToolMemory,

@@ -74,7 +74,9 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         if (item.selected != null) row.setAttribute("aria-checked", item.selected);
         const mark = element("span", "menu-check");
         if (item.selected) mark.append(icon("check"));
-        row.append(mark, element("span", "menu-label", item.label));
+        row.append(mark);
+        if (item.icon) row.append(icon(item.icon));
+        row.append(element("span", "menu-label", item.label));
         if (item.hint) row.append(element("span", "shortcut-hint", item.hint));
         if (submenu) { const arrow = icon("down"); arrow.classList.add("submenu-arrow"); row.append(arrow); }
         container.append(row);
@@ -130,6 +132,12 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     showContext(node, point || [r.left, r.bottom, r.top], focus);
     context.querySelector("button:not(:disabled)")?.focus({preventScroll:true});
     return context;
+  }
+  function variationButton(anchor) {
+    const node = button("", () => openMenu(node), "tool-variations");
+    node.append(icon("chevron-down")); node.setAttribute("aria-haspopup", "menu");
+    target(node, { kind: "tool_variants", anchor });
+    return node;
   }
   function positionPopup(node) {
     const r = node.getBoundingClientRect(), [x, y, top] = anchor;
@@ -271,25 +279,30 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (tile.control.kind === "divider") {
       root.classList.add("tile-divider"); root.setAttribute("role", "separator");
     } else {
-      const node = button("", pickerButtonAction(tile.control,{kind:'tile',panel,tile:tile.id},dispatch,() => {
+      const activate = () => {
         const r = root.getBoundingClientRect(); anchor = [r.x, r.bottom + 6];
         dispatch({ type: "activate_tile", panel, tile: tile.id });
-      }));
+      };
+      const node = button("", pickerButtonAction(() => root.tileView.resolved_control ?? tile.control,{kind:'tile',panel,tile:tile.id},dispatch,activate));
       if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
       node.append(icon(tile.icon));
       if (view.tile_label_lines > 0) node.append(element("span", "tile-label", tile.label));
-      root.append(node);
+      root.append(node, variationButton({ kind: "tile", panel, tile: tile.id }));
     }
     target(root, item); draggable(root, item); refreshTile(root, tile); return root;
   }
   function refreshTile(root, tile) {
     if (!root) return;
+    root.tileView = tile;
     if (root.updateComponent) { root.updateComponent(tile); return; }
     const node = root.querySelector('button'); if (!node) return;
     node.disabled = !tile.enabled; node.title = tile.tooltip;
     node.setAttribute('aria-label', tile.label); node.setAttribute('aria-pressed', tile.selected);
     const label = node.querySelector('.tile-label');if(label)label.textContent=tile.label;
     const glyph = node.querySelector('svg'); if (glyph?.dataset.asset !== tile.icon) glyph?.replaceWith(icon(tile.icon));
+    const variants = root.querySelector('.tool-variations');
+    variants.hidden = !tile.has_variants; variants.title = tile.tooltip;
+    variants.setAttribute('aria-label', tile.label);
   }
   function layoutTile(tile, bounds, axis, style) {
     tile.hidden = !bounds || bounds.width <= 0 || bounds.height <= 0;
@@ -598,7 +611,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, variationButton, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }
 

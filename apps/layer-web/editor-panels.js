@@ -13,25 +13,26 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
   const color = action => dispatch({ type: "color", action });
   const rgba = values => `rgba(${values.slice(0,3).map(v => v * 255).join(",")},${values[3] ?? 1})`;
-  const control = (kind) => {
+  const control = (kind, readToolSet = null) => {
     const root = element("div", `${kind.replaceAll("_", "-")}-control`);
     root.dataset.control = kind;
     let refresh;
-    if (["brushes", "brush_sets", "sculpt_sets", "tools"].includes(kind)) refresh = toolSet(root, kind);
+    if (["brushes", "brush_sets", "sculpt_sets", "tools"].includes(kind)) refresh = toolSet(root, kind, readToolSet);
     else if (kind === "tool_settings") refresh = toolSettings(root);
     else if (kind === "color_wheel") refresh = colorWheel(root);
     else if (kind === "navigator") refresh = navigatorPanel(root);
     else return null;
     updates.set(root, refresh); refresh();
+    root.refreshEditor = refresh;
     root.disposeEditor = () => { updates.delete(root); root.navigatorDispose?.(); root.disposeSettings?.(); };
     return root;
   };
-  function toolSet(root, panel) {
+  function toolSet(root, panel, readView) {
     let key = "", rows = [];
     return () => {
-      const view = state().tool_panels[panel] || state().tool_set;
+      const view = readView?.() || state().tool_panels[panel] || state().tool_set;
       root.classList.toggle('tonal-tool-list', state().tool_extra.some(o=>o.Choice?.id==='tonal-tones'));
-      const next = JSON.stringify([view.groups, view.subtools].map(items => items.map(({selected, ...item}) => item))) + state().theme;
+      const next = JSON.stringify([view.groups, view.subtools].map(items => items.map(({selected, enabled, ...item}) => item))) + state().theme;
       if (next !== key) {
         key = next; rows = []; root.replaceChildren();
         for (const [kind, items] of [["groups",view.groups], ["subtools",view.subtools]]) {
@@ -54,6 +55,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         contentChanged(panel);
       }
       for (const {node,kind,index} of rows) {
+        node.disabled=view[kind][index].enabled===false;
         const pressed=String(view[kind][index].selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);
       }
     };

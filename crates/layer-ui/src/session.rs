@@ -22,6 +22,9 @@ mod targeted_curve;
 #[path = "held_actions.rs"]
 mod held_actions;
 use held_actions::{ERASER_END, merge_change};
+#[path = "tool_slots.rs"]
+mod tool_slots;
+pub use tool_slots::{ToolSlotId, ToolVariant, ToolSlotMemory, ToolSlotSelection};
 #[path = "gesture_input.rs"]
 mod gesture_input;
 #[path = "source_edit.rs"]
@@ -252,6 +255,7 @@ pub struct UiSession<R: CanvasRenderer> {
     effect_catalog: layer_core::EffectCatalog,
     pending_filters: Option<filter_loading::Pending>,
     tools: tools::WorkspaceToolMemory,
+    pending_tool_drawer: Option<(DrawerAnchor, DrawerAnchor, ToolVariant)>,
     files: document_files::DocumentFiles,
 }
 
@@ -423,8 +427,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             layer_interaction: Default::default(),
             source_preview_revisions: Default::default(),
             tools: tools::WorkspaceToolMemory::default(),
+            pending_tool_drawer: None,
             files: document_files::DocumentFiles::default(),
             state: UiState {
+                tool_slots: ToolSlotMemory::default(),
                 localization: localization.clone(),
                 soft_proof: false,
                 preview_sdr: false,
@@ -560,6 +566,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
         let mut menu = match target {
+            ContextTarget::ToolVariants { anchor } => self.tool_variants_menu(anchor),
             ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform, &self.state.localization),
             ContextTarget::Header { id } => self
                 .state
@@ -574,6 +581,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .layout
                 .context_menu_localized_on(target, self.state.platform, self.localization()),
         }?;
+        if !self.state.customization.header_editing {
+            let anchor=match target {
+                ContextTarget::Tile {panel,tile}=>Some(DrawerAnchor::Tile {panel,tile}),
+                ContextTarget::Header {id:Some(id)}=>Some(DrawerAnchor::Header {id}), _=>None,
+            };
+            if let Some(variants)=anchor.and_then(|a|self.tool_variants_menu(a).ok()) {
+                menu.title=variants.title;
+                menu.sections.splice(0..0,variants.sections);
+            }
+        }
         if self.managed_workspace.is_some() {
             fn route(items: &mut [Vec<ContextMenuItem>]) {
                 for item in items.iter_mut().flatten() {
@@ -1232,7 +1249,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.interaction.pressed.push(name.clone());
                 } else if !pressed {
                     self.interaction.pressed.retain(|k| *k != name);
-                    self.release_spring(&name);
+                    reply.change = merge_change(reply.change, self.release_spring(&name));
                     let (change, changed) = self.sync_modifier_keys(hold_allowed)?;
                     reply.change = merge_change(reply.change, change);
                     reply.handled |= changed;
@@ -1378,11 +1395,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             if let Some(ShortcutDefinition { action: ShortcutAction::Action { action }, repeat: repeats, .. }) = binding
                                 && (!repeat || repeats)
                             {
-                                let restore = (!repeat).then(|| self.spring_restore(&action)).flatten();
-                                reply.change = self.dispatch(*action)?;
-                                if let Some(restore) = restore {
-                                    self.interaction.spring = Some(crate::interaction::Spring { key: name.clone(), restore, used: false });
-                                }
+                                reply.change = self.dispatch_spring(name.clone(), *action, repeat)?;
                             }
                         }
                     }
@@ -1484,7 +1497,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.pressed.clear();
                 self.interaction.modifier_holds.clear();
                 self.interaction.suppressed.clear();
-                self.interaction.spring = None;
+                if let Some(key) = self.interaction.spring.as_ref().map(|spring| spring.key.clone()) {
+                    reply.change = merge_change(reply.change, self.release_spring(&key));
+                }
                 let released: Vec<_> = self.interaction.momentary.drain(..).map(|(_, restore)| restore).collect();
                 self.interaction.restores.extend(released);
                 self.interaction.axes.clear();
@@ -2544,6 +2559,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         CommandId::Move,
                         LayerCanvasTool::Move | LayerCanvasTool::Transform
                     )
+                    | (CommandId::ScaleRotate, LayerCanvasTool::Transform)
                     | (CommandId::Hand, LayerCanvasTool::Hand)
                     | (CommandId::Gradient, LayerCanvasTool::Gradient { .. })
                     | (CommandId::Figure, LayerCanvasTool::Figure { .. })
@@ -2669,6 +2685,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | UiAction::ResizeFloating { phase: ContactPhase::Move, .. } | UiAction::MeasurePanels { .. });
         let collapsed_before = layout_only.then(|| self.state.workspace.layout.collapsed.iter().map(|c| c.root).collect::<Vec<_>>());
         let drag_before = self.workspace_drag;
+        let changing_slot_layout = !action.is_host_report() && !matches!(&action,
+            UiAction::DragWorkspace { phase: ContactPhase::Move, .. }
+            | UiAction::DragDivider { phase: ContactPhase::Move, .. }
+            | UiAction::ResizeFloating { phase: ContactPhase::Move, .. });
         let moving_workspace = matches!(
             &action,
             UiAction::DragWorkspace {
@@ -2692,6 +2712,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.auto_levels.is_some() && matches!(&action,UiAction::Effect {action} if !matches!(action,EffectAction::AutoLevels {..})) {self.cancel_auto_levels();}
         if self.targeted_curve.is_some() && matches!(&action,UiAction::Effect {action} if !matches!(action,EffectAction::TargetCurve {..}|EffectAction::SelectPage {..})) {self.cancel_picker();}
         if self.targeted_curve.is_some() && matches!(&action,UiAction::Layer {..}|UiAction::Invoke {command:CommandId::Undo|CommandId::Redo}) {self.cancel_picker();}
+        let choosing_tool = held_actions::selects_tool(&action);
         let tool_before = (self.state.brush.tool, self.layer_interaction.tool);
         let configuring_picker = self.eyedropper.picking.previous.is_some()
             && matches!(&action, UiAction::ColorPicker { .. });
@@ -2936,8 +2957,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !measured(height)
                     || items.len() > 128
                     || items.iter().enumerate().any(|(i, m)| {
-                        self.state.workspace.layout.header.entry(m.id).is_err()
-                            || items[..i].iter().any(|n| n.id == m.id)
+                        items[..i].iter().any(|n| n.id == m.id)
                             || ![m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height]
                                 .into_iter()
                                 .all(measured)
@@ -2945,10 +2965,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     return Err("Invalid window-bar measurement".into());
                 }
-                replace_if_changed(
+                if items.iter().any(|m| self.state.workspace.layout.header.entry(m.id).is_err()) {
+                    (0, false)
+                } else { replace_if_changed(
                     &mut self.state.workspace.layout.header_presentation,
                     HeaderPresentation { height, items },
-                )
+                ) }
             }
             UiAction::MeasurePanels { measurements } => {
                 let mut accepted = Vec::new();
@@ -3093,6 +3115,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 (changed, false)
             }
+            UiAction::ChooseToolVariant { anchor, variant } => return self.choose_tool_variant(anchor,variant),
             UiAction::ActivateTile { panel, tile } => {
                 let control = self
                     .state
@@ -3125,6 +3148,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 workspace.layout.header_presentation =
                     self.state.workspace.layout.header_presentation.clone();
                 self.state.workspace = *workspace;
+                self.state.tool_slots = ToolSlotMemory::default();
                 self.workspace_history = workspace::WorkspaceHistory::default();
                 self.divider_drag = None;
                 self.floating_resize = None;
@@ -3160,11 +3184,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .map(|&command| ToolbarControl::Command { command }),
                     )
                 {
-                    if let ToolbarControl::Command { command } = control
-                        && family.commands().contains(&command)
-                        && !commands.contains(&command)
-                    {
-                        commands.push(command);
+                    let members: Vec<_> = match control {
+                        ToolbarControl::Command {command} => vec![command],
+                        ToolbarControl::ToolSlot {slot} => slot.variants().iter().map(|v|v.command()).collect(),
+                        _=>Vec::new(),
+                    };
+                    for command in members {
+                        if family.commands().contains(&command) && !commands.contains(&command) {commands.push(command);}
                     }
                 }
                 let next = commands
@@ -3677,6 +3703,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if let Some(before) = workspace_before {
+            self.seed_tool_slots(&before.layout);
             let mut after = self.state.workspace.clone();
             self.state.customization.committed_header(&mut after.layout);
             if let Some(description) = workspace_description {
@@ -3724,7 +3751,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .and_then(|panel| layout.active_panel(panel));
         }
         if self.state.customization.drawer.is_some()
-            && ((tool_before != (self.state.brush.tool, self.layer_interaction.tool) && !choosing_drawing_set && !choosing_selection && !configuring_picker)
+            && ((tool_before != (self.state.brush.tool, self.layer_interaction.tool) && !choosing_drawing_set && !choosing_selection && !configuring_picker && !self.slot_drawer_matches())
                 || self.state.customization.expanded.is_some()
                 || (changed & LAYOUT != 0
                     && self.state.customization.drawer.as_ref().is_some_and(|d| {
@@ -3814,6 +3841,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.refresh_document();
             changed |= DOCUMENT;
         }
+        if choosing_tool { self.remember_tool_slots(); }
+        if (choosing_tool || tool_before != (self.state.brush.tool,self.layer_interaction.tool)
+            || changed & LAYOUT != 0 && changing_slot_layout)
+            && self.update_slot_drawer() { changed |= CUSTOMIZATION; }
         if self.refresh_commands() {
             changed |= COMMANDS;
         }
@@ -4275,7 +4306,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut changed = self.poll_filter_installation();
         let revision = self.engine.document().revision;
         changed |= self.poll_selection_paint()?;
+        let tool_before=self.layer_interaction.tool;
         changed |= self.poll_content_bounds();
+        if self.finish_tool_slot_request(tool_before) {changed|=regions::CUSTOMIZATION;}
         self.sync_selection_overlay();
         self.sync_crop_overlay();
         self.sync_moving_pixels();
@@ -5287,7 +5320,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.tool_set.subtools = [
                 (MessageId::TOOL_COLOR_PICKER, "color-picker", ColorPickerStyle::Glass),
                 (MessageId::COMMAND_EYEDROPPER, "eyedropper", ColorPickerStyle::Eyedropper),
-            ].into_iter().map(|(label, icon, style)| ToolSetItem {
+            ].into_iter().map(|(label, icon, style)| ToolSetItem { enabled: true,
                 label: self.state.localization.text(label), icon, selected: self.state.color_picker.style == style,
                 action: UiAction::ColorPicker { action: ColorPickerAction::Style { style } }, preview: None,
             }).collect();
@@ -5334,7 +5367,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             controls
         } else if matches!(
             self.layer_interaction.tool,
-            LayerCanvasTool::Gradient { .. }
+            LayerCanvasTool::Gradient { .. } | LayerCanvasTool::LassoFill
         ) {
             tool_settings::controls(self.engine.configured_brush(), &self.state.localization)
                 .into_iter()
@@ -5526,6 +5559,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 changed = true;
             }
         }
+        if changed { self.update_slot_drawer(); }
         changed
     }
     fn refresh_shortcuts(&mut self, bindings_changed: bool) {
@@ -6158,6 +6192,7 @@ mod tests {
     include!("tonal_tests.rs");
     include!("painted_selection_tests.rs");
     include!("toolbar_component_tests.rs");
+    include!("tool_slot_tests.rs");
     include!("canvas_bar_tests.rs");
     include!("move_pixels_tests.rs");
     include!("held_action_tests.rs");

@@ -383,12 +383,9 @@ fn crop_keys_follow_the_shortcuts_table_and_the_photo_workspace_offers_the_tool(
         .unwrap()
         .tiles()
         .iter()
-        .filter_map(|t| match t.control {
-            ToolbarControl::Command { command } => Some(command),
-            _ => None,
-        })
+        .map(|t| t.control)
         .collect();
-    let crop = tools.iter().position(|c| *c == CommandId::Crop).expect("Crop in the Photo toolbar");
-    assert_eq!(tools[crop - 1], CommandId::Move);
+    let crop = tools.iter().position(|c| *c == ToolbarControl::Command { command: CommandId::Crop }).expect("Crop in the Photo toolbar");
+    assert_eq!(tools[crop - 1], ToolbarControl::ToolSlot { slot: ToolSlotId::Operation });
     assert_eq!(UiSession::<Recorder>::tool_category(LayerCanvasTool::Crop, Tool::Pen), ToolCategory::MoveTransform);
 }

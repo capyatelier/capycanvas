@@ -9,7 +9,7 @@
 class PanelBody {
 public:
     PanelBody(std::shared_ptr<CapyUi::WorkspaceData> data,CapyUi::J const& panel,
-        CapyUi::J const& geometry,std::function<void()> layoutChanged,std::shared_ptr<WorkspaceGestures> const& gestures={},bool scrollable=true);
+        CapyUi::J const& geometry,std::function<void()> layoutChanged,std::shared_ptr<WorkspaceGestures> const& gestures={},bool scrollable=true,std::function<CapyUi::J()> tools={});
     winrt::Microsoft::UI::Xaml::FrameworkElement Root()const{return root;}
     void Apply(bool visible);
     void Layout(CapyUi::J const& geometry);

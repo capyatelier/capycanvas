@@ -372,7 +372,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             columns: None,
             beside: None,
             items: TonalOptions::choices(self.engine.document().color.depth.is_float())
-                .map(|(index, label, icon)| ToolSetItem {
+                .map(|(index, label, icon)| ToolSetItem { enabled: true,
                     label: self.localization().text(label),
                     icon,
                     action: UiAction::Tonal {

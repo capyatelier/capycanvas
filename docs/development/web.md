@@ -113,6 +113,11 @@ first matching row and its error check, or leaves the default journey to the hos
 | Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-options`, `--workspace-options-refresh`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
 | Settings | `--preferences`, `--settings-audit`, `--language-switching` |
 
+`--tool-variations` checks Photo's 15 and Paint's 17 tool buttons, compact variation
+menus and secondary menus, retained icons and sibling choices in active-tool
+drawers, title-bar slots,
+and mouse/touch/pen hold-to-reorder with one layout undo/redo in both themes.
+
 `--language-switching` visits all shipped languages in light and dark themes,
 checks retained Preferences and dirty size-entry identity, focus and selection,
 rapid choices, browser language resolution and another same-profile tab.

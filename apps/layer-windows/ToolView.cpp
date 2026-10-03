@@ -39,9 +39,10 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     std::vector<Button> groupButtons,subtoolButtons;
     hstring groupKey,subtoolKey;
     hstring panel;
+    std::function<J()> projection;
     bool media()const{return panel==L"brush_sets"||panel==L"sculpt_sets";}
     double arrangedWidth=-1;
-    ToolSetView(std::shared_ptr<WorkspaceData> data,hstring panel):data(std::move(data)),panel(std::move(panel)){}
+    ToolSetView(std::shared_ptr<WorkspaceData> data,hstring panel,std::function<J()> projection):data(std::move(data)),panel(std::move(panel)),projection(std::move(projection)){}
     void init(){
         root.Spacing(6);list.Spacing(2);
         auto weak=weak_from_this();
@@ -105,7 +106,8 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
         if(group){arrangedWidth=-1;arrange();}
     }
     void refresh(){
-        auto view=panel==L"brushes"?object(data->state,L"tool_set"):object(object(data->state,L"tool_panels"),panel.c_str());
+        auto view=panel==L"brushes"&&projection?projection():J{};
+        if(!view.Size())view=panel==L"brushes"?object(data->state,L"tool_set"):object(object(data->state,L"tool_panels"),panel.c_str());
         bool tonal=false;for(auto value:array(data->state,L"tool_extra"))tonal=tonal||str(object(value.GetObject(),L"Choice"),L"id")==L"tonal-tones";
         for(bool group:{true,false}){
             auto items=array(view,group?L"groups":L"subtools");auto key=itemSchema(items)+data->theme();
@@ -114,6 +116,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             auto const& buttons=group?groupButtons:subtoolButtons;
             for(uint32_t i=0;i<items.Size();i++){
                 bool active=flag(items.GetObjectAt(i),L"selected");buttons[i].Background(active?selected(data):clear());
+                buttons[i].IsEnabled(flag(items.GetObjectAt(i),L"enabled",true));
                 if(!group)buttons[i].MinHeight(items.GetObjectAt(i).GetNamedValue(L"preview",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number?34:tonal?36:44);
                 AutomationProperties::SetItemStatus(buttons[i],active?data->caption(L"search",L"selected"):L"");
             }
@@ -380,8 +383,8 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     }
 };
 }
-FrameworkElement ToolSetPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,hstring const& panel){
-    auto view=std::make_shared<ToolSetView>(data,panel);view->init();bindings.emplace_back([view]{view->refresh();});return view->root;
+FrameworkElement ToolSetPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,hstring const& panel,std::function<J()> projection){
+    auto view=std::make_shared<ToolSetView>(data,panel,std::move(projection));view->init();bindings.emplace_back([view]{view->refresh();});return view->root;
 }
 FrameworkElement ToolSettingsPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
     auto view=std::make_shared<SettingsView>(data);bindings.emplace_back([view]{view->refresh();});return view->root;

@@ -91,9 +91,10 @@ export function colorButton({app, label, element, button, change, current = () =
 
 // Browser-native clicks preserve keyboard activation and hold-to-drag arbitration.
 export function pickerButtonAction(control,anchor,dispatch,activate) {
-  if(control?.kind!=='color_picker' && !(control?.kind==='command'&&control.command==='eyedropper'))return activate;
   let last=0,device=null;
   return event=>{
+    const current=typeof control==='function'?control():control;
+    if(current?.kind!=='color_picker' && !(current?.kind==='command'&&current.command==='eyedropper')){last=0;return activate(event);}
     const now=performance.now(),type=event?.pointerType||'keyboard';
     const double=event?.detail!==0 && now-last<400 && device===type;
     last=double?0:now;device=type;

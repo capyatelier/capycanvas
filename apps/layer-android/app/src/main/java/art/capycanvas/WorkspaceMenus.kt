@@ -1,6 +1,7 @@
 package art.capycanvas
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -21,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import android.view.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
@@ -37,6 +39,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.PopupProperties
 import org.json.JSONArray
@@ -92,6 +95,22 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
     button.menu?.let { WorkspaceMenu(host, it, focusable = false, command = command) { button.menu = null; button.closedAt = android.os.SystemClock.uptimeMillis() } }
 }
 
+@Composable internal fun ToolVariantsButton(host: CanvasHost, anchor: JSONObject, label: String, modifier: Modifier = Modifier) {
+    val button = remember(anchor.toString()) { WindowlessMenuButton() }
+    val tint = LocalPalette.current.text
+    Box(modifier.size(16.dp).semantics { contentDescription = label }
+        .opensWindowlessMenu(button, label) { open ->
+            host.query(obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))) { open(it as? JSONObject) }
+        }) {
+        Canvas(Modifier.align(Alignment.BottomEnd).padding(3.dp).size(5.dp)) {
+            drawPath(Path().apply {
+                moveTo(0f, size.height); lineTo(size.width, 0f); lineTo(size.width, size.height); close()
+            }, tint)
+        }
+        WindowlessMenuHost(host, button)
+    }
+}
+
 @Composable internal fun WorkspaceMenuItems(host: CanvasHost, sections: JSONArray,
     dismiss: () -> Unit = {}, title: String? = null, command: ((JSONObject) -> Unit)? = null) {
     val colors = LocalPalette.current
@@ -123,12 +142,14 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
                     toggleableState = ToggleableState(item.optBoolean("selected"))
                 } else Modifier)
                 .clip(RoundedCornerShape(6.dp)).alpha(if (enabled) 1f else .4f)
+                .then(if (checkbox || item.isNull("selected")) Modifier else Modifier.semantics { selected = item.getBoolean("selected") })
                 .clickable(enabled = enabled) {
                     if (item.array("sections").length() > 0) pages = pages + (sectionIndex to itemIndex)
                     else item.objectOrNull("command")?.takeIf { command != null }?.let { dismiss(); command!!(it) }
                         ?: item.objectOrNull("action")?.let { action -> dismiss(); host.dispatch(action) }
                 }.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                item.optString("icon").takeIf { it.isNotEmpty() && it != "null" }?.let { SharedIcon(it, null) }
                 Text(item.getString("label"), Modifier.weight(1f), fontWeight = FontWeight.Bold)
                 if (item.optBoolean("selected")) SharedIcon("check", null)
                 item.optString("hint").takeIf { it.isNotEmpty() && it != "null" }?.let { Text(it, color = colors.secondary) }

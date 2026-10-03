@@ -269,7 +269,8 @@ fn photo_keymaps_bind_the_healing_tools() {
     let tools: Vec<_> = photo.panel(Panel::Toolbar).unwrap().tiles().iter().map(|t| t.control).collect();
     let clone = tools.iter().position(|c| *c == ToolbarControl::Command { command: CommandId::Clone }).unwrap();
     assert_eq!(
-        tools[clone..clone + 3],
-        [CommandId::Clone, CommandId::Heal, CommandId::SpotHeal].map(|command| ToolbarControl::Command { command })
+        tools[clone..clone + 2],
+        [ToolbarControl::Command { command: CommandId::Clone }, ToolbarControl::ToolSlot { slot: ToolSlotId::Healing }]
     );
+    assert_eq!(ToolSlotId::Healing.variants(), [CommandId::SpotHeal, CommandId::Heal].map(|command| ToolVariant::Command { command }));
 }

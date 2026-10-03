@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -36,8 +37,8 @@ import kotlinx.coroutines.withContext
 
 /** The selected tool determines groups, subtools and settings in Rust. */
 @OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun ToolSetControls(host: CanvasHost, state: JSONObject, panel: String = "brushes") {
-    val view = state.getJSONObject("tool_panels").optJSONObject(panel) ?: state.getJSONObject("tool_set")
+@Composable internal fun ToolSetControls(host: CanvasHost, state: JSONObject, panel: String = "brushes", projection: JSONObject? = null) {
+    val view = projection ?: state.getJSONObject("tool_panels").optJSONObject(panel) ?: state.getJSONObject("tool_set")
     val compact = state.array("tool_extra").objects().any { it.optJSONObject("Choice")?.optString("id") == "tonal-tones" }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (panel == "brush_sets" || panel == "sculpt_sets") Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -62,11 +63,12 @@ import kotlinx.coroutines.withContext
     val context = LocalContext.current
     val label = item.getString("label")
     val action = item.getJSONObject("action")
+    val enabled = item.optBoolean("enabled", true)
     val preview = item.opt("preview").takeIf { it is Number } as? Number
     ActionTip(host, label, action, modifier) {
-        Column(Modifier.fillMaxWidth().clip(ControlShape)
+        Column(Modifier.fillMaxWidth().clip(ControlShape).alpha(if (enabled) 1f else .4f)
             .background(if (item.optBoolean("selected")) colors.active else Color.Transparent)
-            .clickable { host.dispatch(action) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
+            .clickable(enabled = enabled) { host.dispatch(action) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
             if (preview != null) {
                 val id = preview.toInt()
                 val name = "$id-${if (colors.dark) "dark" else "light"}.png"

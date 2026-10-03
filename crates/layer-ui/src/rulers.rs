@@ -44,7 +44,7 @@ pub(crate) fn tool_set(kind: RulerKind, localizer: &crate::localization::Localiz
         (RulerKind::Radial, localizer.text(crate::localization::MessageId::TOOL_RULERS_RADIAL), "ruler-radial"),
     ]
     .into_iter()
-    .map(|(k, label, icon)| ToolSetItem {
+    .map(|(k, label, icon)| ToolSetItem { enabled: true,
         label,
         icon,
         selected: k == kind,

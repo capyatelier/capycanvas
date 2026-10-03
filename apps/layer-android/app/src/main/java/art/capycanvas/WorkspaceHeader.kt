@@ -191,7 +191,9 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
                                 }
                             }.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (editing) Box(Modifier.width(20.dp).fillMaxHeight()) { HeaderGrip(spec.getString("label")) }
-                            Text(spec.getString("label"), maxLines = 1)
+                            Text(spec.getString("label"), Modifier.weight(1f), maxLines = 1)
+                            if (!editing && spec.optBoolean("has_variants")) ToolVariantsButton(host, obj("kind" to "header", "id" to id), spec.getString("label"),
+                                Modifier.testTag("header-overflow-variants-$id"))
                         }
                     }
                 }
@@ -233,7 +235,8 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     val id = entry.getInt("id")
     val item = entry.getJSONObject("item")
     val kind = item.getString("kind")
-    val activate=pickerClick(host,item.objectOrNull("control"),obj("kind" to "header","id" to id)) { activateHeader(host,entry) }
+    val anchor = obj("kind" to "header", "id" to id)
+    val activate=pickerClick(host,spec.objectOrNull("resolved_control"),anchor) { activateHeader(host,entry) }
     val colors = LocalPalette.current
     val label = spec.getString("label")
     val focus = remember { FocusRequester() }
@@ -310,6 +313,8 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     else SharedIcon(icon, label, Modifier.size(iconSize.dp))
                 }
             }
+            if (!editing && spec.optBoolean("has_variants")) ToolVariantsButton(host, anchor, label,
+                Modifier.align(Alignment.BottomEnd).testTag("header-variants-$id"))
             if (kind != "menu_labels" || compact) menu?.let { WorkspaceMenu(host, if (kind == "workspaces") workspaceSwitcherMenu(host.workspaceManager) else it) { menu = null } }
         }
     }

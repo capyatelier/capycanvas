@@ -220,7 +220,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     auto placement=O({{L"bounds",O({{L"width",N(width)}})}});
                     placement.Insert(L"split_filters",B(splitFilters));
                     if(toolbar!=toolbarLayouts.end())placement.Insert(L"tiles",toolbar->second);
-                    body.view=std::make_unique<PanelBody>(data,panel,placement,[weak]{if(auto self=weak.lock())self->measured();},gestures,false);
+                    body.view=std::make_unique<PanelBody>(data,panel,placement,[weak]{if(auto self=weak.lock())self->measured();},gestures,false,[weak]{if(auto self=weak.lock();self&&self->id==L"tool")return object(self->model,L"tool_set");return J{};});
                     body.key=bodyKey;body.splitFilters=splitFilters;
                     if(toolbar!=toolbarLayouts.end())body.view->Root().Height(std::max(36.,num(toolbar->second,L"content_height")));
                 }

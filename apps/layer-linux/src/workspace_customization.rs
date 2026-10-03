@@ -22,6 +22,64 @@ pub(super) fn drawer_origin(button: &gtk::Button, direction: Option<Edge>) {
     }
 }
 
+pub(super) fn tool_button_content(button: &gtk::Button) -> Option<gtk::Widget> {
+    button.child().map(|child| {
+        child.downcast_ref::<gtk::Overlay>()
+            .and_then(|overlay| overlay.child())
+            .unwrap_or(child)
+    })
+}
+
+pub(super) fn tool_variations_button(
+    w: &Rc<Workspace>,
+    button: &gtk::Button,
+    anchor: layer_ui::DrawerAnchor,
+) {
+    let overlay = gtk::Overlay::new();
+    let content = button.child();
+    button.set_child(gtk::Widget::NONE);
+    overlay.set_child(content.as_ref());
+    let indicator = gtk::DrawingArea::new();
+    indicator.set_widget_name("tool-variations-indicator");
+    indicator.set_size_request(6, 6);
+    indicator.set_halign(gtk::Align::End);
+    indicator.set_valign(gtk::Align::End);
+    indicator.set_margin_end(3);
+    indicator.set_margin_bottom(3);
+    indicator.set_can_target(false);
+    indicator.set_draw_func(|area, cr, width, height| {
+        let color = area.color();
+        cr.set_source_rgba(color.red().into(), color.green().into(), color.blue().into(), 0.8);
+        cr.move_to(width as f64, 0.);
+        cr.line_to(width as f64, height as f64);
+        cr.line_to(0., height as f64);
+        cr.close_path();
+        let _ = cr.fill();
+    });
+    overlay.add_overlay(&indicator);
+    button.set_child(Some(&overlay));
+    button.update_property(&[gtk::accessible::Property::HasPopup(true)]);
+    let click = gtk::GestureClick::new();
+    click.set_name(Some("tool-variations-click"));
+    click.set_button(1);
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    click.connect_pressed(glib::clone!(#[weak] w, move |gesture, _, x, y| {
+        let Some(widget) = gesture.widget() else { return; };
+        if !w.header.is_editing()
+            && x >= (widget.width() - 14) as f64
+            && y >= (widget.height() - 14) as f64
+        {
+            let pending = w.workspace_drag.borrow().clone();
+            if let Some(pending) = pending {
+                w.workspace_drag_input(ContactPhase::Cancel, pending.point, pending.sequence);
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            w.show_context(&widget, ContextTarget::ToolVariants { anchor }, x, y);
+        }
+    }));
+    button.add_controller(click);
+}
+
 pub(super) fn tile_button(
     w: &Rc<Workspace>,
     config: &PanelConfig,
@@ -1483,6 +1541,39 @@ impl Workspace {
                 }));
             widget.add_controller(release);
         }
+        let target_widget = widget.as_ref().clone();
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed(glib::clone!(
+            #[weak(rename_to = w)] self,
+            #[weak] target_widget,
+            #[upgrade_or] glib::Propagation::Proceed,
+            move |_, key, _, modifiers| {
+                if key == gdk::Key::Menu
+                    || (key == gdk::Key::F10 && modifiers.contains(gdk::ModifierType::SHIFT_MASK))
+                {
+                    let Some(focused) = gtk::prelude::GtkWindowExt::focus(&w.window) else {
+                        return glib::Propagation::Proceed;
+                    };
+                    let Some(point) = focused.compute_point(&target_widget,
+                        &gtk::graphene::Point::new(focused.width() as f32 * 0.5, focused.height() as f32 * 0.5))
+                    else { return glib::Propagation::Proceed; };
+                    if let ContextTarget::Header { id: Some(id) } = target
+                        && w.header.switcher_context_at(id, &target_widget, point.x() as f64, point.y() as f64)
+                    {
+                        w.workspaces.show_options(&w, &target_widget, 0., target_widget.height() as f64, false);
+                        return glib::Propagation::Stop;
+                    }
+                    if !owns_context(&target_widget, point.x() as f64, point.y() as f64) {
+                        return glib::Propagation::Proceed;
+                    }
+                    w.show_context(&target_widget, target, 0., target_widget.height() as f64);
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            }
+        ));
+        widget.add_controller(keys);
     }
 
     pub(super) fn show_context(
@@ -1542,8 +1633,9 @@ impl Workspace {
         self.populate_workspace_menu(popover, menu);
         // Unlike MenuButton popovers, this shared surface-owned context menu
         // has no native invoker to restore keyboard focus to on dismissal.
-        *self.customization.context_focus.borrow_mut() =
-            widget.has_focus().then(|| widget.downgrade());
+        *self.customization.context_focus.borrow_mut() = gtk::prelude::GtkWindowExt::focus(&self.window)
+            .filter(|focused| focused == widget || focused.is_ancestor(widget))
+            .map(|focused| focused.downgrade());
         popover.set_pointing_to(Some(&gdk::Rectangle::new(
             point.x() as i32,
             point.y() as i32,
@@ -1575,6 +1667,24 @@ impl Workspace {
     ) {
         let root = self.workspace_menu_model(popover, menu);
         popover.set_menu_model(Some(&root));
+        fn icons(widget: &gtk::Widget) {
+            if let Some(image) = widget.downcast_ref::<gtk::Image>()
+                && let Some(icon) = image.gicon().and_downcast::<gtk::gio::ThemedIcon>()
+                && let Some(name) = icon.names().iter().find(|name| name.starts_with("layer-"))
+            {
+                crate::icons::set(image, Some(name));
+                image.set_pixel_size(16);
+                image.set_visible(true);
+                image.set_hexpand(false);
+                image.set_margin_end(6);
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                child = widget.next_sibling();
+                icons(&widget);
+            }
+        }
+        icons(popover.upcast_ref());
     }
 
     /// The native model of a shared menu, with its actions installed on `popover`.
@@ -1604,6 +1714,9 @@ impl Workspace {
                         continue;
                     }
                     let model = gtk::gio::MenuItem::new(Some(&item.label), None);
+                    if let Some(icon) = item.icon {
+                        model.set_icon(&gtk::gio::ThemedIcon::new(&format!("layer-{icon}-symbolic")));
+                    }
                     let action = if let Some(selected) = item.selected {
                         let action =
                             gtk::gio::SimpleAction::new_stateful(&id, None, &selected.to_variant());

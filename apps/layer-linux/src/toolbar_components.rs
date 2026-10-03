@@ -24,6 +24,12 @@ impl TileWidget {
             return Self::Component(Component::new(w, config.id, tile, choice));
         }
         let button = customization::tile_button(w, config, tile, style, choice);
+        if matches!(tile.control, ToolbarControl::ToolSlot { .. }) {
+            customization::tool_variations_button(w, &button, layer_ui::DrawerAnchor::Tile {
+                panel: config.id,
+                tile: tile.id,
+            });
+        }
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         button.add_css_class("tile-button");
         button.set_hexpand(true);
@@ -69,8 +75,17 @@ impl TileWidget {
             }
             Self::Button { button, .. } => {
                 selected(button, tile.choice.selected);
-                button.set_sensitive(tile.enabled);
-                if let Some(label) = button.child().and_downcast::<gtk::Box>().and_then(|row| row.last_child()).and_downcast::<gtk::Label>()
+                if tile.has_variants {
+                    button.update_state(&[gtk::accessible::State::Pressed(if tile.choice.selected {
+                        gtk::AccessibleTristate::True
+                    } else { gtk::AccessibleTristate::False })]);
+                }
+                button.set_sensitive(tile.enabled || tile.has_variants);
+                if let Some(content) = customization::tool_button_content(button) {
+                    content.set_opacity(if tile.enabled { 1. } else { 0.45 });
+                }
+                button.update_property(&[gtk::accessible::Property::Label(&tile.tooltip)]);
+                if let Some(label) = customization::tool_button_content(button).and_downcast::<gtk::Box>().and_then(|row| row.last_child()).and_downcast::<gtk::Label>()
                     && label.text().as_str() != tile.choice.label
                 {
                     label.set_text(&tile.choice.label);
@@ -80,8 +95,7 @@ impl TileWidget {
                 } else {
                     button.set_tooltip_text(Some(&tile.tooltip));
                 }
-                if let Some(image) = button
-                    .child()
+                if let Some(image) = customization::tool_button_content(button)
                     .and_then(|child| {
                         if child.is::<gtk::Box>() {
                             child.first_child()

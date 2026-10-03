@@ -22,7 +22,7 @@ impl WorkspaceView {
             sections: vec![choices.clone(), vec![manage.clone()]],
         };
         let submenu = ContextMenuItem {
-            label: visibility_label, selected: None, action: None, enabled: true,
+            label: visibility_label, icon: None, selected: None, action: None, enabled: true,
             hint: String::new(), bindings: Vec::new(), sections: vec![choices],
         };
         self.switcher_menu = ContextMenu {
