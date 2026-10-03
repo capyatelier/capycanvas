@@ -72,7 +72,7 @@ inline Button ToolVariantsButton(std::shared_ptr<WorkspaceData> const& data,J co
     auto popup=std::make_shared<MenuFlyout>(nullptr);
     auto pick=button(data,L"",[]{});pick.Width(16);pick.Height(16);pick.Padding({0});pick.Background(clear());
     pick.HorizontalAlignment(HorizontalAlignment::Right);pick.VerticalAlignment(VerticalAlignment::Bottom);
-    pick.Content(icon(L"chevron-down",data->theme(),8));AutomationProperties::SetAutomationId(pick,identifier);
+    pick.Content(icon(L"tool-group",data->theme(),16));AutomationProperties::SetAutomationId(pick,identifier);
     pick.Click([data,anchor,popup,owner=make_weak(pick)](auto&&,auto&&){
         QueryWorkspace(data->query,O({{L"type",S(L"context")},{L"target",O({{L"kind",S(L"tool_variants")},{L"anchor",anchor}})}}),
             [data,popup,owner](J reply){

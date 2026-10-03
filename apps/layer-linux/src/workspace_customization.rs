@@ -39,23 +39,10 @@ pub(super) fn tool_variations_button(
     let content = button.child();
     button.set_child(gtk::Widget::NONE);
     overlay.set_child(content.as_ref());
-    let indicator = gtk::DrawingArea::new();
-    indicator.set_widget_name("tool-variations-indicator");
-    indicator.set_size_request(6, 6);
+    let indicator = crate::icons::image("layer-tool-group-symbolic");
     indicator.set_halign(gtk::Align::End);
     indicator.set_valign(gtk::Align::End);
-    indicator.set_margin_end(3);
-    indicator.set_margin_bottom(3);
     indicator.set_can_target(false);
-    indicator.set_draw_func(|area, cr, width, height| {
-        let color = area.color();
-        cr.set_source_rgba(color.red().into(), color.green().into(), color.blue().into(), 0.8);
-        cr.move_to(width as f64, 0.);
-        cr.line_to(width as f64, height as f64);
-        cr.line_to(0., height as f64);
-        cr.close_path();
-        let _ = cr.fill();
-    });
     overlay.add_overlay(&indicator);
     button.set_child(Some(&overlay));
     button.update_property(&[gtk::accessible::Property::HasPopup(true)]);

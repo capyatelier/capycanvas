@@ -23,6 +23,11 @@ closes a held menu and suppresses the following click. Menus show icons, checked
 choices, availability and shortcut hints. An unavailable remembered tool keeps
 its variations reachable.
 
+Tool groups use the same bottom-right triangle in Paint and Photo, in both
+toolbars and the title bar. GTK, Web, Android and Windows render the shared
+`tool-group` icon. The triangle means tool variations are available; individual
+tools and pinned brush presets have no group marker.
+
 The tile icon and accessible name follow the current variation. Brush size,
 opacity and individual presets do not change that identity. The full grouped
 drawer presents sibling variations, the active tool's media and presets or

@@ -1,7 +1,6 @@
 package art.capycanvas
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -22,7 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import android.view.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
@@ -124,16 +122,11 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
 @Composable internal fun ToolVariantsButton(host: CanvasHost, anchor: JSONObject, label: String, modifier: Modifier = Modifier) {
     val button = remember(anchor.toString()) { WindowlessMenuButton() }
     button.copy = { host.menuCopy(obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))) }
-    val tint = LocalPalette.current.text
     Box(modifier.size(16.dp).semantics { contentDescription = label }
         .opensWindowlessMenu(button, label) { open ->
             host.query(obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))) { open(it as? JSONObject) }
         }) {
-        Canvas(Modifier.align(Alignment.BottomEnd).padding(3.dp).size(5.dp)) {
-            drawPath(Path().apply {
-                moveTo(0f, size.height); lineTo(size.width, 0f); lineTo(size.width, size.height); close()
-            }, tint)
-        }
+        SharedIcon("tool-group", null, Modifier.align(Alignment.BottomEnd))
         WindowlessMenuHost(host, button)
     }
 }

@@ -324,7 +324,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .tool-tile > button, .toolbar-action > button, .toolbar-segments, .column-tab { border-radius: calc(var(--tile-radius) * var(--corner-fit)); }
 .tool-tile > button:disabled { pointer-events: none; }
 .toolbar-controls .tool-tile > button.tool-variations, #header .tool-variations { position:absolute; right:0; bottom:0; width:14px; height:14px; min-width:0; min-height:0; padding:0; display:grid; place-items:center; border-radius:3px; }
-.tool-variations > svg { width:7px; height:7px; }
+.tool-variations > svg { position:absolute; right:0; bottom:0; width:16px; height:16px; }
 .tile-label { width: 72px; min-width: 0; padding-right: 4px; line-height: 18px; font-weight: var(--tile-label-weight); overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: var(--tile-label-lines); -webkit-box-orient: vertical; }
 .panel-measure { position: fixed; left: -10000px; top: 0; visibility: hidden; pointer-events: none; contain: layout style; }
 .toolbar-controls[data-axis="vertical"] > .panel-grip svg { transform: translateY(-1.6px) rotate(90deg); }
@@ -849,7 +849,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .toolbar-controls .tool-tile > button > svg { width:var(--tile-icon-size,16px); height:var(--tile-icon-size,16px); }
 .toolbar-controls[data-labeled="true"] .tool-tile > button { display:flex; justify-content:flex-start; gap:0; text-align:left; }
 .toolbar-controls[data-labeled="true"] .tool-tile > button > svg { flex-shrink:0; margin:0 10px; }
-.toolbar-controls .tool-tile > button.tool-variations > svg { width:7px; height:7px; margin:0; }
+.toolbar-controls .tool-tile > button.tool-variations > svg { width:16px; height:16px; margin:0; }
 #document-title { position:static; transform:none; left:auto; flex:1; min-width:0; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .window-fullscreen #document-title { text-align:right; }
 #header-end { flex-shrink:0; }

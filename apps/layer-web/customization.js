@@ -135,7 +135,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   }
   function variationButton(anchor) {
     const node = button("", () => openMenu(node), "tool-variations");
-    node.append(icon("chevron-down")); node.setAttribute("aria-haspopup", "menu");
+    node.append(icon("tool-group")); node.setAttribute("aria-haspopup", "menu");
     target(node, { kind: "tool_variants", anchor });
     return node;
   }
