@@ -1152,6 +1152,11 @@ model commits to either representation. Node vocabulary, ports, grouping,
 ordering, layer-view behavior and evaluation semantics remain open. No graph
 schema, conversion strategy or implementation sequence is adopted here.
 
+The [dedicated node/layer assessment](authored-graph-research.md) recommends
+structured stack operations within one authored graph and proposes workflow,
+correctness and performance gates. Its candidate design remains unadopted;
+the assessment does not establish implementation or measured feasibility.
+
 Graphite demonstrates the product direction: layers and nodes are two views of
 one document, and canvas edits modify the graph. Its developer guide describes
 reusable node networks with explicit inputs/outputs, including a time input for

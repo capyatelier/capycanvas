@@ -11,6 +11,8 @@ Progress notes, validation reports and other work records are not committed
 ## Research
 
 - [Capy file format: compatibility, containers and future artwork types](capy-format-foundation.md).
+- [One authored graph for layers and nodes](authored-graph-research.md): artist workflows,
+  stack semantics, compositor feasibility and proposed validation gates.
 - [Photo editing: user journeys, gap audit and build list](photo-editing-research.md),
   with its [source reports](photo-editing-research).
 - [Vector drawing and editing](vector-drawing-research.md).
