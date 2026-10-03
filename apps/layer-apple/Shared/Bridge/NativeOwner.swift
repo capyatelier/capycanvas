@@ -301,6 +301,15 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(error.localizedDescription) }
         }
     }
+    func pasteClip(id: UInt64, nonce: String, completion: @escaping @Sendable (Bool, String?) -> Void) {
+        queue.async { [self] in
+            let current = capy_apple_clip_nonce(handle)
+            defer { if let current { capy_apple_string_free(current) } }
+            guard let current, String(cString: current) == nonce else { completion(false, nil); return }
+            do { try check(capy_apple_paste_clip(handle, UInt32(id))); try publish(); completion(true, nil) }
+            catch { completion(true, error.localizedDescription) }
+        }
+    }
     func projectTask(kind: NativeProjectTask.Kind, expected: (UInt64, UInt64)? = nil,
         placement: JSON? = nil,
         completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
@@ -311,7 +320,7 @@ final class NativeOwner: @unchecked Sendable {
         @Sendable func poll() {
             // Inspection validates a committed snapshot in Rust; it does not
             // wait for unrelated filter-library compilation or block drawing.
-            let ready = kind == .histogram ? 0 : kind == .save ? capy_apple_prepare_recovery(handle, FrameTrace.now()) : capy_apple_project_ready(handle)
+            let ready = kind == .histogram || kind == .clip ? 0 : kind == .save ? capy_apple_prepare_recovery(handle, FrameTrace.now()) : capy_apple_project_ready(handle)
             if ready == 1 {
                 if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
                 else { completion(nil, "Document preparation timed out") }

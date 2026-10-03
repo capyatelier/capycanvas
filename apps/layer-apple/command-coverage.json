@@ -2,8 +2,8 @@
   "schema": 3,
   "scope": "Command and shared-control catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
   "unavailable": {
-    "ios": ["fullscreen", "copy", "copy_merged", "cut", "paste_in_place", "paste_into"],
-    "mac": ["copy", "copy_merged", "cut", "paste_in_place", "paste_into"]
+    "ios": ["fullscreen"],
+    "mac": []
   },
   "workspace_commands": {
     "commands": ["manage", "new", "reset_brushes", "reset_layout", "layout_history", "switch", "manage_toolbars", "save_toolbar", "new_toolbar"],

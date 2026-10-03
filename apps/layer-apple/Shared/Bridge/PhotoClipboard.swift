@@ -43,6 +43,41 @@ import UIKit
 }
 
 @MainActor enum PhotoClipboard {
+    private static let nonceType = "art.capycanvas.clip.nonce"
+    #if os(macOS)
+    private final class PNGProvider: NSObject, NSPasteboardItemDataProvider {
+        let png: Data
+        init(_ png: Data) { self.png = png }
+        func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+            item.setData(png, forType: type)
+        }
+    }
+    private static var provider: PNGProvider?
+    #endif
+    static func write(png: Data, nonce: String) {
+        #if os(macOS)
+        let item = NSPasteboardItem(), provider = PNGProvider(png)
+        item.setDataProvider(provider, forTypes: [.png])
+        item.setString(nonce, forType: NSPasteboard.PasteboardType(nonceType))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([item])
+        self.provider = provider
+        #else
+        let item = NSItemProvider()
+        item.registerDataRepresentation(forTypeIdentifier: UTType.png.identifier, visibility: .all) { $0(png, nil); return nil }
+        item.registerDataRepresentation(forTypeIdentifier: nonceType, visibility: .all) { $0(Data(nonce.utf8), nil); return nil }
+        UIPasteboard.general.setItemProviders([item], localOnly: false, expirationDate: nil)
+        #endif
+    }
+    static var nonce: String? {
+        #if os(macOS)
+        NSPasteboard.general.string(forType: NSPasteboard.PasteboardType(nonceType))
+        #else
+        let board = UIPasteboard.general
+        guard board.contains(pasteboardTypes: [nonceType]) else { return nil }
+        return board.data(forPasteboardType: nonceType).flatMap { String(data: $0, encoding: .utf8) }
+        #endif
+    }
     static func read(_ completion: @escaping (Result<[PhotoItem], Error>) -> Void) {
         #if os(macOS)
         let types = UTType.capyPhotoTypes

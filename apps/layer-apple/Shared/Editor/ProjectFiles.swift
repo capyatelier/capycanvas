@@ -23,6 +23,8 @@ import UIKit
     @Published var pendingProfile: JSON?
     @Published var profileError: String?
     @Published var interpreting = false
+    @Published var copyProgress: String?
+    private var copying = false
     private var profileCompletion: ((JSON?) -> Void)?
     private var creationCompletion: ((JSON?) -> Void)?
     private var exportDelivery: (() -> Void)?
@@ -91,7 +93,7 @@ import UIKit
         approved = (file["epoch"].uint, file["revision"].uint)
         let document = request["kind"]["request"]
         let action = document["type"].string
-        blocksEditor = action != "save" || closeCompletion != nil
+        blocksEditor = !["save", "copy"].contains(action) || closeCompletion != nil
         switch action {
         case "save":
             save(to: document["location"]["uri"].string) { [weak self] saved in self?.finish(saved) }
@@ -111,28 +113,21 @@ import UIKit
             } }
         case "place":
             let drop = droppedPhotos; droppedPhotos = nil
-            task(opening: true, placing: true, placement: drop?.placement) { [weak self] task in
+            task(.place, placement: drop?.placement) { [weak self] task in
                 if let drop { self?.place(task, inputs: drop.items); return }
                 self?.chooseOpen(photosOnly: true) { [weak self] urls in
                     guard let self else { return }
                     if urls.isEmpty { finish() } else { place(task, inputs: urls.map(PhotoItem.init(fileURL:))) }
                 }
             }
+        case "copy": copyPixels()
         case "paste":
-            task(opening: true, placing: true) { [weak self] task in
-                guard let self else { return }
-                let id = requestID
-                let completed: (Result<[PhotoItem], Error>) -> Void = { [weak self] result in
-                    guard let self, requestID == id else { return }
-                    if cancelled { finish(); return }
-                    switch result {
-                    case .success(let images):
-                        if images.isEmpty { fail("The clipboard contains no supported images") }
-                        else { place(task, inputs: images) }
-                    case .failure(let error): fail(error.localizedDescription)
-                    }
+            guard let nonce = PhotoClipboard.nonce, let native = store?.native, let id = requestID else { pasteImages(); return }
+            native.pasteClip(id: id, nonce: nonce) { [weak self] handled, error in
+                DispatchQueue.main.async {
+                    guard let self, self.requestID == id else { return }
+                    if !handled { self.pasteImages() } else if let error { self.fail(error) } else { self.finish(true) }
                 }
-                if let paste = dialogs?.paste { paste(completed) } else { PhotoClipboard.read(completed) }
             }
         case "change_color", "color_history", "properties", "repair_source_profile", "rasterize_source":
             guard let store else { fail("The canvas session is unavailable"); return }
@@ -142,6 +137,50 @@ import UIKit
             colorEditor = editor; editor.load()
         case "confirm_close": confirming = true
         default: fail("This document service is not available yet")
+        }
+    }
+    private func pasteImages() {
+        task(.place) { [weak self] task in
+            guard let self else { return }
+            let id = requestID
+            let completed: (Result<[PhotoItem], Error>) -> Void = { [weak self] result in
+                guard let self, requestID == id else { return }
+                if cancelled { finish(); return }
+                switch result {
+                case .success(let images):
+                    if images.isEmpty { fail("The clipboard contains no supported images") }
+                    else { place(task, inputs: images) }
+                case .failure(let error): fail(error.localizedDescription)
+                }
+            }
+            if let paste = dialogs?.paste { paste(completed) } else { PhotoClipboard.read(completed) }
+        }
+    }
+    private func copyPixels() {
+        copying = true
+        task(.clip) { [weak self] task in
+            guard let self, let native = store?.native else { return }
+            let id = requestID, nonce = UUID().uuidString
+            copyProgress = task.clipProgress
+            NativeProjectTask.io.async { [weak self] in
+                let result = Result { try task.copyPixels(nonce: nonce) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, requestID == id else { return }
+                    if cancelled { finish(); return }
+                    switch result {
+                    case .success(let png):
+                        PhotoClipboard.write(png: png, nonce: nonce)
+                        native.finishProject(task, opening: true, title: "", url: nil) { [weak self] error in
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self else { return }
+                                if let error { report(error) }
+                                finish(error == nil)
+                            }
+                        }
+                    case .failure(let error): fail(error.localizedDescription)
+                    }
+                }
+            }
         }
     }
     func openItems(_ items: [PhotoItem]) {
@@ -226,9 +265,9 @@ import UIKit
         // rejected by request ID; cancellation need not wait for that callback.
         if loadingPhoto { finish() }
     }
-    private func task(opening: Bool, placing: Bool = false, placement: JSON? = nil, _ ready: @escaping (NativeProjectTask) -> Void) {
+    private func task(_ kind: NativeProjectTask.Kind, placement: JSON? = nil, _ ready: @escaping (NativeProjectTask) -> Void) {
         guard let native = store?.native else { fail("The canvas session is unavailable"); return }
-        native.projectTask(kind: placing ? .place : opening ? .open : .save, expected: opening ? approved : nil,
+        native.projectTask(kind: kind, expected: [.open, .place].contains(kind) ? approved : nil,
             placement: placement) { [weak self] task, error in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -260,7 +299,7 @@ import UIKit
     }
     private func save(to uri: String, completion: @escaping (Bool) -> Void) {
         if let destination, destination.absoluteString == uri { write(destination, completion: completion); return }
-        task(opening: false) { [weak self] task in
+        task(.save) { [weak self] task in
             guard let self else { return }
             deliver(task, name: title, type: .capyProject) { [weak self] url in
                 guard let self, let url else { completion(false); return }
@@ -349,7 +388,7 @@ import UIKit
         }
     }
     private func write(_ url: URL, completion: @escaping (Bool) -> Void) {
-        task(opening: false) { [weak self] task in
+        task(.save) { [weak self] task in
             NativeProjectTask.io.async {
                 do {
                     try task.write(to: url)
@@ -409,7 +448,7 @@ import UIKit
         store?.recovery.flush { [weak self] saved in
             guard let self else { return }
             guard saved else { fail("Could not preserve the current drawing for recovery"); return }
-            task(opening: true) { [weak self] task in
+            task(.open) { [weak self] task in
                 guard let self else { return }
                 let id = requestID; loadingPhoto = true
                 item.load { [weak self, weak task] result in
@@ -436,7 +475,7 @@ import UIKit
         }
     }
     private func beginOpen(_ url: URL?, options: JSON?, recovery: RecoveryRecord?) {
-        task(opening: true) { [weak self] task in
+        task(.open) { [weak self] task in
             self?.prepare(task, url: url, recovery: recovery) { try task.read(from: url, options: options) }
         }
     }
@@ -513,7 +552,7 @@ import UIKit
         requestID = nil; approved = nil; busy = false; blocksEditor = false; finishing = false
         profileCompletion = nil; pendingProfile = nil; profileError = nil; interpreting = false
         activeTask = nil; cancelling = false; exportDelivery = nil; exportEditor = nil
-        loadingPhoto = false
+        loadingPhoto = false; copying = false; copyProgress = nil
         if let state = store?.state.json {
             receive(state)
             if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }
@@ -587,7 +626,7 @@ struct ProjectFilesModifier: ViewModifier {
                 if files.busy && files.activeOperationVisible {
                     HStack {
                         ProgressView().controlSize(.small)
-                        Text(files.cancelling ? "Cancelling…" : "Working with document…")
+                        Text(files.cancelling ? "Cancelling…" : files.copyProgress ?? "Working with document…")
                         Button(common["cancel"].string) { files.cancel() }.disabled(files.cancelling)
                     }.padding(10).modifier(EditorPopupSurface(shape: Capsule())).padding(12)
                 }
@@ -632,7 +671,7 @@ struct ProjectFilesModifier: ViewModifier {
     }
 }
 private extension ProjectFiles {
-    var activeOperationVisible: Bool { !confirming && picker == nil && !creating && pendingProfile == nil && colorEditor == nil && exportEditor == nil }
+    var activeOperationVisible: Bool { (!copying || copyProgress != nil) && !confirming && picker == nil && !creating && pendingProfile == nil && colorEditor == nil && exportEditor == nil }
 }
 
 #if os(iOS)

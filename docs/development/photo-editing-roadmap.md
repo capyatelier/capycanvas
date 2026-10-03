@@ -47,32 +47,25 @@ The M5 transform controls and shared Properties pages/precise Curves also need
 native presentation and device verification on Apple and Windows. Shared Rust
 support and bridge compilation do not establish native UI parity.
 
-M1 shipped on every host. M2 to M4 need porting through the [Apple](../APPLE_PORTING_GUIDE.md) and [Windows](../WINDOWS_PORTING_GUIDE.md) porting guides. Shared Rust already provides the behaviour; the hosts need to present it. Apple presents the shared UI state, M2 and Canvas Size already; the items marked *Windows* are left only there:
+M1 shipped on every host, and Apple presents M2 to M4. Windows still needs the following, through the [Windows porting guide](../WINDOWS_PORTING_GUIDE.md); shared Rust already provides the behaviour:
 
-- **Shared UI state** (*Windows*):
+- **Shared UI state:**
   - present `UiState.notice` and answer `UiAction::Notice`;
   - read `CommandState.disabled_reason`;
   - open bar menu items (`CanvasBarItem.menu` and `icon`, through `canvas_bar_choice_menu`);
   - draw a `checkable: false` action unpressed even when its command is selected.
-- **M2** (*Windows*):
+- **M2:**
   - mode and guide bar labels;
-  - WebP in the export lists and file types (the edits to Apple's `ExportForm.swift` and `ProjectFiles.swift` and to Windows' `ExportForm.h` are untested).
+  - WebP in the export lists and file types (the edits to `ExportForm.h` are untested).
 - **M3:**
-  - the Image Size dialog (Windows has it);
   - the Edit ▸ Image submenu;
   - the crop tool icon (the overlay is shared renderer code);
-  - clipboard image writers;
-  - the export metadata row (Windows has it).
+  - clipboard image writers, which `Platform::pixel_clipboard` enables.
 - **M4:**
   - the retouch tool icons (the source disc and its bar are shared);
-  - the grouped blend menu instead of the flat `layer_blends` picker, which lists Pass Through for every layer (Windows has it);
-  - the New Document Blending field (Edit ▸ Blending and the Properties row are shared; Windows has it);
   - the Color mixing brush choice;
   - the Use Pass Through for new groups setting;
-  - the Frequency Separation dialog (`frequency_separation`, shaped like Refine; Windows has it) and the Dodge & Burn and Frequency Separation icons.
-- **Tests:**
-  - `CanvasToolChecks.swift` must expect the new preset count;
-  - the Swift ruler fixtures now check the `CAPYRASTER` signature and have not run on a Mac.
+  - the Dodge & Burn and Frequency Separation icons.
 
 ## Open items from M2–M4
 

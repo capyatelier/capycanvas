@@ -1,11 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// The canvas Select All shortcut shares Command-A with native text editing.
-/// Let AppKit route it to native controls, including remote file-panel fields.
+/// The canvas Select All, Cut, Copy and Paste shortcuts share their keys with
+/// native text editing. Let AppKit route them to native controls first,
+/// including remote file-panel fields.
 @MainActor func nativeTextMenuAction(_ action: JSON) -> Bool {
-    guard action["type"].string == "invoke", action["command"].string == "select_all" else { return false }
-    return NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+    let selectors = ["select_all": #selector(NSText.selectAll(_:)), "cut": #selector(NSText.cut(_:)),
+        "copy": #selector(NSText.copy(_:)), "paste_image": #selector(NSText.paste(_:))]
+    guard action["type"].string == "invoke", let selector = selectors[action["command"].string] else { return false }
+    return NSApp.sendAction(selector, to: nil, from: nil)
 }
 
 private struct FocusedEditorKey: FocusedValueKey { typealias Value = EditorStore }

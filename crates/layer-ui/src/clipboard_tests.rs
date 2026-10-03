@@ -163,9 +163,9 @@ mod clipboard_checks {
         for command in [CommandId::Copy, CommandId::Cut, CommandId::CopyMerged] {
             assert_eq!(reason(&s, command).as_deref(), Some("Quick Mask edits the selection; leave it to copy artwork"));
         }
-        for platform in [Platform::Mac, Platform::Ios, Platform::Windows] {
+        for platform in Platform::ALL {
             for command in [CommandId::Copy, CommandId::Cut, CommandId::CopyMerged, CommandId::PasteInPlace, CommandId::PasteInto] {
-                assert!(!command.available_on(platform), "{command:?} on {platform:?}");
+                assert_eq!(command.available_on(platform), platform != Platform::Windows, "{command:?} on {platform:?}");
             }
             assert!(CommandId::PasteImage.available_on(platform));
         }
@@ -321,11 +321,13 @@ mod clipboard_checks {
         assert!(key(&mut s, "c", true, true, false).handled);
         assert!(matches!(pending(&s).1, DocumentRequest::Copy { merged: false, cut: false }));
 
-        let mut mac = session(Platform::Mac);
-        let edit = mac.application_menu(ApplicationMenu::Edit);
-        assert!(edit.sections.iter().flatten().any(|item| item.label == "Paste"));
-        assert!(!edit.sections.iter().flatten().any(|item| item.label == "Copy"));
-        mac.frame(1, 1).unwrap();
+        for (platform, copies) in [(Platform::Mac, true), (Platform::Windows, false)] {
+            let mut host = session(platform);
+            let edit = host.application_menu(ApplicationMenu::Edit);
+            assert!(edit.sections.iter().flatten().any(|item| item.label == "Paste"));
+            assert_eq!(edit.sections.iter().flatten().any(|item| item.label == "Copy"), copies, "{platform:?}");
+            host.frame(1, 1).unwrap();
+        }
     }
 
     #[test]
@@ -341,10 +343,13 @@ mod clipboard_checks {
     }
 
     #[test]
-    fn the_mac_selection_bar_omits_the_pixel_clipboard_menu() {
-        let mut mac = UiSession::new(Recorder::default(), Document::new("mac", 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Mac).unwrap();
-        invoke(&mut mac, CommandId::SelectAll);
-        invoke(&mut mac, CommandId::Move);
-        assert!(!mac.state.canvas_bar.unwrap().items.iter().any(|i| i.menu == Some(CanvasBarMenu::Copy)));
+    fn the_selection_bar_offers_copy_where_the_host_writes_the_clipboard() {
+        for platform in Platform::ALL {
+            let mut s = UiSession::new(Recorder::default(), Document::new("bar", 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], platform).unwrap();
+            invoke(&mut s, CommandId::SelectAll);
+            invoke(&mut s, CommandId::Move);
+            let offered = s.state.canvas_bar.unwrap().items.iter().any(|i| i.menu == Some(CanvasBarMenu::Copy));
+            assert_eq!(offered, platform.pixel_clipboard(), "{platform:?}");
+        }
     }
 }

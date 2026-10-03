@@ -22,7 +22,7 @@ extension UTType {
 /// A job owns immutable Rust data and GPU preparation, never a NativeOwner.
 /// Its final release can destroy a large retired document, so use the I/O queue.
 final class NativeProjectTask: @unchecked Sendable {
-    enum Kind: UInt32 { case save, open, recovery, place, color, properties, source, histogram }
+    enum Kind: UInt32 { case save, open, recovery, place, color, properties, source, histogram, clip }
     static let io = DispatchQueue(label: "art.capycanvas.project-files", qos: .userInitiated)
     let handle: OpaquePointer
     init(_ handle: OpaquePointer) { self.handle = handle }
@@ -63,6 +63,18 @@ final class NativeProjectTask: @unchecked Sendable {
         try check(try (choice ?? JSON()).encoded().withCString { capy_project_edit_work(handle, $0, copy) })
     }
     func compare() throws { try check(capy_project_compare(handle)) }
+    var clipProgress: String? {
+        guard let text = capy_project_clip_progress(handle) else { return nil }
+        defer { capy_apple_string_free(text) }
+        return String(cString: text)
+    }
+    func copyPixels(nonce: String) throws -> Data {
+        try nonce.withCString { try check(capy_project_clip_run(handle, $0)) }
+        var bytes: UnsafePointer<UInt8>?, count = 0
+        try check(capy_project_clip_png(handle, &bytes, &count))
+        guard let bytes else { throw HostFailure(message: "The copy has no pixels") }
+        return Data(bytes: bytes, count: count)
+    }
     func configureExport(_ recipe: JSON) throws {
         try check(try recipe.encoded().withCString { capy_project_export_options(handle, $0) })
     }

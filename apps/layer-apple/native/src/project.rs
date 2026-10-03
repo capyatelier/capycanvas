@@ -2,9 +2,9 @@
 //! Jobs never retain a session pointer. File descriptors/URLs stay host-owned.
 use super::*;
 use layer_core::Project;
-use layer_host::{Renderer, export::ExportTask, open::OpenEnvironment, tasks::{ColorTask, SourceTask}, window::OpenAdoption};
+use layer_host::{Renderer, clipboard::ClipTask, export::ExportTask, open::OpenEnvironment, tasks::{ColorTask, SourceTask}, window::OpenAdoption};
 use layer_render_wgpu::WgpuRasterizer;
-use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
+use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, PixelClip, UiSession};
 use std::{
     fs::File,
     io::{Cursor, Read, Write},
@@ -17,6 +17,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "project_clipboard.rs"]
+mod clipboard;
+pub use clipboard::*;
 #[path = "project_color.rs"]
 mod color;
 pub use color::*;
@@ -52,6 +55,11 @@ enum Payload {
         device: wgpu::Device,
     },
     Export(Box<ExportTask>),
+    Clip {
+        task: Option<Box<ClipTask>>,
+        clip: Option<Box<PixelClip>>,
+        request: u32,
+    },
     Retired {
         _renderer: Option<Box<WgpuRasterizer>>,
     },
@@ -172,6 +180,11 @@ pub unsafe extern "C" fn capy_apple_project_task(
             Payload::Source(Box::new(SourceTask::capture(session, None, DISPLAY_SPACE)?))
         } else if opening == 7 {
             Payload::Inspection(Box::new(inspection::Task::capture(session)?))
+        } else if opening == 8 {
+            let request = session.state().requests.iter().find(|r| matches!(r.kind,
+                HostRequestKind::Document { request: DocumentRequest::Copy { .. } }))
+                .ok_or("No copy is pending")?.id;
+            Payload::Clip { task: Some(Box::new(ClipTask::capture(session, request)?)), clip: None, request }
         } else if opening == 3 {
             #[derive(Default, serde::Deserialize)]
             struct Placement { screen: Option<layer_core::Point>, layer: Option<Row> }
@@ -528,6 +541,10 @@ unsafe fn adopt_project(
         if let Payload::Source(source) = &mut state.payload {
             if recovered { return Err("A source edit is not a recovery drawing".into()); }
             return source.adopt(&mut app.host, task.control.is_cancelled(), || unsafe { capy_project_begin_commit(task) } >= 0);
+        }
+        if let Payload::Clip { clip, request, .. } = &mut state.payload {
+            if recovered { return Err("A copy is not a recovery drawing".into()); }
+            return clipboard::adopt_clip(app, task, clip, *request);
         }
         if let Payload::Placed { images, context, request, device } = &mut state.payload {
             if recovered { return Err("An image import is not a recovery drawing".into()); }

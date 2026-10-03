@@ -3,9 +3,9 @@
 [Workspace and UI](README.md) · [Open and import](open-and-import.md) · [Canvas action bar](canvas-action-bar.md)
 
 Copy, Cut and Copy Merged put pixels on the clipboard; Paste, Paste in Place and
-Paste Into add them as a new layer. GTK, Web and Android offer them; Apple and
-Windows keep Paste for images from other apps until they write pixels to the
-system clipboard.
+Paste Into add them as a new layer. GTK, Web, Android, macOS and iPadOS offer
+them; Windows keeps Paste for images from other apps until it writes pixels to
+the system clipboard.
 
 | Command | Default | Result |
 | --- | --- | --- |
@@ -61,6 +61,7 @@ from another app.
 | GTK | A `ContentProvider` union of `image/png` and `application/x-capycanvas-clip` holding the nonce. | The clipboard offers the private type with the current nonce. |
 | Web | `navigator.clipboard.write` with a `ClipboardItem` created synchronously in the key or click task, whose promises settle when the worker finishes; plus `web application/x-capycanvas-clip` where `ClipboardItem.supports` allows it. The raster worker encodes the clip. | The custom format holds the nonce; without custom formats, the page has not lost focus since its last copy. |
 | Android | `cacheDir/clipboard/<nonce>.png` through a `FileProvider` URI in `ClipData.newUri`, with the nonce in `ClipDescription.extras`. Only the latest file is kept. | The clip description's nonce. Reading the description shows no clipboard toast. |
+| macOS and iPadOS | One pasteboard item with a lazily provided `public.png` and `art.capycanvas.clip.nonce` holding the nonce (an `NSPasteboardItem` data provider, or an `NSItemProvider`). A project task (kind 8) captures on the owner and encodes on the file worker. | The private type with the current nonce; iPadOS checks for the type before reading it, so another app's content shows no paste prompt. On macOS, ⌘X, ⌘C and ⌘V reach a focused text field first. |
 
 The shared parts are `crates/layer-ui/src/clipboard.rs` (commands, capture,
 paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
@@ -80,3 +81,6 @@ paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
 - Web: `node apps/layer-web/test.mjs --headless --clipboard` with pen, touch and mouse.
 - Android: `AndroidInteractionTest#clipboardCopyPasteAcrossDevices` (another app
   reads the URI) and `AndroidRasterTest#clipboardCopyLatency24mp`.
+- macOS and iPadOS: `EditorLaunchTests/testPixelClipboard` (keyboard on macOS,
+  where the test reads the PNG back from the pasteboard; the in-app Edit menu on
+  iPadOS).
