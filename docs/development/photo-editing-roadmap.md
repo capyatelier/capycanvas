@@ -52,9 +52,7 @@ The M5 transform controls and shared Properties pages/precise Curves also need
 native presentation and device verification on Apple; Windows presents them.
 Shared Rust support and bridge compilation do not establish native UI parity.
 
-M1 shipped on every host, and Apple presents M2 to M4. Windows presents them too,
-except the clipboard image writers that `Platform::pixel_clipboard` enables; see the
-[Windows porting guide](../WINDOWS_PORTING_GUIDE.md).
+M1 shipped on every host, and Apple and Windows present M2 to M4.
 
 ## Open items from M2–M4
 

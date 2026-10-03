@@ -3,6 +3,7 @@
 use layer_core::{Project, color::RgbSpace};
 use layer_host::{
     NativeHost,
+    clipboard::ClipTask,
     export::ExportTask,
     tasks::{ColorTask, SourceTask},
 };
@@ -61,6 +62,9 @@ pub(crate) enum Action {
     SaveCopy {
         path: String,
     },
+    PasteClip {
+        nonce: String,
+    },
 }
 struct Import {
     images: layer_ui::ImageImportBatch,
@@ -68,6 +72,7 @@ struct Import {
     device: wgpu::Device,
     paths: std::collections::VecDeque<String>,
     clipboard: Option<std::path::PathBuf>,
+    clip_nonce: Option<String>,
 }
 impl Drop for Import {
     fn drop(&mut self) {
@@ -76,7 +81,25 @@ impl Drop for Import {
         }
     }
 }
+struct Clip {
+    task: Option<Box<ClipTask>>,
+    clip: Option<Box<layer_ui::PixelClip>>,
+    file: std::path::PathBuf,
+    large: bool,
+}
+impl Drop for Clip {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.file);
+    }
+}
 static NEXT_CLIPBOARD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+fn clipboard_file() -> Result<std::path::PathBuf, String> {
+    Ok(crate::settings::data_directory()?.join("clipboard").join(format!(
+        "{}-{}.png",
+        std::process::id(),
+        NEXT_CLIPBOARD.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )))
+}
 use layer_ui::DocumentHostErrorCopy as FeatureFailure;
 fn retain_failure(slot: &mut Option<FeatureFailure>, reason: FeatureFailure, localization: &layer_ui::Localizer) -> String {
     let text=reason.message(localization);*slot=Some(reason);text
@@ -90,6 +113,7 @@ enum Payload {
         notice: Option<layer_ui::ColorFeatureError>,
     },
     Import(Import),
+    Clip(Clip),
     Color(Box<ColorTask>),
     Source(Box<SourceTask>),
     Info(layer_color::DocumentInfo),
@@ -120,7 +144,10 @@ pub(crate) struct Task {
     payload: Payload,
 }
 impl Task {
-    pub fn capture(host: &NativeHost, id: u32) -> Result<Box<Self>, String> {
+    pub fn capture(host: &mut NativeHost, id: u32) -> Result<Box<Self>, String> {
+        let mut copy = (id != 0 && matches!(host.session.document_request(id), Ok(DocumentRequest::Copy { .. })))
+            .then(|| ClipTask::capture(&mut host.session, id).map(Box::new))
+            .transpose()?;
         let session = &host.session;
         if id == 0 {
             return Ok(Box::new(Self {
@@ -192,20 +219,17 @@ impl Task {
                             .device()
                             .clone(),
                         paths: Default::default(),
-                        clipboard: if kind == "paste" {
-                            Some(crate::settings::data_directory()?.join("clipboard").join(
-                                format!(
-                                        "{}-{}.png",
-                                        std::process::id(),
-                                        NEXT_CLIPBOARD
-                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                                    ),
-                            ))
-                        } else {
-                            None
-                        },
+                        clipboard: if kind == "paste" { Some(clipboard_file()?) } else { None },
+                        clip_nonce: None,
                     }),
                 )
+            }
+            HostRequestKind::Document {
+                request: DocumentRequest::Copy { .. },
+            } => {
+                let task = copy.take().ok_or("The copy was not captured")?;
+                let large = task.capture_details().large;
+                ("copy", Payload::Clip(Clip { task: Some(task), clip: None, file: clipboard_file()?, large }))
             }
             HostRequestKind::Document {
                 request: DocumentRequest::ChangeColor { operation },
@@ -363,7 +387,11 @@ impl Task {
                     })?;
                 }
                 json!({"pending":task.images.pending_source().map(|s| &s.interpretation),"extensions":layer_color::photo::extensions().collect::<Vec<_>>(),
-                    "profiles":profiles.clone(), "clipboard":task.clipboard.as_ref().map(|p| json!({"path":p,"folder":p.parent(),"name":p.file_name().and_then(|s| s.to_str())}))})
+                    "profiles":profiles.clone(), "clipboard":task.clipboard.as_ref().map(|p| json!({"path":p,"folder":p.parent(),"name":p.file_name().and_then(|s| s.to_str())})),
+                    "clip_nonce":task.clip_nonce, "delivery":layer_ui::DocumentDeliveryCopy::new(&self.localization)})
+            }
+            Payload::Clip(clip) => {
+                json!({"nonce":clip.clip.as_ref().map(|c| &c.nonce),"file":clip.file,"delivery":layer_ui::DocumentDeliveryCopy::new(&self.localization)})
             }
             Payload::Color(task) => task.details(),
             Payload::Source(task) => {
@@ -407,6 +435,17 @@ impl Task {
                 return Err("Document operation cancelled".into());
             }
             match action {
+                Action::Describe if self.kind == "copy" => {
+                    let Payload::Clip(clip) = &mut self.payload else { return Err("No copy is pending".into()) };
+                    let task = clip.task.take().ok_or("This copy has already run")?;
+                    let copied = task.run(layer_workspace::new_id(), self.control.clone())?;
+                    std::fs::create_dir_all(clip.file.parent().ok_or("Clipboard storage is missing")?)
+                        .and_then(|_| std::fs::write(&clip.file, &copied.png))
+                        .map_err(|e| crate::document_io::io_error("write the copied image", e))?;
+                    clip.clip = Some(Box::new(copied));
+                    self.stage = "commit";
+                    self.describe()
+                }
                 Action::Describe if self.kind == "history" => {
                     if let Payload::Color(task) = &mut self.payload {
                         task.work(None, false, self.control.clone())?;
@@ -656,7 +695,23 @@ impl Task {
         Ok(())
     }
     pub fn awaits_placement_ui(&self) -> bool {
-        matches!(self.payload, Payload::Import(_))
+        matches!(self.payload, Payload::Import(_) | Payload::Clip(_))
+    }
+    pub fn offer_clip(&mut self, nonce: Option<String>) {
+        if let Payload::Import(task) = &mut self.payload { task.clip_nonce = nonce; }
+    }
+    pub fn awaits_clipboard(&self) -> bool {
+        matches!(self.payload, Payload::Clip(_))
+    }
+    pub fn quiet(&self) -> bool {
+        matches!(&self.payload, Payload::Clip(clip) if !clip.large)
+    }
+    pub fn progress_title(&self, host: &NativeHost) -> Option<String> {
+        if !matches!(self.payload, Payload::Clip(_)) { return None; }
+        host.session.document_request(self.id).ok().map(|request| request.title(host.session.localization()).to_string())
+    }
+    pub fn take_clip(&mut self) -> Option<layer_ui::PixelClip> {
+        match &mut self.payload { Payload::Clip(clip) => clip.clip.take().map(|clip| *clip), _ => None }
     }
     pub fn prepare_owner(&mut self, host: &NativeHost) -> Result<bool, String> {
         if self.stage == "proof_candidate" {
@@ -690,11 +745,11 @@ impl Task {
                     return Err("The canvas or import request changed; try again".into());
                 }
                 let previous = session.state().revision;
-                session.place_layer_sources(
-                    task.images.take_sources(self.control.is_cancelled())?,
-                    task.context.center,
-                    task.context.destination,
-                )?;
+                let sources = task.images.take_sources(self.control.is_cancelled())?;
+                match session.document_request(self.id)? {
+                    DocumentRequest::Paste { mode } => { let mode = *mode; session.paste_layer_sources(sources, mode, &task.context)? }
+                    _ => session.place_layer_sources(sources, task.context.center, task.context.destination)?,
+                }
                 let mut change = session.complete_document_request(self.id, Ok(true))?;
                 change.canvas_wake = true;
                 change.regions |= 255;
@@ -833,8 +888,8 @@ mod tests {
     }
     #[test]
     fn late_profile_inventory_reprojects_semantic_issues_without_reinspection() {
-        let host = NativeHost::new(Platform::Windows).unwrap();
-        let mut task = Task::capture(&host, 0).unwrap();
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        let mut task = Task::capture(&mut host, 0).unwrap();
         let entry = layer_ui::profile_library::ProfileEntry {
             id: "user-profile".into(), bytes: 0, name: "My literal name".into(), channels: None, profile: None,
             issue: Some(layer_ui::ColorFeatureError::ProfileMissing),
@@ -855,8 +910,8 @@ mod tests {
     }
     #[test]
     fn late_profile_failure_reprojects_typed_reason_and_retains_the_task() {
-        let host = NativeHost::new(Platform::Windows).unwrap();
-        let mut task = Task::capture(&host, 0).unwrap();
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        let mut task = Task::capture(&mut host, 0).unwrap();
         task.work(Action::ProfileRemove { id: "../invalid".into() });
         let english=task.error.clone().expect("invalid profile must fail before storage");
         let identity=(task.id,task.serial,task.stage);

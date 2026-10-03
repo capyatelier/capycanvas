@@ -41,7 +41,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 - **Dropdowns:** a choice that is not segmented, such as Interpolation, opens its items from the bar.
 - **Menu items:** an item can carry a menu. It opens from the bar as a dropdown, and in More it is a submenu.
   - **Copy to Layer ▾:** Copy Selection to New Layer (the primary command) and Cut Selection to New Layer.
-  - **Copy ▾:** Copy (the primary command), Copy Merged and Cut; see [copy and paste](clipboard.md). Only hosts that write pixels to the system clipboard (all but Windows) show it.
+  - **Copy ▾:** Copy (the primary command), Copy Merged and Cut; see [copy and paste](clipboard.md).
   - **Refine ▾:** Grow…, Shrink…, Feather… (the primary command), Border…, Smooth…, then Transform Outline. The first five open the [Refine dialog](#refine-dialog).
   - **Adjust ▾:** the Filter menu's categories, which hold adjustments only. The new effect layer takes the selection as its mask and consumes it, in one undo step.
   - **Clear ▾:** Clear Selected Pixels (the primary command) and Clear Outside Selection.

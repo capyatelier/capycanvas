@@ -306,6 +306,8 @@ pub(crate) struct DocumentService {
     workflow: Option<Box<crate::document_workflows::Task>>,
     workflow_control: Option<(u32, layer_render_wgpu::snapshot::CaptureControl)>,
     workflow_running: bool,
+    workflow_quiet: bool,
+    workflow_title: Option<String>,
     open_queue: std::collections::VecDeque<String>,
     recording_save: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
@@ -347,6 +349,8 @@ impl DocumentService {
             workflow: None,
             workflow_control: None,
             workflow_running: false,
+            workflow_quiet: false,
+            workflow_title: None,
             open_queue: Default::default(),
             recording_save: None,
         })
@@ -354,7 +358,7 @@ impl DocumentService {
     pub(crate) fn status(&self) -> Option<serde_json::Value> {
         if self.opening.is_none() && let Some(active) = &self.active && active.cancelled.is_some() { return Some(serde_json::json!({"type":"opening_busy","id":active.id})); }
         if let Some(task) = &self.workflow { return Some(task.status()); }
-        if self.workflow_running { return self.workflow_control.as_ref().map(|(id, _)| serde_json::json!({"type":"workflow_busy","id":id})); }
+        if self.workflow_running { return self.workflow_control.as_ref().filter(|_| !self.workflow_quiet).map(|(id, _)| serde_json::json!({"type":"workflow_busy","id":id,"title":self.workflow_title})); }
         self.opening.as_ref().map(|opening| serde_json::json!({
             "type": "interpret", "id": self.active.as_ref().map(|a| a.id), "copy":self.profile_copy,
             "spaces": layer_core::color::RgbSpace::ALL.map(|s| (s, s.name())),
@@ -402,6 +406,26 @@ impl DocumentService {
     ) -> Result<(), String> {
         let previous = host.session.state().revision;
         let change = host.session.complete_document_request(id, result)?;
+        host.apply_change(previous, change);
+        Ok(())
+    }
+    fn adopt_clip(&mut self, host: &mut NativeHost, task: &mut crate::document_workflows::Task) -> Result<(), String> {
+        let clip = task.take_clip().ok_or("The copy did not finish")?;
+        self.window.documents.clip = Some(clip);
+        let previous = host.session.state().revision;
+        let mut change = host.session.complete_document_request(task.id, Ok(true))?;
+        change.canvas_wake = true;
+        host.apply_change(previous, change);
+        Ok(())
+    }
+    fn paste_clip(&mut self, host: &mut NativeHost, id: u32, nonce: &str) -> Result<(), String> {
+        let DocumentRequest::Paste { mode } = Self::request(host, id)? else { return Err("The paste request is no longer active".into()) };
+        let clip = self.window.documents.clip.as_ref().filter(|clip| clip.nonce == nonce).ok_or("Nothing was copied in this window")?;
+        let previous = host.session.state().revision;
+        host.session.paste_clip(clip, mode)?;
+        let mut change = host.session.complete_document_request(id, Ok(true))?;
+        change.canvas_wake = true;
+        change.regions |= layer_ui::regions::ALL;
         host.apply_change(previous, change);
         Ok(())
     }
@@ -514,13 +538,17 @@ impl DocumentService {
             let id = host.session.state().requests.iter().find(|r| matches!(r.kind, HostRequestKind::Document { request: DocumentRequest::Place })).ok_or("Image placement request is missing")?.id;
             let prepared = (|| { let mut task = crate::document_workflows::Task::capture(host, id)?;task.place_at(host, screen, layer)?;Ok::<_, String>(task) })();
             let task = match prepared { Ok(task) => task, Err(error) => return Self::complete(host, id, Err(error)) };
+            self.workflow_quiet = false;self.workflow_title = None;
             self.workflow_control = Some((id, task.control.clone()));self.workflow_running = true;
             self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::ReadImages { paths } });
             return Ok(());
         }
         if let DocumentAction::WorkflowBegin { id } = action {
             if self.active.is_some() || self.workflow_control.is_some() { return Err("A document operation is already running".into()); }
-            let task = crate::document_workflows::Task::capture(host, id)?;
+            let mut task = match crate::document_workflows::Task::capture(host, id) { Ok(task) => task, Err(error) => return Self::complete(host, id, Err(error)) };
+            task.offer_clip(self.window.documents.clip.as_ref().map(|clip| clip.nonce.clone()));
+            self.workflow_quiet = task.quiet();
+            self.workflow_title = task.progress_title(host);
             self.workflow_control = Some((id, task.control.clone()));
             self.workflow_running = true;
             self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::Describe });
@@ -535,7 +563,9 @@ impl DocumentService {
             let mut task = self.workflow.take().ok_or("Wait for document preparation")?;
             let result = match action {
                 crate::document_workflows::Action::Cancel => task.complete(host, false),
+                crate::document_workflows::Action::Commit if task.awaits_clipboard() => self.adopt_clip(host, &mut task).or_else(|error| Self::complete(host, id, Err(error))),
                 crate::document_workflows::Action::Commit => task.commit(host),
+                crate::document_workflows::Action::PasteClip { nonce } => self.paste_clip(host, id, &nonce).or_else(|error| Self::complete(host, id, Err(error))),
                 other => {
                     self.workflow_running = true;
                     self.worker.submit(Job::Workflow { task, action: other });

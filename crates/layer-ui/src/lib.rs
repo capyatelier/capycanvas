@@ -593,7 +593,6 @@ impl CommandId {
         match self {
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),
-            Self::Copy | Self::Cut | Self::CopyMerged | Self::PasteInPlace | Self::PasteInto => platform.pixel_clipboard(),
             _ => true,
         }
     }

@@ -165,7 +165,7 @@ mod clipboard_checks {
         }
         for platform in Platform::ALL {
             for command in [CommandId::Copy, CommandId::Cut, CommandId::CopyMerged, CommandId::PasteInPlace, CommandId::PasteInto] {
-                assert_eq!(command.available_on(platform), platform != Platform::Windows, "{command:?} on {platform:?}");
+                assert!(command.available_on(platform), "{command:?} on {platform:?}");
             }
             assert!(CommandId::PasteImage.available_on(platform));
         }
@@ -321,11 +321,11 @@ mod clipboard_checks {
         assert!(key(&mut s, "c", true, true, false).handled);
         assert!(matches!(pending(&s).1, DocumentRequest::Copy { merged: false, cut: false }));
 
-        for (platform, copies) in [(Platform::Mac, true), (Platform::Windows, false)] {
+        for platform in [Platform::Mac, Platform::Windows] {
             let mut host = session(platform);
             let edit = host.application_menu(ApplicationMenu::Edit);
             assert!(edit.sections.iter().flatten().any(|item| item.label == "Paste"));
-            assert_eq!(edit.sections.iter().flatten().any(|item| item.label == "Copy"), copies, "{platform:?}");
+            assert!(edit.sections.iter().flatten().any(|item| item.label == "Copy"), "{platform:?}");
             host.frame(1, 1).unwrap();
         }
     }
@@ -343,13 +343,13 @@ mod clipboard_checks {
     }
 
     #[test]
-    fn the_selection_bar_offers_copy_where_the_host_writes_the_clipboard() {
+    fn the_selection_bar_offers_copy_on_every_host() {
         for platform in Platform::ALL {
             let mut s = UiSession::new(Recorder::default(), Document::new("bar", 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], platform).unwrap();
             invoke(&mut s, CommandId::SelectAll);
             invoke(&mut s, CommandId::Move);
             let offered = s.state.canvas_bar.unwrap().items.iter().any(|i| i.menu == Some(CanvasBarMenu::Copy));
-            assert_eq!(offered, platform.pixel_clipboard(), "{platform:?}");
+            assert!(offered, "{platform:?}");
         }
     }
 }

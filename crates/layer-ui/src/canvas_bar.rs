@@ -329,7 +329,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let edge = matches!(tool.selection_tool(), Some(SelectionTool::Tonal | SelectionTool::Brush))
             || self.canvas_bar.selection.as_ref().is_none_or(|s| s.1.is_none());
         let command = PlanItem::Command;
-        let copy = self.state.platform.pixel_clipboard().then_some(PlanItem::Menu(CanvasBarMenu::Copy));
         Some(Plan {
             kind: CanvasBarKind::Selection,
             label: None,
@@ -339,8 +338,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ]
             .into_iter()
             .chain((tool == LayerCanvasTool::Move).then_some(command(CommandId::MoveLeaveCopy)))
-            .chain([PlanItem::Menu(CanvasBarMenu::CopyToLayer)])
-            .chain(copy)
+            .chain([PlanItem::Menu(CanvasBarMenu::CopyToLayer), PlanItem::Menu(CanvasBarMenu::Copy)])
             .chain([
                 command(CommandId::ScaleRotate),
                 PlanItem::Menu(CanvasBarMenu::Refine),

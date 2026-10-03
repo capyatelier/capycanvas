@@ -27,11 +27,6 @@ impl Platform {
         // The iOS host is an iPad app with independent native editor scenes.
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
-    /// Hosts that write pixels to the system clipboard and read their own
-    /// copies back at full depth.
-    pub fn pixel_clipboard(self) -> bool {
-        matches!(self, Self::Gtk | Self::Web | Self::Android | Self::Mac | Self::Ios)
-    }
     pub fn touch_gestures(self) -> bool {
         matches!(self, Self::Gtk | Self::Web | Self::Windows | Self::Android | Self::Ios)
     }

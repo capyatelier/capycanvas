@@ -19,6 +19,7 @@ using namespace CapyUi;
 namespace Pickers=winrt::Microsoft::Windows::Storage::Pickers;
 
 struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
+    static constexpr wchar_t ClipNonce[]=L"art.capycanvas.clip.nonce";
     static int depthIndex(hstring const& value){return value==L"F32"?3:value==L"F16"?2:value==L"U16"?1:0;}
     static hstring depthValue(int index){return std::array<hstring,4>{L"U8",L"U16",L"F16",L"F32"}.at(index);}
     Dispatch send,report;
@@ -66,7 +67,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         auto lifetime=shared_from_this();
         auto request=object(object(envelope,L"kind"),L"request");
         auto type=str(request,L"type");
-        if(type==L"export"||type==L"place"||type==L"paste"||type==L"change_color"||type==L"color_history"||type==L"properties"||type==L"repair_source_profile"||type==L"rasterize_source"){
+        if(type==L"export"||type==L"place"||type==L"paste"||type==L"copy"||type==L"change_color"||type==L"color_history"||type==L"properties"||type==L"repair_source_profile"||type==L"rasterize_source"){
             send(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(num(envelope,L"id"))}}).Stringify()));co_return;
         }
         auto id=num(envelope,L"id");
@@ -280,20 +281,37 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             {L"profile",accepted?V(profile):JsonValue::CreateNullValue()}}).Stringify()));
         creationPresetsChanged={};showing=false;changed();
     }
+    fire_and_forget copied(J request){
+        auto lifetime=shared_from_this();auto id=num(request,L"id");auto details=object(request,L"details");
+        J action=O({{L"op",S(L"cancel")}});
+        try{
+            using namespace winrt::Windows::ApplicationModel::DataTransfer;
+            auto file=co_await winrt::Windows::Storage::StorageFile::GetFileFromPathAsync(str(details,L"file"));
+            auto bytes=co_await winrt::Windows::Storage::FileIO::ReadBufferAsync(file);
+            winrt::Windows::Storage::Streams::InMemoryRandomAccessStream png;co_await png.WriteAsync(bytes);png.Seek(0);
+            DataPackage package;package.RequestedOperation(DataPackageOperation::Copy);
+            package.SetData(L"PNG",png);package.SetData(ClipNonce,box_value(str(details,L"nonce")));
+            Clipboard::SetContent(package);action=O({{L"op",S(L"commit")}});
+        }catch(hresult_error const&){if(!stopping)report(to_string(str(object(details,L"delivery"),L"clipboard_unavailable")));}
+        if(!stopping)send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(id)},{L"action",action}}).Stringify()));
+    }
     fire_and_forget pickImages(J request){
-        auto lifetime=shared_from_this();showing=true;changed();A paths;auto id=num(request,L"id");
+        auto lifetime=shared_from_this();showing=true;changed();A paths;J own;auto id=num(request,L"id");
         try{
             auto details=object(request,L"details");
             if(str(request,L"kind")==L"paste"){
                 using namespace winrt::Windows::ApplicationModel::DataTransfer;
                 auto content=Clipboard::GetContent();
                 winrt::Windows::Storage::Streams::IRandomAccessStream input{nullptr};
-                if(content.Contains(StandardDataFormats::StorageItems())){
+                auto nonce=str(details,L"clip_nonce");
+                if(!nonce.empty()&&content.Contains(ClipNonce)&&unbox_value_or<hstring>(co_await content.GetDataAsync(ClipNonce),L"")==nonce){
+                    own=O({{L"op",S(L"paste_clip")},{L"nonce",S(nonce)}});
+                }else if(content.Contains(StandardDataFormats::StorageItems())){
                     auto items=co_await content.GetStorageItemsAsync();for(auto item:items)if(auto file=item.try_as<winrt::Windows::Storage::StorageFile>())paths.Append(S(file.Path()));
                 }else{
                     if(content.Contains(L"PNG"))input=(co_await content.GetDataAsync(L"PNG")).try_as<winrt::Windows::Storage::Streams::IRandomAccessStream>();
                     if(!input&&content.Contains(StandardDataFormats::Bitmap()))input=co_await (co_await content.GetBitmapAsync()).OpenReadAsync();
-                    if(!input)report("The clipboard has no image or image files.");
+                    if(!input)report(to_string(str(object(details,L"delivery"),L"clipboard_empty")));
                 }
                 if(input){
                     auto target=object(details,L"clipboard");auto folder=co_await winrt::Windows::Storage::StorageFolder::GetFolderFromPathAsync(str(target,L"folder"));
@@ -309,7 +327,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         }catch(hresult_canceled const&){}catch(hresult_error const& e){if(!stopping)report(to_string(e.message()));}
         multiplePicker=nullptr;
         if(!stopping)send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(id)},
-            {L"action",paths.Size()?O({{L"op",S(L"read_images")},{L"paths",paths}}):O({{L"op",S(L"cancel")}})}}).Stringify()));
+            {L"action",own.Size()?own:paths.Size()?O({{L"op",S(L"read_images")},{L"paths",paths}}):O({{L"op",S(L"cancel")}})}}).Stringify()));
         showing=false;changed();
     }
     void preview(Image const& image,uint32_t id,uint32_t index){
@@ -328,6 +346,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     }
     fire_and_forget workflow(J request){
         auto lifetime=shared_from_this();auto id=uint32_t(num(request,L"id"));
+        if(str(request,L"kind")==L"copy"&&str(request,L"stage")==L"commit"){copied(request);co_return;}
         if(str(request,L"stage")==L"commit"){
             send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(id)},{L"action",O({{L"op",S(L"commit")}})}}).Stringify()));co_return;
         }
@@ -557,10 +576,11 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
         dialog=nullptr;recoveryProgress=false;showing=false;changed();
     }
+    hstring busyTitle(J const& state){auto title=str(state,L"title");return title.empty()?str(object(catalog,L"bootstrap"),L"preparing_document"):title;}
     fire_and_forget working(J state){
         auto lifetime=shared_from_this();showing=true;busyDialog=true;busyCompleted=false;changed();
         try{
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.Title(box_value(str(object(catalog,L"bootstrap"),L"preparing_document")));dialog.CloseButtonText(common(L"cancel"));
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.Title(box_value(busyTitle(state)));dialog.CloseButtonText(common(L"cancel"));
             ProgressRing progress;progress.IsActive(true);progress.Width(48);progress.Height(48);dialog.Content(progress);co_await dialog.ShowAsync();
         }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
         dialog=nullptr;presentationChanged={};
@@ -576,7 +596,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         if(relocalize&&presentationChanged)presentationChanged();
         if(relocalize&&dialog){
             dialog.Language(data->language());
-            if(busyDialog){dialog.Title(box_value(str(object(catalog,L"bootstrap"),L"preparing_document")));dialog.CloseButtonText(common(L"cancel"));}
+            if(busyDialog){dialog.Title(box_value(busyTitle(object(model,L"windows_document"))));dialog.CloseButtonText(common(L"cancel"));}
             if(recoveryProgress)dialog.Title(box_value(recovery(L"restoring")));
         }
         if(creationPresetsChanged)creationPresetsChanged();
