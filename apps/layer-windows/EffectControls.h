@@ -26,6 +26,7 @@ struct Property {
     J view()const{return object(data->state,L"layer_properties");}
     J model()const{return find(array(view(),L"controls"),L"key",key);}
     V value()const{return object(model(),L"value").GetNamedValue(L"value",JsonValue::CreateNullValue());}
+    J curve()const{return object(model(),L"curve");}
     bool current()const{
         return epoch==num(object(data->state,L"document_file"),L"epoch")
             &&layer==num(view(),L"layer",-1)&&schema==object(model(),L"kind").Stringify();
@@ -39,9 +40,10 @@ struct Property {
         if(!phase.empty())operation=O({{L"op",S(L"gesture")},{L"phase",S(phase)},{L"action",operation}});
         data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",operation}}),to_hstring(uint64_t(epoch)));
     }
-    void set(V const& value)const{
-        action(O({{L"op",S(L"set")},{L"value",O({{L"kind",S(str(object(model(),L"kind"),L"kind"))},{L"value",value}})}}));
+    J setting(V const& value)const{
+        return O({{L"op",S(L"set")},{L"value",O({{L"kind",S(str(object(model(),L"kind"),L"kind"))},{L"value",value}})}});
     }
+    void set(V const& value)const{action(setting(value));}
     void reset()const{action(O({{L"op",S(L"reset")}}));}
     hstring id()const{return L"property-"+key;}
 };

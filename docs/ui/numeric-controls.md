@@ -98,14 +98,13 @@ cancels its live edit. Point selection and the active channel belong to the
 session and do not add undo entries. Stale contacts from a previous page, layer
 or document are ignored.
 
-GTK, Web and Android present the same shared page selector, graph axes and point
-fields. Native controls retain unfinished text while the model refreshes; page,
+GTK, Web, Android and Windows present the same shared page selector, graph axes
+and point fields. Native controls retain unfinished text while the model refreshes; page,
 layer and document changes retire the old contact. Android keeps numeric values
 as doubles through JNI so HDR coordinates retain the shared field's precision.
 Its native numeric draft, selection and edit focus use Compose saved state across
 Activity recreation; an in-progress IME composition is still owned by the input
-method. Windows presents the page selector (`exercise-effects.ps1`) but not yet
-the shared graph contacts and point fields.
+method.
 
 ## Checks
 
@@ -123,7 +122,10 @@ Web's `--curves` journey covers graph contacts, page changes, exact readouts and
 numeric cancellation. Android's
 `AndroidHostTest#curvesPagesNativeContactsAndExactCoordinates` exercises native
 contacts and history; `AndroidTextCompositionTest#curveCoordinatesKeepNativeCompositionAndUnchangedPrecision`
-checks InputConnection composition and unchanged commits.
+checks InputConnection composition and unchanged commits. Windows
+`exercise-effects.ps1` covers mouse, pen and touch contacts, double-click
+insertion and removal, held arrows, Delete, exact and unchanged Output text,
+Log HDR readouts in a float drawing and one Undo per property slider scrub.
 
 References: [GTK Scale](https://docs.gtk.org/gtk4/class.Scale.html),
 [Adwaita SpinRow](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1-latest/class.SpinRow.html),

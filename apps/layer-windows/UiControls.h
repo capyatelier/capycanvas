@@ -375,7 +375,8 @@ struct DoublePress : std::enable_shared_from_this<DoublePress> {
 };
 struct NumberPresentation {
     bool preference=false;hstring description;std::function<hstring()> identity;
-    std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;std::function<hstring()> title;
+    std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;std::function<hstring()> title,text;
+    std::function<void(hstring const&,double)> phase;
 };
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L"",bool inlineTrack=false,NumberPresentation const& presentation={},NumericAdmissions* admissions=nullptr);

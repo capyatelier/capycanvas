@@ -84,7 +84,8 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         AutomationProperties::SetName(page,str(view,L"title"));
         A keys;for(auto value:array(view,L"controls")){
             auto c=value.GetObject();keys.Append(O({{L"key",S(str(c,L"key"))},{L"label",S(str(c,L"label"))},
-                {L"section",S(str(c,L"section"))},{L"section_id",c.GetNamedValue(L"section_id",JsonValue::CreateNullValue())},{L"kind",object(c,L"kind")},{L"color_action",object(c,L"color_action")}}));
+                {L"section",S(str(c,L"section"))},{L"section_id",c.GetNamedValue(L"section_id",JsonValue::CreateNullValue())},{L"kind",object(c,L"kind")},{L"color_action",object(c,L"color_action")},
+                {L"domain",object(object(c,L"curve"),L"domain")}}));
         }
         auto next=O({{L"epoch",N(num(object(data->state,L"document_file"),L"epoch"))},
             {L"layer",view.GetNamedValue(L"layer",JsonValue::CreateNullValue())},{L"controls",keys}}).Stringify();
@@ -100,9 +101,12 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                     if(!section.empty()){auto heading=label(data,section,true);heading.Margin({6,0,0,0});body.Children().Append(heading);}
                 }
                 if(type==L"number"){
+                    auto captured=std::make_shared<bool>(false);NumberPresentation presentation;
+                    presentation.phase=[property,captured](hstring const& phase,double v){*captured=phase==L"down";property->action(property->setting(N(v)),phase);};
                     body.Children().Append(number(data,name,object(kind,L"numeric"),
                         [property]{return num(object(property->model(),L"value"),L"value");},
-                        [property](double v){property->set(N(v));},fields,nullptr,false,property->id()));
+                        [property,captured](double v){property->action(property->setting(N(v)),*captured?L"move":L"");},
+                        fields,nullptr,false,property->id(),false,presentation));
                 }else if(type==L"choice"){
                     Grid row;row.ColumnSpacing(6);row.RowSpacing(6);
                     ColumnDefinition caption;caption.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(caption);

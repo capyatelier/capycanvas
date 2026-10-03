@@ -101,7 +101,7 @@ struct PreviewPanel:std::enable_shared_from_this<PreviewPanel>{
         return O({{L"x",N(x)},{L"y",N(y)},{L"width",N(width)},{L"height",N(height)}});
     }
     void present(){
-        auto previous=shown;
+        auto before=shown;
         if(built.empty()||!work.Size()){
             frame.Visibility(Visibility::Collapsed);frame.IsTabStop(false);
             shadow.Layout({float(Offscreen),0,1,1},899,false);shown.reset();
@@ -120,7 +120,7 @@ struct PreviewPanel:std::enable_shared_from_this<PreviewPanel>{
             shadow.Layout({float(left),float(top),width,height},899,true);
             shown=std::array<double,4>{left,top,double(width),double(height)};
         }
-        if(shown!=previous&&moved)moved();
+        if(shown!=before&&moved)moved();
     }
 };
 }

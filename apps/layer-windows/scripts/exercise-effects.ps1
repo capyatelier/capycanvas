@@ -82,12 +82,52 @@ function Preview-Hash([string]$Id){
     }finally{$bitmap.Dispose()}
 }
 
-function Check-CurveGestures {
+function Field([string]$Axis){Control "property-curve_0-$Axis"}
+function Show-Graph([double]$Percent=0){
+    $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent((Control 'property-curve_0-curve'))
+    while($node){$scroll=$null;if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll) -and $scroll.Current.VerticallyScrollable){break};$node=$walker.GetParent($node)}
+    if($node -and $scroll.Current.VerticalScrollPercent -ne $Percent){$scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,$Percent)}
+    $settled=@{bounds=$null};Wait-Until {$bounds=(Control 'property-curve_0-curve').Current.BoundingRectangle;$same=$bounds -eq $settled.bounds;$settled.bounds=$bounds;Start-Sleep -Milliseconds 100;$same} 'The curve graph did not settle after scrolling'
+}
+function Tap-Point([int]$Index){
+    $point=(Property 'curve_0').value.value[$Index];$low=$point[1] -lt .5;Show-Graph $(if($low){100}else{0})
+    $r=(Control 'property-curve_0-curve').Current.BoundingRectangle;$top=if($low){$r.Bottom-$r.Width}else{$r.Y}
+    $at=@([int][Math]::Min([Math]::Max($r.X+$point[0]*$r.Width,$r.Left+10),$r.Right-10),[int][Math]::Min([Math]::Max($top+(1-$point[1])*$r.Width,$r.Top+10),$r.Bottom-10))
+    [CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up()
+    Wait-Until {(Property 'curve_0').curve.selected -eq $Index} "Tapping point $Index did not select it"
+}
+function Pointer-Session([scriptblock]$Body){
     Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
     [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
     [CapyRowPointer]::Initialize([uint32]$review.Id)
+    try{& $Body}finally{[CapyRowPointer]::Dispose()}
+}
+function Check-PropertyScrub {Pointer-Session {
+    $opacity=(Property 'opacity').value.value;$track=(Control 'property-opacity-slider').Current.BoundingRectangle;$y=[int]($track.Y+$track.Height/2)
+    [CapyRowPointer]::Down('mouse',[int]($track.X+$track.Width*.3),$y)
+    for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($track.X+$track.Width*(.3+.05*$i)),$y);Start-Sleep -Milliseconds 30}
+    [CapyRowPointer]::Up();Wait-Until {[Math]::Abs((Property 'opacity').value.value-.7) -lt .03} 'The opacity slider did not follow the drag'
+    Invoke 'Undo' -Name;Wait-Until {(Property 'opacity').value.value -eq $opacity} 'An opacity slider drag needed more than one Undo'
+}}
+function Check-LogCurve {Pointer-Session {
+    $grown=$false
+    for($attempt=0;$attempt -lt 5 -and !$grown;$attempt++){
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1400
+        try{Wait-Until {(Model).state.camera.viewport[0] -gt 1450} 'Resize pending' 3;$grown=$true}catch{}
+    }
+    if(!$grown){throw 'The window did not grow for the curve check'}
+    Select-Filter 'curves' 'Curves'
+    Choose 'property-domain' (Property 'domain').kind.options[1]
+    Wait-Until {(Property 'curve_0').curve.domain.kind -eq 'log_hdr' -and (Find 'property-hdr_stops')} 'Log HDR did not offer its stops'
+    Tap-Point 0
+    Wait-Until {$ev=Find 'property-curve_0-output-ev';$ev -and $ev.Current.Name -and $ev.Current.Name -eq (Property 'curve_0').curve.output.ev} 'Log HDR did not show the EV readout'
+    Capture 'curve-log-hdr'
+}}
+
+function Check-CurveGestures {
     function Curve-Json {ConvertTo-Json -InputObject ((Property 'curve_0').value.value) -Compress -Depth 10}
     function Curve-At([double]$X,[double]$Y) {
+        Show-Graph
         # The graph is square; UIA can report only its visible, clipped height.
         $hit=@{at=$null}
         Wait-Until {
@@ -112,7 +152,8 @@ function Check-CurveGestures {
         Invoke 'Redo' -Name;Wait-Until {(Curve-Json) -eq $edited} "$Reason consumed Redo"
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$Reason changed history"
     }
-    try {
+    Pointer-Session {
+        if((Field 'input').Current.IsEnabled -or (Field 'output').Current.IsEnabled){throw 'Input and Output were enabled without a selected point'}
         $endpoints=Curve-Json
         # Seed a visible handle instead of resizing or scrolling the workspace.
         $at=Curve-At .5 .85
@@ -180,10 +221,35 @@ function Check-CurveGestures {
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device detach and restore was not one Undo"
             Write-Host "$device curve: double tap removal and drag-off restore passed"
         }
+        Tap-Point 1
+        Wait-Until {(Field 'input').Current.IsEnabled -and (Field 'output').Current.IsEnabled} 'Selecting a point did not enable Input and Output'
+        Wait-Until {(Field 'output').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq (Property 'curve_0').curve.output.text} 'Output did not show the exact shared text'
+        $revision=(Model).state.document_file.revision;$point=(Property 'curve_0').value.value[1]
+        Edit 'property-curve_0-output' '1';Edit 'property-curve_0-output' (Property 'curve_0').curve.output.text;(Control 'property-curve_0-curve').SetFocus();Start-Sleep -Milliseconds 300
+        if((Curve-Json) -ne $original -or (Model).state.document_file.revision -ne $revision){throw 'Committing unchanged Output text changed the point'}
+        Edit 'property-curve_0-output' '200';(Control 'property-curve_0-curve').SetFocus()
+        Wait-Until {$p=(Property 'curve_0').value.value;$p.Count -eq 3 -and [Math]::Abs($p[1][1]-200/255) -lt 1e-6 -and $p[1][0] -eq $point[0]} 'Typed Output did not move only the selected point'
+        Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'Typed Output was not one Undo'
+        Tap-Point 1;$graph=Control 'property-curve_0-curve';$graph.SetFocus();Wait-Until {$graph.Current.HasKeyboardFocus} 'The curve graph did not take focus'
+        for($i=0;$i -lt 5;$i++){[CapyRowPointer]::Hold(0x26,$true);Start-Sleep -Milliseconds 60}
+        [CapyRowPointer]::Hold(0x26,$false)
+        Wait-Until {[Math]::Abs((Property 'curve_0').value.value[1][1]-$point[1]-5/255) -lt 1e-4} 'A held Up arrow did not step the point by 1/255 per repeat'
+        Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'A held arrow was not one Undo'
+        Tap-Point 1;[CapyRowPointer]::Key(0x2E)
+        Wait-Until {(Property 'curve_0').value.value.Count -eq 2} 'Delete did not remove the selected point'
+        Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'Delete was not one Undo'
+        Tap-Point 0
+        Wait-Until {!(Field 'input').Current.IsEnabled -and (Field 'output').Current.IsEnabled} 'An endpoint Input was editable'
+        $at=Curve-At .25 .6
+        for($i=0;$i -lt 2;$i++){[CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 60}
+        Start-Sleep -Milliseconds 400
+        if((Property 'curve_0').value.value.Count -ne 4){throw 'A double click on the empty graph did not insert exactly one point'}
+        Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'The double-click insertion was not one Undo'
+        if((Find 'property-hdr_stops') -or (Find 'property-domain')){throw 'An integer drawing offered the HDR curve domain'}
         Capture 'curve-gestures'
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $endpoints} 'Seed insertion was not one Undo'
         'mouse, pen and touch: passed'
-    } finally {[CapyRowPointer]::Dispose()}
+    }
 }
 
 try {
@@ -231,6 +297,7 @@ try {
     Edit 'property-opacity' '60';(Control 'property-blend').SetFocus()
     Wait-Until {[Math]::Abs((Property 'opacity').value.value-.6) -lt .000001} 'Opacity not updated'
     Choose 'property-blend' 'Multiply';Wait-Until {(Property 'blend').value.value -eq 1} 'Blend not updated'
+    Check-PropertyScrub
     Select-Filter 'curves' 'Curves'
     $curveGestures=Check-CurveGestures
     $graph=(Control 'property-curve_0-curve').GetRuntimeId() -join ':'
@@ -299,7 +366,10 @@ try {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document'
     $discard=@{item=$null};try{Wait-Until {$discard.item=Find 'Discard Changes' -Name;$null -ne $discard.item -or $null -ne (Find 'document-width')} 'New drawing did not open' 5}catch{}
     if($discard.item){$discard.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
-    Edit 'document-width' '128';Edit 'document-height' '64';Invoke 'Create' -Name
+    Edit 'document-width' '128';Edit 'document-height' '64'
+    $depth=Control 'document-depth';$depth.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $float=@{item=$null};Wait-Until {$float.item=@($depth.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ListItem))|Where-Object {$_.Current.Name -match 'float'})[0];$float.item} 'New drawing did not offer a float depth'
+    $float.item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select();Invoke 'Create' -Name
     Wait-Until {$active=@((Model).state.tabs|Where-Object active);$active.Count -eq 1 -and $active[0].width -eq 128 -and $active[0].height -eq 64 -and !(Model).state.document_file.busy} 'Document replacement failed' 45
     Wait-Until {(Control 'drawing-canvas').Current.IsEnabled} 'Document dialog gate did not clear'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Preview after document replacement not ready' 20
@@ -308,6 +378,7 @@ try {
     if((Model).state.document_file.modified){throw 'Preview or stale property changed new document'}
     Select-Panel 'adjustments'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Retained cache not shown on reopen' 15
+    Check-LogCurve
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [PSCustomObject]@{
@@ -315,6 +386,7 @@ try {
         six_property_kinds='passed';reset_draft_guards_and_endpoints='passed'
         curve_control_retention_and_resize='passed';category_search_and_insertion='passed'
         gpu_preview_paint_and_exact_undo='passed';preview_theme_and_document_replacement='passed'
+        properties_pages='passed';curve_fields_keys_and_log_hdr='passed';one_undo_slider_scrub='passed'
         clean_document_and_zero_exit='passed'
         scope='isolated native UI and app-only GPU pixels; full workspace visual parity, physical input and presentation acceptance remain separate'
     }|ConvertTo-Json

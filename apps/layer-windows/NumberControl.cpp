@@ -5,7 +5,7 @@
 namespace CapyUi {
 namespace {
 struct NumberState {
-    double value=0;bool editing=false,dragging=false,formatting=false;
+    double value=0;bool editing=false,dragging=false,formatting=false,gesture=false;
     hstring identity;
     hstring measuredText;double measuredWidth=-1;
     std::function<J(J const&,double,J const&)> resolve;
@@ -21,6 +21,9 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     auto local=std::make_shared<NumberState>();local->value=get();
     if(presentation.identity)local->identity=presentation.identity();
     local->resolve=presentation.resolve?presentation.resolve:decltype(local->resolve)([data](J const& spec,double value,J const& operation){return numeric(data->localization.get(),spec,value,operation);});
+    auto phase=presentation.phase;auto presented=presentation.text;
+    auto finish=[local,phase](hstring const& name){if(local->gesture){local->gesture=false;phase(name,local->value);}};
+    auto showText=[local,spec,presented](wchar_t const* field){return presented?presented():str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),field);};
     bool ranged=str(spec,L"kind")==L"slider",preference=presentation.preference;
     double valueHeight=preference?34.:(ranged?24.:32.),stepSize=ranged&&!preference?24.:32.;
     StackPanel root;root.Spacing(0);
@@ -145,18 +148,19 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         slider.Resources().Insert(box_value(key),preference?accent(data):data->brush(L"thumb"));
     for(auto key:{L"SliderTrackFill",L"SliderTrackFillPointerOver",L"SliderTrackFillPressed",L"SliderTrackFillDisabled"})
         slider.Resources().Insert(box_value(key),data->brush(L"input"));
-    auto commit=[data,local,spec,get,set,setText,identity=presentation.identity,weak=make_weak(entry)](bool cancel){
+    auto commit=[data,local,spec,get,set,setText,presented,identity=presentation.identity,weak=make_weak(entry)](bool cancel){
         auto entry=weak.get();if(!cancel&&entry&&textComposing(entry))return false;
         if(!entry||!local->editing)return true;
         if(identity && local->identity!=identity()){
             local->identity=identity();local->value=get();cancel=true;
         }
+        if(!cancel&&presented&&entry.Text()==presented()){local->editing=false;return true;}
         try{
             auto next=local->resolve(spec,local->value,cancel?O({{L"type",S(L"format")}}):
                 O({{L"type",S(L"expression")},{L"text",S(entry.Text())}}));
             bool changed=local->value!=num(next,L"value");
             local->value=num(next,L"value");local->editing=false;
-            setText(str(next,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));entry.BorderThickness(Thickness{0});
+            setText(cancel&&presented?presented():str(next,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));entry.BorderThickness(Thickness{0});
             ToolTipService::SetToolTip(entry,nullptr);
             if(!cancel&&changed)set(local->value);
             return true;
@@ -168,37 +172,44 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     };
     if(commits)commits->emplace_back([commit]{commit(false);});
     if(admissions)admissions->emplace_back(commit);
-    entry.GotFocus([data,local,spec,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
+    entry.GotFocus([data,local,showText,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
         auto entry=sender.as<TextBox>();entry.Background(data->brush(L"input"));
-        if(!local->editing){setText(str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),L"edit"));}
+        if(!local->editing)setText(showText(L"edit"));
     });
     // LosingFocus is synchronous; close and target-change commands must follow
     // the draft commit, rather than race the later LostFocus notification.
-    entry.LosingFocus([commit](auto&&,auto&&){commit(false);});
-    entry.LostFocus([commit,local,spec,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
+    entry.LosingFocus([commit,finish](auto&&,auto&&){finish(L"up");commit(false);});
+    entry.LostFocus([commit,local,showText,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
         auto entry=sender.as<TextBox>();commit(false);entry.Background(clear());
-        if(!local->editing)setText(str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),L"text"));
+        if(!local->editing)setText(showText(L"text"));
     });
-    entry.KeyDown([commit,local](auto&&,KeyRoutedEventArgs const& e){
+    entry.KeyDown([commit,local,finish](auto&&,KeyRoutedEventArgs const& e){
         if(composingKey(e))return;
         if(e.Key()==Windows::System::VirtualKey::Enter){commit(false);e.Handled(true);}
+        else if(e.Key()==Windows::System::VirtualKey::Escape&&local->gesture){finish(L"cancel");e.Handled(true);}
         else if(e.Key()==Windows::System::VirtualKey::Escape&&local->editing){commit(true);e.Handled(true);}
     });
     // TextBox consumes some arrow keys before the bubbling KeyDown event.
     // Numeric spin steps must take precedence over its caret navigation.
-    if(!ranged)entry.PreviewKeyDown([commit,local,spec,set](auto&&,KeyRoutedEventArgs const& e){
+    if(!ranged)entry.PreviewKeyDown([commit,local,spec,set,phase](auto&&,KeyRoutedEventArgs const& e){
         if(composingKey(e))return;
         if(e.Key()!=Windows::System::VirtualKey::Up&&e.Key()!=Windows::System::VirtualKey::Down)return;
         e.Handled(true);if(!commit(false))return;
         auto next=local->resolve(spec,local->value,O({{L"type",S(L"step")},{L"steps",N(e.Key()==Windows::System::VirtualKey::Up?1:-1)}}));
-        local->value=num(next,L"value");set(local->value);
+        local->value=num(next,L"value");
+        if(phase&&!local->gesture){local->gesture=true;phase(L"down",local->value);}else set(local->value);
     });
-    slider.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler(
-        [local](auto&&,auto&&){local->dragging=true;})),true);
+    if(!ranged&&phase)entry.AddHandler(UIElement::KeyUpEvent(),box_value(KeyEventHandler([finish](auto&&,KeyRoutedEventArgs const& e){
+        if(e.Key()==Windows::System::VirtualKey::Up||e.Key()==Windows::System::VirtualKey::Down)finish(L"up");
+    })),true);
+    slider.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([local,phase](auto&&,auto&&){
+        local->dragging=true;if(phase&&!local->gesture){local->gesture=true;phase(L"down",local->value);}
+    })),true);
     slider.AddHandler(UIElement::PointerReleasedEvent(),box_value(PointerEventHandler(
-        [local](auto&&,auto&&){local->dragging=false;})),true);
-    slider.PointerCaptureLost([local](auto&&,auto&&){local->dragging=false;});
-    slider.ValueChanged([data,local,spec,set,setText,weak=make_weak(entry)](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
+        [local,finish](auto&&,auto&&){local->dragging=false;finish(L"up");})),true);
+    slider.PointerCaptureLost([local,finish](auto&&,auto&&){local->dragging=false;finish(L"up");});
+    slider.PointerCanceled([local,finish](auto&&,auto&&){local->dragging=false;finish(L"cancel");});
+    slider.ValueChanged([data,local,spec,set,setText,phase,weak=make_weak(entry)](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
         if(data->updating)return;
         auto next=local->resolve(spec,local->value,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}}));
         local->value=num(next,L"value");local->editing=false;
@@ -206,21 +217,22 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             entry.BorderThickness({0});ToolTipService::SetToolTip(entry,nullptr);
             setText(str(next,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));
         }
-        set(local->value);
+        if(phase&&!local->gesture)Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().TryEnqueue([local,set,value=local->value]{if(!local->gesture)set(value);});
+        else set(local->value);
     });
     bindings.emplace_back([data,track]{
         auto palette=object(data->state,L"palette");
         auto panel=color(str(palette,L"panel")),ink=color(str(palette,L"text"));
         track.Color({255,uint8_t((int(panel.R)+ink.R)/2),uint8_t((int(panel.G)+ink.G)/2),uint8_t((int(panel.B)+ink.B)/2)});
     });
-    bindings.emplace_back([data,local,spec,get,entry,slider,setText,identity=presentation.identity]{
+    bindings.emplace_back([data,local,spec,get,entry,slider,setText,presented,identity=presentation.identity]{
         if(identity && local->identity!=identity()){
             local->identity=identity();local->editing=false;local->dragging=false;
             entry.BorderThickness({0});ToolTipService::SetToolTip(entry,nullptr);
         }
         if(local->editing||local->dragging)return;
         local->value=get();auto shown=local->resolve(spec,local->value,O({{L"type",S(L"format")}}));
-        setText(str(shown,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));
+        setText(presented?presented():str(shown,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));
         entry.Background(entry.FocusState()==FocusState::Unfocused?clear():data->brush(L"input"));
         slider.Value(num(shown,L"fill"));
     });

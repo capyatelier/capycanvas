@@ -6,6 +6,23 @@
 using namespace CapyEffects;
 using Windows::Foundation::Point;
 namespace {
+hstring curveKey(Windows::System::VirtualKey key){
+    using Windows::System::VirtualKey;
+    switch(key){
+        case VirtualKey::Left:return L"ArrowLeft";
+        case VirtualKey::Right:return L"ArrowRight";
+        case VirtualKey::Up:return L"ArrowUp";
+        case VirtualKey::Down:return L"ArrowDown";
+        case VirtualKey::Delete:return L"Delete";
+        case VirtualKey::Back:return L"Backspace";
+        case VirtualKey::Escape:return L"Escape";
+        default:return L"";
+    }
+}
+bool held(int key){return (GetKeyState(key)&0x8000)!=0;}
+TextBlock axisText(std::shared_ptr<WorkspaceData> const& data){
+    auto text=label(data,L"");text.FontSize(data->textSize()*.85);text.Opacity(.7);return text;
+}
 struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
     std::shared_ptr<Property> property;
     StackPanel root;
@@ -14,35 +31,71 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
     Canvas graph,grid,dots;
     Shapes::Polyline line;
     Button reset{nullptr};
+    std::array<std::array<TextBlock,3>,2> axes;
+    std::array<TextBlock,2> ev;
+    std::array<ContentControl,2> coordinates;
     std::optional<uint32_t> pointer;
-    std::optional<std::pair<int,uint64_t>> lastTap;
-    Point press{},start{};
-    int selected=0,pressed=-1;
-    bool removable=false,detached=false;
-    hstring drawn;
+    std::optional<std::pair<uint64_t,Point>> lastTap;
+    std::pair<uint64_t,Point> press{};
+    hstring heldKey,drawn,labels;
+    double owner=0,firstCount=0;
+    Point extent{};
+    J curve()const{return property->curve();}
+    double epoch()const{return num(curve(),L"epoch");}
     A points()const{return array(object(property->model(),L"value"),L"value");}
-    A point()const{auto p=points();return p.Size()?p.GetArrayAt(std::clamp(selected,0,int(p.Size())-1)):values({0,0});}
-    void change(int index,Point p,bool removePoint=false,hstring const& phase={}){
-        property->action(O({{L"op",S(L"curve_point")},{L"index",index<0?JsonValue::CreateNullValue():N(index)},
-            {L"point",values({p.X,p.Y})},{L"remove",B(removePoint)}}),phase);
+    void send(J operation)const{property->action(operation);}
+    J located(hstring const& op,Point at)const{
+        return O({{L"op",S(op)},{L"epoch",N(owner)},{L"point",values({at.X,at.Y})},{L"extent",values({extent.X,extent.Y})}});
     }
-    Point position(Point p)const{
-        return {float(p.X/graph.ActualWidth()),float(1-p.Y/graph.ActualHeight())};
+    bool secondTap(uint64_t time,Point at)const{
+        return lastTap&&time-lastTap->first<=uint64_t(GetDoubleClickTime())*1000&&std::hypot(at.X-lastTap->second.X,at.Y-lastTap->second.Y)<=8;
     }
-    Point dragged(Point p)const{
-        auto at=position(p);return {start.X+(at.X-press.X),start.Y+(at.Y-press.Y)};
-    }
-    static bool offGraph(Point p){
-        constexpr float margin=.1f;
-        return p.X<-margin||p.X>1+margin||p.Y<-margin||p.Y>1+margin;
-    }
+    void contact(hstring const& phase,Point at){auto operation=located(L"curve_contact",at);operation.Insert(L"phase",S(phase));send(operation);}
     void cancel(){
-        if(!pointer)return;
-        pointer.reset();detached=false;change(selected,{},false,L"cancel");graph.ReleasePointerCaptures();
+        if(!pointer&&heldKey.empty())return;
+        if(pointer){pointer.reset();graph.ReleasePointerCaptures();}else owner=epoch();
+        heldKey=L"";contact(L"cancel",{});
     }
-    ~CurveEditor(){cancel();}
-    void erase(){auto p=points();if(selected>0&&selected+1<int(p.Size())){int old=selected--;change(old,{},true);}}
-    void init(){
+    void removeAt(Point at,std::optional<double> count){
+        owner=epoch();extent={float(graph.ActualWidth()),float(graph.ActualHeight())};
+        auto operation=located(L"curve_remove_at",at);operation.Insert(L"point_count",count?N(*count):JsonValue::CreateNullValue());send(operation);
+    }
+    void key(KeyRoutedEventArgs const& e,bool pressed){
+        auto name=curveKey(e.Key());if(name.empty())return;
+        bool control=held(VK_CONTROL),alt=held(VK_MENU);
+        if(pressed&&name!=L"Escape"&&(control||alt))return;
+        if(name==L"Escape"&&pointer){pointer.reset();graph.ReleasePointerCaptures();}
+        if(name.starts_with(L"Arrow"))heldKey=pressed?name:hstring();
+        send(O({{L"op",S(L"curve_key")},{L"epoch",N(epoch())},{L"key_event",S(name)},{L"pressed",B(pressed)},
+            {L"repeat",B(pressed&&e.KeyStatus().WasKeyDown)},{L"modifiers",O({{L"command",B(control)},{L"shift",B(held(VK_SHIFT))},{L"alt",B(alt)}})}}));
+        e.Handled(true);
+    }
+    FrameworkElement coordinate(int axis,Bindings& bindings){
+        auto data=property->data;auto weak=weak_from_this();auto name=axis?L"output":L"input";
+        auto value=[weak,name]{if(auto self=weak.lock())return self->curve().GetNamedValue(name,JsonValue::CreateNullValue());return JsonValue::CreateNullValue();};
+        auto operation=[weak,name](double v){
+            auto self=weak.lock();if(!self)return J();
+            return O({{L"op",S(L"curve_number")},{L"epoch",N(self->epoch())},{L"axis",S(name)},{L"operation",O({{L"type",S(L"value")},{L"value",N(v)}})}});
+        };
+        auto captured=std::make_shared<bool>(false);
+        NumberPresentation presentation;
+        presentation.title=[weak,axis]{if(auto self=weak.lock())return str(array(self->curve(),L"axes").GetObjectAt(axis),L"label");return hstring();};
+        presentation.text=[value]{auto v=value();return v.ValueType()==JsonValueType::Object?str(v.GetObject(),L"text"):hstring();};
+        presentation.identity=[weak]{if(auto self=weak.lock())return self->curve().GetNamedValue(L"selected",JsonValue::CreateNullValue()).Stringify()+L"/"+to_hstring(self->epoch());return hstring();};
+        presentation.phase=[property=property,operation,captured](hstring const& phase,double v){*captured=phase==L"down";if(auto action=operation(v))property->action(action,phase);};
+        auto field=number(data,presentation.title(),object(curve(),L"numeric"),
+            [value]{auto v=value();return v.ValueType()==JsonValueType::Object?num(v.GetObject(),L"value"):0.;},
+            [property=property,operation,captured](double v){if(auto action=operation(v))property->action(action,*captured?L"move":L"");},
+            bindings,nullptr,false,property->id()+(axis?L"-output":L"-input"),false,presentation);
+        auto& gate=coordinates[axis];gate.Content(field);gate.IsTabStop(false);gate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+        bindings.emplace_back([value,gate,property=property]{
+            auto v=value();gate.IsEnabled(v.ValueType()==JsonValueType::Object&&!flag(v.GetObject(),L"read_only")&&flag(property->view(),L"enabled"));
+        });
+        StackPanel result;result.Children().Append(gate);ev[axis]=axisText(data);ev[axis].HorizontalAlignment(HorizontalAlignment::Right);
+        AutomationProperties::SetAutomationId(ev[axis],property->id()+(axis?L"-output-ev":L"-input-ev"));
+        result.Children().Append(ev[axis]);return result;
+    }
+    void init(Bindings& bindings){
         auto data=property->data;auto weak=weak_from_this();root.Spacing(6);
         graph.Background(data->brush(L"input"));graph.Children().Append(grid);graph.Children().Append(line);graph.Children().Append(dots);
         grid.IsHitTestVisible(false);line.IsHitTestVisible(false);dots.IsHitTestVisible(false);
@@ -50,16 +103,27 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         line.Stroke(data->brush(L"text"));line.StrokeThickness(1.5);
         focus.Content(graph);focus.IsTabStop(true);focus.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         focus.VerticalContentAlignment(VerticalAlignment::Stretch);
-        AutomationProperties::SetName(focus,str(property->model(),L"label")+L" curve");
         AutomationProperties::SetAutomationId(focus,property->id()+L"-curve");
-        hstring hint=L"Click to add a point and drag to shape the curve. Double-click a point or drag it off the graph to remove it.";
-        AutomationProperties::SetHelpText(focus,hint);CapyUi::tooltip(focus,hint);
-        reset=button(data,L"Reset curve",[weak]{if(auto self=weak.lock()){self->selected=0;self->lastTap.reset();self->cancel();self->property->reset();self->refresh();}});
+        reset=button(data,L"",[weak]{if(auto self=weak.lock()){self->cancel();self->property->reset();}});
         reset.Width(28);reset.Height(28);reset.Margin({2,2,2,2});reset.Content(icon(L"reset",data->theme()));
         reset.HorizontalAlignment(HorizontalAlignment::Right);reset.VerticalAlignment(VerticalAlignment::Bottom);reset.Visibility(Visibility::Collapsed);
-        CapyUi::tooltip(reset,AutomationProperties::GetName(reset));
         AutomationProperties::SetAutomationId(reset,property->id()+L"-reset");
-        chart.Children().Append(focus);chart.Children().Append(reset);root.Children().Append(chart);
+        chart.Children().Append(focus);chart.Children().Append(reset);
+        Grid frame;frame.ColumnSpacing(6);frame.RowSpacing(4);
+        for(auto width:{GridUnitType::Auto,GridUnitType::Star}){ColumnDefinition column;column.Width({1,width});frame.ColumnDefinitions().Append(column);}
+        for(auto height:{GridUnitType::Star,GridUnitType::Auto}){RowDefinition row;row.Height({1,height});frame.RowDefinitions().Append(row);}
+        Grid vertical,horizontal;
+        for(auto& axis:axes)for(auto& text:axis)text=axisText(data);
+        for(int i=0;i<3;i++){
+            RowDefinition row;row.Height({1,i==1?GridUnitType::Star:GridUnitType::Auto});vertical.RowDefinitions().Append(row);
+            ColumnDefinition column;column.Width({1,i==1?GridUnitType::Star:GridUnitType::Auto});horizontal.ColumnDefinitions().Append(column);
+            Grid::SetColumn(axes[0][i],i);horizontal.Children().Append(axes[0][i]);
+            Grid::SetRow(axes[1][2-i],i);vertical.Children().Append(axes[1][2-i]);
+        }
+        axes[0][1].HorizontalAlignment(HorizontalAlignment::Center);axes[1][1].VerticalAlignment(VerticalAlignment::Center);
+        Grid::SetColumn(chart,1);Grid::SetColumn(horizontal,1);Grid::SetRow(horizontal,1);
+        frame.Children().Append(vertical);frame.Children().Append(chart);frame.Children().Append(horizontal);root.Children().Append(frame);
+        for(int axis=0;axis<2;axis++)root.Children().Append(coordinate(axis,bindings));
         graph.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){
             if(self->graph.Height()!=e.NewSize().Width)self->graph.Height(e.NewSize().Width);self->refresh();
         }});
@@ -67,105 +131,85 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             auto raw=e.GetCurrentPoint(self->graph);
             if(self->pointer||self->graph.ActualWidth()<1||self->graph.ActualHeight()<1
                 ||!raw.IsInContact()||(raw.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse&&!raw.Properties().IsLeftButtonPressed()))return;
-            auto at=self->position(raw.Position());auto points=self->points();int index=-1;
-            for(uint32_t i=0;i<points.Size();i++){auto p=points.GetArrayAt(i);
-                double dx=(p.GetNumberAt(0)-at.X)*self->graph.ActualWidth(),dy=(p.GetNumberAt(1)-at.Y)*self->graph.ActualHeight();
-                // A curve has one value per x; edit an existing abscissa instead
-                // of guessing an insertion index that Rust would reject.
-                if(std::hypot(dx,dy)<12||std::abs(p.GetNumberAt(0)-at.X)<=.002){index=i;break;}
-            }
-            if(index<0&&points.Size()>=32)return;
+            auto at=raw.Position();if(!self->secondTap(raw.Timestamp(),at))self->firstCount=self->points().Size();
+            self->press={raw.Timestamp(),at};
             if(!self->graph.CapturePointer(e.Pointer()))return;
-            self->pointer=raw.PointerId();self->focus.Focus(FocusState::Programmatic);
-            self->selected=index;self->pressed=index;self->removable=index<0||(index>0&&index+1<int(points.Size()));
-            if(index<0){self->selected=0;for(auto p:points)if(p.GetArray().GetNumberAt(0)<at.X)self->selected++;}
-            self->press=at;self->start=at;
-            // Preserve the grab offset, including a click with no movement.
-            if(index>=0){auto p=points.GetArrayAt(index);self->start={float(p.GetNumberAt(0)),float(p.GetNumberAt(1))};}
-            self->change(index,self->start,false,L"down");e.Handled(true);
+            self->pointer=raw.PointerId();self->owner=self->epoch();
+            self->extent={float(self->graph.ActualWidth()),float(self->graph.ActualHeight())};
+            self->focus.Focus(FocusState::Programmatic);self->contact(L"down",at);e.Handled(true);
         }});
         graph.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
-            auto at=self->dragged(e.GetCurrentPoint(self->graph).Position());
-            self->detached=self->removable&&offGraph(at);
-            self->change(self->selected,at,false,L"move");e.Handled(true);
+            self->contact(L"move",e.GetCurrentPoint(self->graph).Position());e.Handled(true);
         }});
         graph.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->pointer==e.Pointer().PointerId()){
-            auto raw=e.GetCurrentPoint(self->graph);auto at=self->position(raw.Position());
-            bool tapped=self->pressed>=0&&std::hypot((at.X-self->press.X)*self->graph.ActualWidth(),(at.Y-self->press.Y)*self->graph.ActualHeight())<4;
-            bool twice=tapped&&self->lastTap&&self->lastTap->first==self->pressed&&raw.Timestamp()-self->lastTap->second<uint64_t(GetDoubleClickTime())*1000;
-            self->lastTap.reset();if(tapped&&!twice)self->lastTap=std::pair{self->pressed,raw.Timestamp()};
-            auto released=self->dragged(raw.Position());
-            int index=self->selected;
-            if((twice&&index>0&&index+1<int(self->points().Size()))||(self->removable&&offGraph(released)))self->selected=index-1;
-            self->detached=false;self->change(index,released,twice,L"up");
-            self->pointer.reset();self->graph.ReleasePointerCaptures();e.Handled(true);
+            auto at=e.GetCurrentPoint(self->graph).Position();self->pointer.reset();self->contact(L"up",at);
+            self->graph.ReleasePointerCaptures();e.Handled(true);
+            bool tap=std::hypot(at.X-self->press.second.X,at.Y-self->press.second.Y)<=4;
+            if(tap&&self->secondTap(self->press.first,self->press.second)){self->lastTap.reset();self->removeAt(at,self->firstCount);}
+            else self->lastTap=tap?std::optional(self->press):std::nullopt;
         }});
-        graph.PointerCanceled([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
-        graph.PointerCaptureLost([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
+        graph.PointerCanceled([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->pointer)self->cancel();});
+        graph.PointerCaptureLost([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->pointer)self->cancel();});
         graph.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
-        focus.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
-            using Windows::System::VirtualKey;
-            if(self->pointer){
-                if(e.Key()==VirtualKey::Escape)self->cancel();
-                e.Handled(true);return;
-            }
-            auto p=self->point();Point at{float(p.GetNumberAt(0)),float(p.GetNumberAt(1))};
-            switch(e.Key()){
-                case VirtualKey::Left:at.X-=.01f;break;
-                case VirtualKey::Right:at.X+=.01f;break;
-                case VirtualKey::Up:at.Y+=.01f;break;
-                case VirtualKey::Down:at.Y-=.01f;break;
-                case VirtualKey::Delete:self->erase();e.Handled(true);return;
-                default:return;
-            }
-            self->change(self->selected,at);e.Handled(true);
+        graph.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&e.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse){
+            self->cancel();self->removeAt(e.GetPosition(self->graph),std::nullopt);e.Handled(true);
         }});
+        focus.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock())self->key(e,true);});
+        focus.KeyUp([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock())self->key(e,false);});
+        focus.LostFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->cancel();});
     }
+    ~CurveEditor(){cancel();}
     void refresh(){
-        auto data=property->data;auto p=points();if(p.Size()<2)return;
-        // A submitted insertion can be ahead of its snapshot; preserve the
-        // captured index until the owner acknowledges the new point.
-        if(!pointer)selected=std::clamp(selected,0,int(p.Size())-1);
-        auto model=property->model();bool modified=flag(model,L"modified");
-        reset.Visibility(modified?Visibility::Visible:Visibility::Collapsed);
+        auto data=property->data;auto model=property->model();auto view=curve();auto p=points();
+        if(p.Size()<2||!view.Size())return;
+        auto help=str(view,L"help"),resetLabel=str(view,L"reset_label");
+        if(auto copy=str(model,L"label")+L"\n"+help+L"\n"+resetLabel;copy!=labels){labels=copy;
+            AutomationProperties::SetName(focus,str(model,L"label"));AutomationProperties::SetHelpText(focus,help);CapyUi::tooltip(focus,help);
+            AutomationProperties::SetName(reset,resetLabel);CapyUi::tooltip(reset,resetLabel);
+        }
+        auto axisViews=array(view,L"axes");
+        for(int axis=0;axis<2&&axis<int(axisViews.Size());axis++){
+            auto spec=axisViews.GetObjectAt(axis);
+            for(int i=0;i<3;i++)if(auto text=str(spec,std::array{L"minimum",L"label",L"maximum"}[i]);axes[axis][i].Text()!=text)axes[axis][i].Text(text);
+        }
+        bool log=str(object(view,L"domain"),L"kind")==L"log_hdr";
+        for(int axis=0;axis<2;axis++){
+            auto value=view.GetNamedValue(axis?L"output":L"input",JsonValue::CreateNullValue());
+            ev[axis].Text(value.ValueType()==JsonValueType::Object?str(value.GetObject(),L"ev"):hstring());
+            ev[axis].Visibility(log?Visibility::Visible:Visibility::Collapsed);
+        }
+        bool modified=flag(model,L"modified");reset.Visibility(modified?Visibility::Visible:Visibility::Collapsed);
         double side=graph.ActualWidth();if(side<=0)return;
-        auto view=property->view();
-        auto peak=view.GetNamedValue(L"curve_max",JsonValue::CreateNullValue()),white=view.GetNamedValue(L"curve_white",JsonValue::CreateNullValue());
-        bool hdr=peak.ValueType()==JsonValueType::Number&&white.ValueType()==JsonValueType::Number&&peak.GetNumber()>0;
-        auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"side",N(side)},{L"selected",N(detached?-1:selected)},
-            {L"peak",peak},{L"white",white},{L"modified",B(modified)},{L"theme",S(data->theme())}}).Stringify();
+        auto selected=view.GetNamedValue(L"selected",JsonValue::CreateNullValue());
+        auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"side",N(side)},{L"selected",selected},
+            {L"axes",axisViews},{L"theme",S(data->theme())}}).Stringify();
         if(next==drawn)return;drawn=next;grid.Children().Clear();dots.Children().Clear();
         for(int i=1;i<4;i++)for(int axis=0;axis<2;axis++){
             Shapes::Line l;l.X1(axis?0:side*i/4);l.Y1(axis?side*i/4:0);l.X2(axis?side:side*i/4);l.Y2(axis?side*i/4:side);
             l.Stroke(data->brush(L"text"));l.StrokeThickness(1);l.Opacity(.2);grid.Children().Append(l);
         }
-        auto caption=[&](hstring const& text,bool top){
-            TextBlock value;value.Text(text);value.FontSize(11);value.FontFamily(FontFamily(L"Segoe UI"));
-            value.Foreground(data->brush(L"text"));value.Opacity(.7);value.Measure({1000,1000});
-            auto size=value.DesiredSize();
-            Canvas::SetLeft(value,top?5.:std::max(5.,side-(modified?33.:5.)-size.Width));
-            Canvas::SetTop(value,top?5.:side-5.-size.Height);grid.Children().Append(value);
-        };
-        if(hdr){
-            double at=white.GetNumber();
-            for(int axis=0;axis<2;axis++){
-                Shapes::Line l;l.X1(axis?0:at*side);l.Y1(axis?(1-at)*side:0);l.X2(axis?side:at*side);l.Y2(axis?(1-at)*side:side);
-                l.Stroke(data->brush(L"text"));l.StrokeThickness(1);l.Opacity(.7);
-                DoubleCollection dash;dash.Append(3);dash.Append(3);l.StrokeDashArray(dash);grid.Children().Append(l);
-            }
-            wchar_t range[64];swprintf(range,64,L"%.0f \u00b7 %+.0f EV",peak.GetNumber(),std::log2(peak.GetNumber()));
-            caption(L"SDR white \u00b7 0 EV",true);caption(range,false);
-        }else{caption(L"Output",true);caption(L"Input",false);}
+        for(int axis=0;axis<2&&axis<int(axisViews.Size());axis++){
+            auto white=axisViews.GetObjectAt(axis).GetNamedValue(L"white",JsonValue::CreateNullValue());
+            if(white.ValueType()!=JsonValueType::Number)continue;double at=white.GetNumber();
+            Shapes::Line l;l.X1(axis?0:at*side);l.Y1(axis?(1-at)*side:0);l.X2(axis?side:at*side);l.Y2(axis?(1-at)*side:side);
+            l.Stroke(data->brush(L"text"));l.StrokeThickness(1);l.Opacity(.7);
+            DoubleCollection dash;dash.Append(3);dash.Append(3);l.StrokeDashArray(dash);grid.Children().Append(l);
+        }
         std::vector<Point> path;for(auto value:array(model,L"plot")){auto at=value.GetArray();path.push_back({float(at.GetNumberAt(0)*side),float((1-at.GetNumberAt(1))*side)});}
         line.Points().ReplaceAll(path);
-        for(uint32_t i=0;i<p.Size();i++){auto at=p.GetArrayAt(i);double radius=!detached&&int(i)==selected?5:3.5;
-            Shapes::Ellipse dot;dot.Width(radius*2);dot.Height(radius*2);dot.Fill(data->brush(L"text"));
-            Canvas::SetLeft(dot,at.GetNumberAt(0)*side-radius);Canvas::SetTop(dot,(1-at.GetNumberAt(1))*side-radius);dots.Children().Append(dot);
+        for(uint32_t i=0;i<p.Size();i++){
+            auto at=p.GetArrayAt(i);double x=at.GetNumberAt(0)*side,y=(1-at.GetNumberAt(1))*side;
+            Shapes::Ellipse dot;dot.Width(7);dot.Height(7);dot.Fill(data->brush(L"text"));
+            Canvas::SetLeft(dot,x-3.5);Canvas::SetTop(dot,y-3.5);dots.Children().Append(dot);
+            if(selected.ValueType()==JsonValueType::Number&&uint32_t(selected.GetNumber())==i){
+                Shapes::Ellipse ring;ring.Width(12);ring.Height(12);ring.Stroke(data->brush(L"text"));ring.StrokeThickness(1.5);
+                Canvas::SetLeft(ring,x-6);Canvas::SetTop(ring,y-6);dots.Children().Append(ring);
+            }
         }
     }
 };
 }
 FrameworkElement CapyEffects::CurveField(std::shared_ptr<Property> const& property,Bindings& bindings){
-    auto view=std::make_shared<CurveEditor>();view->property=property;view->init();
+    auto view=std::make_shared<CurveEditor>();view->property=property;view->init(bindings);
     bindings.emplace_back([view]{view->refresh();});return view->root;
 }

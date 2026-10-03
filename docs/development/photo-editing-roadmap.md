@@ -44,8 +44,9 @@ Live Liquify (XF-5) is deferred to a future effect; existing baked Liquify remai
 ## Apple and Windows
 
 The M5 transform controls and shared Properties pages/precise Curves also need
-native presentation and device verification on Apple and Windows. Shared Rust
-support and bridge compilation do not establish native UI parity.
+native presentation and device verification on Apple and Windows; Windows
+presents the pages and precise Curves. Shared Rust support and bridge
+compilation do not establish native UI parity.
 
 M1 shipped on every host, and Apple presents M2 to M4. Windows still needs the following, through the [Windows porting guide](../WINDOWS_PORTING_GUIDE.md); shared Rust already provides the behaviour:
 
