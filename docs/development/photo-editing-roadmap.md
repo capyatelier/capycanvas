@@ -34,7 +34,7 @@ and [calibration](../ui/color-picker.md#levels-and-curves).
 The precision adjustment UI still needs Web and Android presentation.
 Hue / Saturation now has six editable hue ranges and Colorize. Invert, luminance
 Threshold, Desaturate and Photo Filter use the existing shared Properties controls
-on GTK, Web and Android.
+on GTK, Web, Android and Windows.
 
 ## Milestones
 

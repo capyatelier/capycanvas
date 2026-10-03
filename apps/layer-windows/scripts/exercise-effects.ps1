@@ -326,8 +326,21 @@ try {
         Choose 'properties-page' $page.label
         Wait-Until {$keys=@((Model).state.layer_properties.controls|Where-Object page -eq $page.id|ForEach-Object key);(Model).state.layer_properties.page -eq $page.id -and $keys.Count -and @($keys|Where-Object {!(Find "property-$_")}).Count -eq 0} "Color Balance did not present its $($page.label) page"
     }
-    Select-Filter 'hue_saturation' 'Hue / Saturation'
+    Select-Filter 'brightness_contrast' 'Brightness / Contrast'
     if(Find 'properties-page'){throw 'A single-page filter offered a page choice'}
+    Select-Filter 'hue_saturation' 'Hue / Saturation'
+    Wait-Until {@((Model).state.layer_properties.pages).Count -eq 7 -and (Find 'properties-page')} 'Hue / Saturation did not offer Master and six ranges'
+    $lightness=Control 'property-lightness';$identity=$lightness.GetRuntimeId() -join ':'
+    $lightness.SetFocus();$lightness.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('12')
+    (Control 'property-colorize').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {(Property 'colorize').value.value -and (Find 'property-colorize_hue') -and !(Find 'property-hue') -and !(Find 'properties-page')} 'Colorize did not replace Hue and Saturation and hide the ranges'
+    if(((Control 'property-lightness').GetRuntimeId() -join ':') -ne $identity){throw 'Colorize replaced the common Lightness field'}
+    Wait-Until {[Math]::Abs((Property 'lightness').value.value-12) -lt 1e-6} 'The Lightness draft did not commit when Colorize took focus'
+    Capture 'hue-colorize'
+    Select-Filter 'photo_filter' 'Photo Filter'
+    foreach($id in @('property-color-color','property-density','property-preserve_luminance')){$null=Control $id}
+    Select-Filter 'threshold' 'Threshold';$null=Control 'property-threshold'
+    foreach($filter in @(@('invert','Invert'),@('desaturate','Desaturate'))){Select-Filter $filter[0] $filter[1];if(@((Model).state.layer_properties.controls).Count){throw "$($filter[1]) offered controls"}}
 
     Select-Filter 'gradient_map' 'Gradient Map'
     Invoke 'property-gradient-add';Wait-Until {(Property 'gradient').value.value.Count -eq 3} 'Gradient stop not added'

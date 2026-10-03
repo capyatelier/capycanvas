@@ -28,7 +28,7 @@ resolution because thresholding averaged colors loses narrow black/white edges.
 
 The [tone and color contract](../development/photo-editing-m5-m6-color.md#huesaturation-by-range)
 defines the equations and bounds. All controls, validation, history and saved
-values use the existing runtime schema on GTK, Web and Android.
+values use the existing runtime schema on GTK, Web, Android and Windows.
 
 ## Definitions and ownership
 
