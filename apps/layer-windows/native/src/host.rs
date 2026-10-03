@@ -291,9 +291,11 @@ impl CapyHost {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Capy Canvas Windows"),
             required_features: adapter.features() & (wgpu::Features::TIMESTAMP_QUERY
+                | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
                 | wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE
                 | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
             required_limits: limits,
+            memory_hints: layer_render_wgpu::memory_hints(),
             ..Default::default()
         }))
         .map_err(err)?;

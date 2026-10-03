@@ -647,6 +647,8 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         POINTER_DEVICE_INFO device{};
         if(GetPointerInfo(current.PointerId(),&info) && GetPointerDevice(info.sourceDevice,&device)
             && device.pointerDeviceType==POINTER_DEVICE_TYPE_EXTERNAL_PEN) deviceFlags=0x40;
+        POINTER_PEN_INFO pen{};
+        if(GetPointerPenInfo(current.PointerId(),&pen)&&(pen.penMask&PEN_MASK_ROTATION))deviceFlags|=0x80;
     }
     auto capture=[&](Microsoft::UI::Input::PointerPoint const& point,bool predicted) {
         auto props=point.Properties();
