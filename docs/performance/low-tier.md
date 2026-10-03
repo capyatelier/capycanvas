@@ -69,6 +69,34 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Tool Options or panel content change | 60 | **Not met.** UI frame p50/p95 25.4/35.3 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 60 | | |
 | Menu open and close | 60 | | |
+| Interface language change | 60 | Preparation only: maximum Web batch 3.14 ms; UI publication and frame cadence unmeasured | Language preparation below; no tier qualification |
+
+## Language preparation
+
+Measured on the TCL TAB 11 Gen 2 on 2026-10-02 with Release Wasm from
+`19a086a37`, Chrome 154 and a cross-origin-isolated timer. Three fresh modules
+per language cover all five catalogs and verify all 2,904 static labels.
+The comparison replaces whole-resource parsing with complete Fluent groups
+bounded to 32 entries and 4096 bytes.
+
+| Preparation interval | Whole resources, maximum | Bounded groups, maximum |
+| --- | ---: | ---: |
+| One step, English already initialized | 2.920 ms | 2.020 ms |
+| One step, fresh module | 5.325 ms | 4.190 ms |
+| Production Web 2 ms deadline loop, English initialized | Unmeasured | 3.140 ms |
+
+Web startup initializes English before a live switch. The fresh-module maximum
+is the first parser/JIT invocation; other fresh-module runs stay at or below
+1.990 ms. Total isolated preparation cost does not materially improve: foreign
+catalogs take approximately 26–35 ms before grouping and 30–34 ms afterwards.
+The smaller indivisible parse work allows more frequent deadline checks.
+
+These elapsed intervals include scheduling and JIT. The batch probe runs the
+production Rust deadline loop, excluding publication, view generation and
+JavaScript serialization. It has no canvas workload and establishes neither
+UI frame rate nor input-to-paint latency. Raw results and source/catalog hashes
+are under `artifacts/localization-live-switching/production-preparation-*`;
+the comparison and limits are in `preparation-quantum.local.md` there.
 
 ## Current drag comparison
 

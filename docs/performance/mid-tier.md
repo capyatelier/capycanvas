@@ -55,6 +55,7 @@ canvas is 6000 × 4000.
 | Tool Options or panel content change | 90 | **Not met.** UI frame p50 21.4 ms | `cbfad9e5`, 2026-09-26 |
 | List scrolling: layers, brushes, filters | 90 | | |
 | Menu open and close | 90 | | |
+| G-Pen 1536 px stroke with a pending language change | 90 | **Not met.** 56.80 fresh updates/s (52.40–56.99), completion-gap p99 32.08–34.97 ms | Language-change diagnostic below; synthetic owner replay, no scanout qualification |
 
 Layer swipe measurements use the Wacom MovinkPad 11 at thermal status 0, the
 6000 × 4000 reference photo beneath one empty paint layer, Fit zoom and default
@@ -66,6 +67,40 @@ Chrome 137, injected pen input through DevTools and Chrome's
 Raw frame data, Chrome traces and fixture details are in
 `artifacts/swipe-alpha-lock/`; Android's repeatable entry point is
 `AndroidTitleBarTest#layerSwipeFrameTiming` ([layer gesture checks](../ui/drag-and-reorder.md#required-validation-when-implementing)).
+
+## Language-change diagnostic
+
+Measured on the Wacom MovinkPad 11 on 2026-10-02 with `19a086a37`, release Rust
+in the unminified Android benchmark APK. The 6000 × 4000 Perceptual photo has an
+empty drawing layer above it and visible Paper below. Navigator is open, panel
+glass uses its default and Fit zoom is 15.99%. G-Pen uses 1536 px and pressure 1.
+Three warmed five-second strokes per scenario follow an ellipse with screen
+semiaxes 310 × 150 px; the whole brush footprint stays at least 46.9 px inside
+the canvas. The priming stroke is undone. Thermal status is zero before and
+after the runs.
+
+| Same-build workload | Median fresh GPU updates/s (range) | Completion-gap p99 across runs |
+| --- | ---: | ---: |
+| Steady language | 55.40 (47.00–57.40) | 30.98–51.27 ms |
+| Language requested halfway through the stroke | 56.80 (52.40–56.99) | 32.08–34.97 ms |
+
+Preparation takes 8.81–11.23 ms. Publication waits for pen-up; pen-up to observed
+published model takes 222.51–303.51 ms. The harness resumes input within
+0.014–0.025 ms of observing publication. Consumed input to the first resumed
+GPU submission takes 14.06–19.30 ms, and to completion 57.00–65.15 ms.
+
+The 90/s and 22.2 ms criteria are not met. Overlapping run ranges and the slower
+first steady run establish no improvement or regression. This compares two
+scenarios in the candidate, not a previous revision. Synthetic owner replay
+does not qualify OS input, display scanout or a real pen. Visible Paper also
+differs from the official brush fixture, which hides it. UI publication frame
+cadence remains unmeasured.
+
+APK SHA-256 is
+`3f7fe53170f5a8282b2766bd5cc828c6a9c971148956b76561809abf777a7553`.
+Raw records are under `artifacts/localization-live-switching/android/viewport-tier/`;
+`viewport-tier-language-summary.json` in its parent directory records the
+samples, geometry, layers and publication/resume intervals.
 
 ## Spatial composition comparison
 
