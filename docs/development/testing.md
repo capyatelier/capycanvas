@@ -48,6 +48,8 @@ Toolbar fixtures allocate tiles through `insert_tools`. Modifier fixtures compar
 their rows with the shortcut page's tool contexts.
 Cursor tests observe a frame before asserting that no ink was deposited. Stroke
 selection tests check nonempty live batches; undo/redo compares raster identities.
+The Web pointer fixture records pen-button reports separately from tip contacts
+so a held barrel button exercises both input paths.
 Presentation tests use the renderer's `create_target` for their surfaces; preserve
 each test's format and extent, and validate its usage flags on the test GPU.
 Renderer source fixtures use `test_support::depth_source` with their original

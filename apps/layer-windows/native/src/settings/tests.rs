@@ -706,7 +706,7 @@ fn prepared_launch_restores_before_views_and_keeps_the_profile_context() {
 fn language_presentation_carries_the_active_delivery_copy() {
     let japanese = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
     let mut native = NativeHost::launch_localized(layer_ui::Platform::Windows, "", japanese.clone()).unwrap();
-    let presentation = crate::host::localization_presentation(&mut native).unwrap();
+    let presentation = localization_presentation(&mut native).unwrap();
     let delivery = layer_ui::DocumentDeliveryCopy::new(&japanese);
     let english = layer_ui::DocumentDeliveryCopy::new(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
     assert_ne!(delivery.drawing_type, english.drawing_type);

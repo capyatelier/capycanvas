@@ -15,6 +15,12 @@ use std::{
 const MAX_BYTES: usize = 1024 * 1024;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
+pub(crate) fn localization_presentation(native: &mut NativeHost) -> Result<serde_json::Value, String> {
+    let mut catalog = native.query(serde_json::json!({"type":"catalog"}))?;
+    catalog["delivery"] = serde_json::to_value(layer_ui::DocumentDeliveryCopy::new(native.session.localization())).map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({"generation": native.localization_generation(), "bootstrap": native.bootstrap_view(), "catalog": catalog}))
+}
+
 fn io_error(operation: &str, error: std::io::Error) -> String {
     format!("Could not {operation} preferences ({:?}).", error.kind())
 }

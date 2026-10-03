@@ -1001,11 +1001,6 @@ pub unsafe extern "C" fn capy_localization_input(host: *mut CapyHost, busy: bool
 pub unsafe extern "C" fn capy_frame(host: *mut CapyHost, now: u64, presentation: u64) -> i32 {
     guard(host, |host| host.frame(now, presentation))
 }
-pub(crate) fn localization_presentation(native: &mut NativeHost) -> Result<serde_json::Value, String> {
-    let mut catalog = native.query(serde_json::json!({"type":"catalog"}))?;
-    catalog["delivery"] = serde_json::to_value(layer_ui::DocumentDeliveryCopy::new(native.session.localization())).map_err(err)?;
-    Ok(serde_json::json!({"generation": native.localization_generation(), "bootstrap": native.bootstrap_view(), "catalog": catalog}))
-}
 #[derive(serde::Serialize)]
 struct WindowsMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1037,7 +1032,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     guard(host, |host| {
         let generation = host.native.localization_generation();
         let localization = if host.localization_generation != Some(generation) {
-            Some(localization_presentation(&mut host.native)?)
+            Some(crate::settings::localization_presentation(&mut host.native)?)
         } else { None };
         let metadata = WindowsMetadata {
             localization,

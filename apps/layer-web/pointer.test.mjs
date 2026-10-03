@@ -31,7 +31,7 @@ test("cursor hover preserves mouse, pen, and eraser device kinds", () => {
   assert.deepEqual(changes, ["cursor-left"]);
 });
 function harness({ raw = false, prediction = false, paint: allowPaint = true } = {}) {
-  const listeners = new Map(), records = [], phases = [], cursors = [];
+  const listeners = new Map(), records = [], phases = [], buttons = [], cursors = [];
   let contact = null;
   const context = {
     canvas: {
@@ -43,10 +43,14 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true } =
     lastPenEvent: null, pending: [], notice: null, state: { camera: { revision: 1 }, settings: { feedback: prediction, platform_prediction: prediction } },
     app: { pen(batch) { records.push(...batch); return batch.length / 11; } },
     input(event) {
+      if (event.type === "pen_button") {
+        buttons.push(event);
+        return { paint: false, handled: true };
+      }
       phases.push(event);
       if (event.phase === "down" && contact === null && event.kind !== "touch")
         contact = { id: event.id, paint: allowPaint && event.button === "primary" };
-      const paint = contact?.id === event.id && contact.paint;
+      const paint = contact !== null && contact.id === event.id && contact.paint;
       const handled = contact?.id === event.id;
       if (contact?.id === event.id && ["up", "cancel"].includes(event.phase)) contact = null;
       return { paint, handled };
@@ -65,7 +69,7 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true } =
         timeStamp: ++timeStamp, cancelable: type !== "pointerrawupdate", preventDefault() {}, ...overrides });
     },
     samples: () => Array.from({ length: records.length / 11 }, (_, i) => records.slice(i * 11, i * 11 + 11)),
-    phases, cursors,
+    phases, buttons, cursors,
   };
 }
 
@@ -158,12 +162,16 @@ for (const raw of [false, true]) {
       h.send("pointerup", { buttons: 0, pressure: 0 });
       assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 2, 2, 3]);
       assert.ok(h.phases.every(p => p.button === "primary"));
+      assert.deepEqual(h.buttons.map(p => [p.button, p.pressed]),
+        [[mask === 2 ? "primary" : "secondary", true], [mask === 2 ? "primary" : "secondary", false]]);
     });
 
     test(`pen tip can draw and lift while side button ${button} stays held (raw=${raw})`, () => {
       const h = harness({ raw });
       h.send("pointerdown", { button, buttons: mask, pressure: 0 });
       assert.equal(h.phases.length, 0, "hover button must not start navigation");
+      assert.deepEqual(h.buttons.map(p => [p.button, p.pressed]),
+        [[mask === 2 ? "primary" : "secondary", true]]);
       for (const tip of [1, 32]) {
         h.send("pointermove", { button: tip === 1 ? 0 : 5, buttons: tip | mask });
         if (raw) h.send("pointerrawupdate", { button: -1, buttons: tip | mask, clientX: 100 });
@@ -174,6 +182,7 @@ for (const raw of [false, true]) {
       h.send("pointerup", { button, buttons: 0, pressure: 0 });
       assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 3, 1, 2, 3]);
       assert.deepEqual(h.samples().map(s => s[10]), [0, 0, 0, 2, 2, 2]);
+      assert.deepEqual(h.buttons.map(p => p.pressed), [true, false]);
     });
   }
 }
