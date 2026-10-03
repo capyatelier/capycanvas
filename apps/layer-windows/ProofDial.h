@@ -34,7 +34,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
         for(auto node=VisualTreeHelper::GetParent(root);node;node=VisualTreeHelper::GetParent(node))if(auto scroll=node.try_as<ScrollViewer>())
             if(auto content=scroll.Content().try_as<UIElement>()){auto mode=content.ManipulationMode();scrollModes.emplace_back(make_weak(content),mode);content.ManipulationMode(mode&~ManipulationModes::System);}
     }
-    void finish(bool cancel){if(!pointer)return;pointer.reset();contact(cancel?L"cancel":L"up");root.ReleasePointerCaptures();releaseScroll();AutomationProperties::SetItemStatus(root,L"Ready");}
+    void finish(bool cancel){if(!pointer)return;pointer.reset();contact(cancel?L"cancel":L"up");root.ReleasePointerCaptures();releaseScroll();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
     static void circle(Shapes::Ellipse const& e,A const& point,double radius){e.Width(radius*2);e.Height(radius*2);Canvas::SetLeft(e,point.GetNumberAt(0)-radius);Canvas::SetTop(e,point.GetNumberAt(1)-radius);}
     void refresh(){
         auto current=array(form(),L"identity").Stringify();if(current!=identity){finish(true);identity=current;}
@@ -57,7 +57,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
     }
     void init(){
         auto weak=weak_from_this();root.IsTabStop(true);root.MinWidth(128);root.MaxWidth(side);root.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetAutomationId(root,L"proof-dial");AutomationProperties::SetName(root,L"SDR appearance dial");AutomationProperties::SetHelpText(root,L"Drag balance and contrast; arcs adjust brightness and color intensity. Arrow keys adjust the selected control. Home resets it; Escape cancels a drag.");
+        AutomationProperties::SetAutomationId(root,L"proof-dial");AutomationProperties::SetName(root,str(object(form(),L"copy"),L"balance_contrast"));AutomationProperties::SetHelpText(root,L"Drag balance and contrast; arcs adjust brightness and color intensity. Arrow keys adjust the selected control. Home resets it; Escape cancels a drag.");
         canvas.Width(side);canvas.Height(side);canvas.Background(clear());view.Child(canvas);view.Stretch(Stretch::Uniform);root.Content(view);
         // One shared immutable illustration; native bitmap storage is BGRA.
         Imaging::WriteableBitmap bitmap(256,256);uint8_t* bytes=nullptr;check_hresult(bitmap.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&bytes));
@@ -66,14 +66,14 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
         for(uint32_t i=0;i<2;++i){arcs[i].IsHitTestVisible(false);handles[i].IsHitTestVisible(false);canvas.Children().Append(arcs[i]);canvas.Children().Append(handles[i]);}
         marker.IsHitTestVisible(false);canvas.Children().Append(marker);
         for(uint32_t i=0;i<4;++i){texts[i].IsHitTestVisible(false);icons[i].IsHitTestVisible(false);canvas.Children().Append(texts[i]);canvas.Children().Append(icons[i]);}
-        reset.Padding({0});reset.MinWidth(0);reset.MinHeight(0);reset.Background(clear());reset.BorderThickness({0});AutomationProperties::SetAutomationId(reset,L"proof-dial-reset");AutomationProperties::SetName(reset,L"Reset SDR appearance");
+        reset.Padding({0});reset.MinWidth(0);reset.MinHeight(0);reset.Background(clear());reset.BorderThickness({0});AutomationProperties::SetAutomationId(reset,L"proof-dial-reset");AutomationProperties::SetName(reset,str(object(form(),L"copy"),L"reset_sdr"));tooltip(reset,str(object(form(),L"copy"),L"reset_sdr"));
         reset.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->control(3,O({{L"type",S(L"reset")}}));});canvas.Children().Append(reset);
         root.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->canvas);if(self->pointer||!p.IsInContact()||(p.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse&&!p.Properties().IsLeftButtonPressed()))return;
             auto g=self->geometry(p.Position());auto hit=g.GetNamedValue(L"hit",JsonValue::CreateNullValue());if(hit.ValueType()!=JsonValueType::Number||hit.GetNumber()==3)return;
             self->root.Focus(FocusState::Pointer);self->claimScroll();if(!self->root.CapturePointer(e.Pointer())){self->releaseScroll();return;}
             self->pointer=p.PointerId();self->part=uint8_t(hit.GetNumber());self->origin=self->last=p.Position();self->epoch=to_hstring(uint64_t(num(object(self->data->state,L"document_file"),L"epoch")));
-            self->contact(L"down");AutomationProperties::SetItemStatus(self->root,L"Adjusting");e.Handled(true);
+            self->contact(L"down");AutomationProperties::SetItemStatus(self->root,self->data->caption(L"header",L"dragging"));e.Handled(true);
         }});
         root.PointerMoved([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->last=e.GetCurrentPoint(self->canvas).Position();self->contact(L"move");e.Handled(true);}});
         root.PointerReleased([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock())if(self->pointer==e.Pointer().PointerId()){self->last=e.GetCurrentPoint(self->canvas).Position();self->finish(e.GetCurrentPoint(self->canvas).Properties().IsCanceled());e.Handled(true);}});

@@ -43,7 +43,7 @@ struct Column:std::enable_shared_from_this<Column>{
         gestures->Source(background,{},item,true);
         gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item);
         AutomationProperties::SetAutomationId(grip,L"column-grip-"+to_hstring(id));
-        AutomationProperties::SetName(grip,L"Move column");frame.Children().Append(grip);workspace.Children().Append(background);
+        copyName(data,grip,data->copyDelivery(L"move_column"));frame.Children().Append(grip);workspace.Children().Append(background);
     }
     J local(J const& bounds,J const& parent,double offset=0)const{
         auto result=J::Parse(bounds.Stringify());result.Insert(L"x",N(num(bounds,L"x")-num(parent,L"x")));
@@ -117,7 +117,7 @@ struct Column:std::enable_shared_from_this<Column>{
                 pick.Background(active?selected(data):clear());
                 auto sourceFacing=!facing.empty()&&joined==panelId?facing:openSources.contains(key)?openDirection:hstring{};
                 pick.CornerRadius(facingCorners(SurfaceRadius*CornerFit,sourceFacing));
-                AutomationProperties::SetItemStatus(pick,active?L"Selected":L"");
+                AutomationProperties::SetItemStatus(pick,active?data->caption(L"search",L"selected"):L"");
             }
         }
         for(auto it=buttons.begin();it!=buttons.end();)if(!current.contains(it->first)){

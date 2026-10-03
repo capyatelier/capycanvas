@@ -62,7 +62,7 @@ try{
     $right=@((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'properties'})[0]
     $rightDrawer=Control "column-drawer-$($right.anchor.column)"
     $grip=Control "drawer-grip-$($right.anchor.group)"
-    if($grip.Current.HelpText -notmatch 'every panel'){throw 'Drawer is missing its whole-group drag handle'}
+    if($grip.Current.Name -ne 'Move all tabs'){throw 'Drawer is missing its whole-group drag handle'}
     Wait-Until {try{($rightDrawer.Current.ItemStatus|ConvertFrom-Json).placement.bounds.width -eq 320}catch{$false}} 'Properties drawer did not reach shared width'
     foreach($press in 1..2){
         (Control 'drawer-tab-adjustments' -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()

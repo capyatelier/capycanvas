@@ -42,7 +42,7 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
         row.Children().Append(text);row.Children().Append(action);
         surface.IsHitTestVisible(false);frame.Children().Append(surface);frame.Children().Append(row);
         frame.Background(nullptr);
-        AutomationProperties::SetAutomationId(frame,L"canvas-notice");AutomationProperties::SetName(frame,L"Canvas notice");
+        AutomationProperties::SetAutomationId(frame,L"canvas-notice");
         AutomationProperties::SetLiveSetting(frame,Automation::Peers::AutomationLiveSetting::Polite);
         Canvas::SetZIndex(frame,900);
         timeout=host.DispatcherQueue().CreateTimer();timeout.IsRepeating(false);timeout.Interval(std::chrono::milliseconds(TimeoutMs));
@@ -60,7 +60,7 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
         auto id=num(notice,L"id");
         if(shown==id)return;
         shown=id;
-        text.Text(str(notice,L"text"));
+        text.Text(str(notice,L"text"));AutomationProperties::SetName(frame,str(notice,L"text"));
         auto offer=object(notice,L"action");
         action.Content(box_value(str(offer,L"label")));AutomationProperties::SetName(action,str(offer,L"label"));
         action.Visibility(offer.Size()?Visibility::Visible:Visibility::Collapsed);

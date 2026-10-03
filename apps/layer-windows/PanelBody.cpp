@@ -162,7 +162,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             }
             auto grip=object(tileGeometry,L"grip");
             if(grip.Size()&&gestures){
-                auto handle=button(data,L"Move "+str(panel,L"title"),[]{});
+                auto handle=button(data,data->caption(O({{L"type",S(L"move_panel")},{L"title",S(str(panel,L"title"))}})),[]{});
                 place(handle,grip);tileGrip=handle;
                 tileGripMark=panelGrip(data->theme(),num(grip,L"width")>num(grip,L"height"));handle.Content(tileGripMark);
                 auto item=O({{L"kind",S(L"panel")},{L"panel",S(str(panel,L"id"))}});

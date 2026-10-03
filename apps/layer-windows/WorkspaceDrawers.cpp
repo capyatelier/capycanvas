@@ -204,8 +204,8 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 grip.HorizontalAlignment(HorizontalAlignment::Left);grip.Child(panelGrip(data->theme()));
                 gestures->Source(grip,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem);
                 AutomationProperties::SetAutomationId(grip,L"drawer-grip-"+to_hstring(uint32_t(group)));
-                AutomationProperties::SetName(grip,L"Move panel group");
-                AutomationProperties::SetHelpText(grip,L"Drag to move every panel in this drawer.");
+                AutomationProperties::SetName(grip,data->delivery(L"move_group"));
+                AutomationProperties::SetHelpText(grip,data->delivery(L"drag_panel"));
                 Grid::SetColumn(grip,1);header.Children().Append(grip);
                 column.frame.Children().Append(header);
             }

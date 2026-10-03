@@ -31,7 +31,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
             if(rect.Y+rect.Height>0&&rect.Y<list.ActualHeight())visible.push_back(row.id);
             auto source=FilterPreviewSource(data->previews,context,row.id);
             if(row.image.Source()!=source)row.image.Source(source);
-            AutomationProperties::SetItemStatus(row.image,source?L"Ready":L"Pending");
+            AutomationProperties::SetItemStatus(row.image,source?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));
         }
         RefreshFilterPreviews(data->previews,reinterpret_cast<uint64_t>(this),context,width,height,visible);
     }
@@ -48,7 +48,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         ColumnDefinition action;action.Width({32,GridUnitType::Pixel});header.ColumnDefinitions().Append(action);header.ColumnSpacing(6);
         category.MinWidth(0);category.MinHeight(32);category.FontSize(data->textSize());category.Background(data->brush(L"input"));
         category.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetName(category,L"Filter category");AutomationProperties::SetAutomationId(category,L"filter-category");
+        AutomationProperties::SetName(category,data->caption(L"color",L"category"));AutomationProperties::SetAutomationId(category,L"filter-category");
         category.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating){
             auto categories=array(self->data->state,L"filter_categories");int index=self->category.SelectedIndex();
             if(index>=0&&uint32_t(index)<categories.Size())self->send(O({{L"op",S(L"category")},
@@ -69,7 +69,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         search.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Escape){
             if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_search")}}));e.Handled(true);
         }});
-        auto toggle=button(data,L"Search filters",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_search")}}));});
+        auto toggle=button(data,str(object(data->state,L"filter_picker"),L"search_label"),[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_search")}}));});
         toggle.Content(icon(L"search",data->theme()));toggle.Height(32);Grid::SetColumn(toggle,1);
         AutomationProperties::SetAutomationId(toggle,L"filter-search-toggle");header.Children().Append(toggle);root.Children().Append(header);
         list.Content(rows);list.HorizontalScrollMode(ScrollingScrollMode::Disabled);
@@ -97,7 +97,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         if(!open||(searchDraft&&query==*searchDraft))searchDraft.reset();
         if(!searchDraft&&search.Text()!=query)search.Text(query);
         if(open&&!wasOpen)search.Focus(FocusState::Programmatic);
-        auto markSelected=[&]{for(auto const& row:previews){bool active=row.id==str(picker,L"selected");row.button.Background(active?selected(data):clear());AutomationProperties::SetItemStatus(row.button,active?L"Selected":L"");}};
+        auto markSelected=[&]{for(auto const& row:previews){bool active=row.id==str(picker,L"selected");row.button.Background(active?selected(data):clear());AutomationProperties::SetItemStatus(row.button,active?data->caption(L"search",L"selected"):L"");}};
         auto choices=array(data->state,L"adjustments");auto next=choices.Stringify();if(next==listKey){markSelected();return;}listKey=next;
         rows.Children().Clear();previews.clear();hstring section;
         for(auto value:choices){
@@ -112,7 +112,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
             pick.Padding({6,3,6,3});
             StackPanel content;Image preview;preview.Height(40);preview.Stretch(Stretch::Fill);preview.IsHitTestVisible(false);
-            AutomationProperties::SetName(preview,str(choice,L"label")+L" preview");
+            AutomationProperties::SetName(preview,str(choice,L"label"));
             AutomationProperties::SetAutomationId(preview,L"filter-preview-"+str(choice,L"id"));
             content.Children().Append(preview);
             Grid caption;caption.HorizontalAlignment(HorizontalAlignment::Right);ColumnDefinition mark;mark.Width({1,GridUnitType::Auto});caption.ColumnDefinitions().Append(mark);
@@ -155,7 +155,7 @@ FrameworkElement FilterTypesPanel(std::shared_ptr<WorkspaceData> const& data,Bin
     ScrollView scroll;scroll.Content(choices);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
     scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
     scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);root.Children().Append(scroll);
-    auto cancel=button(data,L"Cancel",[data]{data->dispatch(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"cancel_filter")}})}}));});
+    auto cancel=button(data,data->common(L"cancel"),[data]{data->dispatch(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"cancel_filter")}})}}));});
     cancel.HorizontalAlignment(HorizontalAlignment::Left);cancel.Height(36);
     AutomationProperties::SetAutomationId(cancel,L"cancel-filter");Grid::SetRow(cancel,1);root.Children().Append(cancel);
     bindings.emplace_back([data,state,choices]{
@@ -178,7 +178,7 @@ FrameworkElement FilterTypesPanel(std::shared_ptr<WorkspaceData> const& data,Bin
         for(uint32_t i=0;i<categories.Size();++i){
             bool active=str(categories.GetObjectAt(i),L"id")==selectedCategory;
             state->buttons[i].Background(active?selected(data):clear());
-            AutomationProperties::SetItemStatus(state->buttons[i],active?L"Selected":L"");
+            AutomationProperties::SetItemStatus(state->buttons[i],active?data->caption(L"search",L"selected"):L"");
         }
     });
     return root;

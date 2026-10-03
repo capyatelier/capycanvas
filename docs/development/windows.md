@@ -59,12 +59,16 @@ text composition keys, canvas contacts and shared gestures to retire. System
 resamples the OS preferred languages on the profile worker; launch tags are the
 fallback when the OS query is unavailable. Text drafts and selections,
 document history, HWNDs and swap chains stay with their existing owners. The
-`localization` snapshot envelope carries one generation of catalog and bootstrap
-copy; stateless native helpers borrow that same immutable context.
+`localization` snapshot envelope carries one generation of catalog, document
+delivery and bootstrap copy; stateless native helpers borrow that same immutable
+context. Controls that outlive a language change, such as the canvas bar, bind
+their names with `copyName`; panel bodies rebuild when their localized tab titles
+change.
 
 `exercise-localization.ps1 -Executable <path> -Theme dark` checks actual preference
 choices for all five languages, retained numeric drafts and preference controls,
-and inactive and future windows. Repeat with `-Theme light`. The VM fixture
+relabeled canvas bar, layer footer, panel grip and resize handle names, and
+inactive and future windows. Repeat with `-Theme light`. The VM fixture
 runner selects these as `localization` and `localization:light`. Genuine TSF
 candidate handling and physical GPU presentation need Windows hardware.
 

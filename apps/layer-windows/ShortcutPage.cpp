@@ -605,12 +605,12 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
             if(auto picked=co_await open.PickSingleFileAsync())path=picked.Path();
         }catch(hresult_error const& failure){finish(id,failure.message(),L"");co_return;}
         if(path.empty()){finish(id,L"",L"");co_return;}
-        background(id,[path]{
+        background(id,[path,tooLarge=data->delivery(L"keymap_too_large")]{
             constexpr size_t limit=size_t(1)<<20;
             std::ifstream in(std::filesystem::path(path.c_str()),std::ios::binary);
             if(!in)return std::pair{hstring(L"Could not read the keymap."),hstring()};
             std::string bytes(limit+1,'\0');in.read(bytes.data(),std::streamsize(bytes.size()));bytes.resize(size_t(in.gcount()));
-            if(bytes.size()>limit)return std::pair{hstring(L"The keymap is larger than 1 MB."),hstring()};
+            if(bytes.size()>limit)return std::pair{tooLarge,hstring()};
             if(!bytes.empty()&&!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),int(bytes.size()),nullptr,0))
                 return std::pair{hstring(L"The keymap is not UTF-8 text."),hstring()};
             return std::pair{hstring(),to_hstring(bytes)};

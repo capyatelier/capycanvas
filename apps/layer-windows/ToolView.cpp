@@ -115,7 +115,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             for(uint32_t i=0;i<items.Size();i++){
                 bool active=flag(items.GetObjectAt(i),L"selected");buttons[i].Background(active?selected(data):clear());
                 if(!group)buttons[i].MinHeight(items.GetObjectAt(i).GetNamedValue(L"preview",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number?34:tonal?36:44);
-                AutomationProperties::SetItemStatus(buttons[i],active?L"Selected":L"");
+                AutomationProperties::SetItemStatus(buttons[i],active?data->caption(L"search",L"selected"):L"");
             }
         }
 
@@ -160,19 +160,20 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     void refreshPicker(){
         auto picker=object(data->state,L"color_picker");auto sizes=array(picker,L"sample_sizes");
         bool layers=flag(picker,L"can_sample_layer");
-        auto next=O({{L"picker",B(true)},{L"layers",B(layers)},{L"sizes",sizes}}).Stringify();
+        auto next=O({{L"picker",B(true)},{L"layers",B(layers)},{L"sizes",sizes},{L"language",N(double(data->localizationGeneration))}}).Stringify();
         if(next!=key){
             key=next;fields.clear();root.Children().Clear();
-            auto weak=weak_from_this();
-            std::vector<hstring> sources{L"Visible color"};if(layers)sources.push_back(L"Selected layer");
-            pickerChoice(L"Source",L"picker-setting-source",sources,
+            auto weak=weak_from_this();auto copy=object(object(data->catalog,L"native_copy"),L"sampler");
+            std::vector<hstring> sources{str(copy,L"visible_color")};if(layers)sources.push_back(str(copy,L"selected_layer"));
+            pickerChoice(str(copy,L"source"),L"picker-setting-source",sources,
                 [](J const& value){return flag(value,L"layer")?1:0;},
                 [weak](int index){if(auto self=weak.lock();self&&picking(self->data->state)&&flag(object(self->data->state,L"color_picker"),L"layer")!=(index==1))
                     self->data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"source")},{L"layer",B(index==1)}})}}));});
             std::vector<hstring> names;std::vector<double> widths;
-            for(auto value:sizes){auto width=value.GetNumber();widths.push_back(width);
-                names.push_back(width==1?hstring(L"Single pixel"):to_hstring(int(width))+L" px circle");}
-            pickerChoice(L"Sample size",L"picker-setting-size",names,
+            for(auto value:sizes){auto width=value.GetNumber();widths.push_back(width);hstring name=to_hstring(int(width));
+                for(auto size:array(copy,L"sizes"))if(size.GetArray().GetNumberAt(0)==width)name=size.GetArray().GetStringAt(1);
+                names.push_back(name);}
+            pickerChoice(str(copy,L"sample_size"),L"picker-setting-size",names,
                 [widths](J const& value){auto at=std::find(widths.begin(),widths.end(),num(value,L"sample_width"));return at==widths.end()?-1:int(at-widths.begin());},
                 [weak,widths](int index){if(auto self=weak.lock();self&&picking(self->data->state)&&size_t(index)<widths.size()
                     &&num(object(self->data->state,L"color_picker"),L"sample_width")!=widths[index])
@@ -217,12 +218,13 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
             NativeMenuItems(menu.Items(),array(model,L"sections"),self->data,[data=self->data](J action){data->dispatch(action);});
         }});
         TrackPopup(menu,data);
-        Button open=button(data,L"Selection Actions\u2026",[]{});open.MinHeight(44);open.HorizontalAlignment(HorizontalAlignment::Stretch);
+        auto title=label(data,data->caption(L"tool_controls",L"selection_menu"),true);
+        Button open=button(data,title.Text(),[]{});open.MinHeight(44);open.HorizontalAlignment(HorizontalAlignment::Stretch);
         open.HorizontalContentAlignment(HorizontalAlignment::Stretch);open.Padding({12,0,12,0});open.Flyout(menu);
         Grid content;content.ColumnSpacing(8);
         ColumnDefinition text;text.Width({1,GridUnitType::Star});content.ColumnDefinitions().Append(text);
         ColumnDefinition arrow;arrow.Width({1,GridUnitType::Auto});content.ColumnDefinitions().Append(arrow);
-        auto title=label(data,L"Selection Actions\u2026",true);title.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(title);
+        title.VerticalAlignment(VerticalAlignment::Center);content.Children().Append(title);
         auto chevron=icon(L"chevron-down",data->theme(),12);chevron.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(chevron,1);content.Children().Append(chevron);
         open.Content(content);AutomationProperties::SetAutomationId(open,L"selection-actions-menu");
         root.Children().Append(open);
@@ -235,7 +237,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 {L"group",S(str(item,L"group"))},{L"numeric",object(item,L"numeric")}}));
         }
         auto actions=array(data->state,L"tool_actions");auto extra=array(data->state,L"tool_extra");
-        auto next=O({{L"context",S(context)},{L"fields",schema},{L"actions",actions},{L"extra",extraSchema(extra)}}).Stringify();
+        auto next=O({{L"context",S(context)},{L"fields",schema},{L"actions",actions},{L"extra",extraSchema(extra)},{L"language",N(double(data->localizationGeneration))}}).Stringify();
         if(next!=key){
             key=next;fields.clear();if(range){range->Dispose();range=nullptr;}root.Children().Clear();hstring group;
             auto weak=weak_from_this();
@@ -246,7 +248,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
             Grid modes{nullptr};
             if(modeCount){
                 modes=segmented(compact,modeCount);AutomationProperties::SetAutomationId(modes,L"selection-mode-row");
-                AutomationProperties::SetName(modes,L"Selection mode");
+                AutomationProperties::SetName(modes,data->caption(L"tool_controls",L"selection_mode"));
                 if(compact)root.Children().Append(modes);
                 else{Border frame;frame.BorderThickness({1,1,1,1});frame.BorderBrush(data->tint(L"text",51));frame.CornerRadius({6,6,6,6});
                     frame.Child(modes);root.Children().Append(frame);}
@@ -267,7 +269,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                         J current;for(auto option:array(self->data->state,L"tool_extra"))if(str(object(option.GetObject(),L"Choice"),L"id")==specId)current=object(option.GetObject(),L"Choice");
                         auto items=array(current,L"items");bool chosen=i<items.Size()&&flag(items.GetObjectAt(i),L"selected");
                         pick.Background(chosen?selected(self->data):self->data->brush(L"input"));
-                        AutomationProperties::SetItemStatus(pick,chosen?L"Selected":L"");
+                        AutomationProperties::SetItemStatus(pick,chosen?self->data->caption(L"search",L"selected"):L"");
                     }});
                 }
                 root.Children().Append(bar);
@@ -278,7 +280,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 if(compact&&id==L"tonal_upper")continue;
                 if(compact&&id==L"tonal_lower"){
                     auto upper=find(settings,L"id",L"tonal_upper");
-                    range=RangeControl::Create(data,item,upper,L"Range in stops relative to reference white (0)",L"tool-setting",true,
+                    range=RangeControl::Create(data,item,upper,data->caption(L"tool_controls",L"range_hint"),L"tool-setting",true,
                         [weak,context](int index,double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
                             self->data->dispatch(O({{L"type",S(L"set_tool_setting")},{L"id",S(index?L"tonal_upper":L"tonal_lower")},{L"value",N(value)}}));});
                     root.Children().Append(range->root);
@@ -336,7 +338,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                         auto command=find(array(self->data->state,L"commands"),L"id",id);bool chosen=flag(command,L"selected");
                         pick.IsEnabled(flag(command,L"enabled"));pick.Opacity(pick.IsEnabled()?1.:.36);
                         pick.Background(chosen?selected(self->data):compact?self->data->brush(L"input"):clear());
-                        AutomationProperties::SetItemStatus(pick,chosen?L"Selected":L"");
+                        AutomationProperties::SetItemStatus(pick,chosen?self->data->caption(L"search",L"selected"):L"");
                         tooltip(pick,str(command,L"tooltip"));
                     }});
                 }else if(source(id)){

@@ -117,7 +117,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->thumbnails=CreateLayerThumbnailCache(previews);
         data->query=previews;data->previews=CreateFilterPreviewCache(std::move(previews));
         data->localization=localization;data->send=std::move(send);data->catalog=catalog;data->glassSurfaces=true;
-        AutomationProperties::SetName(root,L"Drawing workspace");
+        AutomationProperties::SetName(root,str(object(data->catalog,L"bootstrap"),L"drawing_workspace"));
     }
     void init(){
         data->strokes=std::make_shared<StrokeRecording>();data->strokes->data=data;data->strokes->start();
@@ -128,9 +128,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         });
         surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
         cameraSlot.Children().Append(surface);
-        zenCapy=button(data,L"Exit Zen mode",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"zen_mode")}}));});
+        zenCapy=button(data,L"",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"zen_mode")}}));});
         zenCapy.Padding({0,0,0,0});zenCapy.Visibility(Visibility::Collapsed);Canvas::SetZIndex(zenCapy,1001);
-        AutomationProperties::SetAutomationId(zenCapy,L"zen-capy");tooltip(zenCapy,L"Exit Zen mode");
+        AutomationProperties::SetAutomationId(zenCapy,L"zen-capy");
         root.Children().Append(zenCapy);
         canvasBar->data=data;
         canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();self->placePreviews();if(self->glassChanged)self->glassChanged();}};
@@ -200,8 +200,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 handle.HorizontalAlignment(HorizontalAlignment::Left);handle.Child(panelGrip(data->theme()));
                 gestures->Source(handle,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
                 AutomationProperties::SetAutomationId(handle,L"group-grip-"+to_hstring(uint32_t(num(geometry,L"id"))));
-                AutomationProperties::SetName(handle,L"Move panel group");
-                AutomationProperties::SetHelpText(handle,L"Drag to move every panel in this group.");
+                AutomationProperties::SetName(handle,data->delivery(L"move_group"));
+                AutomationProperties::SetHelpText(handle,data->delivery(L"drag_panel"));
                 Grid::SetColumn(handle,1);header.Children().Append(handle);frame.Children().Append(header);
             }
             group.header.Visibility(flag(geometry,L"tabs_visible")?Visibility::Visible:Visibility::Collapsed);
@@ -217,7 +217,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             handle.Child(panelGrip(data->theme(),true));
             auto item=O({{L"kind",S(L"panel")},{L"panel",S(str(panel,L"id"))}});
             gestures->Source(handle,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,true);
-            AutomationProperties::SetName(handle,L"Move "+str(panel,L"title"));
+            AutomationProperties::SetName(handle,data->caption(O({{L"type",S(L"move_panel")},{L"title",S(str(panel,L"title"))}})));
             overlay.Children().Append(handle);frame.Children().Append(overlay);
         }
 
@@ -276,7 +276,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     bool apply(J const& snapshot){
         auto previousGpu=num(data->model,L"windows_gpu_generation");
         bool relocalize=data->adoptLocalization(snapshot);
-        if(relocalize){measureHost.Children().Clear();offscreen.clear();}
+        if(relocalize){measureHost.Children().Clear();offscreen.clear();AutomationProperties::SetName(root,str(object(data->catalog,L"bootstrap"),L"drawing_workspace"));}
         bool full=snapshot.HasKey(L"state");
         auto update=object(snapshot,L"workspace_update");
         // Workspace motion can also carry a camera. It is never a camera-only
@@ -736,9 +736,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 InputSystemCursorShape::SizeWestEast:InputSystemCursorShape::SizeNorthSouth;
             handle.as<IUIElementProtected>().ProtectedCursor(InputSystemCursor::Create(shape));
         }
-        AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,L"Resize panel");
+        AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,data->delivery(L"resize_dock"));
         AutomationProperties::SetAutomationControlType(handle,Automation::Peers::AutomationControlType::Thumb);
-        AutomationProperties::SetHelpText(handle,resetColumn?L"Drag to resize the column. Double-click to restore its default width.":L"Drag to resize the panel.");
     }
     void updateZenCapy(J const& snapshot){
         bool keep=flag(snapshot,L"keep_zen_button");
@@ -746,6 +745,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto command=find(array(data->state,L"commands"),L"id",L"zen_mode");
         zenCapy.Width(tile);zenCapy.Height(tile);zenCapy.Background(headerSurface(data));zenCapy.CornerRadius({tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit});
         zenCapy.Content(icon(str(command,L"icon",L"capy"),data->theme(),tile*440./512.));
+        AutomationProperties::SetName(zenCapy,str(command,L"label"));tooltip(zenCapy,str(command,L"tooltip"));
         Canvas::SetLeft(zenCapy,titlebar[0]+6);Canvas::SetTop(zenCapy,6);
         zenCapy.Visibility(keep?Visibility::Visible:Visibility::Collapsed);
         IJsonValue bounds=keep?IJsonValue(O({{L"x",N(titlebar[0]+6)},{L"y",N(6)},{L"width",N(tile)},{L"height",N(tile)}})):IJsonValue(JsonValue::CreateNullValue());

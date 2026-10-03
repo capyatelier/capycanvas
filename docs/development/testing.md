@@ -230,8 +230,9 @@ are your task, and remove an entry when you fix it.
   tab preview did not cross the shared insertion threshold"), `exercise-layer-pickup.ps1`
   ("Layer tab did not begin its native drag" with touch), `exercise-column-stacks.ps1`
   ("Open column 12 did not match native panels, selected tiles and connector
-  geometry") and `exercise-persistence.ps1` (the unreadable database writes a
-  storage diagnostic to stderr).
+  geometry"), `exercise-persistence.ps1` (the unreadable database writes a
+  storage diagnostic to stderr) and `exercise-proof.ps1` (UI Automation times out
+  choosing sRGB in Proof Setup after the drawing is saved and reopened).
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
 - Apple Rust `apple_photo_corrections_masks_and_original_samples_remain_revisable_after_worker_reopen`

@@ -285,6 +285,9 @@ copy_struct! { ToolControlCopy {
     selection_mode: TOOL_ACTION_GROUP_SELECTION_MODE,
     range_hint: TOOLBAR_RANGE_IN_STOPS_RELATIVE_TO_REFERENCE_WHITE_0,
     selection_menu: MENU_SELECT,
+    more_options: WORKSPACE_TOOLBAR_MORE_OPTIONS,
+    bookmark_value: WORKSPACE_TOOLBAR_BOOKMARK_VALUE,
+    remove_bookmark: WORKSPACE_TOOLBAR_REMOVE_BOOKMARK,
 } }
 
 #[derive(Clone, Debug, Serialize)]

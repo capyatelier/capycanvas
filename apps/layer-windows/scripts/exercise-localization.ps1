@@ -67,6 +67,11 @@ try{
  Use-Window $first
  $zoom=(Control 'canvas-view-info').Current.Name
  if(!$zoom -or $zoom -eq 'Zoom'){throw 'The zoom readout kept its English name after the language changed'}
+ foreach($pair in @(@('canvas-action-bar','Canvas actions'),@('canvas-bar-more','More'),@('layer-add-mask','Add mask'),@('layer-delete','Delete selected layers'))){
+  $named=(Control $pair[0]).Current.Name
+  if(!$named -or $named -eq $pair[1]){throw "$($pair[0]) kept its English name after the language changed"}
+ }
+ foreach($english in @('Move panel group','Resize panel','Drawing workspace')){if(Find $english -Name){throw "$english kept its English name after the language changed"}}
  Use-Window $second
  foreach($scene in @(@{window=$first;name='new-drawing'},@{window=$second;name='preferences'})){
   Use-Window $scene.window

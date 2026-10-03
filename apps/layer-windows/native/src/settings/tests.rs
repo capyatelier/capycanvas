@@ -703,6 +703,21 @@ fn prepared_launch_restores_before_views_and_keeps_the_profile_context() {
 }
 
 #[test]
+fn language_presentation_carries_the_active_delivery_copy() {
+    let japanese = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
+    let mut native = NativeHost::launch_localized(layer_ui::Platform::Windows, "", japanese.clone()).unwrap();
+    let presentation = crate::host::localization_presentation(&mut native).unwrap();
+    let delivery = layer_ui::DocumentDeliveryCopy::new(&japanese);
+    let english = layer_ui::DocumentDeliveryCopy::new(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+    assert_ne!(delivery.drawing_type, english.drawing_type);
+    for (key, text) in [("drawing_type", &delivery.drawing_type), ("move_column", &delivery.move_column), ("resize_dock", &delivery.resize_dock)] {
+        assert_eq!(presentation["catalog"]["delivery"][key], text.as_ref());
+    }
+    assert_eq!(presentation["catalog"]["native_copy"]["header"]["clock"], japanese.text(layer_ui::MessageId::WORKSPACE_HEADER_CLOCK).as_ref());
+    assert_eq!(presentation["generation"], native.localization_generation());
+}
+
+#[test]
 fn profile_language_publication_survives_write_failure_and_defers_an_input_owner() {
     let directory = TempDir::new();
     let (mut first, prepared) = SettingsService::launch_at(Ok(storage(&directory)), &["ja-JP", "en"]).unwrap();

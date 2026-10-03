@@ -128,7 +128,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     }
     explicit PropertiesView(std::shared_ptr<WorkspaceData> source):data(std::move(source)){
         root.Spacing(6);body.Spacing(6);title=label(data,L"",true);
-        AutomationProperties::SetAutomationId(root,L"layer-properties");AutomationProperties::SetName(root,L"Layer properties");
+        AutomationProperties::SetAutomationId(root,L"layer-properties");AutomationProperties::SetName(root,str(find(array(data->catalog,L"panels"),L"id",L"properties"),L"label"));
         bodyGate.Content(body);bodyGate.IsTabStop(false);bodyGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         page.MinWidth(0);page.MinHeight(32);page.HorizontalAlignment(HorizontalAlignment::Stretch);page.FontSize(data->textSize());
         page.Background(data->brush(L"input"));page.BorderThickness({0,0,0,0});page.CornerRadius({6,6,6,6});

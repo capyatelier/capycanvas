@@ -32,13 +32,13 @@ struct CanvasActionBar:std::enable_shared_from_this<CanvasActionBar>{
         row.Orientation(Orientation::Horizontal);row.Spacing(Gap);row.Padding({Inset,Inset,Inset,Inset});
         for(auto panel:{items,completion}){panel.Orientation(Orientation::Horizontal);panel.Spacing(Gap);}
         caption=label(data,L"");caption.VerticalAlignment(VerticalAlignment::Center);caption.Margin({8,0,8,0});caption.Opacity(.8);
-        more=button(data,L"More",[weak]{if(auto self=weak.lock())self->openMenu();});
+        more=button(data,L"",[weak]{if(auto self=weak.lock())self->openMenu();});
         more.MinHeight(40);more.Width(40);more.AllowFocusOnInteraction(false);more.IsTabStop(false);
-        AutomationProperties::SetAutomationId(more,L"canvas-bar-more");tooltip(more,L"More");
+        AutomationProperties::SetAutomationId(more,L"canvas-bar-more");copyName(data,more,data->copyCommon(L"more"),true);
         row.Children().Append(caption);row.Children().Append(items);row.Children().Append(more);row.Children().Append(completion);
         surface.IsHitTestVisible(false);content.Children().Append(surface);content.Children().Append(row);
         frame.Child(content);frame.Background(clear());
-        AutomationProperties::SetAutomationId(frame,L"canvas-action-bar");AutomationProperties::SetName(frame,L"Canvas actions");
+        AutomationProperties::SetAutomationId(frame,L"canvas-action-bar");copyName(data,frame,data->copyCaption(L"color",L"canvas_actions"));
         Canvas::SetZIndex(frame,180);
         reappear=host.DispatcherQueue().CreateTimer();reappear.IsRepeating(false);
         reappear.Interval(std::chrono::milliseconds(uint32_t(num(data->catalog,L"canvas_bar_reappear_ms",180))));

@@ -50,7 +50,7 @@ class HeaderStatus {
             using namespace CapyUi;
             if(!visible){timer.Stop();return;}
             wchar_t text[128]{};
-            if(placeholder){clock.Text(L"Clock");}else if(GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT,TIME_NOSECONDS,nullptr,nullptr,text,128)){
+            if(placeholder){clock.Text(data->caption(L"header",L"clock"));}else if(GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT,TIME_NOSECONDS,nullptr,nullptr,text,128)){
                 if(clock.Text()!=text)clock.Text(text);
             }
             SYSTEM_POWER_STATUS power{};

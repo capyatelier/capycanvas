@@ -76,7 +76,7 @@ void LayersView::init(){
             pick.IsEnabled(flag(capabilities,spec.capability));pick.IsChecked(flag(layer,spec.property));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected(data):clear());
         });
     }
-    auto reference=button<Primitives::ToggleButton>(data,L"Use selected layers as references",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"reference_selection")}}));});
+    auto reference=button<Primitives::ToggleButton>(data,L"",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"reference_selection")}}));});
     reference.Width(24);reference.Height(24);reference.Content(icon(L"reference",data->theme()));
     for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
         reference.Resources().Insert(box_value(role),data->tint(L"text",31));
@@ -104,24 +104,24 @@ void LayersView::init(){
             [weak,create]{if(auto self=weak.lock())self->action(create);});
         actionTooltip(data,pick,[create]{return O({{L"type",S(L"layer")},{L"action",create}});});
     }
-    auto selectionLayer=footerButton(L"selection-brush",L"New Selection Layer",L"layer-new-selection",[weak]{if(auto self=weak.lock();self&&!self->data->updating)
+    auto selectionLayer=footerButton(L"selection-brush",data->caption(L"layers",L"new_selection_layer"),L"layer-new-selection",[weak]{if(auto self=weak.lock();self&&!self->data->updating)
         self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"new_selection_layer")}}));});
     controls.emplace_back([data=data,selectionLayer](J,J){
         auto command=find(array(data->state,L"commands"),L"id",L"new_selection_layer");
         selectionLayer.IsEnabled(flag(command,L"enabled"));selectionLayer.Opacity(selectionLayer.IsEnabled()?1.:.36);
     });
-    auto mask=footerButton(L"mask",L"Add layer mask",L"layer-add-mask",[weak]{if(auto self=weak.lock()){
+    auto mask=footerButton(L"mask",data->caption(L"layers",L"add_mask"),L"layer-add-mask",[weak]{if(auto self=weak.lock()){
         auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id")},{L"replace",B(false)}}));
     }});
     controls.emplace_back([mask](J,J capabilities){mask.IsEnabled(flag(capabilities,L"mask"));mask.Opacity(mask.IsEnabled()?1.:.36);});
-    auto import=footerButton(L"image",L"Import image as layer",L"layer-import",[weak]{if(auto self=weak.lock()){
+    auto import=footerButton(L"image",data->caption(L"layers",L"import_image"),L"layer-import",[weak]{if(auto self=weak.lock()){
         self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"import_image")}}));
     }});
     controls.emplace_back([data=data,import](J,J){
         auto file=object(data->state,L"document_file");
         import.IsEnabled(flag(data->model,L"brush_ready")&&!flag(file,L"busy")&&!flag(file,L"close_ready"));import.Opacity(import.IsEnabled()?1.:.36);
     });
-    auto remove=footerButton(L"delete",L"Delete selected layers",L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
+    auto remove=footerButton(L"delete",data->caption(L"layers",L"delete_selected"),L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
     controls.emplace_back([weak,remove](J,J){if(auto self=weak.lock()){remove.IsEnabled(flag(self->view(),L"can_delete"));remove.Opacity(remove.IsEnabled()?1.:.36);}});
     auto more=footerButton(L"more",data->caption(L"layers",L"actions"),L"layer-actions",[weak]{if(auto self=weak.lock()){
         auto editing=self->editing();

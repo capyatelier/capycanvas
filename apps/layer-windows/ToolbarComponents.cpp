@@ -118,9 +118,9 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         if(!standalone){
             blank.Background(clear());root.Children().Append(blank);
             if(auto source=gestures.lock())source->Source(blank,J{},item);
-            more=button(data,L"More tool options",[weak]{if(auto self=weak.lock())self->activate();});
+            more=button(data,L"",[weak]{if(auto self=weak.lock())self->activate();});
             more.Content(icon(L"more",data->theme(),iconSize));
-            tooltip(more,L"More tool options");
+            copyName(data,more,data->copyCaption(L"tool_controls",L"more_options"),true);
             AutomationProperties::SetAutomationId(more,L"toolbar-more-"+to_hstring(uint32_t(tileId)));
             root.Children().Append(more);
             if(auto source=gestures.lock())source->Source(more,drag(),item,false,{},WorkspaceGestures::Pickup::Hold);
@@ -423,7 +423,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         fade=Shapes::Rectangle();fade.IsHitTestVisible(false);previewBody.Children().Append(fade);
         caption=label(data,L"");caption.VerticalAlignment(VerticalAlignment::Center);caption.TextWrapping(TextWrapping::NoWrap);
         captionSlot=Grid();captionSlot.Children().Append(caption);previewBody.Children().Append(captionSlot);
-        bookmark=button(data,L"Bookmark this value",[weak]{
+        bookmark=button(data,data->caption(L"tool_controls",L"bookmark_value"),[weak]{
             if(auto self=weak.lock())self->send(O({{L"type",S(L"toggle_slider_bookmark")},{L"control",self->control}}));
         });
         bookmarkIcon=0;
@@ -465,7 +465,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         bool chosen=false;for(auto mark:array(model,L"bookmarks"))chosen=chosen||flag(mark.GetObject(),L"selected");
         if(chosen!=bookmarkSelected||glyph!=bookmarkIcon){
             bookmarkSelected=chosen;bookmarkIcon=glyph;bookmark.Content(icon(chosen?L"minus":L"plus",data->theme(),glyph));
-            auto tip=chosen?L"Remove bookmark":L"Bookmark this value";
+            auto tip=data->caption(L"tool_controls",chosen?L"remove_bookmark":L"bookmark_value");
             tooltip(bookmark,tip);AutomationProperties::SetName(bookmark,tip);
         }
         auto anchor=root.TransformToVisual(nullptr).TransformBounds({0,0,float(root.ActualWidth()),float(root.ActualHeight())});

@@ -95,7 +95,7 @@ struct StatsView:std::enable_shared_from_this<StatsView>{
     void recording(){
         if(!data->strokes)return;auto const& strokes=*data->strokes;auto status=strokes.status;auto text=str(status,L"label");
         record.Content(box_value(text));AutomationProperties::SetName(record,text);record.IsEnabled(!strokes.saving);
-        hstring hint=L"Record tablet input for up to 10 minutes";
+        hstring hint=data->caption(L"color",L"record_tablet");
         if(flag(status,L"recording"))hint=hint+L" \u00b7 "+to_hstring(int64_t(num(status,L"elapsed_seconds")))+L"s \u00b7 "+to_hstring(int64_t(num(status,L"raw_events")))+L" inputs";
         tooltip(record,hint);
         recordError.Text(strokes.error);recordError.Visibility(strokes.error.empty()?Visibility::Collapsed:Visibility::Visible);

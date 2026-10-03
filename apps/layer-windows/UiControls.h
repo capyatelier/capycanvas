@@ -213,6 +213,11 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
         };
         return {resolve(),resolve};
     }
+    hstring delivery(wchar_t const* key)const{return str(object(catalog,L"delivery"),key);}
+    LocalizedCopy copyDelivery(wchar_t const* key)const{
+        auto resolve=[weak=weak_from_this(),key=std::wstring(key)]{if(auto data=weak.lock())return data->delivery(key.c_str());return hstring();};
+        return {resolve(),resolve};
+    }
     void dispatch(J const& action) const {send(to_string(action.Stringify()));}
     void dispatchDocument(J const& action,hstring const& epoch) const {
         dispatch(O({{L"windows_epoch",S(epoch)},{L"action",action}}));
@@ -316,6 +321,11 @@ inline void tooltip(DependencyObject const& target,hstring const& text){
     ToolTip tip;tip.Content(box_value(text));
     if(!touchContact())ToolTipService::SetToolTip(target,tip);
     owners.insert_or_assign(get_abi(target),TooltipOwner{make_weak(target),tip});
+}
+inline void copyName(std::shared_ptr<WorkspaceData> const& data,FrameworkElement const& target,LocalizedCopy const& text,bool tip=false){
+    auto present=[tip](FrameworkElement const& view,hstring const& value){AutomationProperties::SetName(view,value);if(tip)tooltip(view,value);};
+    present(target,text);
+    data->copyView([weak=make_weak(target),resolve=text.current,present]{if(auto view=weak.get()){present(view,resolve());return true;}return false;});
 }
 struct TooltipReveal {weak_ref<FrameworkElement> owner;ToolTip tip{nullptr};Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};};
 inline TooltipReveal& tooltipReveal(){thread_local TooltipReveal reveal;return reveal;}
