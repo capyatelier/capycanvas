@@ -188,6 +188,12 @@ behavior and high-refresh presentation need a real tablet.
   checks composition ownership and unchanged numeric commits through the native
   InputConnection. `AndroidRasterTest#imagePlacementBatchHistoryAndStaleRequests`
   includes Position anchor, pivot, held nudges and Transform Again.
+- `AndroidHostTest#pointwiseColorPagesUseNativeControlsAndRetainHiddenValues`
+  checks Hue range pages, Colorize, Threshold and Photo Filter controls and
+  slider history in both themes. Run with and without `-e presentationNarrow true`.
+  `AndroidRasterTest#pointwiseColorEffectsPersistAllParametersAndOriginalSource`
+  covers all Hue parameters, tagged filter colors, source identity and Activity
+  recreation across integer and floating document profiles.
 
 ### Test data
 

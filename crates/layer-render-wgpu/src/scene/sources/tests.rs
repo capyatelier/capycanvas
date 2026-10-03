@@ -28,6 +28,139 @@ fn borrowed_source_tiles_survive_eviction_and_release_their_capacity() {
     drop((first_write, second_write, third_write, fourth_write));
 }
 
+fn scan_source(tiles: usize, offset: u8) -> Arc<SourceImage> {
+    layer_core::color::source::rgba8_source([tiles as u32 * PAGE_SIZE, PAGE_SIZE], |x, _| {
+        let id = (x / PAGE_SIZE) as u8 + offset;
+        [id.wrapping_mul(17), id.wrapping_mul(43).wrapping_add(61), id.wrapping_mul(97).wrapping_add(11), 255]
+    })
+}
+
+fn assert_threshold_pixels(r: &WgpuRasterizer, threshold: f32, offset: u8) {
+    let cache = r.scale_display.as_ref().unwrap();
+    let pixels = crate::test_support::float_pixels(r, cache.texture());
+    for (i, actual) in pixels.into_iter().enumerate() {
+        let id = (i as u32 % cache.plan.size[0] / (PAGE_SIZE >> cache.plan.level)) as u8 + offset;
+        let codes = [id.wrapping_mul(17), id.wrapping_mul(43).wrapping_add(61), id.wrapping_mul(97).wrapping_add(11)];
+        let luminance: f64 = codes.into_iter().zip(r.document_color().space.to_xyz()[1])
+            .map(|(code, weight)| f64::from(code) / 255. * weight).sum();
+        let expected = if luminance >= f64::from(threshold) { 1. } else { 0. };
+        assert_eq!(actual, [expected, expected, expected, 1.], "offset={offset} threshold={threshold} pixel={i}");
+    }
+}
+
+#[test]
+fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
+    use layer_core::{Document, DocumentNames, EffectInstance, EffectValue};
+    for capacity in [8, 16] {
+        for tiles in [capacity + 1, capacity * 13 / 10 + 1] {
+            let extent = [tiles as u32 * PAGE_SIZE, PAGE_SIZE];
+            let mut doc = Document::new("native scan oracle", extent[0], extent[1], DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+            doc.layers[0].source = Some(scan_source(tiles, 0));
+            let mut effect = Layer::paint(LayerId(99), "Threshold");
+            effect.kind = LayerKind::Effect;
+            effect.effect = Some(Arc::new(EffectInstance::new(crate::tests::fixture("threshold").program())));
+            doc.layers.insert(0, effect);
+            let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+            r.source_tiles.get_mut().limits.slots = capacity;
+            r.native_edit.as_mut().unwrap().display_complete_bytes = u64::MAX;
+            let mut allocated = None;
+            for (round, threshold) in [0.2, 0.35, 0.5, 0.65, 0.8, 0.45].into_iter().enumerate() {
+                Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("threshold", EffectValue::Number(threshold)).unwrap();
+                let mut frame = crate::test_support::packet(&doc.layers, extent);
+                frame.view.width_px = extent[0] / 4; frame.view.height_px = extent[1] / 4;
+                frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+                let before = r.source_cache_work();
+                r.submit(frame).unwrap();
+                let after = r.source_cache_work();
+                let work = [after[0] - before[0], after[1] - before[1]];
+                eprintln!("native source scan tiles={tiles} round={round} work={work:?}");
+                if round > 0 { assert!(work[0] >= capacity as u64, "warm traversal must reuse resident tiles: {work:?}"); }
+                let sources = r.source_tiles.borrow();
+                if let Some(bytes) = allocated { assert_eq!(sources.gpu_bytes(), bytes); }
+                else { allocated = Some(sources.gpu_bytes()); }
+                assert_eq!(sources.slots.len(), capacity);
+                drop(sources);
+                let cache = r.scale_display.as_ref().unwrap();
+                assert!(cache.resident_bytes() > 0, "oversized decoded scans must exercise resident native output");
+                assert_eq!(cache.plan.level, 2);
+                assert_eq!(cache.plan.bounds, PixelRect::full(extent));
+                assert_threshold_pixels(&r, threshold, 0);
+            }
+            let replacement = scan_source(capacity, 64);
+            doc.layers[1].source = Some(replacement);
+            doc.width = capacity as u32 * PAGE_SIZE;
+            let frame = crate::test_support::packet(&doc.layers, [doc.width, doc.height]);
+            r.submit(frame).unwrap();
+            assert_threshold_pixels(&r, 0.45, 64);
+            Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("threshold", EffectValue::Number(0.6)).unwrap();
+            let frame = crate::test_support::packet(&doc.layers, [doc.width, doc.height]);
+            let before = r.source_cache_work();
+            r.submit(frame).unwrap();
+            let after = r.source_cache_work();
+            assert_eq!(after[1], before[1], "a replacement set within capacity must be warm on its next update");
+            assert_eq!(r.source_tiles.borrow().gpu_bytes(), allocated.unwrap());
+            assert_threshold_pixels(&r, 0.6, 64);
+        }
+    }
+}
+
+#[test]
+fn discarded_source_decodes_cannot_be_reused_as_valid_pixels() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    r.source_tiles.get_mut().limits.slots = 2;
+    let source = scan_source(2, 32);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    r.original_source_tile(&source, [0, 0], &mut encoder).unwrap();
+    assert!(r.source_tiles.borrow().prepared_view(&source, [0, 0]).is_some());
+    drop(encoder);
+    assert!(r.source_tiles.borrow().prepared_view(&source, [0, 0]).is_none());
+    for x in 0..2 {
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let tile = r.original_source_tile(&source, [x, 0], &mut encoder).unwrap().unwrap();
+        r.uploads.finish(&encoder); encoder.submit(&r.queue);
+        let id = x as u8 + 32;
+        let expected = [id.wrapping_mul(17), id.wrapping_mul(43).wrapping_add(61), id.wrapping_mul(97).wrapping_add(11)]
+            .map(|code| RgbSpace::Srgb.decode(f64::from(code) / 255.) as f32);
+        for pixel in crate::test_support::float_pixels(&r, &tile.texture) {
+            assert_eq!(pixel[3], 1.);
+            for c in 0..3 { assert!((pixel[c] - expected[c]).abs() < 2e-6); }
+        }
+    }
+    assert_eq!(r.source_cache_work(), [0, 3]);
+    let (_, pending) = r.source_tiles.borrow_mut().plan(&r, &source, [0, 0]).unwrap();
+    assert!(pending.is_none());
+}
+
+#[test]
+fn effect_mask_bindings_reuse_retire_and_bound_real_texture_views() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut scene = Scene::new(&r);
+    let layout = scene.effects.masks.clone();
+    let views = std::array::from_fn::<_, { crate::effects::MASK_SLOTS }, _>(|_| r.empty_view.clone());
+    let create = |views: &[wgpu::TextureView; crate::effects::MASK_SLOTS]| r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("mask binding lifetime oracle"), layout: &layout,
+        entries: &std::array::from_fn::<_, { crate::effects::MASK_SLOTS }, _>(|i| wgpu::BindGroupEntry {
+            binding: i as u32, resource: wgpu::BindingResource::TextureView(&views[i]),
+        }),
+    });
+    let original = scene.mask_bindings.get(&views, || create(&views)).clone();
+    scene.begin_frame();
+    assert_eq!(*scene.mask_bindings.get(&views, || panic!("an unchanged mask set must reuse its binding")), original);
+    scene.forget_bindings(&[views[0].clone()]);
+    assert!(scene.mask_bindings.entries.is_empty());
+    assert_ne!(*scene.mask_bindings.get(&views, || create(&views)), original);
+    for _ in 0..=4096 {
+        let mut distinct = views.clone();
+        distinct[0] = r.empty_view.texture().create_view(&Default::default());
+        scene.mask_bindings.get(&distinct, || create(&distinct));
+        assert!(scene.mask_bindings.entries.len() <= 4096);
+    }
+    scene.begin_frame();
+    assert!(!scene.mask_bindings.entries.is_empty());
+    scene.begin_frame();
+    assert!(scene.mask_bindings.entries.is_empty(), "unused bindings must retire after one previous frame");
+}
+
 #[test]
 fn source_residency_and_upload_window_follow_admitted_headroom() {
     let gib = 1024 * 1024 * 1024;

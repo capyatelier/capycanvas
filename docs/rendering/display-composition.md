@@ -63,8 +63,20 @@ presentation levels. A partial source image cannot satisfy a whole-image query.
 
 A changed exact page is averaged directly into its source image. Empty pages
 write zero without reading a full page. Decode batches consume their inputs
-before their cache slots can be reused. Coarser levels derive from valid finer
-regions; gaps in a partial finer image cannot overwrite valid coarse pixels.
+before their cache slots can be reused. Native composition alternates its tile
+and window traversal direction across updates, starting at the previous scan's
+warm end when the source exceeds the decoded cache. This preserves bounded LRU
+reuse without changing source pixels or cache admission. Coarser levels derive
+from valid finer regions; gaps in a partial finer image cannot overwrite valid
+coarse pixels.
+Native composition checks complete-hierarchy admission before rendering, including
+documents opened with native filters already active. Admitted updates gather at
+most 16 tiles per command batch. Final pointwise effects write directly into that
+existing destination, sharing render passes across compatible tiles. Window-only
+composition retains the single working tile and its existing admission.
+Small batches move independent source decodes before their pointwise consumers.
+An earlier source or mask read prevents moving a decode that would overwrite its
+slot; reused decode targets keep their original order.
 Required previews take priority over spare detail when several photos compete
 for the admitted memory. Admission reserves composition scratch and command
 capacity before retaining optional source levels, including images allocated

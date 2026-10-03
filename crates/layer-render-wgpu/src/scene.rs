@@ -130,6 +130,7 @@ pub(super) struct Scene {
     material_pages: std::collections::VecDeque<placement::MaterialPage>,
     material_bounds: std::collections::HashMap<LayerId, placement::MaterialBounds>,
     placement_display: bool,
+    native_reverse: bool,
     scale_sources: scale::Sources,
     scale_commands: Option<scale::Commands>,
     pool: Vec<PageSurface>,
@@ -142,7 +143,7 @@ pub(super) struct Scene {
     compute_bindings: RecentBindings<[wgpu::TextureView; 3]>,
     output_bindings: RecentBindings<wgpu::TextureView>,
     watercolor_outputs: RecentBindings<wgpu::TextureView>,
-    mask_bindings: std::collections::HashMap<[wgpu::TextureView; effects::MASK_SLOTS], wgpu::BindGroup>,
+    mask_bindings: RecentBindings<[wgpu::TextureView; effects::MASK_SLOTS]>,
     layout: wgpu::BindGroupLayout,
     uniforms: wgpu::BindGroupLayout,
     buffer: wgpu::Buffer,
@@ -324,6 +325,7 @@ impl Scene {
         self.compute_bindings.begin_frame();
         self.output_bindings.begin_frame();
         self.watercolor_outputs.begin_frame();
+        self.mask_bindings.begin_frame();
         self.record_count = 0;
         self.effect_passes = 0;
     }
@@ -359,6 +361,7 @@ impl Scene {
             display_mesh: Default::default(),
             scale_sources: Default::default(),
             scale_commands: None,
+            native_reverse: false,
             placement: std::array::from_fn(|i| r.transforms.as_ref().map_or_else(
                 || pixel_transform::PixelTransform::staged(device, i == 1).placement_pass(),
                 |passes| passes.placement_pass(i == 1),
@@ -398,7 +401,7 @@ impl Scene {
         self.compute_bindings.forget(|views| views.iter().any(|view| retired.contains(view)));
         self.output_bindings.forget(|view| retired.contains(view));
         self.watercolor_outputs.forget(|view| retired.contains(view));
-        self.mask_bindings.retain(|views, _| !views.iter().any(|view| retired.contains(view)));
+        self.mask_bindings.forget(|views| views.iter().any(|view| retired.contains(view)));
     }
     fn alloc(&mut self, r: &WgpuRasterizer, color: wgpu::Color) -> usize {
         let id = self.reserve(r);
@@ -1475,6 +1478,24 @@ impl Scene {
             self.copy_window_tile(image, destination, tile);
             if preview { self.encode_query_jobs(r, encoder, Some([tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]]))?; }
         }
+        if !preview && self.jobs.len() <= SOURCE_SLOTS * 2 && self.jobs.iter().all(|job| match job {
+            Job::DecodedTile(_) => true,
+            Job::Effect { target, prepared, .. } => *target == destination.view && prepared.pointwise,
+            _ => false,
+        }) {
+            let mut prefix = 0;
+            for i in 0..self.jobs.len() {
+                let Job::DecodedTile(pending) = &self.jobs[i] else { continue; };
+                if self.jobs[..i].iter().any(|job| match job {
+                    Job::DecodedTile(previous) => previous.view == pending.view,
+                    Job::Effect { sources, masks, .. } => sources.contains(&pending.view) || masks.contains(&pending.view),
+                    _ => true,
+                }) { continue; }
+                self.jobs[prefix..=i].rotate_right(1);
+                prefix += 1;
+            }
+            self.source_jobs.clear();
+        }
         self.encode_jobs(r, encoder)
     }
 
@@ -1564,7 +1585,6 @@ impl Scene {
 
     fn encode_query_jobs(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, grid: Option<[u32;4]>) -> Result<(), GpuRasterError> {
         let result = self.encode_jobs_inner(r, encoder, grid);
-        self.mask_bindings.clear();
         if result.is_err() {
             // Dropping unencoded reservations invalidates their source keys.
             self.jobs.clear();self.source_jobs.clear();
@@ -1848,7 +1868,7 @@ impl Scene {
                             {
                                 pass.set_pipeline(&prepared.pipeline);
                                 pass.set_bind_group(2, &prepared.binding, &[]);
-                                let masks = mask_bindings.entry(masks.as_ref().clone()).or_insert_with(|| {
+                                let masks = mask_bindings.get(masks.as_ref(), || {
                                     r.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                         label: Some("effect tile masks"),
                                         layout: &self.effects.masks,

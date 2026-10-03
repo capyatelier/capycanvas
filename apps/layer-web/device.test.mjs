@@ -1,4 +1,5 @@
 import {checkCurves} from "./effects.test.mjs";
+import {checkPointwiseEffects} from './pointwise-effects.test.mjs';
 import {runJourney} from "./journeys.mjs";
 import {checkTonalSelections} from './tonal-selection.test.mjs';
 import {checkBinaryTransfer} from './binary-transfer.test.mjs';
@@ -153,6 +154,7 @@ try {
     [process.argv.includes("--filter-previews"), () => checkFilterPreviews({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--staged-startup"), () => checkStagedStartup({call,evaluate,settle,canvasPixels}), checkErrors],
     [process.argv.includes("--curves"), () => checkCurves({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--pointwise-effects"), () => checkPointwiseEffects({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--image-placement"), () => checkDeviceImagePlacement({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--notices"), () => checkNotices({call,evaluate,settle,device:true}), checkErrors],
     [process.argv.includes("--zoom-readout"), () => checkZoomReadout({call,evaluate,settle,device:true}), checkErrors],

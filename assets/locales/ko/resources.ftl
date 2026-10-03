@@ -578,3 +578,16 @@ resources-levels-auto = 자동
 resources-curve-targeted = 이미지에서 조정
 resources-curve-targeted-prompt = 이미지 위에서 드래그하세요
 resources-levels-auto-failed = 현재 레벨 설정으로는 이 소스에 자동 보정을 적용할 수 없습니다.
+
+resources-filter-invert = 반전
+resources-filter-threshold = 임계값
+resources-filter-desaturate = 채도 제거
+resources-filter-photo-filter = 포토 필터
+resources-parameter-hue-saturation-master = 전체
+resources-parameter-hue-saturation-center = 중심
+resources-parameter-hue-saturation-width = 너비
+resources-parameter-hue-saturation-feather = 페더
+resources-parameter-hue-saturation-colorize = 색상 입히기
+resources-parameter-photo-filter-color = 색상
+resources-parameter-photo-filter-density = 농도
+resources-parameter-threshold-threshold = 임계값

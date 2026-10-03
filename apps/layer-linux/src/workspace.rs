@@ -1497,13 +1497,10 @@ impl Workspace {
                 {
                     return glib::Propagation::Proceed;
                 }
-                // Space also pans the canvas, but focused color buttons own
-                // native Space / Enter activation, including in retained drawers.
                 if matches!(key, gdk::Key::space | gdk::Key::Return | gdk::Key::KP_Enter)
+                    && !modifiers.intersects(gdk::ModifierType::CONTROL_MASK|gdk::ModifierType::ALT_MASK|gdk::ModifierType::SUPER_MASK|gdk::ModifierType::META_MASK)
                     && gtk::prelude::GtkWindowExt::focus(&this.window).is_some_and(|w| {
-                        w.is::<gtk::Button>()
-                            && w.ancestor(crate::tool_panels::ColorWheel::static_type())
-                                .is_some()
+                        w.is::<gtk::Button>() || w.is::<gtk::Switch>() || w.is::<gtk::CheckButton>()
                     })
                 {
                     return glib::Propagation::Proceed;

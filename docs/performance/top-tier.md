@@ -27,7 +27,9 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Marquee, Lasso or Polygon drag | 120 | Met on a small document: in-stroke interval p50/p99 4.2/6.9 ms with the canvas bar shown, p99 8.8 ms with it off (2048 × 1536) | `ba9483a8`, 2026-09-27 |
 | Selection Brush or Quick Mask, 2048 px | 120 | | |
 | Grow, Shrink or Feather drag, full canvas | 120, soft | **Not met.** Feather: 14.9 updates/s on 6000 × 4000; 72.5 updates/s on 2048 × 1536 | Canvas-bar `refine-feather-drag`, 2026-09-27 |
-| Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 120, soft | | |
+| Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 120, soft | **Not met for Hue.** Master 102.54–109.43, Range 106.57–111.08 presents/s | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |
+| Colorize Saturation and Photo Filter Density | 120, soft | **Not met.** 112.58–115.04 and 110.26–114.09 presents/s | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |
+| Threshold slider, exact native resolution | 120, soft | **Not met.** 4.75–4.79 presents/s, interval p99 241.67 ms | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |
 | Curves point drag (61 MP) | 120, soft | **Not met.** 72.07–74.61 completed canvas updates/s; native UI 76.51–78.53 frames/s | [Curves editing](#curves-editing), 2026-10-02 |
 | Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 120, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 120, soft | | |
@@ -53,6 +55,80 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Tool Options or panel content change | 120 | **Not met.** UI frame p50/p95 25.1/30.6 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 120 | | |
 | Menu open and close | 120 | Menu open adds no canvas frames; UI frame p50/p95 11.5/26.6 ms | Canvas-bar `selection-bar-menu-open`, 2026-09-27 |
+
+## Photo color adjustments
+
+Measured on 2026-10-03 on the reference tablet, using the original Sony photo,
+Fit zoom, Navigator, default display settings and glass, and a private benchmark
+application. Three warmed five-second contacts per control count the private
+SurfaceView's actual presents inside the input window. Thermal status is zero.
+
+| Motion | Actual presents/s, three contacts | Moving interval p99 |
+| --- | --- | --- |
+| Master Hue | 103.192 / 102.537 / 109.426 | 16.667–25.001 ms |
+| Green Range Hue | 109.615 / 111.079 / 106.571 | 16.667–25.001 ms |
+| Colorize Saturation | 112.576 / 113.980 / 115.038 | 16.667 ms |
+| Photo Filter Density | 114.093 / 110.255 / 112.373 | 16.667–25.001 ms |
+| Threshold | 4.773 / 4.745 / 4.790 | 241.674 ms |
+
+No row meets the sustained target. Integer Density and Saturation use 40% slider
+travel with a 0.5-second triangle period, providing over 120 value transitions/s.
+Earlier narrow-waveform runs quantize to too few changes and are diagnostic only.
+Before these changes, matched original-photo Exposure and Master Hue controls
+presented at 111.15–113.35 and 105.60–111.28 Hz. Static Hand navigation presented
+at 41.73–52.36 Hz without an adjustment and 40.29–42.94 Hz with unchanged Invert,
+Desaturate, Threshold or Photo Filter. Those navigation runs precede the final
+native scheduling changes and remain baseline evidence.
+
+Native scans now alternate direction to reuse the warm end of the bounded
+source cache. Resident output batches at most 16 tiles, final pointwise effects
+write directly into the admitted destination, and independent decodes precede
+compatible consumers without crossing a source or mask dependency. Shared mask
+bindings retain the existing bounded cache. A redundant scan for the next missing
+page is also removed. With closely matched 753–760 decoded slots, Threshold
+improved from 1.20–1.40 Hz before batching to 3.57–3.60 Hz after batching and
+4.75–4.79 Hz after decode ordering. Owner CPU medians fell from 547–556 ms to
+180–191 ms and then 134 ms. Final effect passes fell from 246 to 60. Colorize
+avoids calculating the input hue and saturation it replaces.
+
+A separate final trace retains 751 decoded slots and records 751 hits plus 199
+misses per native update. Over five seconds, command finish takes 1.588 s under
+publication and 0.469 s under composition; composition submit takes 0.693 s and
+bounded waits 0.476 s. These nested scopes overlap and must not be summed.
+Source planning takes about 2.2 ms/update. The final trace reports 36 ftrace setup
+notices and no error-severity parser statistics. The remaining cost includes repeated decode
+under the source admission limit and driver command work; this does not establish
+a hardware ceiling.
+
+Same-kernel calibration on this tablet uses exact 3:2 derivatives of the tier
+photo, with the same U8 assumed-sRGB source and RGBA32Float decoded textures.
+At 6000 × 4000, Threshold presents at 28.56–29.33 Hz and ordinary owner CPU
+medians are 15–16 ms. At 4248 × 2832 it presents at 51.09–53.12 Hz. Both retain
+all source tiles (384 and 204) and their diagnostic traces show no source misses
+or upload drains. The 61 MP workload exceeds the retained source allowance.
+These calibrations do not qualify the low or mid reference hardware.
+
+One logical full-resolution RGBA32Float read and write at 61 MP moves
+1,926,955,008 bytes, requiring 231.23 decimal GB/s at 120 updates/s before padding
+and other passes. This is workload arithmetic, not measured physical bandwidth.
+Threshold fails the reduced-graph edge/high-frequency quality bounds and retains
+exact native evaluation. Invert, Desaturate and Photo Filter pass the existing
+reduced-graph qualification and use display-resolution previews.
+
+Final native source allocation is 753 slots / 792,668,672 bytes, with five resident
+hierarchy levels / 1,214,406,400 bytes. These are allocator boundaries, not
+continuous total process, driver or VRAM peaks. Early 355-slot and 733-slot runs
+have different admissions and are not strict paired comparisons. The 8 ms value
+observer includes drag slop; changed-preview and physical display latency remain
+unverified. Low and mid reference tiers and continuous memory peaks are unmeasured.
+
+Final native/Hue benchmark APK SHA-256:
+`21d787596f616ea5593961d6e3879b28597fa4880ebef5ab8983c3475e04b474`.
+Density and Saturation use `665cd1246e2a4ae5bc39edd63df34945e1a936379217dcc6cee6de47c3774e3e`;
+only native scheduling changed afterward, with matching shader and manifest
+hashes. Full source identities, corrected input records, calibration provenance
+and measurements are in
+`artifacts/photo-editing-color/p21-performance/p21-final-evidence.json`.
 
 ## Exact artwork samples
 

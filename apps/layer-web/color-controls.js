@@ -70,10 +70,10 @@ export function chooseColor({app, color, element, button, intensity, onIntensity
 }
 
 export function colorButton({app, label, element, button, change, current = () => ''}) {
-  let color, previewKey, inGamut=true;
+  let color, previewKey, inGamut=true,disposed=false;
   const node = button(label, async () => {
     const context = current(), selected = await chooseColor({app, color, element, button});
-    if (selected && current() === context) change(selected);
+    if (selected && !disposed && current() === context) change(selected);
   }, 'property-color');
   const read=()=>typeof label==='function'?label():label;bindCopy(node,read,'ariaLabel');
   const update = value => {
@@ -86,7 +86,7 @@ export function colorButton({app, label, element, button, change, current = () =
     inGamut=preview.in_gamut;node.title = read();
   };
   bindCopy(node,()=>inGamut?read():`${read()} · ${liveCopy(app,'catalog').native_copy.color.outside_srgb}`,'title');
-  return {node, update, disable: disabled => node.disabled = disabled};
+  return {node, update, disable: disabled => node.disabled = disabled,dispose:()=>{disposed=true;}};
 }
 
 // Browser-native clicks preserve keyboard activation and hold-to-drag arbitration.

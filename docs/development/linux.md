@@ -98,6 +98,17 @@ Drop rules and tile/grip bounds belong to `native_layout_drop_input`,
 `native_toolbar_sizing` and `native_ribbon_allocation`.
 `native_spatial_filter_windows` checks a 24 MP photo with chained Gaussian blurs
 at 50% zoom, panning and radius changes in both themes.
+`native_hue_ranges_colorize_retains_values` and
+`native_pointwise_filters_controls_and_persistence` cover Hue range pages,
+Colorize, Threshold and Photo Filter controls, direct Invert/Desaturate insertion,
+atomic slider history and save/reopen. Run at 640 and 1100 pixels wide; both
+journeys exercise light and dark themes.
+`native_hue_colorize_keyboard_focus_and_common_draft` checks native activation
+and retained common fields. `native_property_draft_is_retired_when_document_changes_with_reused_layer_ids`
+checks that opening another document cannot carry a pending number into it.
+`native_colorize_threshold_visible_artwork` is a focused check of Colorize and
+Threshold controls and rendered artwork pixels in both themes. Run it at 1100
+pixels wide after renderer changes; it does not measure motion.
 
 [`workspace-motion.sh`](../../tools/performance/workspace-motion.sh) builds the
 release tests, starts a private D-Bus session, headless Mutter and PipeWire, and

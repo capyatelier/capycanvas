@@ -171,6 +171,10 @@ class AndroidCanvasBarBenchmarkTest {
                     "Stylus injection failed: $event"
                 } } finally { event.recycle() }
             }
+            var measuring = false
+            var mark = 0L
+            var dispatched = 0L
+            val gestureDown = java.util.concurrent.atomic.AtomicLong()
             fun drag(start: Pair<Double, Double>, milliseconds: Int, path: (Double) -> Pair<Double, Double>) {
                 val initial = path(0.0)
                 check(initial.first == 0.0 && initial.second == 0.0) { "The gesture must press its requested handle" }
@@ -180,8 +184,10 @@ class AndroidCanvasBarBenchmarkTest {
                     val left = began + (i * interval * 1e6).toLong() - System.nanoTime()
                     if (left > 0) java.util.concurrent.locks.LockSupport.parkNanos(left)
                     val (dx, dy) = path(i * interval / 1000.0)
+                    if (i == 0 && measuring) { mark = System.nanoTime(); gestureDown.set(mark) }
                     inject(if (i == 0) MotionEvent.ACTION_DOWN else if (i == count) MotionEvent.ACTION_UP else MotionEvent.ACTION_MOVE,
                         down, start.first + dx, start.second + dy, if (i == count) 0f else .7f)
+                    if (i == 0 && measuring) dispatched = System.nanoTime()
                 }
             }
             fun drags(milliseconds: Int) {
@@ -217,7 +223,6 @@ class AndroidCanvasBarBenchmarkTest {
             data class UiFrame(val total: Long, val layout: Long, val draw: Long, val animation: Long, val delay: Long,
                 val sync: Long, val issue: Long, val swap: Long, val gpu: Long, val vsync: Long)
             val uiFrames = mutableListOf<UiFrame>()
-            var measuring = false
             val metricsThread = HandlerThread("canvas-bar-frame-metrics").apply { start() }
             val listener = Window.OnFrameMetricsAvailableListener { _, metrics, _ ->
                 if (measuring) synchronized(uiFrames) { uiFrames.add(UiFrame(metrics.getMetric(FrameMetrics.TOTAL_DURATION),
@@ -326,11 +331,10 @@ class AndroidCanvasBarBenchmarkTest {
                     "over_8_33" to sorted.count { it > 8.333 })
             }
             var refreshRate = 0f
-            var mark = 0L
-            var dispatched = 0L
             fun measure(label: String, operation: () -> Unit) {
                 if (args.getString("labels")?.split(',')?.let { label !in it } == true) return
                 mark = 0L
+                gestureDown.set(0)
                 SystemClock.sleep(600)
                 host.measurementReport(true)
                 native { Native.completionTimings(it, true) }
@@ -503,15 +507,23 @@ class AndroidCanvasBarBenchmarkTest {
                 measure("paint-strokes") { drag(center, duration) { t -> radius * sin(t * 3.2) to radius * .65 * sin(t * 4.7) } }
             }
             if (wanted("effects") || wanted("spatial-effects")) {
-                data class Scrub(val id: String, val key: String, val title: String, val label: String, val start: Double, val chain: Boolean = false)
+                data class Scrub(val id: String, val key: String, val title: String, val label: String, val start: Double, val chain: Boolean = false, val page: String? = null, val colorize: Boolean = false, val span: Double = .1)
                 val scrubs = if (wanted("spatial-effects")) listOf(
                     Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-small-drag", .2),
                     Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-large-drag", .7),
                 ) else listOf(
                     Scrub("exposure", "exposure", "Exposure", "effect-exposure-drag", .45),
+                    Scrub("hue_saturation", "hue", "Hue", "effect-master-hue-drag", .55),
+                    Scrub("hue_saturation", "greens_hue", "Hue", "effect-range-hue-drag", .55, page = "greens"),
+                    Scrub("hue_saturation", "colorize_hue", "Hue", "effect-colorize-hue-drag", .15, colorize = true),
+                    Scrub("hue_saturation", "colorize_saturation", "Saturation", "effect-colorize-saturation-drag", .35, colorize = true, span = .4),
+                    Scrub("threshold", "threshold", "Threshold", "effect-threshold-drag", .35, span = .4),
+                    Scrub("photo_filter", "density", "Density", "effect-photo-filter-drag", .35, span = .4),
                     Scrub("exposure", "exposure", "Exposure", "effect-chain-exposure-drag", .45, true),
                 )
-                for (scrub in scrubs) {
+                val selectedLabels = args.getString("labels")?.split(',')
+                for (scrub in scrubs.filter { selectedLabels == null || it.label in selectedLabels }) {
+                    val preparedAt = System.nanoTime()
                     val photoLayer = photoDocument()
                     val fixtureVisibleLayerIds = state().array("layers").objects().filter { it.optBoolean("visible") }.map { it.getLong("id") }
                     check(fixtureVisibleLayerIds.size == 2 && photoLayer in fixtureVisibleLayerIds) { "Effect fixture must contain only the photo and empty paint layer" }
@@ -524,6 +536,9 @@ class AndroidCanvasBarBenchmarkTest {
                         effect(obj("op" to "insert", "effect" to "vibrance"))
                     }
                     effect(obj("op" to "insert", "effect" to scrub.id))
+                    val effectLayer = state().getJSONObject("layer_properties").getLong("layer")
+                    scrub.page?.let { effect(obj("op" to "select_page", "layer" to effectLayer, "page" to it)) }
+                    if (scrub.colorize) effect(obj("op" to "set", "layer" to effectLayer, "key" to "colorize", "value" to obj("kind" to "toggle", "value" to true)))
                     action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
                     val group = host.panelGroup("properties")
                     action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
@@ -545,24 +560,40 @@ class AndroidCanvasBarBenchmarkTest {
                     val start = track.left + track.width() * scrub.start - host.surfaceOrigin.x to track.centerY() - host.surfaceOrigin.y.toDouble()
                     val before = value()
                     drag(start, 250) { t -> track.width() * .1 * t / .25 to 0.0 }
-                    waitFor("${scrub.title} gesture changes its value") { kotlin.math.abs(value() - before) > .1 }
+                    waitFor("${scrub.title} gesture changes its value") { value() != before }
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
-                    val values = java.util.Collections.synchronizedSet(mutableSetOf<Double>())
-                    val label = scrub.label
-                    measure(label) {
-                        val sampler = Thread {
-                            val until = SystemClock.uptimeMillis() + duration
-                            while (SystemClock.uptimeMillis() < until) { values += value(); SystemClock.sleep(8) }
-                        }.apply { start() }
-                        drag(start, duration) { t -> track.width() * .1 * (1 - kotlin.math.abs(1 - (t % .5) * 4)) to 0.0 }
-                        sampler.join()
+                    val preparationMs = (System.nanoTime() - preparedAt) / 1e6
+                    val effectRepeats = args.getString("effectRepeats", "1")!!.toInt().also { require(it > 0) }
+                    repeat(effectRepeats) { index ->
+                        val values = java.util.Collections.synchronizedSet(mutableSetOf<Double>())
+                        val firstChanged = java.util.concurrent.atomic.AtomicLong()
+                        val label = scrub.label
+                        measure(label) {
+                            val initialValue = value()
+                            val sampler = Thread {
+                                val until = SystemClock.uptimeMillis() + duration
+                                while (SystemClock.uptimeMillis() < until) {
+                                    val sampled = value()
+                                    values += sampled
+                                    if (sampled != initialValue && gestureDown.get() != 0L) firstChanged.compareAndSet(0, System.nanoTime())
+                                    SystemClock.sleep(8)
+                                }
+                            }.apply { start() }
+                            drag(start, duration) { t -> track.width() * scrub.span * (1 - kotlin.math.abs(1 - (t % .5) * 4)) to 0.0 }
+                            sampler.join()
+                        }
+                        val result = File(output, "$label.json")
+                        result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted()))
+                            .put("slider_travel_fraction", scrub.span).put("triangle_period_seconds", .5).put("preparation_ms", preparationMs).put("effect_id", scrub.id).put("effect_key", scrub.key).put("effect_page", scrub.page ?: "rgb").put("colorize", scrub.colorize).put("theme", state().getString("theme"))
+                            .put("first_value_observed_ns", firstChanged.get().takeIf { it > 0 } ?: JSONObject.NULL)
+                            .put("down_to_first_value_observed_ms", firstChanged.get().takeIf { it > 0 && gestureDown.get() > 0 }?.let { (it - gestureDown.get()) / 1e6 } ?: JSONObject.NULL)
+                            .put("photo_fixture_visible_layer_ids", JSONArray(fixtureVisibleLayerIds)).put("photo_fixture_visible_layer_count", fixtureVisibleLayerIds.size).put("slider_bounds",
+                            JSONArray(listOf(track.left, track.top, track.right, track.bottom))).toString(2))
+                        if (effectRepeats > 1) result.copyTo(File(output, "$label-$index.json"), overwrite = true)
+                        check(values.size > 1) { "$label did not change its value during motion" }
+                        if (scrub.span == .4) check(values.size > 25) { "$label did not traverse enough coarse numeric steps" }
+                        if (scrub.id == "gaussian_blur") check(values.all { it > 0 && it < 21 }) { "$label reached a stationary slider limit" }
                     }
-                    val result = File(output, "$label.json")
-                    result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted()))
-                        .put("photo_fixture_visible_layer_ids", JSONArray(fixtureVisibleLayerIds)).put("photo_fixture_visible_layer_count", fixtureVisibleLayerIds.size).put("slider_bounds",
-                        JSONArray(listOf(track.left, track.top, track.right, track.bottom))).toString(2))
-                    check(values.size > 1) { "$label did not change its value during motion" }
-                    if (scrub.id == "gaussian_blur") check(values.all { it > 0 && it < 21 }) { "$label reached a stationary slider limit" }
                 }
                 if (args.getString("captureFilters") == "true") for (theme in listOf("light", "dark")) {
                     action(obj("type" to "set_theme", "theme" to theme))
@@ -571,6 +602,32 @@ class AndroidCanvasBarBenchmarkTest {
                     val shot = instrumentation.uiAutomation.takeScreenshot()
                     File(output, "filter-$theme.png").outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
                     shot.recycle()
+                }
+            }
+            if (wanted("pointwise-navigation")) {
+                val selectedLabels = args.getString("labels")?.split(',')
+                for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter")) {
+                    val label = "effect-$id-pan"
+                    if (selectedLabels != null && label !in selectedLabels) continue
+                    val preparedAt = System.nanoTime()
+                    val photoLayer = photoDocument()
+                    action(obj("type" to "select_layer", "id" to photoLayer))
+                    val appliedAt = System.nanoTime()
+                    if (id != "none") action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
+                    val applicationMs = (System.nanoTime() - appliedAt) / 1e6
+                    invoke("hand"); invoke("fit_canvas")
+                    waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
+                    val preparationMs = (System.nanoTime() - preparedAt) / 1e6
+                    val area = state().getJSONObject("camera").getJSONArray("work_area")
+                    val center = area.getDouble(0) + area.getDouble(2) / 2 to area.getDouble(1) + area.getDouble(3) / 2
+                    repeat(args.getString("effectRepeats", "1")!!.toInt()) { index ->
+                        measure(label) { drag(center, duration) { t -> 120 * sin(t * 2) to 80 * sin(t * 3) } }
+                        val result = File(output, "$label.json")
+                        result.writeText(JSONObject(result.readText()).put("effect_id", id)
+                            .put("theme", state().getString("theme")).put("preparation_ms", preparationMs)
+                            .put("shared_application_and_drain_ms", applicationMs).toString(2))
+                        result.copyTo(File(output, "$label-$index.json"), overwrite = true)
+                    }
                 }
             }
             if (wanted("curves") && args.getString("labels")?.split(',')?.let { "effect-curves-drag" in it } != false) {

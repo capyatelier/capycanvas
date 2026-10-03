@@ -461,3 +461,16 @@ resources-levels-auto = Auto
 resources-curve-targeted = Target adjustment
 resources-curve-targeted-prompt = Drag on the image
 resources-levels-auto-failed = Auto cannot stretch this source with the current Levels settings.
+
+resources-filter-invert = Invert
+resources-filter-threshold = Threshold
+resources-filter-desaturate = Desaturate
+resources-filter-photo-filter = Photo Filter
+resources-parameter-hue-saturation-master = Master
+resources-parameter-hue-saturation-center = Center
+resources-parameter-hue-saturation-width = Width
+resources-parameter-hue-saturation-feather = Feather
+resources-parameter-hue-saturation-colorize = Colorize
+resources-parameter-photo-filter-color = Color
+resources-parameter-photo-filter-density = Density
+resources-parameter-threshold-threshold = Threshold

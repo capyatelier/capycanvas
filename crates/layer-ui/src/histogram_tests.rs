@@ -31,6 +31,46 @@ fn histogram_control(s: &mut UiSession<Recorder>, action: crate::HistogramAction
 }
 
 #[test]
+fn histogram_retained_panel_configurations_publish_only_supported_host_controls() {
+    for platform in Platform::ALL {
+        let s=session(platform);let workspace=s.state.workspace.clone();
+        let serialized=serde_json::to_vec(&workspace).unwrap();
+        let restored:WorkspaceState=serde_json::from_slice(&serialized).unwrap();assert_eq!(restored,workspace);
+        assert!(workspace.layout.panels.iter().any(|config|config.id==Panel::Histogram));
+        for config in &workspace.layout.panels {
+            let copy=crate::customization::PanelCopy::new(&s.state,config);
+            let view=crate::customization::panel_view(&s.state,config.id,&copy).unwrap();
+            let actual:Vec<_>=view.controls.iter().map(|control|control.control).collect();
+            let expected=if config.id.available_on(platform) {PanelControl::available(config.id)} else {&[]};
+            assert_eq!(actual,expected,"{platform:?} {:?}",config.id);
+            if config.id==Panel::Histogram {assert_eq!(actual.is_empty(),platform!=Platform::Gtk);}
+        }
+        assert_eq!(serde_json::to_vec(&s.state.workspace).unwrap(),serialized);
+    }
+}
+
+#[test]
+fn histogram_unsupported_host_actions_preserve_state_backend_history_and_workspace() {
+    use crate::HistogramAction::*;
+    for platform in Platform::ALL.into_iter().filter(|platform|!Panel::Histogram.available_on(*platform)) {
+        for contact in [false,true] {
+        let mut s=session(platform);if contact {s.pen(event(&s,1,PenPhase::Down,0.5)).unwrap();}
+        let state=serde_json::to_vec(&s.state).unwrap();let document=s.engine.document().clone();
+        let checkpoint=s.engine.checkpoint();let clipping=s.engine.backend().clipping_previews.clone();
+        let requests=s.engine.backend().snapshot_requests.len();let cancels=s.engine.backend().snapshot_cancels;
+        let composites=s.engine.backend().composites;let dabs=s.engine.backend().dabs;
+        for action in [Source {index:3},Channel {index:4},Logarithmic {enabled:true},Shadows {enabled:true},Highlights {enabled:true}] {
+            s.dispatch(UiAction::Histogram {action}).unwrap();
+            assert!(serde_json::to_vec(&s.state).unwrap()==state,"unsupported Histogram action changed UI state on {platform:?}");assert_eq!(s.engine.document(),&document);assert_eq!(s.engine.checkpoint(),checkpoint);
+            assert_eq!(s.engine.backend().clipping_previews,clipping);assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert_eq!(s.engine.backend().snapshot_cancels,cancels);
+            assert_eq!(s.engine.backend().composites,composites);assert_eq!(s.engine.backend().dabs,dabs);
+            assert_eq!(s.pen_contact,contact);
+        }
+        }
+    }
+}
+
+#[test]
 fn histogram_source_and_selected_coverage_changes_cancel_obsolete_queries() {
     for mutation in 0..3 {
         let mut s = histogram_session();

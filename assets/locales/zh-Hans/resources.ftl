@@ -578,3 +578,16 @@ resources-levels-auto = 自动
 resources-curve-targeted = 在图像上调整
 resources-curve-targeted-prompt = 在图像上拖动
 resources-levels-auto-failed = 当前色阶设置无法自动拉伸此来源的色调范围。
+
+resources-filter-invert = 反相
+resources-filter-threshold = 阈值
+resources-filter-desaturate = 去色
+resources-filter-photo-filter = 照片滤镜
+resources-parameter-hue-saturation-master = 全局
+resources-parameter-hue-saturation-center = 中心
+resources-parameter-hue-saturation-width = 宽度
+resources-parameter-hue-saturation-feather = 羽化
+resources-parameter-hue-saturation-colorize = 着色
+resources-parameter-photo-filter-color = 颜色
+resources-parameter-photo-filter-density = 浓度
+resources-parameter-threshold-threshold = 阈值

@@ -6,6 +6,7 @@ use layer_render::{BackendError, FilterPreviewImage, FilterPreviewRequest, Frame
 /// Protocol recorder only: no canvas storage or software rasterization.
 #[derive(Default)]
 pub(crate) struct Recorder {
+    pub(crate) clipping_previews: Vec<(bool,bool)>,
     pub(crate) settling: bool,
     pub(crate) color: layer_core::color::DocumentColor,
     pub(crate) prepared_color: Option<layer_core::color::DocumentColor>,
@@ -54,6 +55,7 @@ pub(crate) struct Recorder {
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
+    fn set_clipping_preview(&mut self, shadows:bool, highlights:bool) {self.clipping_previews.push((shadows,highlights));}
     fn has_pending_submission(&self) -> bool { self.settling }
     fn can_submit(&self) -> bool { !self.settling }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {self.overlay=overlay;}

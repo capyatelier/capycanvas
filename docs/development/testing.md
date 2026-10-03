@@ -83,6 +83,12 @@ private 120 Hz display. Run it with `LAYER_NATIVE_INPUT_TRACE=1` to record input
 shared curve adoption and presentation times. Its small desktop fixture does
 not qualify the reference tablet canvases.
 
+Pointwise color adjustments use `color_adjustment_schema_tests` in `layer-core`,
+the Colorize and Threshold Properties tests in `layer-ui`, and `native_effects::color`
+and `scale::tests::color_effects` in `layer-render-wgpu`. The GPU references
+cover physical hue membership, extended RGB, tiny alpha, tagged colors and
+reduced-resolution previews independently of catalog screenshots.
+
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
 `RUST_TEST_THREADS` or `--test-threads` says otherwise. Some Linux drivers limit

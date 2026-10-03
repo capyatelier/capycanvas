@@ -900,6 +900,127 @@ class AndroidHostTest {
         }
     }
 
+    @Test fun pointwiseColorPagesUseNativeControlsAndRetainHiddenValues() {
+        fun p21Capture(name: String) {
+            host.drain(); settle()
+            compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true && !state().getJSONObject("filter_load").getBoolean("pending") }
+            capture(name)
+        }
+        fun properties() = state().getJSONObject("layer_properties")
+        fun controls() = properties().array("controls").objects()
+        fun value(key: String) = controls().first { it.getString("key") == key }.getJSONObject("value").getDouble("value")
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        fun page(index: Int) {
+            val selected = properties().array("pages").getJSONObject(index)
+            if (properties().getString("page") == selected.getString("id")) return
+            compose.onNodeWithTag("properties-page").performScrollTo().performClick()
+            compose.onNodeWithText(selected.getString("label")).performClick()
+            waitState { properties().getString("page") == selected.getString("id") }
+        }
+        fun edit(key: String, literal: String) {
+            val label = controls().first { it.getString("key") == key }.getString("label")
+            compose.onNodeWithTag("number-value-$key").performScrollTo().performClick()
+            val field = compose.onNodeWithTag("number-$label")
+            field.performTextReplacement(literal); field.performImeAction()
+            waitState { kotlin.math.abs(value(key) - literal.toDouble()) < .0001 }
+        }
+        fun toggle(key: String) {
+            val label = controls().first { it.getString("key") == key }.getString("label")
+            compose.onNode(isToggleable() and hasAnySibling(hasText(label))).performScrollTo().performClick()
+            settle()
+        }
+        action(obj("type" to "set_brush_size", "value" to 120))
+        for ((index, color) in listOf(listOf(.9,.12,.08,1), listOf(.08,.7,.15,1), listOf(.1,.2,.9,1)).withIndex()) {
+            action(obj("type" to "set_color", "rgba" to JSONArray(color)))
+            val x = .4f + index * .1f
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(androidx.compose.ui.geometry.Offset(x, .4f)), MotionEvent.TOOL_TYPE_STYLUS)
+            canvasEvent(MotionEvent.ACTION_MOVE, listOf(androidx.compose.ui.geometry.Offset(x + .03f, .6f)), MotionEvent.TOOL_TYPE_STYLUS)
+            canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(x + .03f, .6f)), MotionEvent.TOOL_TYPE_STYLUS)
+        }
+        host.drain(); settle()
+        for (panel in listOf("navigator", "proof", "layers")) customize(obj("type" to "set_panel_visible", "panel" to panel, "visible" to false))
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "hue_saturation")))
+            assertEquals(7, properties().array("pages").length())
+            edit("hue", "17"); edit("saturation", "23"); edit("lightness", "-9")
+            for ((index, range) in listOf("reds", "yellows", "greens", "cyans", "blues", "magentas").withIndex()) {
+                page(index + 1)
+                for ((key, literal) in listOf("hue" to "31", "saturation" to "-27", "lightness" to "13", "center" to "73", "width" to "19", "feather" to "41")) edit("${range}_$key", literal)
+                p21Capture("p21-$theme-$range")
+            }
+            page(0)
+            val hue = controls().first { it.getString("key") == "hue" }
+            val slider = compose.onNodeWithTag("number-slider-${hue.getString("label")}").performScrollTo()
+            slider.performTouchInput { swipe(androidx.compose.ui.geometry.Offset(width * .4f, height * .5f), androidx.compose.ui.geometry.Offset(width * .6f, height * .5f), 250) }
+            waitState { value("hue") != 17.0 }
+            host.drain(); settle()
+            val after = value("hue")
+            invoke("undo"); assertEquals(17.0, value("hue"), 0.0)
+            invoke("redo"); assertEquals(after, value("hue"), 0.0)
+            slider.performMouseInput {
+                moveTo(androidx.compose.ui.geometry.Offset(width * .3f, height * .5f)); press()
+                moveTo(androidx.compose.ui.geometry.Offset(width * .55f, height * .5f)); release()
+            }
+            waitState { value("hue") != after }
+            host.drain(); settle()
+            val mouseAfter = value("hue")
+            invoke("undo"); assertEquals(after, value("hue"), 0.0)
+            invoke("redo"); assertEquals(mouseAfter, value("hue"), 0.0)
+            invoke("undo")
+            val node = slider.fetchSemanticsNode()
+            val owner = node.root as ViewRootForTest
+            val bounds = node.boundsInRoot
+            val downAt = SystemClock.uptimeMillis()
+            val start = androidx.compose.ui.geometry.Offset(bounds.left + bounds.width * .2f, bounds.center.y)
+            val end = androidx.compose.ui.geometry.Offset(bounds.left + bounds.width * .7f, bounds.center.y)
+            touch(owner.view, downAt, MotionEvent.ACTION_DOWN, start, MotionEvent.TOOL_TYPE_STYLUS)
+            touch(owner.view, downAt, MotionEvent.ACTION_MOVE, end, MotionEvent.TOOL_TYPE_STYLUS)
+            touch(owner.view, downAt, MotionEvent.ACTION_UP, end, MotionEvent.TOOL_TYPE_STYLUS)
+            waitState { value("hue") != after }
+            host.drain(); settle()
+            val penAfter = value("hue")
+            invoke("undo"); assertEquals(after, value("hue"), 0.0)
+            invoke("redo"); assertEquals(penAfter, value("hue"), 0.0)
+            invoke("undo")
+            toggle("colorize")
+            assertEquals(1, properties().array("pages").length())
+            compose.onNodeWithTag("properties-page").assertDoesNotExist()
+            assertEquals(listOf("colorize_hue", "colorize_saturation", "lightness", "colorize"), controls().map { it.getString("key") })
+            edit("colorize_hue", "193"); edit("colorize_saturation", "44")
+            assertEquals(-9.0, value("lightness"), 0.0)
+            p21Capture("p21-$theme-colorize")
+            toggle("colorize")
+            assertEquals(7, properties().array("pages").length())
+            assertEquals(after, value("hue"), 0.0)
+            for ((index, range) in listOf("reds", "yellows", "greens", "cyans", "blues", "magentas").withIndex()) {
+                page(index + 1); assertEquals(31.0, value("${range}_hue"), 0.0)
+                assertEquals(41.0, value("${range}_feather"), 0.0)
+            }
+            action(obj("type" to "set_layer_visibility", "id" to properties().getLong("layer"), "visible" to false))
+            for (id in listOf("invert", "desaturate", "threshold", "photo_filter")) {
+                action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
+                when (id) {
+                    "invert", "desaturate" -> assertTrue(controls().isEmpty())
+                    "threshold" -> { edit("threshold", "0.73"); p21Capture("p21-$theme-threshold") }
+                    "photo_filter" -> {
+                        edit("density", "67"); toggle("preserve_luminance")
+                        val tagged = controls().first { it.getString("key") == "color" }.getJSONObject("value").toString()
+                        compose.onNodeWithTag("property-color-${controls().first { it.getString("key") == "color" }.getString("label")}").performScrollTo().performClick()
+                        compose.onNodeWithText("Use Color").performClick()
+                        compose.waitUntil(10_000) { compose.onAllNodesWithText("Use Color").fetchSemanticsNodes().isEmpty() }
+                        host.drain(); settle()
+                        waitState { host.snapshot?.optBoolean("brush_ready") == true && !it.getJSONObject("filter_load").getBoolean("pending") }
+                        assertEquals(tagged, controls().first { it.getString("key") == "color" }.getJSONObject("value").toString())
+                        p21Capture("p21-$theme-photo-filter")
+                    }
+                }
+                action(obj("type" to "set_layer_visibility", "id" to properties().getLong("layer"), "visible" to false))
+            }
+            assertNull(host.failure); assertNull(host.actionError)
+        }
+    }
+
     @Test fun adjustmentPanelsUseSharedSchema() {
         action(obj("type" to "set_theme", "theme" to "dark"))
         action(obj("type" to "set_brush_size", "value" to 220))
@@ -911,7 +1032,7 @@ class AndroidHostTest {
             canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(x+.03f,.6f)), MotionEvent.TOOL_TYPE_STYLUS)
         }
         val choices=state().array("adjustments").objects().map { it.getString("id") }
-        assertEquals(42, choices.size)
+        assertEquals(46, choices.size)
         assertEquals("The picker lists both fill generators", listOf("solid_color","gradient_fill"), choices.filter { it in listOf("solid_color","gradient_fill") })
         action(obj("type" to "select_panel_tab", "group" to group("adjustments").getLong("id"), "panel" to "adjustments"))
         compose.waitUntil(20_000) { host.filterPreviewCache.images[choices.first()] != null }
@@ -1069,10 +1190,10 @@ class AndroidHostTest {
     }
     private fun capyTag() = "header-control-" + host.snapshot!!.getJSONObject("header").array("items").objects()
         .first { it.getString("label") == "Capy (Zen Mode)" }.get("id")
-    private fun touch(view: View, downAt: Long, action: Int, point: androidx.compose.ui.geometry.Offset) = instrumentation.runOnMainSync {
-        val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER })
+    private fun touch(view: View, downAt: Long, action: Int, point: androidx.compose.ui.geometry.Offset, tool: Int = MotionEvent.TOOL_TYPE_FINGER) = instrumentation.runOnMainSync {
+        val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = tool })
         val coords = arrayOf(MotionEvent.PointerCoords().apply { x = point.x; y = point.y; pressure = 1f })
-        val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, if (tool == MotionEvent.TOOL_TYPE_STYLUS) InputDevice.SOURCE_STYLUS else InputDevice.SOURCE_TOUCHSCREEN, 0)
         view.dispatchTouchEvent(event); event.recycle()
     }
     private fun slide(view: View, downAt: Long, from: androidx.compose.ui.geometry.Offset, to: androidx.compose.ui.geometry.Offset) {

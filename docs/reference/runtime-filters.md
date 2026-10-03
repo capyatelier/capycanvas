@@ -2,12 +2,33 @@
 
 [Technical documentation](../README.md)
 
-Implemented and validated on 2026-09-10. All forty-two built-ins and custom filters use
-one runtime JSON/WGSL format and shared renderer. **Curves and Gradient Map are
+Built-in and custom filters use one runtime JSON/WGSL format and shared renderer.
+**Curves and Gradient Map are
 the agreed exceptions:** their custom controls and parameter preparation remain
 in Rust; GPU shaders evaluate the prepared segments/stops. Generic preparation,
 including Gaussian coefficients, is WGSL.
 No shader-editor UI or general node graph was added.
+
+## Photo color adjustments
+
+Hue / Saturation has a Master page and six editable hue ranges. Range membership
+converts the original linear color from document primaries to Oklab hue and chroma.
+Weighted range changes combine with Master before one extended HSL adjustment.
+Center, Width and Feather define each range; zero Feather gives a closed hard
+edge. Neutral controls preserve the original premultiplied pixel exactly.
+
+Colorize replaces Hue and Saturation with its own stored values and keeps Master
+Lightness. It hides the inactive range pages while retaining their settings.
+Invert and Desaturate need no numeric controls. Threshold compares document
+luminance in encoded coordinates with one threshold. Photo Filter mixes toward a
+tagged color with Density and optional Preserve luminosity; color alpha reduces
+its strength. Invert, Desaturate and Photo Filter use display-resolution previews
+after passing the reduced-graph quality checks. Threshold stays at native
+resolution because thresholding averaged colors loses narrow black/white edges.
+
+The [tone and color contract](../development/photo-editing-m5-m6-color.md#huesaturation-by-range)
+defines the equations and bounds. All controls, validation, history and saved
+values use the existing runtime schema on GTK, Web and Android.
 
 ## Definitions and ownership
 
@@ -65,7 +86,8 @@ and a `ResourceLabel` label. A parameter's optional `page` names one of them;
 parameters without a page remain visible across pages. `visible_when` compares
 one named Toggle or Choice with a validated `EffectValue`. It cannot refer to
 the parameter itself. Hidden parameters retain their values and remain active
-in rendering.
+in rendering. Pages with no visible controls are omitted from Properties; their
+parameters and stored values remain intact.
 
 Numeric parameters may provide `soft_bounds: [minimum, maximum]` within their
 hard bounds and `mapping: {"type":"linear"}`, `{"type":"log"}` or

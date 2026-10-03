@@ -1,4 +1,5 @@
 import {runJourney} from "./journeys.mjs";
+import {checkPointwiseEffects} from './pointwise-effects.test.mjs';
 import {checkTonalSelections} from './tonal-selection.test.mjs';
 import {checkColorPicker} from './color-picker.test.mjs';
 import {checkInputDevices} from './input-devices.test.mjs';
@@ -286,6 +287,8 @@ try {
     [process.argv.includes("--staged-startup"), () => checkStagedStartup({ call, evaluate, settle, canvasPixels }), checkErrors],
     [process.argv.includes("--stroke-recording"), () => checkStrokeRecording({call,evaluate,settle})],
     [process.argv.includes("--curves"), () => checkCurves({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--pointwise-effects"), () => checkPointwiseEffects({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--pointwise-effects-smoke"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,widths:[1100],effects:['threshold']}), checkErrors],
     [process.argv.includes("--adjustments"), () => checkAdjustments({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--selection"), () => checkSelectedPainting({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--layers"), () => checkLayers({ call, evaluate, settle }), checkErrors],

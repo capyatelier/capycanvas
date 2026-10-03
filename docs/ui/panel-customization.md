@@ -8,6 +8,9 @@ The Rust UI core owns customization and the complete serializable workspace.
 Hosts translate native events and render its menu, dialog and control models.
 Customization adds no canvas or rendering path. Zen behavior is described in
 [shared UI](shared-ui.md#window-chrome-and-zen-mode).
+Saved configurations retain every built-in panel. Shared panel views publish
+controls only when the current host supports that panel, matching the panel
+picker's availability rules.
 
 - The **Window** menu (see the [workspace manager](default-workspaces.md#workspace-manager))
   has checkable built-in-panel rows and a **Quick Access Toolbars** submenu with

@@ -101,15 +101,61 @@ fn fx_hsl_domain(rgb:vec3<f32>)->vec2<f32> {
     let high=max(1.,max(rgb.r,max(rgb.g,rgb.b)));
     return vec2<f32>(low,high-low);
 }
+fn fx_hue_coordinates(c:vec4<f32>)->vec2<f32> {
+    var linear=fx_unassociate(c);
+    if FX_ENCODED {linear=fx_decode(linear);}
+    let lab=working_to_oklab(linear);
+    return vec2(fract(atan2(lab.z,lab.y)/6.28318530718+1.)*360.,length(lab.yz));
+}
+fn fx_hue_weight(hue_chroma:vec2<f32>,center:f32,width:f32,feather:f32)->f32 {
+    let angle=abs(hue_chroma.x-center);let distance=min(angle,360.-angle);let half_width=width*.5;
+    var weight=select(0.,1.,distance<=half_width);
+    if feather>0. {weight=1.-smoothstep(half_width,half_width+feather,distance);}
+    return weight*smoothstep(.005,.02,hue_chroma.y);
+}
 fn capy_hue_saturation(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
-    if FX_EXTENDED && fx_parameter(base,0u).x==0. && fx_parameter(base,1u).x==0.
-        && fx_parameter(base,2u).x==0. {return c;}
+    if c.a<=0. {return c;}
+    let colorize=fx_parameter(base,41u).x>.5;
+    var correction=vec3(fx_parameter(base,0u).x,fx_parameter(base,2u).x,fx_parameter(base,4u).x);
+    if !colorize {
+        var hue_chroma=vec2(0.);var sampled=false;
+        for(var i=0u;i<6u;i++) {
+            let offset=5u+i*6u;
+            let adjustment=vec3(fx_parameter(base,offset).x,fx_parameter(base,offset+1u).x,fx_parameter(base,offset+2u).x);
+            if any(adjustment!=vec3(0.)) {
+                if !sampled {hue_chroma=fx_hue_coordinates(c);sampled=true;}
+                correction+=adjustment*fx_hue_weight(hue_chroma,fx_parameter(base,offset+3u).x,fx_parameter(base,offset+4u).x,fx_parameter(base,offset+5u).x);
+            }
+        }
+        if all(correction==vec3(0.)) {return c;}
+    }
     let rgb=fx_rgb(c);let domain=fx_hsl_domain(rgb);
-    var hsl=fx_hsl((rgb-domain.x)/domain.y);
-    hsl.x=fract(hsl.x+fx_parameter(base,0u).x/360.+1.);
-    let s=fx_parameter(base,1u).x/100.; hsl.y=clamp(hsl.y*(1.+s),0.,1.);
-    let l=fx_parameter(base,2u).x/100.; hsl.z=select(hsl.z*(1.+l),mix(hsl.z,1.,l),l>=0.);
+    let normalized=(rgb-domain.x)/domain.y;
+    var hsl:vec3<f32>;
+    if colorize {
+        let lightness=(min(normalized.r,min(normalized.g,normalized.b))+max(normalized.r,max(normalized.g,normalized.b)))*.5;
+        hsl=vec3(fx_parameter(base,1u).x/360.,fx_parameter(base,3u).x/100.,lightness);
+    } else {hsl=fx_hsl(normalized);hsl.x=fract(hsl.x+correction.x/360.);hsl.y=clamp(hsl.y*(1.+clamp(correction.y,-100.,100.)/100.),0.,1.);}
+    let l=clamp(correction.z,-100.,100.)/100.;hsl.z=select(hsl.z*(1.+l),mix(hsl.z,1.,l),l>=0.);
     return fx_rgba(fx_hsl_rgb(hsl)*domain.y+domain.x,c.a);
+}
+fn capy_invert(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
+    return fx_rgba(vec3(1.)-fx_rgb(c),c.a);
+}
+fn capy_threshold(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
+    return fx_rgba(vec3(select(0.,1.,fx_luma(fx_rgb(c))>=fx_parameter(base,0u).x)),c.a);
+}
+fn capy_desaturate(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
+    let rgb=fx_rgb(c);let domain=fx_hsl_domain(rgb);
+    let lightness=fx_hsl((rgb-domain.x)/domain.y).z*domain.y+domain.x;
+    return fx_rgba(vec3(lightness),c.a);
+}
+fn capy_photo_filter(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
+    let color=fx_parameter(base,0u);let strength=fx_parameter(base,1u).x/100.*color.a;
+    if strength==0. {return c;}
+    let rgb=fx_rgb(c);var result=mix(rgb,color.rgb,strength);
+    if fx_parameter(base,2u).x>.5 {result=fx_preserve_luma(result,fx_luma(rgb));}
+    return fx_rgba(result,c.a);
 }
 fn capy_color_balance(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
     let rgb=fx_rgb(c); let l=fx_luma(rgb);

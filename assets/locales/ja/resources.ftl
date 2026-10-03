@@ -578,3 +578,16 @@ resources-levels-auto = 自動
 resources-curve-targeted = 画像上で調整
 resources-curve-targeted-prompt = 画像上をドラッグ
 resources-levels-auto-failed = 現在のレベル補正設定では、この画像に自動補正を適用できません。
+
+resources-filter-invert = 階調の反転
+resources-filter-threshold = しきい値
+resources-filter-desaturate = 彩度を下げる
+resources-filter-photo-filter = レンズフィルター
+resources-parameter-hue-saturation-master = 全体
+resources-parameter-hue-saturation-center = 中心
+resources-parameter-hue-saturation-width = 幅
+resources-parameter-hue-saturation-feather = ぼかし
+resources-parameter-hue-saturation-colorize = 着色
+resources-parameter-photo-filter-color = 色
+resources-parameter-photo-filter-density = 適用量
+resources-parameter-threshold-threshold = しきい値

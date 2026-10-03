@@ -144,32 +144,118 @@
         "abi": 3,
         "entry": "capy_hue_saturation",
         "id": "hue_saturation",
-        "resolution": "display",
         "kind": "adjustment",
         "label": {"message":"resources-filter-hue-saturation"},
-        "pages": [{"id":"rgb","label":{"message":"resources-parameter-curves-curve-0"}}],
         "parameters": [
-          {
-            "default": {"kind":"number","value":0},
-            "key": "hue",
-            "page": "rgb",
-            "kind": {"decimals":0,"kind":"number","max":180,"min":-180,"step":1,"unit":"°"},
-            "label": {"message":"resources-parameter-hue-saturation-hue"}
-          },
-          {
-            "default": {"kind":"number","value":0},
-            "key": "saturation",
-            "page": "rgb",
-            "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
-            "label": {"message":"resources-parameter-hue-saturation-saturation"}
-          },
-          {
-            "default": {"kind":"number","value":0},
-            "key": "lightness",
-            "page": "rgb",
-            "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},
-            "label": {"message":"resources-parameter-hue-saturation-lightness"}
-          }
+          {"key":"hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"rgb","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"colorize_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"rgb","visible_when":{"key":"colorize","value":{"kind":"toggle","value":true}}},
+          {"key":"saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"rgb","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"colorize_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":0,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":25},"page":"rgb","visible_when":{"key":"colorize","value":{"kind":"toggle","value":true}}},
+          {"key":"lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"rgb"},
+          {"key":"reds_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"reds_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"reds_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"reds_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"reds_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"reds_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"yellows_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"yellows_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"yellows_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"yellows_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":110},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"yellows_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"yellows_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"greens_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"greens_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"greens_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"greens_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":145},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"greens_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"greens_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"cyans_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"cyans_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"cyans_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"cyans_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":195},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"cyans_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"cyans_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"blues_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"blues_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"blues_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"blues_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":265},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"blues_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"blues_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"magentas_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"magentas_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"magentas_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"magentas_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":330},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"magentas_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"magentas_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"key":"colorize","label":{"message":"resources-parameter-hue-saturation-colorize"},"kind":{"kind":"toggle"},"default":{"kind":"toggle","value":false}}
+        ],
+        "wgsl": ["effects.wgsl"],
+        "pages": [{"id":"rgb","label":{"message":"resources-parameter-hue-saturation-master"}},{"id":"reds","label":{"message":"resources-parameter-black-white-reds"}},{"id":"yellows","label":{"message":"resources-parameter-black-white-yellows"}},{"id":"greens","label":{"message":"resources-parameter-black-white-greens"}},{"id":"cyans","label":{"message":"resources-parameter-black-white-cyans"}},{"id":"blues","label":{"message":"resources-parameter-black-white-blues"}},{"id":"magentas","label":{"message":"resources-parameter-black-white-magentas"}}],
+        "resolution": "display"
+      }
+    },
+    {
+      "category": "color",
+      "icon": "invert",
+      "preview": {},
+      "program": {
+        "abi": 3,
+        "entry": "capy_invert",
+        "id": "invert",
+        "resolution": "display",
+        "kind": "adjustment",
+        "label": {"message":"resources-filter-invert"},
+        "parameters": [],
+        "wgsl": ["effects.wgsl"]
+      }
+    },
+    {
+      "category": "tone",
+      "icon": "threshold",
+      "preview": {},
+      "program": {
+        "abi": 3,
+        "entry": "capy_threshold",
+        "id": "threshold",
+        "kind": "adjustment",
+        "label": {"message":"resources-filter-threshold"},
+        "parameters": [
+          {"key":"threshold","label":{"message":"resources-parameter-threshold-threshold"},"kind":{"kind":"number","min":0,"max":1,"step":0.01,"decimals":3,"unit":""},"default":{"kind":"number","value":0.5},"soft_bounds":[0,1]}
+        ],
+        "wgsl": ["effects.wgsl"]
+      }
+    },
+    {
+      "category": "color",
+      "icon": "desaturate",
+      "preview": {},
+      "program": {
+        "abi": 3,
+        "entry": "capy_desaturate",
+        "id": "desaturate",
+        "resolution": "display",
+        "kind": "adjustment",
+        "label": {"message":"resources-filter-desaturate"},
+        "parameters": [],
+        "wgsl": ["effects.wgsl"]
+      }
+    },
+    {
+      "category": "color",
+      "icon": "photo_filter",
+      "preview": {},
+      "program": {
+        "abi": 3,
+        "entry": "capy_photo_filter",
+        "id": "photo_filter",
+        "resolution": "display",
+        "kind": "adjustment",
+        "label": {"message":"resources-filter-photo-filter"},
+        "parameters": [
+          {"key":"color","label":{"message":"resources-parameter-photo-filter-color"},"kind":{"kind":"color"},"default":{"kind":"color","value":{"space":"Srgb","rgba":[1,0.72,0.45,1]}}},
+          {"key":"density","label":{"message":"resources-parameter-photo-filter-density"},"kind":{"kind":"number","min":0,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":25}},
+          {"key":"preserve_luminance","label":{"message":"resources-parameter-color-balance-preserve-luminance"},"kind":{"kind":"toggle"},"default":{"kind":"toggle","value":true}}
         ],
         "wgsl": ["effects.wgsl"]
       }

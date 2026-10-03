@@ -35,6 +35,8 @@ pub mod curves;
 mod curves_tests;
 #[cfg(test)]
 mod levels_tests;
+#[cfg(test)]
+mod color_adjustment_schema_tests;
 pub use selection::*;
 pub use effects::*;
 mod presets;

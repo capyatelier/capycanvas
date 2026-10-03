@@ -1219,6 +1219,7 @@ impl EffectProgram {
     pub fn for_depth(self:&Arc<Self>,depth:crate::color::SampleDepth)->Arc<Self> {
         let selected=match self.id.as_ref() {
             "levels" if depth.is_float()=>None,
+            "threshold" if depth.is_float()=>Some(("threshold",-65504.,65504.)),
             "curves" if depth==crate::color::SampleDepth::F32=>Some(("hdr_stops",0.,127.)),
             "exposure" if depth==crate::color::SampleDepth::F32=>Some(("exposure",-126.,126.)),
             _=>return self.clone(),

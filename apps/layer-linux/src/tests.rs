@@ -12914,6 +12914,9 @@ mod histogram;
 #[path = "tonal_tests.rs"]
 mod tonal;
 
+#[path = "pointwise_tests.rs"]
+mod pointwise;
+
 #[path = "color_preferences_tests.rs"]
 mod color_preferences;
 

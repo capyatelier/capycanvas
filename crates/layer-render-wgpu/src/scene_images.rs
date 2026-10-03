@@ -505,19 +505,24 @@ impl Scene {
         if !region.is_empty() {
             let extent = [destination.texture.width(), destination.texture.height()];
             let view = &self.pool[output].view;
+            let direct = match self.jobs.last_mut() {
+                Some(Job::Draw { target, sources, data, over: false, clip })
+                    if clip.is_none_or(|clip| clip == PixelRect::full([PAGE_SIZE; 2])) => Some((target, sources, data, Some(clip))),
+                Some(Job::Effect { target, sources, data, prepared, .. }) if prepared.pointwise => Some((target, sources, data, None)),
+                _ => None,
+            };
             if (extent == [bounds.width(), bounds.height()] || region == page_rect(tile))
                 && destination.texture.usage().contains(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING)
-                && let Some(Job::Draw { target, sources, data, over: false, clip }) = self.jobs.last_mut()
-                && target == view && !sources.contains(view)
+                && let Some((target, sources, data, clip)) = direct
+                && target == view && !sources.contains(view) && !sources.contains(&destination.view)
                 && data[..4] == [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32]
-                && clip.is_none_or(|clip| clip == PixelRect::full([PAGE_SIZE; 2]))
             {
                 *target = destination.view.clone();
                 data[0] = (tile[0] * PAGE_SIZE) as f32 - bounds.min_x() as f32;
                 data[1] = (tile[1] * PAGE_SIZE) as f32 - bounds.min_y() as f32;
                 data[4] = extent[0] as f32;
                 data[5] = extent[1] as f32;
-                *clip = Some(region.window_local(bounds));
+                if let Some(clip) = clip { *clip = Some(region.window_local(bounds)); }
                 let n = self.jobs.len();
                 if n >= 2 && matches!(&self.jobs[n - 2], Job::Clear(target, _) if target == view) {
                     self.jobs.remove(n - 2);

@@ -32,6 +32,9 @@ and black/neutral/white calibration; Curves has matching calibration and targete
 image dragging. See [Properties](../ui/numeric-controls.md#properties-and-curves)
 and [calibration](../ui/color-picker.md#levels-and-curves).
 The precision adjustment UI still needs Web and Android presentation.
+Hue / Saturation now has six editable hue ranges and Colorize. Invert, luminance
+Threshold, Desaturate and Photo Filter use the existing shared Properties controls
+on GTK, Web and Android.
 
 ## Milestones
 

@@ -80,6 +80,10 @@ unfinished text and transient display state only.
 
 ## Properties and Curves
 
+Changing conditional Properties fields retains compatible common widgets, their
+keyboard focus and unfinished numeric text. Native buttons and switches consume
+their activation keys before canvas shortcuts.
+
 A property scrub uses the existing shared gesture transaction: press begins a
 preview, release commits one undo step, and cancellation restores the original
 value and redo history. Hosts keep the gesture open through native release
@@ -105,6 +109,15 @@ as doubles through JNI so HDR coordinates retain the shared field's precision.
 Its native numeric draft, selection and edit focus use Compose saved state across
 Activity recreation; an in-progress IME composition is still owned by the input
 method.
+
+Hue / Saturation uses Master and six hue-range pages. Colorize keeps the same
+Hue, Saturation and Lightness positions, replacing the first two with its stored
+colorization values. Inactive range pages disappear without losing their values.
+Center is a hue angle; Width is the full-strength span and Feather is the falloff
+on either side. Threshold uses a soft 0–1 slider with finite extended entry in
+floating documents. Existing floating bounds and values survive depth changes.
+Photo Filter uses the shared tagged color editor, Density and Preserve luminosity.
+Invert and Desaturate apply directly without numeric controls.
 
 GTK Levels has RGB, Red, Green and Blue pages. Channel stages run before RGB;
 the two clipping controls apply to every stage. Floating documents allow input

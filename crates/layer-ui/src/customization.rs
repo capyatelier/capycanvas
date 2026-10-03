@@ -1503,6 +1503,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
     let expanded = state.customization.expanded == Some(panel);
     let controls = PanelControl::available(panel)
         .iter()
+        .filter(|_| panel.available_on(state.platform))
         .map(|&control| PanelControlView {
             control,
             label: control.localized_label(localization),

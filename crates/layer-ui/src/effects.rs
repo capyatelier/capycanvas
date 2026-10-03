@@ -594,7 +594,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
 pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,state:&mut PropertyEditorState,gesture:Option<&EffectGesture>,l:&Localizer) {
     let effect=if doc.active_mask {None} else {view.layer.and_then(|id|doc.layer(layer_core::LayerId(id))).and_then(|layer|layer.effect.as_ref())};
     view.histogram=effect.is_some_and(|effect|effect.program.id.as_ref()=="levels");
-    view.pages=effect.map_or_else(Vec::new,|effect|effect.program.pages.iter().map(|page|PropertyPageView{id:page.id.to_string(),label:resource_label(&page.label,l).to_string()}).collect());
+    view.pages=effect.map_or_else(Vec::new,|effect|effect.program.pages.iter().filter(|page|view.controls.iter().any(|control|control.page.as_deref()==Some(page.id.as_ref()))).map(|page|PropertyPageView{id:page.id.to_string(),label:resource_label(&page.label,l).to_string()}).collect());
     state.sync(doc.id.clone(),view.layer,doc.revision,view.pages.iter().map(|page|page.id.clone()).collect(),gesture.is_some());
     view.epoch=state.epoch;view.page=state.page().map(str::to_string);
     view.actions=effect.map_or_else(Vec::new,|effect| {

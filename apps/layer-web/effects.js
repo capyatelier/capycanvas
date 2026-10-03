@@ -93,7 +93,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   const stats=element("div","renderer-stats");stats.dataset.control="stats";panels.get("stats").append(stats);
   const recordButton=button("Start stroke recording",()=>{}); stats.append(recordButton);
   const disposeRecording=strokeRecordingControl(app,recordButton,message);
-  let schema,fields=new Map(),metricLabels=[];
+  let schema,fieldOwner,fields=new Map(),metricLabels=[];
   const svg=(tag,attributes={})=>{const e=document.createElementNS("http://www.w3.org/2000/svg",tag);for(const [k,v] of Object.entries(attributes))e.setAttribute(k,v);return e;};
   const chart=svg("svg",{viewBox:"0 0 200 46",class:"renderer-chart","aria-hidden":"true"});
   const line=svg("path",{fill:"none",stroke:"currentColor","stroke-width":1.5}),budget=svg("path",{stroke:"currentColor","stroke-dasharray":"3 3",opacity:.3});chart.append(budget,line);
@@ -191,18 +191,24 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     const pages=JSON.stringify(view.pages);
     if(page.dataset.schema!==pages){page.dataset.schema=pages;page.replaceChildren(...view.pages.map(p=>{const option=element("option","",p.label);option.value=p.id;return option;}));}
     page.hidden=view.pages.length<2;page.value=view.page??"";page.disabled=!view.enabled;
-    const next=JSON.stringify([String(state().document_file.epoch),String(view.layer),view.controls.map(c=>[c.key,c.kind.kind,c.kind.numeric,c.section_id,c.color_action])],(_,v)=>typeof v==="bigint"?String(v):v);
+    const owner=`${state().document_file.epoch}:${view.layer}`;
+    const fieldSchema=c=>JSON.stringify([c.kind.kind,c.kind.numeric,c.kind.options?.length,c.color_action],(_,v)=>typeof v==="bigint"?String(v):v);
+    const next=JSON.stringify([owner,view.controls.map(c=>[c.key,fieldSchema(c),c.section_id])]);
     if(schema!==next){
-      schema=next;for(const field of fields.values())field.dispose?.();body.replaceChildren();fields.clear();
-      let section=JSON.stringify(null);
+      schema=next;
+      const controls=new Map(view.controls.map(c=>[c.key,c]));
+      for(const [key,field] of fields)if(fieldOwner!==owner||!controls.has(key)||field.schema!==fieldSchema(controls.get(key))){field.dispose?.();field.node.remove();fields.delete(key);}
+      fieldOwner=owner;
+      let section=JSON.stringify(null);const children=[];
       for(const [index,c] of view.controls.entries()){
         const identity=JSON.stringify(c.section_id);
         if(section!==identity){
-          if(index>0)body.append(element("hr","property-divider"));
+          if(index>0)children.push(element("hr","property-divider"));
           section=identity;
-          if(c.section)body.append(element("h4","property-section",()=>state().layer_properties.controls.find(v=>v.key===c.key)?.section??""));
+          if(c.section)children.push(element("h4","property-section",()=>state().layer_properties.controls.find(v=>v.key===c.key)?.section??""));
         }
-        const change=value=>send({op:"set",layer:view.layer,key:c.key,value:{kind:c.kind.kind,value}});let field;
+        const change=value=>send({op:"set",layer:view.layer,key:c.key,value:{kind:c.kind.kind,value}});let field=fields.get(c.key);
+        if(!field){
         if(c.kind.kind==="number") {const n=numberEditor(c.kind.numeric,()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",()=>({op:"number",layer:view.layer,key:c.key}));field={node:n,update:c=>n.update(c.value.value),disable:x=>n.setDisabled(x),dispose:()=>n.dispose()};}
         else if(c.kind.kind==="curve") {
           let curve=curveEditor(view.layer,c.key,c),domain=JSON.stringify(c.curve.domain);
@@ -217,10 +223,14 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
         else if(c.kind.kind==="choice"){const n=element("select");c.kind.options.forEach((label,i)=>{const o=element("option","",()=>state().layer_properties.controls.find(v=>v.key===c.key)?.kind.options[i]??"");o.value=i;n.append(o);});n.onchange=()=>change(Number(n.value));field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.value=c.value.value,disable:x=>n.disabled=x};}
         else if(c.kind.kind==="color"){const n=colorButton({app,label:()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",element,button,change,current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}`});let input=n.node,bucket;
           if(c.color_action){bucket=button("",()=>dispatch(c.color_action));bucket.dataset.action=`${c.key.replaceAll("_","-")}-bucket`;bindCopy(bucket,()=>copy.use_selected,"title");bucket.append(icon("fill"));input=element("div","color-action-property");input.append(n.node,bucket);}
-          field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",input),update:c=>n.update(c.value.value),disable:x=>{n.disable(x);if(bucket)bucket.disabled=x;}};}
+          field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",input),update:c=>n.update(c.value.value),disable:x=>{n.disable(x);if(bucket)bucket.disabled=x;},dispose:()=>n.dispose()};}
         else if(c.kind.kind==="gradient")field=gradientEditor(view.layer,c.key);
-        if(field){field.node.dataset.propertyKey=c.key;body.append(field.node);fields.set(c.key,field);}
+        if(field){field.node.dataset.propertyKey=c.key;field.schema=fieldSchema(c);fields.set(c.key,field);}
+        }
+        if(field)children.push(field.node);
       }
+      const retained=new Set(children);for(const child of [...body.children])if(!retained.has(child))child.remove();
+      let before=body.firstChild;for(const child of children){if(child===before)before=before.nextSibling;else body.insertBefore(child,before);}
       contentChanged("properties");
     }
     body.classList.toggle("disabled",!view.enabled);
@@ -253,6 +263,6 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
       position.update(s.position);position.setDisabled(selected===0||selected===stops.length-1);remove.disabled=selected===0||selected===stops.length-1;
       opacity.update(s.color.rgba[3]);
     }
-    return {node,update};
+    return {node,update,dispose(){color.dispose();position.dispose();opacity.dispose();}};
   }
 }

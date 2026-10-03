@@ -2582,6 +2582,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if matches!(action,UiAction::Histogram {..}) && !Panel::Histogram.available_on(self.state.platform) {return Ok(UiChange::default());}
         self.engine.backend_mut().shader_input();
         self.end_holds_for_tool_choice(&action);
         if let UiAction::CommandSearch { action } = action {
@@ -6129,6 +6130,7 @@ mod tests {
     include!("color_picker_tests.rs");
     include!("calibration_tests.rs");
     include!("levels_ui_tests.rs");
+    include!("color_adjustment_tests.rs");
     include!("targeted_curve_tests.rs");
     include!("histogram_tests.rs");
     include!("session_source_tests.rs");
@@ -9288,7 +9290,7 @@ mod tests {
                 result: Ok(()),
             });
             s.frame(0, 0).unwrap();
-            assert_eq!(s.state.adjustments.len(), 43);
+            assert_eq!(s.state.adjustments.len(), 47);
             assert_eq!(
                 s.state.filter_categories.last().unwrap().label.as_ref(),
                 "Examples"

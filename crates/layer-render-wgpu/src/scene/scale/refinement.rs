@@ -11,14 +11,21 @@ impl Cache {
             missing.extend(overview.invalidate_native(scene, r, packet, dirty, encoder, commands, tiles)?);
         }
         if missing.is_empty() { return Ok(PixelRect::EMPTY); }
+        self.admit_hierarchy(r, encoder, commands)?;
+        let reverse = scene.native_reverse;
+        scene.native_reverse = !reverse;
         let changed = missing.iter().fold(PixelRect::EMPTY, |a, c| a.union(page_rect(*c))).intersect(PixelRect::full(packet.document_extent));
         let budget = r.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES, |n| n.image_pixel_budget(self.resident_bytes()));
         let plan = windows::Plan::new(packet.layers, packet.document_extent, budget)?;
-        let regions: Vec<_> = plan.map_or_else(|| vec![(changed, PixelRect::full(packet.document_extent))], |p| p.regions(changed).collect());
-        let image = self.exact_tile.get_or_insert_with(|| Image::new(r,
-            display_mips::Plan::at([PAGE_SIZE; 2], 0), "exact composition working tile"));
-        let mut image = image.clone();
+        let mut regions: Vec<_> = plan.map_or_else(|| vec![(changed, PixelRect::full(packet.document_extent))], |p| p.regions(changed).collect());
+        if reverse { regions.reverse(); }
+        let mut image = match &self.hierarchy {
+            Some(hierarchy) => hierarchy.root().clone(),
+            None => self.exact_tile.get_or_insert_with(|| Image::new(r,
+                display_mips::Plan::at([PAGE_SIZE; 2], 0), "exact composition working tile")).clone(),
+        };
         let (texture, view) = (image.texture.clone(), image.view.clone());
+        let mut batch = Vec::with_capacity(SOURCE_SLOTS);
         if plan.is_some() {
             Scene::submit_chunk(r, encoder, "before native filter windows")?;
             r.metrics.image_window_submissions += 1;
@@ -28,14 +35,23 @@ impl Cache {
             if plan.is_some() {
                 r.metrics.image_window_peak_bytes = r.metrics.image_window_peak_bytes.max(scene.images.storage_bytes());
             }
-            for coordinate in page_coordinates(output).filter(|c| missing.contains(c)) {
-                let region = page_rect(coordinate).intersect(PixelRect::full(packet.document_extent));
-                image.plan = display_mips::Plan::window(packet.document_extent, 0, region);
-                scene.capture_prepared_region(r, packet, &image, region, scene::Output::Display, encoder)?;
-                if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, &texture, coordinate, region); }
-                self.write_exact(r, encoder, commands, &view, coordinate, region)?;
-                if let Some(overview) = &mut self.overview { overview.write_exact(r, encoder, commands, &view, coordinate, region)?; }
-                r.metrics.composited_pixels += region.area();
+            let mut coordinates = page_coordinates(output).filter(|c| missing.contains(c));
+            loop {
+                batch.clear();
+                for _ in 0..if self.hierarchy.is_some() { SOURCE_SLOTS } else { 1 } {
+                    let Some(coordinate) = (if reverse { coordinates.next_back() } else { coordinates.next() }) else { break; };
+                    batch.push(page_rect(coordinate).intersect(PixelRect::full(packet.document_extent)));
+                }
+                if batch.is_empty() { break; }
+                if self.hierarchy.is_none() { image.plan = display_mips::Plan::window(packet.document_extent, 0, batch[0]); }
+                scene.capture_prepared_regions(r, packet, &image, &batch, scene::Output::Display, false, encoder)?;
+                for &region in &batch {
+                    let coordinate = [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE];
+                    if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, &texture, coordinate, region); }
+                    self.write_exact(r, encoder, commands, &view, coordinate, region)?;
+                    if let Some(overview) = &mut self.overview { overview.write_exact(r, encoder, commands, &view, coordinate, region)?; }
+                    r.metrics.composited_pixels += region.area();
+                }
             }
             if let Some(hierarchy) = &mut self.hierarchy { hierarchy.flush(encoder); }
             if plan.is_some() {
@@ -145,7 +161,7 @@ impl Cache {
         self.refined.insert(coordinate);
         self.valid.insert(coordinate);
         if matches!(self.pixels, hierarchy::Pixels::Resident { .. }) {
-            if self.next_exact_page().is_none() { self.placed = None; }
+            if self.placed.is_some() && self.next_exact_page().is_none() { self.placed = None; }
             return Ok(());
         }
         let [x, y, width, height] = paint_transform::texel_rect(covered.window_local(self.plan.bounds), 1 << self.plan.level);

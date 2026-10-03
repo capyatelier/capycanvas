@@ -105,7 +105,7 @@ first matching row and its error check, or leaves the default journey to the hos
 | Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-readout`, `--move-selection` |
 | Retouching | `--clone`, `--heal` |
 | Color | `--color-panel`, `--color-picker`, `--palettes` |
-| Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |
+| Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--pointwise-effects`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
 | Photo files and export | `--portable-photo`, `--export-metadata` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
@@ -116,6 +116,15 @@ first matching row and its error check, or leaves the default journey to the hos
 `--language-switching` visits all shipped languages in light and dark themes,
 checks retained Preferences and dirty size-entry identity, focus and selection,
 rapid choices, browser language resolution and another same-profile tab.
+
+`--pointwise-effects` checks Hue range pages and Colorize value retention,
+Threshold and Photo Filter controls, Invert/Desaturate insertion, slider history,
+visible source pixels, keyboard focus and saved source identity at narrow and
+wide widths in both themes. `node --test apps/layer-web/color-button-lifecycle.test.mjs`
+checks that a removed field cannot publish a deferred color-dialog result.
+`--pointwise-effects-smoke` reuses the journey at 1100 pixels wide in both themes,
+checking Colorize and Threshold compositor pixels, controls, focus and archive
+reopening without slider motion.
 
 Setup that some journeys need:
 

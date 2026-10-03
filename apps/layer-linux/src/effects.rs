@@ -53,6 +53,7 @@ pub struct EffectPanels {
     title: gtk::Label,
     body: gtk::Box,
     schema: RefCell<Option<LayerPropertiesView>>,
+    property_document: Cell<u64>,
     property_localization: RefCell<Option<std::sync::Arc<layer_ui::Localizer>>>,
     fields: RefCell<Vec<Field>>,
     property_labels: RefCell<Vec<(usize, gtk::Label)>>,
@@ -69,6 +70,19 @@ enum Field {
     Color(Rc<crate::color_editor::ColorButton>),
     Curve(CurveEditor),
     Gradient(GradientEditor),
+}
+impl Field {
+    fn widget(&self) -> &gtk::Widget {
+        match self {
+            Self::Number(input) => input.upcast_ref(), Self::Toggle(input) => input.upcast_ref(), Self::Choice(input) => input.upcast_ref(),
+            Self::Color(input) => input.widget.upcast_ref(), Self::Curve(input) => input.area.upcast_ref(), Self::Gradient(input) => input.root.upcast_ref(),
+        }
+    }
+    fn row(&self, body: &gtk::Box) -> gtk::Widget {
+        let mut widget=self.widget().clone();
+        while let Some(parent)=widget.parent() {if parent==*body.upcast_ref::<gtk::Widget>() {break;}widget=parent;}
+        widget
+    }
 }
 impl EffectPanels {
     pub fn picker_content_measurement(
@@ -243,6 +257,7 @@ impl EffectPanels {
             title,
             body,
             schema: RefCell::new(None),
+            property_document: Cell::new(0),
             property_localization: RefCell::new(None),
             fields: RefCell::new(Vec::new()),
             property_labels: RefCell::default(),
@@ -617,6 +632,7 @@ impl EffectPanels {
         let language_changed = self.property_localization.borrow().as_ref().is_none_or(|old| !std::sync::Arc::ptr_eq(old, &localization));
         *self.property_localization.borrow_mut() = Some(localization);
         let view = &state.layer_properties;
+        let document_changed=self.property_document.replace(state.document_file.epoch)!=state.document_file.epoch;
         if self.schema.borrow().as_ref().is_none_or(|old| old.actions != view.actions) {
             while let Some(child) = self.property_actions.first_child() { self.property_actions.remove(&child); }
             for action in &view.actions {
@@ -642,30 +658,43 @@ impl EffectPanels {
         self.page.set_visible(view.pages.len() > 1);
         self.properties_updating.set(false);
         let rebuild = self.schema.borrow().as_ref().is_none_or(|old| {
-            old.layer != view.layer
+            document_changed || old.layer != view.layer
                 || old.controls.len() != view.controls.len()
                 || old.controls.iter().zip(&view.controls).any(|(a, b)| {
                     a.key != b.key
                         || !same_property_kind(&a.kind, &b.kind)
                         || a.section_id != b.section_id
+                        || a.color_action != b.color_action
                         || a.curve.as_ref().map(|curve| curve.domain) != b.curve.as_ref().map(|curve| curve.domain)
                 })
         });
         if rebuild {
-            while let Some(child) = self.body.first_child() {
-                self.body.remove(&child);
+            let old=self.schema.borrow();
+            let labels=self.property_labels.borrow();
+            let mut retained:HashMap<_,_>=std::mem::take(&mut *self.fields.borrow_mut()).into_iter().enumerate().filter_map(|(index,field)| {
+                let old=old.as_ref().filter(|old|!document_changed && old.layer==view.layer)?.controls.get(index)?;
+                let current=view.controls.iter().find(|control|control.key==old.key)?;
+                if !same_property_kind(&old.kind,&current.kind) || old.color_action!=current.color_action
+                    || old.curve.as_ref().map(|curve|curve.domain)!=current.curve.as_ref().map(|curve|curve.domain) {return None;}
+                let row=field.row(&self.body);let label=labels.iter().find(|(i,_)|*i==index).map(|(_,label)|label.clone());
+                Some((old.key.clone(),(field,row,label)))
+            }).collect();
+            drop(labels);drop(old);
+            let mut child=self.body.first_child();
+            while let Some(current)=child {
+                child=current.next_sibling();
+                if !retained.values().any(|(_,row,_)|*row==current) {self.body.remove(&current);}
             }
-            self.fields.borrow_mut().clear();
             self.property_labels.borrow_mut().clear();
             self.section_labels.borrow_mut().clear();
             if let Some(layer) = view.layer {
-                let mut section = None;
+                let mut section = None;let mut previous:Option<gtk::Widget>=None;
                 for (index, control) in view.controls.iter().enumerate() {
                     if section != control.section_id.as_ref() {
                         if index > 0 {
                             let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
                             divider.add_css_class("property-divider");
-                            self.body.append(&divider);
+                            self.body.insert_child_after(&divider,previous.as_ref());previous=Some(divider.upcast());
                         }
                         section = control.section_id.as_ref();
                         if let Some(text) = control.section.as_deref() {
@@ -673,9 +702,14 @@ impl EffectPanels {
                             heading.set_xalign(0.);
                             heading.add_css_class("heading");
                             heading.add_css_class("property-section");
-                            self.body.append(&heading);
+                            self.body.insert_child_after(&heading,previous.as_ref());previous=Some(heading.clone().upcast());
                             self.section_labels.borrow_mut().push((index, heading));
                         }
+                    }
+                    if let Some((field,row,label))=retained.remove(&control.key) {
+                        self.body.reorder_child_after(&row,previous.as_ref());previous=Some(row);
+                        if let Some(label)=label {self.property_labels.borrow_mut().push((index,label));}
+                        self.fields.borrow_mut().push(field);continue;
                     }
                     let key = control.key.clone();
                     let dispatch: Rc<dyn Fn(EffectValue)> = Rc::new(glib::clone!(
@@ -745,6 +779,7 @@ impl EffectPanels {
                             Field::Gradient(input)
                         }
                     };
+                    let row=field.row(&self.body);self.body.reorder_child_after(&row,previous.as_ref());previous=Some(row);
                     self.fields.borrow_mut().push(field);
                 }
             }
@@ -757,11 +792,7 @@ impl EffectPanels {
         let old_schema = self.schema.borrow();
         for (index, (field, c)) in self.fields.borrow().iter().zip(&view.controls).enumerate() {
             if language_changed {
-                let widget: &gtk::Widget = match field {
-                    Field::Number(input) => input.upcast_ref(), Field::Toggle(input) => input.upcast_ref(), Field::Choice(input) => input.upcast_ref(),
-                    Field::Color(input) => input.widget.upcast_ref(), Field::Curve(input) => input.area.upcast_ref(), Field::Gradient(input) => input.root.upcast_ref(),
-                };
-                widget.update_property(&[gtk::accessible::Property::Label(&c.label)]);
+                field.widget().update_property(&[gtk::accessible::Property::Label(&c.label)]);
             }
             if language_changed || old_schema.as_ref().is_none_or(|old| old.controls.get(index).is_none_or(|old| old.label != c.label || old.kind != c.kind)) {
                 match (field, &c.kind) {

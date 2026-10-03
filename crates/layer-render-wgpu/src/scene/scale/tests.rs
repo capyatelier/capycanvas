@@ -9,6 +9,8 @@ mod presentation;
 
 #[path = "effect_tests.rs"]
 mod effects;
+#[path = "color_effect_tests.rs"]
+mod color_effects;
 
 #[path = "refinement_tests.rs"]
 mod refinement;
