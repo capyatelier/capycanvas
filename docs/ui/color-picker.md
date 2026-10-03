@@ -23,10 +23,11 @@ are kept per paint, so neutral colors keep their hue. Hit testing, conversions,
 component values and the selected swatch live in Rust
 ([`color.rs`](../../crates/layer-ui/src/color.rs)).
 
-GTK, Web and Android place the selected paint circle above the other circle,
-including its border and pointer target. Hover leaves that order unchanged. Transparent paint
-keeps the remembered paint circle in front; temporary black or white uses the
-primary circle. Rust publishes the front swatch with the color panel view.
+GTK, Web, Android and Windows place the selected paint circle above the other
+circle, including its border and pointer target. Hover leaves that order
+unchanged. Transparent paint keeps the remembered paint circle in front;
+temporary black or white uses the primary circle. Rust publishes the front
+swatch with the color panel view.
 The visible circular rim belongs to the button's hit area, and the selection or
 hover border covers the paint fill.
 
@@ -205,6 +206,7 @@ LAYER_NATIVE_EVENT_MS=8 LAYER_MOTION_VIEWPORT=4800x3000 LAYER_MOTION_SCALE=3 \
   tools/performance/workspace-motion.sh gtk --native-test=native_color_picker_preview_pacing
 tools/performance/workspace-motion.sh gtk --color-panel      # or web
 node apps/layer-web/test.mjs --color-picker                   # device.test.mjs --color-picker on a tablet
+tools/windows-vm/windows-vm.py fixtures compact-color:dark compact-color:light
 ./apps/layer-windows/scripts/exercise-color-picker.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
 ```
 
@@ -220,7 +222,13 @@ node apps/layer-web/test.mjs --color-picker                   # device.test.mjs 
   not detect lag. Use `3200x2000` and scale `2` for the 2× check.
   `native_solid_colors_match_tagged_textures` compares native fills with managed
   textures.
-- Android runs `AndroidColorPanelTest#glassPickerInputAndSettings`,
+- Windows `compact-color:dark` and `compact-color:light` check composed overlap
+  and rim pixels, native mouse/pen/touch selection, mouse/pen hover, transparent
+  memory and retained keyboard focus. WARP results do not establish physical pen
+  or hardware timing.
+- Android `AndroidColorPanelTest#selectedSwatchOwnsOverlapAndKeepsItsRim` checks
+  both themes, overlap pixels and contacts, circular clipping and hover transfer.
+  Android also runs `AndroidColorPanelTest#glassPickerInputAndSettings`,
   `#pickerWheelPreviewPerformance` and `#pickerRetiresRestingContactsAndPendingHolds`
   with `-e systemInput true`. Apple runs the `picker` and `inspection` tests in
   `cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` and the

@@ -224,6 +224,8 @@ the focused header journeys also check placement cancellation and keyboard input
 - **Measure timed input.** Use the native test drivers for double presses and
   prediction strokes. PowerShell sleeps and method calls can exceed a gesture's
   interval under load; retain the actual injection timing with the result.
+  `RowPointerDriver.PenHover` and `Up(true)` keep a stationary pen in range;
+  call `PenLeave` to end hover. The driver refreshes hover through its input timer.
 - **Preserve OS cancellation.** A released sample with `IsCanceled` is a cancel,
   including for the hold recognizer. Keep the canvas-touch fixture's rapid
   canceled pairs: they must preserve the drawing instead of triggering Undo.
@@ -247,6 +249,14 @@ the focused header journeys also check placement cancellation and keyboard input
 - **Injection is not hardware.** UI Automation and injected input do not establish
   physical pen and touch behavior, painting cadence or latency. Compare an
   injected-input failure with physical input before changing native capture.
+
+`compact-color:dark` and `compact-color:light` select the compact color fixture's
+swatch journeys. They check composed overlap and border pixels, native mouse,
+pen and touch contacts, mouse and pen hover, transparent paint memory, keyboard
+focus and retained control identities. The default `compact-color` also runs its
+wheel, readout, menu and drawer journeys. Use both themes when changing swatch
+presentation.
+`compact-color:input` isolates overlap routing and focus from border pixel checks.
 
 `exercise-workspace-pickup.ps1 -DebuggerPath <cdb.exe>` attaches CDB before input
 and saves an access-violation stack and dump in the run directory.

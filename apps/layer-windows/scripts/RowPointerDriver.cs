@@ -49,12 +49,12 @@ public static class CapyRowPointer {
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
  static long lastInjection;public static double MaxGapMilliseconds {get;private set;}
- static uint owner,kind,penButtons;static bool active,eraserEnd;static Point last;static IntPtr pen;
+ static uint owner,kind,penButtons;static bool active,hovering,eraserEnd;static Point last;static IntPtr pen;
  static readonly object gate=new object();static Timer pulse;static Exception failure;
  public static bool Active {get{lock(gate)return active;}}
  public static void Initialize(uint process) {
   if(active||pulse!=null||pen!=IntPtr.Zero)throw new InvalidOperationException("Dispose the previous pointer review first.");
-  failure=null;kind=0;penButtons=0;eraserEnd=false;owner=process;
+  failure=null;kind=0;penButtons=0;hovering=false;eraserEnd=false;owner=process;
   if(Marshal.SizeOf(typeof(TouchInfo))!=144||Marshal.SizeOf(typeof(PenInfo))!=120||Marshal.SizeOf(typeof(TypeInfo))!=152)
    throw new Exception("Pointer structures require the x64 ABI.");
   if(!InitializeTouchInjection(1,3))throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -70,7 +70,12 @@ public static class CapyRowPointer {
  }
  static void Check(){if(failure!=null)throw new Exception("Pointer keepalive failed.",failure);}
  public static void Verify(){lock(gate)Check();}
+ static void EndHover() {
+  if(!hovering)return;
+  Send(last,0x20000);hovering=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
+ }
  static void MouseMove(Point point) {
+  EndHover();
   var mouse=new Mouse{dx=(point.x-GetSystemMetrics(76))*65535/(GetSystemMetrics(78)-1),
    dy=(point.y-GetSystemMetrics(77))*65535/(GetSystemMetrics(79)-1),flags=0xC001};
   if(SendInput(1,new[]{new Input{mouse=mouse}},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -98,8 +103,8 @@ public static class CapyRowPointer {
  }
  static void Pulse(object unused) {
   lock(gate){
-   if(!active||kind==4)return;
-   try{Guard(last);Send(last,0x20006);}
+   if((!active&&!hovering)||kind==4)return;
+   try{Guard(last);Send(last,active?0x20006u:0x20002u);}
    catch(Exception error){
     failure=error;try{Cancel();}catch{}
     active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
@@ -116,7 +121,7 @@ public static class CapyRowPointer {
  public static void PenHover(int x,int y) {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");
-   var point=new Point{x=x,y=y};Guard(point);kind=3;Send(point,0x20002);last=point;
+   var point=new Point{x=x,y=y};Guard(point);kind=3;Send(point,0x20002);last=point;hovering=true;pulse.Change(25,25);
   }
  }
  public static void EraserEnd(bool on) {lock(gate){eraserEnd=on;}}
@@ -129,13 +134,13 @@ public static class CapyRowPointer {
  public static void PenLeave() {
   lock(gate){
    Check();if(active||kind!=3)return;
-   penButtons=0;Guard(last);Send(last,0x20000);
+   penButtons=0;Guard(last);if(hovering)EndHover();else Send(last,0x20000);
   }
  }
  public static void Down(string device,int x,int y) {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");
-   kind=device=="touch"?2u:device=="pen"?3u:device=="mouse"?4u:0;
+   EndHover();kind=device=="touch"?2u:device=="pen"?3u:device=="mouse"?4u:0;
    if(kind==0)throw new ArgumentException("Unknown pointer device.");
    var point=new Point{x=x,y=y};Guard(point);MaxGapMilliseconds=0;
    if(kind==4){MouseMove(point);MouseButton(2);}else Send(point,0x10006);
@@ -153,7 +158,8 @@ public static class CapyRowPointer {
   lock(gate){
    Check();if(!active)return;Guard(last);Thread.Sleep(2);
    if(kind==4)MouseButton(4);else Send(last,kind==3&&stayInRange?0x40002u:0x40000u);
-   active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
+   active=false;hovering=kind==3&&stayInRange;
+   pulse.Change(hovering?25:Timeout.Infinite,hovering?25:Timeout.Infinite);
   }
  }
  public static double DoubleClick(int x,int y) {
@@ -169,7 +175,7 @@ public static class CapyRowPointer {
  }
  public static void Cancel() {
   lock(gate){
-   if(!active)return;
+   if(!active){EndHover();return;}
    // End only our existing contact, including after a foreground change.
    Thread.Sleep(2);
    if(kind==4)MouseButton(4);
@@ -206,7 +212,7 @@ public static class CapyRowPointer {
  public static void KeyAt(ushort key,int x,int y) {
   lock(gate){
    Check();if(active)throw new Exception("Use the original contact for keys during a gesture.");
-   var point=new Point{x=x,y=y};Guard(point);last=point;Key(key);
+   var point=new Point{x=x,y=y};Guard(point);EndHover();last=point;Key(key);
   }
  }
  public static void Key(ushort key) {

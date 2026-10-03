@@ -1,8 +1,11 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('full','dark','light','input')][string]$Journey='full')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyFind='visible'
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+Add-Type -AssemblyName System.Drawing,System.Windows.Forms
+$CapyCaptureDelay=250
+$theme=if($Journey -eq 'light'){'light'}else{'dark'}
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
@@ -32,9 +35,158 @@ function Pick-Field([string]$Device,[double]$X,[double]$Y){
     Wait-Until {(Control 'color-controls').Current.ItemStatus -eq 'Ready'} "$Device did not release the wheel"
     if((Paint) -eq $before){throw "$Device did not change the field paint"}
 }
+function Swatch-Point([string]$Id){
+    $b=(Control $Id -Arranged).Current.BoundingRectangle
+    @([int][Math]::Round($b.X+$b.Width/2),[int][Math]::Round($b.Y+$b.Height/2))
+}
+function Swatch-Tap([string]$Device,$At){
+    Start-Sleep -Milliseconds ([Windows.Forms.SystemInformation]::DoubleClickTime+100)
+    [CapyRowPointer]::Down($Device,$At[0],$At[1]);[CapyRowPointer]::Up()
+}
+function Park-Pointer{
+    $at=Point .5 .5;[CapyRowPointer]::Hover($at[0],$at[1])
+    Start-Sleep -Milliseconds 250
+}
+function Hit-Id($At){
+    $hit=[System.Windows.Automation.AutomationElement]::FromPoint([System.Windows.Point]::new($At[0],$At[1]))
+    if($hit.Current.ProcessId -ne $review.Id){throw 'Swatch hit is outside the owned review'}
+    while($hit){
+        if($hit.Current.AutomationId -like 'color-*'){return $hit.Current.AutomationId}
+        $hit=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($hit)
+    }
+}
+function Circle-Contains($Bounds,$At){
+    $dx=$At[0]-$Bounds.X-$Bounds.Width/2;$dy=$At[1]-$Bounds.Y-$Bounds.Height/2
+    $dx*$dx+$dy*$dy -le [Math]::Pow($Bounds.Width/2+1,2)
+}
+function Rim-Points($Bounds,[double]$Scale,[double]$Angle){
+    $cx=$Bounds.X+$Bounds.Width/2;$cy=$Bounds.Y+$Bounds.Height/2;$outer=$Bounds.Width/2;$inner=$outer-2*$Scale
+    $middle=($outer+$inner)/2
+    $x=$cx+$middle*[Math]::Cos($Angle);$y=$cy+$middle*[Math]::Sin($Angle)
+    $points=@()
+    for($py=[int][Math]::Floor($y)-2;$py -le [Math]::Floor($y)+2;$py++){
+        for($px=[int][Math]::Floor($x)-2;$px -le [Math]::Floor($x)+2;$px++){
+            $dx=$px+.5-$cx;$dy=$py+.5-$cy;$radius=[Math]::Sqrt($dx*$dx+$dy*$dy)
+            $across=[Math]::Abs($dx*[Math]::Sin($Angle)-$dy*[Math]::Cos($Angle))
+            if($radius -gt $inner -and $radius -lt $outer -and $across -le 2){$points+=,@($px,$py)}
+        }
+    }
+    $points
+}
+function Overlap-Point{
+    $a=(Control 'color-foreground' -Arranged).Current.BoundingRectangle
+    $b=(Control 'color-background' -Arranged).Current.BoundingRectangle
+    $x=$a.X+$a.Width/2;$y=$a.Y+$a.Height/2;$dx=$b.X+$b.Width/2-$x;$dy=$b.Y+$b.Height/2-$y
+    $distance=[Math]::Sqrt($dx*$dx+$dy*$dy);$along=($distance-$b.Width/2+$a.Width/2)/2
+    @([int][Math]::Round($x+$dx*$along/$distance),[int][Math]::Round($y+$dy*$along/$distance))
+}
+function Swatch-Pixel($Bitmap,$At){
+    $origin=[CapyRowPointer+Point]::new()
+    if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$origin)){throw 'Swatch capture origin is unavailable'}
+    $pixel=$Bitmap.GetPixel($At[0]-$origin.x,$At[1]-$origin.y)
+    @([int]$pixel.R,[int]$pixel.G,[int]$pixel.B)
+}
+function Assert-Front([string]$Slot,[string]$Name){
+    $snapshot=Model
+    if($snapshot.color_panel.front_swatch -ne $Slot){throw "$Name lost shared front swatch $Slot"}
+    $at=Overlap-Point;Capture $Name -Composed -WithModel
+    $bitmap=[Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')))
+    try{
+        $actual=Swatch-Pixel $bitmap $at
+        $rgba=($snapshot.color_panel.swatches|Where-Object slot -eq $Slot).rgba
+        for($i=0;$i -lt 3;$i++){if([Math]::Abs($actual[$i]-$rgba[$i]*255) -gt 8){throw "$Name overlap shows $($actual -join ',') instead of $Slot paint"}}
+    }finally{$bitmap.Dispose()}
+    @{point=$at;ui_automation=(Hit-Id $at);front=$Slot}|ConvertTo-Json|Set-Content (Join-Path $run ($Name+'-hit.json'))
+}
+function Assert-Rim([string]$Id,[string]$Name){
+    if($Journey -eq 'input'){return}
+    $bounds=(Control $Id -Arranged).Current.BoundingRectangle
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $snapshot=Model
+    $front='color-'+$snapshot.color_panel.front_swatch
+    $order=@('color-white','color-black','color-background','color-foreground','color-transparent')|Where-Object {$_ -ne $front}
+    $order=@($order)+@($front);$index=[Array]::IndexOf($order,$Id)
+    $covers=@($order|Select-Object -Skip ($index+1)|ForEach-Object {(Control $_ -Arranged).Current.BoundingRectangle})
+    $ink=[Drawing.ColorTranslator]::FromHtml($snapshot.state.palette.text)
+    Capture $Name -Composed -WithModel
+    $bitmap=[Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')));$samples=@()
+    try{
+        for($i=0;$i -lt 16;$i++){
+            $angle=$i*[Math]::PI/8
+            $sector=@()
+            foreach($at in (Rim-Points $bounds $scale $angle)){
+                if(@($covers|Where-Object {Circle-Contains $_ $at}).Count){continue}
+                $pixel=Swatch-Pixel $bitmap $at
+                $difference=[Math]::Max([Math]::Abs($pixel[0]-$ink.R),[Math]::Max([Math]::Abs($pixel[1]-$ink.G),[Math]::Abs($pixel[2]-$ink.B)))
+                $sector+=@{point=$at;rgb=$pixel;difference=$difference}
+            }
+            if(!$sector.Count){continue}
+            $best=$sector|Sort-Object difference|Select-Object -First 1;$samples+=,@{angle=$angle;pixels=$sector}
+            if($best.difference -gt 40){throw "$Name has no visible outline in rim sector ${i}: $($best.rgb -join ',')"}
+        }
+        if($samples.Count -lt 6){throw "$Name has too few visible rim samples"}
+    }finally{
+        $bitmap.Dispose()
+        @{bounds=@{x=$bounds.X;y=$bounds.Y;width=$bounds.Width;height=$bounds.Height};scale=$scale;samples=$samples}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run ($Name+'-pixels.json'))
+    }
+}
+function Swatch-Journey{
+    $document=(Model).state.document_file|ConvertTo-Json -Compress
+    $ids=@('color-foreground','color-background','color-transparent','color-black','color-white')
+    $retained=@{};foreach($id in $ids){$retained[$id]=(Control $id).GetRuntimeId() -join ':'}
+    foreach($device in @('mouse','pen','touch')){
+        foreach($slot in @('background','foreground')){
+            Swatch-Tap $device (Swatch-Point "color-$slot")
+            Wait-Until {(Model).state.colors.slot -eq $slot} "$device did not select $slot"
+            Park-Pointer;Assert-Front $slot "$device-$slot-front"
+            Invoke 'color-transparent';Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent did not select before overlap input'
+            Swatch-Tap $device (Overlap-Point)
+            Wait-Until {(Model).state.colors.slot -eq $slot} "$device overlap selected the rear paint instead of $slot"
+            Write-Output "Native $device overlap selected $slot"
+            Park-Pointer;Assert-Rim "color-$slot" "$device-$slot-selected"
+            $rear=if($slot -eq 'foreground'){'background'}else{'foreground'}
+            $at=Swatch-Point "color-$rear";[CapyRowPointer]::Hover($at[0],$at[1])
+            Assert-Rim "color-$rear" "$device-$rear-hover";Assert-Front $slot "$device-$slot-hover-front"
+            Park-Pointer;[CapyRowPointer]::PenHover($at[0],$at[1])
+            Assert-Rim "color-$rear" "$device-$rear-pen-hover";Assert-Front $slot "$device-$slot-pen-hover-front"
+            [CapyRowPointer]::PenLeave()
+            Swatch-Tap $device (Swatch-Point 'color-transparent')
+            Wait-Until {(Model).state.colors.slot -eq 'transparent'} "$device did not select transparent"
+            Park-Pointer;Assert-Front $slot "$device-$slot-transparent-memory";Assert-Rim 'color-transparent' "$device-$slot-transparent-selected"
+            Swatch-Tap $device (Overlap-Point)
+            Wait-Until {(Model).state.colors.slot -eq $slot} "$device overlap selected the rear paint instead of $slot"
+        }
+    }
+    foreach($slot in @('background','foreground')){
+        Invoke 'color-transparent';Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent did not select before keyboard input'
+        $button=Control "color-$slot";$button.SetFocus();[CapyRowPointer]::Key(0x20)
+        Wait-Until {(Model).state.colors.slot -eq $slot} "Keyboard did not select $slot"
+        if(!$button.Current.HasKeyboardFocus){throw 'Raising the focused swatch lost keyboard focus'}
+        Park-Pointer;Assert-Front $slot "keyboard-$slot-front"
+    }
+    foreach($name in @('black','white')){
+        Invoke 'color-background';Wait-Until {(Model).state.colors.slot -eq 'background'} 'Background did not select before quick color'
+        Invoke 'color-transparent';Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent did not select before quick color'
+        Swatch-Tap 'mouse' (Swatch-Point "color-$name")
+        Wait-Until {(Model).state.colors.slot -eq 'temporary'} "Quick $name did not select"
+        Park-Pointer;Assert-Rim "color-$name" "$name-selected";Assert-Front 'foreground' "$name-front"
+        Invoke 'color-transparent';Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent did not select before quick hover'
+        $at=Swatch-Point "color-$name";[CapyRowPointer]::Hover($at[0],$at[1]);Assert-Rim "color-$name" "$name-hover"
+        Park-Pointer;[CapyRowPointer]::PenHover($at[0],$at[1]);Assert-Rim "color-$name" "$name-pen-hover";[CapyRowPointer]::PenLeave()
+    }
+    Park-Pointer
+    $bounds=(Control 'color-foreground' -Arranged).Current.BoundingRectangle
+    $corner=@([int]($bounds.X+1),[int]($bounds.Y+1))
+    Swatch-Tap 'mouse' $corner
+    if((Model).state.colors.slot -ne 'transparent'){throw 'Swatch square corner changed the paint slot'}
+    foreach($id in $ids){if(((Control $id).GetRuntimeId() -join ':') -ne $retained[$id]){throw "Swatch feedback replaced retained control $id"}}
+    if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $document){throw 'Swatch input changed the document'}
+    Invoke 'color-foreground';Wait-Until {(Model).state.colors.slot -eq 'foreground'} 'Foreground did not restore after swatch journey'
+}
 try{
     Enter-CapyEnvironment
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
+    [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{theme=$theme}|ConvertTo-Json))
     $env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     # The smoke command strip covers the bottom swatches at this window size.
     # This fixture uses native controls only; keep the isolated profile and all
@@ -56,6 +208,8 @@ try{
             throw "Compact color control is clipped: $id"
         }
     }
+    Swatch-Journey
+    if($Journey -eq 'full'){
     $document=(Model).state.document_file|ConvertTo-Json -Compress
     $retained=(Control 'color-shape-0').GetRuntimeId() -join ':'
     foreach($shape in @('circle','square','triangle')){
@@ -138,14 +292,20 @@ try{
     Invoke "tile-toolbar-$tileId"
     Wait-Until {$null -eq (Find 'tool-drawer')} 'Color drawer did not close'
     if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $document){throw 'Picker input painted or changed the document'}
+    }
     [CapyRowPointer]::Dispose()
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Native color stderr requires inspection'}
-    [PSCustomObject]@{
-        compact_bounds='passed';shapes_and_readouts='passed';mouse_pen_touch_fields_and_ring='passed'
-        cancellation='passed';retained_controls='passed';keyboard_activation='passed';paint_slots_and_swap='passed'
-        document_unchanged='passed';native_context_menus='passed';mouse_hold_no_menu='passed';retained_drawer_input='passed';scope='Synthetic native input; pixel and physical digitizer acceptance remain separate'
-    }|ConvertTo-Json
+    $result=[ordered]@{
+        theme=$theme;swatch_overlap_and_transparent_memory='passed';retained_swatch_focus='passed';circular_swatch_hits='passed'
+        compact_bounds='passed';keyboard_activation='passed';document_unchanged='passed'
+        scope='Composed UI pixels and synthetic native input; physical digitizer and hardware performance acceptance remain separate'
+    }
+    if($Journey -ne 'input'){$result['selected_and_hover_rims']='passed'}
+    if($Journey -eq 'full'){
+        foreach($check in @('shapes_and_readouts','mouse_pen_touch_fields_and_ring','cancellation','retained_controls','paint_slots_and_swap','native_context_menus','mouse_hold_no_menu','retained_drawer_input')){$result[$check]='passed'}
+    }
+    $result|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

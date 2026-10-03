@@ -295,10 +295,10 @@ struct View:std::enable_shared_from_this<View>{
     bool fitHeight=false;
     Image image;TextBlock drawError;
     std::array<Button,3> swatches;
-    std::array<Shapes::Ellipse,3> swatchEdges,swatchChecks,swatchPaint;
+    std::array<Shapes::Ellipse,3> swatchBacks,swatchEdges,swatchChecks,swatchPaint;
     std::array<bool,3> hovered{};
     std::array<Button,2> quick;
-    std::array<Shapes::Ellipse,2> quickEdges,quickPaint;
+    std::array<Shapes::Ellipse,2> quickBacks,quickEdges,quickPaint;
     std::array<bool,2> quickHovered{};
     Button edit;Shapes::Ellipse editFill;bool editHovered=false;
     Canvas arc;Shapes::Path arcTrack;std::vector<Shapes::Line> ramp;Shapes::Ellipse markerShadow,marker;TextBlock caption;
@@ -425,15 +425,14 @@ struct View:std::enable_shared_from_this<View>{
         for(int i=0;i<2;i++){
             bool white=i==0;
             quick[i]=control(white?data->caption(L"color",L"paint_white"):data->caption(L"color",L"paint_black"),[weak,white]{if(auto self=weak.lock())self->send(O({{L"op",S(L"quick_color")},{L"white",B(white)}}));});
-            Grid sample;sample.Background(nullptr);sample.Children().Append(quickEdges[i]);sample.Children().Append(quickPaint[i]);
+            Grid sample;sample.Background(nullptr);sample.Children().Append(quickBacks[i]);sample.Children().Append(quickPaint[i]);sample.Children().Append(quickEdges[i]);
             quickPaint[i].Margin({1,1,1,1});quick[i].Content(sample);stage.Children().Append(quick[i]);
             AutomationProperties::SetAutomationId(quick[i],white?L"color-white":L"color-black");
             quick[i].PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
-                self->quickHovered[i]=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();
+                self->quickHovered[i]=e.Pointer().PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Touch;self->refresh();
             }});
             quick[i].PointerExited([weak,i](auto&&,auto&&){if(auto self=weak.lock()){self->quickHovered[i]=false;self->refresh();}});
         }
-        // Background is inserted first so the larger foreground owns their overlap.
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
         for(int i=0;i<3;i++){
             auto slot=slots[i];auto pick=control(slot,[weak,slot]{if(auto self=weak.lock())self->send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));});
@@ -441,7 +440,7 @@ struct View:std::enable_shared_from_this<View>{
                 self->send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));self->editColor(self->edit);
             }});
             Grid sample;sample.Background(nullptr);
-            sample.Children().Append(swatchEdges[i]);sample.Children().Append(swatchChecks[i]);sample.Children().Append(swatchPaint[i]);
+            sample.Children().Append(swatchBacks[i]);sample.Children().Append(swatchChecks[i]);sample.Children().Append(swatchPaint[i]);sample.Children().Append(swatchEdges[i]);
             pick.Content(sample);swatches[i]=pick;stage.Children().Append(pick);
             if(i<2){
                 MenuFlyout menu;
@@ -460,7 +459,7 @@ struct View:std::enable_shared_from_this<View>{
             }
             AutomationProperties::SetAutomationId(pick,L"color-"+slot);
             pick.PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
-                self->hovered[i]=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();
+                self->hovered[i]=e.Pointer().PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Touch;self->refresh();
             }});
             pick.PointerExited([weak,i](auto&&,auto&&){if(auto self=weak.lock()){self->hovered[i]=false;self->refresh();}});
             pick.GotFocus([weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
@@ -710,16 +709,19 @@ struct View:std::enable_shared_from_this<View>{
             J preset;for(auto value:quickColors)if(flag(value.GetObject(),L"white")==(i==0))preset=value.GetObject();
             bool chosen=flag(preset,L"selected");auto ring=color(str(object(data->state,L"palette"),L"text"));
             if(!(chosen||quickHovered[i]))ring.A=64;
-            quickEdges[i].Fill(data->brush(L"panel"));quickEdges[i].Stroke(fill(ring));quickEdges[i].StrokeThickness(chosen||quickHovered[i]?2:1);
+            quickBacks[i].Fill(data->brush(L"panel"));quickEdges[i].Stroke(fill(ring));quickEdges[i].StrokeThickness(chosen||quickHovered[i]?2:1);
             quickPaint[i].Fill(fill(rgba(array(preset,L"rgba"))));
             auto name=str(preset,L"label");AutomationProperties::SetName(quick[i],name);tooltip(quick[i],name);
             AutomationProperties::SetItemStatus(quick[i],chosen?data->caption(L"search",L"selected"):L"");
         }
         updateArc(view);
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
+        auto front=str(view,L"front_swatch");
         for(int i=0;i<3;i++){
             auto swatch=find(array(view,L"swatches"),L"slot",slots[i]);
-            swatchEdges[i].Fill(data->brush(L"panel"));auto stroke=color(str(object(data->state,L"palette"),L"text"));
+            int z=slots[i]==front?1:0;
+            if(Canvas::GetZIndex(swatches[i])!=z)Canvas::SetZIndex(swatches[i],z);
+            swatchBacks[i].Fill(data->brush(L"panel"));auto stroke=color(str(object(data->state,L"palette"),L"text"));
             bool selected=flag(swatch,L"selected");
             if(!(selected||hovered[i]))stroke.A=64;
             swatchEdges[i].Stroke(fill(stroke));swatchEdges[i].StrokeThickness(selected||hovered[i]?2:1);
