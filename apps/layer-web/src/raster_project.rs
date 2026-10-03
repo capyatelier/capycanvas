@@ -120,7 +120,7 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
     let mut profile_bytes = Vec::new();
     let proof = document.proof.as_ref().map(|p| p.clone().with_profile(
         ProfileReference::detach(&p.profile, &mut profile_bytes)));
-    let photo = document.metadata.blocks().map(|block| block.clone().map(|bytes| push_bytes(bytes, &mut parts)));
+    let photo = document.metadata.blocks().map(|block| block.as_ref().map(|bytes| push_bytes(bytes.storage().clone(), &mut parts)));
     let mut metadata = Metadata {
         document, proof, photo, selections, resources, resource_blocks, profiles: Vec::new(),
         rasters: Vec::new(),

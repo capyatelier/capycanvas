@@ -5,6 +5,7 @@ use std::{fmt, str::FromStr};
 pub struct PortableId([u8; 16]);
 
 impl PortableId {
+    pub fn random() -> Self { Self(*uuid::Uuid::new_v4().as_bytes()) }
     pub fn from_bytes(bytes: [u8; 16]) -> Self { Self(bytes) }
     pub fn bytes(self) -> [u8; 16] { self.0 }
 }

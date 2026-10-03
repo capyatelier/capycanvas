@@ -159,7 +159,7 @@ impl EffectPackage {
             if code.len() > 1024 * 1024 || total > 16 * 1024 * 1024 {
                 return Err("Shader modules exceed package limits".into());
             }
-            modules.insert(name, code);
+            modules.insert(name, crate::authored::Resource::from(code));
         }
         let resolve = |shader: &mut EffectShader| {
             if let EffectShader::Modules(names) = shader {
@@ -297,10 +297,10 @@ mod tests {
         let catalog = disk_catalog();
         assert_eq!(catalog.filters().len(), 51);
         assert_eq!(catalog.filters(), bundled_effect_catalog().filters());
-        let mut shared = std::collections::HashMap::<Arc<str>,Arc<str>>::new();
+        let mut shared = std::collections::HashMap::<crate::authored::Resource<str>,crate::authored::Resource<str>>::new();
         for filter in catalog.filters() {
             for module in filter.program.wgsl.sources().unwrap() {
-                if let Some(existing) = shared.get(module) { assert!(Arc::ptr_eq(existing,module)); }
+                if let Some(existing) = shared.get(module) { assert!(Arc::ptr_eq(existing.storage(), module.storage())); assert_eq!(existing.id(), module.id()); }
                 else { shared.insert(module.clone(),module.clone()); }
             }
             filter.preview().unwrap();

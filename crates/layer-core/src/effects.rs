@@ -1,5 +1,6 @@
 //! Pure effect descriptions and parameters. No graphics API or UI widget types.
 use crate::color::{RgbColor, RgbSpace};
+use crate::authored::Resource;
 use crate::effect_catalog::ResourceLabel;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -25,15 +26,15 @@ pub const EFFECT_TABLE_VECTORS: usize = 65;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum EffectShader {
-    Code(Arc<str>),
+    Code(Resource<str>),
     Modules(Arc<[Arc<str>]>),
     /// Resolved modules remain separate so fused programs can share helpers.
     Linked {
-        sources: Arc<[Arc<str>]>,
+        sources: Arc<[Resource<str>]>,
     },
 }
 impl EffectShader {
-    pub fn sources(&self) -> Result<&[Arc<str>], &'static str> {
+    pub fn sources(&self) -> Result<&[Resource<str>], &'static str> {
         match self {
             Self::Code(code) => Ok(std::slice::from_ref(code)),
             Self::Linked { sources } => Ok(sources),
@@ -53,7 +54,7 @@ impl From<String> for EffectShader {
 }
 impl From<Arc<str>> for EffectShader {
     fn from(value: Arc<str>) -> Self {
-        Self::Code(value)
+        Self::Code(value.into())
     }
 }
 

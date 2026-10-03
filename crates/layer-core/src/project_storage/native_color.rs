@@ -170,7 +170,7 @@ fn proof_metadata_roundtrips_deduplicates_profile_and_undo_keeps_raster_exact() 
         let mut p = project(DocumentColor { space: RgbSpace::ProPhoto, depth });
         // Core storage owns exact bytes; CMM validation belongs to layer-color.
         let profile: Arc<[u8]> = (0..1024).map(|i| (i * 13 % 251) as u8).collect::<Vec<_>>().into();
-        let recipe = ProofRecipe::new("Printer and paper".into(), ColorProfile::Icc(profile.clone()));
+        let recipe = ProofRecipe::new("Printer and paper".into(), ColorProfile::Icc(profile.clone().into()));
         let original = p.document.clone();
         let raster = original.layers[0].raster.clone();
         let mut editor = Editor::new(original.clone());
@@ -188,7 +188,7 @@ fn proof_metadata_roundtrips_deduplicates_profile_and_undo_keeps_raster_exact() 
         p.document = editor.document().clone();
         let mut source = SourceBuilder::new([1, 1], SourceInterpretation {
             channels: SourceChannels::Rgba, depth,
-            profile: ColorProfile::Icc(profile.clone()), profile_assumed: false,
+            profile: ColorProfile::Icc(profile.clone().into()), profile_assumed: false,
         }, 1024 * 1024).unwrap();
         source.push_row(&vec![127; 4 * depth.bytes()]).unwrap();
         p.document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
@@ -200,7 +200,7 @@ fn proof_metadata_roundtrips_deduplicates_profile_and_undo_keeps_raster_exact() 
         assert_eq!(reopened.document.proof, p.document.proof);
         let ColorProfile::Icc(proof_profile) = &reopened.document.proof.as_ref().unwrap().profile else { panic!() };
         let ColorProfile::Icc(source_profile) = &reopened.document.layers[0].source.as_ref().unwrap().interpretation.profile else { panic!() };
-        assert!(Arc::ptr_eq(proof_profile, source_profile));
+        assert!(Arc::ptr_eq(proof_profile.storage(), source_profile.storage()));
         let a = raster.wait_data().unwrap();
         let b = reopened.document.layers[0].raster.wait_data().unwrap();
         for (key, tile) in &a.tiles {

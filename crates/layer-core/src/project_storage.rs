@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn photo_metadata_round_trips_as_payloads() {
         let mut project = source_fixture();
-        let block = |n: usize, seed: u8| -> Arc<[u8]> { (0..n).map(|i| (i as u8) ^ seed).collect::<Vec<_>>().into() };
+        let block = |n: usize, seed: u8| -> crate::authored::Resource<[u8]> { (0..n).map(|i| (i as u8) ^ seed).collect::<Vec<_>>().into() };
         project.document.metadata = PhotoMetadata { exif: Some(block(300, 1)), xmp: Some(block(5000, 2)), iptc: None };
         let mut bytes = Vec::new();
         project.write(&mut bytes).unwrap();
@@ -644,7 +644,7 @@ mod tests {
             assert!(!error.contains("incomplete") && !error.contains("I/O"), "{error}");
         }
         let mut invalid = project.clone();
-        invalid.document.proof.as_mut().unwrap().profile = ColorProfile::Icc(Arc::from([]));
+        invalid.document.proof.as_mut().unwrap().profile = ColorProfile::Icc(Vec::new().into());
         assert!(invalid.write(&mut Vec::new()).unwrap_err().contains("proof"));
     }
 

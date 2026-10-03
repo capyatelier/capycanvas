@@ -144,3 +144,20 @@ fn filename_fallback_preserves_embedded_titles_and_bounds_unicode() {
 fn private_transport_attach_refuses_late_bad_donor_without_partial_mutation() {
     let mut document=resource_project().document;let distinct=Arc::new(constant([[0.;3],[1.;3]],[0.75;3]).unwrap());Arc::make_mut(document.layers[0].effect.as_mut().unwrap()).set("table",crate::EffectValue::Lut3d(Some(distinct))).unwrap();let (index,payloads)=crate::ProjectResources::detach(&mut document).unwrap();assert_eq!(payloads.len(),2);let before=document.clone();let mut resources=payloads.iter().map(|r|r.as_ref().clone()).collect::<Vec<_>>();resources[1]=descriptor(&resources[1]);assert!(index.attach(&mut document,&resources).is_err());assert_eq!(document,before);
 }
+
+#[test]
+fn lookup_resource_identity_survives_aliases_and_saved_payload_installation() {
+    let original = Lut3d::parse_cube(cube().as_bytes()).unwrap();
+    let resource = original.resource().unwrap();
+    let id = resource.id();
+    let saved = crate::authored::Resource::with_id(id, original.storage().unwrap().clone());
+    let restored = Lut3d::from_resource(original.size(), original.domain(), original.title().into(), saved).unwrap();
+    assert_eq!(restored, original);
+    assert_eq!(restored.resource().unwrap().id(), id);
+    assert!(Arc::ptr_eq(restored.storage().unwrap(), original.storage().unwrap()));
+    let alias = descriptor(&original).with_shared_payload(&restored).unwrap();
+    assert!(alias.resource().unwrap().same_owner(restored.resource().unwrap()));
+    let mut damaged = original.payload().unwrap().to_vec();
+    damaged[Lut3d::HEADER_BYTES + 12] = 1;
+    assert!(Lut3d::from_resource(original.size(), original.domain(), original.title().into(), damaged.into()).is_err());
+}

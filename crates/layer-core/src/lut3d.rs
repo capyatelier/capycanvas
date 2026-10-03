@@ -1,5 +1,6 @@
 //! Immutable creative color tables; parsing, hashing and verification run on file workers.
 use crate::color::{RgbSpace, rgb};
+use crate::authored::Resource;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -19,7 +20,7 @@ pub struct Lut3d {
     #[serde(flatten)]
     descriptor: Descriptor,
     #[serde(skip)]
-    payload: Option<Arc<[u8]>>,
+    payload: Option<Resource<[u8]>>,
     #[serde(skip)]
     spaces: u8,
 }
@@ -42,7 +43,8 @@ impl Lut3d {
     pub fn title(&self) -> &str { &self.descriptor.title }
     pub fn digest(&self) -> [u8; 32] { self.descriptor.digest }
     pub fn payload(&self) -> Option<&[u8]> { self.payload.as_deref() }
-    pub fn storage(&self) -> Option<&Arc<[u8]>> { self.payload.as_ref() }
+    pub fn storage(&self) -> Option<&Arc<[u8]>> { self.payload.as_ref().map(Resource::storage) }
+    pub fn resource(&self) -> Option<&Resource<[u8]>> { self.payload.as_ref() }
     pub fn expected_bytes(&self) -> usize { Self::HEADER_BYTES + (self.size() as usize).pow(3) * 16 }
     pub fn samples(&self) -> Option<impl Iterator<Item = [f32; 3]> + '_> {
         self.payload.as_deref().map(|bytes| bytes[Self::HEADER_BYTES..].chunks_exact(16).map(|record| std::array::from_fn(|i| f32::from_le_bytes(record[i*4..i*4+4].try_into().unwrap()))))
@@ -213,6 +215,10 @@ impl Lut3d {
     pub fn admitted_spaces(&self) -> u8 { self.spaces }
     #[cfg(target_arch = "wasm32")]
     pub fn from_verified_worker(&self, payload: Arc<[u8]>, spaces: u8) -> Result<Self, &'static str> {
+        self.from_verified_worker_resource(payload.into(), spaces)
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_verified_worker_resource(&self, payload: Resource<[u8]>, spaces: u8) -> Result<Self, &'static str> {
         self.validate_descriptor()?;
         if payload.len() != self.expected_bytes() || spaces == 0 || spaces & !15 != 0 {
             return Err("Invalid verified color lookup payload");
@@ -225,16 +231,29 @@ impl Lut3d {
         Ok(Self {descriptor: self.descriptor.clone(), payload: Some(payload), spaces})
     }
     pub fn with_owned_payload(&self, payload: Arc<[u8]>) -> Result<Self, &'static str> {
+        self.with_resource(payload.into())
+    }
+    pub fn from_resource(size: u32, domain: [[f32; 3]; 2], title: Arc<str>, payload: Resource<[u8]>) -> Result<Self, &'static str> {
+        let mut value = Self { descriptor: Descriptor { size, domain, title, digest: [0; 32] }, payload: None, spaces: 0 };
+        value.spaces = value.payload_spaces(&payload)?;
+        value.descriptor.digest = Sha256::digest(&payload).into();
+        value.payload = Some(payload);
+        Ok(value)
+    }
+    pub fn with_resource(&self, payload: Resource<[u8]>) -> Result<Self, &'static str> {
+        let spaces = self.payload_spaces(&payload)?;
+        if self.digest() != <[u8;32]>::from(Sha256::digest(&payload)) { return Err("Color lookup integrity check failed"); }
+        Ok(Self { descriptor: self.descriptor.clone(), spaces, payload: Some(payload) })
+    }
+    fn payload_spaces(&self, bytes: &[u8]) -> Result<u8, &'static str> {
         self.validate_descriptor()?;
-        let bytes = payload.as_ref();
         if bytes.len() != self.expected_bytes() { return Err("Invalid color lookup payload length"); }
         let component = |record:usize,index:usize| f32::from_le_bytes(bytes[record*16+index*4..record*16+index*4+4].try_into().unwrap());
         if self.headers().iter().enumerate().any(|(record,values)| values.iter().enumerate().any(|(i,v)|component(record,i).to_bits()!=v.to_bits()))
             || (6..bytes.len()/16).any(|record| component(record,3).to_bits() != 0) {
             return Err("Invalid color lookup payload header or padding");
         }
-        if self.digest() != <[u8;32]>::from(Sha256::digest(bytes)) { return Err("Color lookup integrity check failed"); }
         let samples = bytes[Self::HEADER_BYTES..].chunks_exact(16).map(|sample| std::array::from_fn(|i| f32::from_le_bytes(sample[i*4..i*4+4].try_into().unwrap())));
-        Ok(Self { descriptor: self.descriptor.clone(), spaces: Self::space_bits(samples)?, payload: Some(payload) })
+        Self::space_bits(samples)
     }
 }

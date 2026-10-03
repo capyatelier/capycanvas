@@ -3,10 +3,11 @@
 [Technical documentation](../README.md)
 
 This is the target contract for the [format cutover](../development/capy-format.md).
-It fixes M1's package, resource and capture boundaries. The running application
-still uses the pre-release format described in [project format](project-format.md)
-until M3 replaces it. This contract is not evidence of an implemented codec,
-qualified transport, host journey or performance result.
+The shared `layer-core::package` library implements this envelope, typed record
+adapters, immutable resource visitor, bounded transport and package I/O. The
+running application still uses the pre-release format described in
+[project format](project-format.md) until M3 replaces it. Library tests do not
+qualify host journeys, device admission or frame performance.
 
 ## Envelope and references
 
@@ -255,6 +256,16 @@ Pack partition and range changes never change source or resource identity.
 | `capy.wgsl/1` | `utf8`; resolved shader text, local dependency slots only. |
 | `capy.lut3d/1` | `capy.lut3d-block/1`; current immutable little-endian F32 cube block, red coordinate fastest, declared size/domain/title. |
 
+ICC, photo metadata, WGSL and LUT resources may use `capy.lz4-bytes/1` instead
+of their raw encoding. In that case `data.decoded_bytes` is required and gives
+the exact decoded length as a canonical decimal U64 string. It is absent for
+raw encodings. One raw LZ4 block preserves every decoded byte; the resource's
+type fixes the interpretation after decompression. Writers select this encoding
+only when it reduces size, cache the encoded result on the immutable resource,
+and preserve the original encoding and compressed bytes when opening and saving
+unchanged resources. Bounds on both encoded and decoded size apply before allocation.
+No quantization, palette reduction or lossy image encoding is used for authored data.
+
 Raster channels are `coverage`, `gray`, `gray_alpha`, `rgb`, `rgba` or `cmyk`;
 color depths are `u8`, `u16`, `f16`, `f32`. Coverage/material samples are unsigned
 `u8` or `u16`; F16/F32 composition coverage is U16, as fixed by
@@ -352,7 +363,7 @@ writer never patches headers or emits descriptors.
 ## Preview and file outcomes
 
 The fixed `preview.png` is at most 1,024 pixels on each axis and 8 MiB encoded.
-It is non-interlaced 8-bit RGBA PNG with standard sRGB interpretation and straight
+It is non-interlaced 8-bit RGBA PNG with an explicit sRGB chunk and standard sRGB interpretation and straight
 alpha, containing the complete default output framing at a uniform scale. PNG
 chunk CRCs, dimensions and decoded allocation bounds are checked before display.
 HDR uses the output's authored SDR rendition. No checkerboard, current selection,
@@ -367,7 +378,11 @@ may omit both the representation and member when preview evaluation/encoding
 fails or exceeds its budget; never retain an older preview as current. Missing
 preview does not excuse failed source capture, resource integrity or publication.
 
-Shared opening yields one of these outcomes before constructing an editor:
+The codec returns `OpenOutcome::Candidate` for understood authored records and
+verified resources. Shared editor admission must validate color-system support,
+shader/evaluator support and device budgets before constructing an editor. A
+candidate is not proof that a particular GPU or color backend can execute it.
+The complete shared opening operation yields these outcomes:
 
 | Outcome | Permitted operations |
 | --- | --- |
@@ -393,6 +408,14 @@ An already resident slice requires no new payload allocation. Reads can be
 pending, ready or failed; decoded readiness is distinct from byte readiness.
 Cancellation drops only the request's ownership and does not poison a backing
 still needed by another accepted job, document or undo entry.
+
+`package::transport::spool` copies native readers, including pipes, into a private
+owned file using bounded buffers. `BackingReader` adapts a ready immutable owner
+to the archive reader's checked U64 seeks. A host providing pending ranges must
+finish supplying those ranges on its worker before calling the synchronous codec.
+`ChunkedBytes` supports bounded in-memory owners without retaining a whole archive
+through a tiny read. `PreparedResources` can enumerate or stream immutable blocks
+independently of `PreparedPackage` and its ZIP writer.
 
 Native workers may use retained immutable file ranges. A mutable destination or
 revocable provider is spooled into private owned storage before adoption. Streams

@@ -22,12 +22,23 @@ impl<T> Default for Store<T> {
     fn default() -> Self { Self { entries: Vec::new(), ids: BTreeMap::new() } }
 }
 impl<T> Store<T> {
-    pub fn insert(&mut self, id: PortableId, value: T) -> Result<Handle<T>, &'static str> {
+    pub fn reserve(&mut self, id: PortableId) -> Result<Handle<T>, &'static str> {
         if self.ids.contains_key(&id) { return Err("Duplicate authored identity"); }
         let index = u32::try_from(self.entries.len()).map_err(|_| "Authored handle limit exceeded")?;
         let handle = Handle { index, marker: PhantomData };
-        self.entries.push((id, Some(value)));
+        self.entries.push((id, None));
         self.ids.insert(id, handle);
+        Ok(handle)
+    }
+    pub fn install(&mut self, handle: Handle<T>, value: T) -> Result<(), &'static str> {
+        let entry = self.entries.get_mut(handle.index as usize).ok_or("Unknown authored handle")?;
+        if entry.1.is_some() { return Err("Authored handle is already installed"); }
+        entry.1 = Some(value); Ok(())
+    }
+    pub fn allocated(&self, id: PortableId) -> Option<Handle<T>> { self.ids.get(&id).copied() }
+    pub fn insert(&mut self, id: PortableId, value: T) -> Result<Handle<T>, &'static str> {
+        let handle = self.reserve(id)?;
+        self.install(handle, value)?;
         Ok(handle)
     }
     pub fn resolve(&self, id: PortableId) -> Option<Handle<T>> {

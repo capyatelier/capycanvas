@@ -17,6 +17,14 @@ be tested without launching a window.
 masks and other edits. `Editor` applies reversible edits and keeps undo/redo
 history. These types do not depend on a graphics API or a UI toolkit.
 
+The prepared format library in `layer-core::authored` defines typed compositions,
+stacks, occurrences, sources, definitions and outputs with compact handles.
+`layer-core::package` resolves portable IDs, visits immutable resources and reads
+or writes the lossless package. These types are the application cutover boundary;
+the running editor still uses `Document` until the integrated M3 switch described
+in the [format plan](development/capy-format.md). The codec returns an artwork
+candidate; shared color and renderer admission precede editor adoption.
+
 `CanvasEngine`, in `layer-engine`, connects that model to drawing input. It
 interprets ordered pen samples, evaluates brush dynamics and produces work for a
 renderer. Brush dynamics are the rules that map inputs such as pressure to

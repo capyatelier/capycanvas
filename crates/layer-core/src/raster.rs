@@ -121,6 +121,8 @@ pub struct TileKey {
 /// Independently compressed, content-addressed exact samples. Immutable backing
 /// can be written repeatedly without readback, conversion or recompression.
 pub struct TileBlob {
+    resource_profile: Option<crate::authored::Resource<[u8]>>,
+    resource_id: crate::authored::PortableId,
     pub digest: [u8; 32],
     pub descriptor: PixelDescriptor,
     pub(crate) compressed: crate::raster_storage::Bytes,
@@ -171,6 +173,8 @@ fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
 }
 
 impl TileBlob {
+    pub fn resource_id(&self) -> crate::authored::PortableId { self.resource_id }
+    pub fn resource_profile(&self) -> Option<&crate::authored::Resource<[u8]>> { self.resource_profile.as_ref() }
     /// Worst-case encoded ownership reserved before a tile is published.
     pub fn max_compressed_len(descriptor: PixelDescriptor) -> Option<usize> {
         descriptor.byte_len([TILE_SIZE; 2]).map(lz4_flex::block::get_maximum_output_size)
@@ -188,6 +192,8 @@ impl TileBlob {
         // permutation, not a precision change; the digest covers original bytes.
         let shuffled = (descriptor.bits_per_channel > 8).then(|| shuffle_samples(descriptor, bytes));
         Ok(Self {
+            resource_profile: None,
+            resource_id: crate::authored::PortableId::random(),
             digest: Self::digest(descriptor, bytes),
             descriptor,
             compressed: Arc::<[u8]>::from(compression::compress(
@@ -208,23 +214,48 @@ impl TileBlob {
     /// Poll asynchronous backing without synchronously reading native files.
     pub fn compressed_ready(&self) -> Result<bool, String> { self.compressed.ready() }
     pub fn resident_bytes(&self) -> usize { self.compressed.resident_bytes() }
+    fn decode_samples(descriptor: PixelDescriptor, compressed: &[u8]) -> Result<Vec<u8>, String> {
+        let size = descriptor.byte_len([TILE_SIZE; 2]).ok_or("Unsupported raster pixels")?;
+        let mut bytes = compression::decompress(compressed, size)?;
+        if descriptor.bits_per_channel > 8 { bytes = unshuffle_samples(descriptor, &bytes); }
+        descriptor.validate_samples(&bytes)?;
+        Ok(bytes)
+    }
     pub fn decode(&self) -> Result<Vec<u8>, String> {
-        let size = self
-            .descriptor
-            .byte_len([TILE_SIZE; 2])
-            .ok_or("Unsupported raster pixels")?;
-        let compressed = self.compressed()?;
-        let mut bytes = compression::decompress(&compressed, size)?;
-        if self.descriptor.bits_per_channel > 8 {
-            bytes = unshuffle_samples(self.descriptor, &bytes);
-        }
+        let bytes = Self::decode_samples(self.descriptor, &self.compressed()?)?;
         if Self::digest(self.descriptor, &bytes) != self.digest {
             return Err("Raster tile integrity check failed".into());
         }
-        self.descriptor.validate_samples(&bytes)?;
         Ok(bytes)
     }
+    pub fn from_package(
+        resource_id: crate::authored::PortableId,
+        descriptor: PixelDescriptor,
+        compressed: Arc<[u8]>,
+    ) -> Result<Self, String> {
+        if compressed.len() > MAX_COMPRESSED_TILE_BYTES { return Err("Oversized compressed raster tile".into()); }
+        let bytes = Self::decode_samples(descriptor, &compressed)?;
+        Ok(Self { resource_profile: None, resource_id, descriptor, digest: Self::digest(descriptor, &bytes), compressed: compressed.into() })
+    }
+    pub fn from_profiled_package(
+        resource_id: crate::authored::PortableId, descriptor: PixelDescriptor,
+        compressed: Arc<[u8]>, profile: crate::authored::Resource<[u8]>,
+    ) -> Result<Self,String> {
+        if descriptor.encoding != crate::color::TransferEncoding::Profile || profile.is_empty() || profile.len()>crate::color::source::MAX_PROFILE_BYTES {
+            return Err("Invalid tile profile interpretation".into());
+        }
+        let mut tile=Self::from_package(resource_id,descriptor,compressed)?;
+        tile.resource_profile=Some(profile); Ok(tile)
+    }
     pub fn from_compressed(
+        descriptor: PixelDescriptor,
+        digest: [u8; 32],
+        bytes: Arc<[u8]>,
+    ) -> Result<Self, String> {
+        Self::from_compressed_with_id(crate::authored::PortableId::random(), descriptor, digest, bytes)
+    }
+    pub fn from_compressed_with_id(
+        resource_id: crate::authored::PortableId,
         descriptor: PixelDescriptor,
         digest: [u8; 32],
         bytes: Arc<[u8]>,
@@ -233,6 +264,8 @@ impl TileBlob {
             return Err("Oversized compressed raster tile".into());
         }
         let result = Self {
+            resource_profile: None,
+            resource_id,
             descriptor,
             digest,
             compressed: bytes.into(),
@@ -250,6 +283,15 @@ impl TileBlob {
         digest: [u8; 32],
         bytes: Arc<[u8]>,
     ) -> Result<Self, String> {
+        Self::from_verified_worker_with_id(crate::authored::PortableId::random(), descriptor, digest, bytes)
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_verified_worker_with_id(
+        resource_id: crate::authored::PortableId,
+        descriptor: PixelDescriptor,
+        digest: [u8; 32],
+        bytes: Arc<[u8]>,
+    ) -> Result<Self, String> {
         if bytes.is_empty()
             || bytes.len() > MAX_COMPRESSED_TILE_BYTES
             || descriptor.byte_len([TILE_SIZE; 2]).is_none()
@@ -257,6 +299,8 @@ impl TileBlob {
             return Err("Invalid raster worker blob".into());
         }
         Ok(Self {
+            resource_profile: None,
+            resource_id,
             descriptor,
             digest,
             compressed: bytes.into(),
@@ -487,6 +531,26 @@ impl RasterRevision {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tile_resource_identity_preserves_saved_compression_and_samples() {
+        let descriptor = crate::color::PixelDescriptor::COVERAGE8;
+        let samples = vec![81; (super::TILE_SIZE * super::TILE_SIZE) as usize];
+        let original = super::TileBlob::encode(descriptor, &samples).unwrap();
+        let encoded = original.compressed().unwrap();
+        let restored = super::TileBlob::from_compressed_with_id(original.resource_id(), descriptor, original.digest, encoded.clone()).unwrap();
+        assert_eq!(restored.resource_id(), original.resource_id());
+        assert!(std::sync::Arc::ptr_eq(&restored.compressed().unwrap(), &encoded));
+        assert_eq!(restored.decode().unwrap(), samples);
+        let package = super::TileBlob::from_package(original.resource_id(), descriptor, encoded.clone()).unwrap();
+        assert_eq!(package.digest, original.digest);
+        assert_eq!(package.decode().unwrap(), samples);
+        assert_eq!(package.resource_id(), original.resource_id());
+        assert!(std::sync::Arc::ptr_eq(&package.compressed().unwrap(), &encoded));
+        let independent = super::TileBlob::encode(descriptor, &samples).unwrap();
+        assert_ne!(independent.resource_id(), original.resource_id());
+        assert_eq!(independent.digest, original.digest);
+    }
+
     use super::*;
     #[test]
     fn multibyte_tiles_preserve_every_channel_and_validate_integrity() {

@@ -1,4 +1,5 @@
 use super::RgbSpace;
+use crate::authored::Resource;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -43,7 +44,7 @@ impl SampleDepth {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ColorProfile {
     Builtin(RgbSpace),
-    Icc(Arc<[u8]>),
+    Icc(Resource<[u8]>),
 }
 
 /// Metadata reference into a transport's binary ICC table.
@@ -56,8 +57,8 @@ impl ProfileReference {
     pub fn detach(profile: &ColorProfile, payloads: &mut Vec<Arc<[u8]>>) -> Self {
         match profile {
             ColorProfile::Builtin(space) => Self::Builtin(*space),
-            ColorProfile::Icc(bytes) => Self::Embedded(payloads.iter().position(|p| p == bytes)
-                .unwrap_or_else(|| { payloads.push(bytes.clone()); payloads.len() - 1 })),
+            ColorProfile::Icc(bytes) => Self::Embedded(payloads.iter().position(|p| p.as_ref() == bytes.as_ref())
+                .unwrap_or_else(|| { payloads.push(bytes.storage().clone()); payloads.len() - 1 })),
         }
     }
     pub fn resolve(&self, payloads: &[Arc<[u8]>]) -> Result<ColorProfile, String> {
@@ -65,7 +66,7 @@ impl ProfileReference {
             Self::Builtin(space) => Ok(ColorProfile::Builtin(*space)),
             Self::Embedded(index) => payloads.get(*index)
                 .filter(|p| !p.is_empty() && p.len() <= super::source::MAX_PROFILE_BYTES)
-                .cloned().map(ColorProfile::Icc).ok_or_else(|| "Missing or oversized ICC payload".into()),
+                .cloned().map(|bytes| ColorProfile::Icc(bytes.into())).ok_or_else(|| "Missing or oversized ICC payload".into()),
         }
     }
 }

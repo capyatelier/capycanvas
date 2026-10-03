@@ -383,7 +383,7 @@ pub async fn raster_worker_output(
     let recipe = &metadata.recipe;
     recipe.validate().map_err(color_preferences::color_feature_rejection)?;
     let [exif, xmp, iptc] = metadata.photo.map(|index| {
-        index.map(|index| std::sync::Arc::<[u8]>::from(js_sys::Uint8Array::new(&buffers.get(index)).to_vec()))
+        index.map(|index| js_sys::Uint8Array::new(&buffers.get(index)).to_vec().into())
     });
     let delivery = layer_color::photo::DeliveryMetadata {
         resolution: metadata.resolution,

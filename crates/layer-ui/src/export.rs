@@ -793,7 +793,7 @@ mod tests {
                 background,
                 profile: ExportProfile {
                     channels: model,
-                    profile: ColorProfile::Icc(std::sync::Arc::from([1, 2, 3])),
+                    profile: ColorProfile::Icc(vec![1, 2, 3].into()),
                     name: "profile label".into(),
                 },
                 ..ExportRecipe::web_share()

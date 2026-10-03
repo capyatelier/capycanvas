@@ -29,7 +29,7 @@ impl MetadataIndex {
     }
     pub(super) fn collect(metadata: &PhotoMetadata, offset: &mut u64) -> (Self, Vec<Arc<[u8]>>) {
         let mut blocks = Vec::new();
-        let mut record = |block: &Option<Arc<[u8]>>| {
+        let mut record = |block: &Option<crate::authored::Resource<[u8]>>| {
             block.as_ref().map(|bytes| {
                 let record = BlockRecord {
                     offset: *offset,
@@ -37,7 +37,7 @@ impl MetadataIndex {
                     digest: Sha256::digest(bytes).into(),
                 };
                 *offset += record.size;
-                blocks.push(bytes.clone());
+                blocks.push(bytes.storage().clone());
                 record
             })
         };
@@ -72,7 +72,7 @@ impl MetadataIndex {
                     if <[u8; 32]>::from(Sha256::digest(&bytes)) != record.digest {
                         return Err("Photo metadata integrity check failed".to_string());
                     }
-                    Ok(Arc::from(bytes))
+                    Ok(bytes.into())
                 })
                 .transpose()
         };

@@ -1,5 +1,9 @@
 //! Selection coverage, validation, and saved selection targets.
 use super::*;
+use crate::authored::Resource;
+use std::sync::OnceLock;
+
+pub(crate) const SELECTION_CHUNK_BYTES: usize = 65536;
 
 /// Painting changes coverage independently of artwork colors and compositing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -118,14 +122,23 @@ pub enum SelectionMode {
 /// Nibble masks pack eight 0..4 coverage samples per word; refined masks pack
 /// four 0..255 coverage bytes. Rows pad their final word with zero coverage.
 /// Pixels are produced by the GPU; this type validates and retains their data.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SelectionPixels {
     /// Feathered selections retain full 8-bit coverage, four pixels per word.
     byte_coverage: bool,
     extent: [u32; 2],
     bounds: [u32; 4],
     words: Arc<[u32]>,
+    #[serde(skip)]
+    package_chunks: Arc<OnceLock<Arc<[Resource<[u8]>]>>>,
 }
+impl PartialEq for SelectionPixels {
+    fn eq(&self, other: &Self) -> bool {
+        self.byte_coverage == other.byte_coverage && self.extent == other.extent
+            && self.bounds == other.bounds && self.words == other.words
+    }
+}
+impl Eq for SelectionPixels {}
 impl SelectionPixels {
     pub fn new(
         extent: [u32; 2],
@@ -152,6 +165,7 @@ impl SelectionPixels {
             bounds,
             words,
             byte_coverage,
+            package_chunks: Arc::default(),
         };
         value.validate()?;
         Ok(value)
@@ -170,6 +184,72 @@ impl SelectionPixels {
             ));
         }
         Ok(())
+    }
+    pub(crate) fn validate_package(&self) -> Result<(), String> {
+        self.validate().map_err(|e| e.to_string())?;
+        if self.extent.iter().any(|v| *v > crate::MAX_EXTENT) { return Err("Oversized selection coverage".into()); }
+        let count = self.pixels_per_word();
+        let bits = 32 / count;
+        let stride = self.extent[0].div_ceil(count) as usize;
+        let [x0, y0, x1, y1] = self.bounds;
+        for (y, row) in self.words.chunks_exact(stride).enumerate() {
+            for (i, word) in row.iter().enumerate() {
+                let start = i as u32 * count;
+                let lo = x0.saturating_sub(start).min(count) * bits;
+                let hi = x1.saturating_sub(start).min(count) * bits;
+                let mask = if y >= y0 as usize && y < y1 as usize && lo < hi {
+                    ((u64::from(u32::MAX) >> (32 - (hi - lo))) << lo) as u32
+                } else { 0 };
+                if word & !mask != 0 {
+                    return Err("Selection bounds omit coverage or row padding is nonzero".into());
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn package_chunks(&self) -> Result<&[Resource<[u8]>], String> {
+        if let Some(chunks) = self.package_chunks.get() { return Ok(chunks); }
+        self.validate_package()?;
+        Ok(self.package_chunks.get_or_init(|| {
+            self.words.chunks(SELECTION_CHUNK_BYTES / 4).map(|words| {
+                let mut bytes = vec![0; SELECTION_CHUNK_BYTES];
+                for (word, dest) in words.iter().zip(bytes.chunks_exact_mut(4)) {
+                    dest.copy_from_slice(&word.to_le_bytes());
+                }
+                Resource::from(lz4_flex::block::compress(&bytes))
+            }).collect::<Vec<_>>().into()
+        }))
+    }
+    pub(crate) fn from_package_chunks(
+        extent: [u32; 2], bounds: [u32; 4], byte_coverage: bool, chunks: Vec<Resource<[u8]>>,
+    ) -> Result<Self, String> {
+        let count = u64::from(extent[0].div_ceil(if byte_coverage { 4 } else { 8 }))
+            .checked_mul(u64::from(extent[1])).ok_or("Oversized selection coverage")?;
+        let bytes = count.checked_mul(4).ok_or("Oversized selection coverage")?;
+        let [x0, y0, x1, y1] = bounds;
+        if extent.contains(&0) || extent.iter().any(|v| *v > crate::MAX_EXTENT)
+            || x0 > x1 || y0 > y1 || x1 > extent[0] || y1 > extent[1]
+            || bytes.div_ceil(SELECTION_CHUNK_BYTES as u64) != chunks.len() as u64 {
+            return Err("Invalid selection chunk index".into());
+        }
+        let count = usize::try_from(count).map_err(|_| "Oversized selection coverage")?;
+        let mut words = Vec::new();
+        words.try_reserve_exact(count).map_err(|_| "Selection allocation failed")?;
+        let mut decoded = vec![0; SELECTION_CHUNK_BYTES];
+        for chunk in &chunks {
+            if chunk.len() > lz4_flex::block::get_maximum_output_size(SELECTION_CHUNK_BYTES) {
+                return Err("Oversized selection chunk".into());
+            }
+            let length = lz4_flex::block::decompress_into(chunk, &mut decoded).map_err(|e| e.to_string())?;
+            if length != SELECTION_CHUNK_BYTES { return Err("Invalid selection chunk length".into()); }
+            let used = (count - words.len()).min(SELECTION_CHUNK_BYTES / 4) * 4;
+            if decoded[used..].iter().any(|v| *v != 0) { return Err("Nonzero selection chunk padding".into()); }
+            words.extend(decoded[..used].chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())));
+        }
+        let value = Self::with_coverage(extent, bounds, words.into(), byte_coverage).map_err(|e| e.to_string())?;
+        value.validate_package()?;
+        value.package_chunks.set(chunks.into()).map_err(|_| "Selection chunk cache already initialized")?;
+        Ok(value)
     }
     pub fn pixels_per_word(&self) -> u32 {
         if self.byte_coverage { 4 } else { 8 }

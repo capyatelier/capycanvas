@@ -1,7 +1,7 @@
 //! Physical density is metadata, independent of pixel dimensions and color.
 //! Rational values retain TIFF/Exif numbers exactly in native projects.
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::authored::Resource;
 
 /// Descriptive metadata of the photo a document was opened from, kept as the
 /// blocks that carried it. Export builds fresh blocks from these; imports and
@@ -10,15 +10,15 @@ use std::sync::Arc;
 pub struct PhotoMetadata {
     /// A little-endian TIFF block holding the image text tags and the Exif and
     /// GPS directories, without the `Exif\0\0` prefix.
-    pub exif: Option<Arc<[u8]>>,
+    pub exif: Option<Resource<[u8]>>,
     /// An XMP packet.
-    pub xmp: Option<Arc<[u8]>>,
+    pub xmp: Option<Resource<[u8]>>,
     /// IPTC-IIM records.
-    pub iptc: Option<Arc<[u8]>>,
+    pub iptc: Option<Resource<[u8]>>,
 }
 impl PhotoMetadata {
     pub const MAX_BYTES: usize = 64 * 1024 * 1024;
-    pub fn blocks(&self) -> [&Option<Arc<[u8]>>; 3] {
+    pub fn blocks(&self) -> [&Option<Resource<[u8]>>; 3] {
         [&self.exif, &self.xmp, &self.iptc]
     }
     pub fn is_empty(&self) -> bool {

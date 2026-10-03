@@ -212,7 +212,8 @@ pub(super) fn descriptions(packet: &[u8], policy: ExportMetadata) -> Result<Opti
                 }
             }
             Event::GeneralRef(reference) => {
-                let predefined = matches!(reference.as_ref(), b"amp" | b"lt" | b"gt" | b"quot" | b"apos");
+                let name: &[u8] = reference.as_ref();
+                let predefined = matches!(name, b"amp" | b"lt" | b"gt" | b"quot" | b"apos");
                 if !predefined && !reference.resolve_char_ref().is_ok_and(|c| c.is_some()) {
                     return Err(INVALID.into());
                 }

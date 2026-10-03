@@ -38,6 +38,11 @@ impl ByteSource for Arc<[u8]> {
 
 #[derive(Clone)]
 pub struct ImmutableBacking { owner: Arc<Owner> }
+impl std::fmt::Debug for ImmutableBacking {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImmutableBacking").field("identity", &self.identity()).field("length", &self.byte_len()).finish()
+    }
+}
 struct Owner { identity: u64, length: u64, source: Arc<dyn ByteSource>, failure: Mutex<Option<String>> }
 impl ImmutableBacking {
     pub fn new(source: Arc<dyn ByteSource>) -> Result<Self, &'static str> {
@@ -45,6 +50,12 @@ impl ImmutableBacking {
         let identity = NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| "Package owner identity exhausted")?;
         Ok(Self { owner: Arc::new(Owner { identity, length: source.byte_len(), source, failure: Mutex::new(None) }) })
+    }
+    pub fn fail(&self, error: String) -> String {
+        match self.owner.failure.lock() {
+            Ok(mut failure) => failure.get_or_insert(error).clone(),
+            Err(_) => "Package failure lock".into(),
+        }
     }
     pub fn identity(&self) -> u64 { self.owner.identity }
     pub fn byte_len(&self) -> u64 { self.owner.length }

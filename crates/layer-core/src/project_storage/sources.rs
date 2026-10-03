@@ -64,7 +64,7 @@ impl SourceIndex {
                 let digest: [u8; 32] = Sha256::digest(bytes).into();
                 ProfileReference::Embedded(*profiles.entry(digest).or_insert_with(|| {
                     let id = payloads.len();
-                    payloads.push(bytes.clone());
+                    payloads.push(bytes.storage().clone());
                     id
                 }))
             }
@@ -254,7 +254,7 @@ impl SourceIndex {
         tiles: &[RasterTile],
         document: &mut Document,
     ) -> Result<(), String> {
-        let mut profiles: Vec<Arc<[u8]>> = Vec::new();
+        let mut profiles: Vec<crate::authored::Resource<[u8]>> = Vec::new();
         for record in self.profiles {
             let bytes = read_block(input, record.size, MAX_PROFILE_BYTES as u64)?;
             if <[u8; 32]>::from(Sha256::digest(&bytes)) != record.digest {
