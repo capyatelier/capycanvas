@@ -65,12 +65,16 @@ private fun colorEpoch(host: CanvasHost): Long =
     var transportError by remember { mutableStateOf<String?>(null) }
     fun change(draft: JSONObject) {
         try {
-            if(hdr){val stops=intensityText.trim().toFloatOrNull();require(stops!=null&&stops.isFinite()){"Enter a finite EV value"};draft.put("change_intensity",stops)}
+            if(hdr)draft.put("change_intensity_text",intensityText)
             form = JSONObject(Native.colorUi(obj("type" to "form", "request" to draft).toString(), host.languageTag)); transportError = null }
         catch (e: Exception) { transportError = e.message ?: host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("read_failed") }
     }
     LaunchedEffect(host.languageTag) {
-        form = JSONObject(Native.colorUi(obj("type" to "form", "request" to form.getJSONObject("draft")).toString(), host.languageTag))
+        val copy = JSONObject(Native.colorUi(obj("type" to "form_copy", "copy" to form.getJSONObject("copy")).toString(), host.languageTag))
+        val next = JSONObject()
+        form.keys().forEach { next.put(it, form.get(it)) }
+        copy.keys().forEach { next.put(it, copy.get(it)) }
+        form = next
     }
     val draft = form.getJSONObject("draft")
     val labels = form.getJSONArray("labels")
@@ -80,7 +84,7 @@ private fun colorEpoch(host: CanvasHost): Long =
         form.objectOrNull("preview")?.let { preview ->
             Row(Modifier.fillMaxWidth()){
                 form.objectOrNull("base_preview")?.let{base->Column(Modifier.weight(1f),horizontalAlignment=Alignment.CenterHorizontally){Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("base"),color=colors.secondary,style=MaterialTheme.typography.labelSmall);Spacer(Modifier.height(4.dp));Box(Modifier.fillMaxWidth().height(48.dp).background(displayColor(base)))}}
-                Column(Modifier.weight(1f),horizontalAlignment=Alignment.CenterHorizontally){if(!form.isNull("base_preview")){Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("adjusted"),color=colors.secondary,style=MaterialTheme.typography.labelSmall);Spacer(Modifier.height(4.dp))};Box(Modifier.fillMaxWidth().height(48.dp).background(displayColor(preview)))}
+                Column(Modifier.weight(1f),horizontalAlignment=Alignment.CenterHorizontally){if(!form.isNull("base_preview")){Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("adjusted"),color=colors.secondary,style=MaterialTheme.typography.labelSmall);Spacer(Modifier.height(4.dp))};Box(Modifier.fillMaxWidth().height(48.dp).testTag("color-form-preview").background(displayColor(preview)))}
             }
         }
     }
@@ -107,8 +111,7 @@ private fun colorEpoch(host: CanvasHost): Long =
                             }
                         }
                         if(!draft.isNull("intensity"))ColorEntry(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("intensity_ev"),intensityText,"color-intensity-value") {text->
-                            intensityText=text;val n=text.toFloatOrNull()
-                            if(n!=null&&n.isFinite())change(JSONObject(draft.toString()).put("change_intensity",n))else transportError="Enter a finite EV value"
+                            intensityText=text;change(JSONObject(draft.toString()))
                         }
                         for(i in 0..3)if(labels.getString(i).isNotBlank())ColorEntry(labels.getString(i),draft.getJSONArray("fields").getString(i),"color-input-$i") {text->
                             val next=JSONObject(draft.toString());next.getJSONArray("fields").put(i,text);change(next)
@@ -116,13 +119,13 @@ private fun colorEpoch(host: CanvasHost): Long =
                     }
                     if(!hdr)comparison()
                     val error=transportError?:form.optString("error").takeIf{it!="null"&&it.isNotBlank()}
-                    Text(error?:form.optString("validation",""),color=if(error!=null)MaterialTheme.colorScheme.error else colors.text)
+                    Text(error?:form.optString("validation",""),Modifier.testTag("color-form-status"),color=if(error!=null)MaterialTheme.colorScheme.error else colors.text)
                 }
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                     Button(onDismiss,Modifier.weight(1f),shape=RoundedCornerShape(8.dp),colors=ButtonDefaults.buttonColors(containerColor=colors.button,contentColor=colors.text)){Text(host.bootstrap!!.getJSONObject("common").getString("cancel"))}
                     Button(enabled=!form.isNull("value")&&form.isNull("error")&&transportError==null,onClick={
                         if(colorEpoch(host)==epoch){onIntensity(if(draft.isNull("intensity"))null else draft.number("intensity"));onUse(form.getJSONObject("value"))}else onDismiss()
-                    },modifier=Modifier.weight(1f),shape=RoundedCornerShape(8.dp)){Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("use_color"))}
+                    },modifier=Modifier.weight(1f).testTag("color-form-use"),shape=RoundedCornerShape(8.dp)){Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("use_color"))}
                 }
             }
         }
@@ -136,7 +139,7 @@ private fun colorEpoch(host: CanvasHost): Long =
     val owner=remember{Any()}
     var text by remember{mutableStateOf(TextFieldValue(value))}
     var focused by remember{mutableStateOf(false)}
-    LaunchedEffect(value,focused){if(!focused)text=TextFieldValue(value)}
+    LaunchedEffect(value,focused){if(!focused&&text.text!=value)text=TextFieldValue(value)}
     DisposableEffect(owner){onDispose{host.textComposition.clear(owner);if(focused)host.editingText=false}}
     HorizontalDivider(color=colors.divider)
     BasicTextField(text,{text=it;host.textComposition.update(owner,text,focused);onChange(it.text)},singleLine=true,textStyle=MaterialTheme.typography.bodyMedium.copy(color=colors.text),cursorBrush=SolidColor(colors.accent),

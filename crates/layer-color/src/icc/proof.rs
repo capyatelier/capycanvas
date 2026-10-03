@@ -6,7 +6,7 @@ mod black;
 mod lut;
 mod memory;
 mod view_lut;
-pub use view_lut::ProofLut;
+pub use view_lut::{ProofLut, ProofLutError};
 mod pcs;
 use pcs::*;
 

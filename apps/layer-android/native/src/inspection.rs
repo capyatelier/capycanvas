@@ -27,9 +27,9 @@ pub(crate) fn capture_task<T>(env: &mut JNIEnv, handle: jlong, id: jni::sys::jin
         .map(|task| Box::into_raw(Box::new(Task { task, control: control(cancel) })) as jlong);
     or_throw(env, result, 0)
 }
-pub(crate) fn on_worker<T: Send>(name: &str, failed: &str, work: impl FnOnce() -> Result<T, String> + Send) -> Result<T, String> {
+pub(crate) fn on_worker<T: Send, E: From<String> + Send>(name: &str, failed: &str, work: impl FnOnce() -> Result<T, E> + Send) -> Result<T, E> {
     std::thread::scope(|scope| std::thread::Builder::new().name(name.into()).stack_size(8 * 1024 * 1024)
-        .spawn_scoped(scope, work).map_err(error)?.join().map_err(|_| failed.to_owned())?)
+        .spawn_scoped(scope, work).map_err(|value| E::from(error(value)))?.join().map_err(|_| E::from(failed.to_owned()))?)
 }
 
 pub(crate) fn control(handle: jlong) -> CaptureControl {
@@ -207,16 +207,15 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
     recipe: jni::objects::JString,
 ) -> jni::sys::jobjectArray {
     let job = unsafe { Box::from_raw(handle as *mut Inspection) };
-    let result = (|| {
+    let result = (|| -> Result<_, crate::color_preferences::ColorCallError> {
         let recipe: layer_ui::ExportRecipe =
             serde_json::from_str(&crate::android::read(&mut env, &recipe)?).map_err(error)?;
         let (previews,stats)=crate::inspection::on_worker("capy-output-preview", "Output preview worker failed", move || {
-            let localization = &*crate::launch::active_localization()?;
             let mut renderer=job.gpu.capture(job.project,job.background,job.time,job.control).map_err(error)?;
             let before=renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?;
-            let output=layer_host::export::preview_recipe(&mut renderer,[512,384],layer_core::color::RgbSpace::Srgb,1.,&recipe).map_err(|reason| reason.message(localization))?;
-            let json=serde_json::json!({"extent":recipe.size.extent(renderer.extent()).map_err(|reason| reason.message(localization))?,"clipped_channels":output.clipped,"range_blocked":output.range_blocked});
-            Ok::<_,String>(([before,output.after].into_iter().chain(output.sdr_base).collect::<Vec<_>>(),json.to_string()))
+            let output=layer_host::export::preview_recipe(&mut renderer,[512,384],layer_core::color::RgbSpace::Srgb,1.,&recipe)?;
+            let json=serde_json::json!({"extent":recipe.size.extent(renderer.extent())?,"clipped_channels":output.clipped,"range_blocked":output.range_blocked});
+            Ok::<_,crate::color_preferences::ColorCallError>(([before,output.after].into_iter().chain(output.sdr_base).collect::<Vec<_>>(),json.to_string()))
         })?;
         let result = env
             .new_object_array(previews.len() as i32 + 1, "java/lang/Object", jni::objects::JObject::null())
@@ -233,7 +232,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
         }
         Ok(result.into_raw())
     })();
-    or_throw(&mut env, result, std::ptr::null_mut())
+    crate::color_preferences::color_or_throw(&mut env, result, std::ptr::null_mut())
 }
 pub(crate) fn preview_bytes(
     preview: &layer_render_wgpu::snapshot::SnapshotPreview,

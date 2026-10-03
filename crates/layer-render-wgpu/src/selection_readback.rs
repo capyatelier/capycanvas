@@ -2,6 +2,7 @@
 use super::*;
 use layer_render::RegionResult;
 
+#[expect(clippy::too_many_arguments, reason = "Selection readback keeps buffer layout, request identity, and completion callback explicit")]
 pub(super) fn capture_selection<T: Send + 'static>(
     readback: &wgpu::Buffer,
     size: u64,

@@ -81,7 +81,7 @@ pub struct LayersView {
     pub can_reference: bool,
     pub can_delete: bool,
     pub references_selected: bool,
-    pub reference_action_label: &'static str,
+    pub reference_action_label: std::sync::Arc<str>,
     /// Header target remains available even inside a collapsed group.
     pub editing_layer: Option<LayerState>,
     pub rename_layer: Option<u64>,
@@ -626,7 +626,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ]));
             }
             layer.source = Some(std::sync::Arc::new(source));
-            edits.push(Edit::InsertLayer { index: index + offset, layer });
+            edits.push(Edit::InsertLayer { index: index + offset, layer: Box::new(layer) });
             ids.push(id);
         }
         edits.push(Edit::SetActiveLayer { id: ids[0] });
@@ -905,7 +905,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 layer.properties.parent = parent;
                 layer.properties.clipped = clipped;
                 self.layer_edit(Edit::Batch(vec![
-                    Edit::InsertLayer { index, layer },
+                    Edit::InsertLayer { index, layer: Box::new(layer) },
                     Edit::SetActiveLayer { id },
                 ]))?;
             }
@@ -1122,7 +1122,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     edits.push(Edit::InsertLayer {
                         index: index + offset,
-                        layer: copy.clone(),
+                        layer: Box::new(copy.clone()),
                     });
                 }
                 edits.push(Edit::SetActiveLayer { id: root_id });

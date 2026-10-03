@@ -29,6 +29,11 @@ pub struct ProfileEntry {
     pub issue: Option<ColorFeatureError>,
 }
 impl ProfileEntry {
+    pub fn matches(&self, query: &str, localizer: &crate::Localizer) -> bool {
+        let query = crate::search::normalize(query);
+        [&self.name, &self.id, &self.display_name(localizer), &self.details(localizer)]
+            .iter().any(|text| crate::search::normalize(text).contains(&query))
+    }
     pub fn localized_view(&self, localizer: &crate::Localizer) -> serde_json::Value {
         let mut value = serde_json::json!(self);
         value["name"] = self.display_name(localizer).into();
@@ -48,8 +53,8 @@ impl ProfileEntry {
         let mut args = crate::FluentArgs::new();
         let gray = localizer.text(crate::MessageId::COLOR_FEATURES_PROFILE_GRAYSCALE);
         let channels = match self.channels { Some(ProfileChannels::Rgb) => "RGB", Some(ProfileChannels::Cmyk) => "CMYK", Some(ProfileChannels::Gray) => gray.as_ref(), None => "" };
-        let bytes = self.bytes.to_string(); let id = self.id.chars().take(12).collect::<String>();
-        args.set("channels", channels); args.set("bytes", bytes.as_str()); args.set("id", id.as_str());
+        let id = self.id.chars().take(12).collect::<String>();
+        args.set("channels", channels); args.set("bytes", self.bytes); args.set("id", id.as_str());
         localizer.format(crate::MessageId::COLOR_FEATURES_PROFILE_DETAILS, &args)
     }
 }
@@ -208,7 +213,7 @@ impl ProfileLibraryAction {
         use serde_json::json;
         let view = |entry: ProfileEntry| localizer.map_or_else(||json!(&entry), |localizer|entry.localized_view(localizer));
         Ok(match self {
-            Self::Limits => json!({"read_bytes": PROFILE_READ_LIMIT}),
+            Self::Limits => json!({"read_bytes": PROFILE_READ_LIMIT, "entries": PROFILE_LIBRARY_ENTRIES}),
             Self::Visibility { mut hidden, id, visible } => {
                 hidden.retain(|id| valid_profile_id(id));
                 hidden.sort(); hidden.dedup();
@@ -239,6 +244,27 @@ impl ProfileLibraryAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn entry_search_matches_current_captions_and_normalized_literal_names() {
+        let mut entry = ProfileEntry { id: "a".repeat(64), name: String::new(), bytes: 2602,
+            channels: Some(ProfileChannels::Gray), profile: None, issue: None };
+        for language in crate::UiLanguage::ALL {
+            let localizer = crate::Localizer::shared(language);
+            assert!(entry.matches(&entry.display_name(&localizer), &localizer));
+            assert!(entry.matches(&entry.details(&localizer), &localizer));
+            entry.channels = None;
+            assert!(entry.matches(&entry.display_name(&localizer), &localizer));
+            entry.channels = Some(ProfileChannels::Gray);
+        }
+        let localizer = crate::Localizer::shared(crate::UiLanguage::English);
+        for (name, query) in [("Işık İçe aktar", "IŞIK İÇE AKTAR"), ("Größe", "GRÖSSE"),
+            ("Tiếng Việt", "Tie\u{302}\u{301}ng Vie\u{323}\u{302}t")] {
+            entry.name = name.into();
+            assert!(entry.matches(query, &localizer));
+            assert_eq!(entry.name, name);
+        }
+        assert!(!entry.matches("Tieng Viet", &localizer));
+    }
     #[test]
     fn artist_entry_projection_keeps_literal_names_and_localizes_absence() {
         let localizer = crate::Localizer::shared(crate::UiLanguage::English);

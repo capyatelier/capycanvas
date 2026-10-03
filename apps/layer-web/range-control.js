@@ -13,7 +13,7 @@ export function createRangeControl({ app, bounds, label, icon, onChange, prefix 
   const spec = bounds[0].numeric;
   const inputs = bounds.map((f, i) => {
     const input = createNumberField({ control: f.numeric, label: `${f.label} — ${label}`, labels:next=>app.numeric_labels(next), icon, inline: true, valueOnly: true,
-      resolve: request => app.number_input(request), onChange: value => { if (!retired) onChange(i, value); } });
+      resolve: request => app.number_input(request), errorCaption: reason => app.native_caption({type:'numeric_error',reason}), onChange: value => { if (!retired) onChange(i, value); } });
     input.dataset[`${prefix}Setting`] = f.id;
     return input;
   });

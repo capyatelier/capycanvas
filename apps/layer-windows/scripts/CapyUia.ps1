@@ -2,6 +2,7 @@ Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 if(!('CapyWindowApi' -as [type])){Add-Type -TypeDefinition @"
 using System;using System.Runtime.InteropServices;using System.Text;
 public static class CapyWindowApi {
+ [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint owner);
  [DllImport("user32.dll")]public static extern bool PostMessage(IntPtr h,uint m,UIntPtr w,IntPtr l);
  [DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int n);
@@ -32,6 +33,15 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$scri
         Start-Sleep -Milliseconds 50
     }while($watch.Elapsed.TotalSeconds -lt $Seconds*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}))
     throw $Message
+}
+function Wait-StablePixels([scriptblock]$Sample){
+    $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $Sample;$stable=0
+    do{
+        Start-Sleep -Milliseconds 100;$next=& $Sample
+        if($next -eq $last){$stable++}else{$stable=0};$last=$next
+        if($stable -ge 3){return $last}
+    }while($watch.Elapsed.TotalSeconds -lt 5)
+    throw 'Canvas pixels did not settle for comparison'
 }
 function Find([string]$Value,[switch]$Name,$Within=$root,$Type,[switch]$Visible){
     $property=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
@@ -65,6 +75,14 @@ function Control([string]$Value,[switch]$Name,$Within=$root,$Type,[int]$Seconds=
         $hit.stable -ge 2
     } "Missing control: $Value" $Seconds
     $hit.item
+}
+function Scroll-Position($Control,[ValidateRange(0,100)][double]$Percent){
+    $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$scroller=$walker.GetParent($Control);$scroll=$null
+    while($scroller -and !$scroller.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll)){$scroller=$walker.GetParent($scroller)}
+    if(!$scroll){throw 'The native options have no scroll provider'}
+    if(!$scroll.Current.VerticallyScrollable){return}
+    $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,$Percent)
+    Wait-Until {[Math]::Abs($scroll.Current.VerticalScrollPercent-$Percent) -lt .01} 'Native options did not acknowledge their scroll position'
 }
 function Invoke([string]$Value,[switch]$Name,$Within=$root){
     $item=Control $Value -Name:$Name -Within $Within;$pattern=$null
@@ -139,7 +157,21 @@ function Exit-CapyEnvironment{
 function Invoke-Id([string]$Id){
     $hit=@{item=$null}
     Wait-Until {$hit.item=Find $Id;$hit.item -and $hit.item.Current.IsEnabled} "Missing enabled control: $Id"
-    $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Invoke $Id
+}
+function Invoke-PickerButton($Picker,[string]$Id='1'){
+    if($Picker.Current.ClassName -ne '#32770' -or $Picker.Current.ProcessId -ne $review.Id){throw 'Picker does not belong to the isolated review'}
+    $window=[IntPtr]$Picker.Current.NativeWindowHandle;$hit=@{item=$null}
+    Wait-Until {
+        $fresh=[System.Windows.Automation.AutomationElement]::FromHandle($window)
+        if($fresh.Current.ProcessId -ne $review.Id -or $fresh.Current.ClassName -ne '#32770'){return $false}
+        $hit.item=$fresh.FindFirst([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id))
+        $hit.item -and $hit.item.Current.ClassName -eq 'Button' -and $hit.item.Current.IsEnabled -and $hit.item.Current.NativeWindowHandle -ne 0
+    } 'Native picker confirmation did not become ready' 15
+    $handle=[IntPtr]$hit.item.Current.NativeWindowHandle;$owner=[uint32]0
+    [CapyWindowApi]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
+    if($owner -ne $review.Id){throw 'Native picker button has an unexpected owner'}
+    if(![CapyWindowApi]::PostMessage($handle,245,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Cannot invoke native picker button'}
 }
 function Open-Project([string]$Path){
     & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'File'
@@ -147,8 +179,7 @@ function Open-Project([string]$Path){
     $hit=@{edit=$null}
     Wait-Until {$hit.edit=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty,'Edit'),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1148')));$null -ne $hit.edit} 'Missing Open picker' 45
     [CapyWindowApi]::Path([IntPtr]$hit.edit.Current.NativeWindowHandle,$Path)
-    $button=(Find 'Open' -Name).FindFirst([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1'))
-    [CapyWindowApi]::PostMessage([IntPtr]$button.Current.NativeWindowHandle,245,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null
+    Invoke-PickerButton (Find 'Open' -Name)
     Wait-Until {!(Find 'Open' -Name)} 'Open did not finish' 90
 }
 function Zoom-Item([string]$Id){

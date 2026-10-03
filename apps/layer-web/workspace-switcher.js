@@ -1,5 +1,7 @@
+import {bindCopy,liveCopy} from "./localization.js";
 // DOM gestures and chrome only. Rust owns visibility, order and publication.
-export function createWorkspaceSwitcher({dialog, list, element, button, icon, send, getView, redraw}) {
+export function createWorkspaceSwitcher({app,dialog, list, element, button, icon, send, getView, redraw}) {
+  const copy=liveCopy(app,"catalog").native_copy.header;
   const root = element("div", "workspace-switcher");
   root.tabIndex = -1; root.setAttribute("role", "group");
   document.querySelector("#document-title").after(root);
@@ -23,24 +25,24 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     const view = getView(), item = view.rows.find(item => item.id === row.dataset.id);
     if (!item || view.page !== "workspaces" || unavailable()) return;
     closeMenu(); menuOwner = row; menu.replaceChildren(); menu.dataset.id = item.id;
-    menu.setAttribute("aria-label", `Options for ${item.title}`);
+    bindCopy(menu,()=>app.native_caption({type:"options_for",title:getView()?.rows.find(row=>row.id===menuOwner?.dataset.id)?.title??""}),"ariaLabel");
     const action = (label, kind, run, enabled = true, checked) => {
       const node = button("", () => { closeMenu(true); run(); });
       node.dataset.action = kind; node.disabled = !enabled;
       node.setAttribute("role", checked == null ? "menuitem" : "menuitemcheckbox");
       const mark = element("span", "workspace-menu-check");
       if (checked != null) { node.setAttribute("aria-checked", String(checked)); if (checked) mark.append(icon("check")); }
-      node.append(mark, element("span", "", label)); menu.append(node);
+      const caption=element("span");bindCopy(caption,label);node.append(mark,caption);menu.append(node);
     };
     const pinned = view.switcher.some(entry => entry.id === item.id), index = view.order.indexOf(item.id);
-    action("Show in top bar", "pin", () => edit({type:"show", id:item.id, visible:!pinned}), true, pinned);
-    action("Move Up", "up", () => edit({type:"move", id:item.id, before:view.order[index-1]}), index > 0);
-    action("Move Down", "down", () => edit({type:"move", id:item.id, before:view.order[index+2] ?? null}), index < view.order.length-1);
+    action(()=>copy.show_top, "pin", () => edit({type:"show", id:item.id, visible:!pinned}), true, pinned);
+    action(()=>copy.move_up, "up", () => edit({type:"move", id:item.id, before:view.order[index-1]}), index > 0);
+    action(()=>copy.move_down, "down", () => edit({type:"move", id:item.id, before:view.order[index+2] ?? null}), index < view.order.length-1);
     const offered = type => item.actions.some(button => button.enabled && button.action.type === type);
     const rename = offered("rename"), remove = offered("delete");
     if (rename || remove) menu.append(element("hr"));
-    if (rename) action("Rename…", "rename", () => send({type:"form", action:{type:"rename", value:item.id}}));
-    if (remove) action("Delete…", "delete", () => send({type:"form", action:{type:"delete", value:item.id}}));
+    if (rename) action(()=>JSON.parse(app.workspace_view()).rows.find(row=>row.id===item.id)?.actions.find(value=>value.action.type==="rename")?.label??"", "rename", () => send({type:"form", action:{type:"rename", value:item.id}}));
+    if (remove) action(()=>JSON.parse(app.workspace_view()).rows.find(row=>row.id===item.id)?.actions.find(value=>value.action.type==="delete")?.label??"", "delete", () => send({type:"form", action:{type:"delete", value:item.id}}));
     row.querySelector(".workspace-options").setAttribute("aria-expanded", "true");
     menu.showPopover();
     const r = menu.getBoundingClientRect();
@@ -53,21 +55,21 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     // Keep a button hit target: Chrome can redirect touches on a narrow passive
     // icon to the neighboring row button, which would require a hold to drag.
     const handle = button("", e => e.preventDefault(), "workspace-grip"); handle.append(icon("grip")); handle.tabIndex = -1;
-    handle.title = "Drag to reorder"; handle.setAttribute("aria-label", handle.title);
+    bindCopy(handle,()=>copy.drag_to_reorder,"title");bindCopy(handle,()=>copy.drag_to_reorder,"ariaLabel");
     row.prepend(handle);
     for (const [visible, glyph, label] of [
-      [view.id === item.id, "check", "Current workspace"],
-      [view.switcher.some(entry => entry.id === item.id), "pin", "Shown in top bar"],
+      [view.id === item.id, "check", ()=>copy.current_workspace],
+      [view.switcher.some(entry => entry.id === item.id), "pin", ()=>copy.shown_top],
     ]) if (visible) {
       const mark = element("span", `workspace-row-mark workspace-${glyph}`); mark.append(icon(glyph));
-      mark.title = label; mark.setAttribute("aria-label", label); mark.setAttribute("role", "img"); row.append(mark);
+      bindCopy(mark,label,"title");bindCopy(mark,label,"ariaLabel"); mark.setAttribute("role", "img"); row.append(mark);
     }
     const more = button("", () => {
       if (menuOpen() && menuOwner === row) { closeMenu(true); return; }
       const r = more.getBoundingClientRect(); showMenu(row, {x:r.left, y:r.bottom}, true);
     }, "workspace-options");
     more.append(icon("more"));
-    more.setAttribute("aria-label", `Options for ${item.title}`); more.setAttribute("aria-haspopup", "menu"); more.setAttribute("aria-expanded", "false");
+    bindCopy(more,()=>app.native_caption({type:"options_for",title:getView()?.rows.find(row=>row.id===item.id)?.title??item.title}),"ariaLabel"); more.setAttribute("aria-haspopup", "menu"); more.setAttribute("aria-expanded", "false");
     row.append(more);
     row.addEventListener("click", e => {
       if (!e.target.closest(".workspace-choice,.workspace-options") && !unavailable()) choice.click();
@@ -175,7 +177,7 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
       let node = buttons.get(item.id);
       if (!node) { node = button("", () => send({type:"switch",id:item.id})); node.append(element("span")); node.dataset.workspaceId = item.id; buttons.set(item.id,node); }
       if (choices.children[index] !== node) choices.insertBefore(node, choices.children[index] ?? null);
-      node.firstElementChild.textContent = item.title; node.title = `Switch to ${item.title} workspace`;
+      node.firstElementChild.textContent = item.title;bindCopy(node,()=>app.native_caption({type:"switch_workspace",title:getView()?.switcher_display.find(row=>row.id===item.id)?.title??item.title}),"title");
       node.setAttribute("aria-pressed", String(item.id === view.id)); node.disabled = switchUnavailable;
     }
     options.title = view.switcher_options_label;

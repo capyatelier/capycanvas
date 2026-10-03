@@ -261,7 +261,7 @@ impl NativeScalarEncoder {
                 bind_group_layouts: &[Some(&layout)],
                 immediate_size: 0,
             });
-            pipelines.push(crate::Deferred::compute(&device, "native scalar writeback", &pipeline_layout, &crate::Deferred::wgsl(&device, "native scalar writeback", source), "main"));
+            pipelines.push(crate::Deferred::compute(device, "native scalar writeback", &pipeline_layout, &crate::Deferred::wgsl(device, "native scalar writeback", source), "main"));
             layouts.push(layout);
         }
         let records = [SampleDepth::U8, SampleDepth::U16].map(|depth| {

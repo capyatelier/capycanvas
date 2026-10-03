@@ -465,7 +465,13 @@ native-inspection-changed = Drawing changed · { $status }
 common-application-start-failed = Could not start Capy Canvas.
     Reload this page. If you opened a packaged copy, download a fresh copy and open it again.
 native-inspection-range = { $start } to { $end } EV · 0 EV = 203 cd/m² reference white
-native-inspection-pixels = { $sampled } sampled pixels · { $transparent } transparent pixels excluded
+native-inspection-pixels = { $sampled ->
+    [one] { $sampled } sampled pixel
+   *[other] { $sampled } sampled pixels
+    } · { $transparent ->
+    [one] { $transparent } transparent pixel excluded
+   *[other] { $transparent } transparent pixels excluded
+    }
 native-inspection-channel = Below SDR: { $below } · Above SDR: { $above } · Black: { $black } · White: { $white }
 native-inspection-graph = { $channel } histogram
 native-inspection-clipped = Clipped channels: { $count }
@@ -496,3 +502,29 @@ native-drawing-storage-help = { $detail }
 native-dialog-preferences-failed = Windows could not open Preferences.
 native-palettes-hex-help = sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity
 common-description = Description
+
+common-screen-chip-clipped = Colors clipped
+common-screen-chip-sdr-preview = SDR preview
+common-screen-chip-hdr = HDR
+common-screen-chip-showing-sdr = Showing SDR
+common-screen-chip-proof-caveat = May not match print
+common-screen-headline-clipped = Some colors can’t be shown accurately on this screen
+common-screen-headline-proof = The proof may not match the print
+common-screen-title = This screen
+common-screen-headline-sdr = Showing the SDR version
+common-screen-sdr-preview = This is the SDR version you’ll export. Select Off in the Proof panel to see HDR.
+common-screen-hdr-headroom = This screen can show highlights up to { $times }× ({ $ev } EV).
+common-screen-hdr-unknown-peak = Capy Canvas can’t tell how bright this screen can get, so the brightest highlights may look dimmer than they are.
+common-screen-headline-hdr = Showing HDR
+common-screen-white-at-peak = At your current screen brightness, regular content already uses all of this screen’s brightness, leaving nothing brighter for HDR highlights. Lower the screen brightness to see them.
+common-screen-no-hdr = This screen can’t show HDR.
+common-screen-hdr-off = HDR is off for this screen. Turn it on in your operating system’s display settings to see HDR highlights.
+common-screen-wide-color-off = Your operating system is limiting apps to sRGB colors on this screen, although the screen can show more. Turn off saturated or vivid colors in your operating system’s display settings to show them.
+common-screen-srgb-wide-monitor = Your operating system is treating this monitor as a standard sRGB screen, although the monitor can show more colors. Turn on HDR for this monitor in your operating system’s display settings to show them.
+common-screen-unmanaged = Your operating system shows only sRGB colors on this screen.
+common-screen-proof-hdr = With HDR on, Capy Canvas can’t tell how this screen shows colors. Turn off HDR for this screen in your operating system’s display settings.
+common-screen-proof-unknown = Capy Canvas can’t tell which colors this screen can show.
+common-screen-proof-white = At your current screen brightness, the lightest tones look the same. Lower the screen brightness to tell them apart.
+native-highlight-clipped-colors = Highlight these colors
+native-screen-details = Screen details
+native-color-inspection-hdr-help = Linear document RGB and luminance Y. Dashed line: reference white (0 EV). Zero and negative values are counted separately. Includes visible paper; excludes transparent pixels and display overlays.

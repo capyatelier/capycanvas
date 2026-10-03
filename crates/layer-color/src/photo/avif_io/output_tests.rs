@@ -1,4 +1,5 @@
 use super::*;
+use layer_core::color::hdr;
 use crate::photo::gainmap::test_guide;
 use crate::photo::test_support::{hdr_pixels, rows as source_rows};
 use std::io::Cursor;
@@ -33,15 +34,9 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
             (90, 0.035, 0.004), (99, 0.02, 0.002), (100, 0.01, 0.001),
         ] {
             let (bytes, stats) = encode(
-                extent,
-                RgbSpace::Srgb,
-                Default::default(),
-                &test_guide(extent, rows),
-                quality,
+                GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &test_guide(extent, rows), matte: None, clip: false },
+                GainMapEncodeOptions { quality, memory: PhotoMemoryBudget { source_bytes: 128 * 1024 * 1024, decode_bytes: 128 * 1024 * 1024, encode_bytes: 128 * 1024 * 1024 } },
                 &crate::photo::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
-                None,
-                false,
-                128 * 1024 * 1024,
                 &cancel,
                 rows,
             )
@@ -95,15 +90,9 @@ fn rust_avif_export_checks_admission_cancellation_and_pixel_errors() {
     let guide = test_guide([23, 17], rows);
     let attempt = |budget, read| {
         encode(
-            [23, 17],
-            RgbSpace::Srgb,
-            Default::default(),
-            &guide,
-            90,
+            GainMapRender { extent: [23, 17], space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: false },
+            GainMapEncodeOptions { quality: 90, memory: PhotoMemoryBudget { source_bytes: budget, decode_bytes: budget, encode_bytes: budget } },
             &Default::default(),
-            None,
-            false,
-            budget,
             &cancel,
             read,
         )
@@ -123,17 +112,11 @@ fn rust_avif_export_checks_admission_cancellation_and_pixel_errors() {
     };
     assert!(
         encode(
-            [8, 8],
-            RgbSpace::Srgb,
-            Default::default(),
-            &test_guide([8, 8], rows),
-            90,
+            GainMapRender { extent: [8, 8], space: RgbSpace::Srgb, rendition: Default::default(), guide: &test_guide([8, 8], rows), matte: None, clip: false },
+            GainMapEncodeOptions { quality: 90, memory: PhotoMemoryBudget { source_bytes: 128 * 1024 * 1024, decode_bytes: 128 * 1024 * 1024, encode_bytes: 128 * 1024 * 1024 } },
             &Default::default(),
-            None,
-            false,
-            128 * 1024 * 1024,
             &cancel,
-            bad
+            bad,
         )
         .is_err()
     );
@@ -145,16 +128,12 @@ fn rust_avif_preview_preserves_hdr_when_the_authored_sdr_changes() {
     let extent = [23, 17];
     let capture = |quality, exposure| {
         preview(
-            extent,
-            [12, 12],
-            RgbSpace::Srgb,
-            hdr::SdrRendition {
+            GainMapRender { extent, space: RgbSpace::Srgb, rendition: hdr::SdrRendition {
                 exposure,
                 ..Default::default()
-            },
-            &test_guide(extent, rows),
+            }, guide: &test_guide(extent, rows), matte: None, clip: true },
+            [12, 12],
             quality,
-            None,
             &cancel,
             rows,
         )

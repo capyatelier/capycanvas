@@ -47,7 +47,7 @@ impl Validator {
                     .replace("STATUS_BINDING", &tiles_per_dispatch.to_string())
                     .replace("VALIDATE", expression)
             );
-            crate::Deferred::compute(&device, "native publication validation", &pipeline_layout, &crate::Deferred::wgsl(&device, "native publication validation", source), "main")
+            crate::Deferred::compute(device, "native publication validation", &pipeline_layout, &crate::Deferred::wgsl(device, "native publication validation", source), "main")
         });
         Self {
             layout,
@@ -55,6 +55,7 @@ impl Validator {
             tiles_per_dispatch,
         }
     }
+    #[expect(clippy::mutable_key_type, reason = "Texture equality and hashing use immutable GPU handle identities")]
     pub fn validate(inputs: &[(&wgpu::Texture, RasterTile)]) -> Result<(), GpuRasterError> {
         // Reject unexpected/aliased live storage before recording any promotion.
         let mut identities = std::collections::HashSet::new();

@@ -29,7 +29,7 @@ internal class ClipboardController(private val host: CanvasHost, private val app
     }
     private val clipboard = application.getSystemService(ClipboardManager::class.java)
     private val directory = File(application.cacheDir, "clipboard")
-    var progress by mutableStateOf<String?>(null); private set
+    var progress by mutableStateOf<Int?>(null); private set
     var cancelling by mutableStateOf(false); private set
     private var control = 0L
 
@@ -60,7 +60,7 @@ internal class ClipboardController(private val host: CanvasHost, private val app
                 val nonce = UUID.randomUUID().toString()
                 control = Native.captureControl()
                 cancelling = false
-                if (Native.clipTaskLarge(task)) progress = Native.clipTaskProgress(task)
+                if (Native.clipTaskLarge(task)) progress = id
                 val running = task; task = 0L
                 val file = File(directory, "$nonce.png")
                 clip = withContext(Dispatchers.IO) {
@@ -80,7 +80,7 @@ internal class ClipboardController(private val host: CanvasHost, private val app
             } catch (e: CancellationException) {
                 withContext(NonCancellable) { finish(id, false, null) }; throw e
             } catch (e: Exception) {
-                finish(id, false, if (cancelling) null else e.message ?: "Could not copy")
+                finish(id, false, if (cancelling) null else e.message ?: host.bootstrap!!.getString("action_failed"))
             } finally {
                 withContext(NonCancellable + Dispatchers.IO) {
                     if (task != 0L) Native.clipTaskFree(task)
@@ -97,23 +97,29 @@ internal class ClipboardController(private val host: CanvasHost, private val app
         val nonce = nonce() ?: return false
         if (host.withNative { Native.clipNonce(it) } != nonce) return false
         try { host.withNative { Native.pasteClip(it, request.getInt("id")) }; host.documentChanged() }
-        catch (e: Exception) { finish(request.getInt("id"), false, e.message ?: "Could not paste") }
+        catch (e: Exception) { finish(request.getInt("id"), false, e.message ?: host.bootstrap!!.getString("action_failed")) }
         return true
     }
 
     private suspend fun finish(id: Int, success: Boolean, message: String?) {
         try { host.withNative { Native.documentComplete(it, id, success, message?.let(JSONObject::quote) ?: "null") }; host.documentChanged() }
-        catch (e: Exception) { host.reportActionError(e.message ?: "Could not finish the copy") }
+        catch (e: Exception) { host.reportActionError(e.message ?: host.bootstrap!!.getString("action_failed")) }
     }
 }
 
 @Composable internal fun ClipboardProgress(clipboard: ClipboardController) {
     val host = LocalCanvasHost.current
-    val label = clipboard.progress ?: return
+    val id = clipboard.progress ?: return
+    var label by remember(id) { mutableStateOf("") }
+    LaunchedEffect(id, host.languageTag) {
+        val language = host.languageTag
+        val next = host.withNative { Native.documentRequestTitle(it, id) }.orEmpty()
+        if (language == host.languageTag && id == clipboard.progress) label = next
+    }
     androidx.compose.ui.window.Popup(alignment = Alignment.BottomCenter) {
         Surface(Modifier.padding(12.dp).testTag("clipboard-progress"), shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (clipboard.cancelling) "Cancelling…" else label)
+                Text(if (clipboard.cancelling) host.catalog.getJSONObject("document_delivery_copy").getString("cancelling") else label)
                 TextButton(clipboard::cancel, enabled = !clipboard.cancelling) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
             }
         }

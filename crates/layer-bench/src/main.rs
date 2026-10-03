@@ -406,7 +406,7 @@ impl Canvas {
         self.engine
             .apply_edit(Edit::InsertLayer {
                 index,
-                layer: Layer::paint(id, name),
+                layer: Box::new(Layer::paint(id, name)),
             })
             .map_err(|e| e.to_string())?;
         Ok(id.0)

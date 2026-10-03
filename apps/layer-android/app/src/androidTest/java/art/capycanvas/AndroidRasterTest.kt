@@ -2429,6 +2429,7 @@ class AndroidRasterTest {
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
     @Test fun profileLibraryKeepsExactCopiesAndPresetOwnership() {
+        val copy=host.catalog.getJSONObject("profile_copy")
         val wide=builtinRecipe(1)
         png("profile-library.png",wide);open(File(files,"profile-library.png"))
         val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}
@@ -2441,7 +2442,7 @@ class AndroidRasterTest {
             assertArrayEquals(bytes,file.readBytes())
             assertEquals(array.toString(),ProfileStore.get(activity,id).getJSONObject("profile").getJSONArray("Icc").toString())
             file.writeBytes(byteArrayOf(1,2,3));assertTrue(ProfileStore.list(activity)[0].has("issue"))
-            try {ProfileStore.get(activity,id);fail("Corrupt profile was accepted")}catch(e:Exception){assertTrue(e.message.orEmpty().contains("changed"))}
+            try {ProfileStore.get(activity,id);fail("Corrupt profile was accepted")}catch(e:Exception){assertEquals("ProfileChanged",(e as ColorFeatureFailure).reason)}
             ProfileStore.import(activity,bytes)
             val color=native {JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
             val recipe=ColorPreferencesStore.presets(activity,color,obj("type" to "get","index" to 0)).getJSONObject("recipe").put("profile",profile)
@@ -2453,19 +2454,21 @@ class AndroidRasterTest {
         }
         DocumentController.nativeFileJobsForTest=false
         compose.runOnUiThread {host.invoke("export_document")}
-        compose.waitUntil(10_000) {compose.onAllNodesWithText("Saved Profiles…").fetchSemanticsNodes().isNotEmpty()}
-        compose.onNodeWithText("Saved Profiles…").performScrollTo().performClick()
-        compose.waitUntil(10_000) {compose.onAllNodesWithText("Use Profile").fetchSemanticsNodes().isNotEmpty()}
-        compose.onNodeWithText("Use Profile").performClick()
-        compose.waitUntil(10_000) {compose.onAllNodesWithText("Color Profile Library").fetchSemanticsNodes().isEmpty()}
+        compose.waitUntil(10_000) {compose.onAllNodesWithText(copy.getString("saved_dialog")).fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText(copy.getString("saved_dialog")).performScrollTo().performClick()
+        compose.waitUntil(10_000) {compose.onAllNodesWithText(copy.getString("use_profile")).fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText(copy.getString("use_profile")).performClick()
+        compose.waitUntil(10_000) {compose.onAllNodesWithText(copy.getString("library_title")).fetchSemanticsNodes().isEmpty()}
         compose.onNodeWithText("Cancel").performClick()
         compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
         DocumentController.nativeFileJobsForTest=true
         compose.runOnUiThread {host.dispatch(obj("type" to "open_settings","page" to "color"))}
-        compose.onNodeWithText("Manage Color Profiles…").performScrollTo().performClick()
-        compose.waitUntil(10_000) {compose.onAllNodesWithText("Remove").fetchSemanticsNodes().isNotEmpty()}
-        compose.onNodeWithText("Remove").performClick()
-        compose.waitUntil(10_000) {compose.onAllNodesWithText("No imported profiles").fetchSemanticsNodes().isNotEmpty()}
+        val manage=copy.getString("manage")
+        compose.waitUntil(10_000) {compose.onAllNodesWithText(manage).fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText(manage).performScrollTo().performClick()
+        compose.waitUntil(10_000) {compose.onAllNodesWithText(copy.getString("remove")).fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText(copy.getString("remove")).performClick()
+        compose.waitUntil(10_000) {compose.onAllNodesWithText(copy.getString("empty")).fetchSemanticsNodes().isNotEmpty()}
         compose.onNodeWithTag("profile-library-done").performClick()
         compose.runOnUiThread {host.dispatch(obj("type" to "close_settings"))}
         assertNull(host.failure)

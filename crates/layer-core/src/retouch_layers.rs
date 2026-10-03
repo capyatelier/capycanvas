@@ -104,7 +104,7 @@ impl Document {
             kind: LayerOperationKind::Fill { color: [gray, gray, gray, 1.], alpha_locked: false },
         };
         Ok(RetouchLayerPlan {
-            edits: vec![Edit::InsertLayer { index, layer }, Edit::SetActiveLayer { id }],
+            edits: vec![Edit::InsertLayer { index, layer: Box::new(layer) }, Edit::SetActiveLayer { id }],
             operations: vec![(id, fill)],
             active: id,
         })
@@ -189,9 +189,9 @@ impl Document {
         };
         Ok(RetouchLayerPlan {
             edits: vec![
-                Edit::InsertLayer { index, layer: group },
-                Edit::InsertLayer { index: index + 1, layer: part(high, high_name, LayerBlend::LinearLight) },
-                Edit::InsertLayer { index: index + 2, layer: part(low, low_name, LayerBlend::Normal) },
+                Edit::InsertLayer { index, layer: Box::new(group) },
+                Edit::InsertLayer { index: index + 1, layer: Box::new(part(high, high_name, LayerBlend::LinearLight)) },
+                Edit::InsertLayer { index: index + 2, layer: Box::new(part(low, low_name, LayerBlend::Normal)) },
                 Edit::SetLayerVisibility { id: target, visible: false },
                 Edit::SetActiveLayer { id: high },
             ],

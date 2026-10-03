@@ -1,26 +1,31 @@
+import {bindCopy,liveCopy} from "./localization.js";
 import { createWorkspaceSwitcher } from "./workspace-switcher.js";
 export function createWorkspaceManager({ app, store, applyChange, element, button, icon, message }) {
+  let view;
+  const copy=liveCopy(app,"catalog").native_copy.header,common=liveCopy(app,"bootstrap_view").common;
+  const localizedButton=(read,run,classes)=>bindCopy(button("",run,classes),read);
   const dialog = element("dialog", "workspace-manager"), formDialog = element("dialog", "workspace-form");
   const heading = element("h2"), header = element("header", "dialog-header");
+  bindCopy(heading,()=>view?.title??"");
   heading.id = "workspace-manager-title"; dialog.setAttribute("aria-labelledby", heading.id);
   const add = button("", () => send({ type: "form", action: { type: "new" } }), "workspace-add");
-  const close = button("", cancel, "dialog-close"); close.setAttribute("aria-label", "Close");
+  const close = button("", cancel, "dialog-close"); bindCopy(close,()=>common.close,"ariaLabel");
   close.append(element("span"));
   dialog.tabIndex = -1;
   header.append(heading, add, close);
-  const intro = element("p", "workspace-intro");
+  const intro = element("p", "workspace-intro");bindCopy(intro,()=>view?.intro??"");
   const list = element("div", "workspace-list"); list.setAttribute("role", "listbox");
   const error = element("p", "workspace-error"), footer = element("footer");
-  const primary = button("", () => send({ type: "confirm" }), "suggested-action");
-  const retry = button("Retry", () => send({type:"retry"})); retry.hidden = true;
-  footer.append(button("Cancel", cancel), retry, primary); dialog.append(header, intro, list, error, footer);
+  const primary = localizedButton(()=>view?.primary??"", () => send({ type: "confirm" }), "suggested-action");
+  const retry = localizedButton(()=>copy.retry, () => send({type:"retry"})); retry.hidden = true;
+  footer.append(localizedButton(()=>common.cancel,cancel), retry, primary); dialog.append(header, intro, list, error, footer);
   document.body.append(dialog, formDialog);
-  const switcher = createWorkspaceSwitcher({dialog, list, element, button, icon, send, getView:() => view,
+  const switcher = createWorkspaceSwitcher({app,dialog, list, element, button, icon, send, getView:() => view,
     redraw:() => { lastView = null; render(); }});
-  const recoveryButton = button("Workspace save failed…", () => { dismissedError = null; showRecovery(view.error); }, "workspace-recovery");
+  const recoveryButton = localizedButton(()=>view?.error??"", () => { dismissedError = null; showRecovery(view.error); }, "workspace-recovery");
   recoveryButton.hidden = true; switcher.root.after(recoveryButton);
   let switcherRevision;
-  let view, lastView, pageKey, rowsKey, formKey, timer, formName, formError, formSubmit, previousFocus, observePending = false;
+  let lastView, pageKey, rowsKey, formKey, timer, formName, formError, formSubmit, previousFocus, observePending = false;
   const expectedCloses = new WeakMap();
   const channel = new BroadcastChannel("capycanvas.workspace.windows");
   channel.addEventListener("message", e => {
@@ -48,20 +53,20 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   function render() {
     const json = app.workspace_view(); if (json === lastView) return; lastView = json; view = JSON.parse(json);
     if (!view) return;
-    recoveryButton.hidden = !view.error;
+    bindCopy(recoveryButton,()=>view?.error??"");recoveryButton.hidden = !view.error;
     if (!view.error) { dismissedError = null; if (recovery?.open) recovery.close(); }
     switcher.render(view);
     if (switcherRevision != null && switcherRevision !== view.switcher_revision) channel.postMessage({switcher:true});
     switcherRevision = view.switcher_revision;
-    if (view.focus_window) { channel.postMessage({ focus: view.focus_window.id }); message("The workspace is open in another tab or window. Switch to that window to continue."); }
+    if (view.focus_window) { channel.postMessage({ focus: view.focus_window.id }); message(copy.owned_elsewhere); }
     if (view.page !== pageKey) { pageKey = view.page; list.scrollTop = 0; }
-    heading.textContent = view.title; intro.textContent = view.intro; intro.hidden = !view.intro;
+    bindCopy(heading,()=>view?.title??"");bindCopy(intro,()=>view?.intro??"");intro.hidden = !view.intro;
     add.hidden = view.page === "history"; add.disabled = view.busy || view.switcher_busy;
-    add.setAttribute("aria-label", "New Workspace");
-    primary.textContent = view.primary; primary.disabled = view.busy || view.switcher_busy || !view.enabled;
+    bindCopy(add,()=>copy.new_workspace,"ariaLabel");
+    bindCopy(primary,()=>view?.primary??""); primary.disabled = view.busy || view.switcher_busy || !view.enabled;
     retry.hidden = !view.retry; retry.disabled = view.busy;
-    error.textContent = view.switcher_error || view.error || ""; error.hidden = !error.textContent;
-    const newRowsKey = JSON.stringify([view.page, view.rows, view.switcher.map(row => row.id), view.id]);
+    bindCopy(error,()=>view?.switcher_error||view?.error||"");error.hidden = !error.textContent;
+    const newRowsKey = JSON.stringify([view.page, view.rows.map(({id,current,subtitle,actions})=>({id,current,subtitle:!!subtitle,actions:actions.map(({action,enabled,primary})=>({action,enabled,primary}))})), view.switcher.map(row => row.id), view.id]);
     if (newRowsKey !== rowsKey && !switcher.dragging()) {
       const focusedId = document.activeElement.closest?.(".workspace-row")?.dataset.id;
       switcher.closeMenu();
@@ -70,8 +75,8 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
       for (const row of view.rows) {
         const container = element("div", "workspace-row"), select = button("", () => send({ type: "select", id: row.id }), "workspace-choice");
         select.dataset.id = row.id; select.setAttribute("role", "option");
-        select.append(element("span", "workspace-row-title", row.title));
-        if (row.subtitle) select.append(element("span", "workspace-row-subtitle", row.subtitle));
+        const title=element("span","workspace-row-title");bindCopy(title,()=>view?.rows.find(item=>item.id===row.id)?.title??row.title);select.append(title);
+        if(row.subtitle){const subtitle=element("span","workspace-row-subtitle");bindCopy(subtitle,()=>view?.rows.find(item=>item.id===row.id)?.subtitle??"");select.append(subtitle);}
         // Enter/double-click invoke only selection, never the confirmation button.
         container.append(select);
         if (view.page === "workspaces") switcher.decorate(container, select, row, view);
@@ -80,26 +85,26 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
       if (focusedId) [...list.querySelectorAll('.workspace-choice')].find(node=>node.dataset.id===focusedId)?.focus({preventScroll:true});
       list.scrollTop = scroll;
     }
-    for (const row of list.querySelectorAll(".workspace-choice")) { row.setAttribute("aria-selected", String(row.dataset.id === view.selected)); row.parentElement.dataset.selected = String(row.dataset.id === view.selected); row.disabled = view.busy; }
+    for (const row of list.querySelectorAll(".workspace-choice")) { bindCopy(row.querySelector(".workspace-row-title"),()=>view?.rows.find(item=>item.id===row.dataset.id)?.title??"");const subtitle=row.querySelector(".workspace-row-subtitle");if(subtitle)bindCopy(subtitle,()=>view?.rows.find(item=>item.id===row.dataset.id)?.subtitle??"");row.setAttribute("aria-selected", String(row.dataset.id === view.selected)); row.parentElement.dataset.selected = String(row.dataset.id === view.selected); row.disabled = view.busy; }
     const form = view.prompt;
     const key = form ? JSON.stringify([view.prompt_action, form.name]) : null;
     if (key !== formKey) {
       formKey = key; formDialog.replaceChildren(); formName = null;
       if (form) {
-        const heading = element("h2", "", form.title); heading.id = "workspace-form-title";
+        const heading = element("h2");bindCopy(heading,()=>JSON.parse(app.workspace_view()).prompt?.title??""); heading.id = "workspace-form-title";
         formDialog.setAttribute("aria-labelledby", heading.id); formDialog.append(heading);
-        if (form.message) formDialog.append(element("p", "", form.message));
+        if(form.message){const message=element("p");bindCopy(message,()=>JSON.parse(app.workspace_view()).prompt?.message??"");formDialog.append(message);}
         if (form.name != null) {
-          const label = element("label", "", "Name"); formName = element("input"); formName.value = form.name; formName.maxLength = 100;
-          formName.setAttribute("aria-label", "Name"); label.append(formName); formDialog.append(label);
+          const label = element("label");bindCopy(label,()=>common.name); formName = element("input"); formName.value = form.name; formName.maxLength = 100;
+          bindCopy(formName,()=>common.name,"ariaLabel"); label.append(formName); formDialog.append(label);
         }
         formError = element("p", "workspace-error"); const footer = element("footer");
         formSubmit = button(form.confirm, () => send({ type: "submit", name: formName?.value || "" }), "suggested-action");
         if (form.destructive) formSubmit.classList.add("destructive-action");
-        footer.append(button("Cancel", cancel), formSubmit); formDialog.append(formError, footer);
+        footer.append(localizedButton(()=>common.cancel,cancel), formSubmit); formDialog.append(formError, footer);
       }
     }
-    if (form) { formError.textContent = view.error || ""; formSubmit.disabled = view.busy || view.switcher_busy; formSubmit.textContent = view.retry && view.prompt_action?.type !== "save_as_new" ? "Retry" : form.confirm; }
+    if (form) { bindCopy(formError,()=>view?.error??"");formSubmit.disabled = view.busy || view.switcher_busy;bindCopy(formSubmit,()=>view?.retry&&view?.prompt_action?.type!=="save_as_new"?copy.retry:view?.prompt?.confirm??""); }
     show(dialog, !!view.page); show(formDialog, !!form);
     if (!view.page && !form && view.error) showRecovery(view.error);
     switcher.root.dispatchEvent(new Event("workspace-view-changed"));
@@ -108,15 +113,15 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   function showRecovery(text) {
     if (text === dismissedError) return;
     if (!recovery) {
-      recovery = element("dialog", "workspace-form"); recovery.setAttribute("aria-label", "Workspace could not be saved");
+      recovery = element("dialog", "workspace-form"); bindCopy(recovery,()=>copy.workspaces,"ariaLabel");
       recoveryText = element("p"); const footer = element("footer");
       const hide = () => { recovery.close(); };
       recovery.addEventListener("cancel", e => { e.preventDefault(); dismissedError = view.error; hide(); send({type:"resume"}); });
-      footer.append(button("Keep Open", () => { dismissedError = view.error; hide(); send({type:"resume"}); }), button("Retry", () => { dismissedError = null; hide(); send({ type: "retry" }); }),
-        button("Save as New Workspace…", () => { hide(); send({ type: "form", action: { type: "save_as_new" } }); }, "suggested-action"));
-      recovery.append(element("h2", "", "Workspace could not be saved"), recoveryText, footer); document.body.append(recovery);
+      footer.append(localizedButton(()=>common.keep_open, () => { dismissedError = view.error; hide(); send({type:"resume"}); }), localizedButton(()=>copy.retry, () => { dismissedError = null; hide(); send({ type: "retry" }); }),
+        localizedButton(()=>copy.save_as_new_workspace, () => { hide(); send({ type: "form", action: { type: "save_as_new" } }); }, "suggested-action"));
+      const title=element("h2");bindCopy(title,()=>copy.workspaces);recovery.append(title,recoveryText,footer); document.body.append(recovery);
     }
-    recoveryText.textContent = text; if (!recovery.open) recovery.showModal();
+    bindCopy(recoveryText,()=>view?.error??"");if (!recovery.open) recovery.showModal();
   }
   let startupReady = false;
   let resolveReady;
@@ -155,6 +160,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   window.addEventListener("beforeunload", e => { if (view?.dirty || view?.busy || view?.switcher_busy) { e.preventDefault(); e.returnValue = ""; } });
   return {
     ready,
+    localize(){view=JSON.parse(app.workspace_view());if(view)switcher.render(view);},
     wake,
     observe() { observePending = true; },
     send,

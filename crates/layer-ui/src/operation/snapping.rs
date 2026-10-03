@@ -43,7 +43,7 @@ impl Snapping {
         let mut delta = [0.; 2];
         self.guides.clear();
         let guide_bounds = self.targets.iter().fold(bounds, |all, (_, bounds)| all.union(*bounds)).outset(24. * units);
-        for axis in 0..2 {
+        for (axis, change) in delta.iter_mut().enumerate() {
             let from = components(bounds, axis);
             let factor = direction.map_or(1., |direction| if axis == 0 { direction.x } else { direction.y });
             if factor.abs() < 1e-5 { self.axes[axis] = None; continue; }
@@ -59,7 +59,7 @@ impl Snapping {
                 }}}
                 best
             });
-            if let Some(key) = self.axes[axis] { delta[axis] = distance(key); }
+            if let Some(key) = self.axes[axis] { *change = distance(key); }
         }
         let offset = if let Some(direction) = direction {
             let axis = (0..2).filter(|axis| self.axes[*axis].is_some()).min_by(|a, b| delta[*a].abs().total_cmp(&delta[*b].abs()));

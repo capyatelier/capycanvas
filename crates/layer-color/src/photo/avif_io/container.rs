@@ -259,7 +259,7 @@ impl<'a> Container<'a> {
                     let mut r = Reader::new(view.data);
                     let major = r.take(4)?;
                     r.take(4)?;
-                    if r.left() % 4 != 0 {
+                    if !r.left().is_multiple_of(4) {
                         return Err("Invalid AVIF brands".into());
                     }
                     let brands = || [major].into_iter().chain(r.data.chunks_exact(4));
@@ -278,10 +278,8 @@ impl<'a> Container<'a> {
                         return Err("Duplicate AVIF metadata".into());
                     }
                 }
-                b"moov" => {
-                    if me.movie.replace(view.data).is_some() {
-                        return Err("Duplicate AVIF movie".into());
-                    }
+                b"moov" if me.movie.replace(view.data).is_some() => {
+                    return Err("Duplicate AVIF movie".into());
                 }
                 _ => {}
             }

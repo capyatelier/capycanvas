@@ -2310,6 +2310,7 @@ impl WgpuRasterizer {
             self.paint_target_binding(&batch.style), target_offset)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Brush batch encoding keeps target, scissor, bind group, and instance offset explicit")]
     fn encode_batch_to_target(
         &self,
         encoder: &mut crate::submission::CommandEncoder,
@@ -5349,6 +5350,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "Brush pipeline recipes retain explicit shader entry, blend, format, and compilation mode")]
 fn brush_pipeline_format_recipe(
     mode: CompileMode,
     device: &PipelineDevice,
@@ -5403,6 +5405,7 @@ fn brush_pipeline_format_recipe(
     )
 }
 
+#[expect(clippy::too_many_arguments, reason = "Fullscreen pipeline recipes retain explicit shader entry, blend, format, and compilation mode")]
 fn fullscreen_pipeline_recipe(
     mode: CompileMode,
     device: &PipelineDevice,
@@ -5417,6 +5420,7 @@ fn fullscreen_pipeline_recipe(
     fullscreen_pipeline_targets_with_constants_recipe(mode, device, layout, shader, fragment_entry, &[Some(target)], &[], label)
 }
 
+#[expect(clippy::too_many_arguments, reason = "Fullscreen pipeline recipes retain explicit target states and specialization constants")]
 fn fullscreen_pipeline_targets_with_constants_recipe(
     mode: CompileMode,
     device: &PipelineDevice,

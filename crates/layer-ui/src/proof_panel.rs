@@ -47,17 +47,17 @@ pub fn sdr_control(mut recipe: layer_core::color::hdr::SdrRendition, part: u8, e
     }
     Ok(recipe)
 }
-pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, action: ProofAction) -> Result<crate::UiChange, String> {
+pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, action: ProofAction) -> Result<crate::UiChange, crate::ColorFeatureError> {
     match action {
-        ProofAction::Reveal => reveal(session),
+        ProofAction::Reveal => reveal(session).map_err(Into::into),
         ProofAction::Number { key, value, phase } => {
             let mut recipe = session.effective_sdr_rendition();
-            if !value.is_finite() { return Err("Invalid Proof value".into()); }
+            if !value.is_finite() { return Err(crate::ColorFeatureError::ProofInvalidValue); }
             match key.as_str() {
                 "exposure" => recipe.exposure = value as f32,
                 "highlight_color" => recipe.highlight_color = value as f32,
                 "balance" | "contrast" => {
-                    if !(-1. ..=1.).contains(&value) { return Err("Invalid Proof value".into()); }
+                    if !(-1. ..=1.).contains(&value) { return Err(crate::ColorFeatureError::ProofInvalidValue); }
                     let mut pad = sdr_pad_values(recipe);
                     pad[usize::from(key == "contrast")] = value;
                     recipe = sdr_from_pad(recipe, pad);
@@ -86,8 +86,8 @@ pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>,
     }
 }
 
-fn commit_control<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, recipe: layer_core::color::hdr::SdrRendition, phase: Option<crate::ContactPhase>) -> Result<crate::UiChange, String> {
-    recipe.validate().map_err(str::to_string)?;
+fn commit_control<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, recipe: layer_core::color::hdr::SdrRendition, phase: Option<crate::ContactPhase>) -> Result<crate::UiChange, crate::ColorFeatureError> {
+    recipe.validate().map_err(|_| crate::ColorFeatureError::ProofInvalidRendition)?;
     if let Some(phase) = phase {
         return session.edit_sdr_rendition(phase, recipe);
     }
@@ -228,7 +228,7 @@ impl PrintProofSettings {
         Ok(Self {
             profile: Some(ExportProfile {
                 name: recipe.name.clone(),
-                channels: layer_color::profile_channels(&recipe.profile)?,
+                channels: layer_color::profile_declared_channels(&recipe.profile)?,
                 profile: recipe.profile.clone(),
             }),
             intent: recipe.conversion.intent,
@@ -239,8 +239,8 @@ impl PrintProofSettings {
     pub fn bpc_available(&self) -> bool {
         self.intent != RenderingIntent::AbsoluteColorimetric
     }
-    pub fn recipe(&self) -> Result<ProofRecipe, String> {
-        let p = self.profile.as_ref().ok_or("Choose a print profile")?;
+    pub fn recipe(&self) -> Result<ProofRecipe, crate::ColorFeatureError> {
+        let p = self.profile.as_ref().ok_or(crate::ColorFeatureError::ProofChoosePrintProfile)?;
         let mut recipe = ProofRecipe::new(p.name.clone(), p.profile.clone());
         recipe.conversion.intent = self.intent;
         recipe.conversion.black_point_compensation = self.bpc && self.bpc_available();
@@ -550,6 +550,17 @@ pub fn sdr_pad_values(recipe: layer_core::color::hdr::SdrRendition) -> [f64; 2] 
     [f64::from(recipe.balance), f64::from(recipe.contrast.log2())]
 }
 
+pub fn localized_numbers(localizer: &crate::Localizer) -> serde_json::Value {
+    let mut controls = sdr_number_controls();
+    controls[1].numeric.endpoint_labels = Some([localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_WHITE).to_string(), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_COLOR).to_string()]);
+    serde_json::Value::Array(controls.into_iter().zip([localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_BRIGHTNESS), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_HIGHLIGHT_COLOR)]).map(|(control, label)|
+        serde_json::json!({"key":control.key,"label":label,"numeric":control.numeric})).collect())
+}
+pub fn localized_pad(localizer: &crate::Localizer) -> serde_json::Value {
+    serde_json::json!({"axes":sdr_tone_pad().axes.into_iter().zip([localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_BALANCE),localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_CONTRAST)]).map(|(axis,label)|
+        serde_json::json!({"key":axis.key,"label":label,"numeric":axis.numeric,"default":axis.default})).collect::<Vec<_>>()})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,15 +712,27 @@ mod tests {
             }
         }
     }
-}
 
-pub fn localized_numbers(localizer: &crate::Localizer) -> serde_json::Value {
-    let mut controls = sdr_number_controls();
-    controls[1].numeric.endpoint_labels = Some([localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_WHITE).to_string(), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_COLOR).to_string()]);
-    serde_json::Value::Array(controls.into_iter().zip([localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_BRIGHTNESS), localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_HIGHLIGHT_COLOR)]).map(|(control, label)|
-        serde_json::json!({"key":control.key,"label":label,"numeric":control.numeric})).collect())
-}
-pub fn localized_pad(localizer: &crate::Localizer) -> serde_json::Value {
-    serde_json::json!({"axes":sdr_tone_pad().axes.into_iter().zip([localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_BALANCE),localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_CONTRAST)]).map(|(axis,label)|
-        serde_json::json!({"key":axis.key,"label":label,"numeric":axis.numeric,"default":axis.default})).collect::<Vec<_>>()})
+    #[test]
+    fn print_profile_name_fallback_is_presentation_only_for_every_language() {
+        use crate::{Localizer, MessageId, UiLanguage};
+        let mut settings = PrintProofSettings { profile: Some(ExportProfile::builtin(RgbSpace::Srgb)), ..Default::default() };
+        settings.profile.as_mut().unwrap().name.clear();
+        let unnamed = settings.recipe().unwrap();
+        for language in UiLanguage::ALL {
+            let l = Localizer::shared(language);
+            let literal = l.text(MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string();
+            assert_eq!(settings.profile.as_ref().unwrap().display_name(&l), literal);
+            assert_eq!(settings.recipe().unwrap(), unnamed);
+            let mut named = settings.clone();
+            named.profile.as_mut().unwrap().name = literal.clone();
+            let recipe = named.recipe().unwrap();
+            for display_language in UiLanguage::ALL {
+                assert_eq!(named.profile.as_ref().unwrap().display_name(&Localizer::shared(display_language)), literal);
+                assert_eq!(named.recipe().unwrap(), recipe);
+                let restored: PrintProofSettings = serde_json::from_value(serde_json::to_value(&named).unwrap()).unwrap();
+                assert_eq!(restored.recipe().unwrap().name, literal);
+            }
+        }
+    }
 }

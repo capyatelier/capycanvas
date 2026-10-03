@@ -30,6 +30,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -95,10 +97,11 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
             "compact" to (if (kind in listOf("menu_labels", "workspaces", "document_title")) tile else natural) + grip)
     })
     var bankHeight by remember { mutableFloatStateOf(0f) }
-    var overflowMenu by remember { mutableStateOf<(() -> JSONObject?)?>(null) }
+    var overflowMenu by remember { mutableStateOf<JSONObject?>(null) }
+    var overflowSource by remember { mutableStateOf("") }
     val modelKey = model.toString()
     LaunchedEffect(modelKey, editing) {
-        input.finish(true); input.overflow = null; input.context = null
+        input.finish(true); input.overflow = null; input.closeMenu()
         if (!editing || entries.none { it.getInt("id") == input.selected }) input.selected = null
     }
     BackHandler(editing && snapshot.objectOrNull("preferences") == null && snapshot.objectOrNull("picker") == null) {
@@ -185,8 +188,8 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
                                 val entry = entries.first { it.getInt("id") == id }
                                 input.overflow = null
                                 when (entry.getJSONObject("item").getString("kind")) {
-                                    "menu", "menu_labels" -> host.primaryMenu { loaded -> overflowMenu = { loaded } }
-                                    "workspaces" -> overflowMenu = { workspaceSwitcherMenu(host.workspaceManager) }
+                                    "menu", "menu_labels" -> { overflowSource = "primary"; host.primaryMenu { overflowMenu = it } }
+                                    "workspaces" -> { overflowSource = "workspaces"; overflowMenu = workspaceSwitcherMenu(host.workspaceManager) }
                                     else -> activateHeader(host, entry)
                                 }
                             }.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -211,12 +214,16 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         PopupOwner(input.context != null)
         input.context?.let { menu ->
             Box(Modifier.placed(input.contextBounds.headerBounds(), density)) {
-                WorkspaceMenu(host, input.contextProvider?.invoke() ?: menu, preserveContact = input.contact) { input.context = null }
+                WorkspaceMenu(host, input.contextProvider?.invoke() ?: menu, preserveContact = input.contact,
+                    copy = if (input.contextProvider == null) ({ input.contextRequest?.let { host.menuCopy(it) } }) else null, dismiss = input::closeMenu)
             }
         }
         PopupOwner(overflowMenu != null)
-        overflowMenu?.invoke()?.let { menu ->
-            Box(Modifier.offset(6.dp, height.dp)) { WorkspaceMenu(host, menu) { overflowMenu = null } }
+        overflowMenu?.let { menu ->
+            Box(Modifier.offset(6.dp, height.dp)) {
+                if (overflowSource == "workspaces") WorkspaceMenu(host, workspaceSwitcherMenu(host.workspaceManager)) { overflowMenu = null }
+                else WorkspaceMenu(host, menu, copy = { host.menuCopy(obj("type" to "application_menu", "menu" to "primary")) }) { overflowMenu = null }
+            }
         }
     }
 }
@@ -247,7 +254,10 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     }
     var menu by remember { mutableStateOf<JSONObject?>(null) }
     var menuLabel by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(compact, editing) { menu = null }
+    var menuBounds by remember { mutableStateOf(Rect.Zero) }
+    val menuAnchors = remember { mutableStateMapOf<String, Rect>() }
+    val density = LocalDensity.current.density
+    LaunchedEffect(editing) { menu = null }
     DisposableEffect(menu != null) {
         val ownsPopup = menu != null
         if (ownsPopup) input.dock.popup(true)
@@ -267,7 +277,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
             .focusRequester(focus).onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
         if (editing) Box(Modifier.width(20.dp).fillMaxHeight().testTag("header-grip-$id"), contentAlignment = Alignment.Center) { HeaderGrip(label) }
-        Box(Modifier.weight(1f).then(if (kind == "clock") Modifier.height(36.dp) else Modifier.fillMaxHeight()).clipToBounds()
+        Box(Modifier.weight(1f).onGloballyPositioned { menuBounds = it.boundsInRoot() }.then(if (kind == "clock") Modifier.height(36.dp) else Modifier.fillMaxHeight()).clipToBounds()
             .then(if (kind in listOf("document_title", "clock", "battery"))
                 Modifier.glass(TileShape, colors.headerSurface) else Modifier).then(if(kind=="document_title")Modifier.drawingDropTarget(host,!editing)else Modifier), contentAlignment = Alignment.Center) {
             val icon = when (kind) {
@@ -280,7 +290,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 kind == "menu_labels" && !compact -> Row(Modifier.height(36.dp).glass(SquircleShape(50), colors.headerSurface).padding(5.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
-                        Box {
+                        Box(Modifier.onGloballyPositioned { menuAnchors[application.getString("id")] = it.boundsInRoot() }) {
                             val menuId = application.getString("id")
                             HeaderButton(application.getString("label"), false, !editing, menu != null && menuLabel == menuId,
                                 Modifier.height(26.dp).testTag("application-menu-${application.getString("id")}"),
@@ -288,7 +298,6 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                                 onClick = { menuLabel = menuId; menu = application.getJSONObject("model") }) {
                                 Text(application.getString("label"), Modifier.padding(horizontal = 8.dp), maxLines = 1)
                             }
-                            if (menuLabel == menuId) menu?.let { WorkspaceMenu(host, it) { menu = null } }
                         }
                     }
                 }
@@ -303,8 +312,8 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     Modifier.fillMaxSize().testTag(if (kind == "menu_labels") "header-menu-labels-compact" else "header-control-$id"),
                     inBar = inBar, onClick = {
                         when (kind) {
-                            "menu", "menu_labels" -> host.primaryMenu { menu = it }
-                            "workspaces" -> menu = workspaceSwitcherMenu(host.workspaceManager)
+                            "menu", "menu_labels" -> { menuLabel = null; host.primaryMenu { menu = it } }
+                            "workspaces" -> { menuLabel = "workspaces"; menu = workspaceSwitcherMenu(host.workspaceManager) }
                             else -> activate()
                         }
                     }) {
@@ -315,7 +324,15 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
             }
             if (!editing && spec.optBoolean("has_variants")) ToolVariantsButton(host, anchor, label,
                 Modifier.align(Alignment.BottomEnd).testTag("header-variants-$id"))
-            if (kind != "menu_labels" || compact) menu?.let { WorkspaceMenu(host, if (kind == "workspaces") workspaceSwitcherMenu(host.workspaceManager) else it) { menu = null } }
+            menu?.let { opened ->
+                val anchor = if (!compact) menuLabel?.let { menuAnchors[it] } ?: menuBounds else menuBounds
+                Box(Modifier.align(Alignment.TopStart).offset { IntOffset((anchor.left - menuBounds.left).roundToInt(), (anchor.top - menuBounds.top).roundToInt()) }
+                    .size((anchor.width / density).dp, (anchor.height / density).dp)) {
+                    if (menuLabel == "workspaces") WorkspaceMenu(host, workspaceSwitcherMenu(host.workspaceManager)) { menu = null }
+                    else if (menuLabel != null) WorkspaceMenu(host, snapshot.array("application_menus").objects().first { it.getString("id") == menuLabel }.getJSONObject("model")) { menu = null }
+                    else WorkspaceMenu(host, opened, copy = { host.menuCopy(obj("type" to "application_menu", "menu" to "primary")) }) { menu = null }
+                }
+            }
         }
     }
 }

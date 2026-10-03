@@ -377,7 +377,7 @@ mod organization_tests {
         let mut doc = Document::new("groups", 100, 100, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         doc.apply(Edit::InsertLayer {
             index: 0,
-            layer: Layer::paint(LayerId(3), "Texture"),
+            layer: Box::new(Layer::paint(LayerId(3), "Texture")),
         })
         .unwrap();
         doc.layers[0].mask = Some(LayerMask::reveal_all(LayerId(99), Point { x: 7., y: 9. }));
@@ -397,7 +397,7 @@ mod organization_tests {
             .unwrap();
         doc.apply(Edit::InsertLayer {
             index: 0,
-            layer: Layer::paint(LayerId(4), "Outside"),
+            layer: Box::new(Layer::paint(LayerId(4), "Outside")),
         })
         .unwrap();
         // Flat storage need not be contiguous or parent-first after reparenting.
@@ -446,7 +446,7 @@ mod organization_tests {
         clip.properties.clipped = true;
         doc.apply(Edit::InsertLayer {
             index: 0,
-            layer: clip,
+            layer: Box::new(clip),
         })
         .unwrap();
         assert!(doc.delete_layers_edit(&[LayerId(1)]).is_err());
@@ -454,7 +454,7 @@ mod organization_tests {
         assert!(doc.delete_layers_edit(&[LayerId(1), LayerId(3)]).is_ok());
         doc.apply(Edit::InsertLayer {
             index: 0,
-            layer: Layer::paint(LayerId(4), "Other"),
+            layer: Box::new(Layer::paint(LayerId(4), "Other")),
         })
         .unwrap();
         let before = doc.layers.clone();
@@ -1277,7 +1277,7 @@ impl Document {
         group.properties.blend = blend;
         let mut edits = vec![Edit::InsertLayer {
             index: self.layers.iter().position(|l| l.id == top).unwrap(),
-            layer: group,
+            layer: Box::new(group),
         }];
         for &id in roots {
             let mut l = self.layer(id).unwrap().clone();
@@ -1553,10 +1553,9 @@ impl Document {
                 return Err(DocumentError::InvalidLayerOperation("Selection Layers cannot contain artwork"));
             }
         }
-        if let Some(color) = layer.properties.paper_color {
-            if layer.kind != LayerKind::Background || color.validate_working_spaces().is_err() {
-                return Err(DocumentError::InvalidLayerOperation("Invalid paper color"));
-            }
+        if let Some(color) = layer.properties.paper_color
+            && (layer.kind != LayerKind::Background || color.validate_working_spaces().is_err()) {
+            return Err(DocumentError::InvalidLayerOperation("Invalid paper color"));
         }
         if let Some(mask) = &layer.properties.selection_mask {
             if layer.kind != LayerKind::Selection { return Err(DocumentError::InvalidLayerOperation("Mask properties require a Selection Layer")); }

@@ -1,5 +1,7 @@
 use super::*;
 
+type Checkpoint<I> = (usize, I, Option<(I, usize)>);
+
 pub(super) trait Compositor {
     type Image;
     fn clear(&mut self, paper: bool) -> Self::Image;
@@ -11,7 +13,7 @@ pub(super) trait Compositor {
     fn effect(&mut self, chain: &[usize], input: Self::Image) -> Result<Self::Image, GpuRasterError>;
     fn has_content(&self, index: usize) -> bool;
     fn draw_normal(&mut self, _index: usize, _output: &Self::Image) -> Result<bool, GpuRasterError> { Ok(false) }
-    fn checkpoint(&mut self, _parent: Option<LayerId>) -> Option<(usize, Self::Image, Option<(Self::Image, usize)>)> { None }
+    fn checkpoint(&mut self, _parent: Option<LayerId>) -> Option<Checkpoint<Self::Image>> { None }
 }
 
 pub(super) fn has_content(r: &WgpuRasterizer, layer: &Layer) -> bool {

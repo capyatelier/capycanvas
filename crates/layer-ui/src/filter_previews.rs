@@ -226,7 +226,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else if driver.pending.is_some() {
             0
         } else {
-            ((driver.retry_at.saturating_sub(now_ns).max(IDLE_NS) + 999_999) / 1_000_000) as u32
+            driver.retry_at.saturating_sub(now_ns).max(IDLE_NS).div_ceil(1_000_000) as u32
         };
         let status = FilterPreviewStatus {
             key,

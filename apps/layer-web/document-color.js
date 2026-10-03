@@ -24,15 +24,20 @@ export async function chooseDocumentColor({app,dialog,element,button,gpuOperatio
       const dither=operation==="depth"?select(()=>copy.dither,[["None",()=>exportCopy.metadata_none],["Stochastic8",()=>copy.dither_stochastic]],"None"):null;
       const result=operation==="convert"?select(()=>copy.result,[["layers",()=>copy.editable_layers],["copy",()=>copy.flattened_copy]],"layers"):null;
       const intent=operation==="convert"?select(()=>exportCopy.intent,[["RelativeColorimetric",()=>exportCopy.relative],["Perceptual",()=>exportCopy.perceptual],["Saturation",()=>exportCopy.saturation],["AbsoluteColorimetric",()=>exportCopy.absolute]],"RelativeColorimetric"):null;
+      let phase="empty",failure=null,presentation=null;
       const status=element("p"),comparison=element("div","color-comparison"),footer=element("footer");
-      const apply=button(()=>source?(rasterize?copy.rasterize:copy.apply_profile):copy.common.apply,()=>{accepted=true;finish(true);},"suggested-action");apply.disabled=true;
+      const applyLabel=()=>source?(rasterize?copy.rasterize:presentation?.addsLayer?copy.add_source:copy.apply_profile):presentation?.isCopy?copy.save_copy:copy.common.apply;
+      const apply=button(applyLabel,()=>{accepted=true;finish(true);},"suggested-action");apply.disabled=true;
       const cancel=button(()=>copy.common.cancel,()=>{control?.cancel();finish(null);});
-      const invalidate=()=>{candidate?.free();candidate=null;apply.disabled=true;comparison.replaceChildren();status.textContent=copy.preview_help;};
-      if(profile){const load=button(()=>profilesCopy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;profile.append(option);profile.value=option.value;invalidate();}catch(error){status.textContent=String(error);}});const saved=button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;profile.append(option);profile.value=option.value;invalidate();}catch(error){status.textContent=String(error);}});inputs.push(load,saved);form.append(load,saved);}
+      const statusLabel=()=>{if(failure)return app.color_feature_error_copy(failure,true);if(phase==="preparing")return copy.preparing;if(phase==="empty")return "";if(!presentation)return copy.preview_help;const preview=presentation.clipped?copy.outside_gamut:copy.composition_preview;return source?app.color_source_preview(app.source_profile_name_copy(presentation.sourceProfile),preview,presentation.addsLayer):preview;};
+      const present=()=>{bindCopy(status,statusLabel);bindCopy(apply,applyLabel);};
+      const fail=error=>{failure=error;present();};
+      const invalidate=()=>{candidate?.free();candidate=null;presentation=null;failure=null;phase="draft";apply.disabled=true;comparison.replaceChildren();present();};
+      if(profile){const load=button(()=>profilesCopy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",()=>app.profile_name_copy(imported.name));option.value=profiles.length-1;profile.append(option);profile.value=option.value;invalidate();}catch(error){fail(error);}});const saved=button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;profiles.push(imported.profile);const option=element("option","",()=>app.profile_name_copy(imported.name));option.value=profiles.length-1;profile.append(option);profile.value=option.value;invalidate();}catch(error){fail(error);}});inputs.push(load,saved);form.append(load,saved);}
       inputs.forEach(node=>node.onchange=invalidate);
       const prepare=()=>{
         if(running)return;invalidate();control?.free();control=app.capture_control();
-        inputs.forEach(node=>node.disabled=true);preview.disabled=true;status.textContent=copy.preparing;
+        inputs.forEach(node=>node.disabled=true);preview.disabled=true;phase="preparing";present();
         const choice=source?(rasterize?null:profiles[Number(profile.value)]):history?null:operation==="assign"?{Assign:space.value}:operation==="depth"?{Depth:{depth:depth.value,dither:depth.value==="U8"?dither.value:"None"}}:{Convert:{space:space.value,options:{intent:intent.value,black_point_compensation:false}}};
         running=(async()=>{
           try {
@@ -42,25 +47,23 @@ export async function chooseDocumentColor({app,dialog,element,button,gpuOperatio
               return app.prepare_source_comparison(prepared);
             });
             if(closed||control.cancelled()){next.free();return;}
-            candidate=next;
+            candidate=next;presentation={clipped:candidate.clipped_channels()>0,isCopy:!source&&candidate.is_copy(),addsLayer:source&&candidate.adds_layer(),sourceProfile:source?candidate.source_profile():null};phase="complete";
             if(history){accepted=true;finish(true);return;}
             candidate.previews().forEach((image,index)=>{
               const figure=element("figure"),canvas=element("canvas"),caption=element("figcaption","",()=>index?copy.after:copy.before);
               [canvas.width,canvas.height]=image.extent;
-              canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(image.pixels),...image.extent),0,0);
-              canvas.setAttribute("aria-label",index?copy.prepared_composition:copy.original_composition);figure.append(canvas,caption);comparison.append(figure);
+              canvas.getContext("2d",{willReadFrequently:true}).putImageData(new ImageData(new Uint8ClampedArray(image.pixels),...image.extent),0,0);
+              bindCopy(canvas,()=>index?copy.prepared_composition:copy.original_composition,"ariaLabel");figure.append(canvas,caption);comparison.append(figure);
             });
-            status.textContent=candidate.clipped_channels()>0?copy.outside_gamut:copy.composition_preview;
-            if(source){status.textContent=app.color_source_preview(candidate.source_profile(),status.textContent,candidate.adds_layer());apply.textContent=rasterize?copy.rasterize:candidate.adds_layer()?copy.add_source:copy.apply_profile;}
-            if(!source)apply.textContent=candidate.is_copy()?copy.save_copy:copy.common.apply;
+            present();
             apply.disabled=false;
-          }catch(error){const wasCancelled=control.cancelled();control.cancel();if(!closed&&!wasCancelled)status.textContent=String(error);}
-          finally{running=null;if(!closed){inputs.forEach(node=>node.disabled=false);preview.disabled=false;}}
+          }catch(error){const wasCancelled=control.cancelled();control.cancel();if(!closed&&!wasCancelled)fail(error);}
+          finally{running=null;if(!closed){if(phase==="preparing"){phase="draft";present();}inputs.forEach(node=>node.disabled=false);preview.disabled=false;}}
         })();
       };
       const preview=button(()=>copy.preview,prepare);
       footer.append(cancel);if(!history)footer.append(preview,apply);
-      form.append(comparison,status,footer);form.onsubmit=e=>e.preventDefault();
+      form.localize=present;form.append(comparison,status,footer);form.onsubmit=e=>e.preventDefault();
       if(history)queueMicrotask(prepare);
     });
     closed=true;if(!accepted)control?.cancel();await running;

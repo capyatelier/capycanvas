@@ -495,6 +495,13 @@ resources-lookup-replace = แทนที่…
 resources-lookup-files = ไฟล์ตารางแปลงสี
 resources-lookup-unavailable = แพลตฟอร์มนี้ยังไม่รองรับการนำเข้าตารางแปลงสี
 resources-lookup-failed = นำเข้าตารางแปลงสีไม่ได้
+resources-layer-menu-stop-using-as-reference = เลิกใช้เลเยอร์นี้เป็นอ้างอิง
+resources-coverage-from-layer-opacity = จากความทึบของเลเยอร์
+resources-coverage-from-layer-mask = จากมาสก์เลเยอร์
+resources-reference-empty-unmarked = เลเยอร์นี้ว่างและไม่มีเลเยอร์ด้านล่างที่ทำเครื่องหมายเป็นอ้างอิง
+resources-reference-tool-unmarked = เครื่องมือนี้เก็บตัวอย่างจากเลเยอร์อ้างอิง แต่ยังไม่มีเลเยอร์ที่ทำเครื่องหมายไว้
+resources-reference-tool-mark-first = เครื่องมือนี้เก็บตัวอย่างจากเลเยอร์อ้างอิง ทำเครื่องหมายเลเยอร์หนึ่งในแผงเลเยอร์ก่อน
+resources-reference-use-layer = ใช้ { $name } เป็นอ้างอิง
 
 resources-analysis-updating = กำลังอัปเดต…
 resources-analysis-error = ไม่สามารถอัปเดตการปรับแต่งนี้ได้

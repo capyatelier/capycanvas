@@ -157,6 +157,36 @@ mod tests {
                 editable.set_text("12+");
                 control.cancel_edit();
                 assert_eq!(control.value(), 8.);
+                if kind == NumericKind::Slider {
+                    control.set_popover_editor(true);
+                    input.click(screen_point(control.imp().display.get().unwrap().upcast_ref(), &window, [0.5, 0.5]));
+                    until(|| control.imp().popover.get().is_some_and(|popover| popover.is_visible()), "native numeric popover visible");
+                    let child = control.imp().popover_control.get().unwrap().clone();
+                    input.click(screen_point(child.imp().display.get().unwrap().upcast_ref(), &window, [0.5, 0.5]));
+                    let entry = child.imp().entry.get().unwrap();
+                    let child_text = entry.delegate().and_downcast::<gtk::Text>().unwrap();
+                    until(|| child_text.has_focus(), "native numeric popover editor focused");
+                    entry.set_text("12+");
+                    entry.select_region(0, 2);
+                    assert!(!child.commit_text());
+                    let selection = entry.selection_bounds();
+                    let focus = gtk::prelude::GtkWindowExt::focus(&window);
+                    for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+                        let localization = layer_ui::Localizer::shared(language);
+                        let title = localization.text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE);
+                        control.set_caption(&title, "", localization.clone());
+                        assert_eq!(control.imp().popover_control.get().unwrap(), &child);
+                        assert_eq!(child.imp().editor_title.borrow().as_str(), title.as_ref());
+                        assert_eq!(child.imp().caption.get().unwrap().text(), title.as_ref());
+                        assert_eq!(entry.text(), "12+");
+                        assert_eq!(entry.selection_bounds(), selection);
+                        assert_eq!(gtk::prelude::GtkWindowExt::focus(&window), focus);
+                        assert_eq!(child.value(), 8.);
+                        assert_eq!(control.value(), 8.);
+                        assert_eq!(child.tooltip_text().as_deref(), Some(layer_ui::NumericError::InvalidExpression.message(&localization).as_str()));
+                    }
+                    control.imp().popover.get().unwrap().popdown();
+                }
                 content.remove(&control);
                 pump(20);
             }
@@ -269,8 +299,8 @@ impl NumberControl {
 
     pub(crate) fn update_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
         *self.imp().localization.borrow_mut() = Some(localization.clone());
-        if self.imp().error.borrow().is_some() { self.refresh_feedback(); }
-        if let Some(control) = self.imp().popover_control.get() { control.update_localization(localization); }
+        self.refresh_feedback();
+        if let Some(control) = self.imp().popover_control.get() { control.set_caption(&self.imp().editor_title.borrow(), &self.imp().caption_description.borrow(), localization); }
     }
 
     pub fn new(spec: NumericControl, title: &str, description: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
@@ -1071,7 +1101,7 @@ impl NumberControl {
             self.set_tooltip_text(Some(&message));
         } else {
             self.remove_css_class("error");
-            self.set_tooltip_text(None);
+            self.set_tooltip_text(self.has_css_class("number-inline").then(|| self.imp().editor_title.borrow().clone()).as_deref());
         }
     }
     fn text_input(&self, text: &str) -> Result<layer_ui::NumericValue, ()> {

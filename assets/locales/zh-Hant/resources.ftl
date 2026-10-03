@@ -612,6 +612,13 @@ resources-lookup-import = 匯入…
 resources-lookup-replace = 取代…
 resources-lookup-files = 顏色查找檔案
 resources-lookup-unavailable = 此平台尚不支援匯入顏色查找檔案。
+resources-layer-menu-stop-using-as-reference = 不再將此圖層用作參考
+resources-coverage-from-layer-opacity = 從圖層不透明度
+resources-coverage-from-layer-mask = 從圖層遮罩
+resources-reference-empty-unmarked = 此圖層為空，且其下方沒有標記為參考的圖層
+resources-reference-tool-unmarked = 此工具從參考圖層取樣，但沒有標記為參考的圖層
+resources-reference-tool-mark-first = 此工具從參考圖層取樣。請先在圖層面板中將一個圖層標記為參考。
+resources-reference-use-layer = 將 { $name } 用作參考
 
 resources-analysis-updating = 正在更新…
 resources-analysis-error = 無法更新此調整。

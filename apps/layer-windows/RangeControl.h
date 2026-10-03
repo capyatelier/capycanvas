@@ -21,6 +21,7 @@ struct RangeControl : std::enable_shared_from_this<RangeControl> {
     bool retired=false;
     static std::shared_ptr<RangeControl> Create(std::shared_ptr<WorkspaceData> const& data,J const& lower,J const& upper,
         hstring const& label,hstring const& prefix,bool showTrack,std::function<void(int,double)> change);
+    void Relabel(J const& lower,J const& upper,hstring const& currentLabel);
     void Update(double lower,double upper);
     void Dispose();
     void init(bool showTrack);

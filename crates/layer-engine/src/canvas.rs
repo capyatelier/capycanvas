@@ -763,7 +763,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             if let Edit::InsertLayer { layer, .. } = edit
                 && let Some(operated) = layers.remove(&layer.id)
             {
-                *layer = operated;
+                **layer = operated;
             }
         }
         edits.extend(layers.into_values().map(|l| Edit::ReplaceLayer(Box::new(l))));
@@ -1213,7 +1213,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return;
                 }
                 Edit::ReplaceLayer(layer) => &mut **layer,
-                Edit::InsertLayer { layer, .. } => layer,
+                Edit::InsertLayer { layer, .. } => &mut **layer,
                 _ => return,
             };
             if !layer.pending_operations.is_empty() {
@@ -3657,7 +3657,7 @@ mod tests {
         let id = copy.id;
         engine
             .insert_with_operations(
-                vec![Edit::InsertLayer { index: 0, layer: copy }],
+                vec![Edit::InsertLayer { index: 0, layer: Box::new(copy) }],
                 operations,
                 Some(None),
             )
@@ -3685,7 +3685,7 @@ mod tests {
         let lower = engine.document().active_layer;
         let upper = engine.allocate_layer_id();
         engine
-            .apply_edit(Edit::InsertLayer { index: 0, layer: layer_core::Layer::paint(upper, "Upper") })
+            .apply_edit(Edit::InsertLayer { index: 0, layer: Box::new(layer_core::Layer::paint(upper, "Upper")) })
             .unwrap();
         engine.set_active_layer(upper).unwrap();
         engine.render_frame().unwrap();
@@ -5658,7 +5658,7 @@ mod tests {
             kind: LayerOperationKind::Bake { members: vec![original.layer(source_id).unwrap().clone()].into(), offset: Point::default() } };
         let erase = LayerOperation { placement: layer_core::Affine::IDENTITY, coverage,
             kind: LayerOperationKind::Erase { alpha_locked: false } };
-        engine.insert_with_operations(vec![Edit::InsertLayer { index: 0, layer: output }], vec![(output_id, bake), (source_id, erase)], None).unwrap();
+        engine.insert_with_operations(vec![Edit::InsertLayer { index: 0, layer: Box::new(output) }], vec![(output_id, bake), (source_id, erase)], None).unwrap();
         let mut frames = 0;
         while engine.wants_continuous_frames() {
             engine.render_frame().unwrap();

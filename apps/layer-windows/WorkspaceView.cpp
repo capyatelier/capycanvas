@@ -200,8 +200,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 handle.HorizontalAlignment(HorizontalAlignment::Left);handle.Child(panelGrip(data->theme()));
                 gestures->Source(handle,O({{L"type",S(L"drag_workspace")},{L"item",groupItem}}),groupItem,true);
                 AutomationProperties::SetAutomationId(handle,L"group-grip-"+to_hstring(uint32_t(num(geometry,L"id"))));
-                AutomationProperties::SetName(handle,data->delivery(L"move_group"));
-                AutomationProperties::SetHelpText(handle,data->delivery(L"drag_panel"));
+                copyName(data,handle,data->copyDelivery(L"move_group"));
+                auto help=data->copyDelivery(L"drag_panel");
+                AutomationProperties::SetHelpText(handle,help);
+                data->copyView([weak=make_weak(handle),resolve=help.current]{if(auto view=weak.get()){AutomationProperties::SetHelpText(view,resolve());return true;}return false;});
                 Grid::SetColumn(handle,1);header.Children().Append(handle);frame.Children().Append(header);
             }
             group.header.Visibility(flag(geometry,L"tabs_visible")?Visibility::Visible:Visibility::Collapsed);
@@ -217,7 +219,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             handle.Child(panelGrip(data->theme(),true));
             auto item=O({{L"kind",S(L"panel")},{L"panel",S(str(panel,L"id"))}});
             gestures->Source(handle,O({{L"type",S(L"drag_workspace")},{L"item",item}}),item,true);
-            AutomationProperties::SetName(handle,data->caption(O({{L"type",S(L"move_panel")},{L"title",S(str(panel,L"title"))}})));
+            auto caption=[source=std::weak_ptr<WorkspaceData>(data),id=str(panel,L"id")]{
+                auto current=source.lock();if(!current)return hstring();
+                auto currentPanel=find(array(current->model,L"panels"),L"id",id);
+                return current->caption(O({{L"type",S(L"move_panel")},{L"title",S(str(currentPanel,L"title"))}}));
+            };
+            copyName(data,handle,LocalizedCopy(caption(),caption));
+            AutomationProperties::SetAutomationId(handle,L"panel-footer-grip-"+str(panel,L"id"));
             overlay.Children().Append(handle);frame.Children().Append(overlay);
         }
 
@@ -727,6 +735,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             handle.HorizontalContentAlignment(HorizontalAlignment::Stretch);handle.VerticalContentAlignment(VerticalAlignment::Stretch);
             handle.IsTabStop(true);handle.UseSystemFocusVisuals(true);
             handle.RenderTransform(TranslateTransform());root.Children().Append(handle);
+            copyName(data,handle,data->copyDelivery(L"resize_dock"));
         }
         auto transform=handle.RenderTransform().as<TranslateTransform>();transform.X(0);transform.Y(0);
         place(handle,bounds);Canvas::SetZIndex(handle,z);gestures->Source(handle,action,{},resetColumn);
@@ -736,7 +745,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 InputSystemCursorShape::SizeWestEast:InputSystemCursorShape::SizeNorthSouth;
             handle.as<IUIElementProtected>().ProtectedCursor(InputSystemCursor::Create(shape));
         }
-        AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,data->delivery(L"resize_dock"));
+        AutomationProperties::SetAutomationId(handle,hstring(key));
         AutomationProperties::SetAutomationControlType(handle,Automation::Peers::AutomationControlType::Thumb);
     }
     void updateZenCapy(J const& snapshot){

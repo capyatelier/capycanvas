@@ -106,11 +106,21 @@ inline Image panelGrip(hstring const& theme,bool vertical=false){
     result.HorizontalAlignment(HorizontalAlignment::Center);result.VerticalAlignment(VerticalAlignment::Center);
     result.RenderTransformOrigin({.5f,.5f});orientGrip(result,vertical);return result;
 }
+inline J exportDraft(CapyLocalization const* localization,J const& request){
+    auto input=to_string(request.Stringify());std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_export_draft(localization,input.c_str()),capy_string_free);
+    if(!raw)throw hresult_error(E_OUTOFMEMORY);return J::Parse(to_hstring(raw.get()));
+}
+struct NumericFailure : hresult_invalid_argument {
+    J reason;
+    NumericFailure(hstring const& message,J value):hresult_invalid_argument(message),reason(std::move(value)){}
+};
 inline J numeric(CapyLocalization const* localization,J const& spec,double value,J const& operation){
     auto json=to_string(O({{L"control",spec},{L"value",N(value)},{L"operation",operation}}).Stringify());
     std::unique_ptr<char,decltype(&capy_string_free)> result(capy_number(localization,json.c_str()),capy_string_free);
     if(!result)throw hresult_invalid_argument(to_hstring(capy_error()));
-    return J::Parse(to_hstring(result.get()));
+    auto response=J::Parse(to_hstring(result.get()));
+    if(response.HasKey(L"error_reason"))throw NumericFailure(str(response,L"error"),object(response,L"error_reason"));
+    return response;
 }
 using Bindings=std::vector<std::function<void()>>;
 using NumericAdmissions=std::vector<std::function<bool(bool)>>;
@@ -258,7 +268,7 @@ inline SolidColorBrush accent(std::shared_ptr<WorkspaceData> const& data){return
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false,bool retained=true){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
     if(retained)inheritLanguage(result,data);else result.Language(data->language());result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
-    result.LineHeight(18);result.LineStackingStrategy(LineStackingStrategy::BlockLineHeight);
+    result.LineHeight(18);result.LineStackingStrategy(LineStackingStrategy::MaxHeight);
     if(bold)result.FontWeight(Windows::UI::Text::FontWeights::Bold());
     return result;
 }
@@ -266,6 +276,18 @@ inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,LocalizedCopy 
     auto result=label(data,static_cast<hstring const&>(text),bold);
     data->copyView([weak=make_weak(result),resolve=text.current]{if(auto view=weak.get()){view.Text(resolve());return true;}return false;});
     return result;
+}
+inline void comboOptionText(ComboBoxItem const& option,hstring const& text){
+    auto content=option.Content().try_as<TextBlock>();
+    if(!content){content=TextBlock();content.TextTrimming(TextTrimming::CharacterEllipsis);option.Content(content);}
+    content.Text(text);AutomationProperties::SetName(option,text);
+}
+inline ComboBoxItem comboOption(ComboBox const& control,hstring const& text,hstring const& id=L""){
+    ComboBoxItem option;comboOptionText(option,text);if(!id.empty())AutomationProperties::SetAutomationId(option,id);
+    control.Items().Append(option);return option;
+}
+inline void comboOptionText(ComboBox const& control,uint32_t index,hstring const& text){
+    comboOptionText(control.Items().GetAt(index).as<ComboBoxItem>(),text);
 }
 template<typename T>
 inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result){
@@ -318,6 +340,7 @@ inline void tooltip(DependencyObject const& target,hstring const& text){
     auto& owners=tooltipOwners();
     if(auto found=owners.find(get_abi(target));found!=owners.end()&&found->second.owner.get()==target){
         if(unbox_value_or<hstring>(found->second.tip.Content(),L"")!=text)found->second.tip.Content(box_value(text));
+        if(!touchContact())ToolTipService::SetToolTip(target,found->second.tip);
         return;
     }
     if(owners.size()>=1024)std::erase_if(owners,[](auto const& entry){return !entry.second.owner.get();});
@@ -355,6 +378,7 @@ inline void revealTooltip(FrameworkElement const& target){
 struct ChoiceGrid {
     Grid grid;std::vector<Button> cells;
     void update(std::shared_ptr<WorkspaceData> const& data,J const& spec)const{
+        AutomationProperties::SetName(grid,str(spec,L"label"));tooltip(grid,str(spec,L"label"));
         auto items=array(spec,L"items");
         for(uint32_t i=0;i<std::min<uint32_t>(items.Size(),uint32_t(cells.size()));++i){
             auto item=items.GetObjectAt(i);bool chosen=flag(item,L"selected");
@@ -368,7 +392,7 @@ inline ChoiceGrid choiceGrid(std::shared_ptr<WorkspaceData> const& data,J const&
     ChoiceGrid result;auto items=array(spec,L"items");auto columns=std::max<uint32_t>(1,uint32_t(num(spec,L"columns")));
     for(uint32_t i=0;i<columns;++i){ColumnDefinition column;column.Width({18,GridUnitType::Pixel});result.grid.ColumnDefinitions().Append(column);}
     for(uint32_t i=0;i<(items.Size()+columns-1)/columns;++i){RowDefinition row;row.Height({18,GridUnitType::Pixel});result.grid.RowDefinitions().Append(row);}
-    AutomationProperties::SetName(result.grid,str(spec,L"label"));AutomationProperties::SetAutomationId(result.grid,id);tooltip(result.grid,str(spec,L"label"));
+    AutomationProperties::SetAutomationId(result.grid,id);
     for(uint32_t i=0;i<items.Size();++i){
         auto action=object(items.GetObjectAt(i),L"action");
         auto cell=button(data,L"",[send,action]{send(action);});cell.Width(18);cell.Height(18);
@@ -414,7 +438,7 @@ struct DoublePress : std::enable_shared_from_this<DoublePress> {
 };
 struct NumberPresentation {
     bool preference=false;hstring description;std::function<hstring()> identity;
-    std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;std::function<hstring()> title,text;
+    std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;std::function<hstring()> title,text,descriptionText;
     std::function<void(hstring const&,double)> phase;
 };
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,

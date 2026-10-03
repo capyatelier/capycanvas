@@ -152,7 +152,7 @@ fn fixture(mut header: Header, pixels: &[[f32; 4]]) -> Vec<u8> {
         let mut compressor = SequentialBlocksCompressor::new(&meta, writer);
         for (index, location) in block::enumerate_ordered_header_block_indices(&meta.headers) {
             let mut data = Vec::new();
-            for y in location.pixel_position.1..location.pixel_position.1 + location.pixel_size.1 {
+            for pixel in pixels.iter().skip(location.pixel_position.1).take(location.pixel_size.1) {
                 for channel in &meta.headers[0].channels.list {
                     let c = match channel.name.to_string().as_str() {
                         "R" => 0,
@@ -160,7 +160,7 @@ fn fixture(mut header: Header, pixels: &[[f32; 4]]) -> Vec<u8> {
                         "B" => 2,
                         _ => 3,
                     };
-                    data.extend_from_slice(&pixels[y][c].to_ne_bytes());
+                    data.extend_from_slice(&pixel[c].to_ne_bytes());
                 }
             }
             compressor.compress_block(
@@ -181,7 +181,7 @@ fn fixture(mut header: Header, pixels: &[[f32; 4]]) -> Vec<u8> {
 fn exr_rgb_white_scaling_lossless_codecs_and_unsupported_metadata() {
     let header = || {
         Header::new(
-            "RGB".try_into().unwrap(),
+            "RGB".into(),
             (1, 2),
             ["B", "G", "R"]
                 .into_iter()

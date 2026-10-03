@@ -233,7 +233,8 @@ impl ProofPanel {
             .as_mut()
             .ok_or("Canvas unavailable".into())
             .and_then(|g| g.session.select_proof_mode(page.mode()));
-        w.changed(result);
+        *self.model.error.borrow_mut()=result.as_ref().err().cloned();
+        w.changed(result.map_err(|reason:layer_ui::ColorFeatureError|reason.proof_message(&w.localization())));
         if page == Page::Print && self.model.print_dirty.get() {
             self.prepare_print(w);
         }
@@ -257,11 +258,11 @@ impl ProofPanel {
                 }
             });
         if let Err(e) = &result {
-            *self.model.error.borrow_mut() = Some(layer_ui::ColorFeatureError::Diagnostic(e.clone()));
+            *self.model.error.borrow_mut() = Some(e.clone());
         } else {
             self.model.error.borrow_mut().take();
         }
-        w.changed(result);
+        w.changed(result.map_err(|reason:layer_ui::ColorFeatureError|reason.proof_message(&w.localization())));
         self.update_all(w);
     }
     /// Export must freeze the recipe the user just selected, including a profile
@@ -283,7 +284,7 @@ impl ProofPanel {
             }
         }
         if self.model.page.get() == Page::Print {
-            if let Some(error) = self.model.error.borrow().as_ref() { return Err(error.profile_message(&w.localization())); }
+            if let Some(error) = self.model.error.borrow().as_ref() { return Err(error.proof_message(&w.localization())); }
         }
         Ok(())
     }
@@ -320,7 +321,8 @@ impl ProofPanel {
         }
         let recipe = match self.model.print.borrow().recipe() {
             Ok(r) => r,
-            Err(_) => {
+            Err(reason) => {
+                *self.model.error.borrow_mut()=Some(reason);
                 self.update_all(w);
                 return;
             }
@@ -357,7 +359,7 @@ impl ProofPanel {
             })
             .await
             .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Proof preparation worker failed".into()))
-            .and_then(|r| r.map_err(layer_ui::ColorFeatureError::Diagnostic));
+            .and_then(|r| r.map_err(layer_ui::ColorFeatureError::from));
             let result=async{
                 if cancelled.load(Ordering::Acquire)||panel.model.identity.get()!=Some(identity){return Ok(None)}
                 let lut=Arc::new(result?);
@@ -366,8 +368,8 @@ impl ProofPanel {
                 let change={let mut gpu=w.gpu.borrow_mut();let s=&mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
                     if (s.state().document_file.epoch,s.engine().document().color)!=identity{return Ok(None)}
                     if s.proof_panel_mode()!=ProofMode::Print{return Ok(None)}
-                    if s.engine().document().proof!=previous{return Err("Print settings changed while preparing the proof. Choose the profile again.".into())}
-                    s.set_proof_recipe(Some(recipe.clone())).map_err(layer_ui::ColorFeatureError::Diagnostic)?};
+                    if s.engine().document().proof!=previous{return Err(layer_ui::ColorFeatureError::ProofDrawingChanged)}
+                    s.set_proof_recipe(Some(recipe.clone()))?};
                 w.proof.retain(identity.1.space,recipe.clone(),lut);Ok::<_,layer_ui::ColorFeatureError>(Some(change))
             }.await;
             w.window.disconnect(close);
@@ -461,7 +463,7 @@ impl ProofPanel {
         f.progress.set_visible(self.model.busy.get());
         f.progress.set_spinning(self.model.busy.get());
         let error = self.model.error.borrow();
-        f.error.set_label(&error.as_ref().map(|reason| reason.profile_message(&w.localization())).unwrap_or_default());
+        f.error.set_label(&error.as_ref().map(|reason| reason.proof_message(&w.localization())).unwrap_or_default());
         f.error.set_visible(error.is_some());
         f.updating.set(false);
     }
@@ -572,7 +574,7 @@ impl Form {
             f.warning.set_label(Some(&PrintProofControl::GamutWarning.localized_label(localization)));
             f.progress.update_property(&[gtk::accessible::Property::Label(&copy.preparing_print)]);
             f.dial.set_localization(localization.clone());
-            if let Some(model) = model.upgrade() { if let Some(error) = model.error.borrow().as_ref() { f.error.set_label(&error.profile_message(localization)); } }
+            if let Some(model) = model.upgrade() { if let Some(error) = model.error.borrow().as_ref() { f.error.set_label(&error.proof_message(localization)); } }
             f.updating.set(false);
             true
         });

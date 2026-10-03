@@ -1,7 +1,8 @@
 param([Parameter(Mandatory)][int]$ProcessId,
       [ValidateSet('Stroke','Undo','Redo','Resize','Close','Test stroke','Test pan','Test backlog')][string]$Action='Stroke',
-      [int]$X=400,[int]$Y=400,[int]$Width=1500,[int]$Height=1000,[switch]$DiscardUnsaved,[string]$StateDirectory)
+      [int]$X=400,[int]$Y=400,[int]$Width=1500,[int]$Height=1000,[switch]$DiscardUnsaved,[string]$StateDirectory,[long]$WindowHandle)
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -TypeDefinition @'
 using System;
@@ -34,7 +35,11 @@ public static class CapyWindowExercise {
 $p=Get-Process -Id $ProcessId
 # Retain a queryable process handle before the HWND and process disappear.
 $null=$p.Handle
-$handle=$p.MainWindowHandle
+$handle=if($WindowHandle){[IntPtr]$WindowHandle}else{$p.MainWindowHandle}
+if($WindowHandle -and $Action -ne 'Resize'){throw 'An explicit window is supported only for resize.'}
+$windowOwner=[uint32]0
+[CapyWindowExercise]::GetWindowThreadProcessId($handle,[ref]$windowOwner)|Out-Null
+if($windowOwner -ne $ProcessId){throw 'The resize window does not belong to the owned process.'}
 if(!$handle){throw 'The app has no main window.'}
 [CapyWindowExercise]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
 $rect=New-Object CapyWindowExercise+Rect
@@ -44,11 +49,11 @@ if($Action -eq 'Close') {
     if($DiscardUnsaved){
         if($p.ProcessName -ne 'CapyCanvas'){throw 'Discard requires a controlled CapyCanvas review.'}
         if(!$StateDirectory){$StateDirectory=Split-Path -Parent $p.Path}
-        $windows=Get-Content -LiteralPath (Join-Path $StateDirectory "windows-$ProcessId.json") -Raw|ConvertFrom-Json
+        $windows=Read-Snapshot (Join-Path $StateDirectory "windows-$ProcessId.json")
         $window=@($windows.windows|Where-Object hwnd -eq ([int64]$handle))[0]
         if($windows.process_id -ne $ProcessId -or !$window){throw 'Discard requires the traced window of this review.'}
         $stateFile=Join-Path $StateDirectory "ui-state-$ProcessId-$($window.id).json"
-        $snapshot=Get-Content -LiteralPath $stateFile -Raw|ConvertFrom-Json
+        $snapshot=Read-Snapshot $stateFile
         if($snapshot.process_id -ne $ProcessId -or !$snapshot.model.windows_isolated_settings){
             throw 'Discard is only available for an isolated review with a matching trace.'
         }
@@ -60,7 +65,7 @@ if($Action -eq 'Close') {
         $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
         while(!$p.HasExited){
           try {
-            $snapshot=Get-Content -LiteralPath $stateFile -Raw|ConvertFrom-Json
+            $snapshot=Read-Snapshot $stateFile
             if($snapshot.process_id -ne $ProcessId -or !$snapshot.model.windows_isolated_settings){throw 'Discard trace ownership changed'}
             $epoch=$snapshot.model.state.document_file.epoch
             if($epoch -ne $lastEpoch){$lastEpoch=$epoch;$watch.Restart()}

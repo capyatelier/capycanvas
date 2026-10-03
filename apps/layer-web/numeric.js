@@ -1,7 +1,7 @@
 import { composingKey } from "./text-input.js";
 // Native text/range controls around Rust's numeric policy. No expression,
 // range-mapping, unit-formatting or rounding rules are duplicated here.
-export function createNumberField({ control, label, labels: captions, resolve, onChange, icon, inline = false, widthSamples, valueOnly = false }) {
+export function createNumberField({ control, label, labels: captions, resolve, errorCaption, onChange, icon, inline = false, widthSamples, valueOnly = false }) {
   const node = (tag, cls) => { const el = document.createElement(tag); el.className = cls; return el; };
   const initialCaptions = typeof captions === "function" ? captions(label) : captions;
   const root = node("div", `number-control number-${control.kind}`);
@@ -37,7 +37,7 @@ export function createNumberField({ control, label, labels: captions, resolve, o
     valueBox.append(measure);
     if (valueOnly) { root.classList.add('number-value-only'); entry.size = 1; }
   }
-  let value = control.min, display, presented, editing = false, disabled = false;
+  let value = control.min, display, presented, editing = false, disabled = false, errorReason = null;
   let gesture = false, cancelled = false, heldKey, releaseTimer, releasePointer;
   const finishGesture = (phase = 'up') => {
     clearTimeout(releaseTimer); releaseTimer = null;
@@ -88,14 +88,22 @@ export function createNumberField({ control, label, labels: captions, resolve, o
     slider.setAttribute("aria-valuetext", next.text);
     minus.disabled = disabled || value <= control.min; plus.disabled = disabled || value >= control.max;
   }
+  function clearError() {
+    errorReason = null;root.classList.remove("error");entry.removeAttribute("aria-invalid");entry.title = "";
+  }
   function apply(operation) {
-    if(cancelled || (operation.type==='expression' && presented!=null && operation.text===presented))return true;
+    if(cancelled)return true;
+    if(operation.type==='expression' && presented!=null && operation.text===presented){clearError();return true;}
     try {
       const next = resolve({ control, value, operation });
-      root.classList.remove("error"); entry.removeAttribute("aria-invalid"); entry.title = "";
+      clearError();
       const changed = next.value !== value; show(next); if (changed) onChange(next.value);
       return true;
-    } catch (error) { root.classList.add("error"); entry.setAttribute("aria-invalid", "true"); entry.title = String(error); return false; }
+    } catch (error) {
+      const known = error && typeof error === "object" && error.numeric_error != null && typeof error.message === "string";
+      errorReason = known ? error.numeric_error : null;
+      root.classList.add("error");entry.setAttribute("aria-invalid", "true");entry.title = known ? error.message : String(error);return false;
+    }
   }
   function begin() {
     if (disabled) return;
@@ -105,7 +113,7 @@ export function createNumberField({ control, label, labels: captions, resolve, o
   function finish(cancel = false) {
     if (!editing) return true;
     if (!cancel && (composingKey({target:entry}) || !apply({ type: "expression", text: entry.value }))) return false;
-    editing = false; root.classList.remove("error"); entry.removeAttribute("aria-invalid"); entry.title = "";
+    editing = false;clearError();
     entry.value = ranged ? display.edit : display.text;
     if (buttonValue) { entry.hidden = true; valueButton.hidden = false; }
     return true;
@@ -142,10 +150,7 @@ export function createNumberField({ control, label, labels: captions, resolve, o
     entry.setAttribute("aria-label", next); slider.setAttribute("aria-label", next);
     valueButton.setAttribute("aria-label", text.edit);
     minus.setAttribute("aria-label", text.decrease); plus.setAttribute("aria-label", text.increase);
-    if (root.classList.contains("error")) {
-      try { resolve({control, value, operation:{type:"expression",text:entry.value}}); }
-      catch (error) { entry.title = String(error); }
-    }
+    if (errorReason != null && errorCaption) entry.title = errorCaption(errorReason);
   };
   root.entry = entry;
   root.valueButton = valueButton;

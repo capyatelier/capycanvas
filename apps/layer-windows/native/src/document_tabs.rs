@@ -49,6 +49,7 @@ pub(crate) enum Action {
     RetryStorage,
 }
 impl DocumentService {
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn start_recovery(&mut self) -> Result<(), String> {
         if self.recovery.is_none() {
             self.recovery = Some(self.new_recovery()?);
@@ -59,12 +60,14 @@ impl DocumentService {
         let wake = self.wake.clone();
         crate::recovery::Service::open(move || wake())
     }
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn tab_device(&self) -> Option<&wgpu::Device> {
         self.window.gpu.as_ref().map(|g| &g.device)
     }
     pub(crate) fn window_close_ready(&self, host: &NativeHost) -> bool {
         self.window.documents.order().len() == 1 && host.session.state().document_file.close_ready
     }
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn tabs_view(&self, host: &NativeHost) -> Value {
         let mut view = self.window.view(host, 0.);
         view["available"] = (self.idle()

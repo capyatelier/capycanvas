@@ -86,7 +86,7 @@ impl Converter {
             let adj = |pos: u32, pixel: u32, full: u32, sub: bool| {
                 if !sub {
                     pos
-                } else if pixel % 2 == 0 {
+                } else if pixel.is_multiple_of(2) {
                     pos.saturating_sub(1)
                 } else {
                     (pos + 1).min(full - 1)

@@ -1,4 +1,5 @@
 use super::*;
+use super::calibration::CalibrationFailure;
 use layer_core::{ArtworkQuery,ArtworkSample,ArtworkSampleRequest,ArtworkSource,EffectValue,Layer,Point};
 
 pub(super) struct TargetedCurve {
@@ -102,19 +103,22 @@ impl<R:CanvasRenderer> UiSession<R> {
         else if contact.submitted {
             if let Some(result)=self.engine.backend_mut().take_snapshot() {
                 contact.submitted=false;
-                result.map_err(error).and_then(|result| {
-                    let layer_render::SnapshotResult::ArtworkSample(ArtworkSample::Color([r,g,b,_]))=result else {return Err(self.localization().text(MessageId::RESOURCES_PICKER_EMPTY).to_string());};
-                    let effect=contact.expected.effect.as_ref().ok_or("The adjustment was removed")?;
-                    contact.point=Some(layer_core::curves::targeted_curve_point(effect,[r,g,b],contact.request.document.color.space,mode.page).map_err(|_|self.localization().text(MessageId::RESOURCES_CALIBRATION_FAILED).to_string())?);
+                result.map_err(error).map_err(CalibrationFailure::Diagnostic).and_then(|result| {
+                    let layer_render::SnapshotResult::ArtworkSample(ArtworkSample::Color([r,g,b,_]))=result else {return Err(CalibrationFailure::Message(MessageId::RESOURCES_PICKER_EMPTY));};
+                    let effect=contact.expected.effect.as_ref().ok_or_else(||CalibrationFailure::Diagnostic("The adjustment was removed".into()))?;
+                    contact.point=Some(layer_core::curves::targeted_curve_point(effect,[r,g,b],contact.request.document.color.space,mode.page).map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_CALIBRATION_FAILED))?);
                     ready=true;Ok(())
                 })
             } else {Ok(())}
         } else {
-            self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::ArtworkSample(contact.request.clone())).map(|submitted|contact.submitted=submitted).map_err(error)
+            self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::ArtworkSample(contact.request.clone())).map(|submitted|contact.submitted=submitted).map_err(error).map_err(CalibrationFailure::Diagnostic)
         };
         self.targeted_curve=Some(mode);
-        if let Err(reason)=result.and_then(|()|if ready {self.advance_targeted_curve()} else {Ok(())}) {
-            let _=self.cancel_targeted_contact();self.raise_notice(reason,None);return regions::DOCUMENT;
+        if let Err(reason)=result.and_then(|()|if ready {self.advance_targeted_curve().map_err(CalibrationFailure::Diagnostic)} else {Ok(())}) {
+            let _=self.cancel_targeted_contact();match reason {
+                CalibrationFailure::Message(message)=>self.raise_message_notice(message),
+                CalibrationFailure::Diagnostic(reason)=>self.raise_notice(reason,None),
+            }return regions::DOCUMENT;
         }
         if ready {regions::DOCUMENT|regions::BRUSH|regions::COMMANDS} else {0}
     }

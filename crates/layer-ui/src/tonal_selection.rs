@@ -213,7 +213,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let doc = self.engine.document();
         doc.selection_edit(target, baseline.clone().unwrap_or_else(Selection::empty))
             .map_err(error)?;
-        let draft = self.tonal_tools.draft.get_or_insert_with(|| TonalDraft {
+        let draft = self.tonal_tools.draft.get_or_insert(TonalDraft {
             revision: doc.revision,
             baseline,
             mode,

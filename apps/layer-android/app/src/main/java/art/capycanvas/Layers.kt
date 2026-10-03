@@ -92,13 +92,14 @@ internal class LayerSwipe {
     val currentLayers by rememberUpdatedState(layers)
     val list = rememberLazyListState()
     val epoch = state.getJSONObject("document_file").optLong("epoch")
-    LaunchedEffect(epoch) { host.layerSwipe.close() }
     val images = remember(epoch) { mutableStateMapOf<String, ImageBitmap>() }
     val bounds = remember { mutableMapOf<Long, Rect>() }
     var panelOrigin by remember { mutableStateOf(Offset.Zero) }
     var drag by remember { mutableStateOf<LayerDrag?>(null) }
     var menu by remember { mutableStateOf<JSONObject?>(null) }
+    var menuRequest by remember { mutableStateOf<JSONObject?>(null) }
     var menuGeneration by remember { mutableIntStateOf(0) }
+    LaunchedEffect(epoch) { host.layerSwipe.close(); menuGeneration++; menu = null; menuRequest = null }
     var contactHeld by remember { mutableStateOf(false) }
     var menuPoint by remember { mutableStateOf(Offset.Zero) }
     fun contextMenu(layer: JSONObject, mask: Boolean, point: Offset) {
@@ -106,8 +107,9 @@ internal class LayerSwipe {
         val request = ++menuGeneration
         val id = layer.getLong("id")
         host.layer(obj("op" to "context", "id" to id, "mask" to mask))
-        host.query(obj("type" to "layer_menu", "id" to id, "mask" to mask)) {
-            if (request == menuGeneration && drag == null) { menu = it as? JSONObject; menuPoint = point - panelOrigin }
+        val query = obj("type" to "layer_menu", "id" to id, "mask" to mask)
+        host.query(query) {
+            if (request == menuGeneration && host.menuEpoch() == epoch && drag == null) { menuRequest = query; menu = it as? JSONObject; menuPoint = point - panelOrigin }
         }
     }
     LaunchedEffect(host, epoch) {
@@ -150,15 +152,24 @@ internal class LayerSwipe {
             Column(Modifier.wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density.density }.padding(horizontal = 6.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     var blendMenu by remember { mutableStateOf<JSONObject?>(null) }
+                    var blendRequest by remember { mutableStateOf<JSONObject?>(null) }
+                    var blendGeneration by remember { mutableIntStateOf(0) }
+                    LaunchedEffect(epoch) { blendGeneration++; blendMenu = null; blendRequest = null }
                     Box(Modifier.weight(1f)) {
                         Row(Modifier.fillMaxWidth().height(26.dp).background(colors.input,ControlShape).testTag("layer-blend")
                             .clickable(enabled = controls.getBoolean("blend")) {
-                                active?.let { host.query(obj("type" to "layer_blend_menu","id" to it.getLong("id"))) { menu -> blendMenu = menu as? JSONObject } }
+                                active?.let {
+                                    val ticket = ++blendGeneration
+                                    val request = obj("type" to "layer_blend_menu","id" to it.getLong("id"))
+                                    host.query(request) { menu ->
+                                        if (ticket == blendGeneration && host.menuEpoch() == epoch) { blendRequest = request; blendMenu = menu as? JSONObject }
+                                    }
+                                }
                             }.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(active?.getString("blend_label").orEmpty(),Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
                             SharedIcon("chevron-down", host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("blend"),Modifier.size(12.dp))
                         }
-                        blendMenu?.let { WorkspaceMenu(host,it) { blendMenu=null } }
+                        blendMenu?.let { WorkspaceMenu(host,it, copy = { blendRequest?.let { host.menuCopy(it) } }) { blendGeneration++; blendMenu=null; blendRequest=null } }
                     }
                     NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("opacity"),active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f),
                         enabled=controls.getBoolean("opacity"),inline=true) { host.dispatch(obj("type" to "set_layer_opacity","opacity" to it)) }
@@ -214,7 +225,7 @@ internal class LayerSwipe {
                 .alpha(.7f).background(colors.panel),preview=true)
         } }
         if (menu!=null) Box(Modifier.offset { IntOffset(menuPoint.x.roundToInt(),menuPoint.y.roundToInt()) }.size(1.dp)) {
-            WorkspaceMenu(host,menu!!,preserveContact=contactHeld) { menuGeneration++; menu=null }
+            WorkspaceMenu(host,menu!!,preserveContact=contactHeld, copy = { menuRequest?.let { host.menuCopy(it) } }) { menuGeneration++; menu=null; menuRequest=null }
         }
     }
 }

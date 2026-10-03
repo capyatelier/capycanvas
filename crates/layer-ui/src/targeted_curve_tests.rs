@@ -125,3 +125,31 @@ fn targeted_curve_stale_toolbar_action_preserves_current_pending_contact() {
         assert_eq!(s.engine.document(),&before);assert_eq!(s.engine.checkpoint(),checkpoint);
     }
 }
+
+#[test]
+fn targeted_curve_retired_failure_reprojects_typed_notice_without_resampling_or_editing() {
+    for (sample,message) in [
+        (Err(layer_render::BackendError("literal İı { $tone } 🖌")),None),
+        (Ok(layer_core::ArtworkSample::Empty),Some(MessageId::RESOURCES_PICKER_EMPTY)),
+        (Ok(layer_core::ArtworkSample::Outside),Some(MessageId::RESOURCES_PICKER_EMPTY)),
+        (Ok(layer_core::ArtworkSample::Color([f32::NAN,0.25,0.5,1.])),Some(MessageId::RESOURCES_CALIBRATION_FAILED)),
+    ] {
+        let mut s=targeted_session();targeted_pointer(&mut s,ContactPhase::Down,400.);s.frame(2,2).unwrap();
+        targeted_pointer(&mut s,ContactPhase::Up,380.);
+        let document=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
+        let colors=s.state.colors.clone();let tool=s.layer_interaction.tool;
+        s.engine.backend_mut().snapshot_reply=Some(sample.map(layer_render::SnapshotResult::ArtworkSample));s.frame(30,30).unwrap();
+        assert!(s.targeted_curve.is_some());assert!(!s.targeted_curve_busy());assert!(s.effect_gesture.is_none());
+        let notice=s.state.notice.clone().unwrap();
+        let rendering=(s.engine.backend().snapshot_requests.len(),s.engine.backend().snapshot_cancels,s.engine.backend().dabs);
+        for language in UiLanguage::ALL.iter().copied().chain([UiLanguage::English]) {
+            s.set_localization(Localizer::shared(language));
+            let current=s.state.notice.as_ref().unwrap();assert_eq!(current.id,notice.id);assert_eq!(current.action,notice.action);
+            assert_eq!(current.text,message.map_or_else(||notice.text.clone(),|id|s.localization().text(id).to_string()),"{}",language.tag());
+            assert!(s.targeted_curve.is_some());assert!(!s.targeted_curve_busy());assert!(s.effect_gesture.is_none());
+            assert_eq!(s.engine.document(),&document);assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.state.colors,colors);
+            assert_eq!(s.layer_interaction.tool,tool);
+            assert_eq!((s.engine.backend().snapshot_requests.len(),s.engine.backend().snapshot_cancels,s.engine.backend().dabs),rendering);
+        }
+    }
+}

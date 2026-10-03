@@ -24,10 +24,8 @@ private val AnchorCellSize = 40.dp
     val colors = LocalPalette.current
     SizePanel(host, dock, workArea, "canvas_size", "canvas-size", view) { actions ->
         SizeAxes(actions, view, "canvas-size")
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SizeUnits(actions, view, "canvas-size", Modifier.weight(1f))
-            SizeCheck(actions, view.getString("relative_label"), view.getBoolean("relative"), "relative", "canvas-size-relative")
-        }
+        SizeUnits(actions, view, "canvas-size", Modifier.fillMaxWidth())
+        SizeCheck(actions, view.getString("relative_label"), view.getBoolean("relative"), "relative", "canvas-size-relative")
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(view.getString("anchor_label"), Modifier.weight(1f))
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {

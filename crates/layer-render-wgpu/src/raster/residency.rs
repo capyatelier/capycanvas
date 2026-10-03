@@ -5,7 +5,7 @@ use super::*;
 
 impl WgpuRasterizer {
     pub(crate) fn native_backing(&self, id: LayerId) -> Option<&Arc<RasterData>> {
-        return self.native_edit.as_ref()?.backing.get(&id);
+        self.native_edit.as_ref()?.backing.get(&id)
     }
 
     pub(crate) fn native_color_tile(

@@ -612,6 +612,13 @@ resources-lookup-import = 読み込む…
 resources-lookup-replace = 置き換える…
 resources-lookup-files = カラールックアップファイル
 resources-lookup-unavailable = このプラットフォームではカラールックアップをまだ読み込めません。
+resources-layer-menu-stop-using-as-reference = このレイヤーを参照に使用しない
+resources-coverage-from-layer-opacity = レイヤーの不透明度から
+resources-coverage-from-layer-mask = レイヤーマスクから
+resources-reference-empty-unmarked = このレイヤーは空で、下に参照レイヤーが指定されていません
+resources-reference-tool-unmarked = このツールは参照レイヤーから色を取得しますが、参照レイヤーが指定されていません
+resources-reference-tool-mark-first = このツールは参照レイヤーから色を取得します。先にレイヤーパネルで参照レイヤーを指定してください。
+resources-reference-use-layer = 「{ $name }」を参照にする
 
 resources-analysis-updating = 更新中…
 resources-analysis-error = この調整を更新できませんでした。

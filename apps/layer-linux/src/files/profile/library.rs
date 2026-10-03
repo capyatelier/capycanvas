@@ -19,13 +19,12 @@ pub(super) struct Entry {
     pub(super) visible: bool,
 }
 impl Entry {
-    pub(super) fn display_name(&self, localizer: &layer_ui::Localizer) -> String {
-        if self.channels.is_none() {
-            let id = self.path.file_stem().unwrap_or_default().to_string_lossy().chars().take(12).collect::<String>();
-            layer_ui::color_feature_copy::profile_unavailable(localizer, &id)
-        } else if self.name.is_empty() { localizer.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string() }
-        else { self.name.clone() }
+    fn metadata(&self) -> policy::ProfileEntry {
+        policy::ProfileEntry { id: self.path.file_stem().unwrap_or_default().to_string_lossy().into_owned(),
+            bytes: 0, name: self.name.clone(), channels: self.channels, profile: None, issue: self.issue.clone() }
     }
+    pub(super) fn display_name(&self, localizer: &layer_ui::Localizer) -> String { self.metadata().display_name(localizer) }
+    fn matches(&self, query: &str, localizer: &layer_ui::Localizer) -> bool { self.metadata().matches(query, localizer) }
     fn description(&self, localizer: &layer_ui::Localizer) -> String {
         self.issue.as_ref().map(|reason|reason.profile_message(localizer)).unwrap_or_else(|| layer_ui::color_feature_copy::profile_visibility(localizer, self.channels, self.visible))
     }

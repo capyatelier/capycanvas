@@ -17,24 +17,26 @@ import org.json.JSONObject
     var space by remember {mutableStateOf("Srgb")}
     var custom by remember {mutableStateOf<JSONObject?>(null)}
     DisposableEffect(job) {onDispose {job.close()}}
-    AlertDialog(onDismissRequest=job::close,title={Text(if(rasterize)"Rasterize Retained Source" else "Repair Source Profile")},
-        dismissButton={TextButton(job::close){Text(if(job.busy)"Cancel operation" else "Cancel")}},
-        confirmButton={TextButton(job::apply,enabled=job.ready&&!job.busy){Text(if(rasterize)"Rasterize" else if(job.addsLayer)"Add Corrected Source" else "Apply Profile")}},
+    val copy=host.catalog.getJSONObject("document_color_copy")
+    LaunchedEffect(host.languageTag) { job.refreshCopy() }
+    val common=copy.getJSONObject("common")
+    AlertDialog(onDismissRequest=job::close,title={Text(copy.getString(if(rasterize)"rasterize_title" else "repair_title"))},
+        dismissButton={TextButton(job::close){Text(common.getString("cancel"))}},
+        confirmButton={TextButton(job::apply,enabled=job.ready&&!job.busy){Text(copy.getString(if(rasterize)"rasterize" else if(job.addsLayer)"add_source" else "apply_profile"))}},
         text={Column(Modifier.fillMaxWidth().heightIn(max=600.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-            Text(if(rasterize)"Convert the original to the document color space and bit depth at its full size. Existing paint, position, masks and adjustments stay intact. Undo restores the original profile and precision."
-                else "Change how original image numbers are interpreted, keeping their samples and depth. A layer with pixel edits receives a separate corrected original at the same position; the existing edits remain intact.")
+            Text(copy.getString(if(rasterize)"rasterize_help" else "repair_help"))
             if(!job.busy) {
                 if(!rasterize) {
-                    ColorChoice("Correct source profile",listOf("Srgb" to "sRGB","DisplayP3" to "Display P3","AdobeRgb" to "Adobe RGB (1998)","ProPhoto" to "ProPhoto RGB")+(custom?.let{listOf("custom" to it.getString("name"))}?:emptyList()),space){space=it;job.invalidate()}
-                    ImportProfileButton {custom=it;space="custom";job.invalidate()}
+                    ColorChoice(copy.getString("correct_profile"),listOf("Srgb" to "sRGB","DisplayP3" to "Display P3","AdobeRgb" to "Adobe RGB (1998)","ProPhoto" to "ProPhoto RGB")+(custom?.let{listOf("custom" to profileCaption(host,it))}?:emptyList()),space){space=it;job.invalidate()}
+                    ImportProfileButton(host) {custom=it;space="custom";job.invalidate()}
                 }
-                TextButton({job.prepare(if(rasterize)null else if(space=="custom")custom!!.getJSONObject("profile") else obj("Builtin" to space))}){Text("Preview Complete Result")}
+                TextButton({job.prepare(if(rasterize)null else if(space=="custom")custom!!.getJSONObject("profile") else obj("Builtin" to space))}){Text(copy.getString("preview"))}
             }
-            if(job.busy){CircularProgressIndicator();Text("Preparing complete source result…")}
-            if(job.sourceProfile.isNotEmpty())Text("Current source profile: ${job.sourceProfile}")
-            if(job.addsLayer)Text("Apply adds a corrected original as a new layer. The existing layer keeps its edits, masks and adjustments.")
-            if(job.clipped>0)Text("Some source colors exceed the document gamut and will be clipped. Compare before applying.")
-            job.previews.forEachIndexed {i,image->Text(if(i==0)"Before" else "After");Image(image,if(i==0)"Original composition" else "Prepared composition",Modifier.fillMaxWidth().heightIn(max=180.dp))}
-            job.error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+            if(job.busy){CircularProgressIndicator();Text(copy.getString(if(rasterize)"rasterize_comparison" else "preparing_comparison"))}
+            if(job.sourceProfile.isNotEmpty()){Text(copy.getString("current_source"));Text(job.sourceProfile)}
+            if(job.addsLayer)Text(copy.getString("adds_layer"))
+            if(job.clipped>0)Text(copy.getString("source_clipped"))
+            job.previews.forEachIndexed {i,image->Text(copy.getString(if(i==0)"before" else "after"));Image(image,copy.getString(if(i==0)"original_composition" else "prepared_composition"),Modifier.fillMaxWidth().heightIn(max=180.dp))}
+            ColorFailureText(host, job.error)
         }})
 }

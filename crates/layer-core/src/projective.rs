@@ -152,7 +152,7 @@ impl Projective {
             .flat_map(|ring| ring.iter())
             .map(|p| weight([p.x, p.y].map(f64::from)))
             .fold(f64::NEG_INFINITY, f64::max);
-        if !(largest > 0.) {
+        if largest.partial_cmp(&0.) != Some(std::cmp::Ordering::Greater) {
             return Vec::new();
         }
         let floor = largest * MIN_WEIGHT_RATIO;

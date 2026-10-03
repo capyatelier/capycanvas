@@ -29,7 +29,7 @@ import org.json.JSONObject
     }
 }
 @Composable internal fun NewDrawingDialog(host: CanvasHost, spec: JSONObject, onDismiss: () -> Unit, onCreate: (JSONObject) -> Unit) {
-    val model = remember { spec.getJSONObject("creation") }
+    val model = spec.getJSONObject("creation")
     var options by remember { mutableStateOf(JSONObject(model.getJSONObject("options").toString())) }
     var width by remember { mutableStateOf(options.getJSONArray("extent").getInt(0).toString()) }
     var height by remember { mutableStateOf(options.getJSONArray("extent").getInt(1).toString()) }
@@ -57,7 +57,7 @@ import org.json.JSONObject
                         host.documentChanged()
                     }
                     onCreate(selected)
-                } catch (e: Exception) { error = e.message ?: "Could not create the drawing" }
+                } catch (e: Exception) { error = e.message ?: host.bootstrap!!.getString("action_failed") }
                 finally { saving = false }
             }
         }) { Text(text.getString("create")) } }, dismissButton = { TextButton(onDismiss, Modifier.testTag("new-document-cancel"), enabled = !saving) { Text(text.getString("cancel")) } },
@@ -72,8 +72,8 @@ import org.json.JSONObject
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(width, { width = it }, label = { Text(spec.getString("width_label")) }, modifier = Modifier.weight(1f).testTag("new-document-width"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
-                    OutlinedTextField(height, { height = it }, label = { Text(spec.getString("height_label")) }, modifier = Modifier.weight(1f).testTag("new-document-height"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
+                    CoreTextField(width, { width = it }, label = { Text(spec.getString("width_label")) }, modifier = Modifier.weight(1f).testTag("new-document-width"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    CoreTextField(height, { height = it }, label = { Text(spec.getString("height_label")) }, modifier = Modifier.weight(1f).testTag("new-document-height"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 }
                 val spaces = model.getJSONArray("spaces")
                 ColorChoice(text.getString("space"), (0 until spaces.length()).map { spaces.getJSONArray(it).let { a -> a.getString(0) to a.getString(1) } }, options.getJSONObject("color").getString("space")) { color("space", it) }
@@ -85,7 +85,7 @@ import org.json.JSONObject
                 Text(appearance.getString("blending_help"), style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("new-document-blending-note"))
                 ColorChoice(text.getString("background"), model.getJSONArray("backgrounds").let { a -> (0 until a.length()).map { a.getJSONArray(it).let { c -> c.getString(0) to c.getString(1) } } }, options.getString("background")) { options = JSONObject(options.toString()).put("background", it) }
-                OutlinedTextField(name, { name = it }, label = { Text(text.getString("save_preset")) }, singleLine = true)
+                CoreTextField(name, { name = it }, label = { Text(text.getString("save_preset")) })
                 Row { Checkbox(defaults, { defaults = it }); Text(text.getString("use_defaults"), Modifier.padding(top = 12.dp)) }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }

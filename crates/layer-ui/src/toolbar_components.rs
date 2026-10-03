@@ -114,6 +114,7 @@ impl ToolbarNumericBinding {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[expect(clippy::large_enum_variant, reason = "Tool option publications retain inline range fields without allocating")]
 pub enum ToolOption {
     Numeric(ToolSetting),
     /// One atomic interval field; endpoint edits use the existing setting IDs.
@@ -146,7 +147,7 @@ impl ToolOption {
                 a.id == b.id && a.numeric == b.numeric
             }
             (Self::Range { id: a, bounds: p, .. }, Self::Range { id: b, bounds: q, .. }) => {
-                a == b && p.iter().zip(q).all(|(a, b)| {
+                a == b && p.iter().zip(q.iter()).all(|(a, b)| {
                     a.id == b.id && a.numeric == b.numeric
                 })
             }

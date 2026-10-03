@@ -28,8 +28,11 @@ import org.json.JSONObject
 import kotlin.math.*
 
 /** GTK geometry, hit testing and recipe mapping stay in shared Rust. */
-@Composable internal fun ProofSdrControls(form:JSONObject,texture:ImageBitmap?,send:(JSONObject)->Unit) {
+@Composable internal fun ProofSdrControls(host:CanvasHost,form:JSONObject,texture:ImageBitmap?,send:(JSONObject)->Unit) {
     val action by rememberUpdatedState(send)
+    val copy=host.catalog.getJSONObject("proof_copy")
+    val labels=listOf("contrast","balance","brightness","highlight_color").map(copy::getString)
+    val numeric=remember(host.languageTag,labels){labels.map{JSONObject(Native.numericLabels(it,host.languageTag))}}
     val ink=LocalPalette.current.text
     var selectedPart by remember {mutableIntStateOf(0)}
     var gestureActive by remember {mutableStateOf(false)}
@@ -69,13 +72,13 @@ import kotlin.math.*
         val dial=remember(live.toString(),side){query()}
         fun JSONArray.point()=Offset(getDouble(0).toFloat()*density,getDouble(1).toFloat()*density)
         Canvas(Modifier.fillMaxSize().testTag("sdr-tone-pad").semantics {
-            contentDescription="SDR appearance"
-            stateDescription=listOf("Contrast","Balance","Brightness","Color intensity").mapIndexed { index,label -> "$label ${round(dial.getJSONArray("percentages").getDouble(index)).toInt()}%" }.joinToString(", ")
-            customActions=listOf(CustomAccessibilityAction("Reset SDR appearance"){reset(3);true},
-                CustomAccessibilityAction("Increase contrast"){nudge(0,1,1.0);true},CustomAccessibilityAction("Decrease contrast"){nudge(0,1,-1.0);true},
-                CustomAccessibilityAction("Favor fine texture"){nudge(0,0,1.0);true},CustomAccessibilityAction("Favor broad structure"){nudge(0,0,-1.0);true},
-                CustomAccessibilityAction("Increase brightness"){nudge(1,0,1.0);true},CustomAccessibilityAction("Decrease brightness"){nudge(1,0,-1.0);true},
-                CustomAccessibilityAction("Increase color intensity"){nudge(2,0,1.0);true},CustomAccessibilityAction("Decrease color intensity"){nudge(2,0,-1.0);true})
+            contentDescription=copy.getString("balance_contrast")
+            stateDescription=labels.mapIndexed { index,label -> "$label ${round(dial.getJSONArray("percentages").getDouble(index)).toInt()}%" }.joinToString(", ")
+            customActions=listOf(CustomAccessibilityAction(copy.getString("reset_sdr")){reset(3);true},
+                CustomAccessibilityAction(numeric[0].getString("increase")){nudge(0,1,1.0);true},CustomAccessibilityAction(numeric[0].getString("decrease")){nudge(0,1,-1.0);true},
+                CustomAccessibilityAction(numeric[1].getString("increase")){nudge(0,0,1.0);true},CustomAccessibilityAction(numeric[1].getString("decrease")){nudge(0,0,-1.0);true},
+                CustomAccessibilityAction(numeric[2].getString("increase")){nudge(1,0,1.0);true},CustomAccessibilityAction(numeric[2].getString("decrease")){nudge(1,0,-1.0);true},
+                CustomAccessibilityAction(numeric[3].getString("increase")){nudge(2,0,1.0);true},CustomAccessibilityAction(numeric[3].getString("decrease")){nudge(2,0,-1.0);true})
         }.onKeyEvent(::key).onFocusChanged{if(it.isFocused){focusedPart=0;selectedPart=0}else{if(focusedPart==0)focusedPart=-1;cancel()}}.focusRequester(focus[0]).focusable().pointerInput(side) {
             var lastTap=0L;var lastPart=-1;var lastPosition=Offset.Zero
             awaitEachGesture {
@@ -128,6 +131,6 @@ import kotlin.math.*
         }
         dial.getJSONArray("readouts").objects().forEachIndexed{i,r->val box=r.getJSONArray("icon");SharedIcon(dial.getJSONArray("icons").getString(i).removePrefix("layer-").removeSuffix("-symbolic"),null,Modifier.offset(box.getDouble(0).dp,box.getDouble(1).dp).size(box.getDouble(2).dp,box.getDouble(3).dp).then(Modifier.graphicsLayer{alpha=.62f}))}
         val reset=dial.getJSONArray("reset")
-        SharedIcon("reset","Reset SDR appearance",Modifier.offset(reset.getDouble(0).dp,reset.getDouble(1).dp).size(reset.getDouble(2).dp,reset.getDouble(3).dp).testTag("sdr-appearance-reset").clickable(role=Role.Button){reset(3)})
+        SharedIcon("reset",copy.getString("reset_sdr"),Modifier.offset(reset.getDouble(0).dp,reset.getDouble(1).dp).size(reset.getDouble(2).dp,reset.getDouble(3).dp).testTag("sdr-appearance-reset").clickable(role=Role.Button){reset(3)})
     }
 }

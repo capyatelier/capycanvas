@@ -300,7 +300,7 @@ impl NativeTileEncoder {
                         bind_group_layouts: &[Some(&layout)],
                         immediate_size: 0,
                     });
-                pipelines.push(crate::Deferred::compute(&device, "native SDR tile writeback", &pipeline_layout, &crate::Deferred::wgsl(&device, "native SDR tile writeback", source), "main"));
+                pipelines.push(crate::Deferred::compute(device, "native SDR tile writeback", &pipeline_layout, &crate::Deferred::wgsl(device, "native SDR tile writeback", source), "main"));
                 layouts.push(layout);
             }
         }

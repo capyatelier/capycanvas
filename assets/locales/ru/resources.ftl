@@ -495,6 +495,13 @@ resources-lookup-replace = Заменить…
 resources-lookup-files = Файлы таблиц соответствия цветов
 resources-lookup-unavailable = Импорт таблиц соответствия цветов пока недоступен на этой платформе.
 resources-lookup-failed = Не удалось импортировать таблицу соответствия.
+resources-layer-menu-stop-using-as-reference = Перестать использовать этот слой как опорный
+resources-coverage-from-layer-opacity = Из непрозрачности слоя
+resources-coverage-from-layer-mask = Из маски слоя
+resources-reference-empty-unmarked = Этот слой пуст, и ни один слой под ним не отмечен как опорный
+resources-reference-tool-unmarked = Этот инструмент берёт образцы из опорных слоёв, но ни один слой не отмечен
+resources-reference-tool-mark-first = Этот инструмент берёт образцы из опорных слоёв. Сначала отметьте один из них в панели «Слои».
+resources-reference-use-layer = Использовать { $name } как опорный слой
 
 resources-analysis-updating = Обновление…
 resources-analysis-error = Не удалось обновить эту коррекцию.

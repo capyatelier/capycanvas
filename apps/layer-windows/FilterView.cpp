@@ -4,6 +4,9 @@
 #include <optional>
 using namespace CapyEffects;
 namespace {
+A categorySchema(A const& categories){
+    A schema;for(auto value:categories){auto item=value.GetObject();schema.Append(O({{L"id",item.GetNamedValue(L"id")},{L"icon",S(str(item,L"icon"))}}));}return schema;
+}
 struct FiltersView : std::enable_shared_from_this<FiltersView> {
     std::shared_ptr<WorkspaceData> data;
     Grid root,header;
@@ -12,10 +15,12 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     Image categoryGlyph;
     hstring categoryGlyphKey;
     TextBox search;
+    Button toggle{nullptr};
+    TextBlock empty{nullptr};
     StackPanel rows;
     ScrollView list;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
-    struct PreviewRow {hstring id;Button button{nullptr};Image image{nullptr};};
+    struct PreviewRow {hstring id;Button button{nullptr};Image image{nullptr};TextBlock text{nullptr},heading{nullptr};};
     std::vector<PreviewRow> previews;
     ~FiltersView(){if(timer)timer.Stop();RemoveFilterPreviewView(data->previews,reinterpret_cast<uint64_t>(this));}
     void preview(){
@@ -42,13 +47,16 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         auto weak=weak_from_this();root.Padding({6,6,6,6});root.RowSpacing(split?0:6);
         header.Visibility(split?Visibility::Collapsed:Visibility::Visible);
         AutomationProperties::SetAutomationId(root,L"filter-picker");
+        auto title=[source=std::weak_ptr<WorkspaceData>(data)]{if(auto current=source.lock())return str(find(array(current->model,L"panels"),L"id",L"adjustments"),L"title");return hstring();};
+        copyName(data,root,LocalizedCopy(title(),title));
+        copyName(data,list,LocalizedCopy(title(),title));
         RowDefinition a;a.Height({1,GridUnitType::Auto});root.RowDefinitions().Append(a);
         RowDefinition b;b.Height({1,GridUnitType::Star});root.RowDefinitions().Append(b);
         ColumnDefinition content;content.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(content);
         ColumnDefinition action;action.Width({32,GridUnitType::Pixel});header.ColumnDefinitions().Append(action);header.ColumnSpacing(6);
         category.MinWidth(0);category.MinHeight(32);category.FontSize(data->textSize());category.Background(data->brush(L"input"));
         category.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetName(category,data->caption(L"color",L"category"));AutomationProperties::SetAutomationId(category,L"filter-category");
+        copyName(data,category,data->copyCaption(L"color",L"category"));AutomationProperties::SetAutomationId(category,L"filter-category");
         category.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating){
             auto categories=array(self->data->state,L"filter_categories");int index=self->category.SelectedIndex();
             if(index>=0&&uint32_t(index)<categories.Size())self->send(O({{L"op",S(L"category")},
@@ -69,7 +77,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         search.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Escape){
             if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_search")}}));e.Handled(true);
         }});
-        auto toggle=button(data,str(object(data->state,L"filter_picker"),L"search_label"),[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_search")}}));});
+        toggle=button(data,str(object(data->state,L"filter_picker"),L"search_label"),[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_search")}}));});
         toggle.Content(icon(L"search",data->theme()));toggle.Height(32);Grid::SetColumn(toggle,1);
         AutomationProperties::SetAutomationId(toggle,L"filter-search-toggle");header.Children().Append(toggle);root.Children().Append(header);
         list.Content(rows);list.HorizontalScrollMode(ScrollingScrollMode::Disabled);
@@ -82,8 +90,9 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     }
     void refresh(){
         Updating updating(data);auto picker=object(data->state,L"filter_picker");auto categories=array(data->state,L"filter_categories");
-        auto key=categories.Stringify();
-        if(key!=catalogKey){catalogKey=key;category.Items().Clear();for(auto value:categories)category.Items().Append(box_value(str(value.GetObject(),L"label")));}
+        auto key=categorySchema(categories).Stringify();
+        if(key!=catalogKey){catalogKey=key;category.Items().Clear();for(auto value:categories)comboOption(category,str(value.GetObject(),L"label"));}
+        for(uint32_t i=0;i<categories.Size();++i)comboOptionText(category,i,str(categories.GetObjectAt(i),L"label"));
         int categorySelected=0;for(uint32_t i=0;i<categories.Size();i++)if(str(categories.GetObjectAt(i),L"id")==str(picker,L"category"))categorySelected=i;
         category.SelectedIndex(categorySelected);
         auto glyph=categorySelected>=0&&uint32_t(categorySelected)<categories.Size()?str(categories.GetObjectAt(categorySelected),L"icon",L"adjustments"):hstring(L"adjustments");
@@ -93,41 +102,51 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         categoryGlyph.Visibility(open?Visibility::Collapsed:Visibility::Visible);
         category.Visibility(open?Visibility::Collapsed:Visibility::Visible);search.Visibility(open?Visibility::Visible:Visibility::Collapsed);
         search.PlaceholderText(str(picker,L"search_label"));AutomationProperties::SetName(search,str(picker,L"search_label"));
+        AutomationProperties::SetName(toggle,str(picker,L"search_label"));CapyUi::tooltip(toggle,str(picker,L"search_label"));
         auto query=str(picker,L"search");
         if(!open||(searchDraft&&query==*searchDraft))searchDraft.reset();
         if(!searchDraft&&search.Text()!=query)search.Text(query);
         if(open&&!wasOpen)search.Focus(FocusState::Programmatic);
-        auto markSelected=[&]{for(auto const& row:previews){bool active=row.id==str(picker,L"selected");row.button.Background(active?selected(data):clear());AutomationProperties::SetItemStatus(row.button,active?data->caption(L"search",L"selected"):L"");}};
-        auto choices=array(data->state,L"adjustments");auto next=choices.Stringify();if(next==listKey){markSelected();return;}listKey=next;
-        rows.Children().Clear();previews.clear();hstring section;
-        for(auto value:choices){
-            auto choice=value.GetObject();
-            if(!split&&section!=str(choice,L"category")){
-                section=str(choice,L"category");StackPanel heading;heading.Orientation(Orientation::Horizontal);heading.Spacing(6);
-                heading.Children().Append(icon(str(choice,L"category_icon",L"adjustments"),data->theme()));
-                heading.Children().Append(label(data,str(choice,L"category_label"),true));
-                heading.Opacity(.55);heading.Margin({8,8,8,4});rows.Children().Append(heading);
+        auto choices=array(data->state,L"adjustments");A schema;
+        for(auto value:choices){auto item=value.GetObject();schema.Append(O({{L"id",S(str(item,L"id"))},{L"category",S(str(item,L"category"))},{L"icon",S(str(item,L"icon"))},{L"category_icon",S(str(item,L"category_icon"))},{L"animated",B(flag(item,L"animated"))},{L"action",object(item,L"action")}}));}
+        auto next=schema.Stringify()+data->theme();
+        if(next!=listKey){
+            listKey=next;rows.Children().Clear();previews.clear();empty=nullptr;hstring section;
+            for(auto value:choices){
+                auto choice=value.GetObject();TextBlock headingText{nullptr};
+                if(!split&&section!=str(choice,L"category")){
+                    section=str(choice,L"category");StackPanel heading;heading.Orientation(Orientation::Horizontal);heading.Spacing(6);
+                    heading.Children().Append(icon(str(choice,L"category_icon",L"adjustments"),data->theme()));
+                    headingText=label(data,str(choice,L"category_label"),true);heading.Children().Append(headingText);
+                    heading.Opacity(.55);heading.Margin({8,8,8,4});rows.Children().Append(heading);
+                }
+                auto pick=button(data,str(choice,L"label"),[data=data,action=object(choice,L"action")]{data->dispatch(action);});
+                pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+                pick.Padding({6,3,6,3});
+                StackPanel content;Image preview;preview.Height(40);preview.Stretch(Stretch::Fill);preview.IsHitTestVisible(false);
+                AutomationProperties::SetName(preview,str(choice,L"label"));
+                AutomationProperties::SetAutomationId(preview,L"filter-preview-"+str(choice,L"id"));
+                content.Children().Append(preview);
+                Grid caption;caption.HorizontalAlignment(HorizontalAlignment::Right);ColumnDefinition mark;mark.Width({1,GridUnitType::Auto});caption.ColumnDefinitions().Append(mark);
+                ColumnDefinition name;name.Width({1,GridUnitType::Star});caption.ColumnDefinitions().Append(name);
+                StackPanel marks;marks.Orientation(Orientation::Horizontal);marks.Spacing(4);marks.Margin({0,0,4,0});
+                if(flag(choice,L"animated")){auto animation=icon(L"animation",data->theme(),12);animation.Opacity(.55);marks.Children().Append(animation);}
+                marks.Children().Append(icon(str(choice,L"icon",L"adjustments"),data->theme()));caption.Children().Append(marks);
+                auto text=label(data,str(choice,L"label"));text.TextTrimming(TextTrimming::CharacterEllipsis);text.TextAlignment(TextAlignment::Right);
+                Grid::SetColumn(text,1);caption.Children().Append(text);content.Children().Append(caption);pick.Content(content);
+                previews.push_back({str(choice,L"id"),pick,preview,text,headingText});
+                AutomationProperties::SetAutomationId(pick,L"filter-"+str(choice,L"id"));
+                CapyUi::tooltip(pick,str(choice,L"tooltip"));rows.Children().Append(pick);
             }
-            auto pick=button(data,str(choice,L"label"),[data=data,action=object(choice,L"action")]{data->dispatch(action);});
-            pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-            pick.Padding({6,3,6,3});
-            StackPanel content;Image preview;preview.Height(40);preview.Stretch(Stretch::Fill);preview.IsHitTestVisible(false);
-            AutomationProperties::SetName(preview,str(choice,L"label"));
-            AutomationProperties::SetAutomationId(preview,L"filter-preview-"+str(choice,L"id"));
-            content.Children().Append(preview);
-            Grid caption;caption.HorizontalAlignment(HorizontalAlignment::Right);ColumnDefinition mark;mark.Width({1,GridUnitType::Auto});caption.ColumnDefinitions().Append(mark);
-            ColumnDefinition name;name.Width({1,GridUnitType::Star});caption.ColumnDefinitions().Append(name);
-            StackPanel marks;marks.Orientation(Orientation::Horizontal);marks.Spacing(4);marks.Margin({0,0,4,0});
-            if(flag(choice,L"animated")){auto animation=icon(L"animation",data->theme(),12);animation.Opacity(.55);marks.Children().Append(animation);}
-            marks.Children().Append(icon(str(choice,L"icon",L"adjustments"),data->theme()));caption.Children().Append(marks);
-            auto text=label(data,str(choice,L"label"));text.TextTrimming(TextTrimming::CharacterEllipsis);text.TextAlignment(TextAlignment::Right);
-            Grid::SetColumn(text,1);caption.Children().Append(text);content.Children().Append(caption);pick.Content(content);
-            previews.push_back({str(choice,L"id"),pick,preview});
-            AutomationProperties::SetAutomationId(pick,L"filter-"+str(choice,L"id"));
-            CapyUi::tooltip(pick,str(choice,L"tooltip"));rows.Children().Append(pick);
+            if(!choices.Size()){empty=label(data,str(picker,L"empty_label"));AutomationProperties::SetAutomationId(empty,L"filter-empty");empty.Margin({8,8,8,8});empty.Opacity(.55);rows.Children().Append(empty);}
         }
-        markSelected();
-        if(!choices.Size()){auto empty=label(data,str(picker,L"empty_label"));empty.Margin({8,8,8,8});empty.Opacity(.55);rows.Children().Append(empty);}
+        for(uint32_t i=0;i<choices.Size();++i){
+            auto choice=choices.GetObjectAt(i);auto const& row=previews[i];auto title=str(choice,L"label");
+            row.text.Text(title);AutomationProperties::SetName(row.button,title);AutomationProperties::SetName(row.image,title);CapyUi::tooltip(row.button,str(choice,L"tooltip"));
+            if(row.heading)row.heading.Text(str(choice,L"category_label"));
+            bool active=row.id==str(picker,L"selected");row.button.Background(active?selected(data):clear());AutomationProperties::SetItemStatus(row.button,active?data->caption(L"search",L"selected"):L"");
+        }
+        if(empty)empty.Text(str(picker,L"empty_label"));
     }
 };
 }
@@ -147,7 +166,7 @@ FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Binding
 }
 
 FrameworkElement FilterTypesPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
-    struct State {hstring key;std::vector<Button> buttons;};
+    struct State {hstring key;std::vector<Button> buttons;std::vector<TextBlock> labels;};
     auto state=std::make_shared<State>();Grid root;root.Padding({6,6,6,6});root.RowSpacing(6);
     RowDefinition rows;rows.Height({1,GridUnitType::Star});root.RowDefinitions().Append(rows);
     RowDefinition footer;footer.Height({1,GridUnitType::Auto});root.RowDefinitions().Append(footer);
@@ -155,13 +174,13 @@ FrameworkElement FilterTypesPanel(std::shared_ptr<WorkspaceData> const& data,Bin
     ScrollView scroll;scroll.Content(choices);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
     scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
     scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);root.Children().Append(scroll);
-    auto cancel=button(data,data->common(L"cancel"),[data]{data->dispatch(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"cancel_filter")}})}}));});
+    auto cancel=button(data,data->copyCommon(L"cancel"),[data]{data->dispatch(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"cancel_filter")}})}}));});
     cancel.HorizontalAlignment(HorizontalAlignment::Left);cancel.Height(36);
     AutomationProperties::SetAutomationId(cancel,L"cancel-filter");Grid::SetRow(cancel,1);root.Children().Append(cancel);
     bindings.emplace_back([data,state,choices]{
-        auto categories=array(data->state,L"filter_categories");auto key=categories.Stringify()+data->theme();
+        auto categories=array(data->state,L"filter_categories");auto key=categorySchema(categories).Stringify()+data->theme();
         if(state->key!=key){
-            state->key=key;state->buttons.clear();choices.Children().Clear();
+            state->key=key;state->buttons.clear();state->labels.clear();choices.Children().Clear();
             for(auto value:categories){
                 auto item=value.GetObject();auto category=item.GetNamedValue(L"id");
                 auto pick=button(data,str(item,L"label"),[data,category]{data->dispatch(O({{L"type",S(L"filter_picker")},
@@ -169,14 +188,15 @@ FrameworkElement FilterTypesPanel(std::shared_ptr<WorkspaceData> const& data,Bin
                 pick.Height(44);pick.Padding({6,5,6,5});pick.HorizontalAlignment(HorizontalAlignment::Stretch);
                 pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
                 StackPanel labelRow;labelRow.Orientation(Orientation::Horizontal);labelRow.Spacing(6);
-                labelRow.Children().Append(icon(str(item,L"icon"),data->theme()));labelRow.Children().Append(label(data,str(item,L"label")));
+                labelRow.Children().Append(icon(str(item,L"icon"),data->theme()));auto text=label(data,str(item,L"label"));labelRow.Children().Append(text);state->labels.push_back(text);
                 pick.Content(labelRow);AutomationProperties::SetAutomationId(pick,L"filter-type-"+str(item,L"id",L"all"));
                 state->buttons.push_back(pick);choices.Children().Append(pick);
             }
         }
         auto selectedCategory=str(object(data->state,L"filter_picker"),L"category");
         for(uint32_t i=0;i<categories.Size();++i){
-            bool active=str(categories.GetObjectAt(i),L"id")==selectedCategory;
+            auto item=categories.GetObjectAt(i);auto title=str(item,L"label");state->labels[i].Text(title);AutomationProperties::SetName(state->buttons[i],title);
+            bool active=str(item,L"id")==selectedCategory;
             state->buttons[i].Background(active?selected(data):clear());
             AutomationProperties::SetItemStatus(state->buttons[i],active?data->caption(L"search",L"selected"):L"");
         }

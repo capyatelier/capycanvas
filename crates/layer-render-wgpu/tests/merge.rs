@@ -175,7 +175,7 @@ fn merge_visible_and_flatten_keep_the_composite() {
 fn merge_visible_and_flatten_in(space: BlendSpace) {
     let (mut engine, mut input) = painted(space);
     let hidden = engine.allocate_layer_id();
-    engine.apply_edit(Edit::InsertLayer { index: 1, layer: Layer::paint(hidden, "Hidden") }).unwrap();
+    engine.apply_edit(Edit::InsertLayer { index: 1, layer: Box::new(Layer::paint(hidden, "Hidden")) }).unwrap();
     stroke(&mut engine, &mut input, "Hidden", [0., 0., 0., 1.], Point { x: 0., y: 0. }, Point { x: 380., y: 250. }, 3_000_000_000);
     engine.apply_edit(Edit::SetLayerVisibility { id: hidden, visible: false }).unwrap();
     let original = image(&mut engine, 4_000_000_000);

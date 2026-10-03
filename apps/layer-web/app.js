@@ -62,6 +62,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer,
+  statusError = null,
   shownHostError = null;
 let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
 let commandBar;
@@ -108,11 +109,16 @@ function element(tag, className, text) {
   return node;
 }
 function message(error) {
-  $("status").textContent = String(error);
+  statusError = error;
+  refreshMessage();
   clearTimeout(statusTimer);
   statusTimer = setTimeout(() => {
+    statusError = null;
     $("status").textContent = "";
   }, 7000);
+}
+function refreshMessage() {
+  if(statusError!==null)$("status").textContent=typeof statusError==="function"?statusError():app.color_feature_error_copy(statusError);
 }
 function answerNotice(id, accept) {
   if (accept) return dispatch({ type: "notice", id, accept });
@@ -126,7 +132,7 @@ function button(text, action, className = "") {
 }
 function numberField(control, label, onChange, inline = false) {
   const read = typeof label === "function" ? label : null;
-  const number = createNumberField({ control, label:read ? read() : label, labels:next => app.numeric_labels(next), onChange, inline, icon, resolve: request => app.number_input(request) });
+  const number = createNumberField({ control, label:read ? read() : label, labels:next => app.numeric_labels(next), onChange, inline, icon, resolve: request => app.number_input(request), errorCaption: reason => app.native_caption({type:"numeric_error",reason}) });
   if(read){Object.defineProperty(number,"localizedLabel",{set:next=>number.relabel(next)});bindCopy(number,read,"localizedLabel");}
   return number;
 }
@@ -285,12 +291,15 @@ function queueLanguage() {
 function publishLanguage(patch) {
   if (!patch.localization) return false;
   refreshCopy(app);
+  refreshStartup();
+  refreshMessage();
   document.documentElement.lang = patch.localization.tag;
   document.title = catalog.app_name;
   for (const [id, key] of [["workspace","drawing_workspace"],["canvas","drawing_canvas"],["gpu-notice","canvas_availability"],["header-start","application_menus"],["header-end","workspace_controls"],["canvas-status","canvas_status"]]) $(id)?.setAttribute("aria-label", bootstrap[key]);
   canvas.setAttribute("aria-description", bootstrap.drawing_canvas_help);
   $("size-number")?.relabel(catalog.native_copy.color.brush_size);
   documents?.localize();
+  workspaceManager?.localize();
   refreshBindings();
   return true;
 }
@@ -555,13 +564,12 @@ function arrange(nextLayout, layoutOnly = false) {
     }
     const tabStyle = app.group_tab_style(group.id);
     const key = JSON.stringify([group.panels.map((id) => {
-      const view = customization.view(id); return [id, view.title, view.tab, view.icon];
+      const view = customization.view(id); return [id, view.tab, view.icon];
     }), group.active, group.tabs_visible, tabStyle]);
     if (node.dataset.key !== key) {
       node.dataset.key = key;
       node.dataset.panel = group.active;
       node.dataset.group = group.id;
-      node.setAttribute("aria-label", customization.view(group.active).title);
       node.classList.toggle("toolbar", !!group.tiles);
       const preview = node.querySelector(".panel-preview");
       releaseTabs(preview);
@@ -600,6 +608,15 @@ function arrange(nextLayout, layoutOnly = false) {
           footer.append(grip({ kind: "group", group: group.id })); preview.append(footer);
         }
       }
+    }
+    node.setAttribute("aria-label", customization.view(group.active).title);
+    for(const tab of node.querySelectorAll('.dock-tab')) {
+      const title=customization.view(tab.dataset.panel).title;
+      if(tab.title===title)continue;
+      tab.title=title;tab.setAttribute('aria-label',title);
+      const label=tab.querySelector('span');if(label)label.textContent=title;
+      const list=tab.parentElement;
+      if(list.dataset.automatic){pendingTabFits.add(list);tabFitFrame ||= requestAnimationFrame(fitTabs);}
     }
     node.classList.toggle("floating-panel", group.floating);
     node.classList.toggle("tool-strip", !!group.tiles && !group.tabs_visible);
@@ -1780,7 +1797,7 @@ try {
   window.addEventListener("storage", (event) => {
     if (event.key !== settingsKey) return;
     try { dispatch({ type: "restore_saved_settings", saved: localStorage.getItem(settingsKey) ?? "{}" }); }
-    catch (error) { console.error(error); message(app.document_delivery_message({type:"restore_preferences",detail:String(error)})); }
+    catch (error) { console.error(error); message({document_host_error:{type:"delivery",reason:{type:"restore_preferences",detail:String(error)}}}); }
   });
   systemTheme.addEventListener("change", () => dispatch(themeAction()));
   window.addEventListener("languagechange", () => { app.preferred_languages(Array.from(navigator.languages ?? [])); queueLanguage(); });
@@ -1796,7 +1813,7 @@ try {
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
   document.title = catalog.app_name;
   refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });
-  commandBar = createCommandBar({element, button, icon, dispatch, style:catalog.command_search_style, canvas, layoutChanged:() => glass?.queue()});
+  commandBar = createCommandBar({element, button, icon, dispatch, style:catalog.command_search_style, nativeCopy:catalog.native_copy, canvas, layoutChanged:() => glass?.queue()});
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
@@ -1834,12 +1851,12 @@ try {
   const screenChip = element("button", "proof-status");
   screenChip.id = "screen-status";
   $("canvas-status").insertBefore(screenChip, $("view-info"));
-  screenStatus = createScreenStatus({ root: screenChip, workspace, canvas, element, icon, dispatch });
+  screenStatus = createScreenStatus({ root: screenChip, workspace, canvas, element, icon, dispatch, nativeCopy:catalog.native_copy });
   performance.mark("capy.startup.controls");
   update(255);
   systemStatus.sync();
   $("status").textContent = "";
-  if (restoreError) { console.error(restoreError); message(app.document_delivery_message({type:"restore_preferences",detail:String(restoreError)})); }
+  if (restoreError) { console.error(restoreError); message({document_host_error:{type:"delivery",reason:{type:"restore_preferences",detail:String(restoreError)}}}); }
   new ResizeObserver(() => {
     workspaceViewport = [workspace.clientWidth, workspace.clientHeight];
     arrange();
@@ -1852,7 +1869,7 @@ try {
   // Adopt the saved UI before competing with initial GPU allocation. A storage
   // failure must still allow canvas startup and the workspace recovery UI.
   await Promise.race([workspaceManager.ready, new Promise(resolve => setTimeout(resolve, 1000))]);
-  documents.startRecovery().catch(error => message(app.document_recovery_unavailable(String(error))));
+  documents.startRecovery().catch(error => {const detail=String(error);message(()=>app.document_recovery_unavailable(detail));});
   performance.mark("capy.startup.gpu");
   await startGpu();
   if (window.launchQueue?.setConsumer) {

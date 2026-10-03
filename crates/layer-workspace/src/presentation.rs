@@ -152,8 +152,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         self.localization().text(layer_ui::MessageId::WORKSPACE_VISIBLE).to_string()
                     } else {
                         self.localization().text(layer_ui::MessageId::WORKSPACE_HIDDEN).to_string()
-                    }
-                    .into(),
+                    },
                     current: false,
                     actions: Vec::new(),
                 })
@@ -185,7 +184,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     }
             })
             .filter(|i| {
-                layer_ui::normalize_search(&format!("{} {} {}", self.summary_display_name(&i), i.metadata.name, i.metadata.description))
+                layer_ui::normalize_search(&format!("{} {} {}", self.summary_display_name(i), i.metadata.name, i.metadata.description))
                     .contains(&layer_ui::normalize_search(query))
             })
             .map(|i| {

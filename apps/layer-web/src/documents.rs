@@ -16,6 +16,14 @@ pub(super) async fn yield_browser() -> Result<(), JsValue> {
     JsFuture::from(promise).await.map(|_| ())
 }
 
+pub(super) fn host_error_reason(error: &JsValue) -> Option<layer_ui::DocumentHostErrorCopy> {
+    if let Ok(reason) = js_sys::Reflect::get(error, &js("document_host_error")) {
+        if let Ok(reason) = serde_wasm_bindgen::from_value(reason) { return Some(reason); }
+    }
+    js_sys::Reflect::has(error, &js("color_feature_error")).unwrap_or(false)
+        .then(||layer_ui::DocumentHostErrorCopy::Color(color_preferences::color_feature_reason(error.clone())))
+}
+
 #[wasm_bindgen]
 pub struct WebProject {
     session: Option<Box<UiSession<AttachedRenderer>>>,
@@ -32,16 +40,19 @@ pub struct WebProject {
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn document_request_title(&self, id: u32) -> Option<String> {
+        self.session.document_request(id).ok().map(|request|request.title(self.session.localization()).to_string())
+    }
     pub fn document_properties(&self) -> Result<js_sys::Promise, JsValue> {
         let info = layer_color::DocumentInfo::capture(self.session.engine().document());
-        let localization = self.session.localization().clone();
         Ok(future_to_promise(async move {
             let metadata = serde_json::to_string(&info).map_err(js)?;
-            let inspected = JsFuture::from(raster_worker::call("properties", &metadata, &js_sys::Array::new())?).await?;
-            let inspected: layer_color::InspectedDocumentInfo = serde_wasm_bindgen::from_value(inspected).map_err(js)?;
-            let view = layer_ui::document_properties(&inspected, &localization);
-            serialize(&view.rows.into_iter().chain(view.sources).collect::<Vec<_>>())
+            JsFuture::from(raster_worker::call("properties", &metadata, &js_sys::Array::new())?).await
         }))
+    }
+    pub fn document_properties_copy(&self, info: JsValue) -> Result<JsValue, JsValue> {
+        let info: layer_color::InspectedDocumentInfo = serde_wasm_bindgen::from_value(info).map_err(js)?;
+        serialize(&layer_ui::document_properties(&info, self.session.localization()))
     }
     pub fn export_copy(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::color_feature_copy::ExportCopy::new(self.session.localization()))
@@ -64,10 +75,6 @@ impl WebApp {
         let layer = if adds_layer {localizer.text(layer_ui::MessageId::COLOR_FEATURES_COLOR_ADDS_LAYER)} else {std::sync::Arc::from("")};
         args.set("layer", layer.as_ref()); localizer.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_SOURCE_PREVIEW, &args)
     }
-    pub fn export_preview_status(&self, recipe: JsValue, gainmap: bool, clipped: bool) -> Result<String, JsValue> {
-        let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
-        Ok(layer_ui::color_feature_copy::export_preview_status(self.session.localization(), recipe.format, gainmap, clipped))
-    }
     pub fn export_form(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::ExportForm::new_localized(self.session.engine().document(), self.session.localization()))
     }
@@ -79,8 +86,8 @@ impl WebApp {
     pub fn export_validate(&self, recipe: JsValue) -> Result<JsValue, JsValue> {
         let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
         let document = self.session.engine().document();
-        recipe.validate().map_err(|reason|js(reason.message(self.session.localization())))?;
-        recipe.output_extent([document.width, document.height]).map_err(|reason|js(reason.message(self.session.localization())))?;
+        recipe.validate().map_err(color_preferences::color_feature_rejection)?;
+        recipe.output_extent([document.width, document.height]).map_err(color_preferences::color_feature_rejection)?;
         serialize(&recipe)
     }
 
@@ -88,15 +95,22 @@ impl WebApp {
         &mut self,
         id: u32,
         success: bool,
-        error: Option<String>,
+        error: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let result = error.map_or(Ok(success), Err);
-        serialize(
-            &self
-                .session
-                .complete_document_request(id, result)
-                .map_err(js)?,
-        )
+        let change = if let Some(reason) = host_error_reason(&error) {
+            self.session.complete_document_request_failed(id, reason)
+        } else {
+            let result = if error.is_null() || error.is_undefined() { Ok(success) } else { Err(color_preferences::diagnostic_text(&error)) };
+            self.session.complete_document_request(id, result)
+        }.map_err(js)?;
+        serialize(&change)
+    }
+    pub fn finish_host_request(&mut self, id: u32, error: JsValue) -> Result<JsValue, JsValue> {
+        let reason = host_error_reason(&error);
+        let message = reason.as_ref().map_or_else(||color_preferences::diagnostic_text(&error), |reason|reason.message(self.session.localization()));
+        let change = self.session.dispatch(layer_ui::UiAction::CompleteRequest { id, error: Some(message) }).map_err(js)?;
+        if let Some(reason) = reason { self.session.set_host_error_copy(Some(reason)); }
+        serialize(&change)
     }
     pub fn respond_document(&mut self, id: u32, decision: JsValue) -> Result<JsValue, JsValue> {
         let decision = serde_wasm_bindgen::from_value(decision).map_err(js)?;

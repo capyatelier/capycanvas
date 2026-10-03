@@ -48,7 +48,7 @@ impl SelectionPainter {
                 .replace("BrushSelection", &format!("{name}Coverage"))
                 .replace("brush_selection", name)
         };
-        let shader = Deferred::wgsl(&device, "incremental selection coverage", compose_wgsl(&[
+        let shader = Deferred::wgsl(device, "incremental selection coverage", compose_wgsl(&[
                 include_str!("brush_types.wgsl"),
                 &include_str!("brush_textures.wgsl").replace("@group(3)", "@group(1)"),
                 include_str!("analytic_coverage.wgsl"),
@@ -78,6 +78,7 @@ impl SelectionPainter {
         }
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Selection paint bindings retain the separate shader buffers and uniform layout")]
     fn binding(
         &self,
         r: &WgpuRasterizer,

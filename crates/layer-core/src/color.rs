@@ -11,7 +11,7 @@ pub use profile::{ColorProfile, ProfileReference, ConversionOptions, SampleDepth
 mod output;
 pub use output::{OutputDither, OutputEncoding, OutputEncodingError};
 mod proof;
-pub use proof::ProofRecipe;
+pub use proof::{ProofRecipe, ProofRecipeError};
 pub mod source;
 pub mod histogram;
 pub mod hdr;
@@ -92,7 +92,7 @@ impl PixelDescriptor {
     pub fn validate_samples(self, bytes: &[u8]) -> Result<(), String> {
         if self.sample != SampleType::Float { return Ok(()); }
         let bpp = self.bytes_per_pixel().ok_or("Invalid float descriptor")?;
-        if bytes.len() % bpp != 0 { return Err("Incomplete float samples".into()); }
+        if !bytes.len().is_multiple_of(bpp) { return Err("Incomplete float samples".into()); }
         for input in bytes.chunks_exact(bpp) {
             hdr::decode_samples(self.depth(), input).map_err(str::to_string)?;
         }

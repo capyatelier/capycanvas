@@ -374,8 +374,7 @@ mod tests {
     #[test]
     fn option_control_localization_preserves_ids_values_and_numeric_rules() {
         let project = |localizer: &Localizer| {
-            let mut selection = crate::SelectionOptions::default();
-            selection.constraint = crate::SelectionConstraint::Ratio;
+            let mut selection = crate::SelectionOptions { constraint: crate::SelectionConstraint::Ratio, ..Default::default() };
             let mut controls = selection.controls(localizer);
             controls.extend(selection.edge_controls(localizer));
             selection.constraint = crate::SelectionConstraint::Size;

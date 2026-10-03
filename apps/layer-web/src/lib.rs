@@ -98,6 +98,9 @@ struct WebSurface {
 fn js(value: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&value.to_string())
 }
+fn numeric_error(reason: layer_ui::NumericError, localizer: &layer_ui::Localizer) -> JsValue {
+    serialize(&serde_json::json!({"message":reason.message(localizer),"numeric_error":reason})).unwrap_or_else(std::convert::identity)
+}
 #[wasm_bindgen]
 pub fn automatic_tab_names(available: f32, widths: &[f32]) -> Vec<u8> {
     let widths: Vec<[f32; 2]> = widths.chunks_exact(2).map(|w| [w[0], w[1]]).collect();
@@ -712,7 +715,9 @@ impl WebApp {
     }
     pub fn color_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = serde_wasm_bindgen::from_value(request).map_err(js)?;
-        serialize(&layer_ui::color_ui_localized(request, self.session.localization()).map_err(js)?)
+        if let layer_ui::ColorUiRequest::PrintProof {settings} = request {
+            serialize(&settings.recipe().map_err(proof::proof_rejection)?)
+        } else { serialize(&layer_ui::color_ui_localized(request, self.session.localization()).map_err(js)?) }
     }
     /// Retain UI models by model_revision; ordinary workspace motion only
     /// publishes absolute native geometry, tab presentation and drop feedback.
@@ -764,11 +769,15 @@ impl WebApp {
     pub fn number_input(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request: layer_ui::NumericRequest =
             serde_wasm_bindgen::from_value(request).map_err(js)?;
-        serialize(&request.resolve().map_err(|reason| js(reason.message(self.session.localization())))?)
+        serialize(&request.resolve().map_err(|reason| numeric_error(reason, self.session.localization()))?)
     }
     pub fn toolbar_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = serde_wasm_bindgen::from_value(request).map_err(js)?;
-        let result = layer_ui::toolbar_ui(request, self.session.localization()).map_err(js)?;
+        let result = match request {
+            layer_ui::ToolbarUiRequest::Number { request, compact, units } => serde_json::json!(
+                layer_ui::toolbar_number(request, compact, units).map_err(|reason| numeric_error(reason, self.session.localization()))?),
+            request => layer_ui::toolbar_ui(request, self.session.localization()).map_err(js)?,
+        };
         // These JSON queries contain bounded UI numbers, not document IDs.
         // Preserve numbers when a returned numeric spec is sent back to Rust.
         js_sys::JSON::parse(&serde_json::to_string(&result).map_err(js)?)

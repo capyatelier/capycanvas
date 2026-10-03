@@ -517,7 +517,7 @@ pub(crate) fn rows_localized(settings: &Settings, platform: Platform, state: &Sh
                 bindings: keys.iter().map(|k| k.localized_label_parts(platform, l)).collect(),
                 gestures,
                 detail,
-                subgroup: subgroup.into(),
+                subgroup,
                 scope_caption: scope_caption(&definition.scope, l),
                 scope,
                 id: definition.id.clone(),

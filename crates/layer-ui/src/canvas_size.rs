@@ -361,7 +361,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 }
 
 pub(super) fn size_message(localization: &Localizer, message: MessageId, [width, height]: [u32; 2]) -> String {
-    let mut args = FluentArgs::new(); args.set("width", width.to_string()); args.set("height", height.to_string());
+    let mut args = FluentArgs::new(); args.set("width", width); args.set("height", height);
     localization.format(message, &args)
 }
 

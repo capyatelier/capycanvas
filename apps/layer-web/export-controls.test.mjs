@@ -1,4 +1,4 @@
-import { bindCopy } from "./localization.js";
+import { bindCopy,refreshCopy,refreshBindings } from "./localization.js";
 import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -6,13 +6,18 @@ import test from "node:test";
 import { chooseExport, SDR_FORMATS } from "./export-controls.js";
 import { exportFormats } from "./documents.js";
 
+const ownerDocument={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)})};
 class FakeElement extends SharedElement {
   constructor(tag, className = "", text = "") {
     super();
-    this.tagName = tag.toUpperCase(); this.className = className; this.textContent = text ?? "";
-    this.children = []; this.parentNode = null; this.attributes = new Map(); this.listeners = {};
-    this.hidden = false; this.disabled = false; this.value = ""; this.style = {};
+    this.tagName = tag.toUpperCase(); this.className = className; this.ownerDocument=ownerDocument;this.children = []; this.parentNode = null; this.attributes = new Map(); this.listeners = {};
+    this.hidden = false; this.disabled = false; this.value = ""; this.style = {};this.textContent=text??"";
   }
+  get firstChild(){return this.children[0];}
+  get textContent(){return this.children.map(node=>node.nodeType===3?node.nodeValue:node.textContent).join("");}
+  set textContent(value){this.replaceChildren(this.ownerDocument.createTextNode(value));}
+  insertBefore(node,before){node.parentNode=this;this.children.splice(before?this.children.indexOf(before):this.children.length,0,node);return node;}
+  getContext(){return {putImageData:image=>{this.image=image;}};}
   set ariaLabel(value){this.setAttribute("aria-label",value);}
   get ariaLabel(){return this.getAttribute("aria-label");}
   get options() { return this.children.filter(n => n.tagName === "OPTION"); }
@@ -20,7 +25,7 @@ class FakeElement extends SharedElement {
   closest(selector) { for (let n = this; n; n = n.parentNode) if (n.tagName === selector.toUpperCase()) return n; return null; }
   querySelectorAll(selector) {
     const tags = selector.split(",").map(s => s.trim().toUpperCase()), found = [];
-    const walk = node => { for (const child of node.children) { if (tags.includes(child.tagName)) found.push(child); walk(child); } };
+    const walk = node => { for (const child of node.children??[]) { if (tags.includes(child.tagName)) found.push(child); walk(child); } };
     walk(this); return found;
   }
   reportValidity() { return true; }
@@ -68,7 +73,9 @@ const exportCopy = sharedCopy("ExportCopy");
 const sdrLabels = SDR_FORMATS.map(id => [id, ({Png:exportCopy.format_png,Tiff:exportCopy.format_tiff,Jpeg:exportCopy.format_jpeg,Webp:exportCopy.format_webp})[id]]);
 
 function fakeApp({ extent = [20000, 400], photo = false } = {}) {
-  const calls = { drafts: [], validated: [], rendered: 0, preferences: [] };
+  const calls = { drafts: [], validated: [], rendered: 0, preferences: [], reads:0 };
+  let language="en";const text=value=>language==="en"?value:`${language}:${value}`;const copy=()=>Object.fromEntries(Object.entries(exportCopy).map(([key,value])=>[key,typeof value==="string"?text(value):value]));
+  const metadataCopy=(format,keep)=>({label:text("Metadata"),choices:METADATA_CHOICES.map(([value,label])=>({value,label:text(label)})),remove_location:text("Remove location"),location:format!=="Exr"&&keep==="All",available:format!=="Exr",note:format==="Exr"?text("OpenEXR keeps no camera or copyright details. Choose another format to keep them."):null});
   const draft = (recipe, action) => {
     const format = action.type === "format" ? action.value : recipe.format;
     const metadata = action.type === "metadata" ? action.value : recipe.metadata;
@@ -87,10 +94,17 @@ function fakeApp({ extent = [20000, 400], photo = false } = {}) {
   };
   return {
     calls,
+    language(next){language=next;},
+    localize_export_presets: view => ({...view,names:view.names.map((name,index)=>index<4?text(["Web","Print","Archive","Last"][index]):name)}),
+    profile_name_copy: name => name || text("Embedded profile"),
+    export_profile_caption_copy: caption => caption.type==="original"?`${text("Original:")} ${caption.name}`:caption.type==="embedded"?text("Embedded profile"):caption.name,
+    color_feature_error_copy: error => error?.color_feature_error?text(error.color_feature_error):String(error),
+    export_metadata_copy: metadataCopy,
+    export_preview_copy: (format,gainmap,clipped) => text(`${format}:prepared:${gainmap}:${clipped}`),
     export_form: () => ({ profiles: [base.profile], metadata: photo, copy: exportCopy, numeric: { dimension: { min: 1, max: 32768 }, ppi: { min: 1, max: 65535 }, quality: { min: 1, max: 100 } } }),
-    export_copy: () => exportCopy,
+    export_copy: copy,
     profile_copy: () => sharedCopy("ProfileCopy"),
-    export_presets: async action => { if (action?.type !== "get") calls.preferences.push(action); return { names: ["Web", "Print", "Archive", "Last"], recipe: base, index: 0 }; },
+    export_presets: async action => { calls.reads++;if (action?.type !== "get") calls.preferences.push(action); return { names: ["Web", "Print", "Archive", "Last"], recipe: base, index: 0 }; },
     document_color: () => ({ space: "Srgb", depth: "U8" }),
     export_draft: draft,
     export_validate: recipe => {
@@ -216,4 +230,57 @@ test("export refuses unfinished numeric text before validating or rendering", as
   assert.equal(app.calls.preferences.length, 0);
   width.composing = false; dialog.pressed("Choose File…").click();
   assert.deepEqual((await dialog.result).recipe.size.Fit.bounds, [1024, 2048]);
+});
+
+test("language publication retains export drafts and projects bounded labels without storage or validation work",async()=>{
+  const app=fakeApp({extent:[800,600],photo:true}),dialog=await openDialog(app);
+  const controls=dialog.form.querySelectorAll("select,input,button"),format=dialog.labelled("Format"),destination=dialog.labelled("Destination"),metadata=dialog.labelled("Metadata");
+  const options=[...format.options,...destination.options,...metadata.options];
+  const size=dialog.labelled("Pixel size");size.value="Fit";size.onchange();
+  const width=dialog.labelled(exportCopy.maximum_width),name=dialog.labelled(exportCopy.preset_name);
+  width.value="２０４８ unfinished";width.selectionStart=2;width.selectionEnd=7;width.composing=true;name.value="İı ไทย Tiếng Việt { $name } 🎨";
+  const before={drafts:app.calls.drafts.length,validated:app.calls.validated.length,rendered:app.calls.rendered,reads:app.calls.reads};
+  app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
+  assert.deepEqual(dialog.form.querySelectorAll("select,input,button"),controls);assert.deepEqual([...format.options,...destination.options,...metadata.options],options);
+  assert.equal(width.value,"２０４８ unfinished");assert.equal(width.selectionStart,2);assert.equal(width.selectionEnd,7);assert.equal(width.composing,true);assert.equal(name.value,"İı ไทย Tiếng Việt { $name } 🎨");
+  assert.equal(format.ariaLabel,"tr:Format");assert.equal(format.options[0].textContent,`tr:${exportCopy.format_png}`);assert.equal(destination.options[0].textContent,"tr:Web");assert.equal(metadata.ariaLabel,"tr:Metadata");assert.equal(metadata.options[1].textContent,"tr:Copyright & Contact");
+  assert.deepEqual({drafts:app.calls.drafts.length,validated:app.calls.validated.length,rendered:app.calls.rendered,reads:app.calls.reads},before);
+  dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
+});
+
+test("pending and prepared export captions follow publication without recapturing or replacing previews",async t=>{
+  const previous=globalThis.ImageData;globalThis.ImageData=class{constructor(data,width,height){Object.assign(this,{data,width,height});}};t.after(()=>{globalThis.ImageData=previous;});
+  const app=fakeApp({extent:[800,600]});let resolve;
+  app.export_image=()=>{app.calls.rendered++;return new Promise(done=>{resolve=done;});};
+  const dialog=await openDialog(app);dialog.pressed("Preview Output").click();
+  app.language("fr");refreshCopy(app);dialog.form.localize();refreshBindings();
+  assert.equal(app.calls.rendered,1);assert.equal(dialog.form.children.filter(node=>node.tagName==="P").at(-1).textContent,`fr:${exportCopy.preparing_comparison}`);
+  const image={extent:[1,1],pixels:[255,0,0,255]};resolve({previews:[image,image],clipped_channels:0});await new Promise(done=>setImmediate(done));
+  const canvases=dialog.form.querySelectorAll("canvas"),figures=dialog.form.querySelectorAll("figure"),pixels=canvases.map(node=>node.image);
+  assert.equal(canvases.length,2);assert.equal(dialog.form.children.filter(node=>node.tagName==="P").at(-1).textContent,"fr:Png:prepared:false:false");
+  const before={drafts:app.calls.drafts.length,validated:app.calls.validated.length,reads:app.calls.reads};
+  app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
+  assert.deepEqual(dialog.form.querySelectorAll("canvas"),canvases);assert.deepEqual(dialog.form.querySelectorAll("figure"),figures);assert.deepEqual(canvases.map(node=>node.image),pixels);assert.equal(app.calls.rendered,1);
+  assert.equal(canvases[0].ariaLabel,`tr:${exportCopy.artwork_preview}`);assert.equal(figures[1].querySelectorAll("figcaption")[0].textContent,`tr:${exportCopy.output}`);assert.equal(dialog.form.children.filter(node=>node.tagName==="P").at(-1).textContent,"tr:Png:prepared:false:false");
+  assert.deepEqual({drafts:app.calls.drafts.length,validated:app.calls.validated.length,reads:app.calls.reads},before);
+  dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
+});
+
+test("retained export refusals project the raw shared reason without repeating validation",async()=>{
+  const app=fakeApp({extent:[800,600]}),dialog=await openDialog(app);let validations=0;
+  app.export_validate=()=>{validations++;throw {color_feature_error:"ExportDimensions"};};
+  dialog.pressed("Choose File…").click();assert.equal(dialog.error.textContent,"ExportDimensions");
+  app.language("vi");refreshCopy(app);dialog.form.localize();refreshBindings();assert.equal(dialog.error.textContent,"vi:ExportDimensions");assert.equal(validations,1);assert.equal(app.calls.rendered,0);
+  dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
+});
+
+
+test("retained original-profile option reprojects its descriptor while profile bytes and literal layer names remain unchanged",async()=>{
+  const app=fakeApp({extent:[800,600]}),literal="İı ไทย Tiếng Việt { $name } 🎨",profile={name:literal,channels:"Rgb",profile:{Icc:[0,1,2,3]}};
+  const originalForm=app.export_form;app.export_form=()=>({...originalForm(),profiles:[base.profile,profile],profile_captions:[{type:"literal",name:"sRGB"},{type:"original",name:literal}]});
+  const dialog=await openDialog(app),select=dialog.labelled("Output profile"),option=select.options[1];select.value="1";
+  assert.equal(option.textContent,`Original: ${literal}`);const bytes=profile.profile.Icc,before=app.calls.drafts.length;
+  app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
+  assert.equal(select.options[1],option);assert.equal(option.textContent,`tr:Original: ${literal}`);assert.equal(select.value,"1");assert.equal(profile.name,literal);assert.equal(profile.profile.Icc,bytes);assert.equal(app.calls.drafts.length,before);assert.equal(app.calls.reads,1);assert.equal(app.calls.rendered,0);
+  dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
 });

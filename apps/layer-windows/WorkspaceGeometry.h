@@ -36,9 +36,10 @@ inline int visualOrder(Canvas const& root,FrameworkElement const& element){
     return Canvas::GetZIndex(element)*16384+int(index);
 }
 inline J panelStructure(J const& panel){
-    A keys;
+    A keys,controls;
+    for(auto value:array(panel,L"controls")){auto control=value.GetObject();controls.Append(O({{L"control",control.GetNamedValue(L"control")},{L"visible_in_panel",B(flag(control,L"visible_in_panel",true))}}));}
     for(auto value:array(panel,L"tiles")){auto tile=value.GetObject();keys.Append(O({{L"id",N(num(tile,L"id"))},{L"control",object(tile,L"control")}}));}
-    return O({{L"id",S(str(panel,L"id"))},{L"controls",array(panel,L"controls")},{L"style",S(str(panel,L"tile_style"))},{L"tiles",keys}});
+    return O({{L"id",S(str(panel,L"id"))},{L"controls",controls},{L"style",S(str(panel,L"tile_style"))},{L"tiles",keys}});
 }
 inline bool appendGlass(A& regions,FrameworkElement const& element,UIElement const& reference,std::array<double,4> radii,bool squircle=false){
     if(!element||!element.IsLoaded()||element.ActualWidth()<=0||element.ActualHeight()<=0)return false;

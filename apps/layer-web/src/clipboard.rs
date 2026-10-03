@@ -25,9 +25,6 @@ impl WebClipTask {
     pub fn large(&self) -> bool {
         self.capture.large
     }
-    pub fn progress(&self) -> String {
-        self.capture.progress.into()
-    }
     pub fn run(self, control: &output::WebCaptureControl, nonce: String) -> js_sys::Promise {
         future_to_promise(copy(self, control.inner.clone(), nonce))
     }

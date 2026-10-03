@@ -108,11 +108,36 @@ impl<P> ExportProfile<P> {
     }
 }
 impl ExportProfile {
+    pub fn display_name(&self, localizer: &crate::Localizer) -> String {
+        ExportProfileCaption::for_name(self.name.clone()).message(localizer)
+    }
     pub fn builtin(space: RgbSpace) -> Self {
         Self {
             profile: ColorProfile::Builtin(space),
             channels: ProfileChannels::Rgb,
             name: space.name().into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExportProfileCaption {
+    Literal { name: String },
+    Profile { name: String },
+    Original { name: String },
+    Embedded,
+}
+impl ExportProfileCaption {
+    pub fn for_name(name: String) -> Self {
+        if name.is_empty() { Self::Embedded } else { Self::Literal { name } }
+    }
+    pub fn message(&self, localizer: &crate::Localizer) -> String {
+        match self {
+            Self::Literal { name } => name.clone(),
+            Self::Profile { name } => Self::for_name(name.clone()).message(localizer),
+            Self::Original { name } => crate::color_feature_copy::named(localizer, crate::MessageId::COLOR_FEATURES_EXPORT_ORIGINAL_PROFILE, name),
+            Self::Embedded => localizer.text(crate::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string(),
         }
     }
 }
@@ -378,8 +403,11 @@ pub struct ExportMetadataView {
 }
 impl ExportMetadataView {
     pub fn new_localized(recipe: &ExportRecipe, localizer: &crate::Localizer) -> Self {
+        Self::localized_for(recipe.format, recipe.metadata.keep, localizer)
+    }
+    pub fn localized_for(format: ExportFormat, keep: MetadataKeep, localizer: &crate::Localizer) -> Self {
         use crate::MessageId as M;
-        let available = recipe.format != ExportFormat::Exr;
+        let available = format != ExportFormat::Exr;
         Self {
             label: localizer.text(M::COLOR_FEATURES_EXPORT_METADATA),
             choices: MetadataKeep::ALL.into_iter().map(|value| MetadataChoice { value,
@@ -387,20 +415,41 @@ impl ExportMetadataView {
                     MetadataKeep::CopyrightContact => M::COLOR_FEATURES_EXPORT_METADATA_COPYRIGHT,
                     MetadataKeep::None => M::COLOR_FEATURES_EXPORT_METADATA_NONE }) }).collect(),
             remove_location: localizer.text(M::COLOR_FEATURES_EXPORT_REMOVE_LOCATION),
-            location: available && recipe.metadata.keep == MetadataKeep::All, available,
+            location: available && keep == MetadataKeep::All, available,
             note: (!available).then(|| localizer.text(M::COLOR_FEATURES_EXPORT_METADATA_EXR)),
         }
     }
 }
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ExportChoice<T> { pub value: T, pub label: std::sync::Arc<str> }
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ExportChoices {
     pub formats: Vec<ExportChoice<ExportFormat>>,
     pub depths: Vec<ExportChoice<SampleDepth>>,
     pub backgrounds: Vec<ExportChoice<ExportBackground>>,
     pub dithers: Vec<ExportChoice<layer_core::color::OutputDither>>,
 }
+impl ExportChoices {
+    fn new_localized(formats: &[ExportFormat], depths: &[SampleDepth], backgrounds: &[ExportBackground], dithers: &[layer_core::color::OutputDither], localizer: &crate::Localizer) -> Self {
+        use layer_core::color::OutputDither;
+        Self {
+            formats: formats.iter().map(|value| ExportChoice {value:*value, label:value.localized_name(localizer)}).collect(),
+            depths: depths.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {SampleDepth::U8=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_8, SampleDepth::U16=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_16, SampleDepth::F16=>crate::MessageId::COLOR_FEATURES_COLOR_DEPTH_FLOAT16, SampleDepth::F32=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_FLOAT32})}).collect(),
+            backgrounds: backgrounds.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {ExportBackground::Preserve=>crate::MessageId::COLOR_FEATURES_EXPORT_KEEP_TRANSPARENCY, ExportBackground::White=>crate::MessageId::COLOR_FEATURES_EXPORT_WHITE_BACKGROUND, ExportBackground::Black=>crate::MessageId::COLOR_FEATURES_EXPORT_BLACK_BACKGROUND})}).collect(),
+            dithers: dithers.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {OutputDither::None=>crate::MessageId::COLOR_FEATURES_EXPORT_DITHER_NONE, OutputDither::Stochastic8=>crate::MessageId::COLOR_FEATURES_EXPORT_DITHER_STOCHASTIC})}).collect(),
+        }
+    }
+    pub fn localized(&self, localizer: &crate::Localizer) -> Self {
+        Self::new_localized(
+            &self.formats.iter().map(|choice| choice.value).collect::<Vec<_>>(),
+            &self.depths.iter().map(|choice| choice.value).collect::<Vec<_>>(),
+            &self.backgrounds.iter().map(|choice| choice.value).collect::<Vec<_>>(),
+            &self.dithers.iter().map(|choice| choice.value).collect::<Vec<_>>(),
+            localizer,
+        )
+    }
+}
+
 #[derive(Serialize)]
 pub struct ExportDraft {
     pub choices: ExportChoices,
@@ -480,12 +529,7 @@ impl ExportRecipe {
         let depths: Vec<_> = if self.format == ExportFormat::Exr { vec![SampleDepth::F32] } else if self.format.is_hdr() { vec![SampleDepth::U16] } else if eight_bit { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] };
         let backgrounds: Vec<_> = if self.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg) { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] } else if self.format.is_hdr() { vec![ExportBackground::Preserve] } else if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] };
         let dithers: Vec<_> = if self.depth == SampleDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] };
-        let choices = ExportChoices {
-            formats: formats.iter().map(|value| ExportChoice {value:*value, label:value.localized_name(localizer)}).collect(),
-            depths: depths.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {SampleDepth::U8=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_8, SampleDepth::U16=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_16, SampleDepth::F16=>crate::MessageId::COLOR_FEATURES_COLOR_DEPTH_FLOAT16, SampleDepth::F32=>crate::MessageId::COLOR_FEATURES_EXPORT_DEPTH_FLOAT32})}).collect(),
-            backgrounds: backgrounds.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {ExportBackground::Preserve=>crate::MessageId::COLOR_FEATURES_EXPORT_KEEP_TRANSPARENCY, ExportBackground::White=>crate::MessageId::COLOR_FEATURES_EXPORT_WHITE_BACKGROUND, ExportBackground::Black=>crate::MessageId::COLOR_FEATURES_EXPORT_BLACK_BACKGROUND})}).collect(),
-            dithers: dithers.iter().map(|value| ExportChoice {value:*value, label:localizer.text(match value {OutputDither::None=>crate::MessageId::COLOR_FEATURES_EXPORT_DITHER_NONE, OutputDither::Stochastic8=>crate::MessageId::COLOR_FEATURES_EXPORT_DITHER_STOCHASTIC})}).collect(),
-        };
+        let choices = ExportChoices::new_localized(&formats, &depths, &backgrounds, &dithers, localizer);
         ExportDraft {
             choices,
             hdr:self.format.is_hdr(),clip_hdr_range:self.format.maps_hdr_range(),format:self.format.with_hdr_range_mapping(false),
@@ -520,6 +564,8 @@ pub struct ExportForm {
     pub numeric: ExportNumericControls,
     pub copy: crate::color_feature_copy::ExportCopy,
     pub profiles: Vec<ExportProfile>,
+    pub profile_captions: Vec<ExportProfileCaption>,
+    pub profile_names: Vec<String>,
     pub extent: [u32; 2],
     /// The document keeps metadata from an opened photo, so the Metadata row applies.
     pub metadata: bool,
@@ -533,6 +579,7 @@ impl ExportForm {
             .into_iter()
             .map(ExportProfile::builtin)
             .collect();
+        let mut profile_captions: Vec<_> = profiles.iter().map(|profile| ExportProfileCaption::Literal { name:profile.name.clone() }).collect();
         for layer in &document.layers {
             if let Some(source) = &layer.source {
                 let profile = &source.interpretation.profile;
@@ -547,14 +594,18 @@ impl ExportForm {
                 profiles.push(ExportProfile {
                     profile: profile.clone(),
                     channels,
-                    name: crate::color_feature_copy::named(localizer, crate::MessageId::COLOR_FEATURES_EXPORT_ORIGINAL_PROFILE, &layer.name),
+                    name: layer.name.to_string(),
                 });
+                profile_captions.push(ExportProfileCaption::Original { name:layer.name.to_string() });
             }
         }
+        let profile_names = profile_captions.iter().map(|caption| caption.message(localizer)).collect();
         Self {
             numeric: ExportNumericControls::default(),
             copy: crate::color_feature_copy::ExportCopy::new(localizer),
             profiles,
+            profile_captions,
+            profile_names,
             extent: [document.width, document.height],
             metadata: !document.metadata.is_empty(),
         }
@@ -564,6 +615,57 @@ impl ExportForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn export_metadata_copy_projects_scalar_semantics_for_every_language() {
+        let formats = [ExportFormat::Exr, ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::JpegHdr,
+            ExportFormat::JpegHdrMapped, ExportFormat::AvifHdr, ExportFormat::AvifHdrMapped, ExportFormat::Png,
+            ExportFormat::Tiff, ExportFormat::Jpeg, ExportFormat::Webp];
+        for language in crate::UiLanguage::ALL {
+            let localizer = crate::Localizer::shared(language);
+            for format in formats {
+                for keep in MetadataKeep::ALL {
+                    let view = ExportMetadataView::localized_for(format, keep, &localizer);
+                    assert_eq!(view.label, localizer.text(crate::MessageId::COLOR_FEATURES_EXPORT_METADATA));
+                    assert_eq!(view.available, format != ExportFormat::Exr);
+                    assert_eq!(view.location, format != ExportFormat::Exr && keep == MetadataKeep::All);
+                    assert_eq!(view.note.is_some(), format == ExportFormat::Exr);
+                    if let Some(note) = &view.note { assert_eq!(note, &localizer.text(crate::MessageId::COLOR_FEATURES_EXPORT_METADATA_EXR)); }
+                    assert_eq!(view.choices.iter().map(|choice| choice.value).collect::<Vec<_>>(), MetadataKeep::ALL);
+                    assert!(view.choices.iter().all(|choice| !choice.label.is_empty()));
+                    let encoded = serde_json::to_value(&view).unwrap();
+                    assert_eq!(encoded.as_object().unwrap().len(), 6);
+                    assert!(!encoded.as_object().unwrap().contains_key("recipe"));
+                    assert!(!encoded.as_object().unwrap().contains_key("profile"));
+                    assert!(encoded.to_string().len() < 8192);
+                    let mut recipe = ExportRecipe::web_share(); recipe.format = format; recipe.metadata.keep = keep;
+                    assert_eq!(serde_json::to_value(ExportMetadataView::new_localized(&recipe, &localizer)).unwrap(), encoded);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn export_original_profile_captions_preserve_raw_layer_names_and_profile_buffers() {
+        let literal = "İı ไทย Tie\u{302}\u{301}ng Vie\u{323}\u{302}t { $name } 🎨";
+        let bytes: std::sync::Arc<[u8]> = vec![0].into();
+        let mut document = layer_core::Document::new("Photo", 1, 1, layer_core::DocumentNames { paint:literal.into(), paper:"Paper".into() });
+        document.layers[0].name = literal.into();
+        document.layers[0].source = Some(std::sync::Arc::new(layer_core::color::source::SourceImage {
+            kind:layer_core::color::source::SourceKind::Original, extent:[1,1], resolution:None, tiles:Default::default(),
+            interpretation:layer_core::color::source::SourceInterpretation { channels:SourceChannels::Rgba, depth:SampleDepth::U8, profile:ColorProfile::Icc(bytes.clone().into()), profile_assumed:false },
+        }));
+        for language in crate::UiLanguage::ALL {
+            let localization = crate::Localizer::shared(language); let form = ExportForm::new_localized(&document, &localization);
+            assert_eq!(form.profiles.len(), form.profile_captions.len()); assert_eq!(form.profiles.len(), form.profile_names.len());
+            let profile = form.profiles.last().unwrap(); assert_eq!(profile.name, literal);
+            let ColorProfile::Icc(profile_bytes) = &profile.profile else { panic!("Source ICC profile was changed"); };
+            assert!(std::sync::Arc::ptr_eq(profile_bytes.storage(), &bytes));
+            assert!(form.profile_names.last().unwrap().contains(literal)); assert_ne!(form.profile_names.last().unwrap(), literal);
+            let encoded = serde_json::to_string(form.profile_captions.last().unwrap()).unwrap(); assert!(!encoded.contains("profile"));
+            assert_eq!(ExportProfileCaption::for_name(localization.text(crate::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string()).message(&crate::Localizer::shared(crate::UiLanguage::English)), localization.text(crate::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).as_ref());
+        }
+    }
+
     #[test]
     fn hdr_choices_describe_only_the_fixed_delivery_contract() {
         for format in [ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::JpegHdr, ExportFormat::JpegHdrMapped, ExportFormat::AvifHdr, ExportFormat::AvifHdrMapped] {

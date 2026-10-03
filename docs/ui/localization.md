@@ -59,6 +59,10 @@ resolved labels or typed feature copy to hosts; remove the superseded English
 presentation path. Canonical English helpers belong only in explicit search
 aliases, fixtures or documentation, not active UI projection.
 
+Histogram caption keys stay in the session and track language, captured sample,
+channel and document depth. Status identities track language separately, so
+publication of an unchanged capture reuses its captions and labels.
+
 Use `text(MessageId)` for cached static copy and a typed feature helper with
 `FluentArgs` for dynamic copy. Retain complete dynamic captions in the existing
 view or draft when their semantic inputs change. Pointer motion and ordinary
@@ -112,6 +116,20 @@ unfinished numbers, composition and native undo. Captured interactions can defer
 one window while other windows adopt the latest choice. New and resumed owners
 reconcile their application or browser-profile preference before showing controls.
 OS-owned file pickers follow their platform's language lifecycle.
+
+`NativeHost` owns its catalog on the heap so adding feature copy does not enlarge
+nested launch stack frames. Replace it only when the language is published.
+
+Color forms retain validation reasons and scalar presentation inputs. Language
+changes reproject that copy without parsing drafts, converting colors or
+transferring ICC buffers. Profile names stay raw; display fallbacks come from the
+current context. Source metadata is prepared on the file worker before its
+localized details are requested. Known document failures retain typed reasons
+after their requests retire; unexpected diagnostics remain literal.
+
+Screen feedback caches HDR headroom by language and brightness. Histogram views
+retain status identities, and calibration, targeted-curve and reference notices
+retain their reasons, literal names and actions when their captions change.
 
 Native text editors own Escape while editing, including composition. Shared
 shortcuts leave surrounding popups and drawers open until focus leaves the editor.

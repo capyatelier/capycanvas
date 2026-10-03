@@ -2,6 +2,11 @@
 //! entire value atomically; never substitute it for exact artwork or export.
 use super::*;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProofLutError { Cancelled, Diagnostic(String) }
+impl From<String> for ProofLutError { fn from(detail:String) -> Self { Self::Diagnostic(detail) } }
+impl From<&str> for ProofLutError { fn from(detail:&str) -> Self { Self::Diagnostic(detail.into()) } }
+
 pub struct ProofLut {
     space: RgbSpace,
     edge: usize,
@@ -18,19 +23,20 @@ impl ProofLut {
         space: RgbSpace,
         recipe: &ProofRecipe,
         cancelled: impl Fn() -> bool,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ProofLutError> {
         let transform = ProofTransform::new(space, recipe)?;
         let mut reason = String::new();
         for (edge, dark_grid) in [(65, false), (129, false), (129, true)] {
             let result = Self::at_resolution(space, &transform, edge, dark_grid, &cancelled)?;
             match result.quality(&transform, &cancelled) {
                 Ok(()) => return Ok(result),
-                Err(error) => reason = error,
+                Err(ProofLutError::Cancelled) => return Err(ProofLutError::Cancelled),
+                Err(ProofLutError::Diagnostic(error)) => reason = error,
             }
         }
         Err(format!(
             "This profile exceeds the soft-proof preview's interpolation tolerance: {reason}"
-        ))
+        ).into())
     }
 
     pub fn space(&self) -> RgbSpace {
@@ -67,7 +73,7 @@ impl ProofLut {
         edge: usize,
         dark_grid: bool,
         cancelled: &impl Fn() -> bool,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ProofLutError> {
         let from_xyz = builtin(space)?.colorant_matrix().inverse().v;
         let mut samples = Vec::new();
         samples
@@ -75,7 +81,7 @@ impl ProofLut {
             .map_err(|_| "Not enough memory for the proof preview")?;
         for b in 0..edge {
             if cancelled() {
-                return Err("Proof preparation cancelled".into());
+                return Err(ProofLutError::Cancelled);
             }
             for g in 0..edge {
                 for r in 0..edge {
@@ -136,7 +142,7 @@ impl ProofLut {
         &self,
         transform: &ProofTransform,
         cancelled: &impl Fn() -> bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProofLutError> {
         let working_to_xyz = builtin(self.space)?.colorant_matrix().v;
         let views = [RgbSpace::Srgb, RgbSpace::DisplayP3].map(|space| {
             let matrix = builtin(space)
@@ -148,7 +154,7 @@ impl ProofLut {
         let mut random = 0x43505059u32;
         for i in 0..4096 {
             if i % 256 == 0 && cancelled() {
-                return Err("Proof preparation cancelled".into());
+                return Err(ProofLutError::Cancelled);
             }
             let input = if i < 256 {
                 [i as f32 / 4097.; 3]
@@ -184,7 +190,7 @@ impl ProofLut {
                 {
                     return Err(format!(
                         "neutral error at {input:?}: {actual:?} / {expected:?}"
-                    ));
+                    ).into());
                 }
             }
             if (direct.gamut_distance - 5.).abs() > 1.
@@ -195,7 +201,7 @@ impl ProofLut {
                     "gamut error at {input:?}: {} / {}",
                     gamut_score(sample),
                     direct.gamut_distance
-                ));
+                ).into());
             }
         }
         errors.sort_by(f64::total_cmp);
@@ -204,7 +210,7 @@ impl ProofLut {
         if p99 <= 0.5 && max <= 2. {
             Ok(())
         } else {
-            Err(format!("view DeltaE p99={p99}, max={max}"))
+            Err(format!("view DeltaE p99={p99}, max={max}").into())
         }
     }
 }
@@ -222,14 +228,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancellation_during_quality_stops_before_another_grid() {
+        let calls=std::cell::Cell::new(0);
+        let recipe=ProofRecipe::new("literal proof".into(),ColorProfile::default());
+        let result=ProofLut::build(RgbSpace::Srgb,&recipe,|| {let value=calls.get();calls.set(value+1);value>=65});
+        assert_eq!(result.err(),Some(ProofLutError::Cancelled));
+        assert_eq!(calls.get(),66);
+    }
+    #[test]
     fn preview_is_bounded_cancellable_and_preserves_alpha() {
         let recipe = ProofRecipe::new("sRGB".into(), ColorProfile::default());
-        assert!(
-            ProofLut::build(RgbSpace::Srgb, &recipe, || true)
-                .err()
-                .unwrap()
-                .contains("cancelled")
-        );
+        assert_eq!(ProofLut::build(RgbSpace::Srgb, &recipe, || true).err(), Some(ProofLutError::Cancelled));
         let lut = ProofLut::build(RgbSpace::Srgb, &recipe, || false).unwrap();
         assert_eq!(lut.edge(), 65);
         assert_eq!(lut.byte_len(), 65usize.pow(3) * 20);

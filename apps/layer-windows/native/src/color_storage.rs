@@ -164,7 +164,7 @@ pub(crate) fn export_profile(id: &str, cancel: &AtomicBool, localization: &layer
     let profile = profile(id, cancel, localization)?;
     Ok(layer_ui::ExportProfile {
         channels: layer_color::profile_channels(&profile)?,
-        name: layer_ui::profile_library::profile_display_name(&profile, localization)?,
+        name: layer_color::profile_description_optional(&profile)?.unwrap_or_default(),
         profile,
     })
 }

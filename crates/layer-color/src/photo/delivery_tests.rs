@@ -336,9 +336,13 @@ fn round_trips(delivery: &DeliveryMetadata) -> Vec<(&'static str, DecodedPhoto)>
     for (name, format) in [("HDR JPEG", GainMapFormat::Jpeg), ("HDR AVIF", GainMapFormat::Avif)] {
         let mut bytes = Vec::new();
         write_gainmap_rows(
-            &mut bytes, extent, RgbSpace::Srgb, Default::default(), &guide, format,
+            &mut bytes,
+            GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: Some([1.; 3]), clip: true },
+            format,
             GainMapEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::current()),
-            delivery, Some([1.; 3]), true, &Default::default(), hdr,
+            delivery,
+            &Default::default(),
+            hdr,
         )
         .unwrap();
         files.push((name, bytes));

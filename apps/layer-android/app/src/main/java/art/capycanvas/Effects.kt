@@ -149,7 +149,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
                 }
             }
         }
-        TextButton(onClick={host.effect(obj("op" to "cancel_filter"))},modifier=Modifier.testTag("cancel-filter")) { Text("Cancel") }
+        TextButton(onClick={host.effect(obj("op" to "cancel_filter"))},modifier=Modifier.testTag("cancel-filter")) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
     }
 }
 
@@ -430,7 +430,7 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
             }
         }
         Button(onClick = host.strokeRecording::click, enabled = !host.strokeRecording.busy, modifier = Modifier.testTag("stroke-recording")) {
-            Text(host.strokeRecording.status?.optString("label") ?: "Start stroke recording")
+            Text(host.strokeRecording.status?.optString("label") ?: host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("record_tablet"))
         }
     }
 }

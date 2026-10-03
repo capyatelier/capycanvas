@@ -1012,6 +1012,17 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
     }
 }
 
+fn header_move_label(zone: HeaderZone, localization: &Localizer) -> String {
+    let mut args = FluentArgs::new();
+    args.set("zone", zone.localized_label(localization).to_string());
+    localization.format(MessageId::WORKSPACE_HEADER_MOVE_TO, &args)
+}
+
+pub fn header_drag_label(item: &str, localization: &Localizer) -> String {
+    let mut args = FluentArgs::new(); args.set("item", item);
+    localization.format(MessageId::WORKSPACE_HEADER_DRAG_COMPONENT, &args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1444,15 +1455,4 @@ mod tests {
                 .contains("header_presentation")
         );
     }
-}
-
-fn header_move_label(zone: HeaderZone, localization: &Localizer) -> String {
-    let mut args = FluentArgs::new();
-    args.set("zone", zone.localized_label(localization).to_string());
-    localization.format(MessageId::WORKSPACE_HEADER_MOVE_TO, &args)
-}
-
-pub fn header_drag_label(item: &str, localization: &Localizer) -> String {
-    let mut args = FluentArgs::new(); args.set("item", item);
-    localization.format(MessageId::WORKSPACE_HEADER_DRAG_COMPONENT, &args)
 }

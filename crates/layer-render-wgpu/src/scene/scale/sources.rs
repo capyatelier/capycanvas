@@ -290,6 +290,7 @@ impl Scene {
         self.scale_sources.entries.get_mut(&layer.id).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
         Ok(changed)
     }
+    #[expect(clippy::too_many_arguments, reason = "Color reduction keeps source placement, missing pages, and GPU output bindings explicit")]
     pub(super) fn reduce_color_pages(
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, layer: &Layer, plan: display_mips::Plan,
@@ -380,6 +381,7 @@ impl Scene {
         self.scale_sources.entries.get_mut(&mask.id).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
         Ok(changed)
     }
+    #[expect(clippy::too_many_arguments, reason = "Mask reduction keeps missing pages and GPU output bindings explicit")]
     pub(super) fn reduce_mask_pages(
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder, mask: &layer_core::LayerMask,
@@ -401,7 +403,7 @@ impl Scene {
             ]);
             let default = if mask.inverted { 1. - mask.default_coverage } else { mask.default_coverage };
             values[8..12].fill(default.to_bits());
-            let binding = Commands::binding(r, source.as_ref().unwrap_or(&r.empty_view), &r.empty_view, &output);
+            let binding = Commands::binding(r, source.as_ref().unwrap_or(&r.empty_view), &r.empty_view, output);
             commands.reduce(r, encoder, values, &binding, "reduce changed mask pages")?;
         }
         Ok(changed)

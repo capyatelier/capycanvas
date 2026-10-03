@@ -252,7 +252,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }, UiAction::SetZoom { zoom })
         };
         ContextMenu {
-            title: self.localization().text(MessageId::MENU_ZOOM).to_string().into(),
+            title: self.localization().text(MessageId::MENU_ZOOM).to_string(),
             sections: vec![
                 [CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels].map(command).into(),
                 ZOOM_LEVELS.map(level).into(),

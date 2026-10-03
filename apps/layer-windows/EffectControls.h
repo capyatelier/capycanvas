@@ -15,21 +15,27 @@ inline A values(std::initializer_list<double> list){A a;for(double v:list)a.Appe
 
 // Layer ids can be reused after New/Open. A retained draft belongs to an epoch,
 // layer and schema, not merely to the control's current position in the UI.
-struct Property {
+inline hstring propertyKindSignature(J const& control){
+    auto kind=object(control,L"kind");
+    return str(kind,L"kind")==L"choice"?O({{L"kind",S(L"choice")},{L"options_count",N(array(kind,L"options").Size())}}).Stringify():kind.Stringify();
+}
+struct Property:std::enable_shared_from_this<Property> {
     std::shared_ptr<WorkspaceData> data;
     double epoch,layer;
     hstring key,schema;
     Property(std::shared_ptr<WorkspaceData> source,J const& control):data(std::move(source)),
         epoch(num(object(data->state,L"document_file"),L"epoch")),
         layer(num(object(data->state,L"layer_properties"),L"layer")),key(str(control,L"key")),
-        schema(object(control,L"kind").Stringify()){}
+        schema(propertyKindSignature(control)){}
     J view()const{return object(data->state,L"layer_properties");}
     J model()const{return find(array(view(),L"controls"),L"key",key);}
+    LocalizedCopy label()const{auto resolve=[weak=weak_from_this()]{if(auto property=weak.lock())return str(property->model(),L"label");return hstring();};return {resolve(),resolve};}
+    hstring identity()const{return O({{L"epoch",object(data->state,L"document_file").GetNamedValue(L"epoch",JsonValue::CreateNullValue())},{L"layer",view().GetNamedValue(L"layer",JsonValue::CreateNullValue())},{L"key",S(key)},{L"kind",S(propertyKindSignature(model()))}}).Stringify();}
     V value()const{return object(model(),L"value").GetNamedValue(L"value",JsonValue::CreateNullValue());}
     J curve()const{return object(model(),L"curve");}
     bool current()const{
         return epoch==num(object(data->state,L"document_file"),L"epoch")
-            &&layer==num(view(),L"layer",-1)&&schema==object(model(),L"kind").Stringify();
+            &&layer==num(view(),L"layer",-1)&&schema==propertyKindSignature(model());
     }
     void action(J operation,hstring const& phase={})const{
         // A captured preview must finish even if its view was hidden or disabled.
@@ -49,7 +55,7 @@ struct Property {
 };
 FrameworkElement ColorField(std::shared_ptr<Property> const& property,hstring const& title,
     std::function<J()> get,std::function<void(J)> set,Bindings& bindings,
-    std::function<hstring()> context={});
+    std::function<hstring()> context={},std::function<hstring()> currentTitle={});
 FrameworkElement CurveField(std::shared_ptr<Property> const& property,Bindings& bindings);
 FrameworkElement GradientField(std::shared_ptr<Property> const& property,Bindings& bindings);
 }

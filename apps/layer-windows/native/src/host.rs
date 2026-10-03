@@ -1057,7 +1057,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 "frames": host.presenter.as_ref().map_or([0; 2], |p| p.backdrop_frames()),
             }),
             windows_document: host.documents.as_ref().and_then(|service| service.status()),
-            windows_proof_form: layer_ui::proof_workflow::proof_form(&host.native.session),
+            windows_proof_form: serde_json::to_value(layer_ui::proof_workflow::proof_copy(&host.native.session)).unwrap(),
             windows_proof: host
                 .documents
                 .is_some()
@@ -1169,7 +1169,10 @@ pub unsafe extern "C" fn capy_number(context: *const crate::CapyLocalization, js
         let request: layer_ui::NumericRequest =
             serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
         let context = unsafe { context.as_ref() }.ok_or("Missing numeric localization")?;
-        let value = request.resolve().map_err(|reason| reason.message(&context.localizer))?;
+        let value = match request.resolve() {
+            Ok(value) => serde_json::to_value(value).map_err(err)?,
+            Err(reason) => serde_json::json!({"error":reason.message(&context.localizer),"error_reason":reason}),
+        };
         CString::new(serde_json::to_string(&value).map_err(err)?).map_err(err)
     }));
     match result {
@@ -1511,4 +1514,40 @@ pub unsafe extern "C" fn capy_presentation_stats(host: *const CapyHost, values: 
     output[1..].copy_from_slice(&[u64::from(stats.PresentCount), u64::from(stats.PresentRefreshCount),
         u64::from(stats.SyncRefreshCount), stats.SyncQPCTime as u64, stats.SyncGPUTime as u64]);
     0
+}
+
+#[cfg(test)]
+mod numeric_localization_tests {
+    use super::*;
+    use layer_ui::{Localizer, MessageId, NumericControl, NumericError, UiLanguage};
+    #[test]
+    fn numeric_abi_retains_known_failure_reason_and_formats_current_context() {
+        let control = NumericControl::percent();
+        let input = CString::new(serde_json::json!({"control":control,"value":0.5,
+            "operation":{"type":"expression","text":""}}).to_string()).unwrap();
+        let format = CString::new(serde_json::json!({"control":control,"value":0.5,
+            "operation":{"type":"format"}}).to_string()).unwrap();
+        for language in UiLanguage::ALL {
+            let context = crate::CapyLocalization { localizer: Localizer::shared(language) };
+            let result = unsafe { capy_number(&context, input.as_ptr()) };
+            assert!(!result.is_null());
+            let value: serde_json::Value = serde_json::from_slice(unsafe { CString::from_raw(result) }.as_bytes()).unwrap();
+            assert_eq!(value["error"], context.localizer.text(MessageId::NUMERIC_EXPRESSION_REQUIRED).as_ref());
+            assert_eq!(value["error_reason"], serde_json::to_value(NumericError::ExpressionRequired).unwrap());
+            let request = CString::new(serde_json::json!({"type":"numeric_error","reason":value["error_reason"]}).to_string()).unwrap();
+            let projected = unsafe { crate::shared_controls::capy_native_caption(&context, request.as_ptr()) };
+            assert!(!projected.is_null());
+            let projected: serde_json::Value = serde_json::from_slice(unsafe { CString::from_raw(projected) }.as_bytes()).unwrap();
+            assert_eq!(projected["text"],value["error"]);
+            let result = unsafe { capy_number(&context, format.as_ptr()) };
+            assert!(!result.is_null());
+            let value: serde_json::Value = serde_json::from_slice(unsafe { CString::from_raw(result) }.as_bytes()).unwrap();
+            assert_eq!(value["value"],0.5);
+            assert!(value.get("error").is_none());
+        }
+        let malformed = CString::new("literal İı ไทย { $reason }").unwrap();
+        let context = crate::CapyLocalization { localizer: Localizer::shared(UiLanguage::English) };
+        assert!(unsafe { capy_number(&context, malformed.as_ptr()) }.is_null());
+        assert!(unsafe { capy_number(std::ptr::null(), format.as_ptr()) }.is_null());
+    }
 }

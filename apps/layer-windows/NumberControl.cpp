@@ -4,20 +4,35 @@
 
 namespace CapyUi {
 namespace {
+struct NumericCaption {hstring title,language,errorLanguage;J labels,errorReason;};
 struct NumberState {
     double value=0;bool editing=false,dragging=false,formatting=false,gesture=false;
     hstring identity;
     hstring measuredText;double measuredWidth=-1;
     std::function<J(J const&,double,J const&)> resolve;
 };
+void showNumericError(TextBox const& entry,hstring const& text){
+    AutomationProperties::SetHelpText(entry,text);
+    if(text.empty()){entry.BorderThickness({0});ToolTipService::SetToolTip(entry,nullptr);}
+    else {entry.BorderThickness({1,1,1,1});entry.BorderBrush(fill({255,221,85,85}));tooltip(entry,text);}
+}
 }
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits,bool valueOnly,hstring const& identifier,bool inlineTrack,NumberPresentation const& presentation,NumericAdmissions* admissions){
-    auto labelRequest=to_string(O({{L"label",S(title)}}).Stringify());
-    std::unique_ptr<char,decltype(&capy_string_free)> rawLabels(capy_numeric_labels(data->localization.get(),labelRequest.c_str()),capy_string_free);
-    if(!rawLabels)throw hresult_error(E_OUTOFMEMORY);
-    auto numericLabels=J::Parse(to_hstring(rawLabels.get()));
-    if(numericLabels.HasKey(L"error"))throw hresult_invalid_argument(str(numericLabels,L"error"));
+    auto currentTitle=presentation.title?presentation.title:std::function<hstring()>([title]{return title;});
+    auto caption=std::make_shared<NumericCaption>();
+    auto numericCopy=[source=std::weak_ptr<WorkspaceData>(data),currentTitle,caption]{
+        auto data=source.lock();if(!data)return J{};auto title=currentTitle();auto language=data->language();
+        if(!caption->labels.Size()||caption->title!=title||caption->language!=language){
+            auto input=to_string(O({{L"label",S(title)}}).Stringify());
+            std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_numeric_labels(data->localization.get(),input.c_str()),capy_string_free);
+            if(!raw)throw hresult_error(E_OUTOFMEMORY);auto labels=J::Parse(to_hstring(raw.get()));
+            if(labels.HasKey(L"error"))throw hresult_invalid_argument(str(labels,L"error"));
+            caption->title=title;caption->language=language;caption->labels=std::move(labels);
+        }
+        return caption->labels;
+    };
+    auto numericLabels=numericCopy();
     auto local=std::make_shared<NumberState>();local->value=get();
     if(presentation.identity)local->identity=presentation.identity();
     local->resolve=presentation.resolve?presentation.resolve:decltype(local->resolve)([data](J const& spec,double value,J const& operation){return numeric(data->localization.get(),spec,value,operation);});
@@ -36,8 +51,9 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     text.LineHeight(20);text.TextTrimming(TextTrimming::CharacterEllipsis);
     tooltip(text,title);
     StackPanel labels;labels.UseLayoutRounding(false);labels.VerticalAlignment(VerticalAlignment::Center);labels.Children().Append(text);
-    if(!presentation.description.empty()){
-        auto detail=label(data,presentation.description);detail.FontSize(data->textSize()/1.2);
+    weak_ref<TextBlock> detailView;
+    if(!presentation.description.empty()||presentation.descriptionText){
+        auto detail=label(data,presentation.description);detailView=make_weak(detail);detail.FontSize(data->textSize()/1.2);
         detail.LineHeight(detail.FontSize()*1.25);detail.TextWrapping(TextWrapping::Wrap);detail.Opacity(.55);
         labels.Children().Append(detail);
     }
@@ -74,18 +90,18 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     }else header.Children().Append(entry);
     AutomationProperties::SetName(entry,str(numericLabels,L"edit"));if(!identifier.empty())AutomationProperties::SetAutomationId(entry,identifier);
     Slider slider;
-    auto currentTitle=presentation.title?presentation.title:std::function<hstring()>([title]{return title;});
-    data->copyView([source=std::weak_ptr<WorkspaceData>(data),currentTitle,root=make_weak(root),text=make_weak(text),entry=make_weak(entry),slider=make_weak(slider)]{
+    auto presentCaption=[source=std::weak_ptr<WorkspaceData>(data),numericCopy,currentTitle,caption,description=presentation.descriptionText,root=make_weak(root),text=make_weak(text),detail=detailView,entry=make_weak(entry),slider=make_weak(slider)]{
         auto data=source.lock();auto control=entry.get();if(!data||!control)return false;
-        auto title=currentTitle();auto input=to_string(O({{L"label",S(title)}}).Stringify());
-        std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_numeric_labels(data->localization.get(),input.c_str()),capy_string_free);
-        if(!raw)throw hresult_error(E_OUTOFMEMORY);auto labels=J::Parse(to_hstring(raw.get()));
+        auto title=currentTitle();auto labels=numericCopy();
         AutomationProperties::SetName(control,str(labels,L"edit"));
         if(auto view=root.get())AutomationProperties::SetName(view,title);
         if(auto view=text.get()){view.Text(title);tooltip(view,title);}
+        if(auto view=detail.get();view&&description){auto descriptionText=description();view.Text(descriptionText);view.Visibility(descriptionText.empty()?Visibility::Collapsed:Visibility::Visible);}
         if(auto view=slider.get())AutomationProperties::SetName(view,title);
+        if(caption->errorReason.Size()&&caption->errorLanguage!=data->language()){showNumericError(control,data->caption(O({{L"type",S(L"numeric_error")},{L"reason",caption->errorReason}})));caption->errorLanguage=data->language();}
         return true;
-    });
+    };
+    data->copyView(presentCaption);bindings.emplace_back([presentCaption]{presentCaption();});
     auto measureText=[data,local](hstring const& value){
         // Routine model updates retain the measured extent of unchanged text.
         if(local->measuredWidth>=0&&local->measuredText==value)return local->measuredWidth;
@@ -137,7 +153,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         for(auto key:{L"SliderHorizontalThumbWidth",L"SliderHorizontalThumbHeight",L"SliderInnerThumbWidth",L"SliderInnerThumbHeight"})
             slider.Resources().Insert(box_value(key),box_value(0.));
     }
-    AutomationProperties::SetName(slider,title+L" slider");if(!identifier.empty())AutomationProperties::SetAutomationId(slider,identifier+L"-slider");
+    AutomationProperties::SetName(slider,title);if(!identifier.empty())AutomationProperties::SetAutomationId(slider,identifier+L"-slider");
     auto palette=object(data->state,L"palette");
     auto panelColor=color(str(palette,L"panel")),textColor=color(str(palette,L"text"));
     auto track=fill({255,uint8_t((int(panelColor.R)+textColor.R)/2),
@@ -148,25 +164,26 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         slider.Resources().Insert(box_value(key),preference?accent(data):data->brush(L"thumb"));
     for(auto key:{L"SliderTrackFill",L"SliderTrackFillPointerOver",L"SliderTrackFillPressed",L"SliderTrackFillDisabled"})
         slider.Resources().Insert(box_value(key),data->brush(L"input"));
-    auto commit=[data,local,spec,get,set,setText,presented,identity=presentation.identity,weak=make_weak(entry)](bool cancel){
+    auto commit=[data,local,caption,spec,get,set,setText,presented,identity=presentation.identity,weak=make_weak(entry)](bool cancel){
         auto entry=weak.get();if(!cancel&&entry&&textComposing(entry))return false;
         if(!entry||!local->editing)return true;
         if(identity && local->identity!=identity()){
             local->identity=identity();local->value=get();cancel=true;
         }
-        if(!cancel&&presented&&entry.Text()==presented()){local->editing=false;return true;}
+        if(!cancel&&presented&&entry.Text()==presented()){local->editing=false;showNumericError(entry,L"");caption->errorReason=J{};return true;}
         try{
             auto next=local->resolve(spec,local->value,cancel?O({{L"type",S(L"format")}}):
                 O({{L"type",S(L"expression")},{L"text",S(entry.Text())}}));
             bool changed=local->value!=num(next,L"value");
             local->value=num(next,L"value");local->editing=false;
-            setText(cancel&&presented?presented():str(next,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));entry.BorderThickness(Thickness{0});
-            ToolTipService::SetToolTip(entry,nullptr);
+            setText(cancel&&presented?presented():str(next,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));showNumericError(entry,L"");caption->errorReason=J{};
             if(!cancel&&changed)set(local->value);
             return true;
+        }catch(NumericFailure const& error){
+            caption->errorReason=error.reason;caption->errorLanguage=data->language();
+            showNumericError(entry,error.message());return false;
         }catch(hresult_error const& error){
-            entry.BorderThickness(Thickness{1,1,1,1});entry.BorderBrush(fill({255,221,85,85}));
-            tooltip(entry,error.message());
+            caption->errorReason=J{};showNumericError(entry,error.message());
             return false;
         }
     };
@@ -209,12 +226,12 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         [local,finish](auto&&,auto&&){local->dragging=false;finish(L"up");})),true);
     slider.PointerCaptureLost([local,finish](auto&&,auto&&){local->dragging=false;finish(L"up");});
     slider.PointerCanceled([local,finish](auto&&,auto&&){local->dragging=false;finish(L"cancel");});
-    slider.ValueChanged([data,local,spec,set,setText,phase,weak=make_weak(entry)](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
+    slider.ValueChanged([data,local,caption,spec,set,setText,phase,weak=make_weak(entry)](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
         if(data->updating)return;
         auto next=local->resolve(spec,local->value,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}}));
         local->value=num(next,L"value");local->editing=false;
         if(auto entry=weak.get()){
-            entry.BorderThickness({0});ToolTipService::SetToolTip(entry,nullptr);
+            showNumericError(entry,L"");caption->errorReason=J{};
             setText(str(next,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));
         }
         if(phase&&!local->gesture)Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().TryEnqueue([local,set,value=local->value]{if(!local->gesture)set(value);});
@@ -225,10 +242,10 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         auto panel=color(str(palette,L"panel")),ink=color(str(palette,L"text"));
         track.Color({255,uint8_t((int(panel.R)+ink.R)/2),uint8_t((int(panel.G)+ink.G)/2),uint8_t((int(panel.B)+ink.B)/2)});
     });
-    bindings.emplace_back([data,local,spec,get,entry,slider,setText,presented,identity=presentation.identity]{
+    bindings.emplace_back([data,local,caption,spec,get,entry,slider,setText,presented,identity=presentation.identity]{
         if(identity && local->identity!=identity()){
             local->identity=identity();local->editing=false;local->dragging=false;
-            entry.BorderThickness({0});ToolTipService::SetToolTip(entry,nullptr);
+            showNumericError(entry,L"");caption->errorReason=J{};
         }
         if(local->editing||local->dragging)return;
         local->value=get();auto shown=local->resolve(spec,local->value,O({{L"type",S(L"format")}}));
@@ -269,13 +286,11 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             local->value=num(next,L"value");set(local->value);
         });
         step.Width(stepSize);step.Height(stepSize);step.Content(icon(direction<0?L"minus":L"plus",data->theme()));
-        data->copyView([source=std::weak_ptr<WorkspaceData>(data),currentTitle,weak=make_weak(step),direction]{
-            auto data=source.lock();auto view=weak.get();if(!data||!view)return false;
-            auto input=to_string(O({{L"label",S(currentTitle())}}).Stringify());
-            std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_numeric_labels(data->localization.get(),input.c_str()),capy_string_free);
-            if(!raw)throw hresult_error(E_OUTOFMEMORY);auto labels=J::Parse(to_hstring(raw.get()));
+        auto presentStep=[numericCopy,weak=make_weak(step),direction]{
+            auto view=weak.get();if(!view)return false;auto labels=numericCopy();
             AutomationProperties::SetName(view,str(labels,direction<0?L"decrease":L"increase"));return true;
-        });
+        };
+        data->copyView(presentStep);bindings.emplace_back([presentStep]{presentStep();});
         AutomationProperties::SetAutomationId(step,numberId+(direction<0?L"-decrease":L"-increase"));
         step.IsEnabledChanged([](Windows::Foundation::IInspectable const& sender,DependencyPropertyChangedEventArgs const& args){
             sender.as<Button>().Opacity(unbox_value<bool>(args.NewValue())?1.:.36);

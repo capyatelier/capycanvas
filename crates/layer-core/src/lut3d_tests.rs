@@ -122,7 +122,7 @@ fn undo_and_pending_operations_retain_and_charge_shared_resources_once() {
 #[test]
 fn resource_ownership_edits_require_admission_but_intensity_and_title_aliases_do_not() {
     use crate::{Edit,EffectValue};
-    let project=resource_project();let layer=project.document.layers[0].clone();assert!(Edit::InsertLayer {index:0,layer:layer.clone()}.requires_history_admission(&project.document));assert!(Edit::RemoveLayer {id:layer.id}.requires_history_admission(&project.document));
+    let project=resource_project();let layer=project.document.layers[0].clone();assert!(Edit::InsertLayer {index:0,layer:Box::new(layer.clone())}.requires_history_admission(&project.document));assert!(Edit::RemoveLayer {id:layer.id}.requires_history_admission(&project.document));
     let mut changed=layer.clone();Arc::make_mut(changed.effect.as_mut().unwrap()).set("intensity",EffectValue::Number(42.)).unwrap();assert!(!Edit::ReplaceLayer(Box::new(changed)).requires_history_admission(&project.document));
     let resource=layer.effect.as_ref().unwrap().lut3d().unwrap();let mut json=serde_json::to_value(resource.as_ref()).unwrap();json["title"]="Renamed resource".into();let alias:Lut3d=serde_json::from_value(json).unwrap();let alias=Arc::new(alias.with_shared_payload(resource).unwrap());let mut changed=layer.clone();Arc::make_mut(changed.effect.as_mut().unwrap()).set("table",EffectValue::Lut3d(Some(alias))).unwrap();assert!(!Edit::ReplaceLayer(Box::new(changed)).requires_history_admission(&project.document));
     let mut changed=layer.clone();Arc::make_mut(changed.effect.as_mut().unwrap()).set("table",EffectValue::Lut3d(None)).unwrap();assert!(Edit::ReplaceLayer(Box::new(changed)).requires_history_admission(&project.document));

@@ -59,6 +59,7 @@ enum Payload {
         task: Option<Box<ClipTask>>,
         clip: Option<Box<PixelClip>>,
         request: u32,
+        operation:DocumentRequest,
     },
     Retired {
         _renderer: Option<Box<WgpuRasterizer>>,
@@ -184,7 +185,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
             let request = session.state().requests.iter().find(|r| matches!(r.kind,
                 HostRequestKind::Document { request: DocumentRequest::Copy { .. } }))
                 .ok_or("No copy is pending")?.id;
-            Payload::Clip { task: Some(Box::new(ClipTask::capture(session, request)?)), clip: None, request }
+            Payload::Clip { task: Some(Box::new(ClipTask::capture(session, request)?)), clip: None, request, operation:session.document_request(request)?.clone() }
         } else if opening == 3 {
             #[derive(Default, serde::Deserialize)]
             struct Placement { screen: Option<layer_core::Point>, layer: Option<Row> }

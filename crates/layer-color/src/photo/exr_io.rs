@@ -161,13 +161,13 @@ pub(super) fn read_exr(
         },
         limits.source_bytes,
     )?;
-    let mut decoder = reader
+    let decoder = reader
         .all_chunks(true)
         .map_err(err)?
         .sequential_decompressor(true);
     let count = channels.count();
     let mut next_y = 0;
-    while let Some(block) = decoder.next() {
+    for block in decoder {
         check_cancel(cancelled)?;
         let block = block.map_err(err)?;
         if block.index.pixel_position != Vec2(0, next_y)
@@ -239,7 +239,7 @@ pub fn write_exr_rows(
 ) -> Result<(), String> {
     validate_extent(extent, 32768)?;
     let mut header = Header::new(
-        "RGB".try_into().unwrap(),
+        "RGB".into(),
         (extent[0] as usize, extent[1] as usize),
         ["A", "B", "G", "R"]
             .into_iter()

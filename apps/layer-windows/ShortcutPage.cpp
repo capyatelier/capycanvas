@@ -8,7 +8,6 @@
 #include <fstream>
 #include <set>
 #include <thread>
-#include <cwctype>
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -24,20 +23,16 @@ J act(wchar_t const* type,std::initializer_list<std::pair<wchar_t const*,V>> fie
     auto action=O(fields);action.Insert(L"type",S(type));return action;
 }
 TextBlock note(std::shared_ptr<WorkspaceData> const& data,hstring const& text){
-    auto line=label(data,text);line.TextWrapping(TextWrapping::Wrap);line.Opacity(.55);line.FontSize(data->textSize()/1.2);line.LineHeight(15);return line;
-}
-hstring joined(A const& values,wchar_t const* separator){
-    std::wstring text;for(auto value:values)text+=(text.empty()?L"":separator)+std::wstring(value.GetString());return hstring(text);
+    auto line=label(data,text);line.TextWrapping(TextWrapping::Wrap);line.Opacity(.55);line.FontSize(data->textSize()/1.2);line.LineHeight(15);line.LineStackingStrategy(LineStackingStrategy::MaxHeight);return line;
 }
 constexpr wchar_t ModifierCategory[]=L"Modifier keys";
-std::wstring slug(hstring const& text){
-    std::wstring value(text.c_str());for(auto& c:value){c=wchar_t(std::towlower(c));if(c==L' ')c=L'-';}return value;
-}
+
 }
 
 struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
     struct Group{StackPanel section,list,actions;Grid heading;TextBlock title{nullptr},summary{nullptr};};
     struct Row{Button button{nullptr};TextBlock title{nullptr},detail{nullptr},value{nullptr};};
+    struct KeymapResult{hstring diagnostic,text;bool tooLarge=false;};
     struct Sheet{Grid frame;TextBlock title{nullptr};Button close{nullptr},start{nullptr};StackPanel body;hstring signature;};
     std::shared_ptr<WorkspaceData> data;
     Grid overlay;
@@ -52,12 +47,20 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
     StackPanel rootResults,categoryResults,emptyStatus;
     TextBlock emptyTitle{nullptr},emptyText{nullptr};
     std::map<std::wstring,Row> categoryRows,triggerRows;
+    std::map<std::wstring,J> shortcutSpecs;
     std::map<std::wstring,Group> triggerGroups;
     Sheet editor,modifierSheet,picker,details,import;
     TextBlock pickerDescription{nullptr};
     StackPanel pickerList;
     std::set<uint32_t> handledRequests;
-    hstring look,keymapSignature,contextSignature,showSignature,categorySignature,resultsSignature,modifierSignature,triggerSignature,modifierPane,penPane;
+    hstring categorySignature,resultsSignature,modifierSignature,triggerSignature,modifierPane,penPane;
+    std::wstring buildingScope;
+    std::map<std::wstring,std::vector<std::function<void()>>> retained;
+    void beginRefresh(std::wstring scope){buildingScope=std::move(scope);retained[buildingScope].clear();}
+    void remember(std::function<void()> present){present();retained[buildingScope].push_back(std::move(present));}
+    void refresh(std::wstring const& scope){for(auto const& present:retained[scope])present();}
+    Image themed(wchar_t const* glyph){auto image=icon(glyph,data->theme());remember([this,image,glyph=std::wstring(glyph),theme=data->theme()]()mutable{if(theme!=data->theme()){theme=data->theme();image.Source(icon(hstring(glyph.c_str()),theme).Source());}});return image;}
+    static void title(Group const& group,hstring const& text){group.title.Text(text);group.title.Visibility(text.empty()?Visibility::Collapsed:Visibility::Visible);group.heading.Visibility(text.empty()&&group.summary.Text().empty()?Visibility::Collapsed:Visibility::Visible);}
 
     hstring copy(wchar_t const* key)const{return data->caption(L"shortcuts",key);}
     LocalizedCopy localized(wchar_t const* key)const{return data->copyCaption(L"shortcuts",key);}
@@ -114,9 +117,11 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         auto result=button(data,text,std::move(action));result.Padding({10,5,10,5});result.MinHeight(34);result.Background(data->brush(L"button"));
         return result;
     }
-    Button glyphButton(wchar_t const* glyph,hstring const& name,J action,hstring const& id){
-        auto result=button(data,L"",[data=data,action]{send(data,action);});result.Width(34);result.Height(34);result.Content(icon(glyph,data->theme()));
+    Button glyphButton(wchar_t const* glyph,wchar_t const* key,J action,hstring const& id){
+        auto name=copy(key);
+        auto result=button(data,L"",[data=data,action]{send(data,action);});result.Width(34);result.Height(34);result.Content(themed(glyph));
         AutomationProperties::SetName(result,name);AutomationProperties::SetAutomationId(result,id);tooltip(result,name);
+        remember([this,result,key=std::wstring(key)]{auto name=copy(key.c_str());AutomationProperties::SetName(result,name);tooltip(result,name);});
         return result;
     }
     Group group(hstring const& title,hstring const& summary=L""){
@@ -165,7 +170,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         for(int i=0;i<2;++i){ColumnDefinition tail;tail.Width({1,GridUnitType::Auto});content.ColumnDefinitions().Append(tail);}
         cell(content,words(title,detail,&row.title,&row.detail),0);
         row.value=label(data,value);row.value.Opacity(.55);cell(content,row.value,1);
-        cell(content,icon(L"go-next",data->theme()),2);
+        cell(content,themed(L"go-next"),2);
         row.button.Content(content);AutomationProperties::SetName(row.button,title);AutomationProperties::SetAutomationId(row.button,id);
         return row;
     }
@@ -175,13 +180,15 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         if(row.value.Text()!=value)row.value.Text(value);
         AutomationProperties::SetName(row.button,title);AutomationProperties::SetItemStatus(row.button,value);
     }
-    Button buttonRow(wchar_t const* glyph,hstring const& text,J action,hstring const& id,bool destructive=false){
+    Button buttonRow(wchar_t const* glyph,wchar_t const* key,J action,hstring const& id,bool destructive=false){
+        auto text=copy(key);
         auto result=button(data,L"",[data=data,action]{send(data,action);});
         result.HorizontalAlignment(HorizontalAlignment::Stretch);result.HorizontalContentAlignment(HorizontalAlignment::Left);
         result.CornerRadius({0,0,0,0});result.MinHeight(54);result.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());result.Padding({14,8,14,8});
-        StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(12);content.Children().Append(icon(glyph,data->theme()));
+        StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(12);content.Children().Append(themed(glyph));
         auto words=label(data,text);words.VerticalAlignment(VerticalAlignment::Center);if(destructive)words.Foreground(fill(color(data->theme()==L"dark"?L"#ff7b63":L"#c01c28")));
         content.Children().Append(words);result.Content(content);AutomationProperties::SetName(result,text);AutomationProperties::SetAutomationId(result,id);
+        remember([this,result,words,destructive,key=std::wstring(key)]{auto text=copy(key.c_str());words.Text(text);AutomationProperties::SetName(result,text);if(destructive)words.Foreground(fill(color(data->theme()==L"dark"?L"#ff7b63":L"#c01c28")));});
         return result;
     }
     ComboBox dropdown(hstring const& name,hstring const& id,std::function<void(int32_t)> choose){
@@ -191,12 +198,12 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         });
         return result;
     }
-    static void choices(ComboBox const& box,hstring& signature,std::vector<hstring> const& labels,int32_t selected){
-        std::wstring key;for(auto const& value:labels)key+=std::wstring(value)+L"\n";
-        if(signature!=hstring(key)){
-            signature=hstring(key);box.Items().Clear();
-            for(auto const& value:labels){ComboBoxItem item;item.Content(box_value(value));AutomationProperties::SetName(item,value);box.Items().Append(item);}
+    static void choices(ComboBox const& box,std::vector<hstring> const& labels,int32_t selected){
+        if(box.Items().Size()!=labels.size()){
+            box.Items().Clear();
+            for(auto const& value:labels){ComboBoxItem item;item.Content(box_value(value));box.Items().Append(item);}
         }
+        for(uint32_t i=0;i<labels.size();++i)comboOptionText(box,i,labels[i]);
         if(box.SelectedIndex()!=selected)box.SelectedIndex(selected);
     }
     StackPanel Container(hstring const& page,StackPanel const& node){
@@ -282,77 +289,75 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
     J pickerModel()const{return object(page(),L"picker");}
 
     Grid recordingRow(J const& capture){
-        auto row=line();AutomationProperties::SetAutomationId(row,L"shortcut-recording");AutomationProperties::SetName(row,str(capture,L"shortcut"));
-        bool existing=flag(capture,L"existing");auto notice=str(capture,L"notice");
+        auto row=line();AutomationProperties::SetAutomationId(row,L"shortcut-recording");bool existing=flag(capture,L"existing");auto notice=str(capture,L"notice");
         StackPanel lead;lead.Orientation(Orientation::Horizontal);lead.Spacing(12);
-        auto glyph=icon(existing||!notice.empty()?L"info":L"keyboard",data->theme());glyph.VerticalAlignment(VerticalAlignment::Center);
-        lead.Children().Append(glyph);lead.Children().Append(words(str(capture,L"shortcut"),notice));cell(row,lead,0);
-        auto cancel=flat(data->common(L"cancel"),[data=data]{send(data,act(L"cancel_shortcut"));});AutomationProperties::SetAutomationId(cancel,L"cancel-shortcut");cell(row,cancel,1);
-        bool replace=capture.GetNamedValue(L"conflict",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null;
-        auto confirm=flat(existing?copy(L"open"):replace?copy(L"reassign"):copy(L"add"),[data=data,replace]{send(data,act(L"confirm_shortcut",{{L"replace",B(replace)}}));});
+        auto glyph=icon(existing||!notice.empty()?L"info":L"keyboard",data->theme());
+        remember([this,glyph,shown=(existing||!notice.empty()?hstring(L"info"):hstring(L"keyboard"))+data->theme()]()mutable{auto current=object(preferences(),L"capture");auto name=flag(current,L"existing")||!str(current,L"notice").empty()?hstring(L"info"):hstring(L"keyboard");auto wanted=name+data->theme();if(shown!=wanted){shown=wanted;glyph.Source(icon(name,data->theme()).Source());}});glyph.VerticalAlignment(VerticalAlignment::Center);lead.Children().Append(glyph);
+        TextBlock heading{nullptr},detail{nullptr};lead.Children().Append(words(str(capture,L"shortcut"),notice,&heading,&detail));cell(row,lead,0);
+        auto cancel=flat(L"",[data=data]{send(data,act(L"cancel_shortcut"));});AutomationProperties::SetAutomationId(cancel,L"cancel-shortcut");cell(row,cancel,1);
+        auto confirm=flat(L"",[weak=weak_from_this()]{if(auto self=weak.lock())send(self->data,act(L"confirm_shortcut",{{L"replace",B(object(self->preferences(),L"capture").GetNamedValue(L"conflict",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null)}}));});
         confirm.Background(accent(data));confirm.Foreground(data->brush(L"accent_foreground"));
         confirm.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),accent(data));confirm.Resources().Insert(box_value(L"ButtonBackgroundPressed"),accent(data));
-        AutomationProperties::SetAutomationId(confirm,L"confirm-shortcut");
-        confirm.IsEnabled(object(capture,L"chord").Size()!=0&&str(capture,L"error").empty());cell(row,confirm,2);
+        AutomationProperties::SetAutomationId(confirm,L"confirm-shortcut");cell(row,confirm,2);
+        remember([this,row,heading,detail,cancel,confirm]{auto current=object(preferences(),L"capture");auto notice=str(current,L"notice");heading.Text(str(current,L"shortcut"));detail.Text(notice);detail.Visibility(notice.empty()?Visibility::Collapsed:Visibility::Visible);AutomationProperties::SetName(row,str(current,L"shortcut"));auto cancelText=data->common(L"cancel");cancel.Content(box_value(cancelText));AutomationProperties::SetName(cancel,cancelText);auto confirmText=copy(flag(current,L"existing")?L"open":current.GetNamedValue(L"conflict",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null?L"reassign":L"add");confirm.Content(box_value(confirmText));AutomationProperties::SetName(confirm,confirmText);confirm.IsEnabled(object(current,L"chord").Size()!=0&&str(current,L"error").empty());});
         return row;
     }
     void refreshKeymap(){
         auto keymap=object(preferences(),L"keymap");auto presets=array(keymap,L"presets");std::vector<hstring> titles;int32_t selected=-1;
         for(uint32_t i=0;i<presets.Size();++i){auto preset=presets.GetObjectAt(i);titles.push_back(str(preset,L"title"));if(str(preset,L"id")==str(keymap,L"selected"))selected=int32_t(i);}
-        choices(keymapChoice,keymapSignature,titles,selected);
+        choices(keymapChoice,titles,selected);
         keymapOutdated.Visibility(flag(keymap,L"outdated")?Visibility::Visible:Visibility::Collapsed);
-        auto signature=hstring(std::wstring(str(keymap,L"selected"))+array(keymap,L"differences").Stringify()+str(keymap,L"source")+array(keymap,L"links").Stringify()+look);
+        auto signature=str(keymap,L"selected")+array(keymap,L"links").Stringify()+L"|"+to_hstring(array(keymap,L"differences").Size());
         if(details.signature!=signature){
-            details.signature=signature;details.title.Text(str(keymap,L"title"));details.body.Children().Clear();
-            auto source=label(data,str(keymap,L"source"));source.TextWrapping(TextWrapping::Wrap);source.Opacity(.55);details.body.Children().Append(source);
+            details.signature=signature;beginRefresh(L"details");details.body.Children().Clear();
+            auto source=label(data,L"");source.TextWrapping(TextWrapping::Wrap);source.Opacity(.55);details.body.Children().Append(source);
+            remember([this,source]{auto current=object(preferences(),L"keymap");details.title.Text(str(current,L"title"));source.Text(str(current,L"source"));});
             VariableSizedWrapGrid links;links.Orientation(Orientation::Horizontal);
             for(auto link:array(keymap,L"links")){
                 std::wstring url(link.GetString().c_str());auto trimmed=url;while(!trimmed.empty()&&trimmed.back()==L'/')trimmed.pop_back();
                 auto name=trimmed.substr(trimmed.find_last_of(L'/')+1);name=name.substr(0,name.find(L'.'));for(auto& c:name)if(c==L'_'||c==L'-')c=L' ';
                 HyperlinkButton anchor;anchor.Content(box_value(hstring(name.empty()?url:name)));anchor.NavigateUri(winrt::Windows::Foundation::Uri(link.GetString()));links.Children().Append(anchor);
             }
-            details.body.Children().Append(links);
-            auto list=group(L"");auto differences=array(keymap,L"differences");
-            if(!differences.Size()){auto row=line();cell(row,words(copy(L"no_differences"),copy(L"defaults_help")),0);add(list.list,row);}
-            for(auto value:differences){auto difference=value.GetObject();auto row=line();cell(row,words(str(difference,L"trigger"),str(difference,L"note")),0);add(list.list,row);}
+            details.body.Children().Append(links);auto list=group(L"");auto differences=array(keymap,L"differences");
+            if(!differences.Size()){
+                auto row=line();TextBlock heading{nullptr},help{nullptr};cell(row,words(L"",L"",&heading,&help),0);add(list.list,row);
+                remember([this,heading,help]{heading.Text(copy(L"no_differences"));help.Text(copy(L"defaults_help"));help.Visibility(Visibility::Visible);});
+            }
+            for(uint32_t i=0;i<differences.Size();++i){
+                auto row=line();TextBlock heading{nullptr},help{nullptr};cell(row,words(L"",L"",&heading,&help),0);add(list.list,row);
+                remember([this,i,heading,help]{auto current=array(object(preferences(),L"keymap"),L"differences").GetObjectAt(i);heading.Text(str(current,L"trigger"));auto detail=str(current,L"note");help.Text(detail);help.Visibility(detail.empty()?Visibility::Collapsed:Visibility::Visible);});
+            }
             details.body.Children().Append(list.section);
         }
-        show(details,flag(keymap,L"details"));
-        auto preview=object(keymap,L"import");auto previewSignature=hstring(preview.Stringify()+look);
-        if(preview.Size()&&import.signature!=previewSignature){
-            import.signature=previewSignature;import.title.Text(str(preview,L"heading"));import.body.Children().Clear();
-            bool changes=false;
-            for(auto [title,key]:{std::pair{copy(L"added"),L"added"},std::pair{copy(L"changed"),L"changed"},std::pair{copy(L"removed"),L"removed"},std::pair{copy(L"not_available"),L"unavailable"}}){
-                auto items=array(preview,key);if(!items.Size())continue;changes=true;
-                import.body.Children().Append(label(data,hstring(std::wstring(title)+L" ("+std::to_wstring(items.Size())+L")"),true));
-                StackPanel list;list.Spacing(4);list.Margin({12,0,0,0});
-                for(auto item:items){auto entry=label(data,L"• "+item.GetString());entry.TextWrapping(TextWrapping::Wrap);list.Children().Append(entry);}
-                import.body.Children().Append(list);
-            }
-            if(!changes)import.body.Children().Append(label(data,copy(L"no_changes")));
+        refresh(L"details");show(details,flag(keymap,L"details"));
+        auto preview=object(keymap,L"import");
+        if(preview.Size()&&import.signature.empty()){
+            import.signature=L"open";beginRefresh(L"import");import.body.Children().Clear();
+            auto body=label(data,L"");body.TextWrapping(TextWrapping::Wrap);import.body.Children().Append(body);
             StackPanel footer;footer.Orientation(Orientation::Horizontal);footer.Spacing(6);footer.HorizontalAlignment(HorizontalAlignment::Right);
-            footer.Children().Append(flat(str(preview,L"cancel_label"),[data=data]{send(data,act(L"cancel_keymap_import"));}));
-            auto confirm=flat(str(preview,L"import_label"),[data=data]{send(data,act(L"confirm_keymap_import"));});confirm.Background(accent(data));confirm.Foreground(data->brush(L"accent_foreground"));
+            auto cancel=flat(L"",[data=data]{send(data,act(L"cancel_keymap_import"));});footer.Children().Append(cancel);
+            auto confirm=flat(L"",[data=data]{send(data,act(L"confirm_keymap_import"));});confirm.Background(accent(data));confirm.Foreground(data->brush(L"accent_foreground"));
             AutomationProperties::SetAutomationId(confirm,L"confirm-keymap-import");footer.Children().Append(confirm);import.body.Children().Append(footer);
+            remember([this,body,cancel,confirm]{auto current=object(object(preferences(),L"keymap"),L"import");import.title.Text(str(current,L"heading"));body.Text(str(current,L"body"));auto cancelText=str(current,L"cancel_label"),importText=str(current,L"import_label");cancel.Content(box_value(cancelText));AutomationProperties::SetName(cancel,cancelText);confirm.Content(box_value(importText));AutomationProperties::SetName(confirm,importText);});
         }
-        if(!preview.Size())import.signature=L"";
+        if(preview.Size())refresh(L"import");else {import.signature=L"";retained[L"import"].clear();}
         show(import,preview.Size()!=0);
     }
     void refreshFilters(){
         auto spec=page();auto contexts=array(spec,L"contexts");std::vector<hstring> labels;int32_t selected=-1;
         auto context=spec.GetNamedValue(L"context",JsonValue::CreateNullValue()).Stringify();
         for(uint32_t i=0;i<contexts.Size();++i){auto choice=contexts.GetObjectAt(i);labels.push_back(str(choice,L"label"));if(choice.GetNamedValue(L"category",JsonValue::CreateNullValue()).Stringify()==context)selected=int32_t(i);}
-        choices(contextChoice,contextSignature,labels,selected);
+        choices(contextChoice,labels,selected);
         auto shows=array(spec,L"shows");labels.clear();selected=-1;
         for(uint32_t i=0;i<shows.Size();++i){auto choice=shows.GetObjectAt(i);labels.push_back(str(choice,L"label"));if(str(choice,L"show")==str(spec,L"show"))selected=int32_t(i);}
-        choices(showChoice,showSignature,labels,selected);
+        choices(showChoice,labels,selected);
         if(search.Text()!=str(preferences(),L"shortcut_query"))search.Text(str(preferences(),L"shortcut_query"));
     }
     void refreshCategories(){
-        auto spec=page();auto list=array(spec,L"categories");std::wstring ids(look.c_str());
+        auto spec=page();auto list=array(spec,L"categories");std::wstring ids;
         for(auto value:list)ids+=L"\n"+std::wstring(str(value.GetObject(),L"id"));
         if(categorySignature!=hstring(ids)){
-            categorySignature=hstring(ids);categories.list.Children().Clear();categoryRows.clear();
+            categorySignature=hstring(ids);beginRefresh(L"categories");categories.list.Children().Clear();categoryRows.clear();
             for(auto value:list){
                 auto entry=value.GetObject();auto id=str(entry,L"id");
                 auto row=navRow(str(entry,L"label"),L"",to_hstring(uint32_t(num(entry,L"count"))),act(L"shortcut_category",{{L"id",S(id)}}),L"shortcut-category-"+id);
@@ -360,7 +365,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
             }
         }
         for(auto value:list){auto entry=value.GetObject();if(auto it=categoryRows.find(str(entry,L"id").c_str());it!=categoryRows.end())update(it->second,str(entry,L"label"),L"",to_hstring(uint32_t(num(entry,L"count"))));}
-        bool filtering=flag(spec,L"filtering");categories.section.Visibility(filtering?Visibility::Collapsed:Visibility::Visible);
+        refresh(L"categories");bool filtering=flag(spec,L"filtering");categories.section.Visibility(filtering?Visibility::Collapsed:Visibility::Visible);
         auto empty=object(spec,L"empty");emptyStatus.Visibility(empty.Size()?Visibility::Visible:Visibility::Collapsed);
         if(empty.Size()){emptyTitle.Text(str(empty,L"title"));emptyText.Text(str(empty,L"description"));}
     }
@@ -373,176 +378,174 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         content.ColumnDefinitions().Append(text);content.ColumnDefinitions().Append(binding);
         auto scope=str(spec,L"scope_caption");auto detail=str(spec,L"detail");
         auto subtitle=detail.empty()?scope:scope.empty()?detail:detail+L" · "+scope;
-        cell(content,words(str(spec,L"label"),subtitle),0);
+        TextBlock title{nullptr},detailText{nullptr};cell(content,words(str(spec,L"label"),subtitle,&title,&detailText),0);
         auto shortcut=label(data,str(spec,L"shortcut"));shortcut.Opacity(.55);if(flag(spec,L"modified"))shortcut.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
         cell(content,shortcut,1);choose.Content(content);
         AutomationProperties::SetName(choose,str(spec,L"label"));AutomationProperties::SetAutomationId(choose,L"shortcut-"+id);
         AutomationProperties::SetItemStatus(choose,str(spec,L"shortcut"));AutomationProperties::SetHelpText(choose,flag(spec,L"modified")?copy(L"modified"):hstring());
         Grid::SetColumnSpan(choose,3);cell(row,choose,0);
-        if(flag(spec,L"modified"))cell(row,glyphButton(L"reset",copy(L"reset_default"),act(L"reset_shortcut",{{L"id",S(id)}}),L"shortcut-reset-"+id),3);
+        if(flag(spec,L"modified"))cell(row,glyphButton(L"reset",L"reset_default",act(L"reset_shortcut",{{L"id",S(id)}}),L"shortcut-reset-"+id),3);
+        remember([this,id,choose,title,detailText,shortcut]{
+            auto current=shortcutSpecs.at(id.c_str());auto scope=str(current,L"scope_caption"),detail=str(current,L"detail");
+            auto subtitle=detail.empty()?scope:scope.empty()?detail:detail+L" · "+scope;
+            title.Text(str(current,L"label"));detailText.Text(subtitle);detailText.Visibility(subtitle.empty()?Visibility::Collapsed:Visibility::Visible);shortcut.Text(str(current,L"shortcut"));
+            AutomationProperties::SetName(choose,str(current,L"label"));AutomationProperties::SetItemStatus(choose,str(current,L"shortcut"));AutomationProperties::SetHelpText(choose,flag(current,L"modified")?copy(L"modified"):hstring());
+        });
         return row;
     }
     void refreshResults(){
         auto spec=page();bool filtering=flag(spec,L"filtering");auto categoryId=str(spec,L"category");bool inCategory=!categoryId.empty();
-        struct Layout{hstring title;std::vector<J> specs;};std::vector<Layout> layout;
+        struct Layout{hstring title;std::vector<J> specs;};std::vector<Layout> layout;shortcutSpecs.clear();
         for(auto value:array(preferences(),L"shortcuts")){
-            auto row=value.GetObject();if(!flag(row,L"visible",true))continue;
+            auto row=value.GetObject();shortcutSpecs.emplace(str(row,L"id").c_str(),row);if(!flag(row,L"visible",true))continue;
             auto title=inCategory&&!filtering?str(row,L"subgroup"):str(row,L"group");
             if(layout.empty()||layout.back().title!=title)layout.push_back({title,{}});
             layout.back().specs.push_back(row);
         }
-        std::wstring key=std::wstring(categoryId)+L"|"+std::wstring(look);
-        for(auto const& section:layout){key+=L"#"+std::wstring(section.title);for(auto const& row:section.specs)key+=L","+std::wstring(row.Stringify());}
-        if(resultsSignature==hstring(key))return;
-        resultsSignature=hstring(key);
-        auto target=inCategory?categoryResults:rootResults,other=inCategory?rootResults:categoryResults;
-        target.Children().Clear();
-        if(inCategory||filtering)other.Children().Clear();
-        for(auto const& section:layout){
-            auto g=group(section.title);for(auto const& row:section.specs)add(g.list,shortcutRow(row));target.Children().Append(g.section);
+        std::wstring key=std::wstring(categoryId)+(filtering?L"|filtered":L"|all");
+        for(auto const& section:layout){key+=L"#";for(auto const& row:section.specs)key+=L","+std::wstring(str(row,L"id"))+(flag(row,L"modified")?L"*":L"");}
+        if(resultsSignature!=hstring(key)){
+            resultsSignature=hstring(key);beginRefresh(L"results");
+            auto target=inCategory?categoryResults:rootResults,other=inCategory?rootResults:categoryResults;target.Children().Clear();other.Children().Clear();
+            for(auto const& section:layout){
+                auto g=group(inCategory&&!filtering?section.title:categoryLabel(section.title));auto id=str(section.specs.front(),L"id");
+                remember([this,g,id,inCategory,filtering]{auto current=shortcutSpecs.at(id.c_str());title(g,inCategory&&!filtering?str(current,L"subgroup"):categoryLabel(str(current,L"group")));});
+                for(auto const& row:section.specs)add(g.list,shortcutRow(row));target.Children().Append(g.section);
+            }
         }
+        refresh(L"results");
     }
     void refreshModifiers(){
         auto spec=page();std::vector<J> visible;
         for(auto value:array(spec,L"modifiers"))if(flag(value.GetObject(),L"visible"))visible.push_back(value.GetObject());
         bool onCategory=str(spec,L"category")==ModifierCategory;
-        if(auto title=categoryLabel(ModifierCategory);modifierMain.title.Text()!=title){
-            modifierMain.title.Text(title);modifierMain.title.Visibility(Visibility::Visible);modifierMain.heading.Visibility(Visibility::Visible);
-        }
+        title(modifierMain,categoryLabel(ModifierCategory));
         modifierMain.section.Visibility(flag(spec,L"filtering")&&!visible.empty()?Visibility::Visible:Visibility::Collapsed);
         modifierCategory.section.Visibility(onCategory?Visibility::Visible:Visibility::Collapsed);
-        std::wstring key=std::wstring(look)+(onCategory?L"|c":L"|m");for(auto const& row:visible)key+=L"\n"+std::wstring(row.Stringify());
-        if(modifierSignature==hstring(key))return;
-        modifierSignature=hstring(key);
-        auto list=onCategory?modifierCategory.list:modifierMain.list;(onCategory?modifierMain.list:modifierCategory.list).Children().Clear();
-        list.Children().Clear();
-        for(auto const& row:visible){
-            auto entry=navRow(str(row,L"label"),str(row,L"detail"),str(row,L"action"),act(L"edit_modifier_key",{{L"key",row.GetNamedValue(L"key")}}),L"modifier-"+str(row,L"label"));
-            add(list,entry.button);
+        std::wstring key=onCategory?L"category":L"main";for(auto const& row:visible)key+=L"\n"+std::wstring(row.GetNamedValue(L"key").Stringify());
+        if(modifierSignature!=hstring(key)){
+            modifierSignature=hstring(key);beginRefresh(L"modifiers");
+            auto list=onCategory?modifierCategory.list:modifierMain.list;(onCategory?modifierMain.list:modifierCategory.list).Children().Clear();list.Children().Clear();
+            for(auto const& row:visible){
+                auto held=row.GetNamedValue(L"key");auto entry=navRow(str(row,L"label"),str(row,L"detail"),str(row,L"action"),act(L"edit_modifier_key",{{L"key",held}}),L"modifier-"+str(held.GetObject(),L"key")+(flag(held.GetObject(),L"command")?L"-command":L"")+(flag(held.GetObject(),L"shift")?L"-shift":L"")+(flag(held.GetObject(),L"alt")?L"-alt":L""));add(list,entry.button);
+                remember([this,entry,held]{for(auto value:array(page(),L"modifiers")){auto current=value.GetObject();if(current.GetNamedValue(L"key").Stringify()==held.Stringify()){update(entry,str(current,L"label"),str(current,L"detail"),str(current,L"action"));break;}}});
+            }
+            if(onCategory)add(list,buttonRow(L"plus",L"add_modifier",act(L"add_modifier_key"),L"add-modifier-key"));
         }
-        if(onCategory)add(list,buttonRow(L"plus",copy(L"add_modifier"),act(L"add_modifier_key"),L"add-modifier-key"));
+        refresh(L"modifiers");
     }
     void refreshTriggers(){
         if(!inputRoot)return;
-        auto triggers=array(page(),L"triggers");std::wstring key(look.c_str());
-        for(auto value:triggers){auto t=value.GetObject();key+=L"\n"+std::wstring(str(t,L"id"))+L"|"+std::wstring(str(t,L"section"));}
+        auto triggers=array(page(),L"triggers");std::wstring key;hstring section;uint32_t sectionIndex=0;
+        for(auto value:triggers){auto t=value.GetObject();if(str(t,L"section")!=section){section=str(t,L"section");key+=L"#";}key+=L"\n"+std::wstring(str(t,L"id"));}
         if(triggerSignature!=hstring(key)){
-            triggerSignature=hstring(key);
-            for(auto const& [name,section]:triggerGroups){uint32_t index;if(inputRoot.Children().IndexOf(section.section,index))inputRoot.Children().RemoveAt(index);}
-            triggerGroups.clear();triggerRows.clear();
+            triggerSignature=hstring(key);beginRefresh(L"triggers");
+            for(auto const& [name,group]:triggerGroups){uint32_t index;if(inputRoot.Children().IndexOf(group.section,index))inputRoot.Children().RemoveAt(index);}
+            triggerGroups.clear();triggerRows.clear();section=L"";
             for(auto value:triggers){
-                auto trigger=value.GetObject();auto section=str(trigger,L"section");auto id=str(trigger,L"id");
-                if(!triggerGroups.contains(section.c_str())){
-                    auto g=group(section);AutomationProperties::SetAutomationId(g.section,hstring(L"triggers-"+slug(section)));
-                    triggerGroups.emplace(section.c_str(),g);inputRoot.Children().Append(g.section);
+                auto trigger=value.GetObject();auto id=str(trigger,L"id");
+                if(str(trigger,L"section")!=section){
+                    section=str(trigger,L"section");auto g=group(section);auto groupId=to_hstring(sectionIndex++);AutomationProperties::SetAutomationId(g.section,L"triggers-"+groupId);
+                    triggerGroups.emplace(groupId.c_str(),g);inputRoot.Children().Append(g.section);
+                    remember([this,g,id]{title(g,str(find(array(page(),L"triggers"),L"id",id),L"section"));});
                 }
                 bool penButton=std::wstring_view(id).starts_with(L"pen.");
-                auto row=navRow(str(trigger,L"label"),str(trigger,L"detail"),str(trigger,L"action"),
-                    penButton?act(L"edit_pen_button",{{L"trigger",S(id)}}):act(L"open_action_picker",{{L"trigger",S(id)}}),L"trigger-"+id);
-                add(triggerGroups.at(section.c_str()).list,row.button);triggerRows.emplace(id.c_str(),row);
+                auto row=navRow(str(trigger,L"label"),str(trigger,L"detail"),str(trigger,L"action"),penButton?act(L"edit_pen_button",{{L"trigger",S(id)}}):act(L"open_action_picker",{{L"trigger",S(id)}}),L"trigger-"+id);
+                add(triggerGroups.at(to_hstring(sectionIndex-1).c_str()).list,row.button);triggerRows.emplace(id.c_str(),row);
             }
         }
+        refresh(L"triggers");
         for(auto value:triggers){auto t=value.GetObject();if(auto it=triggerRows.find(str(t,L"id").c_str());it!=triggerRows.end())update(it->second,str(t,L"label"),str(t,L"detail"),str(t,L"action"));}
     }
     void perTool(StackPanel const& pane,hstring& signature,J const& binding,hstring const& prefix,hstring const& summary,J reset,
-        std::function<J(bool)> same,std::function<J(V)> pick,J remove=J{},hstring const& removeLabel=L""){
-        auto key=hstring(binding.Stringify()+summary+look+(remove.Size()?L"|r":L""));
-        if(signature==key)return;
-        signature=key;pane.Children().Clear();
-        auto section=group(L"",summary);
-        if(flag(binding,L"modified"))section.actions.Children().Append(glyphButton(L"reset",copy(L"reset_default"),reset,prefix+L"-reset"));
-        auto row=line();cell(row,words(copy(L"same_all_tools"),L""),0);
-        ToggleSwitch toggle;toggle.MinWidth(0);toggle.OnContent(box_value(L""));toggle.OffContent(box_value(L""));toggle.IsOn(!flag(binding,L"per_tool"));
-        AutomationProperties::SetName(toggle,copy(L"same_all_tools"));AutomationProperties::SetAutomationId(toggle,prefix+L"-same");
-        toggle.Toggled([data=data,same](auto&& sender,auto&&){if(!data->updating)send(data,same(!sender.template as<ToggleSwitch>().IsOn()));});
-        cell(row,toggle,1);add(section.list,row);
-        for(auto value:array(binding,L"actions")){
-            auto action=value.GetObject();auto area=action.GetNamedValue(L"category",JsonValue::CreateNullValue());
-            auto name=area.ValueType()==JsonValueType::String?area.GetString():hstring(L"all");
-            add(section.list,navRow(str(action,L"label"),L"",str(action,L"action"),pick(area),prefix+L"-action-"+name).button);
+        std::function<J(bool)> same,std::function<J(V)> pick,J remove=J{},wchar_t const* removeKey=L""){
+        auto key=(prefix==L"modifier"?binding.GetNamedValue(L"key").Stringify():str(binding,L"trigger"))+(flag(binding,L"modified")?L"*":L"")+(remove.Size()?L"|r":L"");
+        for(auto value:array(binding,L"actions"))key=key+value.GetObject().GetNamedValue(L"category",JsonValue::CreateNullValue()).Stringify();
+        auto current=[this,prefix]{return object(preferences(),prefix==L"modifier"?L"modifier_editor":L"pen_button_editor");};
+        if(signature!=key){
+            signature=key;beginRefresh(std::wstring(prefix));pane.Children().Clear();auto section=group(L"",summary);AutomationProperties::SetAutomationId(section.summary,prefix==L"modifier"?L"modifier-hold-summary":L"pen-action-summary");
+            remember([this,section,current,prefix]{auto value=current();section.summary.Text(prefix==L"modifier"?data->caption(O({{L"type",S(L"modifier_hold")},{L"label",S(str(value,L"label"))}})):copy(L"pen_action_help"));});
+            if(flag(binding,L"modified"))section.actions.Children().Append(glyphButton(L"reset",L"reset_default",reset,prefix+L"-reset"));
+            auto row=line();TextBlock heading{nullptr};cell(row,words(L"",L"",&heading),0);
+            ToggleSwitch toggle;toggle.MinWidth(0);toggle.OnContent(box_value(L""));toggle.OffContent(box_value(L""));
+            AutomationProperties::SetAutomationId(toggle,prefix+L"-same");
+            toggle.Toggled([data=data,same](auto&& sender,auto&&){if(!data->updating)send(data,same(!sender.template as<ToggleSwitch>().IsOn()));});cell(row,toggle,1);add(section.list,row);
+            remember([this,heading,toggle,current]{auto text=copy(L"same_all_tools");heading.Text(text);AutomationProperties::SetName(toggle,text);auto selected=!flag(current(),L"per_tool");if(toggle.IsOn()!=selected)toggle.IsOn(selected);});
+            for(auto value:array(binding,L"actions")){
+                auto action=value.GetObject();auto area=action.GetNamedValue(L"category",JsonValue::CreateNullValue());auto name=area.ValueType()==JsonValueType::String?area.GetString():hstring(L"all");
+                auto entry=navRow(str(action,L"label"),L"",str(action,L"action"),pick(area),prefix+L"-action-"+name);add(section.list,entry.button);
+                remember([entry,current,area]{for(auto value:array(current(),L"actions")){auto action=value.GetObject();if(action.GetNamedValue(L"category",JsonValue::CreateNullValue()).Stringify()==area.Stringify()){update(entry,str(action,L"label"),L"",str(action,L"action"));break;}}});
+            }
+            pane.Children().Append(section.section);
+            if(remove.Size()){auto removal=group(L"");add(removal.list,buttonRow(L"delete",removeKey,remove,prefix+L"-remove",true));pane.Children().Append(removal.section);}
         }
-        pane.Children().Append(section.section);
-        if(remove.Size()){auto removal=group(L"");add(removal.list,buttonRow(L"delete",removeLabel,remove,prefix+L"-remove",true));pane.Children().Append(removal.section);}
+        refresh(std::wstring(prefix));
     }
     void refreshEditor(){
-        auto spec=object(preferences(),L"shortcut_editor");
-        if(!spec.Size()){show(editor,false);return;}
+        auto spec=object(preferences(),L"shortcut_editor");if(!spec.Size()){show(editor,false);return;}
         auto capture=object(preferences(),L"capture");if(str(capture,L"id")!=str(spec,L"id"))capture=J{};
-        auto error=capture.Size()?hstring():str(preferences(),L"error");
-        auto signature=hstring(spec.Stringify()+capture.Stringify()+error+look);
+        auto signature=str(spec,L"id")+L"|"+to_hstring(array(spec,L"bindings").Size())+L"|"+to_hstring(array(spec,L"gestures").Size())+(flag(spec,L"modified")?L"*":L"")+(capture.Size()?L"|capture":flag(spec,L"can_add")?L"|add":L"");
         if(editor.signature!=signature){
-            editor.signature=signature;editor.title.Text(str(spec,L"label"));editor.body.Children().Clear();auto id=str(spec,L"id");
-            auto description=label(data,str(spec,L"description"));description.TextWrapping(TextWrapping::Wrap);description.Opacity(.55);description.TextAlignment(TextAlignment::Center);
-            editor.body.Children().Append(description);
-            if(!error.empty()){auto problem=label(data,error);problem.TextWrapping(TextWrapping::Wrap);problem.Foreground(fill(color(data->theme()==L"dark"?L"#ff7b63":L"#c01c28")));editor.body.Children().Append(problem);}
-            std::wstring summary=L"Default: "+std::wstring(array(spec,L"defaults").Size()?joined(array(spec,L"defaults"),L" / "):hstring(L"none"));
-            for(auto overlap:array(spec,L"overlaps"))summary+=L"\n"+std::wstring(overlap.GetString());
-            auto section=group(L"",hstring(summary));
-            if(flag(spec,L"modified"))section.actions.Children().Append(glyphButton(L"reset",copy(L"reset_default"),act(L"reset_shortcut",{{L"id",S(id)}}),L"shortcut-editor-reset"));
+            editor.signature=signature;beginRefresh(L"editor");editor.body.Children().Clear();auto id=str(spec,L"id");
+            auto description=label(data,L"");description.TextWrapping(TextWrapping::Wrap);description.Opacity(.55);description.TextAlignment(TextAlignment::Center);editor.body.Children().Append(description);
+            auto problem=label(data,L"");problem.TextWrapping(TextWrapping::Wrap);editor.body.Children().Append(problem);
+            auto section=group(L"",L" ");AutomationProperties::SetAutomationId(section.summary,L"shortcut-default-summary");
+            remember([this,description,problem,section]{auto current=object(preferences(),L"shortcut_editor");editor.title.Text(str(current,L"label"));description.Text(str(current,L"description"));auto capture=object(preferences(),L"capture");auto error=str(capture,L"id")==str(current,L"id")?hstring():str(preferences(),L"error");problem.Text(error);problem.Visibility(error.empty()?Visibility::Collapsed:Visibility::Visible);problem.Foreground(fill(color(data->theme()==L"dark"?L"#ff7b63":L"#c01c28")));auto summary=data->caption(O({{L"type",S(L"shortcut_defaults")},{L"keys",array(current,L"defaults")}}));for(auto overlap:array(current,L"overlaps"))summary=summary+L"\n"+overlap.GetString();section.summary.Text(summary);});
+            if(flag(spec,L"modified"))section.actions.Children().Append(glyphButton(L"reset",L"reset_default",act(L"reset_shortcut",{{L"id",S(id)}}),L"shortcut-editor-reset"));
             auto bindings=array(spec,L"bindings");
             for(uint32_t i=0;i<bindings.Size();++i){
-                auto row=line();cell(row,words(bindings.GetStringAt(i),L""),0);
-                cell(row,glyphButton(L"delete",copy(L"remove_shortcut"),act(L"remove_shortcut",{{L"id",S(id)},{L"index",N(i)}}),L"remove-shortcut-"+to_hstring(i)),3);add(section.list,row);
+                auto row=line();TextBlock heading{nullptr};cell(row,words(bindings.GetStringAt(i),L"",&heading),0);
+                remember([this,i,heading]{heading.Text(array(object(preferences(),L"shortcut_editor"),L"bindings").GetStringAt(i));});
+                cell(row,glyphButton(L"delete",L"remove_shortcut",act(L"remove_shortcut",{{L"id",S(id)},{L"index",N(i)}}),L"remove-shortcut-"+to_hstring(i)),3);add(section.list,row);
             }
-            if(capture.Size())add(section.list,recordingRow(capture));
-            else if(flag(spec,L"can_add"))add(section.list,buttonRow(L"plus",copy(L"add_shortcut"),act(L"begin_shortcut",{{L"id",S(id)}}),L"add-shortcut"));
+            if(capture.Size())add(section.list,recordingRow(capture));else if(flag(spec,L"can_add"))add(section.list,buttonRow(L"plus",L"add_shortcut",act(L"begin_shortcut",{{L"id",S(id)}}),L"add-shortcut"));
             editor.body.Children().Append(section.section);
             if(auto gestures=array(spec,L"gestures");gestures.Size()){
-                auto touch=group(copy(L"pen_touch"),copy(L"pen_page_help"));
-                for(auto gesture:gestures){auto row=line();cell(row,words(gesture.GetString(),L""),0);add(touch.list,row);}
+                auto touch=group(copy(L"pen_touch"),copy(L"pen_page_help"));remember([this,touch]{title(touch,copy(L"pen_touch"));touch.summary.Text(copy(L"pen_page_help"));});
+                for(uint32_t i=0;i<gestures.Size();++i){auto row=line();TextBlock heading{nullptr};cell(row,words(gestures.GetStringAt(i),L"",&heading),0);add(touch.list,row);remember([this,i,heading]{heading.Text(array(object(preferences(),L"shortcut_editor"),L"gestures").GetStringAt(i));});}
                 editor.body.Children().Append(touch.section);
             }
         }
-        show(editor,true);
+        refresh(L"editor");show(editor,true);
     }
     void refreshModifierSheet(){
-        auto capture=object(preferences(),L"capture");
-        if(str(capture,L"id")!=L"modifier"){show(modifierSheet,false);return;}
-        auto signature=hstring(capture.Stringify()+look);
-        if(modifierSheet.signature!=signature){
-            modifierSheet.signature=signature;modifierSheet.title.Text(copy(L"new_modifier"));modifierSheet.body.Children().Clear();
-            auto prompt=label(data,copy(L"press_hold_key"));prompt.TextAlignment(TextAlignment::Center);prompt.Opacity(.55);
-            modifierSheet.body.Children().Append(prompt);
+        auto capture=object(preferences(),L"capture");if(str(capture,L"id")!=L"modifier"){show(modifierSheet,false);return;}
+        if(modifierSheet.signature.empty()){
+            modifierSheet.signature=L"capture";beginRefresh(L"modifier-capture");modifierSheet.body.Children().Clear();
+            auto prompt=label(data,L"");prompt.TextAlignment(TextAlignment::Center);prompt.Opacity(.55);modifierSheet.body.Children().Append(prompt);
+            remember([this,prompt]{modifierSheet.title.Text(copy(L"new_modifier"));prompt.Text(copy(L"press_hold_key"));});
             auto section=group(L"");add(section.list,recordingRow(capture));modifierSheet.body.Children().Append(section.section);
         }
-        show(modifierSheet,true);
+        refresh(L"modifier-capture");show(modifierSheet,true);
     }
     void refreshPicker(){
-        auto spec=pickerModel();
-        if(!spec.Size()){show(picker,false);return;}
-        picker.title.Text(str(spec,L"title"));pickerDescription.Text(str(spec,L"description"));
-        picker.start.Visibility(flag(spec,L"modified")?Visibility::Visible:Visibility::Collapsed);
+        auto spec=pickerModel();if(!spec.Size()){show(picker,false);return;}
+        picker.title.Text(str(spec,L"title"));pickerDescription.Text(str(spec,L"description"));picker.start.Visibility(flag(spec,L"modified")?Visibility::Visible:Visibility::Collapsed);
         auto query=str(spec,L"query");if(pickerSearch.Text()!=query)pickerSearch.Text(query);
-        auto signature=hstring(spec.GetNamedValue(L"nothing").Stringify()+query+array(spec,L"sections").Stringify()+look);
+        auto signature=str(spec,L"trigger")+(flag(spec,L"nothing_visible")?L"|nothing":L"");
+        for(auto value:array(spec,L"sections")){signature=signature+L"#";for(auto action:array(value.GetObject(),L"actions"))signature=signature+L","+str(action.GetObject(),L"id");}
         if(picker.signature!=signature){
-            picker.signature=signature;pickerList.Children().Clear();
-            auto choice=[this](hstring const& id,hstring const& title,hstring const& detail,bool chosen){
+            picker.signature=signature;beginRefresh(L"picker");pickerList.Children().Clear();
+            auto choice=[this](hstring const& id,std::function<J()> current){
                 auto result=button(data,L"",[data=data,id]{send(data,act(L"choose_action",{{L"id",S(id)}}));});
-                result.HorizontalAlignment(HorizontalAlignment::Stretch);result.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-                result.CornerRadius({0,0,0,0});result.MinHeight(54);result.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());result.Padding({14,8,14,8});
-                Grid content;content.ColumnSpacing(6);ColumnDefinition text;text.Width({1,GridUnitType::Star});ColumnDefinition tail;tail.Width({1,GridUnitType::Auto});
-                content.ColumnDefinitions().Append(text);content.ColumnDefinitions().Append(tail);
-                cell(content,words(title,detail),0);auto check=icon(L"check",data->theme());check.Opacity(chosen?1:0);cell(content,check,1);
-                result.Content(content);AutomationProperties::SetName(result,title);AutomationProperties::SetAutomationId(result,L"action-"+(id.empty()?hstring(L"nothing"):id));
-                AutomationProperties::SetItemStatus(result,chosen?data->caption(L"search",L"selected"):hstring());
-                return result;
+                result.HorizontalAlignment(HorizontalAlignment::Stretch);result.HorizontalContentAlignment(HorizontalAlignment::Stretch);result.CornerRadius({0,0,0,0});result.MinHeight(54);result.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());result.Padding({14,8,14,8});
+                Grid content;content.ColumnSpacing(6);ColumnDefinition text;text.Width({1,GridUnitType::Star});ColumnDefinition tail;tail.Width({1,GridUnitType::Auto});content.ColumnDefinitions().Append(text);content.ColumnDefinitions().Append(tail);
+                TextBlock heading{nullptr},detail{nullptr};cell(content,words(L"",L"",&heading,&detail),0);auto check=themed(L"check");cell(content,check,1);result.Content(content);AutomationProperties::SetAutomationId(result,L"action-"+(id.empty()?hstring(L"nothing"):id));
+                remember([this,result,heading,detail,check,id,current]{auto action=current();auto title=id.empty()?str(action,L"nothing_label"):str(action,L"label"),help=id.empty()?hstring():str(action,L"detail");bool selected=flag(action,id.empty()?L"nothing":L"selected");heading.Text(title);detail.Text(help);detail.Visibility(help.empty()?Visibility::Collapsed:Visibility::Visible);check.Opacity(selected?1:0);AutomationProperties::SetName(result,title);AutomationProperties::SetItemStatus(result,selected?data->caption(L"search",L"selected"):hstring());});return result;
             };
             bool any=false;
-            if(flag(spec,L"nothing_visible")){auto none=group(L"");add(none.list,choice(L"",str(spec,L"nothing_label"),L"",flag(spec,L"nothing")));pickerList.Children().Append(none.section);any=true;}
-            for(auto value:array(spec,L"sections")){
-                auto section=value.GetObject();auto list=group(str(section,L"title"));
-                for(auto entry:array(section,L"actions")){auto a=entry.GetObject();add(list.list,choice(str(a,L"id"),str(a,L"label"),str(a,L"detail"),flag(a,L"selected")));}
+            if(flag(spec,L"nothing_visible")){auto none=group(L"");add(none.list,choice(L"",[this]{return pickerModel();}));pickerList.Children().Append(none.section);any=true;}
+            auto sections=array(spec,L"sections");
+            for(uint32_t i=0;i<sections.Size();++i){
+                auto section=sections.GetObjectAt(i);auto list=group(str(section,L"title"));remember([this,i,list]{title(list,str(array(pickerModel(),L"sections").GetObjectAt(i),L"title"));});
+                for(auto value:array(section,L"actions")){auto id=str(value.GetObject(),L"id");add(list.list,choice(id,[this,i,id]{return find(array(array(pickerModel(),L"sections").GetObjectAt(i),L"actions"),L"id",id);}));}
                 pickerList.Children().Append(list.section);any=true;
             }
             if(!any){
-                StackPanel none;none.Spacing(6);none.HorizontalAlignment(HorizontalAlignment::Center);none.Margin({0,24,0,24});
-                auto title=label(data,copy(L"no_results"),true);title.HorizontalAlignment(HorizontalAlignment::Center);none.Children().Append(title);
-                auto hint=note(data,copy(L"search_help"));hint.HorizontalAlignment(HorizontalAlignment::Center);none.Children().Append(hint);pickerList.Children().Append(none);
+                StackPanel none;none.Spacing(6);none.HorizontalAlignment(HorizontalAlignment::Center);none.Margin({0,24,0,24});auto heading=label(data,L"",true);heading.HorizontalAlignment(HorizontalAlignment::Center);none.Children().Append(heading);auto hint=note(data,L"");hint.HorizontalAlignment(HorizontalAlignment::Center);none.Children().Append(hint);pickerList.Children().Append(none);remember([this,heading,hint]{heading.Text(copy(L"no_results"));hint.Text(copy(L"search_help"));});
             }
         }
-        bool opening=picker.frame.Visibility()==Visibility::Collapsed;
-        show(picker,true);
-        if(opening)pickerSearch.Focus(FocusState::Programmatic);
+        refresh(L"picker");bool opening=picker.frame.Visibility()==Visibility::Collapsed;show(picker,true);if(opening)pickerSearch.Focus(FocusState::Programmatic);
     }
     void show(Sheet& sheet,bool open){
         auto state=open?Visibility::Visible:Visibility::Collapsed;
@@ -554,6 +557,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         for(auto sheet:order){if(!top&&sheet->frame.Visibility()==Visibility::Visible)top=sheet;else if(top)sheet->frame.Opacity(0);}
         for(auto sheet:order){
             bool front=sheet==top;sheet->frame.Opacity(front?1:0);sheet->frame.IsHitTestVisible(front);
+            AutomationProperties::SetName(sheet->frame,sheet->title.Text());
             sheet->frame.Background(data->brush(L"settings"));
         }
         auto host=overlay.Parent().try_as<FrameworkElement>();
@@ -568,52 +572,54 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         overlay.Background(top?fill(winrt::Windows::UI::Color{uint8_t(data->theme()==L"dark"?0x88:0x22),0,0,0}):nullptr);
         overlay.Visibility(top?Visibility::Visible:Visibility::Collapsed);
     }
-    void finish(uint32_t id,hstring const& error,hstring const& text){
+    void finish(uint32_t id,hstring const& diagnostic,hstring const& text,bool tooLarge=false){
+        if(!diagnostic.empty())OutputDebugStringW((diagnostic+L"\n").c_str());
         if(!text.empty())send(data,act(L"import_keymap",{{L"text",S(text)}}));
-        data->dispatch(O({{L"type",S(L"complete_request")},{L"id",N(id)},{L"error",error.empty()?JsonValue::CreateNullValue():S(error)}}));
+        if(tooLarge||!diagnostic.empty())data->dispatch(O({{L"type",S(L"complete_request_failure")},{L"id",N(id)},{L"reason",S(tooLarge?L"keymap_too_large":L"action_failed")}}));
+        else data->dispatch(O({{L"type",S(L"complete_request")},{L"id",N(id)},{L"error",JsonValue::CreateNullValue()}}));
     }
-    void background(uint32_t id,std::function<std::pair<hstring,hstring>()> job){
+    void background(uint32_t id,std::function<KeymapResult()> job){
         std::thread([weak=weak_from_this(),queue=overlay.DispatcherQueue(),id,job=std::move(job)]{
-            auto [error,text]=job();
-            queue.TryEnqueue([weak,id,error,text]{if(auto self=weak.lock())self->finish(id,error,text);});
+            auto result=job();
+            queue.TryEnqueue([weak,id,result]{if(auto self=weak.lock())self->finish(id,result.diagnostic,result.text,result.tooLarge);});
         }).detach();
     }
     fire_and_forget exportKeymap(uint32_t id,hstring name,hstring text){
         auto lifetime=shared_from_this();hstring path;
         try{
-            Pickers::FileSavePicker save(Microsoft::UI::WindowId{data->windowId});save.CommitButtonText(L"Export keymap");
+            Pickers::FileSavePicker save(Microsoft::UI::WindowId{data->windowId});save.CommitButtonText(copy(L"export_menu"));
             std::wstring stem(name.c_str());if(auto dot=stem.rfind(L'.');dot!=std::wstring::npos)stem=stem.substr(0,dot);
             save.SuggestedFileName(hstring(stem));save.DefaultFileExtension(L".capykeys");
-            save.FileTypeChoices().Insert(L"CapyCanvas keymap",single_threaded_vector<hstring>({L".capykeys"}));
+            save.FileTypeChoices().Insert(copy(L"keymap"),single_threaded_vector<hstring>({L".capykeys"}));
             if(auto picked=co_await save.PickSaveFileAsync())path=picked.Path();
         }catch(hresult_error const& failure){finish(id,failure.message(),L"");co_return;}
         if(path.empty()){finish(id,L"",L"");co_return;}
         background(id,[path,bytes=to_string(text)]{
             std::filesystem::path target(path.c_str());auto partial=target;partial+=L".partial";
             {std::ofstream out(partial,std::ios::binary|std::ios::trunc);out.write(bytes.data(),std::streamsize(bytes.size()));
-                if(!out)return std::pair{hstring(L"Could not write the keymap."),hstring()};}
+                if(!out)return KeymapResult{L"Could not write the keymap.",L""};}
             std::error_code failure;std::filesystem::rename(partial,target,failure);
-            if(failure){std::filesystem::remove(partial,failure);return std::pair{hstring(L"Could not save the keymap."),hstring()};}
-            return std::pair{hstring(),hstring()};
+            if(failure){std::filesystem::remove(partial,failure);return KeymapResult{L"Could not save the keymap.",L""};}
+            return KeymapResult{};
         });
     }
     fire_and_forget importKeymap(uint32_t id){
         auto lifetime=shared_from_this();hstring path;
         try{
-            Pickers::FileOpenPicker open(Microsoft::UI::WindowId{data->windowId});open.CommitButtonText(L"Import keymap");
+            Pickers::FileOpenPicker open(Microsoft::UI::WindowId{data->windowId});open.CommitButtonText(copy(L"import_menu"));
             open.FileTypeFilter().Append(L".capykeys");open.FileTypeFilter().Append(L".json");
             if(auto picked=co_await open.PickSingleFileAsync())path=picked.Path();
         }catch(hresult_error const& failure){finish(id,failure.message(),L"");co_return;}
         if(path.empty()){finish(id,L"",L"");co_return;}
-        background(id,[path,tooLarge=data->delivery(L"keymap_too_large")]{
+        background(id,[path]{
             constexpr size_t limit=size_t(1)<<20;
             std::ifstream in(std::filesystem::path(path.c_str()),std::ios::binary);
-            if(!in)return std::pair{hstring(L"Could not read the keymap."),hstring()};
+            if(!in)return KeymapResult{L"Could not read the keymap.",L""};
             std::string bytes(limit+1,'\0');in.read(bytes.data(),std::streamsize(bytes.size()));bytes.resize(size_t(in.gcount()));
-            if(bytes.size()>limit)return std::pair{tooLarge,hstring()};
+            if(bytes.size()>limit)return KeymapResult{L"",L"",true};
             if(!bytes.empty()&&!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),int(bytes.size()),nullptr,0))
-                return std::pair{hstring(L"The keymap is not UTF-8 text."),hstring()};
-            return std::pair{hstring(),to_hstring(bytes)};
+                return KeymapResult{L"The keymap is not UTF-8 text.",L""};
+            return KeymapResult{L"",to_hstring(bytes)};
         });
     }
     void requests(){
@@ -631,7 +637,6 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         model=snapshot;
         requests();
         if(!preferences().Size()){for(auto sheet:{&editor,&modifierSheet,&picker,&details,&import})show(*sheet,false);layoutSheets();return;}
-        look=data->theme()+L"|"+data->language();
         if(iconTheme!=data->theme()){
             iconTheme=data->theme();if(keymapMore)keymapMore.Content(icon(L"more",iconTheme));
             for(auto sheet:{&editor,&modifierSheet,&picker,&details,&import})sheet->close.Content(icon(L"window-close",iconTheme));
@@ -639,11 +644,11 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         if(root.Children().Size()){
             refreshKeymap();refreshFilters();refreshCategories();refreshResults();refreshModifiers();
             auto modifierEditor=object(preferences(),L"modifier_editor");
-            if(modifierEditor.Size())perTool(modifier,modifierPane,modifierEditor,L"modifier",L"Hold "+str(modifierEditor,L"label")+L" to use an action until you let go.",
+            if(modifierEditor.Size())perTool(modifier,modifierPane,modifierEditor,L"modifier",data->caption(O({{L"type",S(L"modifier_hold")},{L"label",S(str(modifierEditor,L"label"))}})),
                 act(L"reset_modifier_key",{{L"key",modifierEditor.GetNamedValue(L"key")}}),
                 [key=modifierEditor.GetNamedValue(L"key")](bool perTool){return act(L"modifier_key_per_tool",{{L"key",key},{L"per_tool",B(perTool)}});},
                 [key=modifierEditor.GetNamedValue(L"key")](V category){return act(L"open_modifier_picker",{{L"key",key},{L"category",category}});},
-                act(L"remove_modifier_key",{{L"key",modifierEditor.GetNamedValue(L"key")}}),copy(L"remove_modifier"));
+                act(L"remove_modifier_key",{{L"key",modifierEditor.GetNamedValue(L"key")}}),L"remove_modifier");
             auto pane=modifierEditor.Size()?modifier:str(page(),L"category").empty()?root:category;
             for(auto candidate:{root,category,modifier})candidate.Visibility(candidate==pane?Visibility::Visible:Visibility::Collapsed);
         }

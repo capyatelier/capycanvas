@@ -74,9 +74,6 @@ impl NoticeBubble {
             self.shown.set(None);
             return;
         };
-        if self.shown.replace(Some(notice.id)) == Some(notice.id) {
-            return;
-        }
         self.text.set_text(&notice.text);
         match &notice.action {
             Some(action) => {
@@ -84,6 +81,9 @@ impl NoticeBubble {
                 self.action.set_visible(true);
             }
             None => self.action.set_visible(false),
+        }
+        if self.shown.replace(Some(notice.id)) == Some(notice.id) {
+            return;
         }
         self.place(bottom);
         self.root.set_visible(true);

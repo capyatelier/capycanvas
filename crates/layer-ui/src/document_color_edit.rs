@@ -24,7 +24,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn hdr_presentation_allowed(&self) -> bool {
         self.proof_panel_mode() == ProofMode::Off && !self.state.gamut_warning
     }
-    pub fn select_proof_mode(&mut self, mode: ProofMode) -> Result<UiChange, String> {
+    pub fn select_proof_mode(&mut self, mode: ProofMode) -> Result<UiChange, crate::ColorFeatureError> {
         if mode == ProofMode::Print && self.engine.document().proof.is_none() {
             let change = self.set_proof_mode(ProofMode::Off)?;
             self.last_proof_mode = Some(ProofMode::Print);
@@ -34,7 +34,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.set_proof_mode(mode)
     }
     /// Shared menu/shortcut policy; hosts reveal the panel only when enabling.
-    pub fn toggle_proof(&mut self) -> Result<UiChange, String> {
+    pub fn toggle_proof(&mut self) -> Result<UiChange, crate::ColorFeatureError> {
         let mode = if self.proof_panel_mode() != ProofMode::Off {
             ProofMode::Off
         } else {
@@ -46,13 +46,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.select_proof_mode(mode)
     }
-    pub fn set_proof_mode(&mut self, mode: ProofMode) -> Result<UiChange, String> {
-        self.require_document_idle()?;
+    pub fn set_proof_mode(&mut self, mode: ProofMode) -> Result<UiChange, crate::ColorFeatureError> {
+        self.require_proof_idle()?;
         if mode == ProofMode::Sdr && !self.engine.document().color.depth.is_float() {
-            return Err("This drawing is already SDR".into());
+            return Err(crate::ColorFeatureError::ProofAlreadySdr);
         }
         if mode == ProofMode::Print && self.engine.document().proof.is_none() {
-            return Err("Choose a print profile".into());
+            return Err(crate::ColorFeatureError::ProofChoosePrintProfile);
         }
         self.proof_setup_pending = false;
         if mode != ProofMode::Off { self.last_proof_mode = Some(mode); }
@@ -71,11 +71,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     /// Live panel editing follows the same one-contact/one-undo contract as
     /// effect controls. Autosave/export waits until the contact finishes.
-    pub fn edit_sdr_rendition(&mut self, phase: ContactPhase, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange, String> {
+    pub fn edit_sdr_rendition(&mut self, phase: ContactPhase, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange, crate::ColorFeatureError> {
         if phase == ContactPhase::Down {
-            self.require_document_idle()?;
+            self.require_proof_idle()?;
             if !self.engine.document().color.depth.is_float() {
-                return Err("SDR rendition settings require HDR artwork".into());
+                return Err(crate::ColorFeatureError::ProofHdrArtwork);
             }
             self.sdr_gesture = Some(self.engine.document().sdr_rendition);
         } else if self.sdr_gesture.is_none() {
@@ -84,9 +84,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if phase == ContactPhase::Cancel || self.workspace_read_only || self.workspace_transition || self.rendering_suspended {
             self.cancel_sdr_gesture()?;
         } else {
-            if let Err(e) = recipe.validate() {
+            if recipe.validate().is_err() {
                 self.cancel_sdr_gesture()?;
-                return Err(e.into());
+                return Err(crate::ColorFeatureError::ProofInvalidRendition);
             }
             if phase == ContactPhase::Up {
                 let original = self.sdr_gesture.take().unwrap();
@@ -111,10 +111,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         true
     }
 
-    pub fn set_sdr_rendition(&mut self, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange,String> {
-        self.require_document_idle()?;
-        if !self.engine.document().color.depth.is_float() { return Err("SDR rendition settings require HDR artwork".into()); }
-        recipe.validate().map_err(str::to_string)?;
+    pub fn set_sdr_rendition(&mut self, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange,crate::ColorFeatureError> {
+        self.require_proof_idle()?;
+        if !self.engine.document().color.depth.is_float() { return Err(crate::ColorFeatureError::ProofHdrArtwork); }
+        recipe.validate().map_err(|_| crate::ColorFeatureError::ProofInvalidRendition)?;
         if recipe != self.engine.document().sdr_rendition { self.engine.apply_edit(layer_core::Edit::SetSdrRendition(recipe)).map_err(error)?; }
         self.refresh_document(); self.refresh_commands();
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
@@ -122,8 +122,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// A host validates the actual bidirectional ICC transform before publishing
     /// this saved recipe. Temporary comparison toggles never enter history.
-    pub fn set_proof_recipe(&mut self, recipe: Option<layer_core::color::ProofRecipe>) -> Result<UiChange, String> {
-        self.require_document_idle()?;
+    pub fn set_proof_recipe(&mut self, recipe: Option<layer_core::color::ProofRecipe>) -> Result<UiChange, crate::ColorFeatureError> {
+        self.require_proof_idle()?;
+        if let Some(recipe) = &recipe { recipe.validate()?; }
         if recipe != self.engine.document().proof {
             self.engine.apply_edit(layer_core::Edit::SetProof(recipe)).map_err(error)?;
         }

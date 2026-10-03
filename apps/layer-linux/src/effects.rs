@@ -138,7 +138,7 @@ impl EffectPanels {
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         header.add_css_class("filter-picker-header");
         header.set_visible(!split_picker);
-        let category = gtk::DropDown::from_strings(&[]);
+        let category = crate::panel_controls::dropdown(&[]);
         category.set_hexpand(true);
         let category_icon = crate::icons::image("layer-adjustments-symbolic");
         category_icon.add_css_class("dim-label");
@@ -169,7 +169,7 @@ impl EffectPanels {
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         title.add_css_class("heading");
         let body = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        let page = gtk::DropDown::from_strings(&[]);
+        let page = crate::panel_controls::dropdown(&[]);
         page.set_widget_name("properties-page");
         properties.append(&title);
         properties.append(&page);
@@ -188,7 +188,6 @@ impl EffectPanels {
         stats.add_css_class("renderer-stats");
         let recording_button = gtk::Button::with_label("Start stroke recording");
         recording_button.set_widget_name("stroke-recording");
-        recording_button.set_tooltip_text(Some("Record tablet input for up to 10 minutes"));
         stats.append(&recording_button);
         let stats_plot = gtk::DrawingArea::builder()
             .content_width(180)
@@ -278,6 +277,10 @@ impl EffectPanels {
         if self.picker_bound.replace(true) {
             return;
         }
+        w.on_localization(glib::clone!(#[weak(rename_to = button)] self.recording_button, #[upgrade_or] false, move |localization| {
+            button.set_tooltip_text(Some(&layer_ui::NativeCopy::new(localization).color.record_tablet));
+            true
+        }));
         self.page.connect_selected_notify(glib::clone!(#[weak] w, #[weak(rename_to = this)] self, move |drop| {
             if this.properties_updating.get() { return; }
             let selection = this.schema.borrow().as_ref().and_then(|view| {
@@ -639,10 +642,14 @@ impl EffectPanels {
         *self.property_localization.borrow_mut() = Some(localization);
         let view = &state.layer_properties;
         let document_changed=self.property_document.replace(state.document_file.epoch)!=state.document_file.epoch;
-        if self.schema.borrow().as_ref().is_none_or(|old| old.actions != view.actions) {
+        if self.schema.borrow().as_ref().is_none_or(|old| old.actions.iter().map(|action| &action.action).ne(view.actions.iter().map(|action| &action.action))) {
             while let Some(child) = self.property_actions.first_child() { self.property_actions.remove(&child); }
             for action in &view.actions {
                 let button = gtk::Button::with_label(&action.label);
+                if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+                    label.set_wrap(true);
+                    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                }
                 button.set_widget_name("property-picker");
                 let action = action.action.clone();
                 button.connect_clicked(glib::clone!(#[weak] w, move |_| {
@@ -654,6 +661,13 @@ impl EffectPanels {
         self.resource_name.set_label(view.resource_name.as_deref().unwrap_or(""));
         self.resource_name.set_tooltip_text(view.resource_name.as_deref());
         self.resource_name.set_visible(view.resource_name.is_some());
+        let mut child = self.property_actions.first_child();
+        for action in &view.actions {
+            if let Some(button) = child.take() {
+                if let Some(button) = button.downcast_ref::<gtk::Button>() { button.set_label(&action.label); button.set_tooltip_text(Some(&action.label)); }
+                child = button.next_sibling();
+            }
+        }
         self.property_actions.set_sensitive(view.enabled);
         self.tonal_histogram.root.set_visible(view.histogram);
         self.title.set_text(&view.title);
@@ -661,7 +675,8 @@ impl EffectPanels {
         self.body.set_sensitive(view.enabled);
         self.properties_updating.set(true);
         if self.schema.borrow().as_ref().is_none_or(|old| old.pages != view.pages) {
-            self.page.set_model(Some(&gtk::StringList::new(&view.pages.iter().map(|page| page.label.as_str()).collect::<Vec<_>>())));
+            let model = self.page.model().unwrap().downcast::<gtk::StringList>().unwrap();
+            model.splice(0, model.n_items(), &view.pages.iter().map(|page| page.label.as_str()).collect::<Vec<_>>());
         }
         self.page.set_selected(view.pages.iter().position(|page| Some(&page.id) == view.page.as_ref()).map_or(gtk::INVALID_LIST_POSITION, |index| index as u32));
         self.page.set_visible(view.pages.len() > 1);
@@ -751,7 +766,7 @@ impl EffectPanels {
                             Field::Toggle(input)
                         }
                         PropertyKind::Choice { options } => {
-                            let input = gtk::DropDown::from_strings(
+                            let input = crate::panel_controls::dropdown(
                                 &options.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
                             );
                             let updating = self.property_updating.clone();
@@ -769,9 +784,17 @@ impl EffectPanels {
                             if let Some(action) = &control.color_action {
                                 let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                                 line.append(&input.widget);
-                                let bucket = w.action_button("Use selected color", action.clone());
+                                let bucket = w.action_button("", action.clone());
                                 bucket.set_widget_name(&format!("{}-bucket", control.key.replace('_', "-")));
                                 crate::icons::set_button(&bucket, "layer-fill-symbolic");
+                                let caption = bucket.downgrade();
+                                w.on_localization(move |localization| {
+                                    let Some(bucket) = caption.upgrade() else { return false; };
+                                    let copy = layer_ui::NativeCopy::new(localization).color;
+                                    bucket.set_tooltip_text(Some(&copy.use_selected));
+                                    bucket.update_property(&[gtk::accessible::Property::Label(&copy.use_selected)]);
+                                    true
+                                });
                                 line.append(&bucket);
                                 self.append_property_row(index, &control.label, &line);
                             } else { self.append_property_row(index, &control.label, &input.widget); }
@@ -1015,20 +1038,22 @@ impl GradientEditor {
     fn new(w: &Rc<Workspace>, layer: u64, key: &str) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let bar = gradient_preview::GradientPreview::new();
-        bar.set_tooltip_text(Some("Click to select a color stop or add one."));
         bar.set_widget_name("effect-gradient");
         let stops = Rc::new(RefCell::new(Vec::<layer_core::GradientStop>::new()));
         let selected = Rc::new(Cell::new(0usize));
         let updating = Rc::new(Cell::new(false));
         let color = crate::color_editor::ColorButton::new();
+        color.bind_copy(w);
         color.widget.set_widget_name("effect-gradient-color");
-        let position = NumberControl::new(layer_ui::NumericControl::percent(), "Position", "", w.localization().clone());
+        let position = NumberControl::new(layer_ui::NumericControl::percent(), "", "", w.localization().clone());
+        position.set_widget_name("effect-gradient-position");
         let remove = crate::icons::button("layer-minus-symbolic");
-        remove.set_tooltip_text(Some("Remove color stop"));
+        remove.set_widget_name("effect-gradient-remove");
         let reset = crate::icons::button("layer-reset-symbolic");
-        reset.set_tooltip_text(Some("Reset gradient"));
+        reset.set_widget_name("effect-gradient-reset");
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let label = gtk::Label::new(Some("Color"));
+        let label = gtk::Label::new(None);
+        label.set_widget_name("effect-gradient-color-label");
         label.set_hexpand(true);
         label.set_xalign(0.);
         actions.append(&label);
@@ -1038,6 +1063,15 @@ impl GradientEditor {
         root.append(&bar);
         root.append(&position);
         root.append(&actions);
+        w.on_localization(glib::clone!(#[weak] bar, #[weak] position, #[weak] remove, #[weak] reset, #[weak] label, #[upgrade_or] false, move |localization| {
+            let copy = layer_ui::NativeCopy::new(localization).color;
+            bar.set_tooltip_text(Some(&copy.add_stop));
+            position.set_caption(&copy.position, "", localization.clone());
+            remove.set_tooltip_text(Some(&copy.remove_stop));
+            reset.set_tooltip_text(Some(&copy.reset_gradient));
+            label.set_text(&copy.color);
+            true
+        }));
         let change = Rc::new(glib::clone!(
             #[weak]
             w,
@@ -1396,6 +1430,11 @@ impl CurveEditor {
         self.clipping_updating.set(true);
         for (index,button) in self.clipping.iter().enumerate() {
             button.set_label(state.histogram.labels.get(index+1).map(|s|s.as_ref()));
+            if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+                label.set_wrap(true);
+                label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            }
+            button.set_tooltip_text(state.histogram.labels.get(index+1).map(|s|s.as_ref()));
             button.set_active(if index==0 {state.histogram.shadows} else {state.histogram.highlights});
         }
         self.clipping_updating.set(false);self.area.queue_draw();

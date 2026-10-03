@@ -22,10 +22,10 @@ mod output;
 mod working;
 pub use description::{profile_description, profile_description_optional, suggested_working_space};
 pub use output::{OutputStatistics, WorkingEncoder};
-pub use profiles::{gray_profile, profile_bytes, profile_channels};
+pub use profiles::{gray_profile, profile_bytes, profile_channels, profile_declared_channels};
 pub use working::WorkingDecoder;
 mod proof;
-pub use proof::{ProofLut, ProofTransform};
+pub use proof::{ProofLut, ProofLutError, ProofTransform};
 
 type FloatTransform<const N: usize> = CompiledTransform<N, 4>;
 

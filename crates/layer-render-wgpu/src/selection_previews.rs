@@ -4,14 +4,12 @@ use super::*;
 use layer_core::Selection;
 use wgpu::util::DeviceExt;
 
+type PreviewKey = (Vec<(Selection, layer_core::SelectionMaskProperties)>, [u32; 2], bool);
+
 #[derive(Default)]
 pub(super) struct SelectionPreviews {
     pub definitions: std::collections::BTreeMap<LayerId, Selection>,
-    key: Option<(
-        Vec<(Selection, layer_core::SelectionMaskProperties)>,
-        [u32; 2],
-        bool,
-    )>,
+    key: Option<PreviewKey>,
     pub buffer: Option<wgpu::Buffer>,
     pub texture: Option<wgpu::TextureView>,
     pipeline: Option<PreviewPipeline>,

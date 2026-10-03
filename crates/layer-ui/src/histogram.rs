@@ -23,6 +23,10 @@ pub struct HistogramView {
     pub captured_time: Option<f32>,
     pub captured_source: Option<ArtworkSource>,
     pub status: Arc<str>,
+    #[serde(skip)]
+    status_message: Option<MessageId>,
+    #[serde(skip)]
+    status_language: Option<UiLanguage>,
     pub description: String,
     pub range: String,
     pub axis: [String; 2],
@@ -31,8 +35,61 @@ pub struct HistogramView {
     pub labels: Vec<Arc<str>>,
 }
 
+pub(super) struct HistogramCaptionKey {
+    language: UiLanguage,
+    sample: Option<std::sync::Weak<Histogram>>,
+    channel: u8,
+    float: bool,
+}
+impl HistogramCaptionKey {
+    fn matches(&self, view: &HistogramView, language: UiLanguage, float: bool) -> bool {
+        self.language == language && self.channel == view.channel && self.float == float
+            && match (&self.sample, &view.data) {
+                (None, None) => true,
+                (Some(cached), Some(current)) => std::ptr::eq(cached.as_ptr(), Arc::as_ptr(current)),
+                _ => false,
+            }
+    }
+}
+
 impl HistogramView {
-    pub(crate) fn clear(&mut self) {self.data=None;self.captured_time=None;self.captured_source=None;self.status=Arc::from("");}
+    fn set_status(&mut self, message: MessageId, l: &Localizer) {
+        if self.status_message == Some(message) && self.status_language == Some(l.language()) { return; }
+        self.status_message = Some(message);self.status_language = Some(l.language());self.status = l.text(message);
+    }
+    fn refresh_copy(&mut self, cached: &mut Option<HistogramCaptionKey>, l: &Localizer, float: bool) {
+        if let Some(message) = self.status_message { self.set_status(message, l); }
+        if cached.as_ref().is_some_and(|key| key.matches(self, l.language(), float)) { return; }
+        let sources = [MessageId::RESOURCES_HISTOGRAM_VISIBLE, MessageId::TOOLBAR_SELECTED_LAYER,
+            MessageId::RESOURCES_HISTOGRAM_REFERENCE, MessageId::RESOURCES_HISTOGRAM_SELECTION].map(|id| l.text(id)).to_vec();
+        let channels = [MessageId::RESOURCES_PARAMETER_CURVES_CURVE_0, MessageId::RESOURCES_PARAMETER_CURVES_CURVE_1, MessageId::RESOURCES_PARAMETER_CURVES_CURVE_2, MessageId::RESOURCES_PARAMETER_CURVES_CURVE_3].map(|id| l.text(id)).to_vec();
+        let labels = [MessageId::NATIVE_COLOR_LOG_COUNTS,
+            if float {MessageId::RESOURCES_HISTOGRAM_SHADOWS_SDR} else {MessageId::RESOURCES_HISTOGRAM_SHADOWS},
+            if float {MessageId::RESOURCES_HISTOGRAM_HIGHLIGHTS_SDR} else {MessageId::RESOURCES_HISTOGRAM_HIGHLIGHTS}].map(|id| l.text(id)).to_vec();
+        let luminance = l.text(MessageId::NATIVE_COLOR_LUMINANCE);
+        let description = self.data.as_ref().map(|data| NativeCaption::InspectionPixels {
+            sampled: data.pixels, transparent: data.transparent,
+        }.message(l)).unwrap_or_default();
+        let axis = self.data.as_ref().map_or_else(|| ["0".into(),"1".into()], |data| {
+            let bins = data.plot_bins();
+            if data.color.depth.is_float() { [format!("{:+.0} EV",data.hdr_bin_stops(bins.start)),format!("{:+.0} EV",data.hdr_bin_stops(bins.end-1))] }
+            else { ["0".into(),"1".into()] }
+        });
+        let range = self.data.as_ref().map(|data| {
+            let indices: &[usize] = match self.channel {1=>&[0],2=>&[1],3=>&[2],4=>&[3],_=>&[0,1,2]};
+            indices.iter().map(|&index| {
+                let channel = &data.channels[index];
+                let label = if index==3 {luminance.as_ref()} else {channels[index+1].as_ref()};
+                format!("{label}: {}", NativeCaption::InspectionChannel {below:channel.below,above:channel.above,black:channel.black,white:channel.white}.message(l))
+            }).collect::<Vec<_>>().join("\n")
+        }).unwrap_or_default();
+        self.range = range;self.axis = axis;
+        self.sources = sources;self.channels = channels;
+        self.channels.push(luminance);self.labels = labels;
+        self.description = description;
+        *cached = Some(HistogramCaptionKey { language: l.language(), sample: self.data.as_ref().map(Arc::downgrade), channel: self.channel, float });
+    }
+    pub(crate) fn clear(&mut self) {self.data=None;self.captured_time=None;self.captured_source=None;self.status=Arc::from("");self.status_message=None;self.status_language=None;}
 }
 
 #[derive(Default)]
@@ -88,35 +145,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn histogram_copy(&mut self) {
-        let l = self.localization();
-        let sources = [MessageId::RESOURCES_HISTOGRAM_VISIBLE, MessageId::TOOLBAR_SELECTED_LAYER,
-            MessageId::RESOURCES_HISTOGRAM_REFERENCE, MessageId::RESOURCES_HISTOGRAM_SELECTION].map(|id| l.text(id)).to_vec();
-        let channels = [MessageId::RESOURCES_PARAMETER_CURVES_CURVE_0, MessageId::RESOURCES_PARAMETER_CURVES_CURVE_1, MessageId::RESOURCES_PARAMETER_CURVES_CURVE_2, MessageId::RESOURCES_PARAMETER_CURVES_CURVE_3].map(|id| l.text(id)).to_vec();
+        let l = &self.state.localization;
         let float = self.engine.document().color.depth.is_float();
-        let labels = [MessageId::NATIVE_COLOR_LOG_COUNTS,
-            if float {MessageId::RESOURCES_HISTOGRAM_SHADOWS_SDR} else {MessageId::RESOURCES_HISTOGRAM_SHADOWS},
-            if float {MessageId::RESOURCES_HISTOGRAM_HIGHLIGHTS_SDR} else {MessageId::RESOURCES_HISTOGRAM_HIGHLIGHTS}].map(|id| l.text(id)).to_vec();
-        let luminance = l.text(MessageId::NATIVE_COLOR_LUMINANCE);
-        let description = self.state.histogram.data.as_ref().map(|data| NativeCaption::InspectionPixels {
-            sampled: data.pixels, transparent: data.transparent,
-        }.message(l)).unwrap_or_default();
-        let axis = self.state.histogram.data.as_ref().map_or_else(|| ["0".into(),"1".into()], |data| {
-            let bins = data.plot_bins();
-            if data.color.depth.is_float() { [format!("{:+.0} EV",data.hdr_bin_stops(bins.start)),format!("{:+.0} EV",data.hdr_bin_stops(bins.end-1))] }
-            else { ["0".into(),"1".into()] }
-        });
-        let range = self.state.histogram.data.as_ref().map(|data| {
-            let indices: &[usize] = match self.state.histogram.channel {1=>&[0],2=>&[1],3=>&[2],4=>&[3],_=>&[0,1,2]};
-            indices.iter().map(|&index| {
-                let channel = &data.channels[index];
-                let label = if index==3 {luminance.as_ref()} else {channels[index+1].as_ref()};
-                format!("{label}: {}", NativeCaption::InspectionChannel {below:channel.below,above:channel.above,black:channel.black,white:channel.white}.message(l))
-            }).collect::<Vec<_>>().join("\n")
-        }).unwrap_or_default();
-        self.state.histogram.range = range;self.state.histogram.axis = axis;
-        self.state.histogram.sources = sources;self.state.histogram.channels = channels;
-        self.state.histogram.channels.push(luminance);self.state.histogram.labels = labels;
-        self.state.histogram.description = description;
+        for (view, cached) in [&mut self.state.histogram, &mut self.state.tonal_histogram].into_iter().zip(&mut self.histogram_captions) {
+            view.refresh_copy(cached, l, float);
+        }
     }
     pub(super) fn poll_histogram(&mut self, now:u64) -> u32 {
         let properties = &self.state.layer_properties;
@@ -132,20 +165,21 @@ impl<R: CanvasRenderer> UiSession<R> {
         if demand && !task.settled && self.histogram.active {
             self.engine.backend_mut().cancel_snapshot();self.histogram.active=false;self.histogram.query=None;
         }
-        let mut updates=self.poll_statistics(now,source.unwrap_or(ArtworkSource::Visible),false,demand,!self.histogram.active,&mut task,&mut view);
+        let mut updates=self.poll_statistics(now,source.unwrap_or(ArtworkSource::Visible),false,demand,!self.histogram.active,(&mut task,&mut view));
         self.tonal_histogram=task;self.state.tonal_histogram=view;
         let mut task=std::mem::take(&mut self.histogram);
         let mut view=std::mem::take(&mut self.state.histogram);
         let source = match view.source {1=>ArtworkSource::LayerContent(self.engine.document().active_layer),2=>ArtworkSource::Reference,_=>ArtworkSource::Visible};
         let demand=self.state.platform==Platform::Gtk && self.panel_is_presented(Panel::Histogram);
         let admitted=!self.tonal_histogram.active && (!self.tonal_histogram.demand || self.tonal_histogram.settled);
-        updates|=self.poll_statistics(now,source,view.source==3,demand,admitted,&mut task,&mut view);
+        updates|=self.poll_statistics(now,source,view.source==3,demand,admitted,(&mut task,&mut view));
         self.histogram=task;self.state.histogram=view;
         if updates!=0 || self.state.histogram.sources.is_empty() {self.histogram_copy();}
         updates
     }
     fn poll_statistics(&mut self, now:u64, source:ArtworkSource, selection:bool, demand:bool, admitted:bool,
-        task:&mut Statistics, view:&mut HistogramView) -> u32 {
+        state:(&mut Statistics, &mut HistogramView)) -> u32 {
+        let (task, view) = state;
         if !demand || self.targeted_curve.is_some() || self.auto_levels.is_some() || self.eyedropper.calibration.is_some() || self.content_bounds.busy() || self.state.host_error.is_some() {
             if task.demand || task.active {
                 if task.active {self.engine.backend_mut().cancel_snapshot();}
@@ -181,7 +215,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             task.observed = Some(observed);
             task.epoch = self.state.document_file.epoch;task.changed = now;
             task.preview_ready = false;task.settled = false;
-            view.status = self.localization().text(MessageId::RESOURCES_HISTOGRAM_UPDATING);
+            view.set_status(MessageId::RESOURCES_HISTOGRAM_UPDATING,self.localization());
             updates = regions::HISTOGRAM;
             if task.active && !task.preview {
                 self.engine.backend_mut().cancel_snapshot();task.active = false;task.query = None;
@@ -198,12 +232,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     view.captured_source = task.query.as_ref().map(|query|query.source.clone());
                     task.settled = current && !task.preview;
                     task.preview_ready = current;
-                    view.status = self.localization().text(if empty {MessageId::RESOURCES_HISTOGRAM_UNAVAILABLE} else if !current { MessageId::RESOURCES_HISTOGRAM_UPDATING }
-                        else if task.preview { MessageId::RESOURCES_HISTOGRAM_PREVIEW } else { MessageId::RESOURCES_HISTOGRAM_EXACT });
+                    view.set_status(if empty {MessageId::RESOURCES_HISTOGRAM_UNAVAILABLE} else if !current { MessageId::RESOURCES_HISTOGRAM_UPDATING }
+                        else if task.preview { MessageId::RESOURCES_HISTOGRAM_PREVIEW } else { MessageId::RESOURCES_HISTOGRAM_EXACT },self.localization());
                 }
                 _ => {
                     task.settled = current;
-                    view.status = self.localization().text(MessageId::RESOURCES_HISTOGRAM_ERROR);
+                    view.set_status(MessageId::RESOURCES_HISTOGRAM_ERROR,self.localization());
                 }
             }
             task.query = None;updates = regions::HISTOGRAM;
@@ -213,14 +247,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             && !self.engine.has_pending_document_edits() {
             let mut query = task.observed.as_ref().unwrap().clone();query.time = self.engine.animation_time();
             task.preview = !task.preview_ready;
-            let request = ArtworkStatisticsRequest { query: query.clone(), preview: task.preview, selection: selection };
+            let request = ArtworkStatisticsRequest { query: query.clone(), preview: task.preview, selection };
             if query.validate().is_err() || (request.selection && query.document.selection.is_none()) {
-                task.settled = true;view.status = self.localization().text(MessageId::RESOURCES_HISTOGRAM_UNAVAILABLE);
+                task.settled = true;view.set_status(MessageId::RESOURCES_HISTOGRAM_UNAVAILABLE,self.localization());
                 updates = regions::HISTOGRAM;
             } else { match self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::ArtworkStatistics(request)) {
                 Ok(true) => {task.active = true;task.query = Some(query);task.started = now;}
                 Ok(false) => (),
-                Err(_) => {task.settled = true;view.status = self.localization().text(MessageId::RESOURCES_HISTOGRAM_ERROR);updates = regions::HISTOGRAM;}
+                Err(_) => {task.settled = true;view.set_status(MessageId::RESOURCES_HISTOGRAM_ERROR,self.localization());updates = regions::HISTOGRAM;}
             }}
         }
         if view.data.is_none() {view.captured_time=None;view.captured_source=None;}

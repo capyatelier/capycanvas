@@ -495,6 +495,13 @@ resources-lookup-replace = Replace…
 resources-lookup-files = Color Lookup files
 resources-lookup-unavailable = Color Lookup import is not available on this platform yet.
 resources-lookup-failed = Could not import the lookup table.
+resources-layer-menu-stop-using-as-reference = Stop using this layer as a reference
+resources-coverage-from-layer-opacity = From Layer Opacity
+resources-coverage-from-layer-mask = From Layer Mask
+resources-reference-empty-unmarked = This layer is empty, and no reference layer below it is marked
+resources-reference-tool-unmarked = This tool samples reference layers, and none is marked
+resources-reference-tool-mark-first = This tool samples reference layers. Mark one in the Layers panel first.
+resources-reference-use-layer = Use { $name } as Reference
 
 resources-analysis-updating = Updating…
 resources-analysis-error = Could not update this adjustment.

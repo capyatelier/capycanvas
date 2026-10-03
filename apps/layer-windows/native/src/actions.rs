@@ -50,6 +50,7 @@ impl Action {
         matches!(
             action,
             UiAction::CompleteRequest { .. }
+                | UiAction::CompleteRequestFailure { .. }
                 | UiAction::CloseSettings
                 | UiAction::MeasureColumnDrawers { .. }
                 | UiAction::MeasureDrawerTiles { .. }
@@ -86,7 +87,15 @@ impl Action {
                     return Ok(());
                 }
                 let previous = host.session.state().revision;
-                let change = layer_ui::proof_panel::apply(&mut host.session, windows_proof_action)?;
+                let change = match layer_ui::proof_panel::apply(&mut host.session, windows_proof_action) {
+                    Ok(change)=>change,
+                    Err(reason)=>{
+                        host.session.set_host_error_copy(Some(layer_ui::DocumentHostErrorCopy::Proof(reason)));
+                        host.invalidate_snapshot();
+                        return Ok(());
+                    }
+                };
+                host.session.set_host_error_copy(None);
                 host.apply_change(previous, change);
                 return Ok(());
             }
@@ -136,6 +145,34 @@ impl Action {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typed_host_failure_passes_blocked_workspace_gate_and_retires_native_request() {
+        use layer_ui::{HostRequestFailure, Localizer, Platform, PreferenceAction, SettingsPage, UiLanguage};
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        host.dispatch(UiAction::OpenSettings { page: SettingsPage::Shortcuts }).unwrap();
+        let document = host.session.engine().document().clone();
+        let checkpoint = host.session.engine().checkpoint();
+        let workspace = host.session.state().workspace.clone();
+        let editing: Action = serde_json::from_value(serde_json::json!({"type":"set_layer_opacity","opacity":0.2})).unwrap();
+        assert!(!editing.allowed_while_workspace_blocked());
+        for reason in [HostRequestFailure::ActionFailed, HostRequestFailure::KeymapTooLarge] {
+            host.dispatch(UiAction::Preferences { action: PreferenceAction::ChooseKeymapFile }).unwrap();
+            let id = host.session.state().requests.last().unwrap().id;
+            let queued: Action = serde_json::from_value(serde_json::json!({"type":"complete_request_failure","id":id,"reason":reason})).unwrap();
+            assert!(queued.allowed_while_workspace_blocked());
+            queued.dispatch(&mut host).unwrap();
+            assert!(!host.session.state().requests.iter().any(|request| request.id == id));
+            let requests = serde_json::to_value(&host.session.state().requests).unwrap();
+            for language in UiLanguage::ALL {
+                host.set_localization(Localizer::shared(language));
+                assert_eq!(host.session.state().host_error, Some(reason.message(host.session.localization())));
+                assert_eq!(host.session.engine().document(), &document);
+                assert_eq!(host.session.engine().checkpoint(), checkpoint);
+                assert_eq!(host.session.state().workspace, workspace);
+                assert_eq!(serde_json::to_value(&host.session.state().requests).unwrap(), requests);
+            }
+        }
+    }
     #[test]
     fn invalid_tab_capture_cannot_start_or_mutate_a_workspace_gesture() {
         use serde_json::json;
@@ -263,14 +300,35 @@ mod tests {
             .dispatch(&mut host)
             .unwrap();
         assert_eq!(host.session.proof_panel_mode(), ProofMode::Off);
-        assert!(
-            action(epoch, serde_json::json!({"type":"mode","mode":"sdr"}))
-                .dispatch(&mut host)
-                .is_err()
-        );
+        let checkpoint=host.session.engine().checkpoint();
+        let workspace=host.session.state().workspace.clone();
+        let flags=(host.session.state().preview_sdr,host.session.state().soft_proof,host.session.state().gamut_warning);
+        assert_eq!(layer_ui::proof_panel::apply(&mut host.session,layer_ui::proof_panel::ProofAction::Mode {mode:ProofMode::Sdr}).unwrap_err(),layer_ui::ColorFeatureError::ProofAlreadySdr);
+        action(epoch, serde_json::json!({"type":"mode","mode":"sdr"})).dispatch(&mut host).unwrap();
+        let reason=layer_ui::DocumentHostErrorCopy::Proof(layer_ui::ColorFeatureError::ProofAlreadySdr);
+        for language in layer_ui::UiLanguage::ALL {
+            let localizer=layer_ui::Localizer::shared(language);
+            host.set_localization(localizer.clone());
+            assert_eq!(host.session.state().host_error,Some(reason.message(&localizer)));
+            assert_eq!(host.session.proof_panel_mode(),ProofMode::Off);
+            assert_eq!((host.session.state().preview_sdr,host.session.state().soft_proof,host.session.state().gamut_warning),flags);
+            assert_eq!(host.session.engine().document(),&original);
+            assert_eq!(host.session.engine().checkpoint(),checkpoint);
+            assert_eq!(host.session.state().workspace,workspace);
+            action(epoch+1,serde_json::json!({"type":"reveal"})).dispatch(&mut host).unwrap();
+            assert_eq!(host.session.state().host_error,Some(reason.message(&localizer)));
+        }
+        action(epoch,serde_json::json!({"type":"number","key":"unknown","value":0})).dispatch(&mut host).unwrap();
+        for language in layer_ui::UiLanguage::ALL {
+            host.set_localization(layer_ui::Localizer::shared(language));
+            assert_eq!(host.session.state().host_error.as_deref(),Some("Unknown Proof value"));
+            assert_eq!(host.session.engine().checkpoint(),checkpoint);
+            assert_eq!(host.session.engine().document(),&original);
+        }
         action(epoch, serde_json::json!({"type":"reveal"}))
             .dispatch(&mut host)
             .unwrap();
+        assert!(host.session.state().host_error.is_none());
         assert!(
             host.session
                 .state()

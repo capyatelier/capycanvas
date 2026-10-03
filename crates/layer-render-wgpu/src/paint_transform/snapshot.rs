@@ -395,7 +395,7 @@ impl SourceMap {
                     .iter()
                     .map(|p| weight(*p))
                     .fold(f64::INFINITY, f64::min);
-                if visible.is_empty() || !(nearest > 0.) {
+                if visible.is_empty() || nearest.partial_cmp(&0.) != Some(std::cmp::Ordering::Greater) {
                     return None;
                 }
                 let mapped: Vec<_> = visible

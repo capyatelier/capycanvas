@@ -209,11 +209,10 @@ impl Settings {
         self.validate_localized(&Localizer::shared(UiLanguage::English))
     }
     pub fn validate_localized(&self, localization: &Localizer) -> Result<(), String> {
-        if let LanguagePreference::Explicit(language) = self.language {
-            if !SHIPPED_LANGUAGES.contains(&language) {
+        if let LanguagePreference::Explicit(language) = self.language
+            && !SHIPPED_LANGUAGES.contains(&language) {
                 return Err("This language isn't available in this build.".into());
             }
-        }
         if self.eraser_end.tool.is_some_and(|t| !crate::shortcuts::ERASER_END_TOOLS.contains(&t)) {
             return Err("The eraser end can't use this tool".into());
         }
@@ -879,7 +878,6 @@ fn swatch_row(
     title: &str,
     mut swatches: Vec<Swatch>,
     value: Option<HexColor>,
-    custom: HexColor,
     placeholder: HexColor,
     inline: bool,
     localizer: &Localizer,
@@ -905,7 +903,7 @@ fn swatch_row(
         PreferenceKind::Swatches {
             selected: selected as u32,
             value: value.map(|c| c.to_string()).unwrap_or_default(),
-            custom: custom.to_string(),
+            custom: value.unwrap_or(placeholder).to_string(),
             placeholder: placeholder.to_string(),
             inline,
             swatches,
@@ -1301,7 +1299,6 @@ impl Settings {
             &localizer.text(MessageId::SETTINGS_ACCENT_COLOR),
             presets,
             self.accent,
-            self.accent.unwrap_or(DEFAULT_ACCENT),
             DEFAULT_ACCENT,
             false,
             localizer,
@@ -1317,7 +1314,7 @@ impl Settings {
             .iter()
             .map(|&c| Swatch::new(&c.to_string(), c.to_string(), Some(c), None))
             .collect();
-        swatch_row(id, &title, presets, Some(value), value, theme.default_base(), true, localizer)
+        swatch_row(id, &title, presets, Some(value), theme.default_base(), true, localizer)
     }
     pub(crate) fn zen_menu(&self, _platform: Platform, localizer: &Localizer) -> Result<ContextMenu, String> {
         Ok(ContextMenu {

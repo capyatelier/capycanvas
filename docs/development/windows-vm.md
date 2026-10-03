@@ -95,7 +95,11 @@ rights. It stops only CapyCanvas processes launched during that run from the
 selected executable and records each exit code, duration and final error. It
 sets `CAPY_WAIT_SCALE=3`, which lengthens every `CapyUia.ps1` wait for the slower
 adapter. Name fixtures
-(`layers`) or single variants (`header:pen`); with no names it runs `shortcuts`
+(`layers`) or single variants (`header:pen`). A bare name includes all its variants;
+`localization:default` selects only the default dark, normal-text run. Split long
+matrices across separate owned VMs with `localization:default localization:LargeText`
+on one and `localization:light localization:light-large` on the other.
+With no names it runs `shortcuts`
 and every fixture that launches its own app, once with its defaults and once for
 each switch and each other `ValidateSet` choice, including document GPU recovery
 and exhausted recovery. The isolated removal hook drains rendering and
@@ -112,6 +116,11 @@ fixture captures and owned process traces. `provenance.json` records the source
 revision, synced file hashes and binary hashes. Preserve both desktop and
 fixture captures when diagnosing a rendering failure; they may use different
 capture APIs.
+
+Each fixture has a 20-minute deadline. For longer language matrices, pass
+`fixtures localization --timeout-minutes 90`; the accepted range is 1–1440
+minutes. `plan.json` records that deadline and the monitor uses it for each
+expected result. Input waits and assertions keep their existing limits.
 
 To use several VMs, give each a share of the names:
 

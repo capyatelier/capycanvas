@@ -145,9 +145,11 @@ impl FilterService {
             localization_generation: 0,
         }
     }
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn status(&self) -> &Status {
         &self.status
     }
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn startup(&mut self, native: &mut NativeHost) {
         if std::env::var_os("CAPY_FILTERS_DIR").is_none() {
             return;

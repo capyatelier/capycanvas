@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 type PreviewGeometry = (layer_core::Projective, layer_core::Interpolation, Point, Option<[u32; 2]>,
     Option<(LayerId, layer_core::Projective, Point, Option<[u32; 2]>, bool)>);
+type PreviewRevision = (Option<std::sync::Weak<SourceImage>>, Option<std::sync::Weak<layer_core::MeshMap>>, PreviewGeometry, u64);
 
 #[derive(Default)]
 pub(super) struct PreviewRevisions {
-    layers: std::collections::BTreeMap<LayerId, (Option<std::sync::Weak<SourceImage>>, Option<std::sync::Weak<layer_core::MeshMap>>, PreviewGeometry, u64)>,
+    layers: std::collections::BTreeMap<LayerId, PreviewRevision>,
     next: u64,
 }
 impl PreviewRevisions {
@@ -63,7 +64,7 @@ fn repair_edit(
     (
         Edit::Batch(vec![
             Edit::InsertLayer {
-                layer: replacement,
+                layer: Box::new(replacement),
                 index,
             },
             Edit::SetActiveLayer { id: next },

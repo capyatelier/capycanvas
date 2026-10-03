@@ -113,10 +113,10 @@ impl Histogram {
             } else {
                 [0, 1, 2].map(|c| f64::from(pixel[c]) / f64::from(pixel[3]))
             };
-            for c in 0..3 {
-                let bin = if let Some(bounds)=&domain {bounds.partition_point(|bound|rgb[c]>=*bound).saturating_sub(1).min(255)}
-                    else if self.color.depth.is_float() { self.hdr_bin(rgb[c]) } else { encoded.index(rgb[c]) };
-                self.channels[c].add(bin, rgb[c]);
+            for (c, &value) in rgb.iter().enumerate() {
+                let bin = if let Some(bounds)=&domain {bounds.partition_point(|bound|value>=*bound).saturating_sub(1).min(255)}
+                    else if self.color.depth.is_float() { self.hdr_bin(value) } else { encoded.index(value) };
+                self.channels[c].add(bin, value);
             }
             // Algebraically equal to dot(Y, RGB), with neutral values exact at
             // the endpoints instead of depending on rounded coefficient sums.

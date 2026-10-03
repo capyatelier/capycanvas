@@ -134,14 +134,10 @@ impl SnapshotRenderer {
         let guide = self.local_tone_guide()?;
         let stats = self.hdr_rows(|extent, working, read| {
             let (extent, hdr, sdr, stats) = layer_color::photo::preview_gainmap_rows(
-                extent,
+                layer_color::photo::GainMapRender { extent, space: working, rendition, guide: &guide, matte, clip: true },
                 bounds,
-                working,
-                rendition,
-                &guide,
                 format,
                 quality,
-                matte,
                 control.cancellation_flag(),
                 read,
             )?;

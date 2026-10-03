@@ -177,10 +177,11 @@ struct WorkspaceMenuCopy {
     labels: Vec<(Panel, String)>,
     restored: [String; 2],
 }
+type CustomizationPromptCopy = (customization::ToolbarPrompt, CustomizationLayoutKey, String, Option<String>, std::sync::Arc<customization::ToolbarPromptView>);
 #[derive(Default)]
 struct CustomizationCopy {
     picker: Option<(customization::ToolPicker, CustomizationLayoutKey, std::sync::Arc<ToolPickerView>)>,
-    prompt: Option<(customization::ToolbarPrompt, CustomizationLayoutKey, String, Option<String>, std::sync::Arc<customization::ToolbarPromptView>)>,
+    prompt: Option<CustomizationPromptCopy>,
     manager: Option<(customization::ToolbarManager, CustomizationLayoutKey, std::sync::Arc<customization::ToolbarManagerView>)>,
     header_tools: Vec<(ToolbarControl, String)>,
     color_picker_buttons: Vec<(ToolbarControl, std::sync::Arc<str>)>,
@@ -189,6 +190,8 @@ struct CustomizationCopy {
 /// A host-owned session: call inline or put the entire owner behind a host
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
+    screen_headroom: std::cell::RefCell<Option<(UiLanguage, u32, std::sync::Arc<str>)>>,
+    histogram_captions: [Option<histogram::HistogramCaptionKey>; 2],
     histogram: histogram::Statistics,
     effect_analyses: effect_analysis::Analyses,
     tonal_histogram: histogram::Statistics,
@@ -336,6 +339,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_shortcuts(true);
         self.refresh_command_search_localization();
         self.refresh_notice_localization();
+        self.histogram_copy();
+        self.refresh_screen_view();
         self.update_canvas_bar();
         self.state.revision += 1;
         self.workspace_model_revision = self.state.revision;
@@ -367,6 +372,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         effects::validate_catalog_labels(&effect_catalog, &localization)?;
         let mut session = Self {
+            screen_headroom: Default::default(),
+            histogram_captions: Default::default(),
             histogram: Default::default(),
             effect_analyses: Default::default(),
             tonal_histogram: Default::default(),
@@ -1592,10 +1599,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 && self.state.settings.zen_show_capy
                                 && self.interaction.facts.zen_button.is_some_and(|bounds| {
                                     bounds.contains(position[0], position[1])
-                                }))
-                                && !self.interaction.facts.canvas_bar.is_some_and(|bounds| {
-                                    bounds.contains(position[0], position[1])
                                 })
+                                || self.interaction.facts.canvas_bar.is_some_and(|bounds| {
+                                    bounds.contains(position[0], position[1])
+                                }))
                                 && self.layout(viewport).near_chrome(
                                     position,
                                     viewport,
@@ -1919,8 +1926,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             // than its viewport, and a drawer is wider than its collapsed source.
             // Standalone toolbars still convert to their compact grid; an icon
             // has no visible panel size, so it keeps the measured/default size.
-            let preserve_size = !drag.source_is_icon
-                && !(drag.panel.kind() == PanelKind::Tiles
+            let preserve_size = !(drag.source_is_icon
+                || drag.panel.kind() == PanelKind::Tiles
                     && self.state.workspace.layout.group_panels(group)?.len() == 1);
             if preserve_size {
                 let floating = self
@@ -2213,7 +2220,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else if id == CommandId::SoftProof {
             self.state.localization.text(MessageId::COMMAND_SOFT_PROOF_TOGGLE)
         } else if id == CommandId::MergeDown {
-            self.merge_down_label().into()
+            self.merge_down_label()
         } else {
             id.localized_label(&self.state.localization)
         }
@@ -3680,20 +3687,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (SETTINGS | COMMANDS, true)
             }
             UiAction::CompleteRequest { id, error } => {
-                let index = self
-                    .state
-                    .requests
-                    .iter()
-                    .position(|r| r.id == id)
-                    .ok_or("Unknown host request")?;
-                if matches!(
-                    self.state.requests[index].kind,
-                    HostRequestKind::Document { .. }
-                ) {
-                    return Err("Complete document requests through the document service".into());
-                }
-                self.state.requests.remove(index);
+                self.retire_host_request(id)?;
                 self.set_host_error(error);
+                (HOST, false)
+            }
+            UiAction::CompleteRequestFailure { id, reason } => {
+                self.retire_host_request(id)?;
+                self.set_host_error_copy(Some(DocumentHostErrorCopy::HostRequest(reason)));
                 (HOST, false)
             }
             UiAction::CloseSettings => {
@@ -3731,9 +3731,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             if !self.tonal_active() {
                 self.region_tools.cancel();
-            } else if tool_before.1 != self.layer_interaction.tool {
-                self.cancel_tonal();
-            } else if self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision != self.engine.document().revision
+            } else if tool_before.1 != self.layer_interaction.tool
+                || self.tonal_tools.draft.as_ref().is_some_and(|d| d.revision != self.engine.document().revision
                 || d.target != self.selection_masks.target().unwrap_or(layer_core::SelectionTarget::Current)) {
                 self.cancel_tonal();
             }
@@ -4435,7 +4434,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((HOST, false))
             }
             CommandId::SoftProof => {
-                let change = self.toggle_proof()?;
+                let change = self.toggle_proof().map_err(|reason| reason.proof_message(self.localization()))?;
                 let mut regions = change.regions;
                 if self.proof_panel_mode() != ProofMode::Off {
                     if self.state.platform == Platform::Windows {
@@ -5770,11 +5769,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             && references
                 .iter()
                 .any(|id| doc.reference_layers.contains(id));
-        self.state.layer_tools.reference_action_label = if self.reference_action_removes() {
-            "Stop using this layer as a reference"
+        self.state.layer_tools.reference_action_label = self.localization().text(if self.reference_action_removes() {
+            MessageId::RESOURCES_LAYER_MENU_STOP_USING_AS_REFERENCE
         } else {
-            "Use selected layers as references"
-        };
+            MessageId::RESOURCES_LAYER_MENU_USE_SELECTED_LAYERS_AS_REFERENCES
+        });
         self.state.tabs = vec![DocumentTab {
             id: doc.id.to_string(),
             title: self.state.document_file.title().into(),
@@ -9371,7 +9370,7 @@ mod tests {
         let mut layer = Layer::paint(id, "Document-only filter");
         layer.kind = LayerKind::Effect;
         layer.effect = Some(Arc::new(EffectInstance::new(definition.program())));
-        s.layer_edit(Edit::InsertLayer { index: 0, layer }).unwrap();
+        s.layer_edit(Edit::InsertLayer { index: 0, layer: Box::new(layer) }).unwrap();
         s.frame(0, 0).unwrap();
         let original = s.engine.document().layer(id).unwrap().effect.clone();
         Arc::make_mut(&mut definition.program).label = "Different definition".into();
@@ -9728,7 +9727,7 @@ mod tests {
         assert!(s.engine.document().active_mask);
         // Only the sole editing target toggles reference use off.
         assert_eq!(
-            s.state.layer_tools.reference_action_label,
+            s.state.layer_tools.reference_action_label.as_ref(),
             "Stop using this layer as a reference"
         );
         send(&mut s, LayerAction::ReferenceSelection);
@@ -9963,7 +9962,7 @@ mod tests {
         s.engine
             .apply_edit(layer_core::Edit::InsertLayer {
                 index: usize::MAX,
-                layer: layer_core::Layer::paint(LayerId(99), "Bottom"),
+                layer: Box::new(layer_core::Layer::paint(LayerId(99), "Bottom")),
             })
             .unwrap();
         assert_eq!(
@@ -11409,7 +11408,7 @@ mod tests {
         .unwrap();
         let group = baseline.layout.panel_group(Panel::Brushes).unwrap();
         let bounds = |app: &UiSession<_>| {
-            find_group(&app, viewport, |g| g.id == group).bounds
+            find_group(app, viewport, |g| g.id == group).bounds
         };
         let start = bounds(&app);
         let point = [start.x + 23.0, start.y + 12.0];
@@ -11558,7 +11557,7 @@ mod tests {
                         .unwrap();
                     let before = app.state.workspace.clone();
                     let bounds = |app: &UiSession<_>| {
-                        find_group(&app, viewport, |g| g.active == Panel::Brushes).bounds
+                        find_group(app, viewport, |g| g.active == Panel::Brushes).bounds
                     };
                     let original = bounds(&app);
                     if float {

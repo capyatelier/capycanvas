@@ -167,7 +167,13 @@ picker's availability rules.
   toolbar's tab icon. All geometry and insertion slots use the same allocator.
 - A standalone vertical toolbar narrower than two tiles keeps a center-third
   tab-merge target. Adding tabs grows the group to fit measured native tab
-  widths. Manual horizontal resizing releases that automatic minimum.
+  widths within the available dock budget. Full captions and additional vertical
+  ribbon lanes are preferred widths; control minima, including open collapsed
+  columns, reserve space for later sidebars and the canvas before they grow.
+  Narrow windows shorten captions and clip ribbons while keeping opposing dock
+  controls reachable. Automatic growth leaves saved band extents unchanged and
+  returns when space becomes available.
+  Manual horizontal resizing releases the caption fit.
 - A stacked group can instead take its active panel's measured content height,
   leaving the rest of the column to its sibling. Siblings keep a tab bar and one
   tile row before the fitted group shrinks. Dragging the adjacent divider

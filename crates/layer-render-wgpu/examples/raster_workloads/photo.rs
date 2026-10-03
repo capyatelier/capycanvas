@@ -127,7 +127,7 @@ fn adjustments(canvas: &mut Canvas, observations: &mut Observations) -> Result<L
             layer.mask = Some(mask);
         }
         observations.render(canvas, "adjustment-first", |engine| {
-            engine.apply_edit(Edit::InsertLayer { index: 0, layer })?;
+            engine.apply_edit(Edit::InsertLayer { index: 0, layer: Box::new(layer) })?;
             Ok(())
         })?;
     }
@@ -589,7 +589,7 @@ pub(super) fn run(
             observations.render(&mut canvas, "blur-first", |engine| {
                 engine.apply_edit(Edit::InsertLayer {
                     index: 0,
-                    layer: blur.clone(),
+                    layer: Box::new(blur.clone()),
                 })?;
                 Ok(())
             })?;

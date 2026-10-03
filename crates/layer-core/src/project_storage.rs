@@ -627,7 +627,6 @@ mod tests {
         project.write(&mut bytes).unwrap();
         for mutate in [
             |v: &mut serde_json::Value| v["tiled_sources"]["proof"]["profile"] = serde_json::json!({"Embedded": 999}),
-            |v: &mut serde_json::Value| v["tiled_sources"]["proof"]["name"] = "".into(),
             |v: &mut serde_json::Value| v["tiled_sources"]["proof"]["name"] = "x".repeat(1025).into(),
             |v: &mut serde_json::Value| {
                 v["tiled_sources"]["proof"]["simulate_paper"] = true.into();
@@ -643,6 +642,9 @@ mod tests {
             let error = Project::read(&invalid[..52 + length], Default::default()).unwrap_err();
             assert!(!error.contains("incomplete") && !error.contains("I/O"), "{error}");
         }
+        let unnamed = rewrite_manifest(&bytes, |v| v["tiled_sources"]["proof"]["name"] = "".into());
+        let loaded = Project::read(unnamed.as_slice(), Default::default()).unwrap();
+        assert_eq!(loaded.document.proof.as_ref().unwrap().name, "");
         let mut invalid = project.clone();
         invalid.document.proof.as_mut().unwrap().profile = ColorProfile::Icc(Vec::new().into());
         assert!(invalid.write(&mut Vec::new()).unwrap_err().contains("proof"));

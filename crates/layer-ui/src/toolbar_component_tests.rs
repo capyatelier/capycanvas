@@ -35,7 +35,7 @@ fn language_refresh_retains_toolbar_editor_schema_and_action_context() {
             assert_eq!(context, s.state().toolbar_context());
             if let Some(ToolOption::Numeric(field)) = updated.iter().find(|option| matches!(option, ToolOption::Numeric(_))) {
                 let mut different = field.clone();
-                different.id = "different-control".into();
+                different.id = "different-control";
                 assert!(!ToolOption::Numeric(field.clone()).same_schema(&ToolOption::Numeric(different)));
             }
         }
@@ -1122,9 +1122,7 @@ fn slider_preview_geometry_opacity_and_tip_raster_are_shared() {
 #[test]
 fn slider_stamp_preserves_mask_holes_and_brush_grain() {
     let mut s = session(Platform::Gtk);
-    let mut brush = layer_core::BrushSnapshot::default();
-    brush.aspect = 1.;
-    brush.angle_radians = 0.;
+    let mut brush = layer_core::BrushSnapshot { aspect: 1., angle_radians: 0., ..Default::default() };
     s.engine.set_brush(brush.clone()).unwrap();
     let context = s.state().toolbar_context();
     let plain = s.toolbar_stamp(context).unwrap();

@@ -177,7 +177,7 @@ impl Task {
             .ok_or("Request expired")?
             .kind;
         let (kind, payload) = match request {
-            HostRequestKind::SoftProofSetup => ("proof", Payload::Proof(Box::new(proof::Task::capture(session, id)?))),
+            HostRequestKind::SoftProofSetup => ("proof", Payload::Proof(Box::new(proof::Task::capture(session, id).map_err(|reason|reason.proof_message(session.localization()))?))),
             HostRequestKind::Document {
                 request: DocumentRequest::Export { name },
             } => (
@@ -395,6 +395,7 @@ impl Task {
             }
             Payload::Color(task) => task.details(),
             Payload::Source(task) => {
+                task.prepare_metadata()?;
                 let mut details = task.details_localized(&self.localization)?;
                 details["profiles"] = profiles.clone();
                 details
@@ -472,13 +473,13 @@ impl Task {
                 }
                 Action::ProofOptions { settings, profile_id } => {
                     let Payload::Proof(task) = &mut self.payload else { return Err("No proof setup is pending".into()); };
-                    task.work(settings, profile_id, &self.control).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
+                    task.work(settings, profile_id, &self.control).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Proof(reason),&self.localization))?;
                     self.stage = "proof_candidate";
                     self.describe()
                 }
                 Action::ProofPreserve => {
                     let Payload::Proof(task) = &mut self.payload else { return Err("No proof setup is pending".into()); };
-                    task.preserve(&self.control).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Profile(reason),&self.localization))?;
+                    task.preserve(&self.control).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Proof(reason),&self.localization))?;
                     self.stage = "commit";
                     Ok(())
                 }
@@ -715,14 +716,16 @@ impl Task {
     }
     pub fn prepare_owner(&mut self, host: &NativeHost) -> Result<bool, String> {
         if self.stage == "proof_candidate" {
+            self.error_reason=None;
             let Payload::Proof(task) = &mut self.payload else { return Err("No proof candidate".into()); };
-            task.validate(host, &self.control)?;
+            task.validate(host, &self.control).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Proof(reason),&self.localization))?;
             self.stage = "proof_preserve";
             return Ok(true);
         }
         if self.stage != "source_candidate" {
             return Ok(false);
         }
+        self.error_reason=None;
         let Payload::Source(task) = &mut self.payload else {
             return Err("No source candidate".into());
         };
@@ -730,6 +733,7 @@ impl Task {
         Ok(true)
     }
     pub fn commit(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        self.error_reason=None;
         if !matches!(self.stage, "preview" | "commit") || self.error.is_some() {
             return Err("Preview the result before applying it".into());
         }
@@ -756,7 +760,7 @@ impl Task {
                 host.apply_change(previous, change);
                 Ok(())
             }
-            Payload::Proof(task) => task.adopt(host, &self.control),
+            Payload::Proof(task) => task.adopt(host, &self.control).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Proof(reason),&self.localization)),
             Payload::Color(task) => task.adopt(host, self.control.is_cancelled(), || true),
             Payload::Source(task) => task.adopt(host, self.control.is_cancelled(), || true),
             _ => Err("No document edit is ready".into()),
@@ -778,19 +782,19 @@ impl Task {
             Ok(())
         }
     }
-    pub fn notice(&self) -> Option<String> {
+    pub fn notice(&self) -> Option<layer_ui::DocumentHostErrorCopy> {
         match &self.payload {
-            Payload::Export { notice, .. } => notice.as_ref().map(|reason| layer_ui::DocumentDeliveryMessage::ExportPreferences { detail:reason.preset_message(&self.localization) }.message(&self.localization)),
+            Payload::Export { notice, .. } => notice.clone().map(layer_ui::DocumentHostErrorCopy::ExportPreferences),
             _ => None,
         }
     }
-    pub fn retain_proof(&self, view: &mut layer_ui::proof_workflow::ProofView) -> Result<(), String> {
-        if let Payload::Proof(task) = &self.payload { task.retain(view)?; }
+    pub fn retain_proof(&mut self, view: &mut layer_ui::proof_workflow::ProofView) -> Result<(), String> {
+        if let Payload::Proof(task) = &self.payload { task.retain(view).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Proof(reason),&self.localization))?; }
         Ok(())
     }
+    pub fn retained_failure(&self) -> bool {self.error_reason.is_some()}
     pub fn fail(&mut self, error: String) {
         self.error = Some(error);
-        self.error_reason = None;
         self.stage = "error";
         self.serial = self.serial.saturating_add(1);
     }
@@ -802,13 +806,17 @@ impl Task {
         self.converted_name = layer_ui::DocumentDeliveryMessage::ConvertedName { name:self.original_name.clone() }.message(&self.localization);
         match &mut self.payload {
             Payload::Export { task, .. } => {
-                let next = task.details_localized(&self.localization)?;
-                for (key, value) in next.as_object().ok_or("Invalid export presentation")? { self.details[key] = value.clone(); }
+                let captions: Vec<layer_ui::ExportProfileCaption> = self.details["form"].get("profile_captions")
+                    .map(|value| serde_json::from_value(value.clone())).transpose().map_err(|error| error.to_string())?.unwrap_or_default();
+                let next = task.copy_localized(&self.localization, &captions);
+                for key in ["copy", "profile_names", "recipe_profile_name"] { self.details["form"][key] = next[key].clone(); }
+                for key in ["suggested_name", "format_name"] { self.details[key] = next[key].clone(); }
                 if !self.preset_view.is_null() {
-                    let mut view: layer_ui::ExportPresetView = serde_json::from_value(self.preset_view.clone()).map_err(|error| error.to_string())?;
+                    let names = serde_json::from_value(self.preset_view["names"].clone()).map_err(|error| error.to_string())?;
+                    let mut view = layer_ui::ExportPresetView { names, index:None, recipe:None, changed:false };
                     view.localize_names(task.document().color, &self.localization);
-                    self.preset_view = json!(view);
-                    self.details["presets"] = self.preset_view.clone();
+                    self.preset_view["names"] = json!(view.names);
+                    self.details["presets"]["names"] = self.preset_view["names"].clone();
                 }
             }
             Payload::Source(task) => {
@@ -865,6 +873,30 @@ mod tests {
     fn ready(task: &mut Task, action: Action) {
         task.work(action);
         assert!(task.error.is_none(), "{}: {:?}", task.kind, task.error);
+    }
+    #[test]
+    fn proof_worker_refusal_survives_owner_noop_and_language_refresh() {
+        let mut host=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.dispatch(layer_ui::UiAction::Invoke {command:layer_ui::CommandId::SoftProofSetup}).unwrap();
+        let id=host.session.state().requests.last().unwrap().id;
+        let mut task=Task::capture(&mut host,id).unwrap();
+        task.work(Action::ProofOptions {settings:layer_ui::proof_panel::PrintProofSettings::default(),profile_id:None});
+        assert_eq!(task.error_reason,Some(FeatureFailure::Proof(layer_ui::ColorFeatureError::ProofChoosePrintProfile)));
+        assert!(!task.prepare_owner(&host).unwrap());
+        let reason=task.error_reason.clone().unwrap();
+        let checkpoint=host.session.engine().checkpoint();
+        for language in layer_ui::UiLanguage::ALL {
+            let localizer=layer_ui::Localizer::shared(language);
+            task.set_localization(localizer.clone()).unwrap();
+            assert_eq!(task.error,Some(reason.message(&localizer)));
+            assert_eq!(task.error_reason,Some(reason.clone()));
+            assert_eq!(host.session.engine().checkpoint(),checkpoint);
+        }
+        let literal=layer_ui::ColorFeatureError::Diagnostic("{\"ProofChooseProfile\":true} literal CMM text".into());
+        task.error_reason=Some(FeatureFailure::Proof(literal.clone()));
+        task.fail(literal.proof_message(host.session.localization()));
+        task.set_localization(layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese)).unwrap();
+        assert_eq!(task.error,Some(literal.proof_message(host.session.localization())));
     }
     #[test]
     fn properties_reproject_cached_inspection_without_restarting_the_workflow() {
@@ -1066,6 +1098,26 @@ mod tests {
                     profile_id: None,
                 },
             );
+            let identity = (task.id, task.serial, task.stage);
+            let Payload::Export { task:export, .. } = &task.payload else { panic!("export task missing") };
+            let preview = export.previews().as_ptr();
+            let retained_recipe = task.details["recipe"].clone();
+            let retained_profiles = task.details["form"]["profiles"].clone();
+            let retained_preset_recipe = task.preset_view["recipe"].clone();
+            for language in layer_ui::UiLanguage::ALL {
+                let localization = layer_ui::Localizer::shared(language);
+                task.set_localization(localization.clone()).unwrap();
+                assert_eq!((task.id,task.serial,task.stage),identity);
+                let Payload::Export { task:export, .. } = &task.payload else { panic!("export task missing") };
+                assert_eq!(export.previews().as_ptr(),preview);
+                assert_eq!(task.details["recipe"],retained_recipe);
+                assert_eq!(task.details["form"]["profiles"],retained_profiles);
+                assert_eq!(task.preset_view["recipe"],retained_preset_recipe);
+                assert_eq!(task.details["form"]["copy"],json!(layer_ui::color_feature_copy::ExportCopy::new(&localization)));
+                let captions: Vec<layer_ui::ExportProfileCaption> = serde_json::from_value(task.details["form"]["profile_captions"].clone()).unwrap();
+                assert_eq!(task.details["form"]["profile_names"],json!(captions.iter().map(|caption|caption.message(&localization)).collect::<Vec<_>>()));
+            }
+            task.set_localization(host.session.localization().clone()).unwrap();
             let path = directory.join(format!("delivery.{}", format.extension()));
             ready(
                 &mut task,
@@ -1073,7 +1125,28 @@ mod tests {
                     path: path.to_str().unwrap().into(),
                 },
             );
+            let reason = layer_ui::DocumentHostErrorCopy::ExportPreferences(layer_ui::ColorFeatureError::PresetNameInvalid);
+            let Payload::Export { notice, .. } = &mut task.payload else { panic!("export task missing") };
+            *notice = Some(layer_ui::ColorFeatureError::PresetNameInvalid);
             task.complete(&mut host, true).unwrap();
+            host.session.set_host_error_copy(task.notice());
+            let id = task.id;
+            drop(task);
+            let checkpoint = host.session.engine().checkpoint();
+            let document = host.session.engine().document().clone();
+            let requests = json!(host.session.state().requests);
+            assert!(!host.session.state().requests.iter().any(|request|request.id==id));
+            for language in layer_ui::UiLanguage::ALL {
+                let localization = layer_ui::Localizer::shared(language);
+                host.set_localization(localization.clone());
+                assert_eq!(host.session.state().host_error,Some(reason.message(&localization)));
+                assert!(host.error.is_none());
+                assert_eq!(host.session.engine().checkpoint(),checkpoint);
+                assert_eq!(host.session.engine().document(),&document);
+                assert_eq!(json!(host.session.state().requests),requests);
+            }
+            host.session.set_host_error(None);
+            host.set_localization(layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
             let imported = layer_ui::read_import(
                 std::fs::File::open(&path).unwrap(),
                 layer_ui::ImportIntent::Open,
@@ -1181,6 +1254,24 @@ mod tests {
         let id = layer_ui::profile_library::profile_identity(&profile);
         assert!(inventory.iter().any(|p| p.id == id && p.issue.is_none()));
         crate::color_storage::remove(&id, &cancel, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+
+        let mut unnamed = profile.clone();
+        let tags = u32::from_be_bytes(unnamed[128..132].try_into().unwrap()) as usize;
+        for tag in unnamed[132..132 + tags * 12].chunks_exact_mut(12) {
+            if &tag[..4] == b"desc" { tag[..4].copy_from_slice(b"zzzz"); }
+        }
+        assert_eq!(layer_color::profile_description_optional(&ColorProfile::Icc(unnamed.clone().into())).unwrap(), None);
+        std::fs::write(&profile_path, &unnamed).unwrap();
+        crate::color_storage::import(&profile_path, &cancel, host.session.localization()).unwrap();
+        let unnamed_id = layer_ui::profile_library::profile_identity(&unnamed);
+        for language in layer_ui::UiLanguage::ALL {
+            let localization = layer_ui::Localizer::shared(language);
+            let candidate = crate::color_storage::export_profile(&unnamed_id, &cancel, &localization).unwrap();
+            assert!(candidate.name.is_empty());
+            assert_eq!(candidate.profile, ColorProfile::Icc(unnamed.clone().into()));
+            assert_eq!(candidate.display_name(&localization), localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).as_ref());
+        }
+        crate::color_storage::remove(&unnamed_id, &cancel, host.session.localization()).unwrap();
 
         // Proof uses the real Windows transport, shared transaction and D3D12
         // presenter. Viewing never enters the project/export or edit history.

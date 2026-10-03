@@ -755,11 +755,11 @@ impl DockLayout {
                     },
                     vec![
                         ContextMenuItem::submenu(
-                            &localization.text(MessageId::WORKSPACE_ADD_PANEL_MENU).to_string(),
+                            &localization.text(MessageId::WORKSPACE_ADD_PANEL_MENU),
                             vec![self.panel_items_localized(PanelKind::Content, Some(group), localization)],
                         ),
                         ContextMenuItem::submenu(
-                            &localization.text(MessageId::WORKSPACE_ADD_TOOLBAR_MENU).to_string(),
+                            &localization.text(MessageId::WORKSPACE_ADD_TOOLBAR_MENU),
                             vec![self.panel_items_localized(PanelKind::Tiles, Some(group), localization)],
                         ),
                     ],
@@ -1278,8 +1278,7 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 CommandId::FlipHorizontal | CommandId::FlipVertical => {
                     localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_FLIP_HORIZONTAL).to_string()
                 }
-            }
-            .into(),
+            },
             control.icon(),
             )
         },
@@ -2375,6 +2374,12 @@ impl CustomizationState {
     }
 }
 
+fn customization_text(localization: &Localizer, id: MessageId, values: &[(&str, String)]) -> String {
+    let mut args = FluentArgs::new();
+    for (key, value) in values { args.set(*key, value.as_str()); }
+    localization.format(id, &args)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::session::test_support::tile_ids;
@@ -3152,10 +3157,4 @@ mod tests {
             }
         }
     }
-}
-
-fn customization_text(localization: &Localizer, id: MessageId, values: &[(&str, String)]) -> String {
-    let mut args = FluentArgs::new();
-    for (key, value) in values { args.set(*key, value.as_str()); }
-    localization.format(id, &args)
 }

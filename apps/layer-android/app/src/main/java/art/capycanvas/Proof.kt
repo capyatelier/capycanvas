@@ -34,7 +34,7 @@ import org.json.JSONObject
 /** One shared draft and worker for all dock/drawer views, as in GTK. */
 internal class ProofController(private val host: CanvasHost) {
     var status by mutableStateOf(""); private set
-    var error by mutableStateOf<String?>(null); private set
+    var error by mutableStateOf<Exception?>(null); private set
     var busy by mutableStateOf(false); private set
     var committing by mutableStateOf(false); private set
     var form by mutableStateOf<JSONObject?>(null); private set
@@ -52,6 +52,8 @@ internal class ProofController(private val host: CanvasHost) {
     private var dirty=false
     private var paused=false
     private var observing=false
+    private var observedGeneration=-1L
+    private var copyGeneration=0L
     fun ensureTexture() {
         if(textureJob!=null)return
         textureJob=host.viewModelScope.launch {
@@ -68,7 +70,7 @@ internal class ProofController(private val host: CanvasHost) {
     fun resume() { paused=false;sync() }
     fun action(value:JSONObject) { host.viewModelScope.launch {
         try { host.withNative{Native.proofControl(it,value.toString())};host.documentChanged();sync() }
-        catch(e:Exception){error=e.message}
+        catch(e:Exception){error=e}
     } }
     fun edit(key:String,value:Any) {
         if(committing)return
@@ -81,14 +83,14 @@ internal class ProofController(private val host: CanvasHost) {
         val draft=settings?:return
         if(draft.objectOrNull("profile")==null)return
         val recipe=try{JSONObject(Native.colorUi(obj("type" to "print_proof","settings" to draft).toString(), host.languageTag))}
-            catch(e:Exception){error=e.message;return}
+            catch(e:Exception){error=e;return}
         if(recipe.toString()==form?.objectOrNull("document_profile")?.toString()){dirty=false;return}
         start(-1,recipe)
     }
     fun hasPending() = debounce?.isActive==true || (dirty&&running?.isActive==true)
     suspend fun finishPending() {
         debounce?.join();running?.join()
-        if(form?.optString("mode")=="print")error?.let{throw IllegalStateException(it)}
+        if(form?.optString("mode")=="print")error?.let{throw it}
     }
     fun sync() {
         if(observing||paused)return
@@ -99,6 +101,7 @@ internal class ProofController(private val host: CanvasHost) {
                     val model=JSONObject(Native.query(h,obj("type" to "proof_form").toString()));val view=JSONObject(Native.query(h,obj("type" to "proof_status").toString()))
                     Triple(model,view,model.getJSONArray("identity").toString())
                 }
+                observedGeneration=view.getLong("generation")
                 val proof=model.objectOrNull("document_profile")?.toString()
                 val changed=identity!=key
                 if(changed||saved!=proof) {
@@ -111,8 +114,29 @@ internal class ProofController(private val host: CanvasHost) {
                 val next=view.getLong("generation")
                 if(next!=generation){if(running?.isActive==true)cancel();generation=next}
                 if(view.getBoolean("needed")&&running?.isActive!=true)start(0,null)
-            } catch(e:Exception){error=e.message}
-            finally {observing=false}
+            } catch(e:Exception){error=e}
+            finally {observing=false;refreshCopy()}
+        }
+    }
+    fun refreshCopy() {
+        if(paused)return
+        val ticket=++copyGeneration
+        val language=host.languageTag
+        host.viewModelScope.launch {
+            try {
+                val (copy,view)=host.withNative { h ->
+                    JSONObject(Native.query(h,obj("type" to "proof_copy").toString())) to JSONObject(Native.query(h,obj("type" to "proof_status").toString()))
+                }
+                currentCoroutineContext().ensureActive()
+                if(ticket!=copyGeneration||language!=host.languageTag||paused)return@launch
+                val retained=form
+                if(retained==null||copy.getJSONArray("identity").toString()!=identity||view.getLong("generation")!=observedGeneration||copy.getString("mode")!=retained.getString("mode")) {
+                    sync();return@launch
+                }
+                val next=retained.shallowCopy()
+                copy.keys().forEach { key -> next.put(key,copy.get(key)) }
+                form=next;status=view.getString("text")
+            } catch(e:Exception){if(ticket==copyGeneration&&language==host.languageTag)error=e}
         }
     }
     private fun start(id:Int,recipe:JSONObject?) {
@@ -135,8 +159,10 @@ internal class ProofController(private val host: CanvasHost) {
                     dirty=false;host.documentChanged()
                 } catch(e:Exception) {
                     if(ticket==serial&&!paused){
-                        error=e.message?:"Could not prepare proof"
-                        if(id==0&&task!=0L)runCatching{host.withNative{Native.proofFailed(it,task,error!!)}}
+                        error=e
+                        if(id==0&&task!=0L)runCatching{host.withNative{ h ->
+                            if(e is ColorFeatureFailure)Native.proofFailedReason(h,task,org.json.JSONArray(listOf(e.reason)).toString().let{it.substring(1,it.length-1)}) else Native.proofFailed(h,task,e.message.orEmpty())
+                        }}
                         if(id<0){dirty=false;settings=form?.getJSONObject("print_settings")}
                     }
                 } finally {
@@ -150,7 +176,7 @@ internal class ProofController(private val host: CanvasHost) {
 }
 
 @Composable internal fun ProofRequests(host:CanvasHost,state:JSONObject) {
-    LaunchedEffect(state.optLong("revision")){host.proof.sync()}
+    LaunchedEffect(state.optLong("revision"),host.languageTag){host.proof.refreshCopy()}
     val request=state.array("requests").objects().firstOrNull{it.getJSONObject("kind").getString("type")in listOf("soft_proof_setup","sdr_rendition")}
     if(request!=null)LaunchedEffect(request.getInt("id")) {
         try {
@@ -168,21 +194,29 @@ internal class ProofController(private val host: CanvasHost) {
     val context=LocalContext.current
     val scope=rememberCoroutineScope()
     val model=controller.form
+    val copy=host.catalog.getJSONObject("proof_copy")
+    val profiles=host.catalog.getJSONObject("profile_copy")
     val settings=controller.settings
     val mode=model?.optString("mode")?:"off"
     var library by remember{mutableStateOf(false)}
     var picker by remember{mutableStateOf(false)}
     var saved by remember{mutableStateOf<List<JSONObject>>(emptyList())}
-    var localError by remember{mutableStateOf<String?>(null)}
-    LaunchedEffect(Unit){controller.sync()}
-    LaunchedEffect(picker){if(picker)try{saved=ProfileStore.list(context)}catch(e:Exception){localError=e.message}}
+    var rawSaved by remember{mutableStateOf<List<JSONObject>>(emptyList())}
+    var localError by remember{mutableStateOf<Exception?>(null)}
+    LaunchedEffect(picker){if(picker)try{rawSaved=ProfileStore.list(context)}catch(e:Exception){localError=e}}
+    LaunchedEffect(rawSaved,host.languageTag) {
+        val language=host.languageTag
+        val retained=rawSaved
+        val projected=profileEntriesCopy(host,retained)
+        if(language==host.languageTag && retained===rawSaved)saved=projected
+    }
     LaunchedEffect(mode){if(mode=="sdr")controller.ensureTexture()}
     BoxWithConstraints(modifier) {
         val dialSide=minOf(maxWidth-16.dp,maxHeight-52.dp).coerceAtLeast(128.dp)
         Column(Modifier.fillMaxWidth().then(if(scrollable&&constraints.hasBoundedHeight)Modifier.verticalScroll(rememberScrollState())else Modifier)
             .onSizeChanged{onHeight(it.height/density)}.padding(horizontal=8.dp,vertical=6.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(2.dp)) {
-                (listOf("off" to "Off")+(if(model?.optBoolean("hdr")==true)listOf("sdr" to "SDR")else emptyList())+listOf("print" to "Print")).forEach{(value,label)->
+                (listOf("off" to copy.getString("mode_off"))+(if(model?.optBoolean("hdr")==true)listOf("sdr" to "SDR")else emptyList())+listOf("print" to copy.getString("mode_print"))).forEach{(value,label)->
                     val selected=mode==value
                     Box(Modifier.weight(1f).heightIn(min=34.dp).clip(ControlShape)
                         .background(if(selected)colors.text.copy(alpha=.12f)else Color.Transparent)
@@ -190,12 +224,12 @@ internal class ProofController(private val host: CanvasHost) {
                         .testTag("proof-mode-$value"),contentAlignment=Alignment.Center){Text(label,color=colors.text)}
                 }
             }
-            if(mode=="sdr"&&model!=null)Box(Modifier.width(dialSide).align(Alignment.CenterHorizontally)){ProofSdrControls(model,controller.texture,controller::action)}
+            if(mode=="sdr"&&model!=null)Box(Modifier.width(dialSide).align(Alignment.CenterHorizontally)){ProofSdrControls(host,model,controller.texture,controller::action)}
             if(mode=="print"&&model!=null&&settings!=null) {
                 for(control in model.getJSONArray("print_controls").objects()) {
                     val label=control.getString("label")
                     when(control.getString("id")) {
-                        "profile"->ProofOptionRow(label){PanelChoiceButton(settings.objectOrNull("profile")?.getString("name")?:"Choose Profile…",Modifier.testTag("proof-profile"),!controller.committing){picker=true}}
+                        "profile"->ProofOptionRow(label){PanelChoiceButton(settings.objectOrNull("profile")?.let{profileCaption(host,it)}?:profiles.getString("choose"),Modifier.testTag("proof-profile"),!controller.committing){picker=true}}
                         "simulation"->ProofChoice(label,model.getJSONArray("simulations").objects().map{it.getString("value") to it.getString("label")},settings.getString("simulation"),!controller.committing){controller.edit("simulation",it)}
                         "intent"->ProofChoice(label,model.getJSONArray("intents").objects().map{it.getString("value") to it.getString("label")},settings.getString("intent"),!controller.committing){controller.edit("intent",it)}
                         "black_point_compensation"->ProofCheck(label,settings.getBoolean("bpc")&&settings.getString("intent")!="AbsoluteColorimetric",!controller.committing&&settings.getString("intent")!="AbsoluteColorimetric"){controller.edit("bpc",it)}
@@ -204,23 +238,23 @@ internal class ProofController(private val host: CanvasHost) {
                 }
                 if(controller.busy)CircularProgressIndicator(Modifier.size(20.dp).align(Alignment.CenterHorizontally))
             }
-            (localError?:controller.error)?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+            if (localError != null) ColorFailureText(host,localError,true) else ColorFailureText(host,controller.error,proof=true)
         }
     }
     fun select(profile:JSONObject){controller.edit("profile",profile);picker=false;localError=null}
-    if(picker)AlertDialog(onDismissRequest={picker=false},title={Text("Proof profile")},confirmButton={TextButton({picker=false}){Text("Done")}},text={
+    if(picker)AlertDialog(onDismissRequest={picker=false},title={Text(copy.getString("profile_choice"))},confirmButton={TextButton({picker=false}){Text(copy.getJSONObject("common").getString("done"))}},text={
         Column(Modifier.fillMaxWidth().heightIn(max=520.dp).verticalScroll(rememberScrollState()).testTag("proof-profile-picker")){
             val original=model?.objectOrNull("print_settings")?.objectOrNull("profile")
-            if(original!=null){Text("Document Profile");TextButton({select(original)}){Text(original.getString("name"))}}
-            Text("Saved Profiles")
-            saved.filter{!it.has("issue")&&it.optBoolean("visible",true)}.forEach{entry->TextButton({scope.launch{try{select(ProfileStore.get(context,entry.getString("id")))}catch(e:Exception){localError=e.message}}}){Text(entry.getString("name"))}}
-            Text("Standard Color Spaces")
+            if(original!=null){Text(profiles.getString("document"));TextButton({select(original)}){Text(profileCaption(host,original))}}
+            Text(profiles.getString("saved"))
+            saved.filter{!it.has("issue")&&it.optBoolean("visible",true)}.forEach{entry->TextButton({scope.launch{try{select(ProfileStore.get(context,entry.getString("id")))}catch(e:Exception){localError=e}}}){Text(entry.getString("name"))}}
+            Text(profiles.getString("standard"))
             model?.getJSONArray("profiles")?.objects()?.forEach{p->TextButton({select(p)}){Text(p.getString("name"))}}
-            ProfileFileButton("Add Profile…"){select(it);scope.launch{saved=ProfileStore.list(context)}}
-            TextButton({picker=false;library=true}){Text("Manage Profiles…")}
+            ProfileFileButton(host,host.catalog.getJSONObject("profile_copy").getString("add_profile_dialog")){select(it);scope.launch{rawSaved=ProfileStore.list(context)}}
+            TextButton({picker=false;library=true}){Text(profiles.getString("manage"))}
         }
     })
-    if(library)ProfileLibraryDialog({library=false;scope.launch{saved=ProfileStore.list(context)}})
+    if(library)ProfileLibraryDialog(host,{library=false;scope.launch{rawSaved=ProfileStore.list(context)}})
 }
 
 @Composable private fun ProofOptionRow(label:String,content:@Composable ()->Unit) {

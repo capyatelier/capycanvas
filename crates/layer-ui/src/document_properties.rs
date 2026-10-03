@@ -15,7 +15,7 @@ pub struct DocumentPropertiesView {
 pub fn document_properties(info: &layer_color::InspectedDocumentInfo, localizer: &Localizer) -> DocumentPropertiesView {
     let label = |id| localizer.text(id).to_string();
     let mut args = FluentArgs::new();
-    args.set("width", info.extent[0].to_string()); args.set("height", info.extent[1].to_string());
+    args.set("width", info.extent[0]); args.set("height", info.extent[1]);
     let depth = match info.color.depth {
         SampleDepth::U8 => MessageId::COLOR_FEATURES_COLOR_DEPTH_8,
         SampleDepth::U16 => MessageId::COLOR_FEATURES_COLOR_DEPTH_16,
@@ -42,8 +42,8 @@ pub fn document_properties(info: &layer_color::InspectedDocumentInfo, localizer:
     let sources = info.sources.iter().map(|source| {
         let channels = match source.channels { SourceChannels::Rgb | SourceChannels::Rgba => "RGB".into(), SourceChannels::Cmyk => "CMYK".into(), SourceChannels::Gray | SourceChannels::GrayAlpha => label(MessageId::COLOR_FEATURES_PROFILE_GRAYSCALE) };
         let retained = if source.kind == SourceKind::Rasterized { MessageId::COLOR_PROPERTIES_RETAINED_RASTERIZED } else if source.embedded { MessageId::COLOR_PROPERTIES_RETAINED_ICC } else { MessageId::COLOR_PROPERTIES_RETAINED_ORIGINAL };
-        let mut args = FluentArgs::new(); args.set("width", source.extent[0].to_string()); args.set("height", source.extent[1].to_string());
-        args.set("bits", source.bits.to_string()); args.set("channels", channels); args.set("profile", crate::profile_library::profile_description_name(source.profile_description.clone(), localizer));
+        let mut args = FluentArgs::new(); args.set("width", source.extent[0]); args.set("height", source.extent[1]);
+        args.set("bits", source.bits); args.set("channels", channels); args.set("profile", crate::profile_library::profile_description_name(source.profile_description.clone(), localizer));
         args.set("assumed", if source.profile_assumed {"yes"} else {"no"}); args.set("retained", label(retained));
         (source.name.clone(), localizer.format(MessageId::COLOR_PROPERTIES_SOURCE, &args))
     }).collect();

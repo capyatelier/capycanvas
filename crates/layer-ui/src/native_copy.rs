@@ -3,12 +3,16 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 macro_rules! copy_struct {
-    ($name:ident { $($field:ident: $message:ident,)* }) => {
+    ($name:ident { $($field:ident: $message:ident $(=> $argument:ident)?,)* }) => {
         #[derive(Clone, Debug, Serialize)]
         pub struct $name { $(pub $field: Arc<str>,)* }
         impl $name {
-            pub(crate) fn new(l: &Localizer) -> Self { Self { $($field: l.text(MessageId::$message),)* } }
+            pub(crate) fn new(l: &Localizer) -> Self { Self { $($field: copy_struct!(@value l, $message $(, $argument)?),)* } }
         }
+    };
+    (@value $l:ident, $message:ident) => { $l.text(MessageId::$message) };
+    (@value $l:ident, $message:ident, $argument:ident) => {
+        crate::color_feature_copy::named($l, MessageId::$message, &$l.text(MessageId::$argument)).into()
     };
 }
 
@@ -104,6 +108,8 @@ copy_struct! { PaletteCopy {
 } }
 
 copy_struct! { HeaderCopy {
+    save_as_new_workspace: WORKSPACE_ACTION_SAVE_AS_NEW_WORKSPACE,
+    owned_elsewhere: WORKSPACE_REFUSAL_THIS_WORKSPACE_IS_OPEN_IN_ANOTHER_WINDOW,
     on: SETTINGS_ON,
     off: SETTINGS_OFF,
     zoom: MENU_ZOOM,
@@ -115,7 +121,9 @@ copy_struct! { HeaderCopy {
     search: COLOR_FEATURES_PROFILE_SEARCH,
     retry: WORKSPACE_ACTION_RETRY_STORAGE,
     title_bar: WORKSPACE_HEADER_TITLE,
+    title_bar_size: WORKSPACE_HEADER_SIZE,
     clock: WORKSPACE_HEADER_CLOCK,
+    battery: WORKSPACE_HEADER_BATTERY,
     current_workspace: WORKSPACE_CURRENT_WORKSPACE,
     drag_to_reorder: WORKSPACE_HEADER_DRAG_ITEM,
     show_top: NATIVE_HEADER_SHOW_TOP,
@@ -154,6 +162,11 @@ copy_struct! { HeaderCopy {
 } }
 
 copy_struct! { ColorCopy {
+    reset_balance_contrast: COLOR_FEATURES_EXPORT_RESET_NAMED => COLOR_FEATURES_PROOF_BALANCE_CONTRAST,
+    reset_brightness: COLOR_FEATURES_EXPORT_RESET_NAMED => COLOR_FEATURES_PROOF_BRIGHTNESS,
+    reset_highlight_color: COLOR_FEATURES_EXPORT_RESET_NAMED => COLOR_FEATURES_PROOF_HIGHLIGHT_COLOR,
+    highlight_clipped_colors: NATIVE_HIGHLIGHT_CLIPPED_COLORS,
+    screen_details: NATIVE_SCREEN_DETAILS,
     manage_profiles: COLOR_FEATURES_PROFILE_MANAGE,
     effects: NATIVE_COLOR_EFFECTS,
     category: NATIVE_COLOR_CATEGORY,
@@ -175,6 +188,7 @@ copy_struct! { ColorCopy {
     canvas_unavailable: NATIVE_COLOR_CANVAS_UNAVAILABLE,
     inspection_failed: NATIVE_COLOR_INSPECTION_FAILED,
     inspection_help: NATIVE_COLOR_INSPECTION_HELP,
+    inspection_hdr_help: NATIVE_COLOR_INSPECTION_HDR_HELP,
 
     brush_size: WORKSPACE_CONTROL_BRUSH_SIZE,
     luminance: NATIVE_COLOR_LUMINANCE,
@@ -226,6 +240,7 @@ copy_struct! { ColorCopy {
 } }
 
 copy_struct! { ShortcutCopy {
+    clear_search: SETTINGS_CLEAR_SEARCH,
     keymap: NATIVE_SHORTCUTS_KEYMAP,
     no_differences: NATIVE_SHORTCUTS_NO_DIFFERENCES,
     defaults_help: NATIVE_SHORTCUTS_DEFAULTS_HELP,
@@ -337,9 +352,11 @@ impl NativeCopy {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NativeCaption {
+    NumericError { reason: crate::NumericError },
+    HeaderDrag { item: String },
     DrawingStorage { detail: String },
     InspectionRange { start: f64, end: f64 },
     InspectionPixels { sampled: u64, transparent: u64 },
@@ -367,12 +384,14 @@ impl NativeCaption {
     pub fn message(&self, l: &Localizer) -> String {
         let mut args = FluentArgs::new();
         let id = match self {
+            Self::NumericError { reason } => return reason.message(l),
+            Self::HeaderDrag { item } => return crate::header_drag_label(item, l),
             Self::DrawingStorage { detail } => { args.set("detail", detail.as_str()); MessageId::NATIVE_DRAWING_STORAGE_HELP },
             Self::InspectionRange { start, end } => { args.set("start", start.to_string()); args.set("end", end.to_string()); MessageId::NATIVE_INSPECTION_RANGE },
-            Self::InspectionPixels { sampled, transparent } => { args.set("sampled", sampled.to_string()); args.set("transparent", transparent.to_string()); MessageId::NATIVE_INSPECTION_PIXELS },
-            Self::InspectionChannel { below, above, black, white } => { args.set("below", below.to_string()); args.set("above", above.to_string()); args.set("black", black.to_string()); args.set("white", white.to_string()); MessageId::NATIVE_INSPECTION_CHANNEL },
+            Self::InspectionPixels { sampled, transparent } => { args.set("sampled", *sampled); args.set("transparent", *transparent); MessageId::NATIVE_INSPECTION_PIXELS },
+            Self::InspectionChannel { below, above, black, white } => { args.set("below", *below); args.set("above", *above); args.set("black", *black); args.set("white", *white); MessageId::NATIVE_INSPECTION_CHANNEL },
             Self::InspectionGraph { channel } => { args.set("channel", channel.as_str()); MessageId::NATIVE_INSPECTION_GRAPH },
-            Self::InspectionClipped { count } => { args.set("count", count.to_string()); MessageId::NATIVE_INSPECTION_CLIPPED },
+            Self::InspectionClipped { count } => { args.set("count", *count); MessageId::NATIVE_INSPECTION_CLIPPED },
             Self::ShortcutDefaults { keys } => return crate::shortcut_default_caption(l, keys),
             Self::ModifierHold { label } => return crate::modifier_hold_help(l, label),
             Self::SwitchWorkspace { title } => { args.set("title", title.as_str()); MessageId::NATIVE_SWITCH_WORKSPACE },
@@ -444,7 +463,7 @@ mod sampler_tests {
                 (&copy.selection_menu, &english.selection_menu, MessageId::MENU_SELECT),
             ] {
                 assert_ne!(label, canonical);
-                assert!(label.chars().any(|c| !c.is_ascii()));
+                assert!(!label.is_ascii());
                 assert!(Arc::ptr_eq(label, &localizer.text(id)));
             }
             let json = serde_json::to_value(&copy).unwrap();
@@ -460,7 +479,7 @@ mod sampler_tests {
             let localizer = Localizer::shared(language);
             let copy = NativeCopy::new(&localizer).sampler;
             assert_ne!(copy.source, english.source);
-            assert!(copy.source.chars().any(|c| !c.is_ascii()));
+            assert!(!copy.source.is_ascii());
             assert!(Arc::ptr_eq(&copy.source, &localizer.text(MessageId::TOOLBAR_SOURCE)));
             assert_eq!(copy.visible_color, localizer.text(MessageId::TOOLBAR_VISIBLE_COLOR));
             assert_eq!(copy.selected_layer, localizer.text(MessageId::TOOLBAR_SELECTED_LAYER));
@@ -475,5 +494,94 @@ mod sampler_tests {
                 assert!(Arc::ptr_eq(label, &localizer.text([MessageId::TOOLBAR_SINGLE_PIXEL, MessageId::TOOLBAR_5_PX_CIRCLE, MessageId::TOOLBAR_15_PX_CIRCLE, MessageId::TOOLBAR_51_PX_CIRCLE, MessageId::TOOLBAR_101_PX_CIRCLE][index])));
             }
         }
+    }
+}
+#[cfg(test)]
+mod numeric_caption_tests {
+    use super::*;
+    use crate::{NumericError, UiLanguage};
+    use layer_core::ResourceLabel;
+
+    #[test]
+    fn inspection_counts_select_numeric_plural_branches_and_preserve_exact_integers() {
+        let english = Localizer::shared(UiLanguage::English);
+        for count in [0, 1, 2, 5, 11, 21, 22, 1_000_003, (1_u64 << 53) - 1] {
+            let text = NativeCaption::InspectionPixels { sampled:count, transparent:count }.message(&english);
+            let sampled = if count == 1 { "sampled pixel" } else { "sampled pixels" };
+            let transparent = if count == 1 { "transparent pixel excluded" } else { "transparent pixels excluded" };
+            assert_eq!(text, format!("{count} {sampled} · {count} {transparent}"));
+            for language in UiLanguage::ALL {
+                let localizer = Localizer::shared(language);
+                for text in [
+                    NativeCaption::InspectionPixels {sampled:count, transparent:count}.message(&localizer),
+                    NativeCaption::InspectionChannel {below:count, above:count, black:count, white:count}.message(&localizer),
+                    NativeCaption::InspectionClipped {count}.message(&localizer),
+                ] {
+                    assert!(text.split(|c:char| !c.is_ascii_digit()).any(|number| number == count.to_string()), "{}: {text}", language.tag());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retained_native_numeric_errors_format_current_copy_and_preserve_literal_arguments() {
+        let literal = "İı ไทย Tie\u{302}\u{301}ng Vie\u{323}\u{302}t { $label }\n{\"type\":\"numeric_error\"} 🎨";
+        let label: ResourceLabel = ResourceLabel::Literal(literal.into());
+        let leaves = [
+            (NumericError::InvalidDefinition, MessageId::NUMERIC_INVALID_DEFINITION),
+            (NumericError::PositiveLogarithmicBounds, MessageId::NUMERIC_POSITIVE_LOGARITHMIC_BOUNDS),
+            (NumericError::InvalidRangeExponent, MessageId::NUMERIC_INVALID_RANGE_EXPONENT),
+            (NumericError::InvalidMappedRange, MessageId::NUMERIC_INVALID_MAPPED_RANGE),
+            (NumericError::FiniteNumber, MessageId::NUMERIC_FINITE_NUMBER),
+            (NumericError::InvalidStep, MessageId::NUMERIC_INVALID_STEP),
+            (NumericError::InvalidPosition, MessageId::NUMERIC_INVALID_POSITION),
+            (NumericError::ExpressionRequired, MessageId::NUMERIC_EXPRESSION_REQUIRED),
+            (NumericError::ExpressionTooLong, MessageId::NUMERIC_EXPRESSION_TOO_LONG),
+            (NumericError::InvalidExpression, MessageId::NUMERIC_INVALID_EXPRESSION),
+            (NumericError::InvalidNumber, MessageId::SETTINGS_EXPECTED_A_NUMBER),
+        ];
+        let reasons = leaves.iter().map(|(reason, _)| reason.clone()).chain([
+            NumericError::Range { label:label.clone(), min:-1.25, max:32768. },
+            NumericError::WholePixels { label:label.clone() },
+            NumericError::Range { label:MessageId::COLOR_FEATURES_EXPORT_MAXIMUM_WIDTH.into(), min:1., max:32768. },
+        ]).collect::<Vec<_>>();
+        for reason in reasons {
+            assert!(reason.valid());
+            let serialized = serde_json::to_value(NativeCaption::NumericError { reason:reason.clone() }).unwrap();
+            assert_eq!(serialized["type"], "numeric_error");
+            assert_eq!(serialized["reason"], serde_json::to_value(&reason).unwrap());
+            let caption: NativeCaption = serde_json::from_value(serialized.clone()).unwrap();
+            for language in UiLanguage::ALL {
+                let localizer = Localizer::shared(language);
+                let message = caption.message(&localizer);
+                assert_eq!(message, reason.message(&localizer));
+                if let Some((_, id)) = leaves.iter().find(|(leaf, _)| leaf == &reason) { assert_eq!(message, localizer.text(*id).as_ref()); }
+                match &reason {
+                    NumericError::Range { label:ResourceLabel::Literal(_), .. } | NumericError::WholePixels { label:ResourceLabel::Literal(_) } => assert!(message.contains(literal)),
+                    NumericError::Range { label:ResourceLabel::Message { .. }, .. } => assert!(message.contains(localizer.text(MessageId::COLOR_FEATURES_EXPORT_MAXIMUM_WIDTH).as_ref())),
+                    _ => {},
+                }
+                assert_eq!(serde_json::to_value(&caption).unwrap(), serialized);
+            }
+        }
+        let invalid = [
+            NumericError::Range { label:label.clone(), min:2., max:1. },
+            NumericError::Range { label:label.clone(), min:f64::NAN, max:1. },
+            NumericError::Range { label:label.clone(), min:0., max:f64::INFINITY },
+            NumericError::WholePixels { label:ResourceLabel::Message { message:"unknown-host-message".into() } },
+        ];
+        for reason in invalid {
+            assert!(!reason.valid());
+            let caption = NativeCaption::NumericError { reason };
+            for language in UiLanguage::ALL {
+                let localizer = Localizer::shared(language);
+                assert_eq!(caption.message(&localizer), localizer.text(MessageId::NUMERIC_INVALID_DEFINITION).as_ref());
+            }
+        }
+        for malformed in [
+            serde_json::json!({"type":"numeric_error","reason":{"reason":"unknown"}}),
+            serde_json::json!({"type":"numeric_error","reason":{"reason":"range","label":"literal","min":0,"max":1,"error":"literal"}}),
+            serde_json::json!({"type":"numeric_error","reason":{"reason":"range","label":"literal","min":null,"max":1}}),
+        ] { assert!(serde_json::from_value::<NativeCaption>(malformed).is_err()); }
     }
 }

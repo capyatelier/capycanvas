@@ -6,6 +6,15 @@ mod drag;
 #[path = "workspace_header_editor.rs"]
 mod editor;
 
+fn ellipsize_caption(button: &gtk::MenuButton) {
+    crate::text_language::visit(button.upcast_ref(), &mut |widget| {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            label.set_single_line_mode(true);
+        }
+    });
+}
+
 mod imp {
     use super::*;
     #[derive(Default)]
@@ -572,7 +581,10 @@ impl Header {
                 } else {
                     w.localization().text(layer_ui::MessageId::WORKSPACE_WORKSPACES).to_string()
                 };
-                compact.set_label(&name);
+                if compact.label().as_deref() != Some(name.as_str()) {
+                    compact.set_label(&name);
+                    ellipsize_caption(compact);
+                }
             }
         }
         for controls in &self.native {
@@ -727,6 +739,7 @@ impl Header {
                     .label(w.localization().text(layer_ui::MessageId::WORKSPACE_WORKSPACES).as_ref())
                     .tooltip_text(w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_SWITCH_WORKSPACE).as_ref())
                     .build();
+                ellipsize_caption(&menu);
                 menu.add_css_class("flat");
                 menu.add_css_class("chrome-control");
                 menu.set_widget_name("header-workspace-selector");

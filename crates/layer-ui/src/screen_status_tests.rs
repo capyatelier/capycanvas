@@ -26,8 +26,38 @@ fn screen_session(space: layer_core::color::RgbSpace, depth: layer_core::color::
     UiSession::new(Recorder { color: document.color, ..Default::default() }, document, [32, 32], Platform::Gtk).unwrap()
 }
 
-fn chip(s: &UiSession<Recorder>) -> Option<(&'static str, bool)> {
-    s.screen_chip().map(|c| (c.label, c.warning))
+fn chip(s: &UiSession<Recorder>) -> Option<(String, bool)> {
+    s.screen_chip().map(|c| (c.label.to_string(), c.warning))
+}
+
+#[test]
+fn screen_language_refresh_preserves_report_and_cached_headroom() {
+    use layer_core::color::{RgbSpace, SampleDepth};
+    let mut s = screen_session(RgbSpace::Srgb, SampleDepth::F16);
+    let mut report = screen_report(gnome("native"));
+    report.name = Some("日本語 { $screen } 🎨".into());
+    if let layer_color::screen::ScreenColor::Described(d) = &mut report.color {
+        d.transfer = layer_color::screen::Transfer::Pq;
+        d.reference_white = 200.;
+        d.target_peak = Some(1000.);
+    }
+    s.set_screen_report(report.clone());
+    s.set_hdr_display_available(true);
+    let checkpoint = s.engine.checkpoint();
+    for language in UiLanguage::ALL {
+        s.set_localization(Localizer::shared(language));
+        let first = s.screen_details().unwrap();
+        assert_eq!(first.title, report.name.as_deref().unwrap());
+        assert_eq!(first.headline, s.localization().text(MessageId::COMMON_SCREEN_HEADLINE_HDR));
+        let mut args = FluentArgs::new();
+        args.set("times", "5"); args.set("ev", "+2.3");
+        assert_eq!(first.body.as_deref(), Some(s.localization().format(MessageId::COMMON_SCREEN_HDR_HEADROOM, &args).as_str()));
+        let repeated = s.screen_details().unwrap();
+        assert!(std::sync::Arc::ptr_eq(first.body.as_ref().unwrap(), repeated.body.as_ref().unwrap()));
+        assert_eq!(s.state.screen.details, Some(first));
+        assert_eq!(s.state.screen.report, report);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
 }
 
 #[test]
@@ -40,8 +70,8 @@ fn sdr_drawings_only_mention_the_screen_when_colors_are_clipped() {
     s.set_screen_clipped(Some(false));
     assert_eq!(chip(&s), None);
     s.set_screen_clipped(Some(true));
-    assert_eq!(chip(&s), Some(("Colors clipped", true)));
-    assert_eq!(s.state.screen.chip.map(|c| c.label), Some("Colors clipped"), "hosts read the chip from state");
+    assert_eq!(chip(&s), Some(("Colors clipped".into(), true)));
+    assert_eq!(s.state.screen.chip.as_ref().map(|c| c.label.as_ref()), Some("Colors clipped"), "hosts read the chip from state");
     assert_eq!(s.state.screen.details, s.screen_details());
     s.state.workspace.layout.canvas_info.visible = false;
     assert_eq!(chip(&s), None, "the footer is hidden");
@@ -57,9 +87,9 @@ fn proofing_always_says_whether_the_screen_can_be_trusted() {
     assert_eq!(chip(&s), None, "a trustworthy screen needs no chip");
     assert_eq!(s.screen_details(), None);
     s.set_screen_report(screen_report(gnome("hdr")));
-    assert_eq!(chip(&s), Some(("May not match print", false)));
+    assert_eq!(chip(&s), Some(("May not match print".into(), false)));
     s.set_screen_clipped(Some(true));
-    assert_eq!(chip(&s), Some(("Colors clipped", true)));
+    assert_eq!(chip(&s), Some(("Colors clipped".into(), true)));
 }
 
 #[test]
@@ -67,15 +97,15 @@ fn hdr_drawings_keep_their_presentation_label_until_proofed() {
     use layer_core::color::{RgbSpace, SampleDepth};
     let mut s = screen_session(RgbSpace::Srgb, SampleDepth::F16);
     s.set_screen_report(screen_report(gnome("default")));
-    assert_eq!(chip(&s), Some(("Showing SDR", false)));
+    assert_eq!(chip(&s), Some(("Showing SDR".into(), false)));
     let details = s.screen_details().unwrap();
-    assert_eq!(details.headline, "Showing the SDR version");
+    assert_eq!(details.headline.as_ref(), "Showing the SDR version");
     assert_eq!(
         details.body.as_deref(),
         Some("HDR is off for this screen. Turn it on in your operating system’s display settings to see HDR highlights.")
     );
     s.set_screen_report(screen_report(gnome("hdr")));
-    assert_eq!(chip(&s), Some(("Showing SDR", false)));
+    assert_eq!(chip(&s), Some(("Showing SDR".into(), false)));
     assert_eq!(
         s.screen_details().unwrap().body.as_deref(),
         Some("At your current screen brightness, regular content already uses all of this screen’s brightness, leaving nothing brighter for HDR highlights. Lower the screen brightness to see them.")
@@ -84,8 +114,8 @@ fn hdr_drawings_keep_their_presentation_label_until_proofed() {
     television.monitor = Some(layer_color::screen::edid::parse(include_bytes!("../../layer-color/tests/fixtures/edid/lg-tv.bin")).unwrap());
     s.set_screen_report(television);
     s.set_hdr_display_available(true);
-    assert_eq!(chip(&s), Some(("HDR", false)));
-    assert_eq!(s.screen_details().unwrap().headline, "Showing HDR");
+    assert_eq!(chip(&s), Some(("HDR".into(), false)));
+    assert_eq!(s.screen_details().unwrap().headline.as_ref(), "Showing HDR");
     assert_eq!(
         s.screen_details().unwrap().body.as_deref(),
         Some("Capy Canvas can’t tell how bright this screen can get, so the brightest highlights may look dimmer than they are.")
@@ -103,10 +133,10 @@ fn hdr_drawings_keep_their_presentation_label_until_proofed() {
     );
     s.set_screen_report(screen_report(gnome("hdr")));
     s.state.preview_sdr = true;
-    assert_eq!(chip(&s), Some(("SDR preview", false)));
+    assert_eq!(chip(&s), Some(("SDR preview".into(), false)));
     s.state.preview_sdr = false;
     s.state.gamut_warning = true;
-    assert_eq!(chip(&s), Some(("May not match print", false)));
+    assert_eq!(chip(&s), Some(("May not match print".into(), false)));
 }
 
 #[test]
@@ -117,7 +147,7 @@ fn details_explain_the_screen_briefly() {
     s.set_screen_report(screen_report(gnome("hdr")));
     let details = s.screen_details().unwrap();
     assert_eq!(details.title, "Cintiq Pro 27");
-    assert_eq!(details.headline, "The proof may not match the print");
+    assert_eq!(details.headline.as_ref(), "The proof may not match the print");
     assert_eq!(
         details.body.as_deref(),
         Some("With HDR on, Capy Canvas can’t tell how this screen shows colors. Turn off HDR for this screen in your operating system’s display settings.")
@@ -144,7 +174,7 @@ fn clipped_colors_can_be_marked_from_the_details() {
     s.set_screen_clipped(Some(true));
     let details = s.screen_details().unwrap();
     assert!(details.warning);
-    assert_eq!(details.headline, "Some colors can’t be shown accurately on this screen");
+    assert_eq!(details.headline.as_ref(), "Some colors can’t be shown accurately on this screen");
     assert_eq!(details.show_clipped, Some(false));
     let change = s.dispatch(UiAction::ShowClippedColors { visible: true }).unwrap();
     assert!(change.regions & regions::HOST != 0 && change.canvas_wake);
@@ -183,7 +213,7 @@ fn clipping_explains_a_color_setting_that_limits_apps_to_srgb() {
     s.state.soft_proof = true;
     assert_eq!(chip(&s), None);
     s.set_screen_clipped(Some(true));
-    assert_eq!(chip(&s), Some(("Colors clipped", true)));
+    assert_eq!(chip(&s), Some(("Colors clipped".into(), true)));
     assert_eq!(
         s.screen_details().unwrap().body.as_deref(),
         Some("Your operating system is limiting apps to sRGB colors on this screen, although the screen can show more. Turn off saturated or vivid colors in your operating system’s display settings to show them.")

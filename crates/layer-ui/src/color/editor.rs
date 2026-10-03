@@ -26,6 +26,13 @@ impl ColorInputModel {
             Self::Oklch => crate::MessageId::COLOR_FORM_MODEL_OKLCH,
         })
     }
+    pub fn localized_description(self, document_space: RgbSpace, localizer: &crate::Localizer) -> String {
+        use crate::MessageId as M;
+        let mut text = localizer.text(match document_space { RgbSpace::Srgb => M::COLOR_FORM_DOCUMENT_SRGB, RgbSpace::DisplayP3 => M::COLOR_FORM_DOCUMENT_DISPLAY_P3, RgbSpace::AdobeRgb => M::COLOR_FORM_DOCUMENT_ADOBE_RGB, RgbSpace::ProPhoto => M::COLOR_FORM_DOCUMENT_PROPHOTO }).to_string();
+        let extra = match self { ColorInputModel::LinearRgb => Some(M::COLOR_FORM_REFERENCE_WHITE), ColorInputModel::SrgbHex => Some(M::COLOR_FORM_HEX_DESCRIPTION), _ => None };
+        if let Some(id) = extra { text.push(' '); text.push_str(&localizer.text(id)); }
+        text
+    }
     pub fn localized_labels(self, localizer: &crate::Localizer) -> [std::sync::Arc<str>; 4] {
         let ids = match self {
             Self::DocumentRgb => [Some(crate::MessageId::COLOR_FORM_FIELD_RED_ENCODED), Some(crate::MessageId::COLOR_FORM_FIELD_GREEN_ENCODED), Some(crate::MessageId::COLOR_FORM_FIELD_BLUE_ENCODED), Some(crate::MessageId::COLOR_FORM_FIELD_ALPHA)],
@@ -39,7 +46,8 @@ impl ColorInputModel {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "detail", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ColorEditorError {
     Numeric { field: usize, reason: crate::NumericError },
     EntriesTooLong,
@@ -61,7 +69,15 @@ impl From<layer_core::color::hdr::HdrPixelError> for ColorEditorError {
     fn from(value: layer_core::color::hdr::HdrPixelError) -> Self { Self::Hdr(value) }
 }
 impl ColorEditorError {
+    pub fn valid(&self) -> bool {
+        match self {
+            Self::Numeric { field, reason } => *field < 4 && reason.valid(),
+            Self::Intensity(reason) => reason.valid(),
+            _ => true,
+        }
+    }
     pub fn message(&self, model: ColorInputModel, localizer: &crate::Localizer) -> String {
+        if !self.valid() { return crate::NumericError::InvalidDefinition.message(localizer); }
         use crate::MessageId as M;
         let id = match self {
             Self::Numeric { field, reason } => return finite_field_message(localizer, model.localized_labels(localizer)[*field].as_ref(), reason),
@@ -205,10 +221,9 @@ impl ColorEditor {
     pub fn color_localized(&self, localizer: &crate::Localizer) -> Result<RgbColor, String> {
         self.color().map_err(|reason| reason.message(self.model, localizer))
     }
-    pub fn colors_localized(&self, localizer: &crate::Localizer) -> Result<(RgbColor, RgbColor), String> {
-        let color = self.color_localized(localizer)?;
-        let base = self.base_for_color(color).map_err(|reason|reason.message(self.model,localizer))?;
-        Ok((color,base))
+    pub fn colors(&self) -> Result<(RgbColor, RgbColor), ColorEditorError> {
+        let color = self.color()?;
+        Ok((color,self.base_for_color(color)?))
     }
     pub fn color(&self) -> Result<RgbColor, ColorEditorError> {
         if self.fields.iter().any(|text| text.len() > 128) {
@@ -294,17 +309,16 @@ impl ColorEditor {
         Ok(color)
     }
     pub fn localized_description(&self, localizer: &crate::Localizer) -> String {
-        use crate::MessageId as M;
-        let mut text = localizer.text(match self.document_space { RgbSpace::Srgb => M::COLOR_FORM_DOCUMENT_SRGB, RgbSpace::DisplayP3 => M::COLOR_FORM_DOCUMENT_DISPLAY_P3, RgbSpace::AdobeRgb => M::COLOR_FORM_DOCUMENT_ADOBE_RGB, RgbSpace::ProPhoto => M::COLOR_FORM_DOCUMENT_PROPHOTO }).to_string();
-        let extra = match self.model { ColorInputModel::LinearRgb => Some(M::COLOR_FORM_REFERENCE_WHITE), ColorInputModel::SrgbHex => Some(M::COLOR_FORM_HEX_DESCRIPTION), _ => None };
-        if let Some(id) = extra { text.push(' '); text.push_str(&localizer.text(id)); }
-        text
+        self.model.localized_description(self.document_space, localizer)
     }
 
 }
 
+pub fn color_intensity_input_typed(text: &str) -> Result<f32, ColorEditorError> {
+    crate::numeric::parse_numeric_text(text).map_err(ColorEditorError::Intensity)
+}
 pub fn color_intensity_input(text: &str, localizer: &crate::Localizer) -> Result<f32, String> {
-    crate::numeric::parse_numeric_text(text).map_err(|reason| finite_field_message(localizer, localizer.text(crate::MessageId::NATIVE_COLOR_INTENSITY_EV).as_ref(), &reason))
+    color_intensity_input_typed(text).map_err(|reason| reason.message(ColorInputModel::DocumentRgb, localizer))
 }
 pub(crate) fn finite_field_message(localizer: &crate::Localizer, label: &str, reason: &crate::NumericError) -> String {
     if !matches!(reason, crate::NumericError::InvalidNumber | crate::NumericError::FiniteNumber) { return reason.message(localizer); }

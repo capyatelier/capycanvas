@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory)][string]$Executable,
     [Parameter(Mandatory)][string]$Output,
     [string]$Name,
-    [int]$TimeoutMinutes = 20
+    [ValidateRange(1,1440)][int]$TimeoutMinutes = 20
 )
 $ErrorActionPreference = 'Stop'
 trap {
@@ -107,11 +107,18 @@ New-Item -ItemType Directory -Force $Output | Out-Null
 $env:LAYER_TEST_SOFTWARE_GPU = '1'
 $env:CAPY_WAIT_SCALE = '3'
 $env:NO_COLOR = '1'
-$selected = if ($Name) { $Name -split ',' } else { @() }
-foreach ($requested in $selected) {
-    if (!@($runs.Keys | Where-Object { $_ -eq $requested -or ($_ -split ':')[0] -eq $requested }).Count) { throw "Unknown fixture: $requested" }
+function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
+    $defaults = @($Requested | Where-Object { $_ -match '^[^:]+:default$' } | ForEach-Object { ($_ -split ':')[0] })
+    foreach ($item in $Requested) {
+        $known = if ($item -match '^([^:]+):default$') { $Matches[1] -in $Available } else {
+            @($Available | Where-Object { $_ -eq $item -or ($_ -split ':')[0] -eq $item }).Count -gt 0
+        }
+        if (!$known) { throw "Unknown fixture: $item" }
+    }
+    @($Available | Where-Object { !$Requested -or $_ -in $Requested -or ($_ -split ':')[0] -in $Requested -or $_ -in $defaults })
 }
-$planned = @($runs.Keys | Where-Object { !$selected -or $_ -in $selected -or ($_ -split ':')[0] -in $selected })
+$selected = if ($Name) { $Name -split ',' } else { @() }
+$planned = @(Select-Fixtures $runs.Keys $selected)
 if (!$planned.Count) { throw 'No fixtures selected.' }
 @{runs=$planned;timeout_minutes=$TimeoutMinutes}|ConvertTo-Json|Set-Content (Join-Path $Output 'plan.json')
 $results = Join-Path $Output 'results.jsonl'

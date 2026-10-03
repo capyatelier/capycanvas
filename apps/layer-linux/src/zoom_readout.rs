@@ -22,7 +22,8 @@ impl ZoomReadout {
         let label = gtk::Label::new(Some("100% · 0°"));
         let root = gtk::Button::builder().child(&label).build();
         root.set_widget_name("canvas-view-info");
-        root.set_tooltip_text(Some("Canvas zoom and rotation"));
+        let title = localization.text(layer_ui::MessageId::MENU_ZOOM);
+        root.set_tooltip_text(Some(&title));
         root.update_property(&[gtk::accessible::Property::HasPopup(true)]);
         root.add_css_class("flat");
         root.add_css_class("status-bubble");
@@ -31,7 +32,7 @@ impl ZoomReadout {
         let menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         menu.set_widget_name("zoom-menu");
         menu.set_position(gtk::PositionType::Top);
-        let field = NumberControl::inline(NumericControl::zoom(), "Zoom", localization);
+        let field = NumberControl::inline(NumericControl::zoom(), &title, localization);
         field.set_widget_name(FIELD);
         field.set_size_request(220, -1);
         Rc::new(Self {
@@ -41,6 +42,12 @@ impl ZoomReadout {
             field,
             previous_focus: RefCell::new(None),
         })
+    }
+
+    pub fn set_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
+        let title = localization.text(layer_ui::MessageId::MENU_ZOOM);
+        self.root.set_tooltip_text(Some(&title));
+        self.field.set_caption(&title, "", localization);
     }
 
     pub fn bind(self: &Rc<Self>, workspace: &Rc<Workspace>) {

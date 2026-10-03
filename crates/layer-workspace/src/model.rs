@@ -601,11 +601,10 @@ impl ItemSummary {
 }
 
 pub fn workspace_display_name(id: &str, metadata: &Metadata, localization: &layer_ui::Localizer) -> String {
-    if metadata.builtin && metadata.kind == ItemKind::Workspace {
-        if let Some((_, preset)) = DEFAULT_WORKSPACES.iter().find(|(key, _)| *key == id) {
-            use layer_ui::{MessageId as M, WorkspacePreset as P};
-            return localization.text(match preset { P::Painter => M::WORKSPACE_BUILTIN_PAINTER, P::Illustrator => M::WORKSPACE_BUILTIN_ILLUSTRATOR, P::Photographer => M::WORKSPACE_BUILTIN_PHOTOGRAPHER }).to_string();
-        }
+    if metadata.builtin && metadata.kind == ItemKind::Workspace
+        && let Some((_, preset)) = DEFAULT_WORKSPACES.iter().find(|(key, _)| *key == id) {
+        use layer_ui::{MessageId as M, WorkspacePreset as P};
+        return localization.text(match preset { P::Painter => M::WORKSPACE_BUILTIN_PAINTER, P::Illustrator => M::WORKSPACE_BUILTIN_ILLUSTRATOR, P::Photographer => M::WORKSPACE_BUILTIN_PHOTOGRAPHER }).to_string();
     }
     metadata.name.clone()
 }

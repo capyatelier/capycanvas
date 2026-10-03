@@ -1,31 +1,35 @@
 import { composingKey } from "./text-input.js";
+import { bindCopy } from "./localization.js";
 // DOM focus/IME and modal capture; Rust owns search, selection and execution.
-export function createCommandBar({element, button, icon, dispatch, style, canvas, layoutChanged}) {
+export function createCommandBar({element, button, icon, dispatch, style, canvas, layoutChanged, nativeCopy}) {
+  const copy = nativeCopy.search;
+  let view = null, signature = "", previousFocus, focus = "canvas", outside = false;
   const dialog = element("dialog", "command-bar");
   dialog.id = "command-bar";
-  dialog.setAttribute("aria-label", "Search commands");
+  bindCopy(dialog, () => copy.search_commands, "ariaLabel");
   for (const [key, value] of Object.entries(style)) dialog.style.setProperty(`--command-${key.replaceAll("_", "-")}`, `${value}px`);
   const header = element("div", "command-search-header");
   const field = element("div", "command-search-field");
   field.append(icon("search"));
   const input = element("input", "command-search-input");
-  input.id = "command-search"; input.type = "search"; input.placeholder = "Search commands";
+  input.id = "command-search"; input.type = "search";
+  bindCopy(input, () => view?.parameter ? copy.enter_value : copy.search_commands, "placeholder");
   input.autocomplete = "off"; input.spellcheck = false;
   input.setAttribute("role", "combobox"); input.setAttribute("aria-autocomplete", "list");
-  input.setAttribute("aria-controls", "command-results"); input.setAttribute("aria-label", "Search commands");
+  input.setAttribute("aria-controls", "command-results");
+  bindCopy(input, () => view?.parameter?.label ?? copy.search_commands, "ariaLabel");
   field.append(input);
   const unit = element("span", "command-unit");
   const close = button("×", () => send({type:"close"}), "command-search-close");
-  close.id = "command-search-close"; close.setAttribute("aria-label", "Close command search");
+  close.id = "command-search-close"; bindCopy(close, () => copy.close_search, "ariaLabel");
   header.append(field, unit, close);
   const list = element("div", "command-results"); list.id = "command-results";
-  list.setAttribute("role", "listbox"); list.setAttribute("aria-label", "Commands");
-  const empty = element("div", "command-empty", "No matching commands");
+  list.setAttribute("role", "listbox"); bindCopy(list, () => copy.commands, "ariaLabel");
+  const empty = element("div", "command-empty"); bindCopy(empty, () => copy.no_matches);
   const detail = element("div", "command-detail"); detail.id = "command-detail";
   detail.setAttribute("aria-live", "polite");
   input.setAttribute("aria-describedby", detail.id);
   dialog.append(header, list, empty, detail); document.body.append(dialog);
-  let view = null, signature = "", previousFocus, focus = "canvas", outside = false;
   const send = action => dispatch({type:"command_search", action});
   function fitViewport() {
     if (!view) return;
@@ -83,8 +87,8 @@ export function createCommandBar({element, button, icon, dispatch, style, canvas
         input.value = parameter?.parameter.text ?? view.query;
         if (parameter) input.select();
       }
-      input.placeholder = parameter ? "Enter a value" : "Search commands";
-      input.setAttribute("aria-label", parameter?.label ?? "Search commands");
+      input.placeholder = parameter ? copy.enter_value : copy.search_commands;
+      input.setAttribute("aria-label", parameter?.label ?? copy.search_commands);
       input.setAttribute("aria-expanded", String(!parameter));
       unit.textContent = parameter?.parameter.numeric.unit ?? "";
       unit.hidden = !unit.textContent;
@@ -96,7 +100,7 @@ export function createCommandBar({element, button, icon, dispatch, style, canvas
           row.id = `command-result-${index}`; row.tabIndex = -1;
           row.setAttribute("role", "option"); row.setAttribute("aria-disabled", String(!command.enabled));
           row.append(element("span", "command-name", command.label));
-          if (command.selected) { const check = element("span", "command-check", "✓"); check.setAttribute("aria-label", "On"); row.append(check); }
+          if (command.selected) { const check = element("span", "command-check", "✓"); bindCopy(check, () => copy.selected, "ariaLabel"); row.append(check); }
           row.append(element("span", "command-shortcut", command.shortcut));
           row.addEventListener("pointerdown", e => e.preventDefault());
           row.addEventListener("pointermove", () => {

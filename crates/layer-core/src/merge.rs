@@ -458,7 +458,7 @@ impl Document {
         let index = merge.anchor.map_or(0, |anchor| {
             self.layers.iter().position(|l| l.id == anchor.id).unwrap_or(0)
         });
-        let mut edits = vec![Edit::InsertLayer { index, layer }, Edit::SetActiveLayer { id: result }];
+        let mut edits = vec![Edit::InsertLayer { index, layer: Box::new(layer) }, Edit::SetActiveLayer { id: result }];
         edits.extend(
             self.ordered_layers()
                 .into_iter()

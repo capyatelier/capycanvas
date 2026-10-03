@@ -142,12 +142,12 @@ fn bmp_calibration_becomes_a_profile_and_bad_declarations_do_not_become_srgb() {
     let mut file = bmp_v5(&[]);
     put32(&mut file, 14 + 56, 0);
     let matrix = RgbSpace::AdobeRgb.to_xyz();
-    for c in 0..3 {
-        for i in 0..3 {
+    for (c, _) in matrix[0].iter().enumerate() {
+        for (i, row) in matrix.iter().enumerate() {
             put32(
                 &mut file,
                 14 + 60 + c * 12 + i * 4,
-                (matrix[i][c] * (1u64 << 30) as f64).round() as i32 as u32,
+                (row[c] * (1u64 << 30) as f64).round() as i32 as u32,
             );
         }
         put32(&mut file, 14 + 96 + c * 4, (2.2 * 65536.) as u32);

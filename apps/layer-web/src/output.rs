@@ -145,8 +145,8 @@ impl WebApp {
         let preview = preview.unwrap_or(false);
         let recipe: ExportRecipe = serde_wasm_bindgen::from_value(value).map_err(js)?;
         let document = self.session.engine().document();
-        recipe.validate().map_err(|reason| js(reason.message(self.session.localization())))?;
-        recipe.output_extent([document.width, document.height]).map_err(|reason| js(reason.message(self.session.localization())))?;
+        recipe.validate().map_err(color_preferences::color_feature_rejection)?;
+        recipe.output_extent([document.width, document.height]).map_err(color_preferences::color_feature_rejection)?;
         let snapshot = self.session.capture_project_export(id).map_err(js)?;
         let gpu = self
             .session
@@ -157,13 +157,12 @@ impl WebApp {
             .ok_or_else(|| js("Wait for the canvas"))?
             .snapshot_gpu();
         let control = control.inner.clone();
-        let localization = self.session.localization().clone();
         Ok(future_to_promise(async move {
             render_output(gpu, snapshot, recipe, control, preview, None).await.map_err(|error| {
                 if js_sys::Reflect::get(&error, &js("name")).ok().and_then(|name| name.as_string()).as_deref() == Some("AbortError") {
                     error
                 } else {
-                    js(color_preferences::color_feature_reason(error).message(&localization))
+                    color_preferences::color_feature_rejection(color_preferences::color_feature_reason(error))
                 }
             })
         }))
@@ -469,8 +468,12 @@ pub async fn raster_worker_output(
             let cancel = std::sync::atomic::AtomicBool::new(false);
             if metadata.preview {
                 let (size, mut hdr, sdr, stats) = layer_color::photo::preview_gainmap_rows(
-                    extent, [512, 384], metadata.color.space, rendition, guide,
-                    format, options, recipe.background.matte(), &cancel, &mut rows,
+                    layer_color::photo::GainMapRender { extent, space: metadata.color.space, rendition, guide, matte: recipe.background.matte(), clip: true },
+                    [512, 384],
+                    format,
+                    options,
+                    &cancel,
+                    &mut rows,
                 ).map_err(js)?;
                 let space = layer_core::color::RgbSpace::Srgb;
                 let mapper = rendition.mapper(space, space);
@@ -490,9 +493,13 @@ pub async fn raster_worker_output(
                 return Ok(result);
             }
             let stats = layer_color::photo::write_gainmap_rows(
-                output, extent, metadata.color.space, rendition, guide, format,
-                options, &delivery, recipe.background.matte(),
-                recipe.format.maps_hdr_range(), &cancel, rows,
+                output,
+                layer_color::photo::GainMapRender { extent, space: metadata.color.space, rendition, guide, matte: recipe.background.matte(), clip: recipe.format.maps_hdr_range() },
+                format,
+                options,
+                &delivery,
+                &cancel,
+                rows,
             ).map_err(js)?;
             return serialize(&serde_json::json!({"clipped_channels": stats.clipped_channels, "extent": extent}));
         }
@@ -610,11 +617,7 @@ pub async fn raster_worker_output(
             metadata.color.space,
             metadata.extent,
             extent,
-            &target,
-            recipe.encoding,
-            recipe.background.matte(),
-            if metadata.flatten.is_some_and(|c|c.depth.is_float()) { None } else { metadata.rendition },
-            guide.as_ref(),
+            layer_color::WorkingRowsOptions { target: &target, encoding: recipe.encoding, matte: recipe.background.matte(), rendition: if metadata.flatten.is_some_and(|c|c.depth.is_float()) { None } else { metadata.rendition }, guide: guide.as_ref() },
             &mut read_row,
             write,
         )
@@ -651,9 +654,16 @@ pub(super) fn preview_value(
 fn mapped_preview(extent:[u32;2],space:layer_core::color::RgbSpace,rendition:Option<layer_core::color::hdr::SdrRendition>,guide:Option<&layer_core::color::hdr::LocalToneGuide>,read:&mut impl FnMut(u32,&mut [[f32;4]])->Result<(),String>) -> Result<layer_render_wgpu::snapshot::SnapshotPreview,String> {
     let target=layer_ui::ExportRecipe::web_share().interpretation();
     let mut preview=None;
-    layer_color::encode_working_rows_with_guide(space,extent,extent,&target,Default::default(),None,rendition,guide,read,|size,target,rows| {
+    layer_color::encode_working_rows_with_guide(
+        space,
+        extent,
+        extent,
+        layer_color::WorkingRowsOptions { target: &target, encoding: Default::default(), matte: None, rendition, guide },
+        read,
+        |size,target,rows| {
         let (extent,pixels)=layer_color::preview_encoded_rows(size,[512,384],layer_core::color::RgbSpace::Srgb,target,rows)?;
         preview=Some(layer_render_wgpu::snapshot::SnapshotPreview{extent,pixels,space:layer_core::color::RgbSpace::Srgb});Ok(())
-    })?;
+    },
+    )?;
     Ok(preview.unwrap())
 }

@@ -21,64 +21,6 @@ impl FilterLoadState {
         self.error = self.localized_error(localization);
     }
 }
-
-#[cfg(test)]
-mod localization_tests {
-    use super::*;
-    use crate::session::test_support::{package_json, session};
-
-    #[test]
-    fn language_refresh_retains_filter_validation_progress_and_failure() {
-        let mut session = session(Platform::Gtk);
-        let mut definition = session.effect_catalog.get("unsharp_mask").unwrap().clone();
-        Arc::make_mut(&mut definition.program).label = "Literal imported filter 日本語".into();
-        let package = package_json(session.effect_catalog.categories().to_vec(), vec![definition]);
-        session.load_effect_package(&package, |_| panic!("inline package"), EffectInstallMode::Replace).unwrap();
-        let validation = session.engine.backend().validation.clone().unwrap();
-        let request_id = session.state.filter_load.request_id;
-        let catalog_revision = session.state.filter_catalog_revision;
-        let document = serde_json::to_value(session.engine.document()).unwrap();
-        let checkpoint = session.engine.checkpoint();
-        let rendering = (session.engine.backend().composites, session.engine.backend().dabs);
-        for language in [UiLanguage::Japanese, UiLanguage::Korean] {
-            assert!(session.set_localization(Localizer::shared(language)));
-            assert!(session.state.filter_load.pending);
-            assert_eq!(session.state.filter_load.request_id, request_id);
-            assert!(session.state.filter_load.error.is_none());
-            let queued = session.engine.backend().validation.as_ref().unwrap();
-            assert_eq!(queued.request_id, validation.request_id);
-            assert_eq!(queued.programs.len(), validation.programs.len());
-            assert!(queued.programs.iter().zip(&validation.programs).all(|(a, b)| Arc::ptr_eq(a, b)));
-            assert_eq!(queued.namespace.len(), validation.namespace.len());
-            assert!(queued.namespace.iter().zip(&validation.namespace).all(|(a, b)| Arc::ptr_eq(a, b)));
-            assert_eq!(session.pending_filters.as_ref().unwrap().validation.request_id, request_id);
-        }
-        session.engine.backend_mut().validation_result = Some(layer_render::EffectValidationResult {
-            request_id, result: Err("literal shader diagnostic".into()),
-        });
-        assert_eq!(session.poll_filter_installation(), regions::DOCUMENT);
-        assert!(!session.state.filter_load.pending);
-        assert!(session.pending_filters.is_none());
-        let retained = session.state.filter_load.clone();
-        session.engine.backend_mut().validation = None;
-        for language in UiLanguage::ALL {
-            let localization = Localizer::shared(language);
-            session.set_localization(localization.clone());
-            assert_eq!(session.state.filter_load.error.as_deref(), Some(localization.text(MessageId::RESOURCES_PACKAGE_VALIDATION_FAILED).as_ref()));
-            assert_eq!(session.state.filter_load.error, retained.localized_error(&localization));
-            assert_eq!(session.state.filter_load.request_id, request_id);
-            assert!(!session.state.filter_load.pending);
-            assert!(session.pending_filters.is_none());
-            assert!(session.engine.backend().validation.is_none());
-            assert_eq!(session.state.filter_catalog_revision, catalog_revision);
-            assert_eq!(serde_json::to_value(session.engine.document()).unwrap(), document);
-            assert_eq!(session.engine.checkpoint(), checkpoint);
-            assert_eq!((session.engine.backend().composites, session.engine.backend().dabs), rendering);
-        }
-        let serialized = serde_json::to_value(&session.state.filter_load).unwrap();
-        assert_eq!(serialized.as_object().unwrap().len(), 3);
-    }
-}
 pub(super) struct Pending {
     catalog: EffectCatalog,
     pub(super) validation: EffectValidationRequest,
@@ -295,5 +237,63 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_document();
         self.refresh_commands();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use super::*;
+    use crate::session::test_support::{package_json, session};
+
+    #[test]
+    fn language_refresh_retains_filter_validation_progress_and_failure() {
+        let mut session = session(Platform::Gtk);
+        let mut definition = session.effect_catalog.get("unsharp_mask").unwrap().clone();
+        Arc::make_mut(&mut definition.program).label = "Literal imported filter 日本語".into();
+        let package = package_json(session.effect_catalog.categories().to_vec(), vec![definition]);
+        session.load_effect_package(&package, |_| panic!("inline package"), EffectInstallMode::Replace).unwrap();
+        let validation = session.engine.backend().validation.clone().unwrap();
+        let request_id = session.state.filter_load.request_id;
+        let catalog_revision = session.state.filter_catalog_revision;
+        let document = serde_json::to_value(session.engine.document()).unwrap();
+        let checkpoint = session.engine.checkpoint();
+        let rendering = (session.engine.backend().composites, session.engine.backend().dabs);
+        for language in [UiLanguage::Japanese, UiLanguage::Korean] {
+            assert!(session.set_localization(Localizer::shared(language)));
+            assert!(session.state.filter_load.pending);
+            assert_eq!(session.state.filter_load.request_id, request_id);
+            assert!(session.state.filter_load.error.is_none());
+            let queued = session.engine.backend().validation.as_ref().unwrap();
+            assert_eq!(queued.request_id, validation.request_id);
+            assert_eq!(queued.programs.len(), validation.programs.len());
+            assert!(queued.programs.iter().zip(&validation.programs).all(|(a, b)| Arc::ptr_eq(a, b)));
+            assert_eq!(queued.namespace.len(), validation.namespace.len());
+            assert!(queued.namespace.iter().zip(&validation.namespace).all(|(a, b)| Arc::ptr_eq(a, b)));
+            assert_eq!(session.pending_filters.as_ref().unwrap().validation.request_id, request_id);
+        }
+        session.engine.backend_mut().validation_result = Some(layer_render::EffectValidationResult {
+            request_id, result: Err("literal shader diagnostic".into()),
+        });
+        assert_eq!(session.poll_filter_installation(), regions::DOCUMENT);
+        assert!(!session.state.filter_load.pending);
+        assert!(session.pending_filters.is_none());
+        let retained = session.state.filter_load.clone();
+        session.engine.backend_mut().validation = None;
+        for language in UiLanguage::ALL {
+            let localization = Localizer::shared(language);
+            session.set_localization(localization.clone());
+            assert_eq!(session.state.filter_load.error.as_deref(), Some(localization.text(MessageId::RESOURCES_PACKAGE_VALIDATION_FAILED).as_ref()));
+            assert_eq!(session.state.filter_load.error, retained.localized_error(&localization));
+            assert_eq!(session.state.filter_load.request_id, request_id);
+            assert!(!session.state.filter_load.pending);
+            assert!(session.pending_filters.is_none());
+            assert!(session.engine.backend().validation.is_none());
+            assert_eq!(session.state.filter_catalog_revision, catalog_revision);
+            assert_eq!(serde_json::to_value(session.engine.document()).unwrap(), document);
+            assert_eq!(session.engine.checkpoint(), checkpoint);
+            assert_eq!((session.engine.backend().composites, session.engine.backend().dabs), rendering);
+        }
+        let serialized = serde_json::to_value(&session.state.filter_load).unwrap();
+        assert_eq!(serialized.as_object().unwrap().len(), 3);
     }
 }

@@ -69,8 +69,8 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     wait_proof(&w, "Normal");
     let apply = |recipe| {
         let change = ui_session_mut(&w)
-            .set_proof_recipe(Some(recipe));
-        w.changed(change);
+            .set_proof_recipe(Some(recipe)).unwrap();
+        w.changed(Ok(change));
     };
     apply(ProofRecipe::new(
         "First".into(),
@@ -126,6 +126,90 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     w.window.destroy();
 }
 
+#[test]
+#[ignore = "private display and hardware GPU retained proof stage captions"]
+fn native_proof_live_language() {
+    use layer_core::color::ProofRecipe;
+    let app = native_test_app("art.capycanvas.ProofStageLanguages");
+    let w = fixture_workspace(&app);
+    w.window.maximize(); w.window.present(); ready(&w);
+    let label = w.proof.label.clone();
+    let switch = |language| {
+        let choice = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32;
+        w.dispatch(UiAction::Preferences { action: layer_ui::PreferenceAction::Edit { id: layer_ui::PreferenceId::Language, value: layer_ui::PreferenceValue::Choice(choice) } });
+        until(|| w.localization().language() == language, "native proof stage language");
+    };
+    let apply = |recipe| {
+        let change = ui_session_mut(&w).set_proof_recipe(Some(recipe)).unwrap();
+        w.changed(Ok(change));
+    };
+    for theme in [layer_ui::Theme::Light, layer_ui::Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for name in ["", "tiếng ไทย Русский {proof} 🎨"] {
+            glib::MainContext::default().block_on(w.proof.pause());
+            apply(ProofRecipe::new(name.into(), ColorProfile::Builtin(RgbSpace::Srgb)));
+            let pending_cache = w.proof.cache_info();
+            let pending_work = w.proof.work_info();
+            let saved = snapshot(&w);
+            let checkpoint = ui_session(&w).engine().checkpoint();
+            for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+                switch(language);
+                assert_eq!(label, w.proof.label);
+                assert_eq!(label.text(), layer_ui::color_feature_copy::ProofCopy::new(&w.localization()).preparing.as_ref());
+                assert_eq!(w.proof.cache_info(), pending_cache);
+                assert_eq!(w.proof.work_info(), pending_work);
+                assert_eq!(snapshot(&w), saved);
+                assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+                if let Some(directory) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+                    save_snapshot(&w, 40, || std::path::PathBuf::from(&directory).join(format!("proof-preparing-paused-{}-{}-{theme:?}.png", if name.is_empty() { "unnamed" } else { "literal" }, language.tag())));
+                }
+            }
+            w.proof.resume(&w);
+            let expected = || {
+                let state = ui_session(&w).state().clone();
+                let caption = layer_ui::ExportProfileCaption::for_name(name.to_owned()).message(&w.localization());
+                layer_ui::color_feature_copy::proof_status(&w.localization(), &caption, state.soft_proof, state.gamut_warning)
+            };
+            until(|| w.proof.cache_info().is_some() && label.text() == expected(), "native proof complete");
+            let cache = w.proof.cache_info();
+            let work = w.proof.work_info();
+            assert_eq!(work, (false, None));
+            for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+                switch(language);
+                assert_eq!(label.text(), expected());
+                assert_eq!(w.proof.cache_info(), cache);
+                assert_eq!(w.proof.work_info(), work);
+                assert_eq!(snapshot(&w), saved);
+                assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+                if let Some(directory) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+                    save_snapshot(&w, 40, || std::path::PathBuf::from(&directory).join(format!("proof-prepared-{}-{}-{theme:?}.png", if name.is_empty() { "unnamed" } else { "literal" }, language.tag())));
+                }
+            }
+        }
+        apply(ProofRecipe::new("ICC {literal} ไทย".into(), ColorProfile::Icc(vec![0; 132].into())));
+        until(|| label.text() == layer_ui::color_feature_copy::ProofCopy::new(&w.localization()).unavailable.as_ref(), "native invalid ICC unavailable");
+        let diagnostic = label.tooltip_text().unwrap();
+        let work = w.proof.work_info();
+        assert_eq!(work, (false, None));
+        assert!(diagnostic.contains("ICC"));
+        let saved = snapshot(&w);
+        let checkpoint = ui_session(&w).engine().checkpoint();
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+            switch(language);
+            assert_eq!(label.text(), layer_ui::color_feature_copy::ProofCopy::new(&w.localization()).unavailable.as_ref());
+            assert_eq!(label.tooltip_text().as_ref(), Some(&diagnostic));
+            assert_eq!(w.proof.cache_info(), None);
+            assert_eq!(w.proof.work_info(), work);
+            assert_eq!(snapshot(&w), saved);
+            assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+            if let Some(directory) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+                save_snapshot(&w, 40, || std::path::PathBuf::from(&directory).join(format!("proof-unavailable-{}-{theme:?}.png", language.tag())));
+            }
+        }
+    }
+    w.window.destroy(); pump(60);
+}
+
 /// The same benchmark fixture runs with no proof, cold preparation, then a warm
 /// compare toggle. Preparation is reported separately from navigation/drawing.
 pub(super) fn benchmark_proof(w: &Rc<Workspace>) -> Option<serde_json::Value> {
@@ -145,8 +229,8 @@ pub(super) fn benchmark_proof(w: &Rc<Workspace>) -> Option<serde_json::Value> {
     let before = process_memory();
     let start = Instant::now();
     let change = ui_session_mut(&w)
-        .set_proof_recipe(Some(recipe));
-    w.changed(change);
+        .set_proof_recipe(Some(recipe)).unwrap();
+    w.changed(Ok(change));
     wait_proof(w, "Proof:");
     let cold_ms = start.elapsed().as_secs_f64() * 1000.;
     let cache = w.proof.cache_info().unwrap();

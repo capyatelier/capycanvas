@@ -186,8 +186,8 @@ fn cold_frequency_detail_prepares_its_retained_adjustment_input() {
     let (low,high,coverage)=(engine.allocate_layer_id(),engine.allocate_layer_id(),engine.allocate_layer_id());
     let operation=|kind|layer_core::LayerOperation{placement:Affine::IDENTITY,
         coverage:LayerMask::reveal_all(coverage,Point::default()),kind};
-    let edits=vec![layer_core::Edit::InsertLayer{index:0,layer:Layer::paint(low,"Low")},
-        layer_core::Edit::InsertLayer{index:0,layer:Layer::paint(high,"High")}];
+    let edits=vec![layer_core::Edit::InsertLayer{index:0,layer:Box::new(Layer::paint(low,"Low"))},
+        layer_core::Edit::InsertLayer{index:0,layer:Box::new(Layer::paint(high,"High"))}];
     engine.insert_with_operations(edits,vec![(low,operation(layer_core::LayerOperationKind::Bake{
         members:vec![original].into(),offset:Point::default()})),
         (high,operation(layer_core::LayerOperationKind::FrequencyDetail{members,offset:Point::default(),low}))],None).unwrap();

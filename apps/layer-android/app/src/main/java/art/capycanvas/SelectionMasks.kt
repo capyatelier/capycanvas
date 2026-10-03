@@ -21,6 +21,6 @@ internal fun JSONObject.displayColors(): JSONObject = objectOrNull("layer_tools"
             Modifier.heightIn(min = 48.dp).testTag("selection-menu-$kind")) {
             Text(label); Spacer(Modifier.width(6.dp)); SharedIcon("chevron-down", null, Modifier.size(16.dp))
         }
-        menu?.let { WorkspaceMenu(host, it) { menu = null } }
+        menu?.let { WorkspaceMenu(host, it, copy = { host.menuCopy(obj("type" to "selection_menu", "kind" to kind)) }) { menu = null } }
     }
 }

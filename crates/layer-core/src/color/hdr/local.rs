@@ -261,11 +261,11 @@ fn pyramid(first: Plane, cancelled: &impl Fn() -> bool) -> Result<Vec<Plane>, St
             for x in 0..size[0] {
                 let mut v = 0.;
                 let mut w = 0.;
-                for k in 0..5 {
+                for (k, &coefficient) in kernel.iter().enumerate() {
                     let sx = (x as i32 * 2 + k as i32 - 2).clamp(0, p.extent[0] as i32 - 1) as u32;
                     let s = p.pixels[(y * p.extent[0] + sx) as usize];
-                    v += s[0] * s[1] * kernel[k];
-                    w += s[1] * kernel[k];
+                    v += s[0] * s[1] * coefficient;
+                    w += s[1] * coefficient;
                 }
                 horizontal[(y * size[0] + x) as usize] = [if w > 0. { v / w } else { 0. }, w / 16.];
             }
@@ -276,11 +276,11 @@ fn pyramid(first: Plane, cancelled: &impl Fn() -> bool) -> Result<Vec<Plane>, St
             for x in 0..size[0] {
                 let mut v = 0.;
                 let mut w = 0.;
-                for k in 0..5 {
+                for (k, &coefficient) in kernel.iter().enumerate() {
                     let sy = (y as i32 * 2 + k as i32 - 2).clamp(0, p.extent[1] as i32 - 1) as u32;
                     let s = horizontal[(sy * size[0] + x) as usize];
-                    v += s[0] * s[1] * kernel[k];
-                    w += s[1] * kernel[k];
+                    v += s[0] * s[1] * coefficient;
+                    w += s[1] * coefficient;
                 }
                 pixels[(y * size[0] + x) as usize] = [if w > 0. { v / w } else { 0. }, w / 16.];
             }

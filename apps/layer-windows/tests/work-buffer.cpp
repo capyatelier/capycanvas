@@ -11,8 +11,26 @@
 #include <vector>
 #include <cassert>
 #include <iostream>
+#ifdef _WIN32
+#include "../TraceFile.h"
+#endif
 
 int main() {
+#ifdef _WIN32
+    auto traceFolder=std::filesystem::temp_directory_path()/(L"capy-trace-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64()));
+    assert(std::filesystem::create_directory(traceFolder));
+    auto trace=traceFolder/L"windows.json";
+    WriteTraceFile(trace,"old");
+    auto reader=CreateFileW(trace.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    assert(reader!=INVALID_HANDLE_VALUE);
+    WriteTraceFile(trace,"current");
+    std::ifstream currentTrace(trace);std::string currentValue;currentTrace>>currentValue;
+    assert(currentValue=="current");assert(!std::filesystem::exists(trace.wstring()+L".pending"));
+    char retained[3];DWORD read=0;assert(ReadFile(reader,retained,3,&read,nullptr)&&read==3);assert(std::string(retained,3)=="old");
+    currentTrace.close();assert(CloseHandle(reader));
+    assert(std::filesystem::remove_all(traceFolder)==2);
+    std::cout<<"Trace publication atomically replaces window manifests while readers retain complete snapshots\n";
+#endif
 
     for(uint32_t key:{13u,27u,40u}) {
         TextCompositionKeys input;
@@ -154,6 +172,17 @@ int main() {
     snapshots.Push("Korean models",true,true,{},false,"Korean context");
     shown=snapshots.Take();assert(shown.localization=="Korean context");
     assert(snapshots.Take().localization.empty());
+    struct Presentation {size_t fields;std::string value;size_t Size()const{return fields;}};
+    auto encode=[](Presentation const& value){return value.value;};
+    snapshots.Push("localized model",true,true,{},false,CanvasSnapshotMailbox::Localization(Presentation{3,"French context"},encode));
+    snapshots.Push("new model with null localization",true,true,{},false,CanvasSnapshotMailbox::Localization(Presentation{0,"{}"},encode));
+    shown=snapshots.Take();assert(shown.full=="new model with null localization"&&shown.localization=="French context");
+    snapshots.Push("incremental localization",false,true,{},false,CanvasSnapshotMailbox::Localization(Presentation{3,"Thai context"},encode));
+    snapshots.Push("incremental search without localization",false,false,{},true,CanvasSnapshotMailbox::Localization(Presentation{0,"{}"},encode));
+    shown=snapshots.Take();assert(shown.workspace=="incremental localization"&&shown.search=="incremental search without localization"&&shown.localization.empty());
+    assert(snapshots.Take().localization.empty());
+    snapshots.Push("complete translated model",true,true);
+    shown=snapshots.Take();assert(shown.full=="complete translated model"&&shown.localization=="Thai context");
     CanvasWorkBuffer queue;
     // Saturation must not consume the caller's rejected command. Every
     // accepted boundary and command remains in the original order.

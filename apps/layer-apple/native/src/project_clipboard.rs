@@ -9,10 +9,10 @@ use layer_ui::PasteMode;
 pub unsafe extern "C" fn capy_project_clip_progress(task: *const CapyProjectTask) -> *mut c_char {
     let Some(task) = (unsafe { task.as_ref() }) else { return std::ptr::null_mut() };
     let state = task.state.lock().unwrap_or_else(|e| e.into_inner());
-    let Payload::Clip { task: Some(clip), .. } = &state.payload else { return std::ptr::null_mut() };
+    let Payload::Clip { task: Some(clip), operation, .. } = &state.payload else { return std::ptr::null_mut() };
     let details = clip.capture_details();
     if !details.large { return std::ptr::null_mut(); }
-    CString::new(details.progress.to_string()).map_or(std::ptr::null_mut(), CString::into_raw)
+    CString::new(operation.title(&task.localization).to_string()).map_or(std::ptr::null_mut(), CString::into_raw)
 }
 
 /// # Safety

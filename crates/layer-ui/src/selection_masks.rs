@@ -483,7 +483,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|l| l.kind == LayerKind::Selection)
             .map(|l| {
                 let mut item = ContextMenuItem::command(
-                    &self.saved_selection_label(l),
+                    self.saved_selection_label(l),
                     UiAction::Selection {
                         action: SelectionAction::ReplaceLayer { id: l.id.0 },
                     },
@@ -504,13 +504,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut items = Vec::new();
         if layer.kind == LayerKind::Paint {
             items.push(ContextMenuItem::submenu(
-                "From Layer Opacity",
+                self.localization().text(MessageId::RESOURCES_COVERAGE_FROM_LAYER_OPACITY).as_ref(),
                 vec![self.coverage_menu_items(id.0, false)],
             ));
         }
         if layer.mask.is_some() {
             items.push(ContextMenuItem::submenu(
-                "From Layer Mask",
+                self.localization().text(MessageId::RESOURCES_COVERAGE_FROM_LAYER_MASK).as_ref(),
                 vec![self.coverage_menu_items(id.0, true)],
             ));
         }
@@ -581,9 +581,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     pub(super) fn mask_brush_reason(&self) -> Option<&'static str> {
-        if self.selection_masks.target().is_none() {
-            return None;
-        }
+        self.selection_masks.target()?;
         if let Some(SelectionTarget::Saved(id)) = self.selection_masks.target()
             && self.engine.document().is_locked(id)
         {
@@ -831,7 +829,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if save_current && self.selection_masks.target().is_some() {
                     layer.properties.selection_mask = Some(self.mask_properties());
                 }
-                self.layer_edit(Edit::InsertLayer { index: 0, layer })?;
+                self.layer_edit(Edit::InsertLayer { index: 0, layer: Box::new(layer) })?;
                 self.begin_selection_mask(SelectionTarget::Saved(id))?;
                 self.state.layer_tools.rename_layer = Some(id.0);
             }

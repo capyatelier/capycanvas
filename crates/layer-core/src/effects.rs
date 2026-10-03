@@ -793,7 +793,8 @@ pub fn curve_inverse(points:&[[f32;2]],target:f32,current:f32)->Option<f32> {
         let [x0,y0]=points[i].map(f64::from);let [x1,y1]=points[i+1].map(f64::from);
         if target<y0.min(y1) || target>y0.max(y1) {return None;}
         if y0==y1 {return Some(current.clamp(x0,x1));}
-        if target==y0 {return Some(x0);}if target==y1 {return Some(x1);}
+        if target==y0 {return Some(x0);}
+        if target==y1 {return Some(x1);}
         let (c,_)=curve_coefficients(points,i);let mut low=0.;let mut high=1.;
         for _ in 0..48 {
             let t=(low+high)*0.5;let y=((c[3]*t+c[2])*t+c[1])*t+c[0];

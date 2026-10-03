@@ -98,15 +98,10 @@ pub extern "C" fn portable_avif_export() -> u32 {
         let mut bytes = Vec::new();
         write_gainmap_rows(
             &mut bytes,
-            extent,
-            RgbSpace::Srgb,
-            Default::default(),
-            &guide,
+            layer_color::photo::GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: false },
             GainMapFormat::Avif,
             quality,
             &Default::default(),
-            None,
-            false,
             &cancel,
             pixels,
         )

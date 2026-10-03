@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "CanvasWindow.h"
-#include <fstream>
+#include "TraceFile.h"
+#include <sstream>
 #include <shellapi.h>
 #include <map>
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
@@ -79,19 +80,16 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
     std::map<uint64_t,std::shared_ptr<CanvasWindow>> windows;
     void TraceWindows()const {
         if(!GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))return;
-        auto name=L"windows-"+std::to_wstring(GetCurrentProcessId())+L".json",pending=name+L".pending";
-        {
-            std::ofstream stream(pending);
-            stream<<"{\"process_id\":"<<GetCurrentProcessId()<<",\"windows\":[";
-            bool comma=false;
-            for(auto const& [id,window]:windows){
-                if(comma)stream<<",";comma=true;
-                stream<<"{\"id\":"<<id<<",\"hwnd\":"<<uintptr_t(window->Handle())<<"}";
-            }
-            stream<<"]}";
-            if(!stream)return;
+        auto name=L"windows-"+std::to_wstring(GetCurrentProcessId())+L".json";
+        std::ostringstream stream;
+        stream<<"{\"process_id\":"<<GetCurrentProcessId()<<",\"windows\":[";
+        bool comma=false;
+        for(auto const& [id,window]:windows){
+            if(comma)stream<<",";comma=true;
+            stream<<"{\"id\":"<<id<<",\"hwnd\":"<<uintptr_t(window->Handle())<<"}";
         }
-        MoveFileExW(pending.c_str(),name.c_str(),MOVEFILE_REPLACE_EXISTING);
+        stream<<"]}";
+        WriteTraceFile(name,stream.str());
     }
     void OpenForwarded(std::vector<std::wstring> files) {
         std::shared_ptr<CanvasWindow> target;

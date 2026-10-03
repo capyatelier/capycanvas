@@ -107,6 +107,8 @@ fn output_codes(p: &[f32; 4], to_srgb: rgb::Matrix3, to_2020: rgb::Matrix3, clip
     Ok(codes)
 }
 
+pub type HdrPreview = ([u32; 2], Vec<[f32; 4]>, crate::OutputStatistics);
+
 /// Simulate the exact PQ/alpha codes before area reduction. Returns linear
 /// premultiplied sRGB with extended values; no SDR rendition or display clamp.
 /// Out-of-range samples are counted and clipped in this preview only. The host
@@ -114,7 +116,7 @@ fn output_codes(p: &[f32; 4], to_srgb: rgb::Matrix3, to_2020: rgb::Matrix3, clip
 pub fn preview_hdr_rows(
     extent: [u32; 2], bounds: [u32; 2], space: RgbSpace,
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
-) -> Result<([u32; 2], Vec<[f32; 4]>, crate::OutputStatistics), String> {
+) -> Result<HdrPreview, String> {
     validate_extent(extent, 32768)?;
     let mut preview = crate::AreaPreview::new(extent, bounds)?;
     let mut row = vec![[0.; 4]; extent[0] as usize];

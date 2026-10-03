@@ -32,63 +32,70 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     return () => {
       const view = readView?.() || state().tool_panels[panel] || state().tool_set;
       root.classList.toggle('tonal-tool-list', state().tool_extra.some(o=>o.Choice?.id==='tonal-tones'));
-      const next = JSON.stringify([view.groups, view.subtools].map(items => items.map(({selected, enabled, ...item}) => item))) + state().theme;
+      const next = JSON.stringify([view.groups, view.subtools].map(items => items.map(({label,selected,enabled,...item})=>item)),(_,value)=>typeof value==='bigint'?String(value):value);
       if (next !== key) {
         key = next; rows = []; root.replaceChildren();
         for (const [kind, items] of [["groups",view.groups], ["subtools",view.subtools]]) {
           if (!items.length) continue;
           const list = element("div", `tool-${kind}`); root.append(list);
-          for (const item of items) {
+          for (const [index,item] of items.entries()) {
+            const read=()=>(readView?.()||state().tool_panels[panel]||state().tool_set)[kind][index];
             const node = button("", () => dispatch(item.action), "tool-choice-button");
-            node.dataset.toolChoice = item.label; node.setAttribute("aria-label", item.label);
-            node.title = app.action_tooltip(item.label, item.action);
+            let image;
             if (item.preview != null) {
-              const image = element("img", "brush-preview"); image.src = asset(`brush-previews/${item.preview}-${state().theme}.png`); image.alt = ""; image.draggable = false;
+              image = element("img", "brush-preview"); image.alt = ""; image.draggable = false;
               node.append(image); node.dataset.brush = item.preview;
             } else if (kind === "groups") node.append(icon(item.icon));
             const label = element("span", "tool-choice-label");
             if (item.preview != null || kind === "subtools") label.append(icon(item.icon));
-            label.append(element("span", "tool-choice-name", item.label));
-            node.append(label); list.append(node); rows.push({node,kind,index:rows.filter(r=>r.kind===kind).length});
+            label.append(element("span", "tool-choice-name", ()=>read()?.label??''));
+            node.append(label); list.append(node); rows.push({node,image,kind,index});
           }
         }
         contentChanged(panel);
       }
-      for (const {node,kind,index} of rows) {
-        node.disabled=view[kind][index].enabled===false;
-        const pressed=String(view[kind][index].selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);
+      for (const {node,image,kind,index} of rows) {
+        const item=view[kind][index];node.disabled=item.enabled===false;node.dataset.toolChoice=item.label;node.setAttribute("aria-label",item.label);node.title=app.action_tooltip(item.label,item.action);
+        if(image){const source=asset(`brush-previews/${item.preview}-${state().theme}.png`);if(image.getAttribute('src')!==source)image.src=source;}
+        const pressed=String(item.selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);
       }
     };
   }
   function toolSettings(root) {
-    let key = "", numbers = [], actions = [], range, choices = [];
+    let key = "", numbers = [], actions = [], range, choices = [], sampler;
     root.disposeSettings = () => { range?.dispose(); numbers.forEach(([,n])=>n.cancelEditing()); };
     return () => {
-      const s = state();
+      const s = state(),editing=s.layer_tools.editing_layer;
+      const owner=[String(s.document_file.epoch),String(editing?.id??''),editing?.mask_selected,String(editing?.mask_id??'')];
       const picking = ['pick_visible','pick_layer'].includes(s.layer_tools.tool);
       const compact = s.tool_extra.some(o=>o.Choice?.id==='tonal-tones');
       root.classList.toggle('tonal-settings', compact);
       if (picking) {
         const picker=s.color_picker;
-        const next=JSON.stringify([picker.layer,picker.can_sample_layer,picker.sample_width,picker.sample_sizes]);
-        if(key===next)return;key=next;root.disposeSettings();range=null;numbers=[];root.replaceChildren();
-        const choice=(label,values,selected,select)=>{
-          const row=element('label','picker-setting'),input=element('select');row.append(element('span','',label),input);
-          input.setAttribute('aria-label',label);input.dataset.pickerSetting=label;
-          for(const [value,title] of values){const option=element('option','',title);option.value=value;input.append(option);}
-          input.value=String(selected);input.onchange=()=>select(input.value);root.append(row);
-        };
-        choice('Source',picker.can_sample_layer?[[false,'Visible color'],[true,'Selected layer']]:[[false,'Visible color']],picker.layer,
-          value=>dispatch({type:'color_picker',action:{kind:'source',layer:value==='true'}}));
-        choice('Sample size',picker.sample_sizes.map(n=>[n,n===1?'Single pixel':`${n} px circle`]),picker.sample_width,
-          value=>dispatch({type:'set_color_sample_size',width:Number(value)}));
-        contentChanged('tool_settings');return;
+        const next=JSON.stringify([owner,picker.can_sample_layer,picker.sample_sizes]);
+        if(key!==next){
+          key=next;root.disposeSettings();range=null;numbers=[];root.replaceChildren();
+          const choice=(id,label,values,select)=>{
+            const row=element('label','picker-setting'),input=element('select');row.append(element('span','',label),input);
+            bindCopy(input,label,'ariaLabel');input.dataset.pickerSetting=id;
+            for(const [value,title] of values){const option=element('option','',title);option.value=value;input.append(option);}
+            input.onchange=()=>select(input.value);root.append(row);return input;
+          };
+          sampler={
+            source:choice('source',()=>copy.sampler.source,(picker.can_sample_layer?[false,true]:[false]).map(value=>[value,()=>value?copy.sampler.selected_layer:copy.sampler.visible_color]),
+              value=>dispatch({type:'color_picker',action:{kind:'source',layer:value==='true'}})),
+            size:choice('sample_size',()=>copy.sampler.sample_size,picker.sample_sizes.map(value=>[value,()=>copy.sampler.sizes.find(([width])=>width===value)[1]]),
+              value=>dispatch({type:'set_color_sample_size',width:Number(value)})),
+          };
+          contentChanged('tool_settings');
+        }
+        sampler.source.value=String(picker.layer);sampler.size.value=String(picker.sample_width);return;
       }
-      const next = JSON.stringify([String(s.document_file.epoch),s.layer_tools.editing_layer,s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])])],(_,v)=>typeof v==='bigint'?String(v):v);
+      const next = JSON.stringify([owner,s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])])],(_,v)=>typeof v==='bigint'?String(v):v);
       if (next !== key) {
         key = next; root.disposeSettings(); range=null; root.replaceChildren(); numbers=[]; actions=[]; choices=[]; let group="";
         const modes = element("div", "selection-modes");
-        modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Selection mode");
+        modes.setAttribute("role", "group"); bindCopy(modes,()=>copy.tool_controls.selection_mode,"ariaLabel");
         if (s.tool_actions.some(spec => selectionModes.has(spec.command))) root.append(modes);
         const beside=new Map();let grouped;
         for (const {Choice:spec} of s.tool_extra) {
@@ -122,7 +129,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
           node.dataset.toolAction=spec.command;
           (selectionModes.has(spec.command) ? modes : root).append(node); actions.push([spec,node]);
         }
-        if(!compact && s.tool_actions.some(spec=>selectionModes.has(spec.command))) root.append(selectionUi.menuButton("Selection Actions…","selection"));
+        if(!compact && s.tool_actions.some(spec=>selectionModes.has(spec.command))) root.append(selectionUi.menuButton(()=>copy.tool_controls.selection_menu,"selection"));
         contentChanged("tool_settings");
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);

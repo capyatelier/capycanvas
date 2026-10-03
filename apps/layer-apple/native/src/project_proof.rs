@@ -27,7 +27,7 @@ pub unsafe extern "C" fn capy_apple_proof_task(
             serde_json::from_str(unsafe { read_title(recipe) }?).map_err(|e| e.to_string())?
         };
         let session = &app.host.session;
-        let job = ProofPreparation::begin(session, (request != 0).then_some(request), recipe)?;
+        let job = ProofPreparation::begin(session, (request != 0).then_some(request), recipe).map_err(|reason|reason.proof_message(session.localization()))?;
         Ok(CapyProjectTask::new(
             Payload::Proof(Box::new(Task { job, lut: None })),
             session.state().document_file.epoch,
@@ -53,7 +53,7 @@ pub unsafe extern "C" fn capy_project_proof_build(task: *const CapyProjectTask) 
         let start = Instant::now();
         proof.lut = Some(proof.job.build(|| {
             task.control.is_cancelled() || start.elapsed() >= Duration::from_secs(120)
-        })?);
+        }).map_err(|reason|reason.proof_message(&task.localization))?);
         Ok(())
     })
 }
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn capy_apple_proof_check(
         let Payload::Proof(proof) = &state.payload else {
             return Err("Not a proof task".into());
         };
-        proof.job.validate(&app.host.session)
+        proof.job.validate(&app.host.session).map_err(|reason|reason.proof_message(app.host.session.localization()))
     })
     .map_or(-1, |_| 0)
 }
@@ -128,7 +128,7 @@ pub unsafe extern "C" fn capy_apple_proof_apply(
             return Err("Not a proof task".into());
         };
         let lut = proof.lut.clone().ok_or("Proof preview is not prepared")?;
-        proof.job.validate(&app.host.session)?;
+        proof.job.validate(&app.host.session).map_err(|reason|reason.proof_message(app.host.session.localization()))?;
         if proof.job.preservation().is_some() && !preserved {
             return Err("Save the original in Saved Profiles before replacing it".into());
         }
@@ -136,8 +136,8 @@ pub unsafe extern "C" fn capy_apple_proof_apply(
             return Err("Proof preparation cancelled".into());
         }
         let previous = app.host.session.state().revision;
-        let change = proof.job.apply(&mut app.host.session, preserved)?;
-        app.host.proof.retain(&proof.job, lut)?;
+        let change = proof.job.apply(&mut app.host.session, preserved).map_err(|reason|reason.proof_message(app.host.session.localization()))?;
+        app.host.proof.retain(&proof.job, lut).map_err(|reason|reason.proof_message(app.host.session.localization()))?;
         app.host.apply_change(previous, change);
         app.host.dirty = true;
         Ok(())

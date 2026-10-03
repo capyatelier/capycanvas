@@ -47,12 +47,12 @@ impl WorkspacePreset {
             }
             Self::Photographer => Self::photo_layout(platform),
         };
-        if self == Self::Photographer && platform == crate::Platform::Gtk {
-            if let Some(group) = layout.panel_group(Panel::Navigator) {
-                layout.set_panel_visible(Panel::Histogram, true).expect("registered panel");
-                layout.move_panel([1600., 1000.], Panel::Histogram, DockTarget::Tab { group, index: None }).expect("histogram tab");
-                layout.select_tab(group, Panel::Navigator).expect("navigator tab");
-            }
+        if self == Self::Photographer && platform == crate::Platform::Gtk
+            && let Some(group) = layout.panel_group(Panel::Navigator)
+        {
+            layout.set_panel_visible(Panel::Histogram, true).expect("registered panel");
+            layout.move_panel([1600., 1000.], Panel::Histogram, DockTarget::Tab { group, index: None }).expect("histogram tab");
+            layout.select_tab(group, Panel::Navigator).expect("navigator tab");
         }
         for (panel, anchor) in [
             (Panel::Palettes, Panel::Color),

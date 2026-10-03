@@ -606,7 +606,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     let item = items.iter().find(|item| item.id == id)?;
                     Some(WorkspaceRow {
                         current: active.as_ref() == Some(&id),
-                        title: m.summary_display_name(&item),
+                        title: m.summary_display_name(item),
                         subtitle: String::new(),
                         actions: Vec::new(),
                         id,
@@ -634,7 +634,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             ),
         };
         self.view.title = title;
-        self.view.intro = intro.into();
+        self.view.intro = intro;
         let history = m
             .current()
             .and_then(|e| e.capture().ok())
@@ -719,8 +719,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     ManagerAction::SwitchToWindow(String::new()).label(&self.localization)
                 } else {
                     self.localization.text(layer_ui::MessageId::WORKSPACE_SWITCH_WORKSPACE).to_string()
-                }
-                .into();
+                };
                 self.view.enabled = idle && selected.is_some_and(|id| current != Some(id));
             }
             Some(_) => {

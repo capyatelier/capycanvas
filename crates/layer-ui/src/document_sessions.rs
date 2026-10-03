@@ -3,7 +3,7 @@
 //! here. Hosts supply completed capture inventories and schedule I/O/GPU work.
 use crate::{DocumentFileState, DocumentTabs, PixelClip, Localizer, MessageId, FluentArgs};
 use layer_core::{Project, raster_storage::RetainedTiles};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::{collections::BTreeMap, ops::Deref};
 
 #[derive(Clone, Copy, Debug)]
@@ -253,7 +253,8 @@ impl DocumentSessionError {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DocumentTransportRefusal {
     SnapshotChanged,
     OpenSnapshotChanged,
@@ -346,7 +347,7 @@ impl DocumentTabLabel {
     }
     fn untitled(id: u64, localization: &Localizer) -> String {
         let mut args = FluentArgs::new();
-        args.set("number", id.to_string());
+        args.set("number", id);
         localization.format(MessageId::DOCUMENTS_UNTITLED_NUMBERED, &args)
     }
     fn with_title(id: u64, file: &DocumentFileState, title: String, localization: &Localizer) -> Self {

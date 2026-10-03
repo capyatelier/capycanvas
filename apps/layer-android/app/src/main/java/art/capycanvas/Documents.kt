@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import org.json.JSONTokener
 import java.io.File
 
 private fun exportFileType(format: String?) = when (format) {
@@ -36,6 +37,9 @@ internal data class DocumentPicker(val request: JSONObject, val epoch: Long, val
 
 /** SAF owns locations; the shared session owns dirty checkpoints and close policy. */
 internal class DocumentController(private val host: CanvasHost, private val application: Application) {
+    private val actionFailed get() = host.bootstrap!!.getString("action_failed")
+    private suspend fun deliveryMessage(type: String, vararg arguments: Pair<String, Any?>): String =
+        JSONTokener(host.withNative { Native.query(it, obj("type" to "document_delivery_message", "message" to obj("type" to type, *arguments)).toString()) }).nextValue() as String
     val images = ImageImportController(host, application)
     val clipboard = ClipboardController(host, application)
     companion object {
@@ -90,7 +94,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             host.documentChanged()
         } catch (e: Exception) {
             queuedOpen.clear(); batchRelease?.invoke(); batchRelease = null
-            host.reportActionError(e.message ?: "Cannot open the drawing")
+            host.reportActionError(e.message ?: actionFailed)
         }
     }
     fun acceptsDrop(event:android.view.DragEvent)=event.localState==null&&!working&&picker==null&&!host.drawingTabs.switching&&event.clipDescription?.let{it.hasMimeType("image/*")||it.hasMimeType("application/octet-stream")||it.hasMimeType("application/x-capy")||it.hasMimeType("text/uri-list")}==true
@@ -122,11 +126,11 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         // while idle, then request options at its new revision.
                         val epoch=file.optLong("epoch")
                         finish(id!!,false)
-                        try { host.proof.finishPending() } catch(e:Exception) {host.reportActionError(e.message?:"Could not finish print preparation");return@launch}
+                        try { host.proof.finishPending() } catch(e:Exception) {host.reportActionError(e.message?:actionFailed);return@launch}
                         if(host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch")==epoch)host.invoke("export_document")
                     } else exportRequest=request
                 }
-                catch(e:Exception){complete(id!!,false,e.message?:"Could not finish print preparation")}
+                catch(e:Exception){complete(id!!,false,e.message?:actionFailed)}
             } }
             "save" -> document.objectOrNull("location")?.let { transfer(request, Uri.parse(it.getString("uri")), approval) }
                 ?: run { picker = DocumentPicker(request, approval.first, approval.second) }
@@ -152,7 +156,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     }
     fun pickerFailed(error: Exception) {
         val id = picker?.request?.getInt("id") ?: return
-        picker = null; complete(id, false, error.message ?: "Could not open the file picker")
+        picker = null; complete(id, false, error.message ?: actionFailed)
     }
     fun create(request: JSONObject, options: JSONObject) = transfer(request, null, approval, options.getJSONArray("extent").getInt(0), options.getJSONArray("extent").getInt(1), options)
     fun chooseExport(recipe: JSONObject, destination: Int) {
@@ -169,7 +173,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         if(decision=="cancel")host.drawingTabs.cancelClose()
         host.viewModelScope.launch {
             try { host.withNative { Native.documentClose(it, id, JSONObject.quote(decision)) }; host.documentChanged() }
-            catch (e: Exception) { host.reportActionError(e.message ?: "Could not close the drawing") }
+            catch (e: Exception) { host.reportActionError(e.message ?: actionFailed) }
         }
     }
     private fun complete(id: Int, success: Boolean, message: String? = null) {
@@ -178,7 +182,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     private suspend fun finish(id: Int, success: Boolean, message: String? = null) {
         if(!success)host.drawingTabs.cancelClose()
         try { host.withNative { Native.documentComplete(it, id, success, message?.let(JSONObject::quote) ?: "null") }; host.documentChanged() }
-        catch (e: Exception) { host.reportActionError(message ?: e.message ?: "Could not complete the file operation") }
+        catch (e: Exception) { host.reportActionError(message ?: e.message ?: actionFailed) }
     }
     private fun transfer(request: JSONObject, uri: Uri?, approved: Pair<Long, Long>, width: Int = 0, height: Int = 0, options: JSONObject? = null) {
         if (working) return
@@ -196,14 +200,14 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 val location = if (uri == null) null else withContext(Dispatchers.IO) {
                     val name = application.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
                         if (it.moveToFirst()) it.getString(0) else null
-                    } ?: uri.lastPathSegment ?: document.optString("name", "Drawing.capy")
+                    } ?: uri.lastPathSegment ?: document.optString("name", host.catalog.getJSONObject("document_delivery_copy").getString("untitled") + ".capy")
                     obj("uri" to uri.toString(), "name" to name)
                 }
                 if (kind == "export") {
                     val master = host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.objectOrNull("location")?.optString("uri")
-                    check(uri.toString() != master) { "Choose a different file to keep the editable drawing." }
+                    check(uri.toString() != master) { host.catalog.getJSONObject("document_delivery_copy").getString("separate_copy") }
                     val extensions = exportFileType(exportRecipe?.getString("format")).second
-                    check(location!!.getString("name").substringAfterLast('.').lowercase() in extensions) { "Use a .${extensions.first()} filename for this image format." }
+                    if (location!!.getString("name").substringAfterLast('.').lowercase() !in extensions) error(deliveryMessage("export_extension", "extension" to extensions.first()))
                 }
                 if(kind=="open"||kind=="new")host.drawingTabs.trim()
                 if (kind in listOf("export", "open", "new")) { control = Native.captureControl(); exportControl = control; exportCancelled = false; publishing = false; exporting = kind == "export"; opening = !exporting }
@@ -227,17 +231,17 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     withContext(Dispatchers.IO) {
                         application.contentResolver.openOutputStream(uri!!, "wt")?.use { output ->
                             temporary!!.inputStream().use { it.copyTo(output) }; output.flush()
-                        } ?: error("The selected file cannot be written")
+                        } ?: error(actionFailed)
                     }
                     finish(id, true)
                     if(kind=="export")try {
                         val color=JSONObject(host.withNative{Native.query(it,obj("type" to "document_color").toString())})
                         ColorPreferencesStore.presets(application,color,obj("type" to "remember","index" to if(exportDestination<4)exportDestination else 3,"recipe" to exportRecipe))
-                    }catch(e:Exception){host.reportActionError("Image saved; export preferences were not saved: ${e.message}")}
+                    }catch(e:Exception){host.reportActionError(deliveryMessage("export_preferences", "detail" to (e.message ?: actionFailed)))}
                     if (kind == "save" && !JSONObject(host.drawingTabs.query(obj("op" to "recovery", "id" to ownerId))).getBoolean("modified")) host.recovery.retire(ownerId)
                 } else {
                     withContext(Dispatchers.IO) {
-                        val fd = if (uri == null) -1 else application.contentResolver.openFileDescriptor(uri, "r")?.detachFd() ?: error("The selected file cannot be read")
+                        val fd = if (uri == null) -1 else application.contentResolver.openFileDescriptor(uri, "r")?.detachFd() ?: error(actionFailed)
                         if (options != null) Native.projectOptions(task, options.toString())
                         Native.projectWork(task, fd, width, height)
                     }
@@ -258,7 +262,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 withContext(NonCancellable) { finish(id, false) }
                 throw e
             } catch (e: Exception) {
-                finish(id, false, if (exportCancelled) null else e.message ?: "Could not complete the file operation")
+                finish(id, false, if (exportCancelled) null else e.message ?: actionFailed)
             } finally {
                 exportControl = 0; exporting = false; opening = false; publishing = false
                 withContext(NonCancellable + Dispatchers.IO) { if (task != 0L) Native.projectFree(task); if (control != 0L) Native.captureFree(control); temporary?.delete() }
@@ -306,12 +310,12 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         Surface(shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium, modifier = Modifier.padding(16.dp)) {
             Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                Text(if (controller.publishing) "Writing image…" else if (controller.exportCancelled) "Cancelling…" else if (controller.opening) "Preparing drawing…" else "Preparing image…")
+                Text(if (controller.publishing) host.catalog.getJSONObject("export_copy").getString("writing_image") else if (controller.exportCancelled) host.catalog.getJSONObject("document_delivery_copy").getString("cancelling") else if (controller.opening) host.bootstrap!!.getString("preparing_document") else host.catalog.getJSONObject("export_copy").getString("preparing"))
                 TextButton(controller::cancelExport, enabled = !controller.publishing && !controller.exportCancelled) { Text(common.getString("cancel")) }
             }
         }
     }
-    controller.profilePrompt?.let { SourceProfileDialog(it, controller::chooseProfile) }
+    controller.profilePrompt?.let { SourceProfileDialog(host,it, controller::chooseProfile) }
     controller.exportRequest?.let { pending ->
         key(pending.getInt("id")) { ExportDialog(host, { controller.cancel(pending.getInt("id")) }, controller::chooseExport) }
     }
@@ -319,9 +323,9 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (controller.images.choosing) {
             try {
-                val uris = if (result.resultCode == Activity.RESULT_OK) result.data?.clipData?.imageUris() ?: result.data?.data?.let(::listOf) else null
+                val uris = if (result.resultCode == Activity.RESULT_OK) result.data?.clipData?.imageUris(host.bootstrap!!.getString("action_failed")) ?: result.data?.data?.let(::listOf) else null
                 controller.images.picked(uris, result.data?.flags ?: 0)
-            } catch (e: Exception) { controller.images.cancel(); host.reportActionError(e.message ?: "Cannot read the selected images") }
+            } catch (e: Exception) { controller.images.cancel(); host.reportActionError(e.message ?: host.bootstrap!!.getString("action_failed")) }
         } else controller.picked(if (result.resultCode == Activity.RESULT_OK) result.data?.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: result.data?.data?.let(::listOf) else null as List<Uri>?, result.data?.flags ?: 0)
     }
     LaunchedEffect(controller.images.choosing) {
@@ -332,7 +336,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                 putExtra(Intent.EXTRA_MIME_TYPES, controller.images.mimeTypes)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            }) } catch (e: Exception) { controller.images.cancel(); host.reportActionError(e.message ?: "Could not open the image picker") }
+            }) } catch (e: Exception) { controller.images.cancel(); host.reportActionError(e.message ?: host.bootstrap!!.getString("action_failed")) }
         }
     }
     LaunchedEffect(request?.getInt("id"), file.optLong("epoch")) { controller.observe(request, file) }
@@ -372,8 +376,8 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     ImportAndTransformControls(host)
     ClipboardProgress(host.documents.clipboard)
     host.hostError?.let { message ->
-        AlertDialog(onDismissRequest = host::dismissHostError, title = { Text("Could not complete action") }, text = { Text(message) },
-            confirmButton = { TextButton(host::dismissHostError) { Text("OK") } })
+        AlertDialog(onDismissRequest = host::dismissHostError, title = { Text(host.bootstrap!!.getString("action_failed")) }, text = { Text(message) },
+            confirmButton = { TextButton(host::dismissHostError) { Text(common.getString("ok")) } })
     }
     if (request != null && !controller.working) {
         val id = request.getInt("id")

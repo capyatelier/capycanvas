@@ -191,16 +191,30 @@ impl ExportTask {
     #[cfg(test)]
     fn details(&self) -> Result<Value, String> { self.details_localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)) }
 
+    pub fn copy_localized(&self, localizer: &layer_ui::Localizer, captions: &[layer_ui::ExportProfileCaption]) -> Value {
+        let name = std::path::Path::new(&self.name).file_stem();
+        json!({
+            "copy": layer_ui::color_feature_copy::ExportCopy::new(localizer),
+            "profile_names": captions.iter().map(|caption| caption.message(localizer)).collect::<Vec<_>>(),
+            "recipe_profile_name": self.recipe.profile.display_name(localizer),
+            "suggested_name": name.and_then(|s| s.to_str()).unwrap_or(localizer.text(layer_ui::MessageId::COLOR_FEATURES_EXPORT_EXPORT).as_ref()),
+            "format_name": self.recipe.format.localized_name(localizer),
+        })
+    }
+
     pub fn details_localized(&self, localizer: &layer_ui::Localizer) -> Result<Value, String> {
         let document = self.document();
         let extent = [document.width, document.height];
         let name = std::path::Path::new(&self.name).file_stem();
+        let mut form = json!(layer_ui::ExportForm::new_localized(document, localizer));
+        form["recipe_profile_caption"] = json!(layer_ui::ExportProfileCaption::Profile { name:self.recipe.profile.name.clone() });
+        form["recipe_profile_name"] = self.recipe.profile.display_name(localizer).into();
         Ok(json!({
             "color": document.color,
             "extent": extent,
             "resolution": document.resolution,
             "recipe": self.recipe,
-            "form": layer_ui::ExportForm::new_localized(document, localizer),
+            "form": form,
             "suggested_name": name.and_then(|s| s.to_str()).unwrap_or(localizer.text(layer_ui::MessageId::COLOR_FEATURES_EXPORT_EXPORT).as_ref()),
             "extension": self.recipe.format.extension(),
             "format_name": self.recipe.format.localized_name(localizer),

@@ -767,3 +767,24 @@ color-hdr-expected-float = Warna HDR memerlukan penyimpanan pecahan mengambang.
 color-hdr-finite-coverage = Warna HDR memerlukan nilai RGB berhingga dan cakupan antara nol dan satu.
 
 color-hdr-storage-range = Warna HDR melebihi rentang penyimpanan terpilih.
+
+color-proof-choose-profile = Pilih profil simulasi cetak
+color-proof-drawing-changed = Gambar berubah; buka kembali pengaturan Simulasi Cetak
+color-proof-inactive = Pratinjau cetak tidak lagi dipilih
+color-proof-setup-inactive = Pengaturan Simulasi Cetak tidak lagi aktif
+color-proof-document-busy = Operasi dokumen sedang berlangsung
+color-proof-preserve-original = Simpan profil asli di Profil Tersimpan sebelum menggantinya
+color-proof-name-limit = Nama target simulasi cetak tidak boleh melebihi 1024 byte
+color-proof-paper-requires-black-ink = Simulasi kertas memerlukan simulasi tinta hitam
+color-proof-absolute-black-point = Simulasi cetak kolorimetrik absolut tidak dapat menggunakan kompensasi titik hitam
+color-proof-choose-print-profile = Pilih profil cetak
+color-proof-cancelled = Persiapan simulasi cetak dibatalkan
+color-proof-working-space-changed = Ruang kerja simulasi cetak berubah
+color-proof-preview-not-prepared = Pratinjau simulasi cetak belum disiapkan
+color-proof-validate-first = Validasi simulasi cetak yang sudah disiapkan terlebih dahulu
+color-proof-prepare-before-apply = Siapkan simulasi cetak sebelum menerapkannya
+color-proof-finish-canvas-interaction = Selesaikan interaksi kanvas terlebih dahulu
+color-proof-already-sdr = Gambar ini sudah SDR
+color-proof-hdr-artwork = Pengaturan tampilan SDR memerlukan karya HDR
+color-proof-invalid-rendition = Pengaturan tampilan SDR tidak valid
+color-proof-invalid-value = Nilai Simulasi Cetak tidak valid

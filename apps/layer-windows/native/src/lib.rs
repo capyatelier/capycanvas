@@ -42,6 +42,7 @@ pub use events::CapyPointer;
 mod device;
 #[cfg(target_os = "windows")]
 mod host;
+#[cfg(any(target_os = "windows", test))]
 mod palette_files;
 #[cfg(target_os = "windows")]
 pub use host::*;

@@ -21,7 +21,7 @@ impl Cache {
             #[cfg(not(target_arch = "wasm32"))]
             let budget = crate::display_memory::resource_budget(device, self.bytes());
             let retained = self.bytes();
-            if size > device.limits().max_storage_buffer_binding_size as u64 || size > device.limits().max_buffer_size
+            if size > device.limits().max_storage_buffer_binding_size || size > device.limits().max_buffer_size
                 || retained.saturating_add(size) > budget {
                 return Err(GpuRasterError::Effect("Color lookup exceeds available GPU memory".into()));
             }

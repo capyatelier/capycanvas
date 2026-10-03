@@ -21,15 +21,19 @@ pub fn build_local_tone_guide(
     builder.finish(cancelled)
 }
 
+pub struct WorkingRowsOptions<'a> {
+    pub target: &'a SourceInterpretation,
+    pub encoding: OutputEncoding,
+    pub matte: Option<[f32; 3]>,
+    pub rendition: Option<layer_core::color::hdr::SdrRendition>,
+    pub guide: Option<&'a layer_core::color::hdr::LocalToneGuide>,
+}
+
 pub fn encode_working_rows_with_guide(
     working: RgbSpace,
     source_extent: [u32; 2],
     extent: [u32; 2],
-    target: &SourceInterpretation,
-    options: OutputEncoding,
-    matte: Option<[f32; 3]>,
-    rendition: Option<layer_core::color::hdr::SdrRendition>,
-    guide: Option<&layer_core::color::hdr::LocalToneGuide>,
+    options: WorkingRowsOptions<'_>,
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
     write: impl FnOnce(
         [u32; 2],
@@ -37,6 +41,7 @@ pub fn encode_working_rows_with_guide(
         &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>,
     ) -> Result<(), String>,
 ) -> Result<OutputStatistics, String> {
+    let WorkingRowsOptions { target, encoding: options, matte, rendition, guide } = options;
     if let Some(r) = rendition {
         r.validate().map_err(str::to_string)?;
     }
@@ -130,11 +135,7 @@ mod tests {
             space,
             [pixels.len() as u32, 1],
             [pixels.len() as u32, 1],
-            &target,
-            Default::default(),
-            None,
-            rendition,
-            guide.as_ref(),
+            WorkingRowsOptions { target: &target, encoding: Default::default(), matte: None, rendition, guide: guide.as_ref() },
             read,
             |_, _, read| read(0, &mut bytes),
         )
@@ -155,10 +156,14 @@ mod tests {
         let resized: Vec<_> = pixels.chunks_exact(4).map(|p| std::array::from_fn(|c| p.iter().map(|v| v[c]).sum::<f32>() / 4.)).collect();
         let encode = |source: &[[f32; 4]]| {
             let mut bytes = vec![0; 8 * 8];
-            encode_working_rows_with_guide(RgbSpace::Srgb, [source.len() as u32, 1], [8, 1],
-                &target, Default::default(), None, Some(SdrRendition::default()), Some(&guide),
+            encode_working_rows_with_guide(
+                RgbSpace::Srgb,
+                [source.len() as u32, 1],
+                [8, 1],
+                WorkingRowsOptions { target: &target, encoding: Default::default(), matte: None, rendition: Some(SdrRendition::default()), guide: Some(&guide) },
                 |_, row| { row.copy_from_slice(source); Ok(()) },
-                |_, _, rows| rows(0, &mut bytes)).unwrap();
+                |_, _, rows| rows(0, &mut bytes),
+            ).unwrap();
             bytes
         };
         assert_eq!(encode(&pixels), encode(&resized));

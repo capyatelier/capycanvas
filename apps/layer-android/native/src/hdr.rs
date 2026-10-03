@@ -1,5 +1,6 @@
 //! HDR display status, proof control and mapped picker fields for Kotlin.
-use crate::android::{app, argb_array, error, fail, or_throw, read, string};
+use crate::color_preferences::{ColorCallError, color_or_throw};
+use crate::android::{app, argb_array, error, or_throw, read, string};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
@@ -13,7 +14,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofControl(
     handle: jlong,
     action: JString,
 ) {
-    let result = (|| {
+    let result = (|| -> Result<_, ColorCallError> {
         let action = serde_json::from_str(&read(&mut env, &action)?).map_err(error)?;
         let a = unsafe { app(handle) };
         let previous = a.host.session.state().revision;
@@ -21,7 +22,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofControl(
         a.host.apply_change(previous, change);
         Ok(())
     })();
-    fail(&mut env, result)
+    color_or_throw(&mut env, result, ())
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_toneStatus(

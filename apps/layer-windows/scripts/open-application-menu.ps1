@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][object]$Root,[Parameter(Mandatory)][string]$Name,[switch]$Inspect,[switch]$PassThru)
+param([Parameter(Mandatory)][object]$Root,[Parameter(Mandatory)][string]$Name,[string]$Caption,[switch]$Inspect,[switch]$PassThru)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 $id=$Name.ToLowerInvariant().Replace('application-menu-','')
@@ -18,7 +18,8 @@ function Menu-Button {
 }
 function Submenu {
     $entry=Visible-Control ('application-menu-'+$id) ([System.Windows.Automation.ControlType]::MenuItem)
-    if(!$entry){$entry=Visible-Control ([Globalization.CultureInfo]::InvariantCulture.TextInfo.ToTitleCase($id)) ([System.Windows.Automation.ControlType]::MenuItem) -ByName}
+    if(!$entry){$entry=Visible-Control ('menu-'+$id) ([System.Windows.Automation.ControlType]::MenuItem)}
+    if(!$entry -and $Caption){$entry=Visible-Control $Caption ([System.Windows.Automation.ControlType]::MenuItem) -ByName}
     $entry
 }
 $watch=[Diagnostics.Stopwatch]::StartNew()

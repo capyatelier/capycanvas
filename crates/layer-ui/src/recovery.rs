@@ -473,8 +473,7 @@ mod tests {
     }
     #[test]
     fn recovery_origin_survives_failed_replacement_until_a_durable_copy_exists() {
-        let mut state = RecoveryState::default();
-        state.owned = true;
+        let mut state = RecoveryState { owned: true, ..Default::default() };
         state
             .event(RecoveryEvent::Offer {
                 key: "origin".into(),

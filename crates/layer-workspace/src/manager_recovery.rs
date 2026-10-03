@@ -80,7 +80,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 continue;
             }
             let names: Vec<_> = batch.writes.iter()
-                .filter(|w| !w.delete && !(w.create && model::is_default_item(&w.id)))
+                .filter(|w| !(w.delete || w.create && model::is_default_item(&w.id)))
                 .map(|write| write.metadata.clone().or_else(|| self.items().into_iter()
                     .find(|item| item.id == write.id).map(|item| item.metadata))
                     .map(|metadata| (write.id.clone(), metadata)))

@@ -14,7 +14,6 @@ struct Batch {
     target: Option<Weak<Workspace>>,
 }
 struct Launcher {
-    names: layer_core::DocumentNames,
     batches: RefCell<VecDeque<Batch>>,
     running: Cell<bool>,
     windows: Weak<RefCell<Vec<Rc<Workspace>>>>,
@@ -35,9 +34,8 @@ fn active(app: &adw::Application, windows: &[Rc<Workspace>]) -> Option<Rc<Worksp
                 .cloned()
         })
 }
-pub(crate) fn install(app: &adw::Application, windows: &Rc<RefCell<Vec<Rc<Workspace>>>>, names: layer_core::DocumentNames) {
+pub(crate) fn install(app: &adw::Application, windows: &Rc<RefCell<Vec<Rc<Workspace>>>>) {
     let launcher = Rc::new(Launcher {
-        names,
         batches: Default::default(),
         running: Cell::new(false),
         windows: Rc::downgrade(windows),
@@ -136,7 +134,9 @@ impl Launcher {
                 .upgrade()
                 .and_then(|v| active(app, &v.borrow())),
         };
-        let localization = target.as_ref().map_or_else(|| crate::application_localization(app).borrow().localization.clone(), |w| w.localization());
+        let localization = if let Some(workspace) = &target { workspace.localization() }
+            else if let Some(windows) = self.windows.upgrade() { crate::prepare_application_context(app, &windows).await.1 }
+            else { return };
         let copy = layer_ui::bootstrap_view(&localization);
         let closed = Rc::new(Cell::new(false));
         let placeholder = if target.is_none() {
@@ -149,12 +149,16 @@ impl Launcher {
             window.set_widget_name("file-launch-window");
             let view = adw::ToolbarView::new();
             view.add_top_bar(&adw::HeaderBar::new());
-            view.set_content(Some(
-                &adw::StatusPage::builder()
-                    .title(copy.opening_files.as_ref())
-                    .icon_name("image-x-generic-symbolic")
-                    .build(),
-            ));
+            let status = adw::StatusPage::builder().title(copy.opening_files.as_ref()).icon_name("image-x-generic-symbolic").build();
+            view.set_content(Some(&status));
+            let owner = window.downgrade(); let status = status.downgrade();
+            crate::on_window_localization(&window, None, &localization, move |localization| {
+                let Some(window) = owner.upgrade() else { return false };
+                let copy = layer_ui::bootstrap_view(localization);
+                window.set_title(Some(layer_ui::DocumentRequest::Open.title(localization).as_ref()));
+                if let Some(status) = status.upgrade() { status.set_title(&copy.opening_files); }
+                true
+            });
             window.set_content(Some(&view));
             window.connect_close_request(glib::clone!(
                 #[strong]
@@ -215,17 +219,14 @@ impl Launcher {
                 .basename()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| file.uri().into());
+            let localization = crate::window_localization(parent, target.as_ref(), &localization);
             let result = super::open::prepare(
                 parent,
                 target.as_ref(),
                 file,
                 settings.photo_open,
                 settings.new_document.defaults.color.space,
-                target.as_ref().map_or_else(|| {
-                    let mut names = self.names.clone();
-                    if !name.is_empty() { names.paint = name.clone().into(); }
-                    names
-                }, |w| layer_ui::photo_document_names(&name, &w.localization())),
+                layer_ui::photo_document_names(&name, &localization),
                 &localization,
             )
             .await;
@@ -262,6 +263,8 @@ impl Launcher {
                 Ok(None) => break,
                 Err(error) => {
                     eprintln!("Cannot open file {name}: {error}");
+                    let localization = crate::window_localization(parent, target.as_ref(), &localization);
+                    let copy = layer_ui::bootstrap_view(&localization);
                     let dialog = adw::AlertDialog::builder()
                         .heading(copy.cannot_open_file.as_ref())
                         .body(layer_ui::file_open_failure(&localization, &name))
@@ -269,6 +272,13 @@ impl Launcher {
                     dialog.set_widget_name("file-launch-error");
                     dialog.add_response("ok", &copy.ok);
                     dialog.set_close_response("ok");
+                    let weak = dialog.downgrade(); let name = name.clone();
+                    crate::on_window_localization(parent, target.as_ref(), &localization, move |localization| {
+                        let Some(dialog) = weak.upgrade() else { return false };
+                        let copy = layer_ui::bootstrap_view(localization);
+                        dialog.set_heading(Some(&copy.cannot_open_file)); dialog.set_body(&layer_ui::file_open_failure(localization, &name)); dialog.set_response_label("ok", &copy.ok);
+                        true
+                    });
                     crate::alert::choose(dialog, parent).await;
                 }
             }

@@ -32,6 +32,7 @@ enum Value {
 /// chunk's file lifetime; no document or GPU identity is stored in the transport.
 pub trait TileChunk: Send + Sync {
     fn len(&self) -> usize;
+    fn is_empty(&self) -> bool { self.len() == 0 }
     fn poll(&self) -> Result<Option<Arc<[u8]>>, String>;
     fn resident_bytes(&self) -> usize;
     fn evict(&self);
@@ -676,7 +677,7 @@ mod tests {
         let before = blob.resident_bytes();
         assert!(
             spill_tiles(
-                &[blob.clone()],
+                std::slice::from_ref(&blob),
                 // A read-only descriptor rejects the write on every native host.
                 std::fs::File::open(std::env::current_exe().unwrap()).unwrap()
             )
@@ -686,7 +687,7 @@ mod tests {
         blob.decode().unwrap();
         let file = file();
         let mut corrupt = file.try_clone().unwrap();
-        spill_tiles(&[blob.clone()], file).unwrap();
+        spill_tiles(std::slice::from_ref(&blob), file).unwrap();
         corrupt.seek(SeekFrom::Start(0)).unwrap();
         corrupt.write_all(b"bad").unwrap();
         assert!(blob.compressed().unwrap_err().contains("integrity"));
@@ -705,7 +706,7 @@ mod tests {
             .take(256 * 256 * 16)
             .collect();
         let blob = Arc::new(TileBlob::encode(descriptor, &samples).unwrap());
-        spill_tiles(&[blob.clone()], file()).unwrap();
+        spill_tiles(std::slice::from_ref(&blob), file()).unwrap();
         assert_eq!(blob.decode().unwrap(), samples);
     }
     #[test]

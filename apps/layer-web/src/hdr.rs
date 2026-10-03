@@ -49,7 +49,7 @@ impl WebApp {
     }
     pub fn proof_control(&mut self, action: JsValue) -> Result<JsValue, JsValue> {
         let action = serde_wasm_bindgen::from_value(action).map_err(js)?;
-        serialize(&layer_ui::proof_panel::apply(&mut self.session, action).map_err(js)?)
+        serialize(&layer_ui::proof_panel::apply(&mut self.session, action).map_err(proof::proof_rejection)?)
     }
     pub fn proof_texture(&self, edge: u32) -> Vec<u8> {
         layer_ui::proof_panel::sdr_direction_texture(edge)

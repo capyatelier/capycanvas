@@ -61,7 +61,7 @@ fn native_white_balance_picker_contacts_and_atomic_history() {
                 let pixel = shown(&w, [128., 128.]);
                 let button = picker_button(&w);
                 assert!(button.is_mapped());
-                let button_point = screen_point(&button, &w.window, [0.5, 0.5]);
+                let button_point = screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]);
                 let hit = w.window.pick(button_point[0] as f64, button_point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
                 assert!(hit == button || hit.is_ancestor(&button), "picker button is the pointer target");
                 crate::snapshot(&w).save_to_png(output.join(format!("armed-layout-{width}-{theme:?}-{kind}.png"))).unwrap();
@@ -115,4 +115,54 @@ fn native_white_balance_picker_contacts_and_atomic_history() {
     input.finish();
     w.window.destroy();
     pump(100);
+}
+
+#[test]
+#[ignore = "private compositor, hardware GPU and native pointer language journeys"]
+fn native_white_balance_live_language() {
+    let (app, active) = crate::application("art.capycanvas.WhiteBalanceLanguages");
+    app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    crate::open_workspace(&app, &active, Some((fixture(), None)), None);
+    until(|| !active.borrow().is_empty(), "prepared white balance window");
+    let w = active.borrow().last().unwrap().clone();
+    w.window.maximize(); w.window.present(); ready(&w);
+    let mut input = RemoteInput::new().settle_ms(100).timeout_secs(30); input.ready();
+    w.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "white_balance".into() } });
+    for panel in Panel::ALL.into_iter().filter(|panel| !matches!(panel, Panel::Toolbar | Panel::Commands | Panel::Properties)) {
+        w.customize(CustomizationAction::SetPanelVisible { panel, visible: false });
+    }
+    w.customize(CustomizationAction::SetPanelVisible { panel: Panel::Properties, visible: true });
+    let group = state(&w).workspace.layout.panel_group(Panel::Properties).unwrap();
+    w.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Properties });
+    w.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded });
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas }); ready(&w); pump(300);
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) }); ready(&w);
+        let button = picker_button(&w).downcast::<gtk::Button>().unwrap();
+        let checkpoint = ui_session(&w).engine().checkpoint(); let before = document(&w);
+        input.click(screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]));
+        until(|| state(&w).canvas_bar.as_ref().is_some_and(|bar| bar.context.kind == CanvasBarKind::Picker), "language picker bar");
+        let bar_label = w.canvas_bar.root.first_child().unwrap().downcast::<gtk::Label>().unwrap();
+        input.click(window_point(&w, [260., 128.]));
+        until(|| state(&w).notice.as_ref().is_some_and(|notice| notice.text == w.localization().text(layer_ui::MessageId::RESOURCES_PICKER_EMPTY).as_ref()), "native empty artwork notice");
+        let notice = state(&w).notice.unwrap();
+        let notice_root = find_named(w.window.upcast_ref(), "canvas-notice").unwrap();
+        let notice_label = notice_root.first_child().unwrap().downcast::<gtk::Label>().unwrap();
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+            let choice = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32;
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(choice) } });
+            until(|| w.localization().language() == language, "white balance language visible");
+            assert_eq!(picker_button(&w), button.clone().upcast::<gtk::Widget>());
+            assert_eq!(button.label().as_deref(), Some(w.localization().text(layer_ui::MessageId::RESOURCES_PICKER_NEUTRAL).as_ref()));
+            assert_eq!(state(&w).canvas_bar.unwrap().label.as_deref(), Some(w.localization().text(layer_ui::MessageId::RESOURCES_PICKER_PROMPT).as_ref()));
+            assert_eq!(bar_label.text(), w.localization().text(layer_ui::MessageId::RESOURCES_PICKER_PROMPT).as_ref());
+            let current_notice = state(&w).notice.unwrap(); assert_eq!(current_notice.id, notice.id);
+            assert_eq!(notice_label.text(), w.localization().text(layer_ui::MessageId::RESOURCES_PICKER_EMPTY).as_ref());
+            assert_eq!(document(&w), before); assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+        }
+        input.key(0xff1b); ready(&w);
+        assert_eq!(document(&w), before); assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+        eprintln!("GTK white balance {theme:?}: all fifteen native button/bar/retained empty notice, controls and history passed");
+    }
+    input.finish(); w.window.destroy(); pump(100);
 }

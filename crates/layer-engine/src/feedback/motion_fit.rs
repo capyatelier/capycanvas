@@ -98,18 +98,15 @@ fn solve(mut a: Matrix, mut b: [f64; 6]) -> Option<[f64; 6]> {
             return None;
         }
         let divisor = a[col][col];
-        for j in col..6 {
-            a[col][j] /= divisor;
-        }
+        for value in a[col].iter_mut().skip(col) { *value /= divisor; }
+        let pivot = a[col];
         b[col] /= divisor;
         for i in 0..6 {
             if i == col {
                 continue;
             }
             let scale = a[i][col];
-            for j in col..6 {
-                a[i][j] -= scale * a[col][j];
-            }
+            for (value, pivot) in a[i].iter_mut().zip(&pivot).skip(col) { *value -= scale * pivot; }
             b[i] -= scale * b[col];
         }
     }
@@ -215,9 +212,7 @@ fn measurement_variance(samples: &[Sample], timestamp_resolution: u32, median: b
                         / (f64::from(window[i].time) - f64::from(window[j].time));
                 }
             }
-            for axis in 0..2 {
-                residual[axis] -= weight * window[i].position[axis];
-            }
+            for (value, position) in residual.iter_mut().zip(window[i].position) { *value -= weight * position; }
             noise_gain += weight * weight;
         }
         errors[n] = (residual[0].powi(2) + residual[1].powi(2)) / noise_gain;
@@ -469,17 +464,15 @@ impl MotionFit {
             jacobian[0][i] = derivative[i][0];
             jacobian[1][i] = derivative[i][1];
         }
-        for i in 2..6 {
-            jacobian[i][i] = 1.;
-        }
+        for (i, row) in jacobian.iter_mut().enumerate().skip(2) { row[i] = 1.; }
         jacobian[2][4] = shift;
         jacobian[3][5] = shift;
         let mut covariance = [[0.; 6]; 6];
         let mut intermediate = [[0.; 6]; 6];
-        for i in 0..6 {
-            for j in 0..6 {
-                for k in 0..6 {
-                    intermediate[i][j] += jacobian[i][k] * self.covariance[k][j];
+        for (row, jacobian) in intermediate.iter_mut().zip(&jacobian) {
+            for (j, value) in row.iter_mut().enumerate() {
+                for (coefficient, covariance) in jacobian.iter().zip(&self.covariance) {
+                    *value += coefficient * covariance[j];
                 }
             }
         }
@@ -672,9 +665,9 @@ impl MotionFit {
                 }
             }
         }
-        for i in 0..6 {
-            for j in 0..6 {
-                residual_squared_trace += weighted_projection[i][j] * weighted_projection[j][i];
+        for (i, row) in weighted_projection.iter().enumerate() {
+            for (j, value) in row.iter().enumerate() {
+                residual_squared_trace += value * weighted_projection[j][i];
             }
         }
         // Weighted Gaussian quadratic-form upper bound, with ||B|| <= 1 and
@@ -781,7 +774,7 @@ impl MotionFit {
         let t = 1. + self.duration(f64::from(horizon_micros) / 1000.) / self.span_ms;
         let (_, end) = evaluate(self.parameters, t);
         let mut variance = 0.;
-        for axis in 0..2 {
+        for (axis, _) in end[0].iter().enumerate() {
             for i in 0..6 {
                 for j in 0..6 {
                     variance += end[i][axis] * self.covariance[i][j] * end[j][axis];

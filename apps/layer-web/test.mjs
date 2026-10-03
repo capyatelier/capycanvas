@@ -1,3 +1,4 @@
+import {checkDocumentErrors} from './document-errors-journey.test.mjs';
 import {runJourney} from "./journeys.mjs";
 import {checkPointwiseEffects,checkLookupTransport} from './pointwise-effects.test.mjs';
 import {checkTonalSelections} from './tonal-selection.test.mjs';
@@ -80,6 +81,7 @@ import { checkParity } from "./parity.mjs";
 import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
 import { checkAdjustments, checkCurves } from "./effects.test.mjs";
 import { checkPreferences, checkSettingsParity, checkLiveLanguage } from "./preferences.test.mjs";
+import {checkLiveHistogramLanguage,checkLiveWorkspaceLanguage,checkLiveDeliveryLanguage,checkLiveProofLanguage,checkLiveColorFormLanguage,checkLiveToolbarLanguage,checkLiveEffectLanguage,checkLiveToolLanguage} from "./localization-journey.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
 import { checkStagedStartup } from "./startup.test.mjs";
@@ -107,7 +109,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -226,6 +228,17 @@ try {
     [process.argv.includes("--heal"), () => checkHeal({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--photo-paint"), () => checkPhotoPaint({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--proof"), () => checkProof({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--document-errors"), () => checkDocumentErrors({evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--live-language-toolbar"), () => checkLiveToolbarLanguage({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--live-language-effects"), () => checkLiveEffectLanguage({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--live-language-color"), () => checkLiveColorFormLanguage({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--live-language-proof"), () => checkLiveProofLanguage({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--live-language-delivery"), () => checkLiveDeliveryLanguage({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--live-language-surfaces"), async () => {
+      await checkLiveToolLanguage({call,evaluate,settle});
+      await checkLiveHistogramLanguage({call,evaluate,settle});
+      await checkLiveWorkspaceLanguage({call,evaluate,settle});
+    }, checkRasterErrors],
     [process.argv.includes("--shared-workflows"), async () => {
       await checkSdrColor({call,evaluate,settle});
       await checkColorEdits({call,evaluate,settle});

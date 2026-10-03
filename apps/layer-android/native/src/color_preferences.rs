@@ -5,6 +5,19 @@ use jni::{
     objects::{JByteArray, JClass, JObject, JString},
     sys::jobjectArray,
 };
+pub(crate) enum ColorCallError { Diagnostic(String), Known(layer_ui::ColorFeatureError) }
+impl From<String> for ColorCallError { fn from(value: String) -> Self { Self::Diagnostic(value) } }
+impl From<layer_ui::ColorFeatureError> for ColorCallError { fn from(value: layer_ui::ColorFeatureError) -> Self { Self::Known(value) } }
+pub(crate) fn color_or_throw<T>(env: &mut JNIEnv, result: Result<T, ColorCallError>, fallback: T) -> T {
+    match result {
+        Ok(value) => value,
+        Err(ColorCallError::Diagnostic(message)) => or_throw(env, Err(message), fallback),
+        Err(ColorCallError::Known(reason)) => {
+            let _ = env.throw_new("art/capycanvas/ColorFeatureFailure", serde_json::json!({"color_feature_error": reason}).to_string());
+            fallback
+        }
+    }
+}
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
     mut env: JNIEnv,
@@ -13,15 +26,13 @@ pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
     request: JString,
     color: JString,
 ) -> jobjectArray {
-    let result = (|| {
-        let localization = &*crate::launch::active_localization()?;
+    let result = (|| -> Result<_, ColorCallError> {
         let bytes = env.convert_byte_array(bytes).map_err(error)?;
         let mut library = layer_ui::ExportPresets::restore(&bytes);
         let request = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
         let color: layer_core::color::DocumentColor =
             serde_json::from_str(&read(&mut env, &color)?).map_err(error)?;
-        let mut view = library.operate(request, color).map_err(|reason| reason.preset_message(localization))?;
-        view.localize_names(color, localization);
+        let view = library.operate(request, color)?;
         let result = env
             .new_object_array(2, "java/lang/Object", JObject::null())
             .map_err(error)?;
@@ -32,27 +43,26 @@ pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
             .map_err(error)?;
         if view.changed {
             let bytes = env
-                .byte_array_from_slice(&library.encode().map_err(|reason| reason.preset_message(localization))?)
+                .byte_array_from_slice(&library.encode()?)
                 .map_err(error)?;
             env.set_object_array_element(&result, 1, bytes)
                 .map_err(error)?;
         }
         Ok(result.into_raw())
     })();
-    or_throw(&mut env, result, std::ptr::null_mut())
+    color_or_throw(&mut env, result, std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_profileLibrary(
     mut env: JNIEnv, _: JClass, request: JString, bytes: JByteArray,
 ) -> jni::sys::jstring {
-    let result = (|| {
-        let localization = &*crate::launch::active_localization()?;
+    let result = (|| -> Result<_, ColorCallError> {
         let action: layer_ui::profile_library::ProfileLibraryAction = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
         let bytes = env.convert_byte_array(bytes).map_err(error)?;
-        serde_json::to_string(&action.execute_localized(&bytes, localization).map_err(|reason| reason.profile_message(localization))?).map_err(error)
+        Ok(env.new_string(serde_json::to_string(&action.execute(&bytes)?).map_err(error)?).map_err(error)?.into_raw())
     })();
-    crate::android::string(&mut env, result)
+    color_or_throw(&mut env, result, std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]

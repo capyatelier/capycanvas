@@ -1,6 +1,11 @@
 use super::*;
 use layer_ui::proof_workflow::{ProofPreparation, proof_form};
 use std::sync::Arc;
+pub(super) fn proof_rejection(reason: layer_ui::ColorFeatureError) -> JsValue {
+    let value = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&value, &js("document_host_error"), &serialize(&layer_ui::DocumentHostErrorCopy::Proof(reason)).unwrap_or(JsValue::NULL));
+    value.into()
+}
 
 #[wasm_bindgen]
 pub struct WebProof {
@@ -46,6 +51,9 @@ impl WebApp {
     pub fn proof_form(&self) -> Result<JsValue, JsValue> {
         js_sys::JSON::parse(&proof_form(&self.session).to_string())
     }
+    pub fn proof_panel_copy(&self) -> Result<JsValue, JsValue> {
+        js_sys::JSON::parse(&serde_json::to_string(&layer_ui::proof_workflow::proof_copy(&self.session)).map_err(js)?)
+    }
     pub fn proof_status(&mut self) -> Result<JsValue, JsValue> {
         serialize(&self.proof.observe(&self.session))
     }
@@ -56,33 +64,35 @@ impl WebApp {
             Some(serde_wasm_bindgen::from_value(recipe).map_err(js)?)
         };
         Ok(WebProof {
-            job: (if id == u32::MAX { ProofPreparation::panel(&self.session,recipe.ok_or_else(||js("Choose a proof profile"))?) }
+            job: (if id == u32::MAX { ProofPreparation::panel(&self.session,recipe.ok_or_else(||proof_rejection(layer_ui::ColorFeatureError::ProofChooseProfile))?) }
                 else { ProofPreparation::begin(&self.session, (id != 0).then_some(id), recipe) })
-                .map_err(js)?,
+                .map_err(proof_rejection)?,
             lut: None,
         })
     }
     pub fn proof_check(&self, job: &WebProof) -> Result<(), JsValue> {
-        job.job.validate(&self.session).map_err(js)
+        job.job.validate(&self.session).map_err(proof_rejection)
     }
     pub fn proof_apply(&mut self, job: &WebProof, preserved: bool) -> Result<JsValue, JsValue> {
         let lut = job
             .lut
             .clone()
-            .ok_or_else(|| js("Proof preview is not prepared"))?;
-        let change = job.job.apply(&mut self.session, preserved).map_err(js)?;
-        self.proof.retain(&job.job, lut).map_err(js)?;
+            .ok_or_else(|| proof_rejection(layer_ui::ColorFeatureError::ProofPreviewNotPrepared))?;
+        let change = job.job.apply(&mut self.session, preserved).map_err(proof_rejection)?;
+        self.proof.retain(&job.job, lut).map_err(proof_rejection)?;
         serialize(&change)
     }
-    pub fn proof_failed(&mut self, job: &WebProof, error: String) {
-        self.proof.fail(&self.session, &job.job, error);
+    pub fn proof_failed(&mut self, job: &WebProof, error: JsValue) {
+        if let Some(layer_ui::DocumentHostErrorCopy::Proof(reason)) = documents::host_error_reason(&error) {
+            self.proof.fail_reason(&self.session, &job.job, reason);
+        } else { self.proof.fail(&self.session, &job.job, color_preferences::diagnostic_text(&error)); }
     }
 }
 
 #[wasm_bindgen]
 pub fn proof_worker_build(request: &str) -> Result<JsValue, JsValue> {
     let job: ProofPreparation = serde_json::from_str(request).map_err(js)?;
-    let lut = job.build(|| false).map_err(js)?;
+    let lut = job.build(|| false).map_err(proof_rejection)?;
     let result = js_sys::Object::new();
     js_sys::Reflect::set(&result, &js("edge"), &JsValue::from(lut.edge()))?;
     js_sys::Reflect::set(&result, &js("dark"), &JsValue::from(lut.dark_grid()))?;

@@ -27,14 +27,12 @@ pub(super) fn mpf_entries(bytes: &[u8]) -> Result<Vec<[u32; 3]>, String> {
                     return Err(INVALID.into());
                 }
             }
-            0xb002 => {
-                if tiff.u16(at + 2)? != 7
+            0xb002 if tiff.u16(at + 2)? != 7
                     || entries
                         .replace((tiff.u32(at + 8)? as usize, tiff.u32(at + 4)? as usize))
                         .is_some()
-                {
-                    return Err(INVALID.into());
-                }
+            => {
+                return Err(INVALID.into());
             }
             _ => (),
         }

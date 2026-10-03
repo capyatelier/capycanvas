@@ -140,6 +140,7 @@ impl Scene {
         })
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Placed-plane jobs keep transform, output domain, and generic tile source explicit")]
     fn placed_plane_jobs(
         &mut self, r: &WgpuRasterizer, transform: layer_core::ImageTransform,
         extent: [u32; 2], tile: [u32; 2], background: f32, scalar: bool, offset: [i32;2],
@@ -241,6 +242,7 @@ impl Scene {
         self.placed_raw_plane_offset(r,layer,transform,tile,plane,extent,[0;2])
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Raw-plane mapping keeps source extent, raster plane, and tile offsets explicit")]
     fn placed_raw_plane_offset(
         &mut self, r: &WgpuRasterizer, layer: &Layer,
         mut transform: layer_core::ImageTransform, tile: [u32;2], plane: layer_core::raster::RasterPlane,
@@ -347,6 +349,7 @@ impl Scene {
         while let Some(entry) = self.material_pages.pop_front() { self.free(entry.page); }
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Material sampling keeps geometry, tile, neighbor, and raster plane explicit")]
     fn material_page(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, layer: &Layer,
         geometry: layer_core::ImageTransform, tile: [u32; 2], neighbor: [u32; 2],
         plane: layer_core::raster::RasterPlane,

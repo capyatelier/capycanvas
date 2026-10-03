@@ -66,15 +66,87 @@ other windows before persistence completes. Mapped and future widgets use the
 window's current Pango language. Shared search queries are forwarded from the
 native editable change signal so a projection cannot overwrite an edit while
 GTK's delayed search signal is pending.
+Open drawer tabs retain their widgets and refresh their shared titles, tooltips
+and accessibility labels when the window publishes a language. Authored toolbar
+names stay literal.
 
 `native_live_language_switching` exercises the Language preference in both
 themes and verifies retained editors, document revisions and numeric refusals.
+It checks built-in and authored drawer tab titles without replacing tab widgets.
 Run it on the private display with the same command used for other native tests.
 
 Numeric controls retain the shared refusal from the last edit. Language changes
 refresh that caption without parsing a draft or changing its selection, focus,
 value or input signals. `native_numeric_error_live_language` checks spin and slider
 editors in every shipped language and both themes; its preedit signals are synthetic.
+
+`native_live_language_documents_light` and
+`native_live_language_documents_dark` cover every shipped language through
+drawing, undo/redo and Unicode project save/reopen/export. `native_text_language` checks
+glyph fallback and actual allocated Thai paragraph wrapping, including narrow
+windows and larger text. Compact workspace captions retain their complete
+accessible label while ellipsizing inside the shared header allocation.
+Shared context menus use nested native popovers so legitimate repeated submenu
+labels do not become toolkit page identities. `native_localized_nested_menus`
+checks the actual Edit and Layer → Organize actions in every shipped language
+and both themes, including identical Turkish captions.
+
+`native_preferences_text_menu_live_language` checks localized text-edit actions,
+native selection and deferred publication while the Preferences menu is open.
+
+Standalone import and profile windows receive prepared contexts and retain
+their own shared transition. `native_bare_profile_language_transition` checks
+late registration, cancellation, future windows and independent input boundaries.
+`native_profile_picker_live_language` and `native_profile_library_live_language`
+check raw ICC names, localized absence, search and retained controls without
+rereading files. `native_white_balance_live_language` checks retained calibration
+buttons and notices. Run each through `--native-test=<name>` on the private display.
+
+Edit Color retains the shared `ColorFormCopy` from the last edit or display
+capability change. Language publication projects its model captions, typed
+refusal and cached gamut flags without parsing fields or converting colors.
+The same combo row, list model, numeric fields and preview widgets remain in
+place; immutable list strings update under the existing selection guard.
+The selected color model appears below its title so longer titles leave the
+choice readable in narrow dialogs.
+Color and gradient buttons, including effect buttons that use the selected
+color, refresh their current shared captions through weak workspace callbacks.
+A stale document refuses color acceptance through the
+shared message notice, so its failure caption also follows language changes.
+The wrapped status and error label stays outside the scrollable fields so
+narrow dialogs reserve space for its complete text.
+`native_color_editor_live_language` checks SDR and HDR drafts, warnings,
+range-refused exposure, Unicode text and selection, retained controls and
+document history in every shipped language and both themes. It also checks
+French/German with narrow windows, larger text and actual status bounds,
+gradient captions and stale document acceptance. Its preedit signals are synthetic; genuine engine
+composition remains a separate private-display acceptance check.
+
+`native_histogram_live_language` checks both Histogram presentations and the
+retained Properties page, numeric focus, selection and targeted adjustment
+buttons in every shipped language and both themes. It preserves the statistics
+data and query time while changing copy, exercises source and channel choices,
+and defers publication while the native channel popup is open.
+Properties action and clipping captions wrap inside the native viewport and keep
+complete tooltips. Selected choices use the compact dropdown helper, retaining
+full tooltip and popup text when the closed caption ellipsizes. The same fixture
+checks inner control and glyph bounds,
+including narrow French/German layouts with larger text.
+Use `LAYER_MOTION_VIEWPORT=1100x800` for its normal run or `640x1000` for
+the small viewport run; it verifies the actual window allocation.
+
+`native_proof_live_language` checks preparing, prepared and unavailable captions
+in every shipped language and both themes. It retains the LUT identity and raw
+profile names while changing copy, and preserves the literal ICC diagnostic.
+Preparing is checked with work paused; language changes must not start a worker.
+
+`native_genuine_language_composition` supplies a private application identity for
+IBus acceptance runners. It requires isolated storage and native compositor keys;
+engine traffic and captures establish Telex/Anthy preedit, commit and deferred
+publication. The Image Size width journey checks the same dirty numeric editor,
+accepted value and typed refusal through native Enter and Escape. Engine traffic
+distinguishes cancellation from an engine committing preedit on Escape.
+Thai Kesmanee commits directly and does not establish active preedit.
 
 ## Tests
 

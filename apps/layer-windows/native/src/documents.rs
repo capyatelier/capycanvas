@@ -312,6 +312,7 @@ pub(crate) struct DocumentService {
     recording_save: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
 impl DocumentService {
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn set_localization(&mut self, localization: Arc<layer_ui::Localizer>) -> Result<(), String> {
         if self.window.set_localization(localization.clone()) {
             self.profile_copy = serde_json::json!(layer_ui::color_feature_copy::ProfileCopy::new(&localization));
@@ -355,6 +356,7 @@ impl DocumentService {
             recording_save: None,
         })
     }
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn status(&self) -> Option<serde_json::Value> {
         if self.opening.is_none() && let Some(active) = &self.active && active.cancelled.is_some() { return Some(serde_json::json!({"type":"opening_busy","id":active.id})); }
         if let Some(task) = &self.workflow { return Some(task.status()); }
@@ -573,7 +575,16 @@ impl DocumentService {
                     return Ok(());
                 }
             };
-            if let Err(error) = result { self.workflow = Some(task); return Err(error); }
+            if let Err(error) = result {
+                if task.retained_failure() {
+                    task.fail(error);
+                    self.workflow=Some(task);
+                    host.invalidate_snapshot();
+                    return Ok(());
+                }
+                self.workflow=Some(task);
+                return Err(error);
+            }
             task.retain_proof(&mut host.proof)?;
             self.workflow_control = None;
             self.worker.retire_workflow(task);
@@ -767,7 +778,8 @@ impl DocumentService {
             if task.control.is_cancelled() || task.stage == "saved" {
                 task.complete(host, task.stage == "saved")?;
                 if let Some(notice) = task.notice() {
-                    host.error = Some(notice.to_owned());
+                    host.session.set_host_error_copy(Some(notice));
+                    host.invalidate_snapshot();
                 }
                 self.workflow_control = None;
                 self.worker.retire_workflow(task);
@@ -826,6 +838,7 @@ impl DocumentService {
         };
         Self::complete(host, active.id, result)
     }
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn preview(&self, id: u32, index: usize) -> Result<crate::previews::CapyPreview, String> {
         let task = self.workflow.as_ref().filter(|t| t.id == id).ok_or("Document preview expired")?;
         task.preview(index)

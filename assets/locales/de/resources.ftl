@@ -494,6 +494,13 @@ resources-lookup-replace = Ersetzen…
 resources-lookup-files = Dateien für Farbzuordnungen
 resources-lookup-unavailable = Das Importieren von Farbzuordnungstabellen ist auf dieser Plattform noch nicht verfügbar.
 resources-lookup-failed = Die Zuordnungstabelle konnte nicht importiert werden.
+resources-layer-menu-stop-using-as-reference = Diese Ebene nicht mehr als Referenz verwenden
+resources-coverage-from-layer-opacity = Aus Ebenendeckkraft
+resources-coverage-from-layer-mask = Aus Ebenenmaske
+resources-reference-empty-unmarked = Diese Ebene ist leer und keine Ebene darunter ist als Referenz markiert
+resources-reference-tool-unmarked = Dieses Werkzeug tastet Referenzebenen ab, aber keine ist markiert
+resources-reference-tool-mark-first = Dieses Werkzeug tastet Referenzebenen ab. Markiere zuerst eine im Ebenen-Bedienfeld.
+resources-reference-use-layer = { $name } als Referenz verwenden
 
 resources-analysis-updating = Wird aktualisiert…
 resources-analysis-error = Diese Anpassung konnte nicht aktualisiert werden.

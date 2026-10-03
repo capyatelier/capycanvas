@@ -194,9 +194,10 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   await select(neighbor);
   assert.equal((await tabs()).resident_bytes,0,'A reread cache is evicted on the next switch');
   const beforeCorrupt=(await tabs()).tabs.map(t=>t.id);
-  assert.equal(await evaluate(`layerApp.documents.openFiles([new File(['invalid'],'broken.capy')]).then(()=>false,()=>true)`),true);
+  assert.equal(await evaluate(`layerApp.documents.openFiles([new File(['invalid'],'broken.capy')]).then(()=>false,error=>{window.tabOpenDiagnostic=error.message??String(error);return true;})`),true);
   assert.deepEqual((await tabs()).tabs.map(t=>t.id),beforeCorrupt,'Corrupt opening cannot remove or replace a drawing');
-  await evaluate(`layerApp.documents.openFiles([new File([[...tabFiles.values()][0]],'duplicate.capy'),new File(['invalid'],'broken-middle.capy'),new File([[...tabFiles.values()][0]],'duplicate.capy')])`);await ready();
+  const reported=await evaluate(`(async()=>{const original=console.error,reported=[];console.error=(...args)=>{if(args.length===1&&args[0] instanceof Error&&args[0].message===tabOpenDiagnostic)reported.push(args[0].message);else original(...args);};try{await layerApp.documents.openFiles([new File([[...tabFiles.values()][0]],'duplicate.capy'),new File(['invalid'],'broken-middle.capy'),new File([[...tabFiles.values()][0]],'duplicate.capy')]);return reported;}finally{console.error=original;}})()`);await ready();
+  assert.deepEqual(reported,[await evaluate('tabOpenDiagnostic')],'Only the deliberately corrupt middle file reports its known failure');
   assert.equal((await tabs()).tabs.length,beforeCorrupt.length+2,'A corrupt middle file does not stop later opens');
   const copies=(await tabs()).tabs.slice(-2);
   assert.equal(copies[0].title,copies[1].title);assert.notEqual(copies[0].id,copies[1].id);

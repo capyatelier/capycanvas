@@ -1,6 +1,9 @@
 import { captureSliderContacts, createNumberField } from './numeric.js';
 import { createRangeControl } from './range-control.js';
+import { bindCopy, liveCopy } from './localization.js';
 const key = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v);
+const semantic = ({label, tooltip, disabled_reason, ...value}) => value;
+const fieldSemantic = ({group, ...value}) => semantic(value);
 
 export function actionField({ element, button, icon }, spec, send, { label, ariaDisabled = false, explain } = {}) {
   const row = element('div', 'toolbar-option toolbar-action'); row.dataset.toolbarField = '';
@@ -9,11 +12,14 @@ export function actionField({ element, button, icon }, spec, send, { label, aria
     else explain?.(b);
   });
   b.append(icon(spec.state.icon || 'settings'));
-  if (label) b.append(element('span', 'toolbar-action-label', label));
+  const caption = label ? element('span', 'toolbar-action-label', label) : null;
+  if (caption) b.append(caption);
   row.append(b); b.setAttribute('aria-label', spec.state.label);
   let tooltip, disabled, pressed;
   function update(option) {
     const state = option.Action.state;
+    b.setAttribute('aria-label', state.label);
+    if (caption) caption.textContent = state.label;
     if (disabled !== !state.enabled) {
       disabled = !state.enabled;
       if (ariaDisabled) b.setAttribute('aria-disabled', String(disabled)); else b.disabled = disabled;
@@ -30,26 +36,35 @@ export function choiceField({ element, button, icon, openPopup, closePopup }, sp
   const row = element('div', `toolbar-option ${spec.segmented ? 'toolbar-segments selection-modes' : 'toolbar-choice'}`);
   row.dataset.toolbarField = ''; row.dataset.toolbarChoice = spec.id;
   if (spec.columns) { row.classList.add('choice-grid'); row.style.setProperty('--choice-columns', spec.columns); row.title = spec.label; }
-  let selected = spec.items.findIndex(i => i.selected);
+  let selected = spec.items.findIndex(i => i.selected), entries = [];
+  const captions = [];
   const buttons = spec.segmented ? spec.items.map((item, i) => {
-    const b = button('', () => send(item.action)); b.append(icon(item.icon));
-    if (labels && !spec.columns) b.append(element('span', 'toolbar-segment-label', item.label));
+    const b = button('', () => send(spec.items[i].action)); b.append(icon(item.icon));
+    if (labels && !spec.columns) b.append(captions[i] = element('span', 'toolbar-segment-label', item.label));
     b.title = item.label; b.setAttribute('aria-label', item.label); b.dataset.toolbarSegment = `${spec.id}-${i}`; row.append(b); return b;
   }) : [];
   const b = spec.segmented ? null : button('', () => {
     const menu = element('div', 'toolbar-choice-menu');
-    spec.items.forEach((item, i) => {
-      const entry = button('', () => { closePopup(); send(item.action); });
-      entry.append(icon(item.icon), element('span', '', item.label)); entry.setAttribute('role', 'menuitemradio'); entry.setAttribute('aria-checked', i === selected); menu.append(entry);
+    entries = spec.items.map((item, i) => {
+      const entry = button('', () => { closePopup(); send(spec.items[i].action); }), caption = element('span', '', item.label);
+      entry.append(icon(item.icon), caption); entry.setAttribute('role', 'menuitemradio'); entry.setAttribute('aria-checked', i === selected); menu.append(entry);
+      return {entry,caption};
     });
     openPopup(b, menu);
   });
+  const chosen = b ? element('span', 'toolbar-choice-label') : null, arrow = b ? icon('chevron-down') : null;
+  let shownIcon;
   if (b) { b.setAttribute('aria-label', spec.label); b.title = spec.label; row.append(b); }
   row.setAttribute('role', spec.segmented ? 'radiogroup' : 'group'); row.setAttribute('aria-label', spec.label);
   function update(option) {
-    const items = option.Choice.items; selected = items.findIndex(i => i.selected);
-    if (b) { const item = items[selected] || items[0]; b.replaceChildren(icon(item.icon), element('span', 'toolbar-choice-label', item.label), icon('chevron-down')); }
-    buttons.forEach((button, i) => { button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', items[i].selected); button.setAttribute('aria-pressed', items[i].selected); });
+    spec = option.Choice;
+    const items = spec.items; selected = items.findIndex(i => i.selected);
+    row.setAttribute('aria-label', spec.label);
+    if (spec.columns) row.title = spec.label;
+    if (b) { b.setAttribute('aria-label', spec.label); b.title = spec.label; }
+    if (b) { const item = items[selected] || items[0]; if(shownIcon!==item.icon){shownIcon=item.icon;b.replaceChildren(icon(item.icon),chosen,arrow);} chosen.textContent=item.label; }
+    buttons.forEach((button, i) => { button.title = items[i].label; button.setAttribute('aria-label', items[i].label); if (captions[i]) captions[i].textContent = items[i].label; button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', items[i].selected); button.setAttribute('aria-pressed', items[i].selected); });
+    entries.forEach(({entry,caption},i) => { caption.textContent=items[i].label; entry.setAttribute('aria-checked', i === selected); });
   }
   update({ Choice: spec });
   return { row, update, segmented: buttons.length };
@@ -66,8 +81,10 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
   let tileStyle = view.tile_style, style = app.toolbar_ui({ type: 'style', style: tileStyle });
   const preferences = tile.control.style || { text: true, sliders: true };
   const standalone = tile.control.kind !== 'tool_options';
+  const copy = liveCopy(app, 'catalog').native_copy.tool_controls;
+  let copyKey = copy.more_options, copyChanged = false;
   const more = button('', () => dispatch({ type: 'activate_tile', panel, tile: tile.id }), 'toolbar-more');
-  more.append(icon('more')); more.title = 'More tool options'; more.setAttribute('aria-label', more.title);
+  more.append(icon('more')); bindCopy(more, () => copy.more_options, 'title'); bindCopy(more, () => copy.more_options, 'ariaLabel');
   target(more, item); draggable(more, item); root.append(more);
   function send(context, action) { dispatch({ type: 'toolbar_edit', context, action }); }
   function closePopup() { if (popup) { popup.remove(); popup = null; } }
@@ -136,7 +153,8 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       caption.textContent = geometry.text;
       const selected = model.bookmarks.some(m => m.selected);
       if (bookmark.dataset.selected !== String(selected)) { bookmark.replaceChildren(icon(selected ? 'minus' : 'plus')); bookmark.dataset.selected = selected; }
-      bookmark.title = selected ? 'Remove bookmark' : 'Bookmark this value'; bookmark.setAttribute('aria-label', bookmark.title);
+      bindCopy(bookmark, () => model.bookmarks.some(m => m.selected) ? copy.remove_bookmark : copy.bookmark_value, 'title');
+      bindCopy(bookmark, () => model.bookmarks.some(m => m.selected) ? copy.remove_bookmark : copy.bookmark_value, 'ariaLabel');
       const ratio = devicePixelRatio || 1;
       const pixels = Math.round(side * ratio);
       if (canvas.width !== pixels || canvas.height !== pixels) canvas.width = canvas.height = pixels;
@@ -151,7 +169,8 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       }
     }
     function update(option) {
-      if (option) current = option.value;
+      if (option) { current = option.value; field = { ...option, numeric: { ...option.numeric, digits: Number(option.numeric.digits) } }; }
+      cap.title = field.label; cap.setAttribute('aria-label', field.label); slider.setAttribute('aria-label', field.label);
       const shown = format(); fill = shown.fill; slider.value = fill; slider.setAttribute('aria-valuetext', shown.text);
       slider.disabled = !model.numeric; cap.disabled = !model.numeric;
       marks.replaceChildren(...model.bookmarks.map(mark => {
@@ -205,16 +224,18 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const info = app.toolbar_ui({ type: 'numeric_info', id: field.id, control: field.numeric, compact: true, units: true });
     let units = true;
     const change = value => send(context, { type: 'set_tool_setting', id: field.id, value });
-    const number = createNumberField({ control: field.numeric, label: field.label, labels:app.numeric_labels(field.label), icon, inline: true,
+    const errorCaption = reason => app.native_caption({type:'numeric_error',reason});
+    const number = createNumberField({ control: field.numeric, label: field.label, labels:next=>app.numeric_labels(next), errorCaption, icon, inline: true,
       widthSamples: info.samples, onChange: change,
       resolve: request => app.toolbar_ui({ type: 'number', request, compact: true, units }) });
     captureSliderContacts(number);
     const label = element('span', 'toolbar-option-label', field.label), glyph = icon(info.icon);
+    label.title = field.label;
     const face = button('', () => {}, 'toolbar-number-face');
     const faceIcon = icon(info.icon), faceLabel = element('span', 'toolbar-face-label', field.label), faceValue = element('span', 'toolbar-face-value');
     face.append(faceIcon, faceLabel, faceValue); face.title = field.label; face.setAttribute('aria-label', field.label);
     for (const node of [label, glyph]) node.ondblclick = () => send(context, { type: 'reset_tool_setting', id: field.id });
-    let current = field.value;
+    let current = field.value, editor;
     function update(value) {
       current = value; number.update(value);
       updateFace();
@@ -253,7 +274,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     }
     scrub(number.valueButton); scrub(face);
     face.addEventListener('click', () => {
-      const editor = createNumberField({ control: field.numeric, label: field.label, labels:app.numeric_labels(field.label), icon, resolve: request => app.number_input(request), onChange: change });
+      editor = createNumberField({ control: field.numeric, label: field.label, labels:next=>app.numeric_labels(next), errorCaption, icon, resolve: request => app.number_input(request), onChange: change });
       editor.update(current); openPopup(face, editor);
     });
     row.append(label, glyph, number, face);
@@ -265,7 +286,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       number.querySelector('.number-track').hidden = !preferences.sliders;
     }
     update(field.value);
-    return { row, update: option => update(option.Numeric?.value ?? option.value), orient, dispose: () => number.cancelEditing(), number };
+    return { row, update(option) { const next=option.Numeric??option; if(copyChanged||field.label!==next.label){field=next;number.relabel(next.label);if(editor?.isConnected)editor.relabel(next.label);label.textContent=faceLabel.textContent=next.label;label.title=face.title=next.label;face.setAttribute('aria-label',next.label);} update(next.value); }, orient, dispose: () => number.cancelEditing(), number };
   }
   function choice(spec, context) {
     const field = choiceField({ element, button, icon, openPopup, closePopup }, spec, action => send(context, action));
@@ -278,7 +299,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const control = createRangeControl({app, ...spec, icon, prefix:'toolbar', showSlider:preferences.sliders,
       onChange:(index,value)=>send(context,{type:'set_tool_setting',id:spec.bounds[index].id,value})});
     row.style.minWidth = preferences.sliders ? '280px' : '0'; row.append(control);
-    return {row, interval:true, update:option=>control.update(option.Range.bounds.map(f=>f.value)), dispose:()=>control.dispose()};
+    return {row, interval:true, update(option){const next=option.Range;if(copyChanged||spec.label!==next.label||spec.bounds.some((field,i)=>field.label!==next.bounds[i].label)){control.relabel(next.bounds,next.label);spec=next;}control.update(next.bounds.map(f=>f.value));}, dispose:()=>control.dispose()};
   }
   function action(spec, context) {
     return actionField({ element, button, icon }, spec, action => send(context, action));
@@ -286,7 +307,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
   function layout() {
     if (!model || !root.isConnected || !extent[0] || !extent[1]) return;
     root.classList.toggle('vertical-component', vertical); root.dataset.tileStyle = tileStyle;
-    fields.forEach(f => f.orient?.());
+    fields.forEach(f => { f.row.classList.remove('allocated'); f.orient?.(); });
     if (standalone) return;
     const fieldHeight = 24;
     const sizes = fields.map(f => {
@@ -301,22 +322,24 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
       const bounds = geometry.fields[i];
       if (!bounds && f.row.contains(document.activeElement)) more.focus();
       f.row.hidden = !bounds;
+      f.row.classList.toggle('allocated', !!bounds && !vertical);
       if (bounds) place(f.row, f.segmented && !vertical ? { ...bounds, y: bounds.y + (bounds.height - fieldHeight) / 2, height: fieldHeight } : bounds);
     });
   }
   root.updateComponent = next => {
     const value = next.component;
-    const nextSchema = key([value.context, value.numeric && { ...value.numeric, value: 0 }, value.options.map(o => o.Range ? {Range:{...o.Range,bounds:o.Range.bounds.map(f=>({...f,value:0}))}} : o.Numeric ? { Numeric: { ...o.Numeric, value: 0 } } : o.Choice ? { Choice: { ...o.Choice, items: o.Choice.items.map(i => ({ ...i, selected: false })) } } : { Action: { ...o.Action, state: { ...o.Action.state, selected: false, enabled: true } } })]);
+    copyChanged = copyKey !== copy.more_options; copyKey = copy.more_options;
+    const nextSchema = key([value.context, value.numeric && { ...fieldSemantic(value.numeric), value: 0 }, value.options.map(o => o.Range ? {Range:{...semantic(o.Range),bounds:o.Range.bounds.map(f=>({...fieldSemantic(f),value:0}))}} : o.Numeric ? { Numeric: { ...fieldSemantic(o.Numeric), value: 0 } } : o.Choice ? { Choice: { ...semantic(o.Choice), items: o.Choice.items.map(i => ({ ...semantic(i), selected: false })) } } : { Action: { ...o.Action, state: { ...semantic(o.Action.state), selected: false, enabled: true } } })]);
+    const sliderField = () => value.numeric || { id: tile.control.kind === 'brush_size_slider' ? 'size' : 'opacity', label: next.label, numeric: app.toolbar_ui({ type: 'slider_spec', control: tile.control }), value: 0.5 };
     model = value;
     if (nextSchema !== schema) {
       closePopup(); fields.forEach(f => { f.dispose?.(); f.row.remove(); }); fields = []; schema = nextSchema;
       if (standalone) {
-        const field = model.numeric || { id: tile.control.kind === 'brush_size_slider' ? 'size' : 'opacity', label: tile.label, numeric: app.toolbar_ui({ type: 'slider_spec', control: tile.control }), value: 0.5 };
-        fields.push(brushSlider(field, value.context));
+        fields.push(brushSlider(sliderField(), value.context));
       } else fields = value.options.map(o => o.Range ? range(o.Range, value.context) : o.Numeric ? numeric(o.Numeric, value.context) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
       fields.forEach(f => root.append(f.row)); measured = '';
     }
-    if (standalone) { if (value.numeric) fields[0].update(value.numeric); }
+    if (standalone) fields[0].update(sliderField());
     else fields.forEach((f, i) => f.update(value.options[i]));
     if (!measured) { layout(); measured = schema; }
   };

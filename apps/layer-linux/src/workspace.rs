@@ -1043,10 +1043,14 @@ impl Workspace {
     fn adopt_language(self: &Rc<Self>, localization: std::sync::Arc<layer_ui::Localizer>) {
         if let Some(g) = self.gpu.borrow_mut().as_mut() { g.session.set_localization(localization.clone()); }
         *self.localization.borrow_mut() = localization.clone();
+        self.proof.sync(self);
         self.layer_panel.set_localization(localization.clone());
         self.color_panel.set_localization(localization.clone());
         self.command_bar.set_localization(localization.clone());
         self.tool_settings.set_localization(localization.clone());
+        self.view_info.set_localization(localization.clone());
+        self.size_number.set_caption(&localization.text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE), "", localization.clone());
+        self.opacity.set_caption(&localization.text(layer_ui::MessageId::TOOL_SETTING_OPACITY), "", localization.clone());
         for window in crate::text_language::owned_windows(&self.window) {
             crate::text_language::visit(window.upcast_ref(), &mut |widget| {
                 if let Some(control) = widget.downcast_ref::<crate::number_control::NumberControl>() { control.update_localization(localization.clone()); }
@@ -1174,12 +1178,12 @@ impl Workspace {
         let effects = Rc::new(crate::effects::EffectPanels::new());
         let size_number = crate::number_control::NumberControl::new(
             NumericControl::brush_size(),
-            "Brush size",
+            &localization.text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE),
             "",
          localization.clone());
         size_number.set_widget_name("brush-size");
         let opacity =
-            crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "", localization.clone());
+            crate::number_control::NumberControl::new(NumericControl::percent(), &localization.text(layer_ui::MessageId::TOOL_SETTING_OPACITY), "", localization.clone());
         opacity.set_width_request(100);
         let color = crate::color_editor::ColorButton::new();
         let status = gtk::Label::new(None);

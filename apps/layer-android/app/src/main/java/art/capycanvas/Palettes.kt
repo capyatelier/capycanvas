@@ -134,7 +134,7 @@ internal class PaletteGeometry {
     fun slot(point: Offset): Int? = if (!viewport.contains(point)) null else cells?.slot(point - origin, count)
 }
 
-internal data class PaletteMenuState(val sections: JSONArray, val point: Offset, val owner: Any)
+internal data class PaletteMenuState(val sections: JSONArray, val point: Offset, val owner: Any, val target: JSONObject)
 internal data class PaletteDialog(val kind: String, val id: Long? = null, val initial: String = "")
 
 internal class PaletteController(val host: CanvasHost) {
@@ -194,7 +194,7 @@ internal class PaletteController(val host: CanvasHost) {
         val request = ++menuGeneration
         contactHeld = held
         host.query(obj("type" to "palette_menu", "target" to target)) { sections ->
-            if (request == menuGeneration && drag?.started != true && sections is JSONArray) menu = PaletteMenuState(sections, point, owner)
+            if (request == menuGeneration && drag?.started != true && sections is JSONArray) menu = PaletteMenuState(sections, point, owner, target)
         }
     }
     fun closeMenu() { menuGeneration++; menu = null }
@@ -385,9 +385,10 @@ private fun Modifier.paletteKeys(activate: () -> Unit, menu: (() -> Unit)?): Mod
             }
         }
         controller.menu?.takeIf { it.owner === owner }?.let { menu ->
+            val model = remember(menu) { obj("sections" to menu.sections) }
             Box(Modifier.offset { (menu.point - panelOrigin).round() }.size(1.dp)) {
-                WorkspaceMenu(host, obj("sections" to menu.sections), preserveContact = controller.contactHeld,
-                    command = controller::command, dismiss = controller::closeMenu)
+                WorkspaceMenu(host, model, preserveContact = controller.contactHeld,
+                    command = controller::command, copy = { host.menuCopy(obj("type" to "palette_menu", "target" to menu.target)) }, dismiss = controller::closeMenu)
             }
         }
     }

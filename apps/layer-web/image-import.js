@@ -1,6 +1,8 @@
+import {liveCopy,bindCopy} from './localization.js';
 // Browser transport and hit targets only. Rust captures camera coordinates,
 // validates layer destinations, prepares the entire batch and owns its history.
 export function createImageImport({app,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,interpret}) {
+  const bootstrap=liveCopy(app,"bootstrap_view"),delivery=liveCopy(app,"document_delivery_copy");
   let incoming=null,control=null;
   const command=id=>app.state().commands.find(c=>c.id===id);
   const clear=()=>document.querySelectorAll('.external-image-drop').forEach(row=>row.classList.remove('external-image-drop','layer-drop-before','layer-drop-after','layer-drop-into'));
@@ -44,8 +46,8 @@ export function createImageImport({app,canvas,dispatch,applyChange,wake,element,
         if(!files?.length){applyChange(app.finish_document(id,false));return;}
         control=app.capture_control();
         progress=element('aside','file-progress');progress.setAttribute('role','status');
-        const label=element('span','','Preparing images…');
-        progress.append(label,button('Cancel',()=>{control.cancel();label.textContent='Cancelling…';}));document.body.append(progress);
+        let cancelling=false;const caption=()=>cancelling?delivery.cancelling:bootstrap.preparing_document,label=element('span','',caption);
+        progress.append(label,button(()=>bootstrap.common.cancel,()=>{control.cancel();cancelling=true;bindCopy(label,caption);}));document.body.append(progress);
         prepared=await gpuOperation(()=>app.prepare_images(request,files,interpret,control));
         const batch=prepared;prepared=null;applyChange(app.adopt_images(batch));wake();message('');
       } catch(error) {

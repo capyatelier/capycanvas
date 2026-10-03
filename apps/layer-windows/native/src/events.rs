@@ -88,6 +88,7 @@ impl CapyPointer {
     }
 }
 /// Validate the whole ingress batch before any session actions can run.
+#[cfg(any(target_os = "windows", test))]
 pub fn validate_batch(records: &[CapyPointer]) -> Result<(), &'static str> {
     for sample in records {
         sample.validate()?;

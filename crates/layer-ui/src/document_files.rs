@@ -24,17 +24,55 @@ impl FileFailure {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DocumentHostErrorCopy { Color(crate::ColorFeatureError), Profile(crate::ColorFeatureError), Preset(crate::ColorFeatureError) }
-impl DocumentHostErrorCopy {
-    pub fn message(&self, localization: &Localizer) -> String {
-        let reason=match self { Self::Color(reason)|Self::Profile(reason)|Self::Preset(reason)=>reason };
-        if let crate::ColorFeatureError::Diagnostic(detail)=reason { return detail.clone(); }
-        match self { Self::Color(reason)=>reason.message(localization),Self::Profile(reason)=>reason.profile_message(localization),Self::Preset(reason)=>reason.preset_message(localization) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentIdleReason { CanvasInteraction, WaitTransform, ApplyCrop, ApplyTransform, CanvasOperation }
+impl DocumentIdleReason {
+    pub fn message(self, localizer: &Localizer) -> std::sync::Arc<str> {
+        localizer.text(match self {
+            Self::CanvasInteraction => MessageId::COLOR_PROOF_FINISH_CANVAS_INTERACTION,
+            Self::WaitTransform => MessageId::COMMANDS_WAIT_FOR_TRANSFORM,
+            Self::ApplyCrop => MessageId::COMMANDS_APPLY_OR_CANCEL_THE_CROP_FIRST,
+            Self::ApplyTransform => MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST,
+            Self::CanvasOperation => MessageId::DOCUMENTS_ERROR_CANVAS_OPERATION,
+        })
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostRequestFailure { ActionFailed, KeymapTooLarge }
+impl HostRequestFailure {
+    pub fn message(self, localization: &Localizer) -> String {
+        localization.text(match self {
+            Self::ActionFailed => MessageId::COMMON_ACTION_FAILED,
+            Self::KeymapTooLarge => MessageId::DOCUMENTS_DELIVERY_KEYMAP_TOO_LARGE,
+        }).to_string()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "reason", rename_all = "snake_case")]
+pub enum DocumentHostErrorCopy { Document(DocumentHostError), Delivery(crate::DocumentDeliveryMessage), Transport(crate::DocumentTransportRefusal), HostRequest(HostRequestFailure), Color(crate::ColorFeatureError), Proof(crate::ColorFeatureError), Profile(crate::ColorFeatureError), Preset(crate::ColorFeatureError), ExportPreferences(crate::ColorFeatureError) }
+impl DocumentHostErrorCopy {
+    pub fn message(&self, localization: &Localizer) -> String {
+        match self {
+            Self::Document(reason) => reason.message(localization),
+            Self::Proof(reason) => reason.proof_message(localization),
+            Self::Delivery(reason) => reason.message(localization),
+            Self::Transport(reason) => reason.message(localization).to_string(),
+            Self::HostRequest(reason) => reason.message(localization),
+            Self::ExportPreferences(reason) => crate::DocumentDeliveryMessage::ExportPreferences { detail: reason.preset_message(localization) }.message(localization),
+            Self::Color(crate::ColorFeatureError::Diagnostic(detail)) | Self::Profile(crate::ColorFeatureError::Diagnostic(detail)) | Self::Preset(crate::ColorFeatureError::Diagnostic(detail)) => detail.clone(),
+            Self::Color(reason) => reason.message(localization),
+            Self::Profile(reason) => reason.profile_message(localization),
+            Self::Preset(reason) => reason.preset_message(localization),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DocumentHostError {
     NewWindowUnavailable, DrawingTabsUnavailable, ChooseDeviceFile, ChooseFilename, ProjectWriterFailed, NoDrawingToOpen, LookupImportFailed,
 }
@@ -271,8 +309,20 @@ pub(super) struct DocumentFiles {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn retire_host_request(&mut self, id: u32) -> Result<(), String> {
+        let index = self.state.requests.iter().position(|request| request.id == id).ok_or("Unknown host request")?;
+        if matches!(self.state.requests[index].kind, HostRequestKind::Document { .. }) {
+            return Err("Complete document requests through the document service".into());
+        }
+        self.state.requests.remove(index);
+        Ok(())
+    }
     pub fn set_host_error(&mut self, error: Option<String>) {
         self.state.host_error=error;self.files.host_error_copy=None;
+    }
+    pub fn set_host_error_copy(&mut self, reason: Option<DocumentHostErrorCopy>) {
+        self.set_host_error(reason.as_ref().map(|reason| reason.message(self.localization())));
+        self.files.host_error_copy=reason;
     }
     pub fn complete_document_request_failed(&mut self, id: u32, reason: DocumentHostErrorCopy) -> Result<UiChange, String> {
         let change=self.complete_document_request(id, Err(reason.message(self.localization())))?;
@@ -306,7 +356,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn numbered_document_name(&self, id: MessageId, number: u64) -> String {
         let mut args = FluentArgs::new();
-        args.set("number", number.to_string());
+        args.set("number", number);
         self.localization().format(id, &args)
     }
     /// Hosts validate/decode projects off-thread first. A fresh session avoids
@@ -570,13 +620,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.requests.retain(|r| r.id != id);
         let success = result == Ok(true);
         let cut = self.files.cut.take().filter(|_| cutting && success);
-        let failure = result.err().map(|diagnostic| {
+        if let Err(diagnostic) = result {
             if lookup {
                 eprintln!("Lookup import: {diagnostic}");
-                DocumentHostError::LookupImportFailed.message(self.localization())
-            } else { diagnostic }
-        });
-        self.set_host_error(failure);
+                self.set_host_error_copy(Some(DocumentHostErrorCopy::Document(DocumentHostError::LookupImportFailed)));
+            } else { self.set_host_error(Some(diagnostic)); }
+        } else { self.set_host_error(None); }
         if save
             && success
             && let Some((checkpoint, location)) = snapshot
@@ -690,19 +739,25 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    fn require_document_interaction_idle(&self) -> Result<(), String> {
-        self.require_idle()?;
-        if self.content_bounds.baking() {
-            Err(self.localization().text(MessageId::COMMANDS_WAIT_FOR_TRANSFORM).to_string())
-        } else if self.operation.active() {
-            Err(self.operation_refusal().to_string())
+    fn document_interaction_idle_reason(&self) -> Option<DocumentIdleReason> {
+        if !self.canvas_idle() { Some(DocumentIdleReason::CanvasInteraction) }
+        else if self.content_bounds.baking() { Some(DocumentIdleReason::WaitTransform) }
+        else if self.operation.active() {
+            Some(if self.cropping() { DocumentIdleReason::ApplyCrop } else { DocumentIdleReason::ApplyTransform })
         } else if (self.region_tools.busy() && !self.refine_previewing())
             || self.targeted_curve_busy() || self.auto_levels.is_some()
             || self.eyedropper.calibration.as_ref().is_some_and(|calibration| calibration.request.is_some()) {
-            Err(FileFailure::CanvasOperation.message(self.localization()))
-        } else {
-            Ok(())
-        }
+            Some(DocumentIdleReason::CanvasOperation)
+        } else { None }
+    }
+    fn require_document_interaction_idle(&self) -> Result<(), String> {
+        self.document_interaction_idle_reason().map_or(Ok(()), |reason| Err(reason.message(self.localization()).to_string()))
+    }
+    pub fn document_idle_reason(&self) -> Option<DocumentIdleReason> {
+        self.document_interaction_idle_reason().or_else(|| self.pending_filters.is_some().then_some(DocumentIdleReason::CanvasOperation))
+    }
+    pub(crate) fn require_proof_idle(&self) -> Result<(), crate::ColorFeatureError> {
+        self.document_idle_reason().map_or(Ok(()), |reason| Err(reason.into()))
     }
 
     /// Library-only validation owns private GPU work and cannot change document
@@ -723,12 +778,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn require_document_idle(&self) -> Result<(), String> {
-        self.require_document_interaction_idle()?;
-        if self.pending_filters.is_some() {
-            Err(FileFailure::CanvasOperation.message(self.localization()))
-        } else {
-            Ok(())
-        }
+        self.document_idle_reason().map_or(Ok(()), |reason| Err(reason.message(self.localization()).to_string()))
     }
 }
 
@@ -736,6 +786,173 @@ impl<R: CanvasRenderer> UiSession<R> {
 mod localization_tests {
     use super::*;
     use crate::session::test_support::{Recorder, layer};
+
+    #[test]
+    fn retired_typed_host_request_failures_follow_language_without_changing_document_or_literal_errors() {
+        let mut session = UiSession::blank_localized(Recorder::default(), [256,256], Platform::Windows, Localizer::shared(UiLanguage::English)).unwrap();
+        layer(&mut session, LayerAction::New { group:false, clipped:false });
+        session.dispatch(UiAction::OpenSettings { page:SettingsPage::Shortcuts }).unwrap();
+        let document = session.engine.document().clone();
+        let checkpoint = session.engine.checkpoint();
+        let files = serde_json::to_value(&session.state.document_file).unwrap();
+        let rendering = (session.engine.backend().composites, session.engine.backend().dabs, session.engine.backend().snapshot_requests.len());
+        for reason in [HostRequestFailure::ActionFailed, HostRequestFailure::KeymapTooLarge] {
+            session.dispatch(UiAction::Preferences { action:PreferenceAction::ChooseKeymapFile }).unwrap();
+            let id = session.state.requests.last().unwrap().id;
+            let action: UiAction = serde_json::from_value(serde_json::json!({"type":"complete_request_failure","id":id,"reason":reason})).unwrap();
+            assert!(action.is_host_report());
+            session.dispatch(action.clone()).unwrap();
+            assert!(!session.state.requests.iter().any(|request| request.id == id));
+            let requests = serde_json::to_value(&session.state.requests).unwrap();
+            assert!(session.dispatch(action).is_err());
+            for language in UiLanguage::ALL {
+                session.set_localization(Localizer::shared(language));
+                assert_eq!(session.state.host_error, Some(reason.message(session.localization())));
+                assert_eq!(session.files.host_error_copy, Some(DocumentHostErrorCopy::HostRequest(reason)));
+                assert_eq!(session.engine.document(), &document);
+                assert_eq!(session.engine.checkpoint(), checkpoint);
+                assert_eq!(serde_json::to_value(&session.state.document_file).unwrap(), files);
+                assert_eq!(serde_json::to_value(&session.state.requests).unwrap(), requests);
+                assert_eq!((session.engine.backend().composites, session.engine.backend().dabs, session.engine.backend().snapshot_requests.len()), rendering);
+            }
+        }
+        session.request_document(DocumentRequest::Open).unwrap();
+        let id = session.files.pending.as_ref().unwrap().0;
+        let error = session.state.host_error.clone();
+        assert!(session.dispatch(UiAction::CompleteRequestFailure { id, reason:HostRequestFailure::ActionFailed }).is_err());
+        assert_eq!(session.state.host_error, error);
+        assert!(session.state.requests.iter().any(|request| request.id == id));
+        session.complete_document_request(id, Ok(false)).unwrap();
+        session.dispatch(UiAction::Preferences { action:PreferenceAction::ChooseKeymapFile }).unwrap();
+        let id = session.state.requests.last().unwrap().id;
+        let literal = "literal İı ไทย { $name }\n{\"type\":\"complete_request_failure\",\"reason\":\"keymap_too_large\"}";
+        session.dispatch(UiAction::CompleteRequest { id, error:Some(literal.into()) }).unwrap();
+        for language in UiLanguage::ALL {
+            session.set_localization(Localizer::shared(language));
+            assert_eq!(session.state.host_error.as_deref(), Some(literal));
+            assert!(session.files.host_error_copy.is_none());
+            assert_eq!(session.engine.document(), &document);
+            assert_eq!(session.engine.checkpoint(), checkpoint);
+        }
+        session.dispatch(UiAction::CloseSettings).unwrap();
+        session.dispatch(UiAction::Invoke { command:CommandId::Undo }).unwrap();
+        assert_eq!(session.engine.document().layers.len() + 1, document.layers.len());
+        session.dispatch(UiAction::Invoke { command:CommandId::Redo }).unwrap();
+        assert_eq!(session.engine.document().layers.iter().map(|layer| layer.id).collect::<Vec<_>>(), document.layers.iter().map(|layer| layer.id).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn retained_export_preferences_warning_refreshes_after_task_retirement_without_document_changes() {
+        let mut session = UiSession::blank_localized(Recorder::default(), [256,256], Platform::Windows, Localizer::shared(UiLanguage::English)).unwrap();
+        session.state.document_file.unsaved_name = Some("Untitled { $name } 🖌".into());
+        layer(&mut session, LayerAction::New { group: false, clipped: false });
+        session.request_document(DocumentRequest::Export { name: "literal 🖌.png".into() }).unwrap();
+        let id = session.files.pending.as_ref().unwrap().0;
+        session.complete_document_request(id, Ok(true)).unwrap();
+        assert!(session.files.pending.is_none());
+        assert!(!session.state.requests.iter().any(|request| request.id == id));
+        let document = session.engine.document().clone();
+        let checkpoint = session.engine.checkpoint();
+        let files = serde_json::to_value(&session.state.document_file).unwrap();
+        let requests = serde_json::to_value(&session.state.requests).unwrap();
+        let rendering = (session.engine.backend().composites, session.engine.backend().dabs, session.engine.backend().snapshot_requests.len());
+        for reason in [crate::ColorFeatureError::PresetNameInvalid, crate::ColorFeatureError::PresetChanged,
+            crate::ColorFeatureError::Diagnostic("literal { $name } 🖌\n{\"color_feature_error\":\"PresetChanged\"}".into())] {
+            session.set_host_error_copy(Some(DocumentHostErrorCopy::ExportPreferences(reason.clone())));
+            for language in UiLanguage::ALL.into_iter().chain([UiLanguage::English]) {
+                session.set_localization(Localizer::shared(language));
+                let expected = crate::DocumentDeliveryMessage::ExportPreferences { detail: reason.preset_message(session.localization()) }.message(session.localization());
+                assert_eq!(session.state.host_error.as_deref(), Some(expected.as_str()), "{}", language.tag());
+                if let crate::ColorFeatureError::Diagnostic(detail) = &reason { assert!(session.state.host_error.as_ref().unwrap().contains(detail)); }
+                assert_eq!(session.files.host_error_copy, Some(DocumentHostErrorCopy::ExportPreferences(reason.clone())));
+                assert_eq!(session.engine.document(), &document);
+                assert_eq!(session.engine.checkpoint(), checkpoint);
+                assert_eq!(serde_json::to_value(&session.state.document_file).unwrap(), files);
+                assert_eq!(serde_json::to_value(&session.state.requests).unwrap(), requests);
+                assert!(session.files.pending.is_none());
+                assert_eq!((session.engine.backend().composites, session.engine.backend().dabs, session.engine.backend().snapshot_requests.len()), rendering);
+            }
+        }
+        let literal = "literal { $name } 🖌 {\"color_feature_error\":\"PresetChanged\"}";
+        session.set_host_error(Some(literal.into()));
+        for language in UiLanguage::ALL {
+            session.set_localization(Localizer::shared(language));
+            assert_eq!(session.state.host_error.as_deref(), Some(literal));
+            assert!(session.files.host_error_copy.is_none());
+        }
+        session.set_host_error_copy(None);
+        session.set_localization(Localizer::shared(UiLanguage::English));
+        assert!(session.state.host_error.is_none());
+        assert!(session.files.host_error_copy.is_none());
+    }
+
+    #[test]
+    fn typed_host_failures_retain_semantic_reasons_and_literal_arguments_in_every_language() {
+        use crate::{DocumentDeliveryMessage as Delivery, DocumentTransportRefusal as Transport};
+        let literal="Éİı ไทย Tiếng Việt 雪 { $name }";
+        let mut cases=vec![
+            (DocumentHostErrorCopy::Delivery(Delivery::ClipboardUnavailable),MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_UNAVAILABLE,None),
+            (DocumentHostErrorCopy::Delivery(Delivery::ClipboardTooLarge),MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_TOO_LARGE,None),
+            (DocumentHostErrorCopy::Delivery(Delivery::ClipboardEmpty),MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_EMPTY,None),
+            (DocumentHostErrorCopy::Delivery(Delivery::ConvertedFilenameInvalid),MessageId::DOCUMENTS_DELIVERY_CONVERTED_FILENAME_INVALID,None),
+            (DocumentHostErrorCopy::Delivery(Delivery::ChooseDifferent),MessageId::COLOR_FEATURES_COLOR_CHOOSE_DIFFERENT,None),
+            (DocumentHostErrorCopy::Delivery(Delivery::ClipboardFormats {formats:literal.into()}),MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_FORMATS,Some("formats")),
+            (DocumentHostErrorCopy::Delivery(Delivery::ExportExtension {extension:literal.into()}),MessageId::DOCUMENTS_DELIVERY_EXPORT_EXTENSION,Some("extension")),
+            (DocumentHostErrorCopy::Delivery(Delivery::ClipboardShared {detail:literal.into()}),MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_SHARED,Some("detail")),
+            (DocumentHostErrorCopy::Delivery(Delivery::OutputCleanup {detail:literal.into()}),MessageId::DOCUMENTS_DELIVERY_OUTPUT_CLEANUP,Some("detail")),
+            (DocumentHostErrorCopy::Delivery(Delivery::ExportPreferences {detail:literal.into()}),MessageId::DOCUMENTS_DELIVERY_EXPORT_PREFERENCES,Some("detail")),
+        ];
+        for (reason,id) in [
+            (DocumentHostError::NewWindowUnavailable,MessageId::DOCUMENTS_ERROR_NEW_WINDOW_UNAVAILABLE),
+            (DocumentHostError::DrawingTabsUnavailable,MessageId::DOCUMENTS_ERROR_TABS_UNAVAILABLE),
+            (DocumentHostError::ChooseDeviceFile,MessageId::DOCUMENTS_ERROR_DEVICE_FILE),
+            (DocumentHostError::ChooseFilename,MessageId::DOCUMENTS_ERROR_FILENAME),
+            (DocumentHostError::ProjectWriterFailed,MessageId::DOCUMENTS_ERROR_PROJECT_WRITER),
+            (DocumentHostError::NoDrawingToOpen,MessageId::DOCUMENTS_ERROR_NO_DRAWING),
+            (DocumentHostError::LookupImportFailed,MessageId::RESOURCES_LOOKUP_FAILED),
+        ] { cases.push((DocumentHostErrorCopy::Document(reason),id,None)); }
+        for (reason,id) in [
+            (Transport::SnapshotChanged,MessageId::DOCUMENTS_REFUSAL_SNAPSHOT_CHANGED),
+            (Transport::OpenSnapshotChanged,MessageId::DOCUMENTS_REFUSAL_OPEN_SNAPSHOT_CHANGED),
+            (Transport::RestoreOperation,MessageId::DOCUMENTS_REFUSAL_RESTORE_OPERATION),
+            (Transport::RecoveryGpuChanged,MessageId::DOCUMENTS_REFUSAL_RECOVERY_GPU_CHANGED),
+            (Transport::SwitchGpuChanged,MessageId::DOCUMENTS_REFUSAL_SWITCH_GPU_CHANGED),
+            (Transport::PaintingUnavailable,MessageId::DOCUMENTS_REFUSAL_PAINTING_UNAVAILABLE),
+            (Transport::RecoveryServiceUnavailable,MessageId::DOCUMENTS_REFUSAL_RECOVERY_SERVICE_UNAVAILABLE),
+            (Transport::RecoveryInProgress,MessageId::DOCUMENTS_REFUSAL_RECOVERY_IN_PROGRESS),
+            (Transport::SwitchOperation,MessageId::DOCUMENTS_REFUSAL_SWITCH_OPERATION),
+            (Transport::ChangeInProgress,MessageId::DOCUMENTS_REFUSAL_CHANGE_IN_PROGRESS),
+            (Transport::SwitchDialog,MessageId::DOCUMENTS_REFUSAL_SWITCH_DIALOG),
+            (Transport::CloseOperation,MessageId::DOCUMENTS_REFUSAL_CLOSE_OPERATION),
+            (Transport::SelectedChanged,MessageId::DOCUMENTS_REFUSAL_SELECTED_CHANGED),
+            (Transport::OpenOperation,MessageId::DOCUMENTS_REFUSAL_OPEN_OPERATION),
+            (Transport::BatchOpening,MessageId::DOCUMENTS_REFUSAL_BATCH_OPENING),
+            (Transport::OpenDrawingsOperation,MessageId::DOCUMENTS_REFUSAL_OPEN_DRAWINGS_OPERATION),
+        ] { cases.push((DocumentHostErrorCopy::Transport(reason),id,None)); }
+        let mut session=UiSession::blank_localized(Recorder::default(),[96,96],Platform::Web,Localizer::shared(UiLanguage::English)).unwrap();
+        let checkpoint=session.engine.checkpoint();let document=session.engine.document().clone();
+        let rendering=(session.engine.backend().composites,session.engine.backend().dabs,session.engine.backend().snapshot_requests.len());
+        for (reason,id,argument) in cases {
+            let encoded=serde_json::to_value(&reason).unwrap();
+            assert_eq!(serde_json::from_value::<DocumentHostErrorCopy>(encoded).unwrap(),reason);
+            session.request_document(DocumentRequest::Open).unwrap();let request=session.files.pending.as_ref().unwrap().0;
+            session.complete_document_request_failed(request,reason.clone()).unwrap();
+            assert!(session.complete_document_request_failed(request,DocumentHostErrorCopy::HostRequest(HostRequestFailure::ActionFailed)).is_err());
+            assert_eq!(session.files.host_error_copy,Some(reason.clone()));
+            for language in UiLanguage::ALL {
+                session.set_localization(Localizer::shared(language));
+                let expected=if let Some(argument)=argument {let mut args=FluentArgs::new();args.set(argument,literal);session.localization().format(id,&args)}else{session.localization().text(id).to_string()};
+                assert_eq!(session.state.host_error.as_deref(),Some(expected.as_str()));
+                assert_eq!(session.files.host_error_copy,Some(reason.clone()));
+                assert_eq!(session.engine.checkpoint(),checkpoint);assert_eq!(session.engine.document(),&document);
+                assert_eq!((session.engine.backend().composites,session.engine.backend().dabs,session.engine.backend().snapshot_requests.len()),rendering);
+                assert!(!session.state.requests.iter().any(|pending|pending.id==request));
+            }
+        }
+        let diagnostic="{\"document_host_error\":{\"type\":\"transport\",\"reason\":\"switch_dialog\"}} literal 雪";
+        session.set_host_error(Some(diagnostic.into()));
+        for language in UiLanguage::ALL {session.set_localization(Localizer::shared(language));assert_eq!(session.state.host_error.as_deref(),Some(diagnostic));assert!(session.files.host_error_copy.is_none());}
+    }
 
     #[test]
     fn completed_typed_host_failure_refreshes_and_literal_replacement_clears_its_source() {

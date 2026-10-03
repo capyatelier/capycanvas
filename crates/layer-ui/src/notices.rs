@@ -20,15 +20,26 @@ pub struct NoticeAction {
     pub label: String,
 }
 
-#[derive(Clone, Copy)]
-enum NoticeCopy { Drawing(DrawingRefusal), Stroke(StrokeRefusal) }
+#[derive(Clone)]
+enum NoticeCopy { Drawing(DrawingRefusal), Stroke(StrokeRefusal), Message(MessageId), Reference { message: MessageId, name: std::sync::Arc<str> } }
 
 impl NoticeCopy {
-    fn text(self, localization: &Localizer) -> String {
+    fn text(&self, localization: &Localizer) -> String {
         match self {
-            Self::Drawing(reason) => drawing_refusal_text(reason, localization),
-            Self::Stroke(reason) => stroke_refusal_text(reason, localization),
+            Self::Drawing(reason) => drawing_refusal_text(*reason, localization),
+            Self::Stroke(reason) => stroke_refusal_text(*reason, localization),
+            Self::Message(message) | Self::Reference { message, .. } => localization.text(*message),
         }.to_string()
+    }
+    fn action_label(&self, localization: &Localizer) -> Option<String> {
+        match self {
+            Self::Stroke(StrokeRefusal::NoCloneSource) => Some(CommandId::CloneSourceArm.localized_label(localization).to_string()),
+            Self::Reference { name, .. } => {
+                let mut args = FluentArgs::new(); args.set("name", name.as_ref());
+                Some(localization.format(MessageId::RESOURCES_REFERENCE_USE_LAYER, &args))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -84,11 +95,9 @@ pub(super) const NO_REFERENCE_BELOW: MessageId = MessageId::COMMANDS_REFUSAL_NOT
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn refresh_notice_localization(&mut self) {
-        if let (Some(copy), Some(notice)) = (self.notices.copy, &mut self.state.notice) {
+        if let (Some(copy), Some(notice)) = (self.notices.copy.as_ref(), &mut self.state.notice) {
             notice.text = copy.text(&self.state.localization);
-            if matches!(copy, NoticeCopy::Stroke(StrokeRefusal::NoCloneSource)) {
-                notice.action = Some(NoticeAction { label: CommandId::CloneSourceArm.localized_label(&self.state.localization).to_string() });
-            }
+            notice.action = copy.action_label(&self.state.localization).map(|label| NoticeAction { label });
             self.notices.changed = true;
         }
     }
@@ -104,6 +113,11 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn notify(&mut self, text: impl Into<String>) {
         self.raise_notice(text.into(), None);
+    }
+
+    pub fn raise_message_notice(&mut self, message: MessageId) {
+        self.raise_notice(self.localization().text(message).to_string(), None);
+        self.notices.copy = Some(NoticeCopy::Message(message));
     }
 
     pub(super) fn raise_notice(&mut self, text: String, action: Option<(String, UiAction)>) {
@@ -181,7 +195,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         match refusal {
             Some(StrokeRefusal::EmptySource(RetouchSource::References)) if self.reference_below().is_some() => self
-                .offer_reference_below("This layer is empty, and no reference layer below it is marked"),
+                .offer_reference_below(MessageId::RESOURCES_REFERENCE_EMPTY_UNMARKED),
             Some(refusal) => {
                 let action = (refusal == StrokeRefusal::NoCloneSource).then(|| (
                     CommandId::CloneSourceArm.localized_label(self.localization()).to_string(),
@@ -242,18 +256,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Wand and Fill sampling reference layers when none is marked.
     pub(super) fn notify_missing_reference(&mut self) {
         if self.reference_below().is_some() {
-            self.offer_reference_below("This tool samples reference layers, and none is marked");
+            self.offer_reference_below(MessageId::RESOURCES_REFERENCE_TOOL_UNMARKED);
         } else {
-            self.notify("This tool samples reference layers. Mark one in the Layers panel first.");
+            self.raise_message_notice(MessageId::RESOURCES_REFERENCE_TOOL_MARK_FIRST);
         }
     }
 
-    /// Explain `text` and offer to mark the nearest layer below as a
-    /// reference, in one undo step.
-    fn offer_reference_below(&mut self, text: &str) {
+    fn offer_reference_below(&mut self, message: MessageId) {
         if let Some(layer) = self.reference_below() {
-            let label = format!("Use {} as Reference", layer.name);
-            self.raise_notice(text.into(), Some((label, UiAction::Invoke { command: CommandId::UseReferenceBelow })));
+            let copy = NoticeCopy::Reference { message, name: layer.name.clone() };
+            let label = copy.action_label(self.localization()).unwrap();
+            self.raise_notice(copy.text(self.localization()), Some((label, UiAction::Invoke { command: CommandId::UseReferenceBelow })));
+            self.notices.copy = Some(copy);
         }
     }
 }
@@ -262,6 +276,31 @@ impl<R: CanvasRenderer> UiSession<R> {
 mod localization_tests {
     use super::*;
     use crate::session::test_support::session;
+
+    #[test]
+    fn reference_offer_language_refresh_retains_literal_name_and_action() {
+        let mut s = session(Platform::Gtk);
+        let name = "日本語 { $name } 🎨";
+        let id = s.engine.allocate_layer_id();
+        s.engine.apply_edit(layer_core::Edit::InsertLayer { index: 1, layer: Box::new(layer_core::Layer::paint(id, name)) }).unwrap();
+        s.notify_missing_reference();
+        let notice = s.state.notice.as_ref().unwrap().id;
+        let document = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        for language in UiLanguage::ALL {
+            s.set_localization(Localizer::shared(language));
+            let current = s.state.notice.as_ref().unwrap();
+            assert_eq!(current.id, notice);
+            assert_eq!(current.text, s.localization().text(MessageId::RESOURCES_REFERENCE_TOOL_UNMARKED).as_ref());
+            let mut args = FluentArgs::new(); args.set("name", name);
+            assert_eq!(current.action.as_ref().unwrap().label, s.localization().format(MessageId::RESOURCES_REFERENCE_USE_LAYER, &args));
+            assert!(matches!(s.notices.action, Some(UiAction::Invoke { command: CommandId::UseReferenceBelow })));
+            assert_eq!(s.engine.document(), &document);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+        }
+        s.notice_action(notice, true).unwrap();
+        assert!(s.engine.document().reference_layers.contains(&id));
+    }
 
     #[test]
     fn notice_language_refresh_preserves_identity_action_and_dry_mask_lifetime() {

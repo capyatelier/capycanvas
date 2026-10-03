@@ -9,7 +9,8 @@ pub fn curve_point_between(value:f32,lower:f32,upper:f32)->Option<f32> {
     Some(value.clamp(if low<=high {low}else{first},if low<=high {high}else{last}))
 }
 pub fn curve_reusable_knot(points:&[[f32;2]],x:f32)->Option<usize> {
-    if x==0. {return Some(0);}if x==1. {return points.len().checked_sub(1);}
+    if x==0. {return Some(0);}
+    if x==1. {return points.len().checked_sub(1);}
     points.iter().enumerate().skip(1).take(points.len().saturating_sub(2))
         .filter(|(_,p)|(p[0]-x).abs()<=0.002)
         .min_by(|a,b|(a.1[0]-x).abs().total_cmp(&(b.1[0]-x).abs()).then(a.0.cmp(&b.0))).map(|(i,_)|i)
@@ -60,9 +61,9 @@ pub fn calibrate_curves(effect:&EffectInstance,rgb:[f32;3],space:RgbSpace,page:u
         result.set(&format!("curve_{}",i+1),EffectValue::Curve(points))?;
     }
     result.validate()?;
-    for i in 0..3 {
+    for (i, &value) in input.iter().enumerate() {
         if page!=0 && usize::from(page)!=i+1 {continue;}
-        let actual=curve_value(master,curve_value(curve(&result,i as u8+1)?,input[i]));
+        let actual=curve_value(master,curve_value(curve(&result,i as u8+1)?,value));
         let linear=transform(effect,space,f64::from(actual),false);
         if !linear.is_finite() || (f64::from(actual)-normalized).abs()>f64::from(8.*f32::EPSILON)
             || (linear-target).abs()>2e-6f64.max(2e-4*target.abs()) {return Err("The curve cannot represent this correction");}

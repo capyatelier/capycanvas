@@ -152,17 +152,12 @@ impl Quadratic {
             if !divisor.is_finite() || divisor.abs() < 1e-10 {
                 return None;
             }
-            for j in col..5 {
-                system[col][j] /= divisor;
-            }
-            for i in 0..3 {
-                if i == col {
-                    continue;
-                }
-                let scale = system[i][col];
-                for j in col..5 {
-                    system[i][j] -= scale * system[col][j];
-                }
+            for value in system[col].iter_mut().skip(col) { *value /= divisor; }
+            let pivot = system[col];
+            for (i, row) in system.iter_mut().enumerate() {
+                if i == col { continue; }
+                let scale = row[col];
+                for (value, pivot) in row.iter_mut().zip(&pivot).skip(col) { *value -= scale * pivot; }
             }
         }
         let coefficients = system.map(|row| [row[3], row[4]]);
@@ -184,8 +179,8 @@ impl Quadratic {
     fn transported(&self, elapsed: u32, anchor_delta: [f64; 2]) -> Self {
         let t = f64::from(elapsed) / f64::from(WINDOW_MICROS);
         let mut result = self.clone();
-        for axis in 0..2 {
-            result.coefficients[0][axis] += anchor_delta[axis]
+        for (axis, delta) in anchor_delta.into_iter().enumerate() {
+            result.coefficients[0][axis] += delta
                 + t * (self.coefficients[1][axis] + t * self.coefficients[2][axis]);
             result.coefficients[1][axis] += 2. * t * self.coefficients[2][axis];
         }
@@ -415,7 +410,7 @@ impl LocalMotion {
         accepted.min(cap.round() as u32)
     }
 
-    fn from_delta(&self, delta: [f64; 2], time: u32) -> StrokePoint {
+    fn point_from_delta(&self, delta: [f64; 2], time: u32) -> StrokePoint {
         StrokePoint {
             position: Point {
                 x: self.anchor.position.x
@@ -448,13 +443,13 @@ impl LocalMotion {
             let gain = (2. / delta[0].hypot(delta[1])).min(1.);
             [0, 1].map(|a| base[a] + gain * delta[a])
         };
-        self.from_delta(result, time)
+        self.point_from_delta(result, time)
     }
 
     pub fn point_at(&self, time: u32) -> StrokePoint {
         // Use the responsive component for the age/distance budget.
         let end = self.responsive.position(time);
         let start = self.responsive.position(0);
-        self.from_delta([end[0] - start[0], end[1] - start[1]], time)
+        self.point_from_delta([end[0] - start[0], end[1] - start[1]], time)
     }
 }

@@ -184,8 +184,9 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         bool modified=flag(model,L"modified");reset.Visibility(modified?Visibility::Visible:Visibility::Collapsed);
         double side=graph.ActualWidth();if(side<=0)return;
         auto selected=view.GetNamedValue(L"selected",JsonValue::CreateNullValue());
+        A whites;for(auto axis:axisViews)whites.Append(axis.GetObject().GetNamedValue(L"white",JsonValue::CreateNullValue()));
         auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"side",N(side)},{L"selected",selected},
-            {L"axes",axisViews},{L"theme",S(data->theme())}}).Stringify();
+            {L"whites",whites},{L"theme",S(data->theme())}}).Stringify();
         if(next==drawn)return;drawn=next;grid.Children().Clear();dots.Children().Clear();
         for(int i=1;i<4;i++)for(int axis=0;axis<2;axis++){
             Shapes::Line l;l.X1(axis?0:side*i/4);l.Y1(axis?side*i/4:0);l.X2(axis?side:side*i/4);l.Y2(axis?side*i/4:side);

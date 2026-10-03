@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "CanvasWindow.h"
+#include "TraceFile.h"
 #include "CanvasPointerSample.h"
 #include "UiControls.h"
 #include "KeyNames.h"
@@ -97,23 +98,7 @@ HWND CanvasWindow::Handle()const {
     return handle;
 }
 void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
-    auto write=[&](std::string const& name){
-        auto pending=name+".pending";
-        {std::ofstream stream(pending);stream<<value;if(!stream)return;}
-        // Local tracing is opt-in. A transient file scanner or diagnostic reader
-        // can deny replacement; do not silently leave the previous state forever.
-        auto source=to_hstring(pending),destination=to_hstring(name);
-        for(unsigned attempt=0;;++attempt){
-            if(MoveFileExW(source.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING))break;
-            auto error=GetLastError();
-            if(attempt==4||(error!=ERROR_SHARING_VIOLATION&&error!=ERROR_ACCESS_DENIED)){
-                OutputDebugStringW((std::wstring(L"Capy trace replacement failed: ")+std::to_wstring(error)+L"\n").c_str());
-                std::ofstream(name)<<value;DeleteFileW(source.c_str());break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    };
-    write(std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json");
+    WriteTraceFile(std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json",value);
 }
 std::string CanvasWindow::SystemTheme(){
     using winrt::Windows::UI::ViewManagement::UIColorType;
@@ -1182,6 +1167,10 @@ void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject 
         auto identity="{\"process_id\":"+std::to_string(GetCurrentProcessId())+
             ",\"window_id\":"+std::to_string(windowId);
         if(full)TraceState("ui-state",identity+",\"model\":"+snapshot+"}");
+        if(full||model.HasKey(L"command_search")){
+            auto search=full?CapyUi::object(model,L"state").GetNamedValue(L"command_search",Windows::Data::Json::JsonValue::CreateNullValue()):model.GetNamedValue(L"command_search");
+            TraceState("search-state",identity+",\"search\":"+to_string(search.Stringify())+"}");
+        }
         auto view=full?CapyUi::object(CapyUi::object(model,L"state"),L"camera"):CapyUi::object(model,L"camera");
         if(view.Size())TraceState("camera-state",identity+",\"camera\":"+to_string(view.Stringify())+"}");
     }
@@ -1195,7 +1184,7 @@ void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject 
     bool post;
     {
         std::lock_guard lock(mutex);if(closing)return;
-        snapshots.Push(std::move(snapshot),full,model.HasKey(L"workspace_update"),std::move(camera),model.HasKey(L"command_search"),model.HasKey(L"localization")?to_string(CapyUi::object(model,L"localization").Stringify()):std::string());
+        snapshots.Push(std::move(snapshot),full,model.HasKey(L"workspace_update"),std::move(camera),model.HasKey(L"command_search"),CanvasSnapshotMailbox::Localization(CapyUi::object(model,L"localization"),[](auto const& value){return to_string(value.Stringify());}));
         post=!snapshotPosted;snapshotPosted=true;
     }
     if(post)dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyPending();});

@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -109,14 +110,14 @@ internal class SizePanelActions(private val dispatch: (JSONObject) -> Unit, priv
 /** Pixels or Percent, as segments that never take focus. */
 @Composable internal fun SizeUnits(actions: SizePanelActions, view: JSONObject, tag: String, modifier: Modifier) {
     val colors = LocalPalette.current
-    Row(modifier.clip(ControlShape).background(colors.input)) {
+    Row(modifier.height(IntrinsicSize.Min).clip(ControlShape).background(colors.input)) {
         view.getJSONArray("units").objects().forEach { choice ->
             val unit = choice.getString("unit")
             val selected = unit == view.getString("unit")
-            Box(Modifier.weight(1f).heightIn(min = 40.dp).clip(ControlShape).background(if (selected) colors.active else Color.Transparent)
+            Box(Modifier.weight(1f).fillMaxHeight().heightIn(min = 40.dp).clip(ControlShape).background(if (selected) colors.active else Color.Transparent)
                 .focusProperties { canFocus = false }.testTag("$tag-unit-$unit")
                 .selectable(selected, role = Role.RadioButton) { actions.choose(obj("op" to "unit", "unit" to unit)) },
-                contentAlignment = Alignment.Center) { Text(choice.getString("label"), maxLines = 1) }
+                contentAlignment = Alignment.Center) { Text(choice.getString("label"), Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), textAlign = TextAlign.Center) }
         }
     }
 }

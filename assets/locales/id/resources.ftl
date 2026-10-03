@@ -926,6 +926,13 @@ resources-lookup-replace = Ganti…
 resources-lookup-files = Berkas pemetaan warna
 resources-lookup-unavailable = Impor tabel pemetaan warna belum tersedia di platform ini.
 resources-lookup-failed = Tidak dapat mengimpor tabel pemetaan.
+resources-layer-menu-stop-using-as-reference = Berhenti menggunakan lapisan ini sebagai acuan
+resources-coverage-from-layer-opacity = Dari Opasitas Lapisan
+resources-coverage-from-layer-mask = Dari Mask Lapisan
+resources-reference-empty-unmarked = Lapisan ini kosong dan tidak ada lapisan di bawahnya yang ditandai sebagai acuan
+resources-reference-tool-unmarked = Alat ini mengambil sampel dari lapisan acuan dan belum ada yang ditandai
+resources-reference-tool-mark-first = Alat ini mengambil sampel dari lapisan acuan. Tandai satu lapisan di panel Lapisan terlebih dahulu.
+resources-reference-use-layer = Gunakan { $name } sebagai acuan
 
 resources-analysis-updating = Memperbarui…
 resources-analysis-error = Penyesuaian ini tidak dapat diperbarui.

@@ -328,7 +328,27 @@ class AndroidWorkspaceSwitcherTest {
             host.drain(obj("type" to "set_theme", "theme" to theme)); header(compact)
             val current = view().getString("id"); val savedLayout = layout(); val savedOrder = order()
             val tag = if (compact) "header-control-900" else "workspace-switch-${ids("switcher_display").first { it != current }}"
+            val zone = if (compact) 1 else 0
+            fun presentedSource(): String {
+                    idle()
+                    var source = ""
+                    waitFor("workspace item resolves its editor geometry") {
+                        source = listOf(tag, "workspace-switch-${ids("switcher_display").firstOrNull { it != current }}", "header-control-900", "header-overflow-item-900", "header-overflow-$zone").firstOrNull { node(it) != null } ?: ""
+                        source.isNotEmpty()
+                    }
+                    if (source == "header-overflow-$zone") {
+                        val pointer = tool; val buttons = button
+                        tool = MotionEvent.TOOL_TYPE_FINGER; button = MotionEvent.BUTTON_PRIMARY
+                        tap(source); tool = pointer; button = buttons
+                        waitFor("workspace overflow representation") { node("header-overflow-item-900") != null }
+                        source = "header-overflow-item-900"
+                    }
+                    return source
+                }
             if (compact) {
+                waitFor("compact header settles after workspace refresh") {
+                    !view().optBoolean("switcher_busy") && node(tag) != null
+                }
                 tool = MotionEvent.TOOL_TYPE_FINGER; tap(tag)
                 waitFor("compact switching menu") { node("workspace-menu") != null }
                 val menu = view().getJSONObject("switcher_menu")
@@ -343,7 +363,10 @@ class AndroidWorkspaceSwitcherTest {
                 }
                 tapMenu(menuRows().first().getString("label"))
                 assertEquals(current, view().getString("id")); assertEquals(savedLayout, layout()); assertEquals(savedOrder, order())
-                tap(tag); tapMenu(menu.array("sections").getJSONArray(1).getJSONObject(0).getString("label")); tapMenu(menuRows().first().getString("label"))
+                tool = MotionEvent.TOOL_TYPE_MOUSE; button = MotionEvent.BUTTON_SECONDARY
+                down(presentedSource()); event(MotionEvent.ACTION_UP); button = MotionEvent.BUTTON_PRIMARY
+                assertOptions(current, savedLayout, savedOrder)
+                tapMenu(menuRows().first().getString("label"))
             }
             for (editing in listOf(false, true)) {
                 if (editing) {
@@ -351,23 +374,8 @@ class AndroidWorkspaceSwitcherTest {
                     waitFor("title bar editor") { host.snapshot!!.getJSONObject("header").optBoolean("editing") }
                 }
                 val zones = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values().map { it as JSONArray }
-                val zone = zones.indexOfFirst { entries -> entries.objects().any { it.getInt("id") == 900 && it.getJSONObject("item").getString("kind") == "workspaces" } }
-                assertEquals(if (compact) 1 else 0, zone)
-                fun presentedSource(): String {
-                    var source = ""
-                    waitFor("workspace item resolves its editor geometry") {
-                        source = listOf(tag, "header-control-900", "header-overflow-item-900", "header-overflow-$zone").firstOrNull { node(it) != null } ?: ""
-                        source.isNotEmpty()
-                    }
-                    if (source == "header-overflow-$zone") {
-                        val pointer = tool; val buttons = button
-                        tool = MotionEvent.TOOL_TYPE_FINGER; button = MotionEvent.BUTTON_PRIMARY
-                        tap(source); tool = pointer; button = buttons
-                        waitFor("workspace overflow representation") { node("header-overflow-item-900") != null }
-                        source = "header-overflow-item-900"
-                    }
-                    return source
-                }
+                val actualZone = zones.indexOfFirst { entries -> entries.objects().any { it.getInt("id") == 900 && it.getJSONObject("item").getString("kind") == "workspaces" } }
+                assertEquals(zone, actualZone)
                 android.util.Log.i("SwitcherAcceptance", "Context $theme compact=$compact editing=$editing choices=${ids("switcher_display")}")
                 tool = MotionEvent.TOOL_TYPE_MOUSE; button = MotionEvent.BUTTON_SECONDARY
                 down(presentedSource()); event(MotionEvent.ACTION_UP); button = MotionEvent.BUTTON_PRIMARY

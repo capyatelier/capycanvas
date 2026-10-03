@@ -9,7 +9,7 @@ pub use photo_project::{assume_source_profile, photo_project};
 mod resize;
 pub use resize::{AreaPreview, RowResampler};
 mod output_rows;
-pub use output_rows::{build_local_tone_guide, encode_working_rows_with_guide, preview_encoded_rows};
+pub use output_rows::{build_local_tone_guide, encode_working_rows_with_guide, preview_encoded_rows, WorkingRowsOptions};
 
 mod rasterize;
 pub use rasterize::rasterize_source;

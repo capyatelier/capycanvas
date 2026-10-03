@@ -1141,6 +1141,47 @@ impl Settings {
     }
 }
 
+pub(crate) fn shortcut_cannot_hold(l: &Localizer, trigger: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CANNOT_HOLD, &[("trigger", trigger)]) }
+
+pub(crate) fn shortcut_with_tools(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_WITH_TOOLS, &[("tools", tools)]) }
+
+pub(crate) fn shortcut_tooltip(l: &Localizer, label: String, shortcut: String) -> String { shortcut_format(l, MessageId::SHORTCUT_TOOLTIP, &[("label", label), ("shortcut", shortcut)]) }
+
+pub(crate) fn shortcut_modifier_key(l: &Localizer, key: String) -> String { shortcut_format(l, MessageId::SHORTCUT_MODIFIER_KEY, &[("key", key)]) }
+
+pub(crate) fn shortcut_while_held(l: &Localizer, action: String) -> String { shortcut_format(l, MessageId::SHORTCUT_WHILE_HELD, &[("action", action)]) }
+
+pub(crate) fn shortcut_brush_size(l: &Localizer, value: String) -> String { shortcut_format(l, MessageId::SHORTCUT_BRUSH_SIZE, &[("value", value)]) }
+
+pub(crate) fn shortcut_gamepad_button(l: &Localizer, button: String) -> String { shortcut_format(l, MessageId::SHORTCUT_GAMEPAD_BUTTON, &[("button", button)]) }
+
+pub(crate) fn shortcut_pad_button(l: &Localizer, button: String) -> String { shortcut_format(l, MessageId::SHORTCUT_PAD_BUTTON, &[("button", button)]) }
+
+pub(crate) fn shortcut_context_choice(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CONTEXT_CHOICE, &[("tools", tools)]) }
+
+pub(crate) fn shortcut_hold_help(l: &Localizer, key: String) -> String { shortcut_format(l, MessageId::SHORTCUT_HOLD_HELP, &[("key", key)]) }
+
+pub(crate) fn shortcut_key_context(l: &Localizer, key: String, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_KEY_CONTEXT, &[("key", key), ("tools", tools)]) }
+
+pub(crate) fn shortcut_brush_detail(l: &Localizer, tool: String) -> String { shortcut_format(l, MessageId::SHORTCUT_BRUSH_DETAIL, &[("tool", tool)]) }
+
+pub(crate) fn shortcut_context_empty(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CONTEXT_EMPTY, &[("tools", tools)]) }
+
+pub(crate) fn shortcut_key_unassigned(l: &Localizer, key: String) -> String { shortcut_format(l, MessageId::SHORTCUT_KEY_UNASSIGNED, &[("key", key)]) }
+
+pub(crate) fn shortcut_context_summary(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CONTEXT_SUMMARY, &[("tools", tools)]) }
+
+pub(crate) fn shortcut_list_and(l: &Localizer, rest: String, last: String) -> String { shortcut_format(l, MessageId::SHORTCUT_LIST_AND, &[("rest", rest), ("last", last)]) }
+
+fn shortcut_scope_overlap(l: &Localizer, key: String, action: String, scope: &BindingScope, instead: bool) -> String {
+    let (scope, tools) = match scope {
+        BindingScope::Application => ("application", String::new()),
+        BindingScope::Canvas => ("canvas", String::new()),
+        BindingScope::Tools { categories } => ("tools", categories.iter().map(|category| category.localized_label(l).to_string()).collect::<Vec<_>>().join(", ")),
+    };
+    shortcut_format(l, if instead { MessageId::SHORTCUT_SCOPE_INSTEAD } else { MessageId::SHORTCUT_SCOPE_ELSEWHERE }, &[("key", key), ("action", action), ("scope", scope.into()), ("tools", tools)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1265,45 +1306,4 @@ mod tests {
             [key("i", true, true)]
         );
     }
-}
-
-pub(crate) fn shortcut_cannot_hold(l: &Localizer, trigger: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CANNOT_HOLD, &[("trigger", trigger)]) }
-
-pub(crate) fn shortcut_with_tools(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_WITH_TOOLS, &[("tools", tools)]) }
-
-pub(crate) fn shortcut_tooltip(l: &Localizer, label: String, shortcut: String) -> String { shortcut_format(l, MessageId::SHORTCUT_TOOLTIP, &[("label", label), ("shortcut", shortcut)]) }
-
-pub(crate) fn shortcut_modifier_key(l: &Localizer, key: String) -> String { shortcut_format(l, MessageId::SHORTCUT_MODIFIER_KEY, &[("key", key)]) }
-
-pub(crate) fn shortcut_while_held(l: &Localizer, action: String) -> String { shortcut_format(l, MessageId::SHORTCUT_WHILE_HELD, &[("action", action)]) }
-
-pub(crate) fn shortcut_brush_size(l: &Localizer, value: String) -> String { shortcut_format(l, MessageId::SHORTCUT_BRUSH_SIZE, &[("value", value)]) }
-
-pub(crate) fn shortcut_gamepad_button(l: &Localizer, button: String) -> String { shortcut_format(l, MessageId::SHORTCUT_GAMEPAD_BUTTON, &[("button", button)]) }
-
-pub(crate) fn shortcut_pad_button(l: &Localizer, button: String) -> String { shortcut_format(l, MessageId::SHORTCUT_PAD_BUTTON, &[("button", button)]) }
-
-pub(crate) fn shortcut_context_choice(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CONTEXT_CHOICE, &[("tools", tools)]) }
-
-pub(crate) fn shortcut_hold_help(l: &Localizer, key: String) -> String { shortcut_format(l, MessageId::SHORTCUT_HOLD_HELP, &[("key", key)]) }
-
-pub(crate) fn shortcut_key_context(l: &Localizer, key: String, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_KEY_CONTEXT, &[("key", key), ("tools", tools)]) }
-
-pub(crate) fn shortcut_brush_detail(l: &Localizer, tool: String) -> String { shortcut_format(l, MessageId::SHORTCUT_BRUSH_DETAIL, &[("tool", tool)]) }
-
-pub(crate) fn shortcut_context_empty(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CONTEXT_EMPTY, &[("tools", tools)]) }
-
-pub(crate) fn shortcut_key_unassigned(l: &Localizer, key: String) -> String { shortcut_format(l, MessageId::SHORTCUT_KEY_UNASSIGNED, &[("key", key)]) }
-
-pub(crate) fn shortcut_context_summary(l: &Localizer, tools: String) -> String { shortcut_format(l, MessageId::SHORTCUT_CONTEXT_SUMMARY, &[("tools", tools)]) }
-
-pub(crate) fn shortcut_list_and(l: &Localizer, rest: String, last: String) -> String { shortcut_format(l, MessageId::SHORTCUT_LIST_AND, &[("rest", rest), ("last", last)]) }
-
-fn shortcut_scope_overlap(l: &Localizer, key: String, action: String, scope: &BindingScope, instead: bool) -> String {
-    let (scope, tools) = match scope {
-        BindingScope::Application => ("application", String::new()),
-        BindingScope::Canvas => ("canvas", String::new()),
-        BindingScope::Tools { categories } => ("tools", categories.iter().map(|category| category.localized_label(l).to_string()).collect::<Vec<_>>().join(", ")),
-    };
-    shortcut_format(l, if instead { MessageId::SHORTCUT_SCOPE_INSTEAD } else { MessageId::SHORTCUT_SCOPE_ELSEWHERE }, &[("key", key), ("action", action), ("scope", scope.into()), ("tools", tools)])
 }

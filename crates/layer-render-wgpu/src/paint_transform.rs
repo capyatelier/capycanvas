@@ -135,7 +135,7 @@ impl PaintTransforms {
     }
     pub fn direct_source(&self, id: LayerId) -> bool {
         self.0.iter().any(|t| t.preview.as_ref().is_some_and(|p| p.layer == id
-            && !p.transform.keep_source && !p.transform.placement.mesh.is_some())
+            && !p.transform.keep_source && p.transform.placement.mesh.is_none())
             && !t.native_preview && t.reduced.as_ref().is_some_and(|input| input.kept.is_none()))
     }
     pub fn input_requirements(&self, preview: &layer_render::TransformPreview, requested: u32, extent: [u32; 2]) -> (u32, bool) {
@@ -177,6 +177,7 @@ impl PaintTransforms {
         let values = state.display_record(preview, extent, placement, display, display_mips::Plan::at(extent, 0), [0; 4])?;
         Ok(resample::Mapped { view: inputs.sampling[0].clone(), values })
     }
+    #[expect(clippy::too_many_arguments, reason = "Paint transforms keep source placement and output sampling regions explicit")]
     pub fn render_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         id: LayerId, placement: layer_core::Affine, output: &wgpu::TextureView,
@@ -1321,6 +1322,7 @@ impl ImageTransformState {
         }) && self.reducible()
     }
     fn reducible(&self) -> bool { self.background.is_none() && self.sources[0].is_some() }
+    #[expect(clippy::too_many_arguments, reason = "Transform previews keep source level, preview geometry, and output sampling regions explicit")]
     fn render_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview, extent: [u32; 2], placement: layer_core::Affine,

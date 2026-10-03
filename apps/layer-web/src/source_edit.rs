@@ -22,7 +22,7 @@ pub struct WebSourceCandidate {
     background: [f32; 4],
     time: f32,
     clipped: u64,
-    profile: String,
+    profile: Option<String>,
     previews: Vec<SnapshotPreview>,
 }
 #[wasm_bindgen]
@@ -40,7 +40,7 @@ impl WebSourceCandidate {
     pub fn adds_layer(&self) -> bool {
         self.workflow.adds_layer()
     }
-    pub fn source_profile(&self) -> String {
+    pub fn source_profile(&self) -> Option<String> {
         self.profile.clone()
     }
 }
@@ -75,7 +75,6 @@ impl WebApp {
         let control = control.inner.clone();
         let background = s.engine().view().background_rgba_linear;
         let time = s.engine().animation_time();
-        let localization = s.localization().clone();
         Ok(future_to_promise(async move {
             output::cancelled(&control)?;
             let (converted, clipped, name) = if workflow.rasterize() {
@@ -109,7 +108,6 @@ impl WebApp {
                     .unwrap_or(0.) as u64;
                 let name = js_sys::Reflect::get(&result, &js("source_profile"))?
                     .as_string();
-                let name = layer_ui::profile_library::profile_description_name(name, &localization);
                 let converted = raster_project::unpack(&metadata, buffers, true)
                     .await?
                     .document
@@ -135,7 +133,6 @@ impl WebApp {
                 .map_err(js)?;
                 let name = js_sys::Reflect::get(&result, &js("source_profile"))?
                     .as_string();
-                let name = layer_ui::profile_library::profile_description_name(name, &localization);
                 source.validate().map_err(js)?;
                 (Arc::new(source), 0, name)
             };

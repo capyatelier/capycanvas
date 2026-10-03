@@ -612,6 +612,13 @@ resources-lookup-import = 가져오기…
 resources-lookup-replace = 바꾸기…
 resources-lookup-files = 색상 조회 파일
 resources-lookup-unavailable = 이 플랫폼에서는 아직 색상 조회 파일을 가져올 수 없습니다.
+resources-layer-menu-stop-using-as-reference = 이 레이어를 참조로 사용하지 않기
+resources-coverage-from-layer-opacity = 레이어 불투명도에서
+resources-coverage-from-layer-mask = 레이어 마스크에서
+resources-reference-empty-unmarked = 이 레이어는 비어 있고 아래에 참조로 지정된 레이어가 없습니다
+resources-reference-tool-unmarked = 이 도구는 참조 레이어에서 샘플링하지만 참조로 지정된 레이어가 없습니다
+resources-reference-tool-mark-first = 이 도구는 참조 레이어에서 샘플링합니다. 먼저 레이어 패널에서 하나를 참조로 지정하세요.
+resources-reference-use-layer = { $name } 레이어를 참조로 사용
 
 resources-analysis-updating = 업데이트 중…
 resources-analysis-error = 이 조정을 업데이트하지 못했습니다.

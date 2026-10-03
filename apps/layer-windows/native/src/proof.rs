@@ -11,7 +11,7 @@ struct Pending {
     job: ProofPreparation,
     control: CaptureControl,
     thread: JoinHandle<()>,
-    result: mpsc::Receiver<Result<Arc<layer_color::ProofLut>, String>>,
+    result: mpsc::Receiver<Result<Arc<layer_color::ProofLut>, layer_ui::ColorFeatureError>>,
 }
 pub(crate) struct Service {
     pending: Option<Pending>,
@@ -48,8 +48,8 @@ impl Service {
             let _ = pending.thread.join();
             if !pending.control.is_cancelled() && pending.job.validate(&host.session).is_ok() {
                 match result {
-                    Ok(lut) => host.proof.retain(&pending.job, lut)?,
-                    Err(error) => host.proof.fail(&host.session, &pending.job, error),
+                    Ok(lut) => if let Err(reason)=host.proof.retain(&pending.job, lut) {host.proof.fail_reason(&host.session,&pending.job,reason)},
+                    Err(reason) => host.proof.fail_reason(&host.session, &pending.job, reason),
                 }
                 host.dirty = true;
                 host.invalidate_snapshot();
@@ -59,7 +59,7 @@ impl Service {
             && host.proof.observe(&host.session).needed
             && !host.session.state().document_file.close_ready
         {
-            let job = ProofPreparation::begin(&host.session, None, None)?;
+            let job = ProofPreparation::begin(&host.session, None, None).map_err(|reason|reason.proof_message(host.session.localization()))?;
             let control = CaptureControl::default();
             let (work, cancel, wake) = (job.clone(), control.clone(), self.wake.clone());
             let (send, result) = mpsc::channel();

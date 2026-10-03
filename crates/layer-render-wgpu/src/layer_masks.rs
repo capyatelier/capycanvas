@@ -190,6 +190,7 @@ impl MaskRenderer {
     }
     /// Prepare only the mask-local pages needed by an isolated region capture.
     /// Existing GPU polygon/pixel coverage rules are shared with live editing.
+    #[expect(clippy::too_many_arguments, reason = "Mask preparation borrows device, inputs, selection storage, and dirty regions independently")]
     pub fn prepare_regions(
         &mut self,
         device: &PipelineDevice,

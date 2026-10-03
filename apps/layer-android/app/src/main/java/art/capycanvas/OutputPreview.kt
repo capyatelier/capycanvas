@@ -11,7 +11,7 @@ internal class OutputPreview(private val host:CanvasHost) {
     var busy by mutableStateOf(false)
     var images by mutableStateOf<List<ImageBitmap>>(emptyList())
     var sdr by mutableStateOf<ImageBitmap?>(null)
-    var error by mutableStateOf<String?>(null)
+    var error by mutableStateOf<Exception?>(null)
     var clipped by mutableStateOf(0L)
     var rangeBlocked by mutableStateOf(false)
     private var control=0L
@@ -31,7 +31,7 @@ internal class OutputPreview(private val host:CanvasHost) {
                         JSONObject(values[0] as String) to values.drop(1).map{comparisonBitmap(it as ByteArray)}}
                 }
                 if(!closed){clipped=result.first.optLong("clipped_channels");rangeBlocked=result.first.optBoolean("range_blocked");images=result.second.take(2);sdr=result.second.getOrNull(2)}
-            }catch(e:Exception){if(!closed)error=e.message ?: "Could not preview output"}
+            }catch(e:Exception){if(!closed)error=e}
             finally{host.drawingTabs.releaseInspection(registered);val flag=control;control=0;Native.captureFree(flag);busy=false;after?.invoke();after=null}
         }
     }

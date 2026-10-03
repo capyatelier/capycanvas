@@ -50,7 +50,11 @@ void LayerRow::init(){
     root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->swipe(0);});root.MinHeight(40);root.Padding({6,2,6,2});root.BorderThickness({0});
     root.BorderBrush(accent(data));body.ColumnSpacing(0);body.VerticalAlignment(VerticalAlignment::Center);
     AutomationProperties::SetAutomationId(root,L"layer-row-"+to_hstring(uint64_t(id)));
-    AutomationProperties::SetName(root,data->caption(L"layers",L"row"));
+    auto rowCaption=[weak]{
+        auto self=weak.lock();if(!self||!self->current())return hstring();
+        return self->data->caption(O({{L"type",S(L"layer_row")},{L"title",S(str(self->model(),L"label"))}}));
+    };
+    copyName(data,root,LocalizedCopy(rowCaption(),rowCaption));
     root.AllowDrop(true);
     root.DragOver([weak](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&self->current()&&fileDrag(event)){
         event.Handled(true);auto fraction=float(event.GetPosition(self->root).Y/std::max(1.,self->root.ActualHeight()));auto deferral=event.GetDeferral();
@@ -77,7 +81,8 @@ void LayerRow::init(){
         control.Height(30);control.HorizontalAlignment(HorizontalAlignment::Left);Grid::SetColumn(control,column);body.Children().Append(control);return control;
     };
     eye=pick(data->caption(L"layers",L"visibility"),0,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"visibility")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"visible"))}}));});
-    check=pick(data->caption(L"layers",L"select_row_help"),1,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"toggle_selection")},{L"id",N(self->id)}}));});
+    check=pick(L"",1,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"toggle_selection")},{L"id",N(self->id)}}));});
+    copyName(data,check,data->copyCaption(L"layers",L"select_row_help"));
     for(auto control:{eye,check}){control.ClearValue(FrameworkElement::HeightProperty());control.MinHeight(24);control.VerticalAlignment(VerticalAlignment::Stretch);}
     Grid::SetColumn(indent,2);body.Children().Append(indent);clip.Width(3);clip.Height(28);clip.CornerRadius({1,1,1,1});clip.Background(fill({255,233,153,165}));clip.HorizontalAlignment(HorizontalAlignment::Left);
     Grid::SetColumn(clip,3);body.Children().Append(clip);
@@ -89,7 +94,8 @@ void LayerRow::init(){
         self->data->dispatchDocument(O({{L"type",S(L"selection")},{L"action",O({{L"op",S(L"load_layer")},{L"id",N(self->id)},
             {L"mode",S(L"new")},{L"inverted",B(false)}})}}),self->epoch);});
     load.Content(icon(L"selection-load",data->theme(),24));load.Visibility(Visibility::Collapsed);
-    mask=pick(data->caption(L"layers",L"edit_mask"),7,[weak]{if(auto self=weak.lock();self&&!self->loadThumbnail(true))self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(true)}}));});
+    mask=pick(L"",7,[weak]{if(auto self=weak.lock();self&&!self->loadThumbnail(true))self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(true)}}));});
+    copyName(data,mask,data->copyCaption(L"layers",L"edit_mask"));
     for(auto pair:{std::pair{contentImage,contentTile},std::pair{maskImage,maskTile}}){
         pair.first.Width(28);pair.first.Height(28);pair.first.Stretch(Stretch::Fill);pair.first.IsHitTestVisible(false);pair.second.Children().Append(pair.first);
     }
@@ -117,7 +123,7 @@ void LayerRow::init(){
     Grid::SetColumn(name,8);body.Children().Append(name);
     rename.MinWidth(0);rename.MinHeight(24);rename.Height(24);rename.Padding({2,0,2,0});rename.Margin({6,0,2,0});rename.FontSize(data->textSize());
     rename.MaxLength(128);rename.Background(data->brush(L"input"));rename.Visibility(Visibility::Collapsed);
-    AutomationProperties::SetName(rename,data->caption(L"layers",L"name"));Grid::SetColumn(rename,8);body.Children().Append(rename);
+    copyName(data,rename,data->copyCaption(L"layers",L"name"));Grid::SetColumn(rename,8);body.Children().Append(rename);
     rename.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
         if(composingKey(e))return;
         if(e.Key()==Windows::System::VirtualKey::Enter){self->commit(false);e.Handled(true);}
@@ -138,12 +144,13 @@ void LayerRow::init(){
         }
     });
     lockImage.Width(12);lockImage.Height(12);lockImage.HorizontalAlignment(HorizontalAlignment::Left);lockImage.IsHitTestVisible(false);Grid::SetColumn(lockImage,9);body.Children().Append(lockImage);
-    grip=pick(data->caption(L"layers",L"move_layer"),10,[]{});grip.Height(12);grip.Content(icon(L"grip",data->theme(),12));grip.Opacity(.6);
+    grip=pick(L"",10,[]{});grip.Height(12);grip.Content(icon(L"grip",data->theme(),12));grip.Opacity(.6);
+    copyName(data,grip,data->copyCaption(L"layers",L"move_layer"));
     for(auto item:{std::pair{eye,L"visibility"},std::pair{check,L"selection"},std::pair{content,L"content"},
         std::pair{load,L"load"},std::pair{mask,L"mask"},std::pair{link,L"link"},std::pair{name,L"name"},std::pair{grip,L"drag"}})
         AutomationProperties::SetAutomationId(item.first,L"layer-"+to_hstring(uint64_t(id))+L"-"+item.second);
     AutomationProperties::SetAutomationId(rename,L"layer-"+to_hstring(uint64_t(id))+L"-rename");
-    AutomationProperties::SetName(contentImage,data->caption(L"layers",L"preview"));AutomationProperties::SetName(maskImage,data->caption(L"layers",L"mask_preview"));
+    copyName(data,contentImage,data->copyCaption(L"layers",L"preview"));copyName(data,maskImage,data->copyCaption(L"layers",L"mask_preview"));
     AutomationProperties::SetAutomationId(contentImage,L"layer-"+to_hstring(uint64_t(id))+L"-thumbnail");
     AutomationProperties::SetAutomationId(maskImage,L"layer-"+to_hstring(uint64_t(id))+L"-mask-thumbnail");
     root.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){

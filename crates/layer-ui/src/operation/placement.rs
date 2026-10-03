@@ -172,7 +172,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let id = current[0].id;
             let edit = if let Some(index) = placement.insertion {
                 let mut edits: Vec<_> = current.into_iter().enumerate()
-                    .map(|(i, layer)| Edit::InsertLayer { index: index + i, layer }).collect();
+                    .map(|(i, layer)| Edit::InsertLayer { index: index + i, layer: Box::new(layer) }).collect();
                 edits.push(Edit::SetActiveLayer { id });
                 Edit::Batch(edits)
             } else { Edit::Batch(current.into_iter().map(|layer| Edit::ReplaceLayer(Box::new(layer))).collect()) };

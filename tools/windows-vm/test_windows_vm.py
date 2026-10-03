@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +13,21 @@ spec.loader.exec_module(vm)
 
 
 class FixtureRunnerTests(unittest.TestCase):
+    def test_cli_timeout_defaults_and_bounded_override(self):
+        for arguments, minutes in (([], 20), (["--timeout-minutes", "90"], 90)):
+            with patch.object(sys, "argv", ["windows-vm.py", "fixtures", "localization", *arguments]), \
+                    patch.object(vm, "fixtures") as fixtures:
+                vm.main()
+            args = fixtures.call_args.args[0]
+            self.assertEqual(args.timeout_minutes, minutes)
+            self.assertEqual(args.names, ["localization"])
+        for value in ("0", "-1", "1441", "invalid"):
+            with patch.object(sys, "argv", ["windows-vm.py", "fixtures", "--timeout-minutes", value]), \
+                    patch.object(vm, "fixtures") as fixtures, patch.object(sys, "stderr"), \
+                    self.assertRaises(SystemExit):
+                vm.main()
+            fixtures.assert_not_called()
+
     def test_no_build_rejects_changed_sources_and_binaries(self):
         inputs = vm.build_inputs({"apps/layer-windows/CanvasWindow.cpp": "original",
                                   "assets/locales/ja/commands.ftl": "original-catalog"})

@@ -44,11 +44,35 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.PopupProperties
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+
+internal fun CanvasHost.menuEpoch(): Long? = snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch")
+
+internal suspend fun CanvasHost.menuCopy(request: JSONObject): JSONObject? = suspendCancellableCoroutine { continuation ->
+    val epoch = menuEpoch()
+    query(request) { value ->
+        if (continuation.isActive) continuation.resume(if (menuEpoch() != epoch) null else when (value) {
+            is JSONObject -> value
+            is JSONArray -> obj("sections" to value)
+            else -> null
+        })
+    }
+}
 
 /** Header menus, context menus and configuration options render the same Rust
  * items. They never reconstruct eligibility, naming, defaults or commands. */
 @Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, preserveContact: Boolean = false,
-    focusable: Boolean = !preserveContact, command: ((JSONObject) -> Unit)? = null, dismiss: () -> Unit) {
+    focusable: Boolean = !preserveContact, command: ((JSONObject) -> Unit)? = null,
+    copy: (suspend () -> JSONObject?)? = null, dismiss: () -> Unit) {
+    var projected by remember(menu) { mutableStateOf(menu) }
+    val currentCopy by rememberUpdatedState(copy)
+    LaunchedEffect(host, host.languageTag, menu) {
+        val tag = host.languageTag
+        val epoch = host.menuEpoch()
+        currentCopy?.invoke()?.let { if (host.languageTag == tag && host.menuEpoch() == epoch) projected = it }
+    }
+    val current = if (copy == null) menu else projected
     // A focusable Android popup cancels the contact in the activity that opened
     // it. Context menus must leave that contact with the original drag owner.
     BackHandler(!focusable, dismiss)
@@ -58,7 +82,7 @@ import org.json.JSONObject
         },
         properties = if (focusable) PopupProperties(focusable = true) else WindowlessMenu,
         shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
-        WorkspaceMenuItems(host, menu.array("sections"), dismiss, if (menu.has("title")) menu.getString("title") else null, command)
+        WorkspaceMenuItems(host, current.array("sections"), dismiss, if (current.has("title")) current.getString("title") else null, command)
     }
 }
 
@@ -81,6 +105,7 @@ internal class WindowlessMenuButton {
     var menu by mutableStateOf<JSONObject?>(null)
     var pressedAt = 0L
     var closedAt = 0L
+    var copy: (suspend () -> JSONObject?)? = null
 }
 
 internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: String, load: ((JSONObject?) -> Unit) -> Unit) =
@@ -90,13 +115,15 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
         if (button.menu == null && button.closedAt < button.pressedAt) load { button.menu = it }
     }
 
-@Composable internal fun WindowlessMenuHost(host: CanvasHost, button: WindowlessMenuButton, command: ((JSONObject) -> Unit)? = null) {
+@Composable internal fun WindowlessMenuHost(host: CanvasHost, button: WindowlessMenuButton, command: ((JSONObject) -> Unit)? = null,
+    current: JSONObject? = null) {
     PopupOwner(button.menu != null)
-    button.menu?.let { WorkspaceMenu(host, it, focusable = false, command = command) { button.menu = null; button.closedAt = android.os.SystemClock.uptimeMillis() } }
+    button.menu?.let { WorkspaceMenu(host, current ?: it, focusable = false, command = command, copy = if (current == null) button.copy else null) { button.menu = null; button.closedAt = android.os.SystemClock.uptimeMillis() } }
 }
 
 @Composable internal fun ToolVariantsButton(host: CanvasHost, anchor: JSONObject, label: String, modifier: Modifier = Modifier) {
     val button = remember(anchor.toString()) { WindowlessMenuButton() }
+    button.copy = { host.menuCopy(obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))) }
     val tint = LocalPalette.current.text
     Box(modifier.size(16.dp).semantics { contentDescription = label }
         .opensWindowlessMenu(button, label) { open ->
@@ -116,21 +143,26 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
     val colors = LocalPalette.current
     var pages by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
     var page: JSONObject? = null
-    for ((section, item) in pages) {
-        page = (page?.array("sections") ?: sections).optJSONArray(section)?.optJSONObject(item)
-        if (page == null) break
+    var currentSections = sections
+    var resolved = 0
+    for ((sectionIndex, itemIndex) in pages) {
+        page = currentSections.optJSONArray(sectionIndex)?.optJSONObject(itemIndex)
+            ?.takeIf { it.array("sections").length() > 0 } ?: break
+        currentSections = page.array("sections")
+        resolved++
     }
+    SideEffect { if (resolved < pages.size) pages = pages.take(resolved) }
     val currentPage = page
     if (currentPage != null) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).clickable { pages = pages.dropLast(1) }
+        Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).testTag("workspace-menu-back").clickable { pages = pages.dropLast(1) }
             .padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SharedIcon("down", "Back", Modifier.rotate(90f))
+            SharedIcon("down", host.bootstrap!!.getJSONObject("common").getString("back"), Modifier.rotate(90f))
             Text(currentPage.getString("label"), fontWeight = FontWeight.Bold)
         }
         HorizontalDivider(color = colors.divider)
     } else if (title != null) Text(title, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = colors.secondary)
-    (currentPage?.array("sections") ?: sections).values().mapIndexed { section, value -> section to (value as JSONArray) }
+    (currentPage?.array("sections") ?: sections).values().mapIndexed { index, value -> index to (value as JSONArray) }
         .filter { it.second.length() > 0 }.forEachIndexed { index, (sectionIndex, section) ->
         if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = colors.divider)
         section.objects().forEachIndexed { itemIndex, item ->

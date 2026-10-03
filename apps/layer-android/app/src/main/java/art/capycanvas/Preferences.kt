@@ -134,7 +134,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
 
 @Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject, open: Boolean) {
     var profilesOpen by remember { mutableStateOf(false) }
-    if(open && profilesOpen) ProfileLibraryDialog({profilesOpen=false})
+    if(open && profilesOpen) ProfileLibraryDialog(host,{profilesOpen=false})
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val paneFocus = remember { FocusRequester() }
@@ -212,7 +212,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                                     editor != null -> ShortcutEditor(host, model, editor)
                                     modifierKey != null -> {
                                         val key = modifierKey.getJSONObject("key")
-                                        PerToolPage(host, "modifier", "Hold ${modifierKey.getString("label")} to use an action until you let go.", modifierKey,
+                                        PerToolPage(host, "modifier", JSONObject(Native.nativeCaption(obj("type" to "modifier_hold", "label" to modifierKey.getString("label")).toString(),host.languageTag)).getString("text"), modifierKey,
                                             obj("type" to "reset_modifier_key", "key" to key),
                                             { obj("type" to "modifier_key_per_tool", "key" to key, "per_tool" to it) },
                                             { obj("type" to "open_modifier_picker", "key" to key, "category" to it) },
@@ -255,7 +255,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                                     }
                                 }
                                 if (model.settingsRoute() == "page:input") TriggerGroups(host, model)
-                                if(model.getString("page")=="color")TextButton({profilesOpen=true}){Text("Manage Color Profiles…")}
+                                if(model.getString("page")=="color")TextButton({profilesOpen=true}){Text(host.catalog.getJSONObject("profile_copy").getString("manage"))}
                                 model.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let {
                                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("settings-error"))
                                 }
@@ -296,7 +296,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                 trailingIcon = if (view.optString("query").isEmpty()) null else ({
                     IconButton({
                         focus.clearFocus(); host.preference(obj("type" to "search", "query" to ""))
-                    }) { SharedIcon("close", "Clear search", Modifier.size(20.dp)) }
+                    }) { SharedIcon("close", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("clear_search"), Modifier.size(20.dp)) }
                 }))
             if (showDone) { Spacer(Modifier.width(8.dp)); SettingsDone(close) }
         }

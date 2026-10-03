@@ -17,8 +17,17 @@ Language changes prepare the shared context on a separate worker, then publish
 bootstrap, catalog and editor views together on the render owner. Publication
 waits for active text composition and canvas or workspace contact. The Activity,
 Compose context, native text fields and canvas surface retain their identities.
-Recreated and resumed owners adopt the application's latest choice. Stateless
-control helpers use the owning view's language tag; system fonts retain Android's
+Open menus project current shared copy and retain submenu paths by section and
+item position in the current shared model. Refreshes resolve those paths again
+and truncate removed pages; mutable checkbox commands do not identify navigation
+pages. Language publication keeps the popup and its owner; document
+replacement retires layer-owned menus. Recreated and resumed owners adopt the
+application's latest choice. Size panel units use a full-width row, with the
+checkbox below, so translated captions have room at larger system text sizes.
+Numeric input starts at the visible edge of its horizontal scroll viewport; check
+the glyphs against the visible field bounds as well as the paragraph bounds.
+Stateless control helpers use
+the owning view's language tag; system fonts retain Android's
 native fallback. `locales_config.xml` advertises only shared shipped languages,
 and the Rust launch test rejects inventory drift. Text fields retain native
 composition ranges; editor key captures yield while preedit or IME key events own
@@ -28,6 +37,11 @@ a real Japanese, Chinese or Korean input method.
 JNI result handling lives in `native/src/android.rs`: `or_throw` reports
 `IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
 pixels for Kotlin.
+Known numeric and color refusals retain their shared typed reason across JNI;
+unexpected diagnostics stay literal. Color, profile, proof and export controls
+relabel retained scalar copy without revalidating dirty input, reading profile
+storage, decoding ICC data or restarting image jobs.
+
 File and conversion jobs use `inspection::on_worker` for named threads with an
 8 MiB stack; call it from an IO worker. Task cancellation owns a separate
 `CaptureControl` and never borrows a running job.
@@ -150,9 +164,19 @@ behavior and high-refresh presentation need a real tablet.
 
 ### Where to start
 
-- `AndroidLanguageTest`: all six language choices through Preferences in both
-  themes, stable Activity/host/surface ownership, drawing history, and retained
-  numeric text/selection across a deferred InputConnection composition.
+- `AndroidLanguageTest`: every shipped language through Preferences in both
+  themes, retained popup routes, typed numeric refusals, raw color and export
+  drafts, profile metadata and prepared comparisons, saved Unicode drawings,
+  and stable Activity/host/surface ownership and drawing history.
+  InputConnection cases cover deferred composition and selection.
+  `#genuineKeyboardCompositionDefersLanguagePublication -e genuineIme true`
+  requires an installed keyboard to produce actual preedit before requesting a
+  language change in both themes, then commits it through that keyboard. Set
+  `genuineImeKeys`, `genuineImePreedit` and `genuineImeCandidate` to the engine's
+  key sequence, composing text and visible candidate. For Japanese Gboard
+  QWERTY, use `nihonn`, `にほん` and `日本`. Missing preedit fails the prerequisite
+  and does not count as IME evidence. Record and restore keyboard languages,
+  layout and the selected system subtype after device setup.
 - [`AndroidInteractionTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt):
   drawers, drag geometry, panels, the canvas action bar, notices, the zoom
   readout, effects and retouching, each with mouse, finger and stylus. It

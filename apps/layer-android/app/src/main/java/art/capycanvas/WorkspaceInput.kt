@@ -100,6 +100,7 @@ internal class DockInteraction(val host: CanvasHost) {
     var expansion by mutableStateOf<JSONObject?>(null)
     var configurationHeight by mutableFloatStateOf(0f)
     var contextMenu by mutableStateOf<JSONObject?>(null)
+    var contextRequest: JSONObject? = null
     var contactHeld by mutableStateOf(false)
     var contactType: PointerType? = null
     var contactSource: Any? = null
@@ -181,14 +182,15 @@ internal class DockInteraction(val host: CanvasHost) {
         if (contextTarget == key) return
         contextTarget = key
         val request = generation
-        host.query(obj("type" to "context", "target" to target)) {
-            if (!dragging && request == generation) { contextAnchor = anchor; contextMenu = it as? JSONObject; refresh() }
+        val query = obj("type" to "context", "target" to target)
+        host.query(query) {
+            if (!dragging && request == generation) { contextRequest = query; contextAnchor = anchor; contextMenu = it as? JSONObject; refresh() }
         }
     }
     fun holdContext(target: JSONObject) {
         if (contactType != PointerType.Mouse) context(target)
     }
-    fun closeContext() { generation++; contextTarget = null; contextMenu = null; refresh() }
+    fun closeContext() { generation++; contextTarget = null; contextMenu = null; contextRequest = null; refresh() }
     fun doubleClickHandle(item: JSONObject) {
         host.query(obj("type" to "panel_handle_target", "item" to item)) { group ->
             if (group is Number) host.dispatch(obj("type" to "double_click_panel_handle", "group" to group, "viewport" to viewport))

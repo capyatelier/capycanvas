@@ -18,11 +18,13 @@ import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
 export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged}) {
-  const common=bootstrap.common,exportCopy=liveCopy(app,"export_copy"),colorCopy=liveCopy(app,"document_color_copy");
+  const common=bootstrap.common,exportCopy=liveCopy(app,"export_copy");
   const formatLabels=()=>({Exr:exportCopy.format_exr,PngHdr:exportCopy.format_pq,PngHdrMapped:exportCopy.format_pq_clipped,
     JpegHdr:exportCopy.format_jpeg_hdr,JpegHdrMapped:exportCopy.format_jpeg_hdr,AvifHdr:exportCopy.format_avif_hdr,AvifHdrMapped:exportCopy.format_avif_hdr,
     Png:exportCopy.format_png,Tiff:exportCopy.format_tiff,Jpeg:exportCopy.format_jpeg,Webp:exportCopy.format_webp});
   const deliveryMessage=(type,values)=>app.document_delivery_message({type,...values});
+  const deliveryFailure=(type,values)=>({document_host_error:{type:"delivery",reason:{type,...values}}});
+  const transportFailure=reason=>({document_host_error:{type:"transport",reason}});
   const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
   let nextHandle=0,closing=false,changing=false,batching=false;
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
@@ -85,7 +87,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
       const remember=element("input");remember.type="checkbox";field("remember",()=>model.text.remember,remember);
       form.localize=()=>{
         model=app.editor_models(innerWidth,innerHeight).document_options.creation;
-        for(const [node,choices] of [[space,model.spaces],[depth,model.depths],[background,model.backgrounds],[blending,model.blending.choices.map(c=>[c.id,c.label])]]) {
+        for(const [node,choices] of [[preset,[["custom",model.text.custom],...model.presets.map(p=>[presetKey(p.id),p.name])]],[space,model.spaces],[depth,model.depths],[background,model.backgrounds],[blending,model.blending.choices.map(c=>[c.id,c.label])]]) {
           for(const [key,label] of choices){const option=[...node.options].find(o=>o.value===key);if(option)option.textContent=label;}
         }
         describe();
@@ -107,7 +109,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   window.addEventListener("blur",()=>{ownedClip=null;});
   document.addEventListener("visibilitychange",()=>{if(document.hidden)ownedClip=null;});
   const clipboardRead=()=>{
-    if(!navigator.clipboard?.read)throw new Error(delivery.clipboard_unavailable);
+    if(!navigator.clipboard?.read)throw deliveryFailure("clipboard_unavailable");
     return navigator.clipboard.read();
   };
   // Called synchronously from the key or click task: browsers accept a
@@ -123,19 +125,20 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     try{written=navigator.clipboard?.write&&globalThis.ClipboardItem?navigator.clipboard.write([new ClipboardItem(items)]):null;}
     catch(error){written=Promise.reject(error);}
     const writeError=written?written.then(()=>null,error=>error):Promise.resolve(new Error("this browser has no clipboard writer"));
-    let control,progress,clip;
+    let control,progress,clip,cancelling=false;
+    const caption=()=>cancelling?delivery.cancelling:app.document_request_title(id)??"";
     try {
       control=app.capture_control();
       if(task.large()){
         progress=element("aside","file-progress");progress.setAttribute("role","status");
-        progress.append(element("span","",task.progress()),button(()=>common.cancel,()=>{control.cancel();progress.firstChild.textContent=delivery.cancelling;}));
+        const label=element("span","",caption);progress.append(label,button(()=>common.cancel,()=>{control.cancel();cancelling=true;bindCopy(label,caption);}));
         document.body.append(progress);
       }
       clip=await gpuOperation(()=>task.run(control,nonce));
       deliver(new Blob([clip.png()],{type:"image/png"}));
       const failure=await writeError;
       app.adopt_clip(clip);clip=null;ownedClip=nonce;
-      if(failure)message(deliveryMessage("clipboard_shared",{detail:String(failure.message??failure)}));
+      if(failure)message(deliveryFailure("clipboard_shared",{detail:String(failure.message??failure)}));
       applyChange(app.finish_document(id,true));
     } catch(error) {
       fail(error);
@@ -157,13 +160,13 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     const formats=app.photo_formats(),preferred=formats.flatMap(f=>f.mime_types.flatMap(m=>[`web ${m}`,m]));
     const files=[];
     for(const item of items) {
-      const type=preferred.find(type=>item.types.includes(type));if(!type)throw new Error(deliveryMessage("clipboard_formats",{formats:formats.map(f=>f.name).join(", ")}));
+      const type=preferred.find(type=>item.types.includes(type));if(!type)throw deliveryFailure("clipboard_formats",{formats:formats.map(f=>f.name).join(", ")});
       const blob=await item.getType(type),mime=type.replace(/^web /,"");
-      if(blob.size>512*1024*1024)throw new Error(delivery.clipboard_too_large);
+      if(blob.size>512*1024*1024)throw deliveryFailure("clipboard_too_large");
       const extension=formats.find(f=>f.mime_types.includes(mime)).extensions[0];
       files.push(new File([blob],deliveryMessage("pasted_image",{extension}),{type:mime}));
     }
-    if(!files.length)throw new Error(delivery.clipboard_empty);
+    if(!files.length)throw deliveryFailure("clipboard_empty");
     return files;
   }
   function chooseFile(placing=false) {
@@ -181,7 +184,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     const url=URL.createObjectURL(new Blob([bytes],{type:mime}));
     try {
       return await dialog(()=>delivery.download_file,(form,finish)=>{
-        form.append(element("p","",deliveryMessage("download_confirm",{name})));
+        form.append(element("p","",()=>deliveryMessage("download_confirm",{name})));
         const footer=element("footer");cancel(footer,finish);
         const done=button(()=>delivery.file_saved,()=>finish(true),"suggested-action");done.disabled=true;
         const start=button(()=>delivery.download,()=>{const a=element("a");a.href=url;a.download=name;a.click();done.disabled=false;});
@@ -213,32 +216,39 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
       if(request.kind.type!=="document")throw new Error(`Unsupported host request: ${request.kind.type}`);
       const r=request.kind.request,id=request.id;
       if(r.type==="confirm_close") {
-        const spec=app.editor_models(innerWidth,innerHeight).document_options;
-        const decision=await dialog(r.title,(form,finish)=>{
-          form.append(element("p","",spec.unsaved_description));const footer=element("footer");cancel(footer,finish);
-          footer.append(button(spec.discard_label,()=>finish("discard")),button(()=>common.save,()=>finish("save"),"suggested-action"));form.append(footer);
+        const current=()=>app.state().requests.find(request=>request.id===id)?.kind.request;
+        const spec=()=>app.editor_models(innerWidth,innerHeight).document_options;
+        const decision=await dialog(()=>current()?.title??r.title,(form,finish)=>{
+          form.append(element("p","",()=>spec().unsaved_description));const footer=element("footer");cancel(footer,finish);
+          footer.append(button(()=>spec().discard_label,()=>finish("discard")),button(()=>common.save,()=>finish("save"),"suggested-action"));form.append(footer);
         });
         applyChange(app.respond_document(id,decision??"cancel"));return;
       }
       if(r.type==="properties") {
-        const rows=await app.document_properties();
-        await dialog(app.state().commands.find(c=>c.id==="document_properties").label,(form,finish)=>{for(const [name,value]of rows){form.append(element("h3","",name),element("p","source-details",value));}form.append(button(()=>common.done,()=>finish(true)));});
+        const info=await app.document_properties();
+        if(!app.state().requests.some(request=>request.id===id))return;
+        let view=app.document_properties_copy(info);
+        await dialog(()=>view.title,(form,finish)=>{
+          for(const section of ['rows','sources'])for(const [index]of view[section].entries())form.append(element("h3","",()=>view[section][index][0]),element("p","source-details",()=>view[section][index][1]));
+          form.localize=()=>{view=app.document_properties_copy(info);};
+          form.append(button(()=>view.done,()=>finish(true)));
+        });
         applyChange(app.finish_document(id,true));
       } else if(["change_color","color_history","repair_source_profile","rasterize_source"].includes(r.type)) {
         candidate=await chooseDocumentColor({app,dialog,element,button,gpuOperation,request:r,id});
         if(candidate?.is_copy?.()) {
           const master=app.state().document_file.location;
           const target=await destination({name:deliveryMessage("converted_name",{name:(master?.name??app.document_tabs(0).tabs.find(t=>String(t.id)===String(app.document_tabs(0).selected)).title).replace(/\.[^.]+$/,"")})});
-          if(!target.location.name.toLowerCase().endsWith(".capy"))throw new Error(delivery.converted_filename_invalid);
+          if(!target.location.name.toLowerCase().endsWith(".capy"))throw deliveryFailure("converted_filename_invalid");
           const original=handles.get(master?.uri);
-          if(original&&target.handle&&await original.isSameEntry?.(target.handle))throw new Error(colorCopy.choose_different);
+          if(original&&target.handle&&await original.isSameEntry?.(target.handle))throw deliveryFailure("choose_different");
           const progress=element("aside","file-progress");progress.setAttribute("role","status");
-          let cancelled=false;
-          progress.append(element("span","",()=>delivery.preparing_converted_copy),button(()=>common.cancel,()=>{cancelled=true;candidate.cancel();}));document.body.append(progress);
+          let cancelled=false,phase="preparing_converted_copy";const caption=()=>delivery[phase],label=element("span","",caption);
+          progress.append(label,button(()=>common.cancel,()=>{cancelled=true;phase="cancelling";bindCopy(label,caption);candidate.cancel();}));document.body.append(progress);
           try {
             const bytes=await app.save_color_copy(candidate);
             if(cancelled)throw new DOMException("Converted copy cancelled","AbortError");
-            progress.firstChild.textContent=delivery.writing_converted_copy;progress.querySelector("button").disabled=true;
+            phase="writing_converted_copy";bindCopy(label,caption);progress.querySelector("button").disabled=true;
             let success;
             if(target.handle){const stream=await target.handle.createWritable();try{await stream.write(bytes);await stream.close();success=true;}catch(error){try{await stream.abort();}catch{}throw error;}}
             else success=!!await download(bytes,target.location.name,"application/octet-stream");
@@ -273,7 +283,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
           try {
             await proof.finishPending();
             if(app.state().document_file.epoch===epoch)dispatch({type:"invoke",command:"export_document"});
-          } catch(error) { message(String(error)); }
+          } catch(error) { message(error); }
           return;
         }
         const choice=r.type==="export"?await chooseExport({app,dialog,element,button,numberField,gpuOperation,id}):null;
@@ -283,18 +293,19 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
         if(recipe){
           const extension=exportFormats[recipe.format][0];
           const extensions=extension==='jpg'?['jpg','jpeg']:extension==='tif'?['tif','tiff']:[extension];
-          if(!extensions.includes(target.location.name.split('.').at(-1).toLowerCase()))throw new Error(deliveryMessage("export_extension",{extension:extensions[0]}));
+          if(!extensions.includes(target.location.name.split('.').at(-1).toLowerCase()))throw deliveryFailure("export_extension",{extension:extensions[0]});
           const master=handles.get(app.state().document_file.location?.uri);
-          if(master&&target.handle&&await master.isSameEntry?.(target.handle))throw new Error(colorCopy.choose_different);
+          if(master&&target.handle&&await master.isSameEntry?.(target.handle))throw deliveryFailure("choose_different");
         }
-        let output,control,progress;
+        let output,control,progress,progressLabel,progressPhase="preparing";
+        const progressCaption=()=>progressPhase==="cancelling"?delivery.cancelling:exportCopy[progressPhase];
         try {
           if(recipe){
             control=app.capture_control();progress=element("aside","file-progress");progress.setAttribute("role","status");
-            progress.append(element("span","",()=>exportCopy.preparing),button(()=>common.cancel,()=>{control.cancel();progress.firstChild.textContent=delivery.cancelling;}));document.body.append(progress);
+            progressLabel=element("span","",progressCaption);progress.append(progressLabel,button(()=>common.cancel,()=>{control.cancel();progressPhase="cancelling";bindCopy(progressLabel,progressCaption);}));document.body.append(progress);
           }
           const bytes=r.type==="save"?await app.save_project(id,target.location):(output=await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
-          if(progress){progress.firstChild.textContent=exportCopy.writing_image;progress.querySelector('button').disabled=true;}
+          if(progress){progressPhase="writing_image";bindCopy(progressLabel,progressCaption);progress.querySelector('button').disabled=true;}
 
           let success;
           if(target.handle) {
@@ -303,7 +314,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
             catch(error){try{await stream.abort();}catch{}throw error;}
           } else success=!!await download(bytes,target.location.name,recipe?exportFormats[recipe.format][1]:"application/octet-stream");
           applyChange(app.finish_document(id,success));
-          if(success&&recipe)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(deliveryMessage("export_preferences",{detail:String(error)}));}
+          if(success&&recipe)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(error?.color_feature_error!==undefined?{document_host_error:{type:"export_preferences",reason:error.color_feature_error}}:deliveryFailure("export_preferences",{detail:String(error)}));}
           if(success && r.type==="save" && !app.state().document_file.modified) {
             await recovery.retire(ownerId);
           }
@@ -312,20 +323,20 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
           if(wasCancelled)throw new DOMException("Image export cancelled","AbortError");throw error;
         } finally {
           progress?.remove();control?.free();
-          if(output)try{await rasterWorker({operation:"output-close",metadata:output.token,buffers:[]});}catch(error){message(deliveryMessage("output_cleanup",{detail:String(error)}));}
+          if(output)try{await rasterWorker({operation:"output-close",metadata:output.token,buffers:[]});}catch(error){message(deliveryFailure("output_cleanup",{detail:String(error)}));}
         }
       } else throw new Error(`Unknown document operation: ${r.type}`);
     } catch(error) {
       if(request.kind.type==="document" && app.state().requests.some(r=>r.id===request.id)) {
-        const cancelled=error?.name==="AbortError";applyChange(app.finish_document(request.id,false,cancelled?undefined:String(error)));
-      } else if(app.state().requests.some(r=>r.id===request.id))dispatch({type:"complete_request",id:request.id,error:String(error)});
-      else if(error?.name!=="AbortError")message(String(error));
+        const cancelled=error?.name==="AbortError";applyChange(app.finish_document(request.id,false,cancelled?undefined:error));
+      } else if(app.state().requests.some(r=>r.id===request.id))applyChange(app.finish_host_request(request.id,error));
+      else if(error?.name!=="AbortError")message(error);
     } finally {candidate?.free();active.delete(request.id);pruneHandles();}
   }
   async function readyToPark(){
     const deadline=performance.now()+30000;
     while(!app.document_park_ready()){
-      if(performance.now()>deadline)throw Error(delivery.switch_operation);
+      if(performance.now()>deadline)throw transportFailure("switch_operation");
       wake();await new Promise(resolve=>setTimeout(resolve,8));
     }
   }
@@ -334,17 +345,17 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     if(spilling)return spilling;
     const run=async()=>{
       try{while(await app.spill_document_tiles()){}app.document_storage_result();}
-      catch(error){app.document_storage_result(String(error));message(app.document_storage_retained(String(error)));}
+      catch(error){const detail=String(error);app.document_storage_result(detail);message(()=>app.document_storage_retained(detail));}
     };
     spilling=run().finally(()=>spilling=null);return spilling;
   }
   async function transition(action,capture=true){
-    if(changing)throw Error(delivery.change_in_progress);
+    if(changing)throw transportFailure("change_in_progress");
     changing=true;tabs.cancel();
     const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','',()=>delivery.switching_drawing));document.body.append(blocker);
     try{
       await proof.pause();await histogram.retire();await readyToPark();
-      if(capture)await recovery.capture().catch(error=>message(app.document_recovery_unavailable(String(error))));
+      if(capture)await recovery.capture().catch(error=>{const detail=String(error);message(()=>app.document_recovery_unavailable(detail));});
       await action();
       await trim();
       await recovery.ensure();
@@ -353,18 +364,18 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   }
   async function select(id){
     if(id==null||String(id)===String(app.document_tabs(0).selected))return;
-    if(active.size||batching||closing||document.querySelector('dialog[open]'))throw Error(delivery.switch_dialog);
+    if(active.size||batching||closing||document.querySelector('dialog[open]'))throw transportFailure("switch_dialog");
     await transition(()=>applyChange(app.select_document(BigInt(id))));
   }
   async function close(id){
     await select(id);
-    if(changing||batching||active.size)throw Error(delivery.close_operation);
+    if(changing||batching||active.size)throw transportFailure("close_operation");
     const deadline=performance.now()+30000;
     while(!app.document_close_available()){
-      if(performance.now()>deadline)throw Error(delivery.close_operation);
+      if(performance.now()>deadline)throw transportFailure("close_operation");
       wake();await new Promise(resolve=>setTimeout(resolve,8));
     }
-    if(String(id)!==String(app.document_tabs(0).selected))throw Error(delivery.selected_changed);
+    if(String(id)!==String(app.document_tabs(0).selected))throw transportFailure("selected_changed");
     dispatch({type:'invoke',command:'close_document'});
   }
   async function openDrawing({request=null,file=null,options,recovered=false,bytes}){
@@ -372,13 +383,13 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     if(request===null&&!recovered){
       const change=app.dispatch({type:'invoke',command:file?'open_document':'new_document'});
       const pending=app.state().requests.find(r=>r.kind.type==='document'&&['new','open'].includes(r.kind.request.type));
-      if(!pending)throw Error(delivery.open_operation);
+      if(!pending)throw transportFailure("open_operation");
       request=pending.id;active.add(request);
       applyChange(change);
     }
     const id=request??0,fileState=app.state().document_file,target=file?location(file.file.name,file.handle):null;
     const progress=element('aside','file-progress');progress.setAttribute('role','status');let cancelled=false,candidate;
-    progress.append(element('span','',bootstrap.preparing_document),button(()=>common.cancel,()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}));document.body.append(progress);
+    progress.append(element('span','',()=>bootstrap.preparing_document),button(()=>common.cancel,()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}));document.body.append(progress);
     try{
       if(file)bytes=new Uint8Array(await file.file.arrayBuffer());
       candidate=await gpuOperation(()=>app.prepare_document(id,bytes,0,0,fileState.epoch,fileState.revision,recovered,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
@@ -386,34 +397,34 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
       if(request!==null)applyChange(app.finish_document(request,true));
       await transition(()=>{const prepared=candidate;candidate=null;applyChange(app.adopt_document(prepared,target));});
     }catch(error){
-      if(request!==null&&app.state().requests.some(r=>r.id===request))applyChange(app.finish_document(request,false,error?.name==='AbortError'?undefined:String(error)));
+      if(request!==null&&app.state().requests.some(r=>r.id===request))applyChange(app.finish_document(request,false,error?.name==='AbortError'?undefined:error));
       throw error;
     }finally{candidate?.free();progress.remove();if(request!==null)active.delete(request);}
   }
   async function openBatch(files,request=null){
-    if(batching)throw Error(delivery.batch_opening);
+    if(batching)throw transportFailure("batch_opening");
     batching=true;
     try{for(const [index,file] of files.entries()){
       try{await openDrawing({request:index===0?request:null,file});}
-      catch(error){if(error?.name==='AbortError')break;if(files.length===1)throw error;console.error(error);message(app.file_open_failure(file.file.name));}
+      catch(error){if(error?.name==='AbortError')break;if(files.length===1)throw error;console.error(error);const name=file.file.name;message(()=>app.file_open_failure(name));}
     }}finally{batching=false;tabs.refresh(true);}
   }
   async function openFiles(files){
-    if(active.size||batching||changing||closing||document.querySelector('dialog[open]'))throw Error(delivery.open_drawings_operation);
+    if(active.size||batching||changing||closing||document.querySelector('dialog[open]'))throw transportFailure("open_drawings_operation");
     await openBatch(files.map(value=>value.file?value:{file:value}));
   }
   const recovery=createDocumentRecovery({app,call:rasterWorker,dialog,element,button,message,restore:bytes=>openDrawing({recovered:true,bytes}),settled:trim,
     canOffer:()=>app.gpu_ready()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
   return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing||batching,showSelector:tabs.showSelector,
-    mountProof:proof.mount,localize(){for(const form of openDialogs)form.localize?.();proof.sync();tabs.refresh(true);},handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
+    mountProof:proof.mount,localize(){for(const form of openDialogs)form.localize?.();histogram.localize();proof.sync();tabs.refresh(true);},handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
     proof.sync();tabs.refresh();
     const published=state();
     if(closing||changing||!published.document_file.close_ready)return;
     closing=true;
     const id=app.document_tabs(0).selected;
     transition(async()=>{await recovery.retire(id,true);applyChange(app.close_document_tab());},false)
-      .catch(error=>{app.reset_document_close();message(String(error));})
+      .catch(error=>{app.reset_document_close();message(error);})
       .finally(()=>{closing=false;tabs.refresh(true);pruneHandles();});
   }};
 }

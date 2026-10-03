@@ -546,6 +546,7 @@ impl Service {
     pub fn status(&self) -> serde_json::Value {
         serde_json::json!({"offer":self.update.offer,"busy":self.update.busy,"restoring":self.restoring(),"closing":self.closing,"ready":self.close_ready(),"error":self.error})
     }
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub fn retire_renderer(&mut self, renderer: Renderer) {
         self.queue(Job::RetiredRenderer(Box::new(renderer)));
     }

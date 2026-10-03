@@ -48,8 +48,8 @@ void LayersView::init(){
         ContentControl chevron;chevron.IsTabStop(false);chevron.IsHitTestVisible(false);Grid::SetColumn(chevron,1);content.Children().Append(chevron);
         controls.emplace_back([data=data,chevron,theme=std::make_shared<hstring>()](J,J){if(*theme!=data->theme()){*theme=data->theme();chevron.Content(icon(L"chevron-down",*theme,12));}});blend.Content(content);}
     blend.MinWidth(0);blend.MinHeight(24);blend.Height(24);blend.Padding({6,0,6,0});blend.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-    AutomationProperties::SetName(header,data->caption(L"layers",L"controls"));AutomationProperties::SetName(values,data->caption(L"layers",L"blend_opacity"));
-    AutomationProperties::SetName(tools,data->caption(L"layers",L"flags"));AutomationProperties::SetName(footerFrame,data->caption(L"layers",L"actions"));
+    copyName(data,header,data->copyCaption(L"layers",L"controls"));copyName(data,values,data->copyCaption(L"layers",L"blend_opacity"));
+    copyName(data,tools,data->copyCaption(L"layers",L"flags"));copyName(data,footerFrame,data->copyCaption(L"layers",L"actions"));
     AutomationProperties::SetAutomationId(header,L"layer-controls");
     AutomationProperties::SetAutomationId(values,L"layer-options");
     AutomationProperties::SetAutomationId(tools,L"layer-flags");
@@ -57,13 +57,13 @@ void LayersView::init(){
     blend.FontSize(data->textSize());blend.FontWeight(Windows::UI::Text::FontWeights::Bold());
     blend.Background(data->brush(L"input"));blend.BorderThickness({0,0,0,0});blend.CornerRadius({6,6,6,6});
     blend.HorizontalAlignment(HorizontalAlignment::Stretch);
-    AutomationProperties::SetName(blend,data->caption(L"layers",L"blend"));AutomationProperties::SetAutomationId(blend,L"layer-blend");
+    copyName(data,blend,data->copyCaption(L"layers",L"blend"));AutomationProperties::SetAutomationId(blend,L"layer-blend");
     opacityGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     values.Children().Append(blend);Grid::SetColumn(opacityGate,1);values.Children().Append(opacityGate);header.Children().Append(values);
     tools.Orientation(Orientation::Horizontal);tools.Spacing(2);
-    struct Toggle {wchar_t const* icon;hstring label;wchar_t const* property;wchar_t const* op;wchar_t const* capability;};
-    for(auto spec:{Toggle{L"alpha-lock",data->caption(L"layers",L"alpha_lock"),L"alpha_locked",L"alpha_lock",L"alpha_lock"},
-        Toggle{L"lock",data->caption(L"layers",L"lock_editing"),L"locked",L"lock",L"edit_lock"},Toggle{L"clip",data->caption(L"layers",L"clip"),L"clipped",L"clip",L"clip"}}){
+    struct Toggle {wchar_t const* icon;LocalizedCopy label;wchar_t const* property;wchar_t const* op;wchar_t const* capability;};
+    for(auto spec:{Toggle{L"alpha-lock",data->copyCaption(L"layers",L"alpha_lock"),L"alpha_locked",L"alpha_lock",L"alpha_lock"},
+        Toggle{L"lock",data->copyCaption(L"layers",L"lock_editing"),L"locked",L"lock",L"edit_lock"},Toggle{L"clip",data->copyCaption(L"layers",L"clip"),L"clipped",L"clip",L"clip"}}){
         auto pick=button<Primitives::ToggleButton>(data,spec.label,[weak,spec]{if(auto self=weak.lock()){
             auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(spec.op)},
                 {L"id",layer.GetNamedValue(L"id")},{L"value",B(!flag(layer,spec.property))}}));
@@ -94,36 +94,36 @@ void LayersView::init(){
     list.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);list.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);
     AutomationProperties::SetAutomationId(list,L"layer-scroll-container");Grid::SetRow(list,1);root.Children().Append(list);
     footer.Orientation(Orientation::Horizontal);footer.Spacing(2);footer.Padding({6,4,6,4});
-    auto footerButton=[&](hstring const& iconName,hstring const& text,hstring const& id,std::function<void()> action){
-        auto pick=button(data,text,std::move(action));pick.Width(24);pick.Height(24);pick.Content(icon(iconName,data->theme()));
-        AutomationProperties::SetAutomationId(pick,id);CapyUi::tooltip(pick,text);footer.Children().Append(pick);return pick;
+    auto footerButton=[&](hstring const& iconName,LocalizedCopy const& text,hstring const& id,std::function<void()> action){
+        auto pick=button(data,L"",std::move(action));pick.Width(24);pick.Height(24);pick.Content(icon(iconName,data->theme()));
+        AutomationProperties::SetAutomationId(pick,id);copyName(data,pick,text,true);footer.Children().Append(pick);return pick;
     };
     for(bool group:{false,true}){
         auto create=O({{L"op",S(L"new")},{L"group",B(group)},{L"clipped",B(false)}});
-        auto pick=footerButton(group?L"folder":L"add-layer",group?data->caption(L"layers",L"new_group"):data->caption(L"layers",L"new_layer"),group?L"layer-new-group":L"layer-new",
+        auto pick=footerButton(group?L"folder":L"add-layer",group?data->copyCaption(L"layers",L"new_group"):data->copyCaption(L"layers",L"new_layer"),group?L"layer-new-group":L"layer-new",
             [weak,create]{if(auto self=weak.lock())self->action(create);});
         actionTooltip(data,pick,[create]{return O({{L"type",S(L"layer")},{L"action",create}});});
     }
-    auto selectionLayer=footerButton(L"selection-brush",data->caption(L"layers",L"new_selection_layer"),L"layer-new-selection",[weak]{if(auto self=weak.lock();self&&!self->data->updating)
+    auto selectionLayer=footerButton(L"selection-brush",data->copyCaption(L"layers",L"new_selection_layer"),L"layer-new-selection",[weak]{if(auto self=weak.lock();self&&!self->data->updating)
         self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"new_selection_layer")}}));});
     controls.emplace_back([data=data,selectionLayer](J,J){
         auto command=find(array(data->state,L"commands"),L"id",L"new_selection_layer");
         selectionLayer.IsEnabled(flag(command,L"enabled"));selectionLayer.Opacity(selectionLayer.IsEnabled()?1.:.36);
     });
-    auto mask=footerButton(L"mask",data->caption(L"layers",L"add_mask"),L"layer-add-mask",[weak]{if(auto self=weak.lock()){
+    auto mask=footerButton(L"mask",data->copyCaption(L"layers",L"add_mask"),L"layer-add-mask",[weak]{if(auto self=weak.lock()){
         auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id")},{L"replace",B(false)}}));
     }});
     controls.emplace_back([mask](J,J capabilities){mask.IsEnabled(flag(capabilities,L"mask"));mask.Opacity(mask.IsEnabled()?1.:.36);});
-    auto import=footerButton(L"image",data->caption(L"layers",L"import_image"),L"layer-import",[weak]{if(auto self=weak.lock()){
+    auto import=footerButton(L"image",data->copyCaption(L"layers",L"import_image"),L"layer-import",[weak]{if(auto self=weak.lock()){
         self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"import_image")}}));
     }});
     controls.emplace_back([data=data,import](J,J){
         auto file=object(data->state,L"document_file");
         import.IsEnabled(flag(data->model,L"brush_ready")&&!flag(file,L"busy")&&!flag(file,L"close_ready"));import.Opacity(import.IsEnabled()?1.:.36);
     });
-    auto remove=footerButton(L"delete",data->caption(L"layers",L"delete_selected"),L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
+    auto remove=footerButton(L"delete",data->copyCaption(L"layers",L"delete_selected"),L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
     controls.emplace_back([weak,remove](J,J){if(auto self=weak.lock()){remove.IsEnabled(flag(self->view(),L"can_delete"));remove.Opacity(remove.IsEnabled()?1.:.36);}});
-    auto more=footerButton(L"more",data->caption(L"layers",L"actions"),L"layer-actions",[weak]{if(auto self=weak.lock()){
+    auto more=footerButton(L"more",data->copyCaption(L"layers",L"actions"),L"layer-actions",[weak]{if(auto self=weak.lock()){
         auto editing=self->editing();
         bool maskRow=flag(self->view(),L"quick_mask")||flag(editing,L"selection_layer");
         self->context(maskRow?num(editing,L"id",-1):-1,false,self->footer);
@@ -161,13 +161,14 @@ void LayersView::refresh(){
     auto activeId=num(active,L"id",-1);auto nextKey=epoch+L":"+to_hstring(activeId);
     if(opacityKey!=nextKey){
         opacityKey=nextKey;opacityLayer=activeId;opacityBindings.clear();
-        auto weak=weak_from_this();auto generation=epoch;
+        auto weak=weak_from_this();auto generation=epoch;NumberPresentation presentation;
+        presentation.title=[weak]{if(auto self=weak.lock())return self->data->caption(L"layers",L"opacity");return hstring();};
         opacityGate.Content(number(data,data->caption(L"layers",L"opacity"),object(data->catalog,L"layer_opacity"),
             [weak]{if(auto self=weak.lock())return num(self->editing(),L"opacity",1);return 1.;},
             [weak,generation,activeId](double value){if(auto self=weak.lock();self&&epochOf(self->data)==generation
                 &&num(self->editing(),L"id",-1)==activeId&&flag(object(self->view(),L"controls"),L"opacity"))
                 self->data->dispatchDocument(O({{L"type",S(L"set_layer_opacity")},{L"opacity",N(value)}}),generation);
-            },opacityBindings,nullptr,true,L"layer-opacity",true));
+            },opacityBindings,nullptr,true,L"layer-opacity",true,presentation));
     }
     opacityGate.IsEnabled(flag(capabilities,L"opacity"));for(auto const& bind:opacityBindings)bind();
     for(auto const& bind:controls)bind(active,capabilities);
@@ -191,7 +192,7 @@ void LayersView::preview(){
     if(!root.IsLoaded()||!root.XamlRoot()||!root.XamlRoot().IsHostVisible()||list.ActualHeight()<=0)return;
     // Templates can create or replace the scroll provider after Loaded.
     if(auto presenter=list.ScrollPresenter();presenter&&AutomationProperties::GetAutomationId(presenter)!=L"layer-list"){
-        AutomationProperties::SetAutomationId(presenter,L"layer-list");AutomationProperties::SetName(presenter,data->caption(L"layers",L"title"));
+        AutomationProperties::SetAutomationId(presenter,L"layer-list");copyName(data,presenter,data->copyCaption(L"layers",L"title"));
         // The pinned ScrollView template spans content across its auto-width
         // scrollbar column. Reserve that column when it is visible so the
         // native scrollbar cannot cover the row grip.

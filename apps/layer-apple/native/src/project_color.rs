@@ -71,7 +71,7 @@ pub unsafe extern "C" fn capy_project_details(task: *const CapyProjectTask) -> *
         json = match payload {
             Payload::Info(info) => serde_json::to_string(&layer_ui::document_properties(&info.inspect()?, &task.localization)),
             Payload::Inspection(inspection) => serde_json::to_string(&inspection.histogram(task)?),
-            Payload::Source(source) => serde_json::to_string(&source.details_localized(&task.localization)?),
+            Payload::Source(source) => { source.prepare_metadata()?; serde_json::to_string(&source.details_localized(&task.localization)?) },
             Payload::Export(export) => serde_json::to_string(&export.details_localized(&task.localization)?),
             Payload::Color(color) => serde_json::to_string(&color.details()),
             _ => return Err("No document details are available".into()),

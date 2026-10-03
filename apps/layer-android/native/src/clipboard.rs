@@ -22,8 +22,12 @@ pub extern "system" fn Java_art_capycanvas_Native_clipTaskLarge(_: JNIEnv, _: JC
     jboolean::from(unsafe { crate::inspection::borrow_ref::<ClipTask>(handle) }.capture_details().large)
 }
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_clipTaskProgress(mut env: JNIEnv, _: JClass, handle: jlong) -> jstring {
-    string(&mut env, Ok(unsafe { crate::inspection::borrow_ref::<ClipTask>(handle) }.capture_details().progress.into()))
+pub extern "system" fn Java_art_capycanvas_Native_documentRequestTitle(mut env: JNIEnv, _: JClass, handle: jlong, id: jint) -> jstring {
+    let owner = unsafe { app(handle) };
+    match owner.host.session.document_request(id as u32) {
+        Ok(request) => string(&mut env, Ok(request.title(owner.host.session.localization()).to_string())),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 /// Worker: consumes the task and returns the finished clip.
 #[unsafe(no_mangle)]

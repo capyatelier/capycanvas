@@ -98,7 +98,8 @@ fn unsupported_tiff_layouts_and_classic_output_overflow_fail_explicitly() {
             .unwrap_err()
             .contains("Planar TIFF")
     );
-    for (tag, value, reason) in [(Tag::ExtraSamples, 1, "unassociated alpha")] {
+    {
+        let (tag, value, reason) = (Tag::ExtraSamples, 1, "unassociated alpha");
         let mut file = Cursor::new(Vec::new());
         {
             let mut encoder = TiffEncoder::new(&mut file).unwrap();

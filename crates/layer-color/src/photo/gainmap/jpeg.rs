@@ -40,18 +40,14 @@ fn decode(
 }
 
 pub(super) fn encode(
-    extent: [u32; 2],
-    space: RgbSpace,
-    rendition: SdrRendition,
-    guide: &hdr::LocalToneGuide,
-    quality: u8,
+    render: GainMapRender<'_>,
+    options: GainMapEncodeOptions,
     delivery: &DeliveryMetadata,
-    matte: Option<[f32; 3]>,
-    clip: bool,
-    budget: PhotoMemoryBudget,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<(Vec<u8>, crate::OutputStatistics), String> {
+    let GainMapRender { extent, matte, .. } = render;
+    let GainMapEncodeOptions { quality, memory: budget } = options;
     let count = admit(extent, 0, budget.encode_bytes)?;
     let profile = crate::icc::nclx_profile(
         [0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290],
@@ -63,7 +59,7 @@ pub(super) fn encode(
     let mut master = Vec::<f32>::new();
     master.try_reserve_exact(count * 3).map_err(err)?;
     let (stats, peak) = render_pair(
-        extent, space, rendition, guide, quality, matte, clip, cancel, read,
+        render, quality, cancel, read,
         |hdr, sdr, a| {
             if a < 1. && matte.is_none() {
                 return Err("Enable Flatten transparency for HDR JPEG".into());
@@ -262,20 +258,17 @@ pub(in crate::photo) fn read(
 }
 
 pub(super) fn preview(
-    extent: [u32; 2],
+    render: GainMapRender<'_>,
     bounds: [u32; 2],
-    space: RgbSpace,
-    rendition: SdrRendition,
-    guide: &hdr::LocalToneGuide,
     options: impl Into<GainMapEncodeOptions>,
-    matte: Option<[f32; 3]>,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<GainMapPreview, String> {
     let options = options.into();
     let (bytes, stats) = encode(
-        extent, space, rendition, guide, options.quality, &Default::default(), matte, true, options.memory, cancel, read,
+        GainMapRender { clip: true, ..render }, options, &Default::default(), cancel, read,
     )?;
+    let extent = render.extent;
     let mut limits = DecodeLimits::from_memory_budget(options.memory);
     // Both rendition accumulators and their finished outputs coexist with the
     // decoded pair. Reserve their bounded storage before admitting that pair.
@@ -321,18 +314,13 @@ mod tests {
         let mut bytes = Vec::new();
         write_gainmap_rows(
             &mut bytes,
-            EXTENT,
-            RgbSpace::Srgb,
-            SdrRendition {
+            GainMapRender { extent: EXTENT, space: RgbSpace::Srgb, rendition: SdrRendition {
                 exposure,
                 ..Default::default()
-            },
-            &test_guide(EXTENT, rows),
+            }, guide: &test_guide(EXTENT, rows), matte: None, clip: false },
             GainMapFormat::Jpeg,
             quality,
             &crate::photo::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
-            None,
-            false,
             &AtomicBool::new(false),
             rows,
         )
@@ -385,28 +373,20 @@ mod tests {
         let c = AtomicBool::new(false);
         let guide = test_guide(EXTENT, rows);
         let (_, h0, s0, _) = preview(
+            GainMapRender { extent: EXTENT, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: true },
             EXTENT,
-            EXTENT,
-            RgbSpace::Srgb,
-            Default::default(),
-            &guide,
             90,
-            None,
             &c,
             rows,
         )
         .unwrap();
         let (_, h1, s1, _) = preview(
-            EXTENT,
-            EXTENT,
-            RgbSpace::Srgb,
-            SdrRendition {
+            GainMapRender { extent: EXTENT, space: RgbSpace::Srgb, rendition: SdrRendition {
                 exposure: -2.,
                 ..Default::default()
-            },
-            &guide,
+            }, guide: &guide, matte: None, clip: true },
+            EXTENT,
             90,
-            None,
             &c,
             rows,
         )
@@ -425,15 +405,10 @@ mod tests {
         let run = |matte, c: &AtomicBool| {
             write_gainmap_rows(
                 std::io::sink(),
-                [16, 16],
-                RgbSpace::Srgb,
-                Default::default(),
-                &guide,
+                GainMapRender { extent: [16, 16], space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte, clip: false },
                 GainMapFormat::Jpeg,
                 90,
                 &Default::default(),
-                matte,
-                false,
                 c,
                 transparent,
             )

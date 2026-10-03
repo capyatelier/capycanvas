@@ -310,7 +310,7 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
     filter.kind = LayerKind::Effect;
     filter.effect = Some(Arc::new(effect));
     filter.properties.clipped = true;
-    engine.apply_edit(Edit::Batch(vec![Edit::InsertLayer { index: 0, layer: filter }, Edit::SetActiveLayer { id: blur }])).unwrap();
+    engine.apply_edit(Edit::Batch(vec![Edit::InsertLayer { index: 0, layer: Box::new(filter) }, Edit::SetActiveLayer { id: blur }])).unwrap();
     settle(&mut engine);
     std::thread::sleep(std::time::Duration::from_secs(1));
     let begin = now();

@@ -684,7 +684,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if phase == ContactPhase::Down {
                 self.require_idle()?;
                 self.selection_masks.quick_property_gesture = Some((key.clone(), self.selection_masks.quick_properties.clone()));
-            } else if !self.selection_masks.quick_property_gesture.as_ref().is_some_and(|(k, _)| *k == key) {
+            } else if self.selection_masks.quick_property_gesture.as_ref().is_none_or(|(k, _)| *k != key) {
                 return Ok(());
             }
             if phase == ContactPhase::Cancel || self.workspace_read_only || self.workspace_transition || self.rendering_suspended {
@@ -1030,7 +1030,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_edit(if replacing {
                     Edit::ReplaceLayer(Box::new(layer))
                 } else {
-                    let mut edits = vec![Edit::InsertLayer { index, layer }, Edit::SetActiveLayer { id }];
+                    let mut edits = vec![Edit::InsertLayer { index, layer: Box::new(layer) }, Edit::SetActiveLayer { id }];
                     if masked {
                         edits.push(Edit::SetSelection(None));
                     }

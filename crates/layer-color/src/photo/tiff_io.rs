@@ -366,6 +366,5 @@ pub fn write_tiff_rows(
         (SourceChannels::Cmyk, SampleDepth::U16) => write!(colortype::CMYK16, true),
     };
     result?;
-    drop(encoder);
     output.flush().map_err(err)
 }

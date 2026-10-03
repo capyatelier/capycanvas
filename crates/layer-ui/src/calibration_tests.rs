@@ -81,7 +81,7 @@ fn calibration_pending_admission_keeps_released_contact_until_ready() {
 #[test]
 fn calibration_failed_empty_outside_and_nonpositive_samples_preserve_history_and_retry() {
     for result in [
-        Err(layer_render::BackendError("sample failed".into())),
+        Err(layer_render::BackendError("sample failed")),
         Ok(layer_core::ArtworkSample::Empty), Ok(layer_core::ArtworkSample::Outside),
         Ok(layer_core::ArtworkSample::Color([0., 0.25, 0.5, 1.])),
     ] {
@@ -311,5 +311,60 @@ fn calibration_unported_hosts_hide_picker_and_refuse_direct_action_without_editi
         assert_eq!(*s.state.preview_colors(), colors);
         assert!(s.eyedropper.calibration.is_none());
         assert!(s.engine.backend().snapshot_requests.is_empty());
+    }
+}
+
+#[test]
+fn calibration_failed_notice_language_refresh_preserves_picker_request_document_and_history() {
+    for (sample, message) in [
+        (Err(layer_render::BackendError("sample failed { $name } 🖌")), None),
+        (Ok(layer_core::ArtworkSample::Empty), Some(MessageId::RESOURCES_PICKER_EMPTY)),
+        (Ok(layer_core::ArtworkSample::Outside), Some(MessageId::RESOURCES_PICKER_EMPTY)),
+        (Ok(layer_core::ArtworkSample::Color([0., 0.25, 0.5, 1.])), Some(MessageId::RESOURCES_PICKER_NEUTRAL_FAILED)),
+    ] {
+        let mut s = calibration_session();
+        arm_calibration(&mut s);
+        release_calibration(&mut s);
+        let document = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        let colors = s.state.colors.clone();
+        let tool = s.layer_interaction.tool;
+        let calibration = |s: &UiSession<Recorder>| {
+            let c = s.eyedropper.calibration.as_ref().unwrap();
+            (c.original.clone(), c.epoch, c.document_epoch, c.width, c.request.as_ref().map(|r| (r.document.clone(), std::sync::Arc::as_ptr(&r.document), r.source.clone(), r.position, r.width, r.time, r.effect_times.clone())), c.queued, c.submitted)
+        };
+        let pending = calibration(&s);
+        let rendering = (s.engine.backend().snapshot_requests.len(), s.engine.backend().snapshot_cancels, s.engine.backend().dabs);
+        for language in UiLanguage::ALL {
+            s.set_localization(Localizer::shared(language));
+            assert_eq!(calibration(&s), pending, "{}", language.tag());
+            assert!(s.eyedropper.picking.finishing);
+            assert_eq!(s.engine.document(), &document);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            assert_eq!((s.engine.backend().snapshot_requests.len(), s.engine.backend().snapshot_cancels, s.engine.backend().dabs), rendering);
+            assert_eq!(s.state.canvas_bar.as_ref().unwrap().label.as_deref(), Some(s.localization().text(MessageId::RESOURCES_PICKER_PROMPT).as_ref()));
+        }
+        s.set_localization(Localizer::shared(UiLanguage::English));
+        calibration_reply(&mut s, sample);
+        let notice = s.state.notice.clone().unwrap();
+        let failed = calibration(&s);
+        assert!(failed.4.is_none());
+        assert!(!failed.6);
+        for language in UiLanguage::ALL.iter().copied().chain([UiLanguage::English]) {
+            s.set_localization(Localizer::shared(language));
+            let current = s.state.notice.as_ref().unwrap();
+            assert_eq!(current.id, notice.id);
+            assert_eq!(current.action, notice.action);
+            let expected = message.map_or_else(|| notice.text.clone(), |message| s.localization().text(message).to_string());
+            assert_eq!(current.text, expected, "{}", language.tag());
+            assert_eq!(calibration(&s), failed);
+            assert!(!s.eyedropper.picking.finishing);
+            assert_eq!(s.state.canvas_bar.as_ref().unwrap().label.as_deref(), Some(s.localization().text(MessageId::RESOURCES_PICKER_PROMPT).as_ref()));
+            assert_eq!(s.engine.document(), &document);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            assert_eq!(s.state.colors, colors);
+            assert_eq!(s.layer_interaction.tool, tool);
+            assert_eq!((s.engine.backend().snapshot_requests.len(), s.engine.backend().snapshot_cancels, s.engine.backend().dabs), rendering);
+        }
     }
 }

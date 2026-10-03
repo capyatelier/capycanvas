@@ -494,6 +494,13 @@ resources-lookup-replace = Remplacer…
 resources-lookup-files = Fichiers de correspondance de couleurs
 resources-lookup-unavailable = L’importation de tables de correspondance de couleurs n’est pas encore disponible sur cette plateforme.
 resources-lookup-failed = Impossible d’importer la table de correspondance.
+resources-layer-menu-stop-using-as-reference = Ne plus utiliser ce calque comme référence
+resources-coverage-from-layer-opacity = À partir de l’opacité du calque
+resources-coverage-from-layer-mask = À partir du masque du calque
+resources-reference-empty-unmarked = Ce calque est vide et aucun calque en dessous n’est marqué comme référence
+resources-reference-tool-unmarked = Cet outil échantillonne les calques de référence et aucun n’est marqué
+resources-reference-tool-mark-first = Cet outil échantillonne les calques de référence. Marquez-en un dans le panneau Calques d’abord.
+resources-reference-use-layer = Utiliser { $name } comme référence
 
 resources-analysis-updating = Mise à jour…
 resources-analysis-error = Impossible de mettre à jour ce réglage.

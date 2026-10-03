@@ -2,7 +2,7 @@
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 
-pub(super) fn ready(w: &Rc<Workspace>) {
+pub(crate) fn ready(w: &Rc<Workspace>) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         pump(20);
@@ -22,7 +22,7 @@ pub(super) fn ready(w: &Rc<Workspace>) {
         {
             return;
         }
-        assert!(Instant::now() < deadline, "ready: {}", w.status.text());
+        assert!(Instant::now() < deadline, "ready: {} workspace_ready={} busy={} accepts_input={} canvas={:?}", w.status.text(), w.workspaces.ready(), w.workspaces.busy(), w.workspaces.accepts_input(w), w.gpu.borrow().as_ref().map(|g| (g.session.rendering_suspended(), g.session.state().host_error.clone(), g.session.engine().backend().startup.complete, g.session.engine().backend().paint_ready(g.session.engine().document(), g.session.engine().configured_brush(), false), g.session.state().filter_load.pending, g.session.engine().has_pending_document_edits())));
     }
 }
 pub(super) fn finish(w: &Rc<Workspace>) {
@@ -149,7 +149,7 @@ pub(super) fn profile_name(w: &Rc<Workspace>, name: &str) -> String {
     if let Some(row)=control.downcast_ref::<adw::ActionRow>() {return row.subtitle().unwrap().into();}
     named::<gtk::MenuButton>(&control,"proof-profile-choose").label().unwrap().into()
 }
-pub(super) fn response(w: &Rc<Workspace>, id: &str) {
+pub(crate) fn response(w: &Rc<Workspace>, id: &str) {
     if w.window.visible_dialog().is_some_and(|d| d.widget_name() == "export-options") {
         export_page(w, "main");
         let dialog = w.window.visible_dialog().unwrap();

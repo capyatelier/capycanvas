@@ -26,8 +26,76 @@ fn histogram_reply(s: &mut UiSession<Recorder>, pixels: u64, now: u64) {
     s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::ArtworkStatistics(histogram_value(s, pixels))));
     s.frame(now, now).unwrap();
 }
+
+#[test]
+fn histogram_language_refresh_reprojects_retained_independent_and_embedded_captions() {
+    for embedded in [false, true] {
+        let mut s = if embedded { tonal_histogram_session() } else { histogram_session() };
+        histogram_reply(&mut s, 7, 150_000_000);
+        s.frame(350_000_000, 350_000_000).unwrap();
+        histogram_reply(&mut s, 11, 400_000_000);
+        let before = if embedded { &s.state.tonal_histogram } else { &s.state.histogram };
+        let data = before.data.clone().unwrap();
+        let source = before.captured_source.clone();
+        let time = before.captured_time;
+        let status = before.status.clone();
+        let description = before.description.clone();
+        let requests = s.engine.backend().snapshot_requests.len();
+        let cancels = s.engine.backend().snapshot_cancels;
+        let checkpoint = s.engine.checkpoint();
+        assert!(s.set_localization(Localizer::shared(UiLanguage::Japanese)));
+        let after = if embedded { &s.state.tonal_histogram } else { &s.state.histogram };
+        assert_eq!(after.status, s.localization().text(MessageId::RESOURCES_HISTOGRAM_EXACT));
+        assert_ne!(after.status, status);
+        assert_ne!(after.description, description);
+        assert!(std::sync::Arc::ptr_eq(after.data.as_ref().unwrap(), &data));
+        assert_eq!(after.captured_source, source);
+        assert_eq!(after.captured_time, time);
+        assert_eq!(s.engine.backend().snapshot_requests.len(), requests);
+        assert_eq!(s.engine.backend().snapshot_cancels, cancels);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
+}
 fn histogram_control(s: &mut UiSession<Recorder>, action: crate::HistogramAction) {
     s.dispatch(UiAction::Histogram { action }).unwrap();
+}
+
+#[test]
+fn histogram_retained_captions_reuse_buffers_during_status_only_publication() {
+    let buffers = |view: &crate::HistogramView| [view.description.as_ptr() as usize, view.range.as_ptr() as usize,
+        view.axis[0].as_ptr() as usize, view.axis[1].as_ptr() as usize,
+        view.sources.as_ptr() as usize, view.channels.as_ptr() as usize, view.labels.as_ptr() as usize];
+    for embedded in [false, true] {
+        let mut s = session(Platform::Gtk);
+        s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "film_grain".into() } }).unwrap();
+        s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: s.engine.document().active_layer.0, key: "animate".into(), value: layer_core::EffectValue::Toggle(true) } }).unwrap();
+        if embedded {
+            s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }).unwrap();
+            s.reveal_panel(Panel::Properties).unwrap();
+            s.frame(100_000_000, 100_000_000).unwrap();
+        } else { histogram_open(&mut s); }
+        histogram_reply(&mut s, 7, 150_000_000);
+        s.frame(350_000_000, 350_000_000).unwrap();
+        histogram_reply(&mut s, 11, 400_000_000);
+        let view = if embedded { &s.state.tonal_histogram } else { &s.state.histogram };
+        let retained = buffers(view);
+        let sample = std::sync::Arc::as_ptr(view.data.as_ref().unwrap());
+        s.histogram_copy();
+        let view = if embedded { &s.state.tonal_histogram } else { &s.state.histogram };
+        assert_eq!(buffers(view), retained, "unchanged captured sample, embedded={embedded}");
+        s.frame(500_000_000, 500_000_000).unwrap();
+        let view = if embedded { &s.state.tonal_histogram } else { &s.state.histogram };
+        assert_eq!(view.status, s.localization().text(MessageId::RESOURCES_HISTOGRAM_UPDATING));
+        assert_eq!(std::sync::Arc::as_ptr(view.data.as_ref().unwrap()), sample);
+        assert_eq!(buffers(view), retained, "status-only publication, embedded={embedded}");
+        let checkpoint = s.engine.checkpoint();
+        let requests = s.engine.backend().snapshot_requests.len();
+        for _ in 0..4 { s.histogram_copy(); }
+        let view = if embedded { &s.state.tonal_histogram } else { &s.state.histogram };
+        assert_eq!(buffers(view), retained);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.backend().snapshot_requests.len(), requests);
+    }
 }
 
 #[test]
@@ -116,6 +184,7 @@ fn histogram_hidden_or_suspended_releases_query_and_retained_data() {
         let mut s = histogram_session();
         histogram_reply(&mut s, 7, 150_000_000);
         assert_eq!(s.state.histogram.data.as_ref().unwrap().pixels, 7);
+        let sample = std::sync::Arc::downgrade(s.state.histogram.data.as_ref().unwrap());
         s.frame(350_000_000, 350_000_000).unwrap();
         let before = s.engine.backend().snapshot_cancels;
         if suspend { s.suspend_renderer().unwrap(); }
@@ -126,6 +195,7 @@ fn histogram_hidden_or_suspended_releases_query_and_retained_data() {
         s.frame(400_000_000, 400_000_000).unwrap();
         assert!(s.engine.backend().snapshot_cancels > before);
         assert!(s.state.histogram.data.is_none());
+        assert!(sample.upgrade().is_none());
         let count = s.engine.backend().snapshot_requests.len();
         s.frame(1_000_000_000, 1_000_000_000).unwrap();
         assert_eq!(s.engine.backend().snapshot_requests.len(), count);

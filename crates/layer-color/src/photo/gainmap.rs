@@ -31,6 +31,15 @@ impl From<u8> for GainMapEncodeOptions {
         Self::from_memory_budget(quality, PhotoMemoryBudget::current())
     }
 }
+#[derive(Clone, Copy)]
+pub struct GainMapRender<'a> {
+    pub extent: [u32; 2],
+    pub space: RgbSpace,
+    pub rendition: SdrRendition,
+    pub guide: &'a hdr::LocalToneGuide,
+    pub matte: Option<[f32; 3]>,
+    pub clip: bool,
+}
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GainMapMetadata {
     pub min_log2: f32,
@@ -72,17 +81,13 @@ const OFFSET: f32 = 1. / 64.;
 /// Validated linear BT.2020 HDR and tone-mapped SDR for each output pixel,
 /// composited over `matte`. Returns clipping statistics and the HDR peak.
 pub(in crate::photo) fn render_pair(
-    extent: [u32; 2],
-    space: RgbSpace,
-    rendition: SdrRendition,
-    guide: &hdr::LocalToneGuide,
+    render: GainMapRender<'_>,
     quality: u8,
-    matte: Option<[f32; 3]>,
-    clip: bool,
     cancelled: &AtomicBool,
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
     mut emit: impl FnMut([f32; 3], [f32; 3], f32) -> Result<(), String>,
 ) -> Result<(crate::OutputStatistics, f32), String> {
+    let GainMapRender { extent, space, rendition, guide, matte, clip } = render;
     check_cancel(cancelled)?;
     rendition.validate().map_err(str::to_string)?;
     if !(1..=100).contains(&quality) {
@@ -191,24 +196,18 @@ mod metadata;
 pub(super) use metadata::Metadata;
 pub fn write_gainmap_rows(
     mut output: impl Write,
-    extent: [u32; 2],
-    space: RgbSpace,
-    rendition: SdrRendition,
-    guide: &layer_core::color::hdr::LocalToneGuide,
+    render: GainMapRender<'_>,
     format: GainMapFormat,
     options: impl Into<GainMapEncodeOptions>,
     metadata: &super::DeliveryMetadata,
-    matte: Option<[f32; 3]>,
-    clip: bool,
     cancelled: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
     let options = options.into();
     let (bytes, stats) = if format == GainMapFormat::Jpeg {
-        jpeg::encode(extent, space, rendition, guide, options.quality, metadata, matte, clip, options.memory, cancelled, read)
+        jpeg::encode(render, options, metadata, cancelled, read)
     } else {
-        super::avif_io::encode(extent, space, rendition, guide, options.quality, metadata, matte,
-            clip, options.memory.encode_bytes, cancelled, read)
+        super::avif_io::encode(render, options, metadata, cancelled, read)
     }?;
     for chunk in bytes.chunks(65536) {
         check_cancel(cancelled)?;
@@ -222,14 +221,10 @@ pub fn write_gainmap_rows(
 pub type GainMapPreview = ([u32; 2], Vec<[f32; 4]>, Vec<[f32; 4]>, crate::OutputStatistics);
 
 pub fn preview_gainmap_rows(
-    extent: [u32; 2],
+    render: GainMapRender<'_>,
     bounds: [u32; 2],
-    space: RgbSpace,
-    rendition: SdrRendition,
-    guide: &layer_core::color::hdr::LocalToneGuide,
     format: GainMapFormat,
     options: impl Into<GainMapEncodeOptions>,
-    matte: Option<[f32; 3]>,
     cancelled: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<GainMapPreview, String> {
@@ -238,9 +233,9 @@ pub fn preview_gainmap_rows(
     }
     let options = options.into();
     if format == GainMapFormat::Jpeg {
-        return jpeg::preview(extent, bounds, space, rendition, guide, options, matte, cancelled, read);
+        return jpeg::preview(render, bounds, options, cancelled, read);
     }
-    super::avif_io::preview(extent, bounds, space, rendition, guide, options, matte, cancelled, read)
+    super::avif_io::preview(render, bounds, options, cancelled, read)
 }
 
 #[cfg(test)]
@@ -270,25 +265,37 @@ mod tests {
             let guide = test_guide(extent, |_, row| { row.fill([2., 0.5, 0.25, 1.]); Ok(()) });
             let mut reads = 0;
             let result = write_gainmap_rows(
-                Vec::new(), extent, RgbSpace::Srgb, Default::default(), &guide, format,
-                GainMapEncodeOptions::from_memory_budget(90, memory), &Default::default(), None, false,
-                &cancel, |_, row| { reads += 1; row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
+                Vec::new(),
+                GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: false },
+                format,
+                GainMapEncodeOptions::from_memory_budget(90, memory),
+                &Default::default(),
+                &cancel,
+                |_, row| { reads += 1; row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
             );
             assert!(result.unwrap_err().contains("memory budget"));
             assert_eq!(reads, 0, "Reject before consuming the captured image");
             let options = GainMapEncodeOptions::from_memory_budget(90,
                 PhotoMemoryBudget { encode_bytes: 128 * 1024 * 1024, ..memory });
             let result = preview_gainmap_rows(
-                extent, [8, 8], RgbSpace::Srgb, Default::default(), &guide, format,
-                options, None, &cancel, |_, row| { row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
+                GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: true },
+                [8, 8],
+                format,
+                options,
+                &cancel,
+                |_, row| { row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
             );
             assert!(result.unwrap_err().contains("memory budget"),
                 "Preview decoding must not replace the host's zero allowance with a default");
             let options = GainMapEncodeOptions::from_memory_budget(90,
                 PhotoMemoryBudget::from_available_memory(512 * 1024 * 1024));
             let (_, hdr, _, _) = preview_gainmap_rows(
-                extent, [8, 8], RgbSpace::Srgb, Default::default(), &guide, format,
-                options, None, &cancel, |_, row| { row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
+                GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: true },
+                [8, 8],
+                format,
+                options,
+                &cancel,
+                |_, row| { row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
             ).unwrap();
             assert!(hdr.iter().all(|p| p[0] > 1.9), "A later admitted preview retains HDR");
         }
@@ -310,8 +317,15 @@ mod tests {
         };
         let read = |y, row: &mut [[f32; 4]]| { for (x,p) in row.iter_mut().enumerate() { *p = pixel(x as u32,y); } Ok(()) };
         let mut encoded = Vec::new();
-        write_gainmap_rows(&mut encoded, extent, RgbSpace::Srgb, SdrRendition::default(),
-            &test_guide(extent, read), GainMapFormat::Avif, quality, &super::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))), None, false, &cancel, read).unwrap();
+        write_gainmap_rows(
+            &mut encoded,
+            GainMapRender { extent, space: RgbSpace::Srgb, rendition: SdrRendition::default(), guide: &test_guide(extent, read), matte: None, clip: false },
+            GainMapFormat::Avif,
+            quality,
+            &super::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
+            &cancel,
+            read,
+        ).unwrap();
         let encode_time = started.elapsed();
         let encoded_bytes = encoded.len();
         if let Some(directory) = std::env::var_os("LAYER_AVIF_OUTPUT") {
@@ -372,14 +386,10 @@ mod tests {
                 let expected = recipe.mapper(RgbSpace::Srgb,RgbSpace::Srgb)
                     .map_local_premultiplied([8.*alpha,0.,0.,alpha],[0.5,0.5],&guide);
                 let (_, hdr, base, stats) = preview_gainmap_rows(
+                    GainMapRender { extent: [32, 32], space: RgbSpace::Srgb, rendition: recipe, guide: &guide, matte: None, clip: true },
                     [32, 32],
-                    [32, 32],
-                    RgbSpace::Srgb,
-                    recipe,
-                    &guide,
                     format,
                     100,
-                    None,
                     &cancel,
                     read,
                 )
@@ -426,14 +436,10 @@ mod tests {
                 };
                 let guide = test_guide(extent, read);
                 let (_, hdr, base, stats) = preview_gainmap_rows(
+                    GainMapRender { extent, space: RgbSpace::Srgb, rendition, guide: &guide, matte: None, clip: true },
                     extent,
-                    extent,
-                    RgbSpace::Srgb,
-                    rendition,
-                    &guide,
                     format,
                     90,
-                    None,
                     &cancel,
                     read,
                 )
@@ -459,15 +465,10 @@ mod tests {
                     let mut file = Vec::new();
                     write_gainmap_rows(
                         &mut file,
-                        extent,
-                        RgbSpace::Srgb,
-                        rendition,
-                        &guide,
+                        GainMapRender { extent, space: RgbSpace::Srgb, rendition, guide: &guide, matte: None, clip: false },
                         format,
                         90,
                         &Default::default(),
-                        None,
-                        false,
                         &cancel,
                         read,
                     )
@@ -535,15 +536,10 @@ mod tests {
             let mut encoded = Vec::new();
             write_gainmap_rows(
                 &mut encoded,
-                extent,
-                RgbSpace::Srgb,
-                SdrRendition::default(),
-                &test_guide(extent, |y, r| row(y, r, transparent)),
+                GainMapRender { extent, space: RgbSpace::Srgb, rendition: SdrRendition::default(), guide: &test_guide(extent, |y, r| row(y, r, transparent)), matte: None, clip: false },
                 format,
                 100,
                 &crate::photo::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
-                None,
-                false,
                 &AtomicBool::new(false),
                 |y, r| row(y, r, transparent),
             )
@@ -586,12 +582,12 @@ mod tests {
         let extent=[64,48];let cancel=AtomicBool::new(false);
         for format in [GainMapFormat::Jpeg,GainMapFormat::Avif] {
             let alpha=if format==GainMapFormat::Avif {0.5}else{1.};
-            let read=|y:u32,row:&mut [[f32;4]]| {for (x,p) in row.iter_mut().enumerate(){let v=if x<32 {0.05}else{8.}*if (x/8+y as usize/8)%2==0 {0.8}else{1.2};*p=[v*alpha,v*0.7*alpha,v*0.4*alpha,alpha];}Ok(())};
+            let read=|y:u32,row:&mut [[f32;4]]| {for (x,p) in row.iter_mut().enumerate(){let v=if x<32 {0.05}else{8.}*if (x/8+y as usize/8).is_multiple_of(2) {0.8}else{1.2};*p=[v*alpha,v*0.7*alpha,v*0.4*alpha,alpha];}Ok(())};
             let guide=crate::build_local_tone_guide(extent,RgbSpace::Srgb,||false,read).unwrap();
             let mut bases=Vec::new();
             for (contrast,balance) in [(0.5,-1.),(2.,1.)] {
                 let recipe=SdrRendition{contrast,balance,headroom:guide.peak.log2(),..Default::default()};
-                let (_,hdr,base,stats)=preview_gainmap_rows(extent,extent,RgbSpace::Srgb,recipe,&guide,format,100,None,&cancel,read).unwrap();assert_eq!(stats.clipped_channels,0);
+                let (_,hdr,base,stats)=preview_gainmap_rows(GainMapRender { extent, space: RgbSpace::Srgb, rendition: recipe, guide: &guide, matte: None, clip: true }, extent, format, 100, &cancel, read).unwrap();assert_eq!(stats.clipped_channels,0);
                 for (x,y) in [(12,12),(20,20),(44,12),(52,20)] {
                     let mut row=vec![[0.;4];64];read(y,&mut row).unwrap();let p=row[x];let i=y as usize*64+x;
                     let expected=recipe.mapper(RgbSpace::Srgb,RgbSpace::Srgb).map_local_premultiplied(p,[x as f32+0.5,y as f32+0.5],&guide);

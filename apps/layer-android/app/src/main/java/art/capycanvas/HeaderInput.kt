@@ -48,13 +48,14 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
     var overflow by mutableStateOf<Int?>(null)
     var context by mutableStateOf<JSONObject?>(null)
     var contextProvider: (() -> JSONObject?)? = null
+    var contextRequest: JSONObject? = null
     var contextBounds = Rect.Zero
     var contact by mutableStateOf(false)
     private var generation = 0
     private var last = Offset.Zero
     fun begin(source: Source, press: Offset) {
         generation++
-        held = source; last = press; context = null; overflow = null
+        held = source; last = press; context = null; contextRequest = null; contextProvider = null; overflow = null
         host.headerQuery(obj("op" to "begin", "source" to source.source, "width" to width,
             "insets" to JSONArray(listOf(0, 0)), "metrics" to metrics,
             "press" to press.headerPoint(), "grab" to source.bounds.headerBounds()))
@@ -74,16 +75,23 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
     }
     fun menu(id: Int?, bounds: Rect) {
         contextBounds = bounds
+        val ticket = ++generation
         val source = sources.values.filter { it.source.optInt("value", -1) == id && it.context != null }.maxByOrNull { it.priority }
         contextProvider = source?.context
+        contextRequest = null
         if (source != null) context = contextProvider?.invoke()
-        else host.query(obj("type" to "context", "target" to obj("kind" to "header", "id" to id))) {
-            context = it as? JSONObject
+        else {
+            val query = obj("type" to "context", "target" to obj("kind" to "header", "id" to id))
+            contextRequest = query
+            host.query(query) {
+                if (ticket == generation) context = it as? JSONObject
+            }
         }
     }
+    fun closeMenu() { generation++; context = null; contextRequest = null; contextProvider = null }
     fun key(event: KeyEvent): Boolean {
         if (!host.editingText && context != null && event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
-            if (event.action == KeyEvent.ACTION_DOWN) context = null
+            if (event.action == KeyEvent.ACTION_DOWN) closeMenu()
             return true
         }
         if (!editing || !enabled || host.editingText || event.isCtrlPressed || event.isMetaPressed || event.isAltPressed) return false
@@ -92,7 +100,7 @@ internal class HeaderInteraction(val host: CanvasHost, val dock: DockInteraction
         if (event.keyCode !in keys) return false
         if (event.action != KeyEvent.ACTION_DOWN) return true
         if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
-            if (held != null) finish(true) else if (context != null || overflow != null) { context = null; overflow = null }
+            if (held != null) finish(true) else if (context != null || overflow != null) { closeMenu(); overflow = null }
             else host.headerEdit(obj("type" to "cancel"))
             return true
         }
@@ -136,7 +144,7 @@ private suspend fun AwaitPointerEventScope.holdMenu(input: HeaderInteraction, do
             released = !change.pressed
         }
     } finally {
-        if (!released) input.context = null
+        if (!released) input.closeMenu()
         input.contact = false
     }
 }
@@ -191,7 +199,7 @@ private suspend fun AwaitPointerEventScope.holdMenu(input: HeaderInteraction, do
                 }
             } finally {
                 if (started && !released) input.finish(true)
-                if (!released) input.context = null
+                if (!released) input.closeMenu()
                 input.contact = false
             }
         }

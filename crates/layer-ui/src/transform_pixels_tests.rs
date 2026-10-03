@@ -17,7 +17,7 @@ fn bake_session(linked: bool) -> UiSession<Recorder> {
         channels: SourceChannels::Rgba, depth: layer_core::color::SampleDepth::U8,
         profile: Default::default(), profile_assumed: false,
     }, 1024 * 1024).unwrap();
-    for _ in 0..8 { source.push_row(&vec![120; 16 * 4]).unwrap(); }
+    for _ in 0..8 { source.push_row(&[120; 16 * 4]).unwrap(); }
     doc.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
     doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 3., -17., 13.]));
     doc.layers[0].raster = raw_revision(doc.color, &[RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness], 20);

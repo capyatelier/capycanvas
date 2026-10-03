@@ -110,7 +110,7 @@ impl<'a> Builder<'a> {
         }
         self.items[id as usize - 1]
             .properties
-            .push(index as u8 + 1 | if essential { 128 } else { 0 });
+            .push((index as u8 + 1) | if essential { 128 } else { 0 });
         Ok(())
     }
     fn image_properties(

@@ -52,7 +52,7 @@ pub use workspace_update::*;
 mod eyedropper;
 pub use eyedropper::{COLOR_SAMPLE_WIDTHS, ColorPickerAction, ColorPickerState, ColorPickerStyle, PickerPreview};
 mod export;
-pub use export::{ExportChoice, ExportChoices, ExportNumericControls, ExportDraft, ExportDraftAction, ExportForm, ExportBackground, ExportFormat, ExportMetadataView, ExportProfile, ExportRecipe, ExportResolution, ExportSize, MetadataChoice};
+pub use export::{ExportChoice, ExportChoices, ExportNumericControls, ExportDraft, ExportDraftAction, ExportForm, ExportBackground, ExportFormat, ExportMetadataView, ExportProfile, ExportProfileCaption, ExportRecipe, ExportResolution, ExportSize, MetadataChoice};
 pub use layer_color::photo::{ExportMetadata, MetadataKeep};
 mod export_presets;
 pub use export_presets::{ExportPresets, ExportPresetAction, ExportPresetView};
@@ -71,7 +71,7 @@ mod toolbar_preview;
 pub use toolbar_preview::*;
 mod tools;
 pub use color::{
-    color_intensity_input, ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form_localized, color_preview, color_validation_localized, color_ui_localized,
+    color_intensity_input, color_intensity_input_typed, ColorEditor, ColorEditorError, ColorInputModel, ColorFormCopy, ColorFormCopyView, ColorValidationCopy, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form_localized, color_preview, color_validation_localized, color_ui_localized,
     ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor,
     PaletteChoiceView, PaletteCommand, PaletteExport, PaletteFileRequest, PaletteFormat, palette_file, PaletteMenuItem, PaletteMenuTarget, PalettePanelView,
     PaletteTileView, selected_swatch,
@@ -119,7 +119,7 @@ pub use session::{
     AdjustmentChoice, ApplicationLink, ApplicationMenu, ClipboardCapture, CloseDecision,
     LARGE_CLIP_PIXELS, PasteMode, PixelClip,
     DEFAULT_DOCUMENT_EXTENT,
-    DocumentColorOperation, DocumentHostError, DocumentHostErrorCopy, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
+    DocumentColorOperation, DocumentIdleReason, DocumentHostError, DocumentHostErrorCopy, HostRequestFailure, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
     FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
     MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, PropertyPageView, CurveAxis, CurveAxisView, CurveControls, CurveCoordinateControl, CurveDomain, new_drawing, new_document_spec,
 };
@@ -174,7 +174,7 @@ pub use shortcut_page::{
 };
 pub use shortcuts::{
     BindingScope, GAMEPAD_BUTTONS, GESTURE_TRIGGERS, GestureTrigger, HoldKey, KeyChord, MODIFIER_CAPTURE, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
-    TextEditMenuItem, text_edit_menu,
+    TextEditMenuItem, text_edit_menu, text_edit_menu_localized,
 };
 pub use theme::{
     ACCENTS, DEFAULT_ACCENT, HexColor, TRANSPARENCY_CHECKER, TRANSPARENCY_CHECKER_CELL, Theme,
@@ -302,6 +302,11 @@ pub struct BrushCategory {
 #[derive(Clone, Debug, Serialize)]
 pub struct UiCatalog {
     pub native_copy: NativeCopy,
+    pub profile_copy: color_feature_copy::ProfileCopy,
+    pub export_copy: color_feature_copy::ExportCopy,
+    pub document_color_copy: color_feature_copy::DocumentColorCopy,
+    pub proof_copy: color_feature_copy::ProofCopy,
+    pub document_delivery_copy: DocumentDeliveryCopy,
     pub command_search_style: CommandSearchStyle,
     pub canvas_bar_reappear_ms: u32,
     pub app_name: &'static str,
@@ -328,6 +333,11 @@ pub fn ui_catalog() -> UiCatalog {
 pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
     UiCatalog {
         native_copy: NativeCopy::new(localization),
+        profile_copy: color_feature_copy::ProfileCopy::new(localization),
+        export_copy: color_feature_copy::ExportCopy::new(localization),
+        document_color_copy: color_feature_copy::DocumentColorCopy::new(localization),
+        proof_copy: color_feature_copy::ProofCopy::new(localization),
+        document_delivery_copy: DocumentDeliveryCopy::new(localization),
         command_search_style: COMMAND_SEARCH_STYLE,
         canvas_bar_reappear_ms: CANVAS_BAR_REAPPEAR_MS,
         zen_icon_size: ZEN_ICON_SIZE,
@@ -1496,6 +1506,10 @@ pub enum UiAction {
         id: u32,
         error: Option<String>,
     },
+    CompleteRequestFailure {
+        id: u32,
+        reason: HostRequestFailure,
+    },
     CloseSettings,
 }
 impl UiAction {
@@ -1503,6 +1517,7 @@ impl UiAction {
         matches!(
             self,
             Self::CompleteRequest { .. }
+                | Self::CompleteRequestFailure { .. }
                 | Self::CloseSettings
                 | Self::RestoreSettings { .. }
                 | Self::RestoreSavedSettings { .. }

@@ -245,7 +245,7 @@ impl Builder {
     ) -> Result<Self, String> {
         let extent = guide_extent(document)?;
         if 16 + u64::from(extent[0]) * u64::from(extent[1]) * 16
-            > u64::from(device.limits().max_storage_buffer_binding_size)
+            > device.limits().max_storage_buffer_binding_size
         {
             return Err("Local tone guide exceeds GPU buffer limit".into());
         }
@@ -291,6 +291,7 @@ impl Builder {
             texture,
         })
     }
+    #[expect(clippy::too_many_arguments, reason = "Local tone stages pass uniforms, buffers, texture targets, and dispatch size explicitly")]
     fn encode(
         &self,
         encoder: &mut CommandEncoder,

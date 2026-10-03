@@ -80,6 +80,11 @@ fn lookup_parse_failures_use_active_localization_and_leave_no_partial_edit() {
         assert_eq!(s.state.host_error.as_deref(),Some(s.localization().text(MessageId::RESOURCES_LOOKUP_FAILED).as_ref()));
         assert!(!s.state.host_error.as_ref().unwrap().contains("line 17"));
         assert_eq!(s.engine.document(),&before);assert_eq!(s.engine.checkpoint(),checkpoint);assert!(s.state.requests.is_empty());
+        for next in [UiLanguage::Japanese, UiLanguage::Russian, UiLanguage::English] {
+            s.set_localization(Localizer::shared(next));
+            assert_eq!(s.state.host_error.as_deref(),Some(s.localization().text(MessageId::RESOURCES_LOOKUP_FAILED).as_ref()));
+            assert_eq!(s.engine.document(),&before);assert_eq!(s.engine.checkpoint(),checkpoint);assert!(s.state.requests.is_empty());
+        }
         let cancelled=lookup_request(&mut s);s.complete_document_request(cancelled,Ok(false)).unwrap();
         assert!(s.state.host_error.is_none());assert_eq!(s.engine.document(),&before);assert_eq!(s.engine.checkpoint(),checkpoint);
     }

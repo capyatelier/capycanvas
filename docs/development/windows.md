@@ -62,17 +62,43 @@ document history, HWNDs and swap chains stay with their existing owners. The
 `localization` snapshot envelope carries one generation of catalog, document
 delivery and bootstrap copy; stateless native helpers borrow that same immutable
 context. Controls that outlive a language change, such as the canvas bar, bind
-their names with `copyName`; panel bodies rebuild when their localized tab titles
-change. A button made from localized copy relabels its text and accessible name
+their names with `copyName`; localized tab titles update retained panel headers.
+A button made from localized copy relabels its text and accessible name
 but keeps an icon or panel given as its content, because copy callbacks also run
 when the window prunes them.
 
-`exercise-localization.ps1 -Executable <path> -Theme dark` checks actual preference
-choices for all five languages, retained numeric drafts and preference controls,
-relabeled canvas bar, layer footer, panel grip and resize handle names, and
-inactive and future windows. Repeat with `-Theme light`. The VM fixture
-runner selects these as `localization` and `localization:light`. Genuine TSF
-candidate handling and physical GPU presentation need Windows hardware.
+Empty localization metadata preserves the current context; a pending envelope
+stays queued until a full snapshot carries it. Properties, tool controls, filter
+results and options use semantic identities for their structural keys. Current
+captions update retained controls, accessibility names and tooltips. Numeric
+refusals retain their shared reason, and color forms project their cached
+`form_copy` descriptor without reparsing drafts or converting previews. Profile,
+proof and export captions preserve raw names, selections and prepared candidates.
+Preferences reserves the measured titlebar height when fitting its centered
+dialog; its narrow-window check dismisses it with an actual pointer click.
+
+`exercise-localization.ps1 -Executable <path> -Theme dark` checks every shipped
+language, retained numeric and Unicode drafts and selections, Properties,
+shortcuts, filters, color forms, profile/proof/export controls, workspace handles,
+and inactive and future windows. It checks drawing, pixel restoration through
+undo/redo and Unicode save/reopen/export. Before recording curve history or drawing
+pixels, fixtures require Undo availability in the current shared snapshot.
+This checks the published command state; queued native input can still retire
+after that snapshot. Repeat with `-Theme light` and
+`-LargeText`, which sets the private VM user's system text scale to 150 percent
+and restores it afterwards. The VM runner selects all four variants with
+`localization`; suffixes `:default`, `:light`, `:LargeText` and `:light-large`
+select a single variant. Genuine TSF candidate handling needs an interactive Windows
+desktop with an enabled IME; physical GPU presentation needs Windows hardware.
+`localization-smoke` checks English and Japanese, including compact menus and
+narrow Preferences, in both themes. Menu selectors use semantic IDs or the exact
+current caption from the shared snapshot.
+
+Activating Preferences deliberately sends shared Blur, restoring the tool used
+before temporary eyedropping. The sampler journey checks that restoration, then
+reenters the picker and checks current captions and unchanged sample choices.
+A windowless shared test checks pure language publication while picking stays
+active; the native fixture does not claim retained sampler identity across Blur.
 
 ### Environment switches
 
@@ -196,6 +222,15 @@ name so independent groups remain independently selectable.
 and Photo selection tools, pinned Eraser, and a drawing group added to the header
 through customization, with injected mouse, pen and touch. Repeat with `-Theme light`.
 The VM fixture names are `tool-variations` and `tool-variations:light`.
+
+`exercise-ime.ps1 -Executable <path> -Theme dark` exercises the installed
+Microsoft Japanese IME on the interactive test desktop. Enable Japanese input
+in the private test user first; the fixture requires actual Hiragana preedit
+and a converted candidate, with 100 ms between key presses, before checking
+Enter, Escape, selected layer names,
+numeric refusal, pointer confirmation and focus changes. Repeat with `-Theme
+light`, or select `fixtures ime` in the VM runner. Captures include the private
+desktop so the IME candidate window remains visible in the evidence.
 
 ### UI fixtures
 

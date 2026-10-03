@@ -495,6 +495,13 @@ resources-lookup-replace = Sostituisci…
 resources-lookup-files = File di mappatura colori
 resources-lookup-unavailable = L’importazione di tabelle di mappatura colori non è ancora disponibile su questa piattaforma.
 resources-lookup-failed = Impossibile importare la tabella di mappatura.
+resources-layer-menu-stop-using-as-reference = Smetti di usare questo livello come riferimento
+resources-coverage-from-layer-opacity = Dall’opacità del livello
+resources-coverage-from-layer-mask = Dalla maschera del livello
+resources-reference-empty-unmarked = Questo livello è vuoto e nessun livello sottostante è contrassegnato come riferimento
+resources-reference-tool-unmarked = Questo strumento campiona i livelli di riferimento e nessuno è contrassegnato
+resources-reference-tool-mark-first = Questo strumento campiona i livelli di riferimento. Prima contrassegnane uno nel pannello Livelli.
+resources-reference-use-layer = Usa { $name } come riferimento
 
 resources-analysis-updating = Aggiornamento…
 resources-analysis-error = Impossibile aggiornare questa regolazione.

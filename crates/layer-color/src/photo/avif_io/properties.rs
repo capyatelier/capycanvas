@@ -44,7 +44,7 @@ impl Geometry {
     }
     pub fn extent(self, source: [u32; 2]) -> Result<[u32; 2]> {
         let [_, _, w, h] = self.crop(source)?;
-        Ok(if self.rotation % 2 == 0 {
+        Ok(if self.rotation.is_multiple_of(2) {
             [w, h]
         } else {
             [h, w]
@@ -52,7 +52,7 @@ impl Geometry {
     }
     pub fn source_pixel(self, crop: [u32; 4], x: u32, y: u32) -> [u32; 2] {
         let [cx, cy, w, h] = crop;
-        let output = if self.rotation % 2 == 0 {
+        let output = if self.rotation.is_multiple_of(2) {
             [w, h]
         } else {
             [h, w]

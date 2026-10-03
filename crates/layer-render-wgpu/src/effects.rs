@@ -476,14 +476,14 @@ impl Effects {
         let binding = if reusable && Arc::ptr_eq(&resource, &self.instances[&ids].resource) {
             self.instances[&ids].binding.clone()
         } else {
-            crate::bindings::group(&r.device(), "effect parameter binding", &self.layout, [
+            crate::bindings::group(r.device(), "effect parameter binding", &self.layout, [
                 buffer.as_entire_binding(), resource.buffer.as_entire_binding(),
             ])
         };
         let compute_binding = if reusable {
             self.instances[&ids].compute_binding.clone()
         } else {
-            crate::bindings::group(&r.device(), "effect preparation binding", &self.preparation.layout, [
+            crate::bindings::group(r.device(), "effect preparation binding", &self.preparation.layout, [
                 buffer.as_entire_binding(),
             ])
         };

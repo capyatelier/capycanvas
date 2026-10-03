@@ -60,8 +60,8 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Layer reorder drag | 60 | | |
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
-| Panel, tab, column or toolbar drag and docking | 60 | | |
-| Panel or column resize | 60 | | |
+| Panel, tab, column or toolbar drag and docking | 60 | Current lifecycle binary unmeasured. Earlier Web checkpoint: group/tab placements 47.38/60.22 Hz; Navigator assertion failed | Web workspace diagnostic below; no tier qualification |
+| Panel or column resize | 60 | Current lifecycle binary unmeasured. Earlier Web checkpoint: width changes 11.93–13.49 Hz; nine retained-resource/geometry checks pass | Web workspace diagnostic below; no tier qualification |
 | Drawer open and close | 60 | | |
 | Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); functional checks do not qualify this tier |
 | Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 59.02–59.52 Hz, maximum p99 33.31 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
@@ -73,7 +73,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Workspace choices: horizontal scroll | 60 | Screen 59.42–59.82 presents/s, maximum p99 33.24 ms | Workspace switcher scrolling below; long-list fixture |
 | Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
 | Menu open and close | 60 | | |
-| Interface language change | 60 | Single samples: cold preparation 18.240–27.400 ms; maximum isolated batch 2.355 ms; German publication 190.340 ms | Fifteen-language diagnostic below; no tier qualification |
+| Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
 
 ## Grouped tool drawer scrolling
 
@@ -165,17 +165,101 @@ was prepared once, verifying all 2,972 static labels; German was then reused.
 | Cached German preparation | 0.030 ms |
 | Stock cached English publication / first associated GPU completion | 293.590 / 255.655 ms |
 | Candidate cold German publication / first associated GPU completion | 190.340 / 354.650 ms |
-| Maximum preparation call during application switching, stock / candidate | 7.220 / 12.805 ms |
+| Final preparation call plus shared publication, stock / candidate | 7.220 / 12.805 ms |
 
 Preparation totals exclude waits between tasks and module fetch/instantiation.
 Each publication sample precedes one five-second CDP pen motion on the 12 MP
 photo. Publication includes host apply; GPU completion is associated with input
-at the JavaScript boundary, not physical ink or scanout. Different language/cache
-states and single samples establish no improvement or frame-target result.
+at the JavaScript boundary, not physical ink or scanout. The final preparation
+call also publishes shared state; its duration is not an isolated parsing batch.
+Different language/cache states and single samples establish no improvement or
+frame-target result.
 Desktop native preparation was 3.010–4.329 ms, a supporting diagnostic rather
 than tier hardware. [Raw records and exact binary/source hashes](../../artifacts/localization-expansion/preparation/current155/focused-summary.local.json)
 and the [unchanged build/deployment guard](../../artifacts/localization-expansion/preparation/current155/final-focused-sourceguard.local.json)
 identify this minimal candidate; earlier broad measurements are excluded.
+
+## Matched Web language checkpoint
+
+Measured on 2026-10-03 on the TCL reference tablet, Chrome 154, release Wasm,
+with a 4248 × 2832 photo, one empty paint layer above it and Paper, G-Pen
+1024 px, Fit 15.9703%, Navigator open and default glass. The viewport is
+1920 × 996 physical pixels, 1129 × 586 CSS pixels. Three fresh app modules per
+build each perform one cold and two cached German switches after restoring
+English. Camera, workspace, brush, settings, color, layers and contained pen
+trajectory match. Thermal status was zero before and after the measured sequence.
+
+| Interval | Baseline | Measured `6318d9c7` checkpoint |
+| --- | ---: | ---: |
+| Preparation-only call maximum across three cold switches | 3.100 ms | 4.095 ms |
+| Cold preparation, sum of calls | 28.34–30.12 ms | 30.91–31.64 ms |
+| Cold final call including shared publication | 10.66–12.90 ms | 9.75–11.04 ms |
+| Cold host publication | 189.18–202.37 ms | 159.45–184.72 ms |
+| Cold total publication | 201.74–215.28 ms | 169.19–195.49 ms |
+| Cached total publication | 182.88–230.68 ms | 144.35–194.36 ms |
+| Cold first associated GPU completion after resumed pen input | 320.08–346.99 ms | 421.57–557.21 ms |
+| Cached first associated GPU completion after resumed pen input | 191.77–380.96 ms | 216.88–366.50 ms |
+
+Cached switches have no preparation-only calls. The final preparation call
+publishes shared state and is excluded from parsing maxima. The measured cold
+maxima are 2.710, 2.950 and 4.095 ms; these elapsed intervals do not establish
+the CPU budget. Publication is faster in this sequence, while cold resumed GPU
+association is slower. No general responsiveness improvement is established.
+Five-second CDP pen motions after publication reach 16.35–17.66 completed
+updates/s cold and 18.95–21.32/s cached. GPU callbacks pair with input at the
+JavaScript boundary; they do not measure consumed ink, physical latency or
+canvas scanout and do not qualify the tier target.
+
+A separate instrumented checkpoint trace attributes 52.1 ms to style updates
+and 26.4 ms to layout within a 213.5 ms cold host publication, with no GC or
+compilation span in that window. A copy-only experiment removing repeated tab
+and proof refresh did not improve cached timings consistently, so production
+preparation scheduling remains unchanged. Trace timings are diagnostic and
+are not pooled with the matched runs.
+
+Baseline is `0f6b5b708`; measured checkpoint Wasm SHA-256 is
+`6318d9c79e92af194d3f4cef331275dbbdaf237c23399f9c8b0f1c408e4d8933`.
+Both binaries' embedded producers identify rustc 1.96.0 and wasm-bindgen
+0.2.128. [Repeated raw records and summary](../../artifacts/localization-resolution/performance/final-matched-summary.local.json),
+[matched fixture checks](../../artifacts/localization-resolution/performance/final-matched-state-check.local.json),
+[deployment and source guard](../../artifacts/localization-resolution/performance/final-deployment.local.json)
+and [separate attribution](../../artifacts/localization-resolution/performance/attribution-summary.local.json)
+retain exact scope, hashes and mixed results. [Runtime byte equivalence](../../artifacts/localization-resolution/performance/final-stack-runtime-equivalence.local.json)
+identifies the same measured production bytes after the shared-host catalog
+allocation correction. Earlier single-language samples and intermediate
+candidates remain separate checkpoints.
+
+The subsequent lifecycle build, Wasm SHA-256
+`2282c166274739cb0715960de5a56b88543d6b83e8d00d4cd58875c9bca1102e`,
+is **unmeasured on reference hardware**. Its [deployment and source guard](../../artifacts/localization-resolution/performance/final-lifecycle-deployment.local.json)
+verify the exact release runtime; only Wasm differs from the measured
+checkpoint. These retained timings do not establish current-binary performance
+or qualify any tier target.
+
+The rebased release, Wasm SHA-256
+`313264f2fed8eef1285f2d010a820ba6286c18566ccf46eb5c4ab68c4b5d941c`,
+also remains unmeasured on reference hardware. Its [runtime and source checks](../../artifacts/localization-resolution/web/acceptance-tool-variations-final.local.json)
+qualify the recorded functional journeys only.
+
+## Web workspace diagnostic
+
+The same measured checkpoint and TCL photo fixture above perform three five-second
+CDP mouse resizes each for the left column, right column and Navigator. Width
+changes sampled through animation callbacks reach 12.04–13.23, 13.03–13.49 and
+11.93–12.36 updates/s respectively; baseline samples were approximately
+12–14/s. All nine gestures retain DOM/content and native-resolution resources
+and pass shared-geometry, undo/redo and cancellation checks.
+
+The first floating-group and tab drags sample 47.38 and 60.22 placements/s.
+The Navigator drag then fails the same assertion as baseline: one full
+`layout()` call occurs where the existing fixture expects zero. Remaining
+repetitions and its trailing glass check do not run. The failed raw probe is
+retained. These UI geometry samples have no presented-frame oracle, so neither
+motion row is qualified. Narrow transient-open collapsed-column motion remains
+unmeasured. [Checkpoint records, partial failure and hashes](../../artifacts/localization-resolution/performance/final-motion-summary.local.json)
+and [baseline scope](../../artifacts/localization-resolution/performance/baseline-motion-summary.local.json)
+record the bounded comparison; they do not establish unchanged performance
+for other workspaces or tiers.
 
 ## Current drag comparison
 

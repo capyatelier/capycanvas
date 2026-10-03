@@ -494,6 +494,13 @@ resources-lookup-replace = Reemplazar…
 resources-lookup-files = Archivos de consulta de colores
 resources-lookup-unavailable = La importación de tablas de consulta de colores aún no está disponible en esta plataforma.
 resources-lookup-failed = No se pudo importar la tabla de consulta.
+resources-layer-menu-stop-using-as-reference = Dejar de usar esta capa como referencia
+resources-coverage-from-layer-opacity = Desde la opacidad de la capa
+resources-coverage-from-layer-mask = Desde la máscara de la capa
+resources-reference-empty-unmarked = Esta capa está vacía y ninguna capa inferior está marcada como referencia
+resources-reference-tool-unmarked = Esta herramienta toma muestras de capas de referencia y ninguna está marcada
+resources-reference-tool-mark-first = Esta herramienta toma muestras de capas de referencia. Primero marca una en el panel Capas.
+resources-reference-use-layer = Usar { $name } como referencia
 
 resources-analysis-updating = Actualizando…
 resources-analysis-error = No se pudo actualizar este ajuste.

@@ -18,7 +18,7 @@ GPU and platform crates that a given machine may not be able to run.
 | --- | --- |
 | Shared Rust (`layer-core`, `-engine`, `-ui`, `-workspace`, `-color`, `-render`) | `cargo test --locked -p <crate>` for each changed crate, then `cargo check --locked -p layer-linux --tests` and `cargo check --locked -p layer-web --target wasm32-unknown-unknown` for the consumers. |
 | Renderer, shaders or runtime filters | `cargo test --locked -p layer-render-wgpu <filter>` and `-p layer-host` on a hardware GPU. If shader cache-key inputs changed, `python3 tools/build/test_shader_generation.py`. Frame-path changes need [measurements](#performance). |
-| Pen prediction or stroke placement | `cargo test --locked -p layer-engine --features prediction-bench`, then `cargo build --locked -p layer-engine --release --features prediction-bench --examples` and `python3 tools/prediction/replay-bank.py --output artifacts/strokes/bank --check`. |
+| Pen prediction or stroke placement | `cargo test --locked -p layer-engine --features prediction-bench`, then `cargo build --locked -p layer-engine --release --features prediction-bench --examples` and `python3 tools/prediction/replay-bank.py --output artifacts/strokes/bank --analyze --check`. |
 | GTK | `cargo test --locked -p layer-linux` for the model tests, then each affected journey on the private display: `bash tools/performance/workspace-motion.sh gtk --native-test=<name>`, adding `--tablet` for pen journeys ([Linux](linux.md#tests)). |
 | Web | `bash apps/layer-web/build.sh`, the pure tests `node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs`, then the affected journeys with `bash tools/performance/workspace-motion.sh web --<journey>` (headed, hardware WebGPU) or `node apps/layer-web/test.mjs --headless --<journey>` against `run.sh`. Packaging changes: `node apps/layer-web/package.mjs && node apps/layer-web/test.mjs --package` ([Web](web.md#tests)). |
 | Android | Without a device: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug -PcapyAbi=arm64-v8a` in `apps/layer-android`. On a reserved tablet, through `tools/devices/devices.py run`: install both APKs with `adb install -r`, then `am instrument -w -e class art.capycanvas.<Class>[#method] $CAPY_APPLICATION_ID.test/androidx.test.runner.AndroidJUnitRunner`. Read `OK` or `FAILURES!!!`, not the exit status ([Android](android.md#device-tests)). |
@@ -202,12 +202,13 @@ brush previews with `cargo run --locked --release -p layer-bench -- --brush-prev
 These fail on `main` independently of your change. Don't chase them unless they
 are your task, and remove an entry when you fix it.
 
+- Renderer `scene::scale::tests::refinement::global_filters_evict_optional_levels_before_rejecting_the_document`
+  rejects the document during submission after its initial budget assertions
+  pass. The same image-pixel limit failure occurs on the unmodified baseline.
 - GTK `native_selection_pen_input`, `native_toolbar_components_narrow_input`,
   `native_workspace_motion_input`, and `native_workspace_switcher_input`
   (intermittent). `native_workspace_resize_input` presents below its rate
   threshold under the runner's `color-mgmt`.
-- GTK `native_toolbar_manager` and `native_panel_customization` expect the older
-  customization dialogs where managed desktop menus now open the workspace manager.
 - Android: 7 of 15 `AndroidTitleBarTest` cases;
   `detachedPanelsKeepBodiesAndWiderResizeTargets`;
   `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` (light docked panels);
@@ -264,13 +265,10 @@ are your task, and remove an entry when you fix it.
   `apple_current_main_drawers_paper_and_zen_use_shared_actions` compares the
   transient Properties epoch across undo/redo. Both also fail at `b886ccf6b`.
 - Headless Web `--toolbar-components`, `--tonal-selection`, `--editor`, `--hdr`,
-  `--proof`, `--raster`, `--selection-tools` and `--shared-workflows`, and 8 pen
-  side-button cases in `pointer.test.mjs`.
+  `--proof`, `--raster`, `--selection-tools` and `--shared-workflows`.
 - Tablet Chrome `--workspace-manager` cannot find its new-workspace name input
   on MovinkPad 11.
 - Headless Web `--contact-brushes` with `LAYER_BRUSH_PRESETS=20,21` differs from
   the committed watercolor pixels after Redo.
 - Headless Web `--zoom-readout` reaches export with an empty stroke image
   and fails its ink assertion.
-- `cargo clippy -- -D warnings` stops in `layer-core` on lints new in Clippy 1.96.
-  New code adds no warnings.

@@ -140,7 +140,7 @@ impl Preparation {
                 "Preparation exceeds device workgroup limits".into(),
             ));
         }
-        let module = Deferred::wgsl(&device, "effect preparation", source);
+        let module = Deferred::wgsl(device, "effect preparation", source);
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("effect preparation"),
             bind_group_layouts: &[Some(&self.layout)],

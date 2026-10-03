@@ -140,6 +140,7 @@ impl ThumbnailQuery {
             .collect()
     }
 }
+#[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
 pub fn layer_thumbnails(host: &mut NativeHost, json: &str) -> Result<CapyPreview, String> {
     let query: ThumbnailQuery = serde_json::from_str(json).map_err(|e| e.to_string())?;
     let epoch = host.session.state().document_file.epoch;

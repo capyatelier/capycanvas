@@ -135,7 +135,7 @@ fn knot_placement_moves_exact_endpoints_and_refuses_near_endpoint_insertion() {
 
 #[test]
 fn reusable_knot_is_nearest_interior_with_lower_x_tie_and_exact_sample_coordinate() {
-    let curve = [[0.,0.],[0.4990234375,0.3],[0.5009765625,0.7],[1.,1.]];
+    let curve = [[0.,0.],[511. / 1024.,0.3],[513. / 1024.,0.7],[1.,1.]];
     assert_eq!(curve_reusable_knot(&curve,0.5),Some(1));
     assert_eq!(curve_reusable_knot(&curve,0.5008),Some(2));
     let mut crowded = curve.to_vec(); assert!(curve_place_knot(&mut crowded,[0.5,0.4]).is_err()); assert_eq!(crowded,curve);

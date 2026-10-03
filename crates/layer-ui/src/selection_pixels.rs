@@ -162,7 +162,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.engine
             .insert_with_operations(
-                vec![Edit::InsertLayer { index, layer: copy }, Edit::SetActiveLayer { id }],
+                vec![Edit::InsertLayer { index, layer: Box::new(copy) }, Edit::SetActiveLayer { id }],
                 operations,
                 Some(None),
             )

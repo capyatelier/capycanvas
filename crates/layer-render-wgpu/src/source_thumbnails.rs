@@ -345,6 +345,7 @@ impl SourceThumbnails {
         }
         Ok(result)
     }
+    #[expect(clippy::too_many_arguments, reason = "Thumbnail integration keeps tile input and separate reduction outputs explicit")]
     fn integrate(
         &self,
         r: &mut WgpuRasterizer,

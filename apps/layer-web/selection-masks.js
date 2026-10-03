@@ -1,5 +1,6 @@
 // Native DOM projection. Rust owns mask destinations, commands and menu policy.
 import { createPreviewPanel } from "./preview-panel.js";
+import {bindCopy} from "./localization.js";
 
 export function createSelectionUi({app,state,element,button,icon,numberField,dispatch,workspace,layout,bar}) {
   const menuButton=(label,kind)=>{
@@ -8,7 +9,7 @@ export function createSelectionUi({app,state,element,button,icon,numberField,dis
       node.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:r.left,clientY:r.bottom}));
     },'selection-menu-button');
     node.dataset.context='{}';node.layerMenu=()=>app.selection_menu(kind);
-    node.setAttribute('aria-haspopup','menu');node.title=label;
+    node.setAttribute('aria-haspopup','menu');if(typeof label==='function')bindCopy(node,label,'title');else node.title=label;
     node.append(icon('chevron-down'));return node;
   };
   const send=action=>dispatch({type:'selection',action});

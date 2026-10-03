@@ -159,7 +159,7 @@ impl Body {
             Self::Settings(v) => v.refresh(w, state),
             Self::Color(v) => v.refresh(&state.preview_colors(), w.view_color(), w.picker_headroom()),
             Self::Palettes(v) => v.refresh(state, w.view_color(), w.picker_headroom()),
-            Self::Sizes(v) => v.refresh(&state.brush),
+            Self::Sizes(v) => v.refresh(w, &state.brush),
             Self::Layers(v) => v.refresh(state),
             Self::Navigator(v) => v.refresh(state),
             Self::Proof(v) => v.refresh(w, state),
@@ -335,16 +335,24 @@ impl View {
                     let icon = crate::icons::image(&format!("layer-{}-symbolic", config.icon()));
                     icon.set_visible(presentation.show_icon);
                     content.append(&icon);
-                    let label = gtk::Label::new(Some(&config.title_localized(&w.localization())));
+                    let label = gtk::Label::new(None);
                     label.set_visible(presentation.show_name);
                     content.append(&label);
                     if !presentation.show_name {
                         button.add_css_class("icon-only-tab");
                     }
                     button.set_child(Some(&content));
-                    selected(&button, tabs.active == *panel);
-                    w.install_panel_drag(&button, DockItem::Panel { panel: *panel });
-                    w.install_context(&button, layer_ui::ContextTarget::Panel { panel: *panel });
+                    let panel = *panel;
+                    w.on_localization(glib::clone!(#[weak] w, #[weak] button, #[weak] label, #[upgrade_or] false, move |localization| {
+                        let Ok(title) = w.surface.imp().layout.borrow().panel(panel).map(|config| config.title_localized(localization)) else { return false };
+                        label.set_label(&title);
+                        button.set_tooltip_text(Some(&title));
+                        button.update_property(&[gtk::accessible::Property::Label(&title)]);
+                        true
+                    }));
+                    selected(&button, tabs.active == panel);
+                    w.install_panel_drag(&button, DockItem::Panel { panel });
+                    w.install_context(&button, layer_ui::ContextTarget::Panel { panel });
                     labels.append(&button);
                     tab_buttons.push(button);
                 }

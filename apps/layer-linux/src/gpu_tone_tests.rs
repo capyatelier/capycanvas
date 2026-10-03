@@ -10,8 +10,8 @@ fn native_gpu_tone_retains_preview_cancels_and_refreshes_after_drawing() {
     w.window.present();
     ready(&w);
     let change = ui_session_mut(&w)
-        .set_proof_mode(layer_ui::ProofMode::Sdr);
-    w.changed(change);
+        .set_proof_mode(layer_ui::ProofMode::Sdr).unwrap();
+    w.changed(Ok(change));
     w.dispatch(UiAction::SetBrushSize { value: 180. });
     w.dispatch(UiAction::Color {
         action: layer_ui::ColorAction::Definition {

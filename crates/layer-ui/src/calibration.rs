@@ -14,6 +14,12 @@ pub(crate) struct Calibration {
     pub submitted: bool,
 }
 
+pub(super) enum CalibrationFailure { Message(MessageId), Diagnostic(String) }
+
+impl From<String> for CalibrationFailure {
+    fn from(reason: String) -> Self { Self::Diagnostic(reason) }
+}
+
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn start_calibration(&mut self, layer: u64, epoch: u64, role:layer_core::levels::CalibrationRole) -> Result<(), String> {
         if self.state.platform != Platform::Gtk { return Err(self.localization().text(MessageId::RESOURCES_PICKER_UNAVAILABLE).to_string()); }
@@ -79,25 +85,25 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if let Some(position) = next { self.queue_calibration(position); }
                 return regions::COLOR_PREVIEW;
             }
-            Some(result.map_err(error).and_then(|result| {
-                let layer_render::SnapshotResult::ArtworkSample(sample) = result else { return Err("Unexpected artwork sample".into()); };
+            Some(result.map_err(error).map_err(CalibrationFailure::Diagnostic).and_then(|result| {
+                let layer_render::SnapshotResult::ArtworkSample(sample) = result else { return Err(CalibrationFailure::Diagnostic("Unexpected artwork sample".into())); };
                 let ArtworkSample::Color([r, g, b, _]) = sample else {
-                    return Err(self.localization().text(MessageId::RESOURCES_PICKER_EMPTY).to_string());
+                    return Err(CalibrationFailure::Message(MessageId::RESOURCES_PICKER_EMPTY));
                 };
-                let original=self.engine.document().layer(calibration.original.id).ok_or("The adjustment was removed")?.clone();
+                let original=self.engine.document().layer(calibration.original.id).ok_or_else(||CalibrationFailure::Diagnostic("The adjustment was removed".into()))?.clone();
                 let mut layer = original.clone();
-                let effect = Arc::make_mut(layer.effect.as_mut().ok_or("Missing adjustment")?);
+                let effect = Arc::make_mut(layer.effect.as_mut().ok_or_else(||CalibrationFailure::Diagnostic("Missing adjustment".into()))?);
                 effect.program=effect.program.for_depth(self.engine.document().color.depth);
                 if effect.program.id.as_ref()=="curves" {
                     *effect=layer_core::curves::calibrate_curves(effect,[r,g,b],self.engine.document().color.space,calibration.page,calibration.role)
-                        .map_err(|_|self.localization().text(MessageId::RESOURCES_CALIBRATION_FAILED).to_string())?;
+                        .map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_CALIBRATION_FAILED))?;
                 } else if effect.program.id.as_ref()=="levels" {
                     *effect=layer_core::levels::calibrate_levels(effect,[r,g,b],self.engine.document().color.space,calibration.page,calibration.role)
-                        .map_err(|_|self.localization().text(MessageId::RESOURCES_CALIBRATION_FAILED).to_string())?;
+                        .map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_CALIBRATION_FAILED))?;
                 } else {
                     let preserve = effect.value("preserve_luminance") == Some(&EffectValue::Toggle(true));
                     let values = layer_core::white_balance_neutral([r, g, b], self.engine.document().color.space, preserve)
-                        .map_err(|_| self.localization().text(MessageId::RESOURCES_PICKER_NEUTRAL_FAILED).to_string())?;
+                        .map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_PICKER_NEUTRAL_FAILED))?;
                     effect.set("temperature", EffectValue::Number(values[0])).map_err(str::to_string)?;
                     effect.set("tint", EffectValue::Number(values[1])).map_err(str::to_string)?;
                 }
@@ -108,7 +114,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else if !calibration.submitted && let Some(request) = &calibration.request {
             match self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::ArtworkSample(request.clone())).map_err(error) {
                 Ok(submitted) => { calibration.submitted = submitted; None }
-                Err(error) => Some(Err(error)),
+                Err(error) => Some(Err(CalibrationFailure::Diagnostic(error))),
             }
         } else { None };
         match result {
@@ -117,7 +123,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.eyedropper.picking.finishing = false;
                 calibration.request = None;
                 self.eyedropper.calibration = Some(calibration);
-                self.raise_notice(reason, None);
+                match reason {
+                    CalibrationFailure::Message(message) => self.raise_message_notice(message),
+                    CalibrationFailure::Diagnostic(reason) => self.raise_notice(reason, None),
+                }
                 regions::BRUSH | regions::COMMANDS | regions::COLOR_PREVIEW
             }
             None => { self.eyedropper.calibration = Some(calibration); 0 }
@@ -161,24 +170,27 @@ impl<R:CanvasRenderer> UiSession<R> {
             self.refresh_document();return regions::DOCUMENT;
         }
         let outcome=if task.submitted {
-            self.engine.backend_mut().take_snapshot().map(|result|result.map_err(error).and_then(|result| {
-                let layer_render::SnapshotResult::LevelsStatistics(statistics)=result else {return Err("Unexpected Auto statistics".into());};
-                let original=self.engine.document().layer(task.original.id).ok_or("The adjustment was removed")?.clone();
+            self.engine.backend_mut().take_snapshot().map(|result|result.map_err(error).map_err(CalibrationFailure::Diagnostic).and_then(|result| {
+                let layer_render::SnapshotResult::LevelsStatistics(statistics)=result else {return Err(CalibrationFailure::Diagnostic("Unexpected Auto statistics".into()));};
+                let original=self.engine.document().layer(task.original.id).ok_or_else(||CalibrationFailure::Diagnostic("The adjustment was removed".into()))?.clone();
                 let mut layer=original.clone();
-                let mut effect=(**layer.effect.as_ref().ok_or("Missing adjustment")?).clone();
+                let mut effect=(**layer.effect.as_ref().ok_or_else(||CalibrationFailure::Diagnostic("Missing adjustment".into()))?).clone();
                 effect.program=effect.program.for_depth(self.engine.document().color.depth);
-                let candidate=layer_core::levels::auto_levels(&effect,&statistics,task.page).map_err(|_|self.localization().text(MessageId::RESOURCES_LEVELS_AUTO_FAILED).to_string())?;
+                let candidate=layer_core::levels::auto_levels(&effect,&statistics,task.page).map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_LEVELS_AUTO_FAILED))?;
                 layer.effect=Some(Arc::new(candidate));
                 if layer!=original {self.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(layer)))?;}Ok(())
             }))
         } else {
             match self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::LevelsStatistics(task.query.clone())) {
-                Ok(submitted)=>{task.submitted=submitted;None},Err(reason)=>Some(Err(error(reason))),
+                Ok(submitted)=>{task.submitted=submitted;None},Err(reason)=>Some(Err(CalibrationFailure::Diagnostic(error(reason)))),
             }
         };
         match outcome {
             None=>{self.auto_levels=Some(task);0},
-            Some(result)=>{if let Err(reason)=result {self.raise_notice(reason,None);}self.refresh_document();regions::DOCUMENT},
+            Some(result)=>{if let Err(reason)=result {match reason {
+                CalibrationFailure::Message(message)=>self.raise_message_notice(message),
+                CalibrationFailure::Diagnostic(reason)=>self.raise_notice(reason,None),
+            }}self.refresh_document();regions::DOCUMENT},
         }
     }
 }

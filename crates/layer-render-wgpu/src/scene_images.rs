@@ -805,7 +805,7 @@ impl Scene {
                     if !mask_dirty.is_empty() {
                         for tile in page_coordinates(mask_dirty) {
                             let m = self.mask_tile(r, mask, mask_offset, tile);
-                            self.copy_window_tile(m, &image, tile);
+                            self.copy_window_tile(m, image, tile);
                         }
                         self.encode_jobs(r, encoder)?;
                     }

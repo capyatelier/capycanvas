@@ -36,8 +36,14 @@ pub(crate) struct ProofView {
     cancelled: RefCell<Option<Arc<AtomicBool>>>,
     running: Cell<bool>,
     paused: Cell<bool>,
+    error: RefCell<Option<layer_ui::ColorFeatureError>>,
+    copy_language:Cell<Option<layer_ui::UiLanguage>>,
 }
 impl ProofView {
+    #[cfg(test)]
+    pub fn work_info(&self) -> (bool, Option<usize>) {
+        (self.running.get(), self.cancelled.borrow().as_ref().map(|job| Arc::as_ptr(job) as usize))
+    }
     #[cfg(test)]
     pub fn cache_info(&self) -> Option<(usize, u32, usize)> {
         self.cache
@@ -63,6 +69,8 @@ impl ProofView {
             cancelled: Default::default(),
             running: Cell::new(false),
             paused: Cell::new(false),
+            error:Default::default(),
+            copy_language:Cell::new(None),
         })
     }
     pub async fn pause(&self) {
@@ -101,9 +109,28 @@ impl ProofView {
             gamut: session.state().gamut_warning,
         })
     }
+    fn localize(&self,w:&Workspace) {
+        let localizer=w.localization();
+        self.copy_language.set(Some(localizer.language()));
+        let desired=self.desired.borrow();
+        let Some(desired)=desired.as_ref() else { self.label.set_visible(false);return; };
+        self.label.set_visible(desired.key.recipe.is_some()&&(desired.enabled||desired.gamut));
+        let copy=layer_ui::color_feature_copy::ProofCopy::new(&localizer);
+        let error=self.error.borrow();
+        let text=if error.is_some() {copy.unavailable.to_string()}
+            else if self.published.borrow().as_ref()!=Some(desired) {copy.preparing.to_string()}
+            else if desired.enabled||desired.gamut {
+                let name=desired.key.recipe.as_ref().map_or("",|recipe|recipe.name.as_str());
+                let name=layer_ui::ExportProfileCaption::for_name(name.to_owned()).message(&localizer);
+                layer_ui::color_feature_copy::proof_status(&localizer,&name,desired.enabled,desired.gamut)
+            } else {copy.normal.to_string()};
+        self.label.set_text(&text);
+        self.label.set_tooltip_text(Some(&error.as_ref().map_or(text,|reason|reason.proof_message(&localizer))));
+    }
     pub fn sync(self: &Rc<Self>, w: &Rc<Workspace>) {
         let desired = Self::current(w);
         if *self.desired.borrow() == desired {
+            if self.copy_language.get()!=Some(w.localization().language()) {self.localize(w);}
             return;
         }
         let target_changed =
@@ -111,21 +138,9 @@ impl ProofView {
         if target_changed && let Some(cancelled) = self.cancelled.borrow().as_ref() {
             cancelled.store(true, Ordering::Release);
         }
+        self.error.borrow_mut().take();
         *self.desired.borrow_mut() = desired;
-        self.label.set_visible(
-            self.desired
-                .borrow()
-                .as_ref()
-                .is_some_and(|d| d.key.recipe.is_some() && (d.enabled || d.gamut)),
-        );
-        if self
-            .desired
-            .borrow()
-            .as_ref()
-            .is_some_and(|d| d.enabled || d.gamut)
-        {
-            self.label.set_text(&layer_ui::color_feature_copy::ProofCopy::new(&w.localization()).preparing);
-        }
+        self.localize(w);
         if self.paused.get() || self.running.replace(true) {
             return;
         }
@@ -137,21 +152,8 @@ impl ProofView {
                 let result = state.prepare_and_publish(&w, &desired).await;
                 if Self::current(&w).as_ref() != Some(&desired) { continue; }
                 *state.published.borrow_mut() = Some(desired.clone());
-                let name = desired.key.recipe.as_ref().map_or("", |r| r.name.as_str());
-                match result {
-                    Ok(()) => {
-                        let label = if desired.enabled || desired.gamut {
-                            layer_ui::color_feature_copy::proof_status(&w.localization(), name, desired.enabled, desired.gamut)
-                        } else { layer_ui::color_feature_copy::ProofCopy::new(&w.localization()).normal.to_string() };
-                        state.label.set_text(&label);
-                        state.label.set_tooltip_text(Some(&label));
-                    }
-                    Err(error) => {
-                        state.label.set_text(&layer_ui::color_feature_copy::ProofCopy::new(&w.localization()).unavailable);
-                        state.label.set_tooltip_text(Some(&error));
-                        eprintln!("Soft proof: {error}");
-                    }
-                }
+                *state.error.borrow_mut()=result.err();
+                state.localize(&w);
                 w.wake();
             }
             state.running.set(false);
@@ -187,7 +189,7 @@ impl ProofView {
             glib::timeout_future(Duration::from_millis(5)).await;
         }
     }
-    async fn prepare_and_publish(&self, w: &Workspace, desired: &Desired) -> Result<(), String> {
+    async fn prepare_and_publish(&self, w: &Workspace, desired: &Desired) -> Result<(), layer_ui::ColorFeatureError> {
         let cached = self
             .cache
             .borrow()
@@ -198,10 +200,10 @@ impl ProofView {
             .map(|(_, _, lut)| lut.clone());
         let Some(recipe) = desired.key.recipe.clone() else {
             self.cache.borrow_mut().take();
-            return Self::publish(w, None, false, false).await;
+            return Self::publish(w, None, false, false).await.map_err(Into::into);
         };
         if !desired.enabled && !desired.gamut {
-            return Self::publish(w, cached, false, false).await;
+            return Self::publish(w, cached, false, false).await.map_err(Into::into);
         }
         let lut = if let Some(lut) = cached {
             lut
@@ -225,11 +227,11 @@ impl ProofView {
                 })
             })
             .await
-            .map_err(|_| "Proof preparation worker failed".to_string())
-            .and_then(|r| r);
+            .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Proof preparation worker failed".into()))
+            .and_then(|r| r.map_err(Into::into));
             self.cancelled.borrow_mut().take();
             if cancelled.load(Ordering::Acquire) {
-                return Err("Proof preparation cancelled".into());
+                return Err(layer_ui::ColorFeatureError::ProofCancelled);
             }
             let lut = Arc::new(result?);
             self.retain(space, recipe, lut.clone());
@@ -238,7 +240,7 @@ impl ProofView {
         if Self::current(w).as_ref() != Some(desired) {
             return Ok(());
         }
-        Self::publish(w, Some(lut), desired.enabled, desired.gamut).await
+        Self::publish(w, Some(lut), desired.enabled, desired.gamut).await.map_err(Into::into)
     }
 }
 impl Drop for ProofView {

@@ -1,7 +1,6 @@
 //! Shared AVIF gain-map export and previews of the delivered file.
 use super::*;
 use crate::photo::gainmap::{GainMapPreview, LogGain, render_pair};
-use layer_core::color::hdr;
 
 const MEMORY: &str =
     "HDR AVIF output exceeds the available memory budget. Choose a smaller export size.";
@@ -111,25 +110,22 @@ fn grid(
 }
 
 pub(in crate::photo) fn encode(
-    extent: [u32; 2],
-    space: RgbSpace,
-    rendition: hdr::SdrRendition,
-    guide: &hdr::LocalToneGuide,
-    quality: u8,
+    render: GainMapRender<'_>,
+    options: GainMapEncodeOptions,
     delivery: &DeliveryMetadata,
-    matte: Option<[f32; 3]>,
-    clip: bool,
-    budget: usize,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<(Vec<u8>, crate::OutputStatistics), String> {
+    let GainMapRender { extent, matte, .. } = render;
+    let GainMapEncodeOptions { quality, memory: budget } = options;
+    let budget = budget.encode_bytes;
     let layout = Layout::new(extent)?;
     let count = admit(layout, budget)?;
     let mut master = buffer::<[f32; 3]>(count)?;
     let mut base = buffer::<[u16; 4]>(count)?;
     let mut transparent = false;
     let (stats, peak) = render_pair(
-        extent, space, rendition, guide, quality, matte, clip, cancel, read,
+        render, quality, cancel, read,
         |hdr, sdr, a| {
             let alpha = if matte.is_some() {
                 4095
@@ -265,29 +261,15 @@ fn preview_rendition(
 }
 
 pub(in crate::photo) fn preview(
-    extent: [u32; 2],
+    render: GainMapRender<'_>,
     bounds: [u32; 2],
-    space: RgbSpace,
-    rendition: hdr::SdrRendition,
-    guide: &hdr::LocalToneGuide,
     options: impl Into<GainMapEncodeOptions>,
-    matte: Option<[f32; 3]>,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<GainMapPreview, String> {
     let options = options.into();
     let (bytes, stats) = encode(
-        extent,
-        space,
-        rendition,
-        guide,
-        options.quality,
-        &Default::default(),
-        matte,
-        true,
-        options.memory.encode_bytes,
-        cancel,
-        read,
+        GainMapRender { clip: true, ..render }, options, &Default::default(), cancel, read,
     )?;
     let (preview_extent, hdr) = preview_rendition(&bytes, bounds, true, bytes.capacity(), options.memory, cancel)?;
     let (_, sdr) = preview_rendition(

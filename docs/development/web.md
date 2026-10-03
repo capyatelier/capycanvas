@@ -50,6 +50,13 @@ selection, dialogs, the canvas and WebGPU owners keep their identities. Same-ori
 tabs receive preference choices through the existing storage event and reconcile
 again when visible. Browser `languagechange` events refresh a System choice.
 
+Retained numeric, color and file errors carry shared reasons. Publication formats
+those reasons and cached document metadata without parsing drafts, inspecting
+profiles or restarting prepared previews. Tool, toolbar and workspace control
+identity excludes localized captions. Proof panels read scalar copy during refresh;
+full profiles cross the boundary only when their proof generation changes or the
+panel opens.
+
 Color, retained-source and output previews share `output::preview_value` for
 their extent and sRGB pixel array.
 
@@ -59,9 +66,13 @@ Pure unit tests need no browser or GPU:
 
 ```bash
 node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs
+node --test apps/layer-web/{numeric,histogram,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
 ```
 
-The localization tests cover retained semantic copy, optional fields and binding replacement.
+The localization tests cover retained semantic copy, optional fields, binding
+replacement and composite labels that contain native inputs. The copy suites check
+retained controls, drafts, focus, options and prepared results, plus semantic errors
+without repeating parsing, storage or rendering work.
 The text-input tests cover composition key ownership through native key release,
 including a keydown delivered after composition ends and engines that consume the
 release. Real IME checks must also distinguish candidate confirmation from the
@@ -107,11 +118,11 @@ first matching row and its error check, or leaves the default journey to the hos
 | Color | `--color-panel`, `--color-picker`, `--palettes` |
 | Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--pointwise-effects`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
-| Photo files and export | `--portable-photo`, `--export-metadata` |
+| Photo files and export | `--portable-photo`, `--export-metadata`, `--document-errors` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--drawer-drag`, `--drawer-style` |
 | Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-options`, `--workspace-options-refresh`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
-| Settings | `--preferences`, `--settings-audit`, `--language-switching` |
+| Settings and retained copy | `--preferences`, `--settings-audit`, `--language-switching`, `--live-language-color`, `--live-language-proof`, `--live-language-delivery`, `--live-language-surfaces`, `--live-language-toolbar`, `--live-language-effects` |
 
 `--tool-variations` checks Photo's 15 and Paint's 17 tool buttons, compact variation
 menus and secondary menus, retained icons and sibling choices in active-tool
@@ -121,6 +132,29 @@ and mouse/touch/pen hold-to-reorder with one layout undo/redo in both themes.
 `--language-switching` visits all shipped languages in light and dark themes,
 checks retained Preferences and dirty size-entry identity, focus and selection,
 rapid choices, browser language resolution and another same-profile tab.
+The `--live-language-*` journeys compare current catalog copy in both themes
+while retaining native controls, draft text, focus, selected options and prepared
+results. They count expression submissions and worker preparation to reject
+locale-only reparsing or repeated work. Delivery needs an owned embedded-profile
+PNG served as `/pkg/prophoto16.png`. For the proof journey,
+`LAYER_TEST_NAMELESS_PROOF=1` and `LAYER_NAMELESS_PROFILE_FILE` select an owned
+nameless ICC fixture and check that its localized fallback never changes stored
+profile or recipe names. The proof journey also routes an actual premature-apply
+refusal through the retained panel and checks current copy without another worker
+preparation. German and French narrow checks use a CSS text override;
+this does not establish operating-system text scaling or genuine IME composition.
+Test genuine composition separately with private IBus engines and native
+compositor keys. Chromium on XWayland with `GTK_IM_MODULE=ibus` can connect to
+that private IBus session; a headless Mutter Wayland-only session may deliver
+ordinary keys without an input-method context. Verify trusted preedit events
+and engine traffic before qualifying deferred publication, Enter or Escape.
+Native browser zoom changes `devicePixelRatio`; record it and the CSS viewport
+separately from the app text-size variable.
+
+`--document-errors` opens a corrupt owned fixture, then calls another actual
+Wasm method to verify that rejection released the borrow and preserved drawings.
+It also checks that raw JavaScript Error and DOMException messages and strings stay literal,
+including after a language change; other objects use deterministic JSON.
 
 `--pointwise-effects` checks Hue range pages and Colorize value retention,
 Threshold and Photo Filter controls, Invert/Desaturate insertion, slider history,

@@ -85,7 +85,10 @@ impl Inspector {
         let source_changed = self.view.borrow().sources != view.sources;
         let channel_changed = self.view.borrow().channels != view.channels;
         for (dropdown, changed, after) in [(&self.source,source_changed,&view.sources),(&self.channel,channel_changed,&view.channels)] {
-            if changed { dropdown.set_model(Some(&gtk::StringList::new(&after.iter().map(|s| s.as_ref()).collect::<Vec<_>>()))); }
+            if changed {
+                let model = dropdown.model().unwrap().downcast::<gtk::StringList>().unwrap();
+                model.splice(0, model.n_items(), &after.iter().map(|s| s.as_ref()).collect::<Vec<_>>());
+            }
         }
         self.source.set_selected(u32::from(view.source));self.channel.set_selected(u32::from(view.channel));
         self.status.set_label(&view.status);self.description.set_label(&view.description);self.range.set_label(&view.range);

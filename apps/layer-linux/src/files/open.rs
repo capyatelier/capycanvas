@@ -18,7 +18,7 @@ pub(super) async fn prepare(
     policy: layer_ui::PhotoOpenPolicy,
     working: layer_core::color::RgbSpace,
     names: layer_core::DocumentNames,
-    localization: &layer_ui::Localizer,
+    localization: &Arc<layer_ui::Localizer>,
 ) -> Result<Option<(Project, Option<DocumentLocation>)>, String> {
     let path = file.path().ok_or_else(|| layer_ui::DocumentHostError::ChooseDeviceFile.message(localization))?;
     let location = DocumentLocation {
@@ -49,7 +49,7 @@ async fn run(
     location: DocumentLocation,
     policy: layer_ui::PhotoOpenPolicy,
     names: layer_core::DocumentNames,
-    localization: &layer_ui::Localizer,
+    localization: &Arc<layer_ui::Localizer>,
 ) -> Result<Option<(Project, Option<DocumentLocation>)>, String> {
     let copy = layer_ui::bootstrap_view(localization);
     let failure_name = location.name.clone();
@@ -60,9 +60,9 @@ async fn run(
     dialog.set_widget_name("document-open-progress");
     dialog.add_response("cancel", copy.common.cancel.as_ref());
     dialog.set_close_response("cancel");
-    if let Some(w) = workspace {
+    {
         let weak = dialog.downgrade();
-        w.on_localization(move |localization| {
+        crate::on_window_localization(window, workspace, localization, move |localization| {
             let Some(dialog) = weak.upgrade() else { return false };
             let copy = layer_ui::bootstrap_view(localization);
             dialog.set_heading(Some(&copy.opening_files)); dialog.set_body(&copy.preparing_document);
@@ -88,9 +88,8 @@ async fn run(
         return Ok(None);
     }
     dialog.close();
-    let current = workspace.map(|w| w.localization());
-    let localization = current.as_deref().unwrap_or(localization);
-    result.map(Some).map_err(|detail| format!("{}\n{detail}", layer_ui::file_open_failure(localization, &failure_name)))
+    let localization = crate::window_localization(window, workspace, localization);
+    result.map(Some).map_err(|detail| format!("{}\n{detail}", layer_ui::file_open_failure(&localization, &failure_name)))
 }
 
 /// Shared by Open, Place and Paste. Choosing an interpretation changes no source
@@ -111,7 +110,7 @@ async fn interpret_window(
     mut source: layer_core::color::source::SourceImage,
     policy: layer_ui::PhotoOpenPolicy,
     working: layer_core::color::RgbSpace,
-    localization: &layer_ui::Localizer,
+    localization: &Arc<layer_ui::Localizer>,
 ) -> Result<Option<layer_core::color::source::SourceImage>, String> {
     if !policy.needs_interpretation(&source)
     {
@@ -121,7 +120,7 @@ async fn interpret_window(
     let purpose = super::profile::ProfilePurpose::Source(source.interpretation.clone());
     let chooser = match workspace {
         Some(w) => super::profile::ProfileChooser::new(w, &copy.interpret_as, "untagged-profile-space", working, purpose),
-        None => super::profile::ProfileChooser::for_window(window, &copy.interpret_as, "untagged-profile-space", working, purpose),
+        None => super::profile::ProfileChooser::for_window(window, &copy.interpret_as, "untagged-profile-space", working, purpose, localization.clone()),
     };
     let space = chooser.row.clone();
     let group = adw::PreferencesGroup::new();
@@ -139,9 +138,9 @@ async fn interpret_window(
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("use"));
     dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
-    if let Some(w) = workspace {
+    {
         let weak = dialog.downgrade(); let space = space.downgrade();
-        w.on_localization(move |localization| {
+        crate::on_window_localization(window, workspace, localization, move |localization| {
             let Some(dialog) = weak.upgrade() else { return false };
             let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
             dialog.set_heading(Some(&copy.interpret_title)); dialog.set_body(&copy.interpret_help);

@@ -78,9 +78,9 @@ pub fn calibrate_levels(effect:&EffectInstance,rgb:[f32;3],space:RgbSpace,page:u
         replace(&mut result,&format!("{}{key}",LEVELS_PREFIXES[index+1]),value)?;
     }
     result.validate()?;
-    for index in 0..3 {
+    for (index, &value) in source.iter().enumerate() {
         if page!=0 && usize::from(page)!=index+1 {continue;}
-        let actual=master.apply(LevelsStage::read(&result,index+1)?.apply(source[index],clamps),clamps);
+        let actual=master.apply(LevelsStage::read(&result,index+1)?.apply(value,clamps),clamps);
         if !close(actual,target) {return Err("This tone cannot be calibrated within the adjustment range");}
     }
     Ok(result)

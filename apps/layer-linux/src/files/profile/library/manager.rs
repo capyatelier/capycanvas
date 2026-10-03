@@ -12,8 +12,30 @@ struct Manager {
     add: glib::WeakRef<gtk::Button>,
     note: glib::WeakRef<gtk::Label>,
     entries: RefCell<Vec<Entry>>,
+    rows: RefCell<Vec<(PathBuf, ProfileRow)>>,
     busy: Cell<bool>,
     failure: RefCell<Option<ColorFeatureError>>,
+}
+
+struct ProfileRow {
+    row: adw::ActionRow,
+    pin: Option<gtk::Widget>,
+    more: gtk::MenuButton,
+    visibility: gio::Menu,
+    removal: gio::Menu,
+}
+
+impl ProfileRow {
+    fn refresh(&self, entry: &Entry, localization: &layer_ui::Localizer, copy: &layer_ui::color_feature_copy::ProfileCopy) {
+        let name = entry.display_name(localization);
+        self.row.set_title(&name); self.row.set_subtitle(&entry.description(localization));
+        if let Some(pin) = &self.pin {
+            pin.set_tooltip_text(Some(&copy.shown)); pin.update_property(&[gtk::accessible::Property::Label(&copy.shown)]);
+        }
+        self.visibility.remove_all(); self.visibility.append(Some(&copy.show), Some("saved.show"));
+        self.removal.remove_all(); self.removal.append(Some(&copy.remove), Some("saved.remove"));
+        self.more.set_tooltip_text(Some(&layer_ui::color_feature_copy::named(localization, layer_ui::MessageId::COLOR_FEATURES_PROFILE_OPTIONS, &name)));
+    }
 }
 
 enum Operation {
@@ -27,27 +49,30 @@ impl Manager {
         let (Some(list), Some(search)) = (self.list.upgrade(), self.search.upgrade()) else {
             return;
         };
-        let query = search.text().to_lowercase();
+        let query = search.text();
         let entries = self.entries.borrow();
         search.set_visible(entries.len() > 7 || !query.is_empty());
-        list.remove_all();
+        let mut rows = self.rows.borrow_mut();
+        let mut visible = Vec::new();
         for (index, entry) in entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.name.to_lowercase().contains(&query))
+            .filter(|(_, e)| e.matches(&query, &self.localization.borrow()))
         {
-            let row = adw::ActionRow::builder()
-                .title(entry.display_name(&self.localization.borrow()))
-                .subtitle(entry.description(&self.localization.borrow()))
-                .use_markup(false)
-                .build();
-            if entry.visible {
+            if let Some((_, row)) = rows.iter().find(|(path, _)| path == &entry.path) {
+                row.refresh(entry, &self.localization.borrow(), &self.copy.borrow());
+                visible.push(row.row.clone());
+                continue;
+            }
+            let row = adw::ActionRow::builder().use_markup(false).build();
+            let pin = if entry.visible {
                 let pin = crate::icons::image("layer-pin-symbolic");
                 pin.add_css_class("dim-label");
                 pin.set_tooltip_text(Some(self.copy.borrow().shown.as_ref()));
                 pin.update_property(&[gtk::accessible::Property::Label(self.copy.borrow().shown.as_ref())]);
                 row.add_suffix(&pin);
-            }
+                Some(pin.upcast::<gtk::Widget>())
+            } else { None };
             let menu = gio::Menu::new();
             let visibility = gio::Menu::new();
             visibility.append(Some(self.copy.borrow().show.as_ref()), Some("saved.show"));
@@ -59,10 +84,11 @@ impl Manager {
             let actions = gio::SimpleActionGroup::new();
             let show = gio::SimpleAction::new_stateful("show", None, &entry.visible.to_variant());
             let remove = gio::SimpleAction::new("remove", None);
+            let owner = Rc::downgrade(self);
             for (action, removing) in [(&show, false), (&remove, true)] {
                 action.connect_activate(glib::clone!(
-                    #[strong(rename_to = state)]
-                    self,
+                    #[strong]
+                    owner,
                     #[weak]
                     popup,
                     #[strong(rename_to = path)]
@@ -70,6 +96,7 @@ impl Manager {
                     #[strong(rename_to = visible)]
                     entry.visible,
                     move |_, _| {
+                        let Some(state) = owner.upgrade() else { return };
                         popup.popdown();
                         state.run(if removing {
                             Operation::Remove(path.clone())
@@ -90,11 +117,20 @@ impl Manager {
             more.add_css_class("flat");
             more.set_widget_name(&format!("profile-library-menu-{index}"));
             row.add_suffix(&more);
-            list.append(&row);
+            let projected = ProfileRow { row: row.clone(), pin, more, visibility, removal };
+            projected.refresh(entry, &self.localization.borrow(), &self.copy.borrow());
+            rows.push((entry.path.clone(), projected)); visible.push(row);
             if let Some(w) = self.w.upgrade() {
                 w.watch_popover(popup.upcast_ref());
             }
         }
+        let mut child = list.first_child();
+        let unchanged = visible.iter().all(|row| {
+            let same = child.as_ref() == Some(row.upcast_ref());
+            child = child.as_ref().and_then(|child| child.next_sibling());
+            same
+        }) && child.is_none();
+        if !unchanged { list.remove_all(); for row in visible { list.append(&row); } }
     }
 
     fn run(self: &Rc<Self>, operation: Operation) {
@@ -138,6 +174,7 @@ impl Manager {
                 match result {
                     Ok(Some(entries)) => {
                         *state.entries.borrow_mut() = entries;
+                        state.rows.borrow_mut().clear();
                         state.render();
                     }
                     Ok(None) => (),
@@ -180,9 +217,10 @@ impl Manager {
             .filters(&filters)
             .default_filter(&filter)
             .build();
-        if let Some(w) = self.w.upgrade() {
+        {
+            let initial = self.localization.borrow().clone();
             let weak = chooser.downgrade(); let filter = filter.downgrade();
-            w.on_localization(move |localization| {
+            crate::on_window_localization(&window, self.w.upgrade().as_ref(), &initial, move |localization| {
                 let Some(chooser) = weak.upgrade() else { return false };
                 let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
                 chooser.set_title(&copy.add_profile); chooser.set_accept_label(Some(&copy.add));
@@ -217,14 +255,14 @@ impl Manager {
 }
 
 pub(crate) async fn manage(w: &Rc<Workspace>) -> Result<(), String> {
-    manage_for_window(&w.window, Some(w)).await
+    manage_for_window(&w.window, Some(w), w.localization()).await
 }
 
 pub(crate) async fn manage_for_window(
     window: &adw::ApplicationWindow,
     workspace: Option<&Rc<Workspace>>,
+    localization: std::sync::Arc<layer_ui::Localizer>,
 ) -> Result<(), String> {
-    let localization = workspace.map(|w| w.localization().clone()).unwrap_or_else(|| crate::launch_localization().clone());
     let copy = layer_ui::color_feature_copy::ProfileCopy::new(&localization);
     let entries = gio::spawn_blocking(|| list(&directory()))
         .await
@@ -255,6 +293,7 @@ pub(crate) async fn manage_for_window(
         .build();
     body.append(&intro);
     let search = gtk::SearchEntry::new();
+    crate::input::guard_editable_activation(&search);
     search.set_placeholder_text(Some(copy.search.as_ref()));
     search.set_widget_name("profile-library-search");
     body.append(&search);
@@ -301,7 +340,7 @@ pub(crate) async fn manage_for_window(
     view.set_content(Some(&body));
     dialog.set_child(Some(&view));
     let state = Rc::new(Manager {
-        copy: RefCell::new(copy), localization: RefCell::new(localization),
+        copy: RefCell::new(copy), localization: RefCell::new(localization.clone()),
         w: workspace.map_or_else(std::rc::Weak::new, Rc::downgrade),
         window: window.downgrade(),
         dialog: dialog.downgrade(),
@@ -309,14 +348,14 @@ pub(crate) async fn manage_for_window(
         search: search.downgrade(),
         add: add.downgrade(),
         note: note.downgrade(),
-        entries: RefCell::new(entries),
+        entries: RefCell::new(entries), rows: RefCell::default(),
         busy: Cell::new(false),
         failure: RefCell::new(None),
     });
-    if let Some(workspace) = workspace {
+    {
         let weak = Rc::downgrade(&state);
         let intro = intro.downgrade(); let empty = empty.downgrade(); let done = done.downgrade();
-        workspace.on_localization(move |localization| {
+        crate::on_window_localization(window, workspace, &localization, move |localization| {
             let Some(state) = weak.upgrade() else { return false };
             let Some(dialog) = state.dialog.upgrade() else { return false };
             let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
@@ -349,4 +388,67 @@ pub(crate) async fn manage_for_window(
     state.render();
     dialog.present(Some(window));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "private display with retained profile library controls"]
+    fn native_profile_library_live_language() {
+        let (app, active) = crate::application("art.capycanvas.ProfileLibraryLanguages");
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let directory = directory(); assert!(directory.starts_with(std::env::temp_dir()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let id = "0".repeat(64); let path = directory.join(format!("{id}.icc"));
+        let literal = "tiếng ไทย Русский {profile} 🎨";
+        std::fs::write(&path, b"invalid ICC literal fixture").unwrap();
+        std::fs::write(path.with_extension("name"), literal).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let wait = |predicate: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !predicate() {
+                assert!(std::time::Instant::now() < deadline, "native library ready");
+                while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        let pump = |duration| { let start = std::time::Instant::now(); while start.elapsed() < std::time::Duration::from_millis(duration) { while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); } std::thread::sleep(std::time::Duration::from_millis(5)); } };
+        let request = |language| {
+            let settings = layer_ui::Settings { language: layer_ui::LanguagePreference::Explicit(language), ..Default::default() };
+            app.activate_action("settings-changed", Some(&serde_json::to_string(&settings).unwrap().to_variant()));
+        };
+        for theme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
+            app.style_manager().set_color_scheme(theme); request(layer_ui::UiLanguage::English);
+            let initial = glib::MainContext::default().block_on(crate::prepare_application_context(&app, &active)).1;
+            let window = adw::ApplicationWindow::builder().application(&app).default_width(640).default_height(700).build();
+            window.present();
+            glib::MainContext::default().block_on(manage_for_window(&window, None, initial.clone())).unwrap();
+            let dialog = window.visible_dialog().unwrap();
+            let mut controls = Vec::new(); crate::text_language::visit(dialog.upcast_ref(), &mut |widget| controls.push(widget.clone()));
+            let search = controls.iter().find_map(|widget| widget.downcast_ref::<gtk::SearchEntry>()).unwrap().clone();
+            let list = controls.iter().find_map(|widget| widget.downcast_ref::<gtk::ListBox>()).unwrap().clone();
+            search.set_text("000"); search.select_region(1, 3); search.grab_focus();
+            wait(&|| list.first_child().is_some());
+            let row = list.first_child().unwrap().downcast::<adw::ActionRow>().unwrap();
+            let more = controls.iter().find_map(|widget| widget.downcast_ref::<gtk::MenuButton>()).unwrap().clone();
+            let popup = more.popover().unwrap();
+            let selection = search.selection_bounds();
+            for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+                let old = crate::window_localization(&window, None, &initial).language();
+                more.popup(); wait(&|| popup.is_mapped()); request(language); pump(100);
+                assert_eq!(crate::window_localization(&window, None, &initial).language(), old, "native popup holds publication");
+                more.popdown(); wait(&|| crate::window_localization(&window, None, &initial).language() == language);
+                assert_eq!(list.first_child().as_ref(), Some(row.upcast_ref())); assert_eq!(more.popover().as_ref(), Some(&popup));
+                let localization = crate::window_localization(&window, None, &initial);
+                assert_eq!(row.title(), layer_ui::color_feature_copy::profile_unavailable(&localization, &id[..12]));
+                assert_eq!(search.text(), "000"); assert_eq!(search.selection_bounds(), selection);
+                search.grab_focus(); assert!(search.has_focus() || search.focus_child().is_some());
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), bytes); assert_eq!(std::fs::read_to_string(path.with_extension("name")).unwrap(), literal);
+            eprintln!("GTK library {:?}: all fifteen row/button/popover identities, raw profiles, search draft/selection and menu deferral passed", theme);
+            dialog.force_close(); window.destroy();
+        }
+    }
 }

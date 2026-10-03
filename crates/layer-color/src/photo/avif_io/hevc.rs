@@ -179,7 +179,7 @@ pub(super) fn decode(
     }
     if properties
         .channels
-        .is_some_and(|v| v != 3 && !(alpha && v == 1) && !(!alpha && v == 4))
+        .is_some_and(|v| !(v == 3 || alpha && v == 1 || !alpha && v == 4))
     {
         return Err("HEIF channels disagree with HEVC samples".into());
     }

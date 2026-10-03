@@ -35,7 +35,7 @@ pub(super) fn damage(rect: PixelRect, view: ViewState, turns: u32) -> PixelRect 
             }
         }
     }
-    let extent = if turns % 2 == 0 {
+    let extent = if turns.is_multiple_of(2) {
         [view.width_px, view.height_px]
     } else {
         [view.height_px, view.width_px]
@@ -93,7 +93,7 @@ pub(super) fn surface_bounds(bounds: [f32; 4], view: ViewState, turns: u32) -> P
         3 => [y, w - x - width, y + height, w - x],
         _ => [x, y, x + width, y + height],
     };
-    let extent = if turns % 2 == 0 { [w, h] } else { [h, w] };
+    let extent = if turns.is_multiple_of(2) { [w, h] } else { [h, w] };
     PixelRect::new(
         left.floor().clamp(0., extent[0]) as u32,
         top.floor().clamp(0., extent[1]) as u32,

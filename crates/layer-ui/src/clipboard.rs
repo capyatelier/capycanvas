@@ -73,7 +73,6 @@ pub struct ClipboardCapture {
     pub name: String,
     /// Show the import-style progress with Cancel.
     pub large: bool,
-    pub progress: &'static str,
 }
 impl ClipboardCapture {
     pub fn color(&self) -> DocumentColor {
@@ -281,7 +280,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             original,
             name,
             large: pixels > LARGE_CLIP_PIXELS,
-            progress: if cut { "Cutting…" } else { "Copying…" },
         })
     }
 
@@ -407,7 +405,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 layer.mask = Some(self.selection_mask_with_id(&layer, false, mask)?);
             }
             layers.push(id);
-            edits.push(Edit::InsertLayer { index: index + offset, layer });
+            edits.push(Edit::InsertLayer { index: index + offset, layer: Box::new(layer) });
         }
         edits.push(Edit::SetActiveLayer { id: layers[0] });
         if masked {

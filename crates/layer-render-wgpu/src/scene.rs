@@ -1378,6 +1378,7 @@ impl Scene {
         self.capture_query_region(r, packet, destination, region, output, false, encoder)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Query capture keeps output encoding, preview mode, and destination region explicit")]
     pub(super) fn capture_query_region(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &wgpu::Texture,
         region: PixelRect, output: Output, preview: bool, encoder: &mut crate::submission::CommandEncoder,
@@ -1416,6 +1417,7 @@ impl Scene {
         result.map(|_| ())
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Tiled capture keeps submission size and generic tile consumer explicit")]
     pub(super) async fn capture_query_tiles(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect, output: Output, preview:bool, tiles_per_submission:u32,
         encoder: &mut crate::submission::CommandEncoder,
@@ -1449,6 +1451,7 @@ impl Scene {
         self.capture_prepared_regions(r, packet, destination, &[region], output, false, encoder)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Prepared capture keeps output encoding and independent destination regions explicit")]
     fn capture_prepared_regions(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &Image,
         regions: &[PixelRect], output: Output, preview: bool, encoder: &mut crate::submission::CommandEncoder,
@@ -1881,7 +1884,7 @@ impl Scene {
                                             }),
                                     })
                                 });
-                                pass.set_bind_group(3, &*masks, &[]);
+                                pass.set_bind_group(3, masks, &[]);
                             } else if let Job::Draw { over, .. } = job {
                                 pass.set_pipeline(&self.pipeline[usize::from(*over)]);
                             }

@@ -21,7 +21,8 @@ import kotlin.math.ln
 @Composable internal fun HistogramWindow(host: CanvasHost, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     var result by remember { mutableStateOf<JSONObject?>(null) }
-    var status by remember { mutableStateOf(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_preparing")) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    var captions by remember { mutableStateOf(JSONObject()) }
     var attempted by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var automatic by remember { mutableStateOf(true) }
@@ -30,10 +31,30 @@ import kotlin.math.ln
     var cancel by remember { mutableStateOf(0L) }
     val file = host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")
     val key = "${file?.optLong("epoch")}:${file?.optLong("revision")}"
-    val staleCaption = remember(status, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "inspection_changed", "status" to status).toString(), host.languageTag)).getString("text") }
+    val copy=host.catalog.getJSONObject("native_copy").getJSONObject("color")
+    val depthCopy=host.catalog.getJSONObject("document_color_copy")
+    LaunchedEffect(result,host.languageTag,busy,failure) {
+        val current=result
+        val tag=host.languageTag
+        val currentBusy=busy
+        val currentFailure=failure
+        val localized=host.withNative { owner ->
+            fun caption(value:JSONObject)=org.json.JSONTokener(Native.query(owner,obj("type" to "native_caption","caption" to value).toString())).nextValue() as String
+            val status=currentFailure ?: if(currentBusy)copy.getString("inspection_updating") else if(current==null)copy.getString("inspection_preparing") else if(current.isNull("sampled_time"))copy.getString("inspection_current") else caption(obj("type" to "inspection_sample","seconds" to current.getDouble("sampled_time")))
+            val localized=obj("status" to status,"stale" to caption(obj("type" to "inspection_changed","status" to status)))
+            current?.getJSONObject("histogram")?.let { histogram ->
+                localized.put("pixels",caption(obj("type" to "inspection_pixels","sampled" to histogram.getLong("pixels"),"transparent" to histogram.getLong("transparent"))))
+                histogram.getJSONArray("channels").objects().forEachIndexed { i,c -> localized.put("channel-$i",caption(obj("type" to "inspection_channel","below" to c.getLong("below"),"above" to c.getLong("above"),"black" to c.getLong("black"),"white" to c.getLong("white")))) }
+                current.getJSONObject("axis").optJSONArray("stops")?.let { stops -> localized.put("range",caption(obj("type" to "inspection_range","start" to stops.getDouble(0),"end" to stops.getDouble(1)))) }
+            }
+            localized
+        }
+        ensureActive()
+        if(tag==host.languageTag&&current===result&&currentBusy==busy&&currentFailure==failure)captions=localized
+    }
     fun refresh() {
         if (busy || host.drawingTabs.switching) return
-        attempted = key; busy = true; status = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_updating")
+        attempted = key; busy = true; failure = null
         scope.launch {
             val control = Native.captureControl(); cancel = control
             host.drawingTabs.registerInspection(control, currentCoroutineContext().job)
@@ -44,9 +65,9 @@ import kotlin.math.ln
                     val task = host.withNative { Native.inspectionTask(it, control) }
                     withContext(Dispatchers.IO) { JSONObject(Native.inspectionHistogram(task)) }
                 }
-                ensureActive(); result = next; status = if (next.isNull("sampled_time")) host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_current") else JSONObject(Native.nativeCaption(obj("type" to "inspection_sample", "seconds" to next.getDouble("sampled_time")).toString(), host.languageTag)).getString("text")
+                ensureActive(); result = next
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { status = e.message ?: host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_failed") }
+            catch (e: Exception) { failure = e.message ?: host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_failed") }
             finally { host.drawingTabs.releaseInspection(control); cancel = 0; Native.captureFree(control); busy = false }
         }
     }
@@ -81,14 +102,15 @@ import kotlin.math.ln
                 }
                 if (histogram != null) {
                     val color = histogram.getJSONObject("color")
-                    Text("${color.getString("space")} · ${when(color.getString("depth")){"F32"->"32-bit float";"F16"->"16-bit float";"U16"->"16-bit";else->"8-bit"}} · ${histogram.getLong("pixels")} nontransparent pixels")
+                    Text("${color.getString("space")} · ${depthCopy.getString(when(color.getString("depth")){"F32"->"depth_float32";"F16"->"depth_float16";"U16"->"depth_16";else->"depth_8"})}")
+                    Text(captions.optString("pixels"))
                     for (i in indices) {
-                        val c = histogram.getJSONArray("channels").getJSONObject(i)
-                        Text("${listOf("R","G","B","Y")[i]}: below 0 ${c.getLong("below")}, above 1 ${c.getLong("above")} · black ${c.getLong("black")}, white ${c.getLong("white")}", style = MaterialTheme.typography.bodySmall)
+                        Text("${listOf("R","G","B","Y")[i]}: ${captions.optString("channel-$i")}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                Text(if (result != null && "${result!!.getLong("epoch")}:${result!!.getLong("revision")}" != key && !busy) staleCaption else status)
-                Text((if(histogram?.getJSONObject("color")?.getString("depth") in listOf("F16","F32")) "Linear RGB and luminance: ${axis!!.getJSONArray("stops").values().joinToString(" to "){"%.1f".format((it as Number).toDouble())}} EV. Dashed line: reference white (0 EV). Zero and negative values counted separately. Includes visible paper; excludes transparent pixels and display overlays." else host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("inspection_help")), style = MaterialTheme.typography.bodySmall)
+                Text(if (result != null && "${result!!.getLong("epoch")}:${result!!.getLong("revision")}" != key && !busy) captions.optString("stale") else captions.optString("status",copy.getString("inspection_preparing")))
+                if(captions.has("range"))Text(captions.getString("range"),style=MaterialTheme.typography.bodySmall)
+                Text(copy.getString(if(histogram?.getJSONObject("color")?.getString("depth") in listOf("F16","F32"))"inspection_hdr_help" else "inspection_help"),style=MaterialTheme.typography.bodySmall)
                 TextButton({ refresh() }, enabled = !busy) { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("refresh")) }
             }
         }

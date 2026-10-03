@@ -55,7 +55,7 @@ impl State {
             self.value
                 .borrow()
                 .as_ref()
-                .map_or_else(|| self.copy.borrow().choose.as_ref().into(), |p| p.name.clone())
+                .map_or_else(|| self.copy.borrow().choose.as_ref().into(), |p| p.display_name(&self.localization.borrow()))
         };
         if let Some(error) = self.error.upgrade() {
             error.set_label(&self.failure.borrow().as_ref().map(|reason| reason.profile_message(&self.localization.borrow())).unwrap_or_default());
@@ -69,8 +69,7 @@ impl State {
             changed(&subtitle);
         }
     }
-    fn set(&self, mut value: ExportProfile) {
-        if value.name.is_empty() { value.name = self.copy.borrow().embedded.to_string(); }
+    fn set(&self, value: ExportProfile) {
         self.generation.set(self.generation.get().wrapping_add(1));
         *self.value.borrow_mut() = Some(value);
         self.failure.borrow_mut().take();
@@ -171,9 +170,10 @@ impl State {
             .filters(&filters)
             .default_filter(&filter)
             .build();
-        if let Some(w) = self.w.upgrade() {
+        {
+            let initial = self.localization.borrow().clone();
             let weak = dialog.downgrade(); let filter = filter.downgrade();
-            w.on_localization(move |localization| {
+            crate::on_window_localization(&window, self.w.upgrade().as_ref(), &initial, move |localization| {
                 let Some(dialog) = weak.upgrade() else { return false };
                 let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
                 dialog.set_title(&copy.add_profile); dialog.set_accept_label(Some(&copy.add));
@@ -265,7 +265,7 @@ impl ProfilePicker {
         working: RgbSpace,
         purpose: ProfilePurpose,
     ) -> Self {
-        let picker = Self::build(&w.window, Some(w), working, purpose);
+        let picker = Self::build(&w.window, Some(w), working, purpose, w.localization());
         picker.button.set_widget_name(name);
         crate::panel_controls::menu_choice(&picker.button, &picker.state.copy.borrow().choose_short);
         picker.state.changed.borrow_mut().push(Rc::new(glib::clone!(
@@ -288,7 +288,7 @@ impl ProfileChooser {
         working: RgbSpace,
         purpose: ProfilePurpose,
     ) -> Self {
-        Self::build(&w.window, Some(w), title, name, working, purpose)
+        Self::build(&w.window, Some(w), title, name, working, purpose, w.localization())
     }
 
     // Application file opens can ask for a source profile before a canvas exists.
@@ -298,8 +298,9 @@ impl ProfileChooser {
         name: &str,
         working: RgbSpace,
         purpose: ProfilePurpose,
+        localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Self {
-        Self::build(window, None, title, name, working, purpose)
+        Self::build(window, None, title, name, working, purpose, localization)
     }
 
     fn build(
@@ -309,8 +310,9 @@ impl ProfileChooser {
         name: &str,
         working: RgbSpace,
         purpose: ProfilePurpose,
+        localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Self {
-        let picker = ProfilePicker::build(window, workspace, working, purpose);
+        let picker = ProfilePicker::build(window, workspace, working, purpose, localization);
         let row = adw::ActionRow::builder()
             .title(title)
             .subtitle(picker.state.copy.borrow().choose.as_ref())
@@ -339,8 +341,8 @@ impl ProfilePicker {
         workspace: Option<&Rc<Workspace>>,
         working: RgbSpace,
         purpose: ProfilePurpose,
+        localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Self {
-        let localization = workspace.map(|w| w.localization().clone()).unwrap_or_else(|| crate::launch_localization().clone());
         let copy = layer_ui::color_feature_copy::ProfileCopy::new(&localization);
         let prefix = match purpose {
             ProfilePurpose::Proof => "proof",
@@ -410,8 +412,9 @@ impl ProfilePicker {
                             #[strong]
                             state,
                             async move {
+                                let localization = state.localization.borrow().clone();
                                 if let Err(error) =
-                                    library::manage_for_window(&window, state.w.upgrade().as_ref())
+                                    library::manage_for_window(&window, state.w.upgrade().as_ref(), localization)
                                         .await
                                 {
                                     *state.failure.borrow_mut() = Some(layer_ui::ColorFeatureError::Diagnostic(error));
@@ -503,7 +506,7 @@ impl ProfilePicker {
                         ] {
                             let Some(profile) = profile else { continue };
                             let section = gio::Menu::new();
-                            let title = profile.name.clone();
+                            let title = profile.display_name(&state.localization.borrow());
                             item(
                                 &section,
                                 &actions,
@@ -570,11 +573,12 @@ impl ProfilePicker {
                 ));
             }
         ));
-        if let Some(workspace) = workspace {
+        {
+            let initial = state.localization.borrow().clone();
             let weak = Rc::downgrade(&state);
             let popup = popover.downgrade();
             let footer = footer.downgrade();
-            workspace.on_localization(move |localization| {
+            crate::on_window_localization(window, workspace, &initial, move |localization| {
                 let Some(state) = weak.upgrade().filter(|state| state.menu.upgrade().is_some()) else { return false };
                 let copy = layer_ui::color_feature_copy::ProfileCopy::new(localization);
                 if let Some(menu) = state.menu.upgrade() {
@@ -632,4 +636,177 @@ impl ProfilePicker {
             state,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_selection_preserves_metadata_and_reprojects_absent_names() {
+        let source = SourceInterpretation { channels: layer_core::color::source::SourceChannels::Rgba, depth: layer_core::color::SampleDepth::U8, profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false };
+        for purpose in [ProfilePurpose::Output, ProfilePurpose::Proof, ProfilePurpose::Source(source)] {
+            let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+            let state = State {
+                copy: RefCell::new(layer_ui::color_feature_copy::ProfileCopy::new(&localization)), localization: RefCell::new(localization),
+                w: std::rc::Weak::new(), window: glib::WeakRef::new(), changed: RefCell::default(), edits: RefCell::default(), error: glib::WeakRef::new(), menu: glib::WeakRef::new(),
+                value: RefCell::default(), document: RefCell::default(), failure: RefCell::default(), busy: Cell::new(false), in_flight: Cell::new(false), listing: Cell::new(false), generation: Cell::new(0), working: RgbSpace::Srgb, purpose,
+            };
+            let presented = Rc::new(RefCell::new(String::new()));
+            let output = presented.clone();
+            state.changed.borrow_mut().push(Rc::new(move |name| *output.borrow_mut() = name.to_string()));
+            for name in ["", "Embedded ICC profile", "Tiếng Việt ไทย Русский {name} 🎨"] {
+                let profile = ExportProfile { profile: ColorProfile::Builtin(RgbSpace::Srgb), channels: ProfileChannels::Rgb, name: name.into() };
+                state.set(profile.clone());
+                assert_eq!(state.value.borrow().as_ref(), Some(&profile));
+                for language in layer_ui::UiLanguage::ALL {
+                    let localization = layer_ui::Localizer::shared(language);
+                    *state.copy.borrow_mut() = layer_ui::color_feature_copy::ProfileCopy::new(&localization);
+                    *state.localization.borrow_mut() = localization.clone();
+                    state.refresh_copy();
+                    assert_eq!(state.value.borrow().as_ref(), Some(&profile));
+                    let expected = if name.is_empty() { localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string() } else { name.to_string() };
+                    assert_eq!(presented.borrow().as_str(), expected);
+                }
+            }
+        }
+    }
+    #[test]
+    #[ignore = "private display and hardware GPU retained native profile selectors"]
+    fn native_profile_picker_live_language() {
+        let (app, active) = crate::application("art.capycanvas.ProfilePickerLanguages");
+        app.register(None::<&gio::Cancellable>).unwrap();
+        app.activate_action("new-window", None);
+        let wait = |predicate: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !predicate() {
+                assert!(std::time::Instant::now() < deadline, "native profile state ready");
+                while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        wait(&|| !active.borrow().is_empty());
+        let w = active.borrow().last().unwrap().clone();
+        wait(&|| w.gpu.borrow().is_some());
+        let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::Srgb)).unwrap();
+        let profile = ColorProfile::Icc(bytes.into());
+        let source = SourceInterpretation { channels: layer_core::color::source::SourceChannels::Rgba, depth: layer_core::color::SampleDepth::U8, profile: profile.clone(), profile_assumed: false };
+        for theme in [layer_ui::Theme::Light, layer_ui::Theme::Dark] {
+            w.dispatch(layer_ui::UiAction::SetTheme { theme: Some(theme) });
+            for purpose in [ProfilePurpose::Output, ProfilePurpose::Proof, ProfilePurpose::Source(source.clone())] {
+                let picker = ProfileChooser::new(&w, "ICC", "language-profile", RgbSpace::Srgb, purpose);
+                let group = adw::PreferencesGroup::new(); group.add(&picker.row);
+                let dialog = adw::AlertDialog::builder().heading("ICC").extra_child(&group).build();
+                dialog.add_response("close", "×"); dialog.set_close_response("close");
+                dialog.present(Some(&w.window));
+                let row = picker.row.clone(); let button = picker.button.clone();
+                for name in ["", "Embedded ICC profile", "Tiếng Việt ไทย Русский {name} 🎨"] {
+                    picker.validated_selection()(profile.clone(), name.into());
+                    wait(&|| !picker.is_pending());
+                    let selected = (picker.selected_typed)().unwrap();
+                    assert_eq!(selected.name, name); assert_eq!(selected.profile, profile);
+                    let engine = w.gpu.borrow().as_ref().unwrap().session.engine() as *const _ as usize;
+                    let checkpoint = w.gpu.borrow().as_ref().unwrap().session.engine().checkpoint();
+                    for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+                        let choice = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32;
+                        w.dispatch(layer_ui::UiAction::Preferences { action: layer_ui::PreferenceAction::Edit { id: layer_ui::PreferenceId::Language, value: layer_ui::PreferenceValue::Choice(choice) } });
+                        wait(&|| w.localization().language() == language);
+                        assert_eq!(picker.row, row); assert_eq!(picker.button, button);
+                        assert_eq!(row.subtitle().as_deref(), Some(selected.display_name(&w.localization()).as_str()));
+                        assert_eq!((picker.selected_typed)().unwrap(), selected);
+                        if name.is_empty() {
+                            let standalone = ProfileChooser::for_window(&w.window, "ICC", "prepared-profile", RgbSpace::Srgb, ProfilePurpose::Output, w.localization());
+                            (standalone.restore)(selected.clone());
+                            assert_eq!(standalone.row.subtitle().as_deref(), Some(selected.display_name(&w.localization()).as_str()));
+                            assert_eq!((standalone.selected_typed)().unwrap(), selected);
+                        }
+                        assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine() as *const _ as usize, engine);
+                        assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().checkpoint(), checkpoint);
+                    }
+                }
+                dialog.force_close();
+            }
+        }
+        w.window.close();
+        while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
+    }
+
+    #[test]
+    #[ignore = "private display with native bare window language publication"]
+    fn native_bare_profile_language_transition() {
+        let (app, active) = crate::application("art.capycanvas.BareProfileLanguages");
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let wait = |predicate: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !predicate() {
+                assert!(std::time::Instant::now() < deadline, "bare native language ready");
+                while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        let request = |language| {
+            let settings = layer_ui::Settings { language: layer_ui::LanguagePreference::Explicit(language), ..Default::default() };
+            app.activate_action("settings-changed", Some(&serde_json::to_string(&settings).unwrap().to_variant()));
+        };
+        let profile = ExportProfile { profile: ColorProfile::Builtin(RgbSpace::Srgb), channels: ProfileChannels::Rgb, name: String::new() };
+        for theme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
+            app.style_manager().set_color_scheme(theme);
+            request(layer_ui::UiLanguage::English);
+            let initial = glib::MainContext::default().block_on(crate::prepare_application_context(&app, &active)).1;
+            let window = adw::ApplicationWindow::builder().application(&app).default_width(480).default_height(300).build();
+            let picker = ProfileChooser::for_window(&window, "ICC", "bare-profile", RgbSpace::Srgb, ProfilePurpose::Output, initial.clone());
+            (picker.restore)(profile.clone());
+            let entry = gtk::Entry::new(); entry.set_text("tiếng ไทย Русский {draft} 🎨");
+            let guard = crate::input::guard_entry_activation(&entry);
+            let group = adw::PreferencesGroup::new(); group.add(&picker.row);
+            let body = gtk::Box::new(gtk::Orientation::Vertical, 8); body.append(&group); body.append(&entry);
+            window.set_content(Some(&body)); window.present();
+            wait(&|| window.is_mapped()); entry.grab_focus(); entry.select_region(1, 4);
+            let selection = entry.selection_bounds(); let row = picker.row.clone(); let button = picker.button.clone();
+            for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+                request(language);
+                wait(&|| crate::window_localization(&window, None, &initial).language() == language);
+                let localization = crate::window_localization(&window, None, &initial);
+                assert_eq!(row.subtitle().as_deref(), Some(profile.display_name(&localization).as_str()));
+                assert_eq!(picker.row, row); assert_eq!(picker.button, button);
+                assert_eq!((picker.selected_typed)().unwrap(), profile);
+                assert_eq!(entry.text(), "tiếng ไทย Русский {draft} 🎨"); assert_eq!(entry.selection_bounds(), selection);
+            }
+            request(layer_ui::UiLanguage::English);
+            wait(&|| crate::window_localization(&window, None, &initial).language() == layer_ui::UiLanguage::English);
+            let mut editable = entry.upcast_ref::<gtk::Editable>().clone();
+            while let Some(delegate) = editable.delegate() { editable = delegate; }
+            let text = editable.downcast::<gtk::Text>().unwrap();
+            text.emit_by_name::<()>("preedit-changed", &[&"に"]);
+            assert!(guard.active());
+            request(layer_ui::UiLanguage::Russian);
+            let future = glib::MainContext::default().block_on(crate::prepare_application_context(&app, &active)).1;
+            assert_eq!(future.language(), layer_ui::UiLanguage::Russian);
+            let late_window = adw::ApplicationWindow::builder().application(&app).default_width(480).default_height(300).build();
+            let late_picker = ProfileChooser::for_window(&late_window, "ICC", "late-bare-profile", RgbSpace::Srgb, ProfilePurpose::Output, initial.clone());
+            (late_picker.restore)(profile.clone());
+            let late_group = adw::PreferencesGroup::new(); late_group.add(&late_picker.row); late_window.set_content(Some(&late_group)); late_window.present();
+            wait(&|| crate::window_localization(&late_window, None, &initial).language() == layer_ui::UiLanguage::Russian);
+            assert_eq!(late_picker.row.subtitle().as_deref(), Some(profile.display_name(&future).as_str()));
+            assert_eq!(crate::window_localization(&window, None, &initial).language(), layer_ui::UiLanguage::English);
+            let future_window = adw::ApplicationWindow::builder().application(&app).default_width(480).default_height(300).build();
+            let future_picker = ProfileChooser::for_window(&future_window, "ICC", "future-bare-profile", RgbSpace::Srgb, ProfilePurpose::Output, future.clone());
+            (future_picker.restore)(profile.clone());
+            let group = adw::PreferencesGroup::new(); group.add(&future_picker.row); future_window.set_content(Some(&group)); future_window.present();
+            request(layer_ui::UiLanguage::English);
+            wait(&|| crate::window_localization(&future_window, None, &future).language() == layer_ui::UiLanguage::English);
+            assert!(guard.active());
+            assert_eq!(crate::window_localization(&window, None, &initial).language(), layer_ui::UiLanguage::English);
+            text.emit_by_name::<()>("preedit-changed", &[&""]);
+            assert!(!guard.active());
+            for &language in layer_ui::localization::SHIPPED_LANGUAGES { request(language); }
+            request(layer_ui::UiLanguage::Vietnamese);
+            wait(&|| crate::window_localization(&window, None, &initial).language() == layer_ui::UiLanguage::Vietnamese && crate::window_localization(&future_window, None, &future).language() == layer_ui::UiLanguage::Vietnamese);
+            assert_eq!((future_picker.selected_typed)().unwrap(), profile); assert_eq!((picker.selected_typed)().unwrap(), profile);
+            assert_eq!(entry.text(), "tiếng ไทย Русский {draft} 🎨"); assert_eq!(entry.selection_bounds(), selection);
+            eprintln!("GTK bare language {:?}: all fifteen, dirty literal/selection, synthetic preedit owner cancellation and future-window rapid publication passed", theme);
+            future_window.destroy(); late_window.destroy(); window.destroy();
+        }
+    }
+
 }

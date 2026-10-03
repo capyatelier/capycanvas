@@ -60,7 +60,6 @@ impl WebApp {
         let mut view = s.engine().view();
         let time = s.engine().animation_time();
         let control = control.inner.clone();
-        let localization = self.session.localization().clone();
         Ok(future_to_promise(async move {
             raster_project::wait_backing(&original).await?;
             output::cancelled(&control)?;
@@ -84,7 +83,7 @@ impl WebApp {
                     false,
                     Some(color),
                 )
-                .await.map_err(|error| js(crate::color_preferences::color_feature_reason(error).message(&localization)))?;
+                .await.map_err(|error| crate::color_preferences::color_feature_rejection(crate::color_preferences::color_feature_reason(error)))?;
                 output::cancelled(&control)?;
                 let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
                     .as_string()

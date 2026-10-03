@@ -58,7 +58,7 @@ mod clipboard_checks {
         let paint = s.engine.document().active_layer;
         invoke(&mut s, CommandId::AddLayer);
         let group = s.engine.allocate_layer_id();
-        s.layer_edit(Edit::InsertLayer { index: 0, layer: Layer { kind: LayerKind::Group, ..Layer::paint(group, "Group") } }).unwrap();
+        s.layer_edit(Edit::InsertLayer { index: 0, layer: Box::new(Layer { kind: LayerKind::Group, ..Layer::paint(group, "Group") }) }).unwrap();
         let mut layer = s.engine.document().layer(paint).unwrap().clone();
         layer.properties.parent = Some(group);
         layer.properties.offset = Point { x: 7., y: 3. };
@@ -267,8 +267,7 @@ mod clipboard_checks {
         invoke(&mut s, CommandId::Cut);
         let (id, request) = pending(&s);
         assert!(matches!(request, DocumentRequest::Copy { merged: false, cut: true }));
-        let capture = s.capture_clipboard(id).unwrap();
-        assert_eq!(capture.progress, "Cutting…");
+        s.capture_clipboard(id).unwrap();
         s.complete_document_request(id, Ok(true)).unwrap();
         s.frame(2, 2).unwrap();
         let erased = s.renderer_mut().pending_operations.clone();

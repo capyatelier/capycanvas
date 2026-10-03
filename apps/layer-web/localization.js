@@ -1,4 +1,4 @@
-const copies = new WeakMap(), bindings = new Set(), nodeBindings = Symbol("localized DOM bindings");
+const copies = new WeakMap(), bindings = new Set(), nodeBindings = Symbol("localized DOM bindings"), textBinding = Symbol("localized text");
 
 export function updateCopy(target, source) {
   for (const key of Object.keys(target)) if (!Object.hasOwn(source,key)) delete target[key];
@@ -18,11 +18,16 @@ export function liveCopy(app, method) {
 }
 
 export function bindCopy(node, read, property = 'textContent') {
+  const owner = node;
+  if(property === 'textContent' && node.ownerDocument) {
+    node = node[textBinding] ??= node.firstChild?.nodeType === 3 ? node.firstChild : node.insertBefore(node.ownerDocument.createTextNode(''),node.firstChild);
+    property = 'nodeValue';
+  }
   if (!node[nodeBindings]) node[nodeBindings] = new Map();
   if (!node[nodeBindings].has(property)) bindings.add({node:new WeakRef(node),property});
   node[nodeBindings].set(property,read);
   node[property] = read();
-  return node;
+  return owner;
 }
 
 export function refreshCopy(app) {

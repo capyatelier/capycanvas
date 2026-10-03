@@ -462,7 +462,7 @@ impl BackdropBlur {
         timestamps: Option<wgpu::RenderPassTimestampWrites>,
         repaint: &mut Vec<PixelRect>,
     ) -> bool {
-        let extent = if turns % 2 == 0 { logical } else { [logical[1], logical[0]] };
+        let extent = if turns.is_multiple_of(2) { logical } else { [logical[1], logical[0]] };
         let size = logical.map(|v| v as f32);
         let placed: Vec<BackdropRegion> = self.regions.iter().map(|r| r.rotated(turns, size)).collect();
         if placed != self.placed {

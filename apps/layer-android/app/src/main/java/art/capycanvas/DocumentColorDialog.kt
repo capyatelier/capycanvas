@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import org.json.JSONTokener
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -31,10 +32,13 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
     var copy by mutableStateOf(false)
         private set
     var ready by mutableStateOf(false)
-    var error by mutableStateOf<String?>(null)
+    var error by mutableStateOf<Exception?>(null)
     var clipped by mutableStateOf(0L)
     var addsLayer by mutableStateOf(false)
     var sourceProfile by mutableStateOf("")
+        private set
+    private var sourceProfileName: String? = null
+    private var copyGeneration = 0L
     var previews by mutableStateOf<List<ImageBitmap>>(emptyList())
     private var task = 0L
     private var control = 0L
@@ -72,13 +76,23 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
                     withContext(Dispatchers.IO) { JSONObject(Native.sourceCompare(task)) }
                 } else withContext(Dispatchers.IO) { JSONObject(Native.colorWork(task, choice?.toString() ?: "null", copy)) }
                 if (!closing) {
-                    clipped = result.optLong("clipped_channels"); addsLayer = result.optBoolean("adds_layer"); sourceProfile = result.optString("source_profile")
+                    clipped = result.optLong("clipped_channels"); addsLayer = result.optBoolean("adds_layer"); sourceProfileName = if (result.isNull("source_profile_name")) null else result.getString("source_profile_name")
                     if (!history) previews = withContext(Dispatchers.IO) { listOf(false, true).map { comparisonBitmap(if (source) Native.sourcePreview(task, it) else Native.colorPreview(task, it)) } }
                     ready = true
                 }
-            } catch (e: Exception) { if (!closing) error = e.message ?: "Could not prepare color change"; release() }
-            finally { busy = false; if (closing) finishCancel() }
+            } catch (e: Exception) { if (!closing) error = e; release() }
+            finally { busy = false; if (closing) finishCancel() else refreshCopy() }
             if (history && ready && !closing) apply()
+        }
+    }
+    fun refreshCopy() {
+        if (!source || !ready || closing || finished) return
+        val generation = ++copyGeneration
+        val language = host.languageTag
+        val retained = sourceProfileName
+        host.viewModelScope.launch {
+            val caption = profileNameCopy(host, retained)
+            if (generation == copyGeneration && language == host.languageTag && ready && !closing && !finished) sourceProfile = caption
         }
     }
     fun apply() {
@@ -88,7 +102,7 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
             try {
                 host.withNative { if (source) Native.sourceAdopt(it, task) else Native.colorAdopt(it, task) }
                 finished = true; host.documentChanged(); release()
-            } catch (e: Exception) { error = e.message ?: "Could not apply color change"; release() }
+            } catch (e: Exception) { error = e; release() }
             finally { busy = false; if (closing) finishCancel() }
         }
     }
@@ -101,10 +115,10 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
             try {
                 val application = host.getApplication<Application>()
                 val master = host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.objectOrNull("location")?.optString("uri")
-                check(uri.toString() != master) { "Choose a different file to keep the editable drawing." }
+                check(uri.toString() != master) { host.catalog.getJSONObject("document_delivery_copy").getString("separate_copy") }
                 withContext(Dispatchers.IO) {
                     val name = application.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null }
-                    check(name?.endsWith(".capy", ignoreCase = true) == true) { "Use a .capy filename for the converted drawing." }
+                    check(name?.endsWith(".capy", ignoreCase = true) == true) { host.catalog.getJSONObject("document_delivery_copy").getString("converted_filename_invalid") }
                     temporary = File.createTempFile("capy-converted-", ".capy", application.cacheDir)
                     Native.colorWriteCopy(task, ParcelFileDescriptor.open(temporary, ParcelFileDescriptor.MODE_READ_WRITE).detachFd())
                 }
@@ -113,11 +127,11 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
                 withContext(Dispatchers.IO) {
                     application.contentResolver.openOutputStream(uri, "wt")?.use { output ->
                         temporary!!.inputStream().use { it.copyTo(output) }; output.flush()
-                    } ?: error("The selected file cannot be written")
+                    } ?: error(host.bootstrap!!.getString("action_failed"))
                 }
                 host.withNative { Native.documentComplete(it, id, true, "null") }
                 finished = true; host.documentChanged(); release()
-            } catch (e: Exception) { if (!closing) error = e.message ?: "Could not save the converted copy" }
+            } catch (e: Exception) { if (!closing) error = e }
             finally {
                 withContext(NonCancellable + Dispatchers.IO) { temporary?.delete() }
                 publishing = false; busy = false; if (closing) finishCancel()
@@ -138,6 +152,7 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
     var intent by remember { mutableStateOf("RelativeColorimetric") }
     var dither by remember { mutableStateOf("None") }
     var result by remember { mutableStateOf("layers") }
+    val scope = rememberCoroutineScope()
     val saveCopy = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> if (uri != null) job.saveCopy(uri) }
     var loaded by remember { mutableStateOf(false) }
     LaunchedEffect(id) {
@@ -145,43 +160,52 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
             val current = JSONObject(host.withNative { Native.query(it, obj("type" to "document_color").toString()) })
             space = current.getString("space"); depth = current.getString("depth"); loaded = true
             if (history) job.prepare(null, true)
-        } catch (e: Exception) { job.error = e.message }
+        } catch (e: Exception) { job.error = e }
     }
     DisposableEffect(job) { onDispose { job.close() } }
-    val title = if (history) (if (spec.getBoolean("redo")) "Redo color change" else "Undo color change") else when (operation) { "assign" -> "Assign Profile"; "depth" -> "Change Bit Depth"; else -> "Convert Color Space" }
+    val copy = host.catalog.getJSONObject("document_color_copy")
+    val common = copy.getJSONObject("common")
+    val exportCopy = host.catalog.getJSONObject("export_copy")
+    val delivery = host.catalog.getJSONObject("document_delivery_copy")
+    val title = if (history) copy.getString(if (spec.getBoolean("redo")) "redo_title" else "undo_title") else when (operation) { "assign" -> copy.getString("assign_title"); "depth" -> copy.getString("depth_title"); else -> copy.getString("convert_title") }
     AlertDialog(onDismissRequest = job::close, title = { Text(title) },
-        dismissButton = { TextButton(job::close, enabled = !job.publishing) { Text(if (job.busy) "Cancel operation" else "Cancel") } },
+        dismissButton = { TextButton(job::close, enabled = !job.publishing) { Text(common.getString("cancel")) } },
         confirmButton = { if (!history) TextButton({
-            if (job.copy) try { saveCopy.launch("Converted copy.capy") } catch (e: Exception) { job.error = e.message }
-            else job.apply()
-        }, enabled = job.ready && !job.busy) { Text(if (job.copy) "Save Copy…" else "Apply") } },
+            if (job.copy) scope.launch {
+                try {
+                    val name = host.drawingTabs.rows.first { it.getLong("id") == host.drawingTabs.selected }.getString("title").substringBeforeLast('.')
+                    val filename = host.withNative { Native.query(it, obj("type" to "document_delivery_message", "message" to obj("type" to "converted_name", "name" to name)).toString()) }
+                    saveCopy.launch(JSONTokener(filename).nextValue() as String)
+                } catch (e: Exception) { job.error = e }
+            } else job.apply()
+        }, enabled = job.ready && !job.busy) { Text(if (job.copy) copy.getString("save_copy") else common.getString("apply")) } },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 600.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!history) {
                     Text(when (operation) {
-                        "assign" -> "Keep document RGB numbers and reinterpret their color. Retained original photos keep their source profile."
-                        "depth" -> "Change stored precision. Effects and the blending domain remain the same."
-                        else -> "Convert editable layers. Compare the complete composition before applying; original photo samples stay retained."
+                        "assign" -> copy.getString("assign_help")
+                        "depth" -> copy.getString("depth_help")
+                        else -> copy.getString("convert_help")
                     })
                     if (loaded && !job.busy) {
-                        if (operation != "depth") ColorChoice("Color space", listOf("Srgb" to "sRGB", "DisplayP3" to "Display P3", "AdobeRgb" to "Adobe RGB", "ProPhoto" to "ProPhoto RGB"), space) { space = it; job.invalidate() }
+                        if (operation != "depth") ColorChoice(copy.getString("space"), listOf("Srgb" to "sRGB", "DisplayP3" to "Display P3", "AdobeRgb" to "Adobe RGB", "ProPhoto" to "ProPhoto RGB"), space) { space = it; job.invalidate() }
                         if (operation == "depth") {
-                            ColorChoice("Bit depth", listOf("U8" to "8-bit SDR", "U16" to "16-bit SDR", "F16" to "16-bit float HDR", "F32" to "32-bit float HDR"), depth) { depth = it; job.invalidate() }
-                            if (depth == "U8") ColorChoice("Dither", listOf("None" to "None", "Stochastic8" to "Stochastic"), dither) { dither = it; job.invalidate() }
+                            ColorChoice(copy.getString("depth"), listOf("U8" to copy.getString("depth_8"), "U16" to copy.getString("depth_16"), "F16" to copy.getString("depth_float16"), "F32" to copy.getString("depth_float32")), depth) { depth = it; job.invalidate() }
+                            if (depth == "U8") ColorChoice(copy.getString("dither"), listOf("None" to exportCopy.getString("dither_none"), "Stochastic8" to copy.getString("dither_stochastic")), dither) { dither = it; job.invalidate() }
                         }
-                        if (operation == "convert") ColorChoice("Result", listOf("layers" to "Editable layers", "copy" to "Save flattened copy"), result) { result = it; job.invalidate() }
-                        if (operation == "convert") ColorChoice("Rendering intent", listOf("RelativeColorimetric" to "Relative colorimetric", "Perceptual" to "Perceptual", "Saturation" to "Saturation", "AbsoluteColorimetric" to "Absolute colorimetric"), intent) { intent = it; job.invalidate() }
+                        if (operation == "convert") ColorChoice(copy.getString("result"), listOf("layers" to copy.getString("editable_layers"), "copy" to copy.getString("flattened_copy")), result) { result = it; job.invalidate() }
+                        if (operation == "convert") ColorChoice(exportCopy.getString("intent"), listOf("RelativeColorimetric" to exportCopy.getString("relative"), "Perceptual" to exportCopy.getString("perceptual"), "Saturation" to exportCopy.getString("saturation"), "AbsoluteColorimetric" to exportCopy.getString("absolute")), intent) { intent = it; job.invalidate() }
                         TextButton({ job.prepare(when (operation) {
                             "assign" -> obj("Assign" to space)
                             "depth" -> obj("Depth" to obj("depth" to depth, "dither" to if (depth == "U8") dither else "None"))
                             else -> obj("Convert" to obj("space" to space, "options" to obj("intent" to intent, "black_point_compensation" to false)))
-                        }, copy = result == "copy") }) { Text("Preview Complete Result") }
+                        }, copy = result == "copy") }) { Text(copy.getString("preview")) }
                     }
                 }
-                if (job.busy) { CircularProgressIndicator(); Text(if (job.publishing) "Writing converted copy…" else "Preparing complete color result…") }
-                if (job.clipped > 0) Text("Some colors exceed the destination gamut. Compare the result before applying.")
-                job.previews.forEachIndexed { index, bitmap -> Text(if (index == 0) "Before" else "After"); Image(bitmap, if (index == 0) "Original composition" else "Prepared composition", Modifier.fillMaxWidth().heightIn(max = 180.dp)) }
-                job.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (job.busy) { CircularProgressIndicator(); Text(if (job.publishing) delivery.getString("writing_converted_copy") else copy.getString("preparing")) }
+                if (job.clipped > 0) Text(copy.getString("outside_gamut"))
+                job.previews.forEachIndexed { index, bitmap -> Text(copy.getString(if (index == 0) "before" else "after")); Image(bitmap, copy.getString(if (index == 0) "original_composition" else "prepared_composition"), Modifier.fillMaxWidth().heightIn(max = 180.dp)) }
+                ColorFailureText(host, job.error)
             }
         })
 }

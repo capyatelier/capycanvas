@@ -1,14 +1,19 @@
 use super::*;
 
-fn validate_header(bytes: &[u8]) -> Result<(), String> {
+fn declared_size(bytes: &[u8]) -> Result<usize, String> {
     if bytes.len() < 132 || bytes.len() > MAX_ICC_BYTES {
         return Err("ICC profile size is unsupported".into());
     }
-    let integer = |at| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
-    let declared = integer(0);
+    let declared = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
     if declared < 132 || declared > bytes.len() || &bytes[36..40] != b"acsp" {
         return Err("ICC profile header is corrupt".into());
     }
+    Ok(declared)
+}
+
+fn validate_header(bytes: &[u8]) -> Result<(), String> {
+    let declared = declared_size(bytes)?;
+    let integer = |at| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
     let count = integer(128);
     let table_end = count
         .checked_mul(12)
@@ -26,6 +31,20 @@ fn validate_header(bytes: &[u8]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+pub fn profile_declared_channels(profile: &ColorProfile) -> Result<ProfileChannels, String> {
+    let ColorProfile::Icc(bytes) = profile else { return Ok(ProfileChannels::Rgb); };
+    declared_size(bytes)?;
+    if !matches!(&bytes[12..16], b"scnr" | b"mntr" | b"prtr" | b"spac") {
+        return Err("This ICC profile is not an image color space".into());
+    }
+    match &bytes[16..20] {
+        b"RGB " => Ok(ProfileChannels::Rgb),
+        b"GRAY" => Ok(ProfileChannels::Gray),
+        b"CMYK" => Ok(ProfileChannels::Cmyk),
+        _ => Err("Only RGB, grayscale and CMYK ICC sources are supported".into()),
+    }
 }
 
 pub(super) fn channels(profile: &Profile) -> Result<ProfileChannels, String> {
@@ -270,4 +289,34 @@ fn stable_bytes(profile: &Profile) -> Result<Vec<u8>, String> {
     }
     bytes[84..100].fill(0);
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod declared_channel_tests {
+    use super::*;
+
+    #[test]
+    fn declared_profile_channels_need_only_bounded_header_metadata() {
+        let mut bytes = vec![0_u8; 132];
+        bytes[..4].copy_from_slice(&132_u32.to_be_bytes());
+        bytes[12..16].copy_from_slice(b"prtr");
+        bytes[36..40].copy_from_slice(b"acsp");
+        bytes[128..132].copy_from_slice(&u32::MAX.to_be_bytes());
+        for (signature, channels) in [(b"RGB ", ProfileChannels::Rgb), (b"GRAY", ProfileChannels::Gray), (b"CMYK", ProfileChannels::Cmyk)] {
+            bytes[16..20].copy_from_slice(signature);
+            let profile = ColorProfile::Icc(bytes.clone().into());
+            assert_eq!(profile_declared_channels(&profile).unwrap(), channels);
+            assert!(profile_channels(&profile).is_err());
+        }
+        for space in RgbSpace::ALL { assert_eq!(profile_declared_channels(&ColorProfile::Builtin(space)).unwrap(), ProfileChannels::Rgb); }
+        for invalid in [Vec::new(), vec![0_u8;131], vec![0_u8;MAX_ICC_BYTES+1]] {
+            assert!(profile_declared_channels(&ColorProfile::Icc(invalid.into())).is_err());
+        }
+        for (offset, signature) in [(12, b"link"), (16, b"Lab "), (36, b"bad!")] {
+            let mut invalid = bytes.clone(); invalid[offset..offset+4].copy_from_slice(signature);
+            assert!(profile_declared_channels(&ColorProfile::Icc(invalid.into())).is_err());
+        }
+        bytes[..4].copy_from_slice(&133_u32.to_be_bytes());
+        assert!(profile_declared_channels(&ColorProfile::Icc(bytes.into())).is_err());
+    }
 }

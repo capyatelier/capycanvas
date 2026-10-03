@@ -13,7 +13,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
     ContentControl root;Canvas canvas;Viewbox view;
     Shapes::Ellipse field,marker;std::array<Shapes::Polyline,2> arcs;
     std::array<Shapes::Ellipse,2> handles;std::array<TextBlock,4> texts;std::array<Image,4> icons;
-    Button reset;std::optional<uint32_t> pointer;winrt::Windows::Foundation::Point origin{},last{};
+    Button reset;std::array<MenuFlyoutItem,4> resetItems;std::optional<uint32_t> pointer;winrt::Windows::Foundation::Point origin{},last{};
     hstring epoch,identity,key;uint8_t part=0;static constexpr float side=256;
     J form()const{return object(data->model,L"windows_proof_form");}
     J geometry(std::optional<winrt::Windows::Foundation::Point> point={})const{
@@ -37,6 +37,12 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
     void finish(bool cancel){if(!pointer)return;pointer.reset();contact(cancel?L"cancel":L"up");root.ReleasePointerCaptures();releaseScroll();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
     static void circle(Shapes::Ellipse const& e,A const& point,double radius){e.Width(radius*2);e.Height(radius*2);Canvas::SetLeft(e,point.GetNumberAt(0)-radius);Canvas::SetTop(e,point.GetNumberAt(1)-radius);}
     void refresh(){
+        auto copy=object(form(),L"copy");auto title=str(copy,L"balance_contrast");
+        AutomationProperties::SetName(root,title);AutomationProperties::SetHelpText(root,title);root.Language(data->language());
+        AutomationProperties::SetName(reset,str(copy,L"reset_sdr"));tooltip(reset,str(copy,L"reset_sdr"));
+        AutomationProperties::SetItemStatus(root,data->caption(L"header",pointer?L"dragging":L"ready"));
+        std::array<hstring,4> labels{data->caption(L"color",L"reset_balance_contrast"),data->caption(L"color",L"reset_brightness"),data->caption(L"color",L"reset_highlight_color"),str(copy,L"reset_sdr")};
+        for(uint32_t i=0;i<labels.size();++i){resetItems[i].Text(labels[i]);AutomationProperties::SetName(resetItems[i],labels[i]);}
         auto current=array(form(),L"identity").Stringify();if(current!=identity){finish(true);identity=current;}
         auto next=object(form(),L"rendition").Stringify()+data->theme();if(next==key)return;key=next;
         auto g=geometry();if(!g.Size()||g.HasKey(L"error"))return;
@@ -57,7 +63,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
     }
     void init(){
         auto weak=weak_from_this();root.IsTabStop(true);root.MinWidth(128);root.MaxWidth(side);root.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetAutomationId(root,L"proof-dial");AutomationProperties::SetName(root,str(object(form(),L"copy"),L"balance_contrast"));AutomationProperties::SetHelpText(root,L"Drag balance and contrast; arcs adjust brightness and color intensity. Arrow keys adjust the selected control. Home resets it; Escape cancels a drag.");
+        AutomationProperties::SetAutomationId(root,L"proof-dial");
         canvas.Width(side);canvas.Height(side);canvas.Background(clear());view.Child(canvas);view.Stretch(Stretch::Uniform);root.Content(view);
         // One shared immutable illustration; native bitmap storage is BGRA.
         Imaging::WriteableBitmap bitmap(256,256);uint8_t* bytes=nullptr;check_hresult(bitmap.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&bytes));
@@ -66,7 +72,7 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
         for(uint32_t i=0;i<2;++i){arcs[i].IsHitTestVisible(false);handles[i].IsHitTestVisible(false);canvas.Children().Append(arcs[i]);canvas.Children().Append(handles[i]);}
         marker.IsHitTestVisible(false);canvas.Children().Append(marker);
         for(uint32_t i=0;i<4;++i){texts[i].IsHitTestVisible(false);icons[i].IsHitTestVisible(false);canvas.Children().Append(texts[i]);canvas.Children().Append(icons[i]);}
-        reset.Padding({0});reset.MinWidth(0);reset.MinHeight(0);reset.Background(clear());reset.BorderThickness({0});AutomationProperties::SetAutomationId(reset,L"proof-dial-reset");AutomationProperties::SetName(reset,str(object(form(),L"copy"),L"reset_sdr"));tooltip(reset,str(object(form(),L"copy"),L"reset_sdr"));
+        reset.Padding({0});reset.MinWidth(0);reset.MinHeight(0);reset.Background(clear());reset.BorderThickness({0});AutomationProperties::SetAutomationId(reset,L"proof-dial-reset");
         reset.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->control(3,O({{L"type",S(L"reset")}}));});canvas.Children().Append(reset);
         root.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->canvas);if(self->pointer||!p.IsInContact()||(p.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse&&!p.Properties().IsLeftButtonPressed()))return;
@@ -86,8 +92,8 @@ struct ProofDial:std::enable_shared_from_this<ProofDial>{
             if(key==VirtualKey::Home){self->control(self->part,O({{L"type",S(L"reset")}}));e.Handled(true);}
             else if(key==VirtualKey::Left||key==VirtualKey::Right||key==VirtualKey::Up||key==VirtualKey::Down){self->control(self->part,O({{L"type",S(L"step")},{L"axis",N(key==VirtualKey::Up||key==VirtualKey::Down?1:0)},{L"steps",N(key==VirtualKey::Right||key==VirtualKey::Up?1:-1)}}));e.Handled(true);}
         }});
-        MenuFlyout menu;TrackPopup(menu,data);std::array<hstring,4> names{L"Reset balance and contrast",L"Reset brightness",L"Reset color intensity",L"Reset all"};
-        for(uint8_t i=0;i<4;++i){MenuFlyoutItem item;item.Text(names[i]);item.Click([weak,i](auto&&,auto&&){if(auto self=weak.lock())self->control(i,O({{L"type",S(L"reset")}}));});menu.Items().Append(item);}root.ContextFlyout(menu);
+        MenuFlyout menu;TrackPopup(menu,data);
+        for(uint8_t i=0;i<4;++i){auto item=resetItems[i];AutomationProperties::SetAutomationId(item,L"proof-dial-reset-"+to_hstring(i));item.Click([weak,i](auto&&,auto&&){if(auto self=weak.lock())self->control(i,O({{L"type",S(L"reset")}}));});menu.Items().Append(item);}root.ContextFlyout(menu);
         refresh();
     }
 };

@@ -26,3 +26,19 @@ test('removes superseded array entries and replaces an existing binding',()=>{
   assert.deepEqual(copy.choices,['一']);
   assert.equal(node.textContent,'一');
 });
+
+
+test('relabels an owned text node without detaching native input children',()=>{
+  let value={label:'Width'};
+  const app={catalog:()=>structuredClone(value)},copy=liveCopy(app,'catalog');
+  const input={value:'１２+invalid',selectionStart:1,selectionEnd:4};
+  const label={children:[input],ownerDocument:{createTextNode:nodeValue=>({nodeType:3,nodeValue})},get firstChild(){return this.children[0];},insertBefore(node,before){this.children.splice(this.children.indexOf(before),0,node);return node;},set textContent(value){this.children=[{nodeType:3,nodeValue:value}];}};
+  assert.equal(bindCopy(label,()=>copy.label),label);
+  const text=label.firstChild;
+  value={label:'Largeur'};refreshCopy(app);
+  assert.deepEqual(label.children,[text,input]);
+  assert.equal(text.nodeValue,'Largeur');
+  assert.deepEqual(input,{value:'１２+invalid',selectionStart:1,selectionEnd:4});
+  bindCopy(label,()=>copy.label+' (px)');refreshCopy(app);
+  assert.deepEqual(label.children,[text,input]);assert.equal(text.nodeValue,'Largeur (px)');
+});

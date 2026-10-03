@@ -705,13 +705,12 @@ impl Cache {
                 .filter_map(|(p, _)| source_plan(Some(scene), p, &placement, target_extent(layer,id,p.extent), r.moving_layer == Some(id)).ok().filter(|s| p.level > 0 || s.level > 0))
                 .filter(|p| !p.bounds.is_empty()).map(|p| (p.level, self.source_plan(sources, id, p))).collect())
         }).collect();
-        if let Some(Presentation::Placed(root)) = &self.placed && let Some(levels) = requested.get_mut(&root.value.id) {
-            if let Some(plan) = levels.get(&root.value.plan.level).copied() {
+        if let Some(Presentation::Placed(root)) = &self.placed && let Some(levels) = requested.get_mut(&root.value.id)
+            && let Some(plan) = levels.get(&root.value.plan.level).copied() {
                 for level in [plan.level + 1, source_coarse_level(plan)] {
                     levels.insert(level, display_mips::Plan::window(plan.extent, level, plan.bounds));
                 }
             }
-        }
         requested
     }
     pub fn source_budget(&self, r: &WgpuRasterizer, packet: FramePacket<'_>, commands: &Commands, scene: Option<&Scene>) -> u64 {
@@ -838,6 +837,7 @@ impl Cache {
         Ok(changed)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Graph rendering keeps frame input, damage, encoding, and destination domains explicit")]
     fn render_graph(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         dirty: PixelRect, encoding: &mut Encoding<'_>, destination: Destination<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
@@ -932,7 +932,6 @@ impl Cache {
             };
             compositor.cache.placed = presentation;
             if compositor.cache.placed.is_some() {
-                drop(compositor);
                 self.output.clear(); self.used.clear(); self.refined.clear();
                 let changed = if matches!(self.placed, Some(Presentation::Mapped(_))) {
                     self.valid.extend(page_coordinates(self.plan.bounds));
@@ -1379,7 +1378,7 @@ impl Evaluator<'_> {
         for (offset, input) in [(16, &front), (18, &back)] {
             let Value::Image { plan: source, .. } = input else { continue; };
             let target = plan;
-            let side = (1 << target.level) as i32;
+            let side = 1 << target.level;
             values[offset] = ((target.bounds.min_x() as i32 - source.bounds.min_x() as i32) / side) as u32;
             values[offset + 1] = ((target.bounds.min_y() as i32 - source.bounds.min_y() as i32) / side) as u32;
         }

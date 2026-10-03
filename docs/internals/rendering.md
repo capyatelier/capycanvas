@@ -675,7 +675,9 @@ and Auto preempt live statistics. Hidden panels release statistics and resume
 only on demand; old owner, page, source and device results cannot publish.
 
 Snapshot PNG/TIFF output streams sixteen-row strips through the working-color
-encoder and profiled row writers. A matching, unmodified source with default
+encoder and profiled row writers using borrowed `WorkingRowsOptions`. Gain-map
+JPEG and AVIF share borrowed `GainMapRender` settings and generic row callbacks.
+A matching, unmodified source with default
 conversion and no matte bypasses composition to preserve exact integer samples,
 including hidden straight RGB. An explicit matte composites in linear document
 RGB before encoding. Region captures return linear-premultiplied document values;

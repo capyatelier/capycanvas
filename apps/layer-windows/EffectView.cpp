@@ -12,7 +12,8 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
     std::shared_ptr<Property> property;
     std::function<J()> get;
     std::function<void(J)> set;
-    std::function<hstring()> context;
+    std::function<hstring()> context,currentTitle;
+    TextBlock name;Button pick;
     StackPanel root,fields;
     Bindings numbers;
     SolidColorBrush sample{Windows::UI::Color{}};
@@ -27,9 +28,9 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
         root.Spacing(6);fields.Spacing(6);fields.Visibility(Visibility::Collapsed);
         Grid row;ColumnDefinition text;text.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(text);
         ColumnDefinition swatch;swatch.Width({56,GridUnitType::Pixel});row.ColumnDefinitions().Append(swatch);
-        auto name=label(property->data,title);name.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(name);
+        name=label(property->data,title);name.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(name);
         auto weak=weak_from_this();
-        auto pick=button(property->data,title,[weak]{if(auto self=weak.lock()){
+        pick=button(property->data,title,[weak]{if(auto self=weak.lock()){
             self->fields.Visibility(self->fields.Visibility()==Visibility::Visible?Visibility::Collapsed:Visibility::Visible);
         }});
         pick.Height(32);pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.Background(property->data->brush(L"input"));
@@ -40,6 +41,7 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
         rebuild();
     }
     void refresh(){
+        auto title=currentTitle?currentTitle():str(property->model(),L"label");name.Text(title);AutomationProperties::SetName(pick,title);
         auto next=context?context():L"";
         if(next!=editingContext){editingContext=next;rebuild();}
         auto space=str(object(property->data->model,L"color_panel"),L"rgb_space",L"Srgb");
@@ -55,9 +57,10 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     ComboBox page;
     struct Field{FrameworkElement row{nullptr};Bindings bindings;hstring schema;};
     std::map<std::wstring,Field> fields;
+    Bindings headings;
     hstring schema,pages,fieldOwner;
     static hstring fieldSchema(J const& c){
-        return O({{L"label",S(str(c,L"label"))},{L"kind",object(c,L"kind")},{L"color_action",object(c,L"color_action")},{L"domain",object(object(c,L"curve"),L"domain")}}).Stringify();
+        return O({{L"kind",S(propertyKindSignature(c))},{L"color_action",object(c,L"color_action")},{L"domain",object(object(c,L"curve"),L"domain")}}).Stringify();
     }
     void arrange(std::vector<UIElement> const& items){
         auto children=body.Children();
@@ -72,7 +75,8 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         auto property=std::make_shared<Property>(data,c);
         auto kind=object(c,L"kind");auto type=str(kind,L"kind");auto name=str(c,L"label");
         if(type==L"number"){
-            auto captured=std::make_shared<bool>(false);NumberPresentation presentation;
+            auto captured=std::make_shared<bool>(false);NumberPresentation presentation;presentation.title=property->label().current;
+            presentation.identity=[weak=std::weak_ptr<Property>(property)]{if(auto current=weak.lock())return current->identity();return hstring();};
             presentation.phase=[property,captured](hstring const& phase,double v){*captured=phase==L"down";property->action(property->setting(N(v)),phase);};
             return number(data,name,object(kind,L"numeric"),
                 [property]{return num(object(property->model(),L"value"),L"value");},
@@ -95,17 +99,17 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                 bool wrap=event.NewSize().Width-text.DesiredSize().Width-6<std::min(150.f,event.NewSize().Width);
                 Grid::SetRow(choices,wrap?1:0);Grid::SetColumn(choices,wrap?0:1);Grid::SetColumnSpan(choices,wrap?2:1);
             });
-            for(auto option:array(kind,L"options"))choices.Items().Append(box_value(option.GetString()));
+            for(auto option:array(kind,L"options"))comboOption(choices,option.GetString());
             AutomationProperties::SetName(choices,name);AutomationProperties::SetAutomationId(choices,property->id());
             choices.SelectionChanged([property,weak=make_weak(choices)](auto&&,auto&&){if(auto choices=weak.get();choices&&choices.SelectedIndex()>=0)property->set(N(choices.SelectedIndex()));});
-            bindings.emplace_back([property,choices]{choices.SelectedIndex(int(num(object(property->model(),L"value"),L"value")));});
+            bindings.emplace_back([property,choices,text]{auto model=property->model();auto title=str(model,L"label");text.Text(title);AutomationProperties::SetName(choices,title);auto options=array(object(model,L"kind"),L"options");for(uint32_t i=0;i<options.Size();++i)comboOptionText(choices,i,options.GetStringAt(i));auto selected=int(num(object(model,L"value"),L"value"));if(choices.SelectedIndex()!=selected)choices.SelectedIndex(selected);});
             Grid::SetColumn(choices,1);row.Children().Append(choices);return row;
         }
         if(type==L"toggle"){
-            CheckBox check;check.Content(label(data,name));check.MinHeight(32);check.MinWidth(0);
+            CheckBox check;auto caption=label(data,name);check.Content(caption);check.MinHeight(32);check.MinWidth(0);
             AutomationProperties::SetName(check,name);AutomationProperties::SetAutomationId(check,property->id());
             check.Click([property,weak=make_weak(check)](auto&&,auto&&){if(auto c=weak.get())property->set(B(c.IsChecked().Value()));});
-            bindings.emplace_back([property,check]{check.IsChecked(flag(object(property->model(),L"value"),L"value"));});return check;
+            bindings.emplace_back([property,check,caption]{auto model=property->model();auto title=str(model,L"label");caption.Text(title);AutomationProperties::SetName(check,title);check.IsChecked(flag(object(model,L"value"),L"value"));});return check;
         }
         if(type==L"color"){
             auto color=ColorField(property,name,[property]{return object(object(property->model(),L"value"),L"value");},
@@ -119,7 +123,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             auto bucket=button(data,data->caption(L"color",L"use_selected"),[property,action]{if(property->current()&&!property->data->updating&&flag(property->view(),L"enabled"))property->data->dispatchDocument(action,to_hstring(uint64_t(property->epoch)));});
             bucket.Content(icon(L"fill",data->theme()));bucket.Width(40);bucket.Height(36);bucket.VerticalAlignment(VerticalAlignment::Top);
             std::wstring id(str(c,L"key").c_str());std::replace(id.begin(),id.end(),L'_',L'-');
-            CapyUi::tooltip(bucket,data->caption(L"color",L"use_selected"));AutomationProperties::SetAutomationId(bucket,hstring(id+L"-bucket"));Grid::SetColumn(bucket,1);row.Children().Append(bucket);
+            bindings.emplace_back([data=data,bucket]{auto caption=data->caption(L"color",L"use_selected");AutomationProperties::SetName(bucket,caption);CapyUi::tooltip(bucket,caption);});AutomationProperties::SetAutomationId(bucket,hstring(id+L"-bucket"));Grid::SetColumn(bucket,1);row.Children().Append(bucket);
             return row;
         }
         if(type==L"curve")return CurveField(property,bindings);
@@ -128,7 +132,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     }
     explicit PropertiesView(std::shared_ptr<WorkspaceData> source):data(std::move(source)){
         root.Spacing(6);body.Spacing(6);title=label(data,L"",true);
-        AutomationProperties::SetAutomationId(root,L"layer-properties");AutomationProperties::SetName(root,str(find(array(data->catalog,L"panels"),L"id",L"properties"),L"label"));
+        AutomationProperties::SetAutomationId(root,L"layer-properties");
         bodyGate.Content(body);bodyGate.IsTabStop(false);bodyGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         page.MinWidth(0);page.MinHeight(32);page.HorizontalAlignment(HorizontalAlignment::Stretch);page.FontSize(data->textSize());
         page.Background(data->brush(L"input"));page.BorderThickness({0,0,0,0});page.CornerRadius({6,6,6,6});
@@ -146,21 +150,23 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     void refresh(){
         Updating updating(data);
         auto view=object(data->state,L"layer_properties");
-        title.Text(str(view,L"title"));CapyUi::tooltip(title,str(view,L"description"));
+        title.Text(str(view,L"title"));AutomationProperties::SetName(root,str(view,L"title"));CapyUi::tooltip(title,str(view,L"description"));
         auto pageChoices=array(view,L"pages");
-        if(auto key=pageChoices.Stringify();key!=pages){pages=key;page.Items().Clear();for(auto choice:pageChoices)page.Items().Append(box_value(str(choice.GetObject(),L"label")));}
+        A pageIds;for(auto choice:pageChoices)pageIds.Append(S(str(choice.GetObject(),L"id")));
+        if(auto key=pageIds.Stringify();key!=pages){pages=key;page.Items().Clear();for(auto choice:pageChoices)comboOption(page,str(choice.GetObject(),L"label"));}
+        for(uint32_t i=0;i<pageChoices.Size();++i)comboOptionText(page,i,str(pageChoices.GetObjectAt(i),L"label"));
         int32_t selected=-1;for(uint32_t i=0;i<pageChoices.Size();++i)if(str(pageChoices.GetObjectAt(i),L"id")==str(view,L"page"))selected=int32_t(i);
         if(page.SelectedIndex()!=selected)page.SelectedIndex(selected);
         page.Visibility(pageChoices.Size()>1?Visibility::Visible:Visibility::Collapsed);page.IsEnabled(flag(view,L"enabled"));
         AutomationProperties::SetName(page,str(view,L"title"));
         A keys;for(auto value:array(view,L"controls")){
             auto c=value.GetObject();keys.Append(O({{L"key",S(str(c,L"key"))},{L"field",S(fieldSchema(c))},
-                {L"section",S(str(c,L"section"))},{L"section_id",c.GetNamedValue(L"section_id",JsonValue::CreateNullValue())}}));
+                {L"section_id",c.GetNamedValue(L"section_id",JsonValue::CreateNullValue())}}));
         }
         auto owner=to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch")))+L":"+view.GetNamedValue(L"layer",JsonValue::CreateNullValue()).Stringify();
         auto next=O({{L"owner",S(owner)},{L"controls",keys}}).Stringify();
         if(next!=schema){
-            schema=next;std::vector<UIElement> items;
+            schema=next;headings.clear();std::vector<UIElement> items;
             auto previous=std::exchange(fields,{});if(owner!=fieldOwner)previous.clear();fieldOwner=owner;
             hstring sectionId=L"null";
             for(auto value:array(view,L"controls")){
@@ -168,7 +174,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                 auto nextSectionId=c.GetNamedValue(L"section_id",JsonValue::CreateNullValue()).Stringify();
                 if(sectionId!=nextSectionId){sectionId=nextSectionId;auto section=str(c,L"section");
                     if(!items.empty()){Shapes::Rectangle line;line.Height(1);line.Opacity(.15);line.Fill(data->brush(L"text"));line.Margin({0,3,0,3});items.push_back(line);}
-                    if(!section.empty()){auto heading=label(data,section,true);heading.Margin({6,0,0,0});items.push_back(heading);}
+                    if(!section.empty()){auto heading=label(data,section,true);heading.Margin({6,0,0,0});items.push_back(heading);auto property=std::make_shared<Property>(data,c);headings.emplace_back([heading,property]{heading.Text(str(property->model(),L"section"));});}
                 }
                 std::wstring key=str(c,L"key").c_str();auto shape=fieldSchema(c);
                 auto found=previous.find(key);
@@ -178,14 +184,15 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             }
             arrange(items);
         }
+        for(auto const& update:headings)update();
         for(auto const& [key,field]:fields)for(auto const& update:field.bindings)update();
         bodyGate.IsEnabled(flag(view,L"enabled"));body.Opacity(flag(view,L"enabled")?1.:.4);
     }
 };
 }
 FrameworkElement CapyEffects::ColorField(std::shared_ptr<Property> const& property,hstring const& title,
-    std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context){
-    auto editor=std::make_shared<ColorEditor>();editor->property=property;editor->get=std::move(get);editor->set=std::move(set);editor->context=std::move(context);
+    std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context,std::function<hstring()> currentTitle){
+    auto editor=std::make_shared<ColorEditor>();editor->property=property;editor->get=std::move(get);editor->set=std::move(set);editor->context=std::move(context);editor->currentTitle=std::move(currentTitle);
     editor->init(title);bindings.emplace_back([editor]{editor->refresh();});return editor->root;
 }
 FrameworkElement PropertiesPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){

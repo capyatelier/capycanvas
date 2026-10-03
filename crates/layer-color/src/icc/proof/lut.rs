@@ -173,12 +173,12 @@ impl Pipeline {
                     entries,
                     channels,
                 } => {
-                    for channel in 0..*channels {
-                        let x = values[channel].clamp(0., 1.) * (*entries - 1) as f64;
+                    for (channel, value) in values.iter_mut().enumerate().take(*channels) {
+                        let x = value.clamp(0., 1.) * (*entries - 1) as f64;
                         let lower = (x as usize).min(*entries - 2);
                         let t = x - lower as f64;
                         let at = channel * entries + lower;
-                        values[channel] = table[at] * (1. - t) + table[at + 1] * t;
+                        *value = table[at] * (1. - t) + table[at + 1] * t;
                     }
                 }
                 Stage::Matrix { matrix, bias } => {

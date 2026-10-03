@@ -612,11 +612,14 @@ fn native_workspace_switcher_pending_menu() {
             assert!(enabled_row.is_sensitive(), "open preference rows become enabled");
             assert!(menu_row(&popup, "Manage Workspaces…").has_focus(), "menu refresh preserves focused native row: {theme:?} presentation {presentation}, focused {:?}", gtk::prelude::GtkWindowExt::focus(&w.window).map(|widget| (widget.type_(), widget.widget_name())));
             pump(250);
-            if presentation == 2 {
-                click(&w, &mut input, &mapped_label(popup.upcast_ref(), "Show in top bar").unwrap());
-                assert!(popup.visible_submenu().as_deref().is_some_and(|page| page != "main"));
-            }
-            click(&w, &mut input, &mapped_label(popup.upcast_ref(), &title).unwrap());
+            let checklist = if presentation == 2 {
+                let button = menu_row(&popup, "Show in top bar");
+                let nested = button.property::<Option<gtk::PopoverMenu>>("popover").unwrap();
+                click(&w, &mut input, &button);
+                until(|| nested.is_mapped() && nested.width() > 0 && nested.height() > 0, "pending checklist nested submenu mapped and allocated");
+                nested
+            } else { popup.clone() };
+            click(&w, &mut input, &mapped_label(checklist.upcast_ref(), &title).unwrap());
             wait_switcher(&w);
             assert!(!popup.is_visible());
             assert!(manager.switcher_ids().contains(&active));

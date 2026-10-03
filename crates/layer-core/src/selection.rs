@@ -477,7 +477,7 @@ mod selection_tests {
         };
         layer.properties.selection_mask = Some(properties.clone());
         editor
-            .perform(Edit::InsertLayer { index: 0, layer })
+            .perform(Edit::InsertLayer { index: 0, layer: Box::new(layer) })
             .unwrap();
         let saved_checkpoint = editor.checkpoint();
         let loaded = editor.document().saved_selection(id).unwrap();
@@ -535,7 +535,7 @@ mod selection_tests {
         group.properties.offset = Point { x: 12., y: 8. };
         doc.apply(Edit::InsertLayer {
             index: 0,
-            layer: group.clone(),
+            layer: Box::new(group.clone()),
         })
         .unwrap();
         let id = doc.allocate_layer_id();
@@ -543,7 +543,7 @@ mod selection_tests {
         layer.properties.parent = Some(group_id);
         layer.properties.placement =
             LayerPlacement::from_affine(Affine::around(Point::default(), [2., 2.], 0., Point::default()));
-        doc.apply(Edit::InsertLayer { index: 1, layer }).unwrap();
+        doc.apply(Edit::InsertLayer { index: 1, layer: Box::new(layer) }).unwrap();
         let world = doc.saved_selection(id).unwrap();
         assert_eq!(world.affine, doc.affine_edit_transform(id).unwrap());
         let replacement = world.translated(Point { x: 2., y: 4. });
@@ -586,7 +586,7 @@ mod selection_tests {
             mutate(&mut invalid);
             assert!(doc.validate_layer(&invalid).is_err());
         }
-        doc.apply(Edit::InsertLayer { index: 0, layer }).unwrap();
+        doc.apply(Edit::InsertLayer { index: 0, layer: Box::new(layer) }).unwrap();
         let project = Project::snapshot(&doc).unwrap();
         assert!(
             project
@@ -612,13 +612,13 @@ mod selection_tests {
         let saved = doc.allocate_layer_id();
         doc.apply(Edit::InsertLayer {
             index: 0,
-            layer: Layer::selection(saved, "Region", Selection::empty()),
+            layer: Box::new(Layer::selection(saved, "Region", Selection::empty())),
         })
         .unwrap();
         let clip = doc.allocate_layer_id();
         let mut layer = Layer::paint(clip, "Highlights");
         layer.properties.clipped = true;
-        doc.apply(Edit::InsertLayer { index: 0, layer }).unwrap();
+        doc.apply(Edit::InsertLayer { index: 0, layer: Box::new(layer) }).unwrap();
         assert_eq!(doc.clipping_base(clip), Some(LayerId(1)));
         assert_eq!(doc.clipping_stack_top(LayerId(1)), Some(clip));
         assert!(doc.target_raster(saved).is_none());

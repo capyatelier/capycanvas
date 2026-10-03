@@ -20,15 +20,10 @@ impl SnapshotRenderer {
         self.hdr_rows(|extent, space, read| {
             layer_color::photo::write_gainmap_rows(
                 output,
-                extent,
-                space,
-                rendition,
-                &guide,
+                layer_color::photo::GainMapRender { extent, space, rendition, guide: &guide, matte, clip },
                 format,
                 quality,
                 &metadata,
-                matte,
-                clip,
                 control.cancellation_flag(),
                 read,
             )
@@ -217,11 +212,7 @@ impl SnapshotRenderer {
             working,
             source_extent,
             extent,
-            target,
-            options,
-            matte,
-            rendition,
-            guide.as_deref(),
+            layer_color::WorkingRowsOptions { target, encoding: options, matte, rendition, guide: guide.as_deref() },
             |y, row| {
                 control.check().map_err(|e| e.to_string())?;
                 row.copy_from_slice(source.read(y)?);

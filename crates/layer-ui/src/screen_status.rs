@@ -11,17 +11,17 @@ pub struct ScreenState {
     pub details: Option<ScreenDetails>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ScreenChip {
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub warning: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ScreenDetails {
     pub title: String,
-    pub headline: &'static str,
-    pub body: Option<String>,
+    pub headline: std::sync::Arc<str>,
+    pub body: Option<std::sync::Arc<str>>,
     pub warning: bool,
     pub show_clipped: Option<bool>,
 }
@@ -72,11 +72,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.document().color.depth.is_float()
     }
 
-    fn hdr_view_label(&self) -> &'static str {
+    fn hdr_view_label(&self) -> MessageId {
         match (self.state.hdr_display_available, self.state.preview_sdr) {
-            (true, true) => "SDR preview",
-            (true, false) => "HDR",
-            (false, _) => "Showing SDR",
+            (true, true) => MessageId::COMMON_SCREEN_CHIP_SDR_PREVIEW,
+            (true, false) => MessageId::COMMON_SCREEN_CHIP_HDR,
+            (false, _) => MessageId::COMMON_SCREEN_CHIP_SHOWING_SDR,
         }
     }
 
@@ -86,13 +86,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let screen = &self.state.screen;
         if screen.clipped == Some(true) {
-            return Some(ScreenChip { label: "Colors clipped", warning: true });
+            return Some(ScreenChip { label: self.localization().text(MessageId::COMMON_SCREEN_CHIP_CLIPPED), warning: true });
         }
         if self.screen_hdr_document() && !self.screen_proofing() {
-            return Some(ScreenChip { label: self.hdr_view_label(), warning: false });
+            return Some(ScreenChip { label: self.localization().text(self.hdr_view_label()), warning: false });
         }
         (self.screen_proofing() && proof_caveat(&screen.assessment).is_some())
-            .then_some(ScreenChip { label: "May not match print", warning: false })
+            .then(|| ScreenChip { label: self.localization().text(MessageId::COMMON_SCREEN_CHIP_PROOF_CAVEAT), warning: false })
     }
 
     pub fn screen_details(&self) -> Option<ScreenDetails> {
@@ -101,82 +101,88 @@ impl<R: CanvasRenderer> UiSession<R> {
         let proofing = self.screen_proofing();
         let clipped = screen.clipped == Some(true);
         let (headline, body) = if clipped {
-            ("Some colors can’t be shown accurately on this screen", clipped_reason(assessment))
+            (MessageId::COMMON_SCREEN_HEADLINE_CLIPPED, clipped_reason(assessment).map(|id| self.localization().text(id)))
         } else if self.screen_hdr_document() && !proofing {
             self.hdr_view(assessment, screen.report.hdr_capable)
         } else if proofing && let Some(caveat) = proof_caveat(assessment) {
-            ("The proof may not match the print", Some(caveat))
+            (MessageId::COMMON_SCREEN_HEADLINE_PROOF, Some(self.localization().text(caveat)))
         } else {
             return None;
         };
         Some(ScreenDetails {
-            title: screen.report.name.clone().unwrap_or_else(|| "This screen".into()),
-            headline,
+            title: screen.report.name.clone().unwrap_or_else(|| self.localization().text(MessageId::COMMON_SCREEN_TITLE).to_string()),
+            headline: self.localization().text(headline),
             body,
             warning: clipped,
             show_clipped: (clipped || screen.show_clipped).then_some(screen.show_clipped),
         })
     }
 
-    fn hdr_view(&self, assessment: &ScreenAssessment, hdr_capable: Option<bool>) -> (&'static str, Option<String>) {
-        const SDR: &str = "Showing the SDR version";
+    fn hdr_view(&self, assessment: &ScreenAssessment, hdr_capable: Option<bool>) -> (MessageId, Option<std::sync::Arc<str>>) {
+        let l = self.localization();
         if self.state.hdr_display_available && self.state.preview_sdr {
-            return (SDR, Some("This is the SDR version you’ll export. Select Off in the Proof panel to see HDR.".into()));
+            return (MessageId::COMMON_SCREEN_HEADLINE_SDR, Some(l.text(MessageId::COMMON_SCREEN_SDR_PREVIEW)));
         }
         if self.state.hdr_display_available {
             let body = if assessment.peak.is_some() {
-                let headroom = assessment.headroom();
-                format!("This screen can show highlights up to {}× ({:+.1} EV).", times(headroom), headroom.log2())
+                self.hdr_headroom_body(assessment.headroom())
             } else {
-                "Capy Canvas can’t tell how bright this screen can get, so the brightest highlights may look dimmer than they are.".into()
+                l.text(MessageId::COMMON_SCREEN_HDR_UNKNOWN_PEAK)
             };
-            return ("Showing HDR", Some(body));
+            return (MessageId::COMMON_SCREEN_HEADLINE_HDR, Some(body));
         }
         let body = if assessment.white_at_peak() {
-            Some("At your current screen brightness, regular content already uses all of this screen’s brightness, leaving nothing brighter for HDR highlights. Lower the screen brightness to see them.".into())
+            Some(MessageId::COMMON_SCREEN_WHITE_AT_PEAK)
         } else if hdr_capable == Some(false) {
-            Some("This screen can’t show HDR.".into())
+            Some(MessageId::COMMON_SCREEN_NO_HDR)
         } else if hdr_capable == Some(true) && !assessment.hdr_signal {
-            Some(format!("HDR is off for this screen. Turn it on in {DISPLAY_SETTINGS} to see HDR highlights."))
+            Some(MessageId::COMMON_SCREEN_HDR_OFF)
         } else {
             None
         };
-        (SDR, body)
+        (MessageId::COMMON_SCREEN_HEADLINE_SDR, body.map(|id| l.text(id)))
+    }
+
+    fn hdr_headroom_body(&self, headroom: f32) -> std::sync::Arc<str> {
+        let l = self.localization();
+        let key = (l.language(), headroom.to_bits());
+        let mut cached = self.screen_headroom.borrow_mut();
+        if let Some((language, bits, body)) = cached.as_ref()
+            && (*language, *bits) == key
+        {
+            return body.clone();
+        }
+        let mut args = FluentArgs::new();
+        args.set("times", times(headroom));
+        args.set("ev", format!("{:+.1}", headroom.log2()));
+        let body: std::sync::Arc<str> = l.format(MessageId::COMMON_SCREEN_HDR_HEADROOM, &args).into();
+        *cached = Some((key.0, key.1, body.clone()));
+        body
     }
 }
-
-const DISPLAY_SETTINGS: &str = "your operating system’s display settings";
 
 fn times(value: f32) -> String {
     let tenths = (value * 10.).round();
     if tenths % 10. == 0. { format!("{:.0}", tenths / 10.) } else { format!("{:.1}", tenths / 10.) }
 }
 
-fn clipped_reason(assessment: &ScreenAssessment) -> Option<String> {
+fn clipped_reason(assessment: &ScreenAssessment) -> Option<MessageId> {
     if assessment.wide_color_off {
-        Some(format!(
-            "Your operating system is limiting apps to sRGB colors on this screen, although the screen can show more. Turn off saturated or vivid colors in {DISPLAY_SETTINGS} to show them."
-        ))
+        Some(MessageId::COMMON_SCREEN_WIDE_COLOR_OFF)
     } else if assessment.srgb_on_wide_monitor {
-        Some(format!(
-            "Your operating system is treating this monitor as a standard sRGB screen, although the monitor can show more colors. Turn on HDR for this monitor in {DISPLAY_SETTINGS} to show them."
-        ))
+        Some(MessageId::COMMON_SCREEN_SRGB_WIDE_MONITOR)
     } else if assessment.basis == Basis::Unmanaged {
-        Some("Your operating system shows only sRGB colors on this screen.".into())
+        Some(MessageId::COMMON_SCREEN_UNMANAGED)
     } else {
         None
     }
 }
 
-fn proof_caveat(assessment: &ScreenAssessment) -> Option<String> {
+fn proof_caveat(assessment: &ScreenAssessment) -> Option<MessageId> {
     let caveat = match assessment.basis {
-        Basis::Monitor | Basis::Unknown if assessment.hdr_signal => format!(
-            "With HDR on, Capy Canvas can’t tell how this screen shows colors. Turn off HDR for this screen in {DISPLAY_SETTINGS}."
-        ),
-        Basis::Unknown => "Capy Canvas can’t tell which colors this screen can show.".into(),
-        Basis::System if assessment.white_at_peak() => {
-            "At your current screen brightness, the lightest tones look the same. Lower the screen brightness to tell them apart.".into()
-        }
+        Basis::Monitor | Basis::Unknown if assessment.hdr_signal => MessageId::COMMON_SCREEN_PROOF_HDR,
+        Basis::Unknown => MessageId::COMMON_SCREEN_PROOF_UNKNOWN,
+        Basis::System if assessment.white_at_peak() => MessageId::COMMON_SCREEN_PROOF_WHITE,
         Basis::Monitor | Basis::System | Basis::Unmanaged | Basis::Pending => return None,
     };
     Some(caveat)

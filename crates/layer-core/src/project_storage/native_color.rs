@@ -224,7 +224,7 @@ fn hdr_archive_and_history_preserve_samples_and_authored_rendition() {
     let key=TileKey{plane:RasterPlane::Color,coordinate:[0,0]};
     document.layers[0].raster=RasterRevision::backed(RasterData{tiles:BTreeMap::from([(key,RasterTile::backed(TileBlob::encode(color.paint_descriptor(),&samples).unwrap()))]),watercolor:None});
     let mut editor=Editor::new(document);
-    let rendition=crate::color::hdr::SdrRendition{exposure:-1.,contrast:0.8,headroom:4.,balance:0.4,highlight_color:0.35,..Default::default()};
+    let rendition=crate::color::hdr::SdrRendition{exposure:-1.,contrast:0.8,headroom:4.,balance:0.4,highlight_color:0.35};
     editor.perform(Edit::SetSdrRendition(rendition)).unwrap();
     editor.undo().unwrap();assert_eq!(editor.document().sdr_rendition,Default::default());
     editor.redo().unwrap();assert_eq!(editor.document().sdr_rendition,rendition);
@@ -244,7 +244,7 @@ fn float32_archive_history_preserve_every_bit_including_hidden_rgb() {
     assert_eq!(color.paint_descriptor().bytes_per_pixel(), Some(16));
     assert_eq!(color.coverage_descriptor().depth(), SampleDepth::U16);
     let values = [f32::MAX, -f32::MAX, f32::MIN_POSITIVE, f32::from_bits(1),
-        -f32::from_bits(1), -0., 1.0000001, 65505., -1234567.125];
+        -f32::from_bits(1), -0., 1.0000001, 65505., -1_234_567. - 0.125];
     let bytes: Vec<_> = (0..65536).flat_map(|i| [values[i%values.len()], values[(i+1)%values.len()],
         values[(i+2)%values.len()], [0., f32::from_bits(1), 0.12345679, 1.][i%4]])
         .flat_map(f32::to_le_bytes).collect();

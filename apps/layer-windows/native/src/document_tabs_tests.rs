@@ -26,10 +26,10 @@ fn settle(service: &mut DocumentService, host: &mut NativeHost) {
         if host.session.engine().backend().0.is_some() {
             host.prepare_canvas_frame(0, 0, true).unwrap();
         }
-        if service.idle()
-            && !service.close_next
-            && !host.session.state().document_file.busy
-            && !(host.session.state().document_file.close_ready
+        if !(!service.idle()
+            || service.close_next
+            || host.session.state().document_file.busy
+            || host.session.state().document_file.close_ready
                 && service.window.documents.order().len() > 1)
             && host.session.can_park_document()
             && host

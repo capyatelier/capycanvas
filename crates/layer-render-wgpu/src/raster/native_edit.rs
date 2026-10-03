@@ -534,15 +534,14 @@ impl WgpuRasterizer {
         commit: bool,
     ) -> Result<(), GpuRasterError> {
         let runtime = self.raster.as_mut().unwrap();
-        if let Some(capture) = frame.capture.take() {
-            if !capture.outputs.is_empty() {
+        if let Some(capture) = frame.capture.take()
+            && !capture.outputs.is_empty() {
                 runtime
                     .worker
                     .as_ref()
                     .unwrap()
                     .submit_batch(capture)?;
             }
-        }
         while let Some(publication) = frame.publications.pop() {
             let data = if commit {
                 publication.revision.publish(Ok(publication.data)).map_err(GpuRasterError::Effect)?;

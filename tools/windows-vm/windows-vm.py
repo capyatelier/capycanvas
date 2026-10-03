@@ -610,7 +610,8 @@ def fixtures(args):
         sys.exit("Fixture names use letters, numbers, hyphens and a variant colon.")
     selection = f" -Name {','.join(args.names)}" if args.names else ""
     desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
-                     f"-Executable {SOFTWARE_BUILD}\\CapyCanvas.exe -Output {output}{selection}")
+                     f"-Executable {SOFTWARE_BUILD}\\CapyCanvas.exe -Output {output} "
+                     f"-TimeoutMinutes {args.timeout_minutes}{selection}")
     results, plan, failure = wait_for_fixtures(machine, output)
     local = ROOT / "artifacts" / "windows-vm" / machine.name
     local.mkdir(parents=True, exist_ok=True)
@@ -663,6 +664,13 @@ def destroy(args):
         remove(path)
 
 
+def fixture_timeout(value):
+    minutes = int(value)
+    if not 1 <= minutes <= 1440:
+        raise argparse.ArgumentTypeError("Fixture timeout must be 1–1440 minutes.")
+    return minutes
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--vm", help="VM name (default: $CAPYCANVAS_VM or the worktree directory name)")
@@ -689,6 +697,8 @@ def main():
     fixture = command("fixtures", fixtures, "sync, build and run the UI fixtures on the software adapter")
     fixture.add_argument("names", nargs="*", help="fixtures to run, e.g. layers or header:pen (default: all)")
     fixture.add_argument("--no-build", action="store_true", help="reuse the last software-adapter build")
+    fixture.add_argument("--timeout-minutes", type=fixture_timeout, default=20,
+                         help="deadline for each fixture, 1–1440 minutes (default: 20)")
     command("screenshot", screenshot, "save the VM display as a PNG").add_argument("file", type=Path)
     command("reset", reset, "delete the VM; the next start makes a fresh one from the base image")
     command("destroy", destroy, "delete the base image and every VM, keeping the downloaded ISO")

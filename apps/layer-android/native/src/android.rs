@@ -1292,6 +1292,22 @@ fn localized_context(env: &mut JNIEnv, language: &JString) -> Result<std::sync::
     layer_ui::Localizer::prepared(language).ok_or_else(|| "android_language_not_prepared".to_owned())
 }
 
+enum AndroidNumericFailure {
+    Literal(String),
+    Known { reason: layer_ui::NumericError, text: String },
+}
+fn numeric_string(env: &mut JNIEnv, result: Result<String, AndroidNumericFailure>) -> jstring {
+    match result {
+        Ok(value) => string(env, Ok(value)),
+        Err(AndroidNumericFailure::Literal(message)) => string(env, Err(message)),
+        Err(AndroidNumericFailure::Known { reason, text }) => {
+            let encoded = serde_json::json!({"reason": reason, "text": text}).to_string();
+            let _ = env.throw_new("art/capycanvas/NumericFailure", encoded);
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// Stateless numeric math is independent of the render-owned session. Safe to
 /// call on the UI thread; no renderer lock, I/O or expression compilation loop.
 #[unsafe(no_mangle)]
@@ -1301,12 +1317,14 @@ pub extern "system" fn Java_art_capycanvas_Native_number(
     request: JString,
     language: JString,
 ) -> jstring {
-    let context = localized_context(&mut env, &language);
-    let result = read(&mut env, &request)
-        .and_then(|s| serde_json::from_str::<layer_ui::NumericRequest>(&s).map_err(error))
-        .and_then(|request| { let localization = context.as_ref().map_err(|reason| reason.clone())?; request.resolve().map_err(|reason| reason.message(localization)) })
-        .and_then(|value| serde_json::to_string(&value).map_err(error));
-    string(&mut env, result)
+    let result = (|| {
+        let context = localized_context(&mut env, &language).map_err(AndroidNumericFailure::Literal)?;
+        let source = read(&mut env, &request).map_err(AndroidNumericFailure::Literal)?;
+        let request: layer_ui::NumericRequest = serde_json::from_str(&source).map_err(|e| AndroidNumericFailure::Literal(error(e)))?;
+        let value = request.resolve().map_err(|reason| AndroidNumericFailure::Known { text: reason.message(&context), reason })?;
+        serde_json::to_string(&value).map_err(|e| AndroidNumericFailure::Literal(error(e)))
+    })();
+    numeric_string(&mut env, result)
 }
 
 #[unsafe(no_mangle)]
@@ -1332,12 +1350,18 @@ pub extern "system" fn Java_art_capycanvas_Native_toolbarUi(
     request: JString,
     language: JString,
 ) -> jstring {
-    let context = localized_context(&mut env, &language);
-    let result = read(&mut env, &request)
-        .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|request| { let localization = context.as_ref().map_err(|reason| reason.clone())?; layer_ui::toolbar_ui(request, localization) })
-        .and_then(|value| serde_json::to_string(&value).map_err(error));
-    string(&mut env, result)
+    let result = (|| {
+        let context = localized_context(&mut env, &language).map_err(AndroidNumericFailure::Literal)?;
+        let source = read(&mut env, &request).map_err(AndroidNumericFailure::Literal)?;
+        let request: layer_ui::ToolbarUiRequest = serde_json::from_str(&source).map_err(|e| AndroidNumericFailure::Literal(error(e)))?;
+        let value = match request {
+            layer_ui::ToolbarUiRequest::Number { request, compact, units } => serde_json::json!(layer_ui::toolbar_number(request, compact, units)
+                .map_err(|reason| AndroidNumericFailure::Known { text: reason.message(&context), reason })?),
+            request => layer_ui::toolbar_ui(request, &context).map_err(AndroidNumericFailure::Literal)?,
+        };
+        serde_json::to_string(&value).map_err(|e| AndroidNumericFailure::Literal(error(e)))
+    })();
+    numeric_string(&mut env, result)
 }
 
 #[unsafe(no_mangle)]
@@ -1400,11 +1424,15 @@ pub extern "system" fn Java_art_capycanvas_Native_colorUi(
     language: JString,
 ) -> jstring {
     let context = localized_context(&mut env, &language);
-    let result = read(&mut env, &request)
-        .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|request| layer_ui::color_ui_localized(request, context.as_ref().map_err(|reason| reason.clone())?))
-        .and_then(|value| serde_json::to_string(&value).map_err(error));
-    string(&mut env, result)
+    let result = (|| -> Result<_, crate::color_preferences::ColorCallError> {
+        let request = serde_json::from_str(&read(&mut env, &request)?).map_err(error)?;
+        let localizer = context.map_err(crate::color_preferences::ColorCallError::from)?;
+        let value = if let layer_ui::ColorUiRequest::PrintProof {settings} = request {
+            serde_json::to_value(settings.recipe()?).map_err(error)?
+        } else { layer_ui::color_ui_localized(request, &localizer)? };
+        Ok(env.new_string(serde_json::to_string(&value).map_err(error)?).map_err(error)?.into_raw())
+    })();
+    crate::color_preferences::color_or_throw(&mut env, result, std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]

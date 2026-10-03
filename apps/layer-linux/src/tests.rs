@@ -22,7 +22,7 @@ mod effect_color;
 #[path = "export_resize_tests.rs"]
 mod export_resize;
 #[path = "new_photo_tests.rs"]
-mod new_photo;
+pub(crate) mod new_photo;
 #[path = "hdr_tests.rs"]
 mod hdr;
 #[path = "hdr_picker_tests.rs"]
@@ -105,7 +105,7 @@ use layer_ui::FloatingToolbarLayout;
 use std::time::{Duration, Instant};
 
 /// A new drawing at `depth`, as New drawing makes it.
-fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::SampleDepth) -> layer_core::Project {
+pub(crate) fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::SampleDepth) -> layer_core::Project {
     NewDocumentOptions {
         extent: [width, height],
         color: layer_core::color::DocumentColor { depth, ..Default::default() },
@@ -237,7 +237,7 @@ fn artifact_dir(path: &str) -> &str {
     path
 }
 
-fn save_snapshot(w: &Workspace, wait: u64, path: impl FnOnce() -> std::path::PathBuf) {
+pub(crate) fn save_snapshot(w: &Workspace, wait: u64, path: impl FnOnce() -> std::path::PathBuf) {
     let _ = crate::snapshot(w);
     pump(wait);
     crate::snapshot(w).save_to_png(path()).unwrap();
@@ -1152,7 +1152,7 @@ fn native_startup_latency() {
     pump(20);
 }
 
-pub(crate) struct NativeTestApp(adw::Application);
+pub(crate) struct NativeTestApp(pub(crate) adw::Application);
 impl std::ops::Deref for NativeTestApp {
     type Target = adw::Application;
     fn deref(&self) -> &Self::Target {
@@ -6289,6 +6289,7 @@ fn native_panel_customization() {
         .set_gtk_enable_animations(false);
     let w = fixture_workspace(&app);
     w.window.present();
+    new_photo::ready(&w);
     pump(600);
     let dir = artifact_dir("../../artifacts/ui/customization");
     let send = |action| w.dispatch(UiAction::Customize { action });
@@ -6346,6 +6347,9 @@ fn native_panel_customization() {
     };
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let mut fixture = state(&w).workspace;
+        fixture.layout.rename_toolbar(Panel::Toolbar, "Tools").unwrap();
+        w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) });
         send(CustomizationAction::SetControlVisible {
             panel: Panel::Sizes,
             control: PanelControl::BrushOpacity,
@@ -6762,7 +6766,14 @@ fn native_toolbar_manager() {
         .unwrap()
         .set_gtk_enable_animations(false);
     let w = fixture_workspace(&app);
+    w.window.maximize();
     w.window.present();
+    new_photo::ready(&w);
+    until(|| w.window.is_maximized(), "native toolbar window allocated");
+    let mut input = RemoteInput::new();
+    input.ready();
+    input.click(screen_point(w.header.root.upcast_ref(), &w.window, [0.5, 0.5]));
+    until(|| w.window.is_active(), "native toolbar window activated");
     pump(500);
     let initial = state(&w).workspace;
     let send = |action| w.dispatch(UiAction::Customize { action });
@@ -6783,7 +6794,10 @@ fn native_toolbar_manager() {
             });
             pump(100);
             send(CustomizationAction::ToolbarName { name: name.into() });
-            send(CustomizationAction::ConfirmToolbar);
+            let prompt = named::<adw::AlertDialog>(w.window.upcast_ref(), "toolbar-dialog");
+            let label = ui_session(&w).toolbar_prompt().unwrap().confirm_label;
+            input.click(screen_point(find_button(prompt.upcast_ref(), &label).unwrap().upcast_ref(), &w.window, [0.5, 0.5]));
+            until(|| ui_session(&w).toolbar_prompt().is_none(), "native duplicate toolbar confirmation");
             pump(200);
         }
         let hidden = state(&w).workspace.layout.panels.last().unwrap().id;
@@ -6806,6 +6820,7 @@ fn native_toolbar_manager() {
         )
         .unwrap();
         pump(300);
+
         let dialog = named::<adw::Dialog>(w.window.upcast_ref(), "toolbar-manager");
         let list = named::<gtk::ListBox>(dialog.upcast_ref(), "managed-toolbars");
         let delete = named::<gtk::Button>(dialog.upcast_ref(), "delete-managed-toolbar");
@@ -6876,7 +6891,8 @@ fn native_menu_sections() {
     new_photo::ready(&w);
     // Exercise both the menu bar and the configurable Main Menu component.
     let mut workspace = state(&w).workspace;
-    workspace.layout.header.add(HeaderZone::Left, None, &[HeaderItem::Menu]).unwrap();
+    let first = workspace.layout.header.zones[HeaderZone::Left.index()].first().unwrap().id;
+    workspace.layout.header.add(HeaderZone::Left, Some(first), &[HeaderItem::Menu]).unwrap();
     w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
     pump(300);
     let dir = artifact_dir("../../artifacts/ui/menus");
@@ -10277,9 +10293,13 @@ fn native_column_drawer_drag_input() {
                 .placement()
                 .unwrap()
                 .bounds;
+            if (gb.x() + gb.width() - bounds.x - bounds.width).abs() >= 2.
+                && let Some(directory) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
+                capture_reference(&w, std::path::PathBuf::from(directory).join("drawer-grip-mismatch.png").to_str().unwrap(), 1.);
+            }
             assert!(
                 (gb.x() + gb.width() - bounds.x - bounds.width).abs() < 2.,
-                "fixed top-right grip"
+                "fixed top-right grip: native {gb:?}, resolved {bounds:?}, group {group}, panel {panel:?}"
             );
             let start = if whole {
                 [gb.x() + gb.width() * 0.5, gb.y() + gb.height() * 0.5]
@@ -10307,7 +10327,9 @@ fn native_column_drawer_drag_input() {
             assert!(
                 matches!(w.drag_target_at(start), Some(DragTarget::Dock(target)) if target == item)
             );
-            let away = [viewport[0] * 0.5, viewport[1] * 0.55];
+            let away = [[12., 12.], [viewport[0] - 12., 12.], [12., viewport[1] - 12.], [viewport[0] - 12., viewport[1] - 12.]]
+                .into_iter().max_by(|a, b| bounds.distance_to(*a).total_cmp(&bounds.distance_to(*b))).unwrap();
+            assert!(!bounds.contains(away[0], away[1]));
             perform(
                 serde_json::json!([{ "point": start }, { "down": true }, { "point": [start[0] - 12., start[1]] }]),
             );
@@ -10340,6 +10362,12 @@ fn native_column_drawer_drag_input() {
                 assert!((drag.point[0] - drag.origin[0] + 12.).abs() < 1.);
             }
             perform(serde_json::json!([{ "point": away }]));
+            if w.workspace_drag.borrow().as_ref().unwrap().tab.is_some() {
+                let drag = w.workspace_drag.borrow();
+                let drag = drag.as_ref().unwrap();
+                eprintln!("Drawer detach {group} {panel:?} whole={whole} bounds={bounds:?} start={start:?} away={away:?} actual={:?} origin={:?}", drag.point, drag.origin);
+                if let Some(path) = std::env::var_os("LAYER_TEST_ARTIFACTS") { capture_reference(&w, std::path::PathBuf::from(path).join(format!("drawer-detach-{group}-{panel:?}-{whole}.png")).to_str().unwrap(), 1.); }
+            }
             assert!(w.workspace_drag.borrow().as_ref().unwrap().tab.is_none());
             assert_eq!(
                 state(&w).workspace.layout.floating.len(),
@@ -10368,7 +10396,9 @@ fn native_column_drawer_drag_input() {
                     target.bounds.y + 18.,
                 ]
             } else {
-                away
+                let point = center(w.resolved().work_area);
+                assert!(w.drop_at(point[0], point[1], item).is_none(), "canvas release has no docking target");
+                point
             };
             perform(serde_json::json!([{ "point": destination }, { "down": false }]));
             assert!(w.workspace_drag.borrow().is_none());
@@ -11861,7 +11891,7 @@ fn named<T: IsA<gtk::Widget>>(root: &gtk::Widget, name: &str) -> T {
         .unwrap_or_else(|| panic!("{name}: expected {}", std::any::type_name::<T>()))
 }
 
-fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
+pub(crate) fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
     widgets(root).find_map(|widget| {
         if widget.widget_name() == "export-navigation" {
             let nav = widget.downcast_ref::<adw::NavigationView>().unwrap();
@@ -11960,12 +11990,15 @@ impl RemoteInput {
 
 pub(crate) fn screen_point(widget: &gtk::Widget, window: &impl IsA<gtk::Widget>, at: [f32; 2]) -> [f32; 2] {
     let b = if let Some(popup) = widget.native().and_downcast::<gtk::Popover>() {
-        let surface = popup.surface().unwrap().downcast::<gdk::Popup>().unwrap();
+        let mut surface = popup.surface().unwrap();
         let (dx, dy) = popup.surface_transform();
-        widget.compute_bounds(&popup).unwrap().offset_r(
-            surface.position_x() as f32 - dx as f32,
-            surface.position_y() as f32 - dy as f32,
-        )
+        let (mut x, mut y) = (-dx as f32, -dy as f32);
+        while let Ok(parent) = surface.clone().downcast::<gdk::Popup>() {
+            x += parent.position_x() as f32;
+            y += parent.position_y() as f32;
+            surface = parent.parent().unwrap();
+        }
+        widget.compute_bounds(&popup).unwrap().offset_r(x, y)
     } else {
         widget.compute_bounds(window).unwrap()
     };
@@ -12133,8 +12166,11 @@ fn native_workspace_menu_input() {
             pump(100);
             let workspace = mapped_label(popup.upcast_ref(), "Workspaces").unwrap();
             click(screen_point(&workspace, &w.window, [0.5, 0.5]), 272);
-            let manage = mapped_label(popup.upcast_ref(), "Manage Workspaces…")
-                .expect("Workspace submenu should open");
+            let manage = widgets(popup.upcast_ref()).find(|widget| widget.is_mapped()
+                && widget.type_().name() == "GtkModelButton"
+                && widget.property::<Option<gtk::PopoverMenu>>("popover").is_none()
+                && descendant::<gtk::Label>(widget).is_some_and(|label| label.label() == w.localization().text(MessageId::WORKSPACE_WORKSPACES).as_ref()))
+                .expect("Workspace manager action should open");
             capture_popover(&popup, dir.join("Workspace.png").to_str().unwrap());
             click(screen_point(&manage, &w.window, [0.5, 0.5]), 272);
             assert!(
@@ -13127,17 +13163,49 @@ fn native_text_language() {
         crate::text_language::install(&app, &localization);
         let expected = gtk::pango::Language::from_string(language.tag());
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let label = gtk::Label::new(Some("日本語 简体 繁體 한국어"));
+        let label = gtk::Label::new(Some(&format!("{} 日本語 简体 繁體 한국어 Русский Türkçe Tiếng Việt ไทย", localization.text(MessageId::COMMON_DRAWING_CANVAS))));
+        label.set_wrap(true);
+        label.set_max_width_chars(44);
+        label.set_margin_start(8);
+        label.set_margin_end(8);
+        label.set_margin_top(8);
+        label.set_margin_bottom(8);
         let entry = gtk::Entry::new();
+        entry.set_width_chars(6);
         content.append(&label);
         content.append(&entry);
-        let window = adw::ApplicationWindow::builder().application(&app).content(&content).build();
+        let thai = (language == UiLanguage::Thai).then(|| {
+            let paragraph = gtk::Label::new(Some("การเปลี่ยนภาษาไม่ควรเปลี่ยนภาพวาดหรือข้อความที่กำลังพิมพ์"));
+            paragraph.set_wrap(true);
+            paragraph.set_max_width_chars(20);
+            paragraph.set_margin_start(8);
+            paragraph.set_margin_end(8);
+            content.append(&paragraph);
+            paragraph
+        });
+        let window = adw::ApplicationWindow::builder().application(&app).content(&content).default_width(if language == UiLanguage::Thai { 200 } else { 480 }).default_height(300).build();
         for theme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
             adw::StyleManager::default().set_color_scheme(theme);
             window.present();
             pump(60);
             assert_eq!(label.layout().context().language(), Some(expected.clone()));
             assert_eq!(label.layout().unknown_glyphs_count(), 0);
+            if let Some(paragraph) = &thai {
+                assert_eq!(paragraph.layout().context().language(), Some(expected.clone()));
+                eprintln!("GTK Thai diagnostics window {} × {}, paragraph {} × {}, measure {:?}, layout width {}, pixels {:?}, wrap {:?}", window.width(), window.height(), paragraph.width(), paragraph.height(), paragraph.measure(gtk::Orientation::Horizontal, -1), paragraph.layout().width(), paragraph.layout().pixel_size(), paragraph.wrap_mode());
+                if paragraph.layout().line_count() <= 1 && let Ok(directory) = std::env::var("LAYER_TEST_ARTIFACTS") {
+                    crate::snapshot_window(&window, 1.).save_to_png(std::path::PathBuf::from(directory).join("thai-failed-native-allocation.png")).unwrap();
+                }
+                assert!(paragraph.layout().line_count() > 1);
+                assert_eq!(paragraph.layout().unknown_glyphs_count(), 0);
+                eprintln!("GTK Thai paragraph actual allocation {} × {}, lines {}", paragraph.width(), paragraph.height(), paragraph.layout().line_count());
+            }
+            eprintln!("GTK font allocation {} {theme:?}: window {} × {}, label {} × {}, lines {}, layout width {}, pixels {:?}, measure {:?}", language.tag(), window.width(), window.height(), label.width(), label.height(), label.layout().line_count(), label.layout().width(), label.layout().pixel_size(), label.measure(gtk::Orientation::Horizontal, -1));
+            if let Ok(directory) = std::env::var("LAYER_TEST_ARTIFACTS") {
+                let directory = std::path::PathBuf::from(directory);
+                std::fs::create_dir_all(&directory).unwrap();
+                crate::snapshot_window(&window, 1.).save_to_png(directory.join(format!("fonts-{}-{theme:?}.png", language.tag()))).unwrap();
+            }
             assert_eq!(entry.pango_context().language(), Some(expected.clone()));
             let text = entry.delegate().and_downcast::<gtk::Text>().unwrap();
             assert_eq!(text.pango_context().language(), Some(expected.clone()));
@@ -13209,8 +13277,146 @@ fn native_numeric_size_apply_refuses_uncommitted_text() {
 
 
 #[test]
+#[ignore = "private display and hardware GPU localized production nested menus"]
+fn native_localized_nested_menus() {
+    let app = native_test_app("art.capycanvas.LocalizedNestedMenus");
+    let w = Workspace::new(&app);
+    w.window.maximize();
+    w.window.present();
+    new_photo::ready(&w);
+    let mut workspace = state(&w).workspace;
+    let first = workspace.layout.header.zones[HeaderZone::Left.index()].first().unwrap().id;
+    workspace.layout.header.add(HeaderZone::Left, Some(first), &[HeaderItem::Menu]).unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    let menu = named::<gtk::MenuButton>(w.window.upcast_ref(), "application-menu-Primary");
+    let popup = menu.popover().unwrap().downcast::<gtk::PopoverMenu>().unwrap();
+    let mut input = RemoteInput::new();
+    input.ready();
+    input.perform(serde_json::json!([{"wait_ms":200}]));
+    let button = |parent: &gtk::PopoverMenu, label: &str| widgets(parent.upcast_ref()).find(|widget| widget.is_mapped() && widget.type_().name() == "GtkModelButton" && descendant::<gtk::Label>(widget).is_some_and(|text| text.label() == label)).unwrap();
+    let open = |parent: &gtk::PopoverMenu, label: &str, input: &mut RemoteInput| {
+        until(|| widgets(parent.upcast_ref()).any(|widget| widget.is_mapped() && widget.width() > 0 && widget.height() > 0 && widget.type_().name() == "GtkModelButton" && descendant::<gtk::Label>(&widget).is_some_and(|text| text.label() == label)), "localized submenu button allocated");
+        let button = button(parent, label);
+        let nested = button.property::<Option<gtk::PopoverMenu>>("popover").unwrap();
+        let point = screen_point(&button, &w.window, [0.5, 0.5]);
+        input.perform(serde_json::json!([{"point":point},{"wait_ms":200}]));
+        if !nested.is_mapped() { input.click(point); }
+        until(|| nested.is_mapped() && nested.width() > 0 && widgets(nested.upcast_ref()).any(|widget| widget.type_().name() == "GtkModelButton" && widget.width() > 0 && widget.height() > 0), "localized production submenu mapped and allocated");
+        nested
+    };
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+            let choice = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32;
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(choice) } });
+            until(|| w.localization().language() == language, "localized nested-menu language");
+            if language == UiLanguage::Turkish {
+                assert_eq!(ApplicationMenu::Edit.localized_label(&w.localization()), w.localization().text(MessageId::RESOURCES_LAYER_MENU_ORGANIZE), "real Turkish Edit and Organize intentionally share their visible label");
+            }
+            menu.popup();
+            until(|| popup.is_mapped(), "localized production Primary menu mapped");
+            let edit = open(&popup, &ApplicationMenu::Edit.localized_label(&w.localization()), &mut input);
+            if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+                input.perform(serde_json::json!([{"wait_ms":200},{"capture":format!("edit-{}-{}", language.tag().to_lowercase(), format!("{theme:?}").to_lowercase())}]));
+            }
+            input.click(screen_point(&button(&edit, &CommandId::SearchCommands.localized_label(&w.localization())), &w.window, [0.5, 0.5]));
+            until(|| state(&w).command_search.is_some(), "native localized Edit command action");
+            w.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Close });
+            menu.popup();
+            until(|| popup.is_mapped(), "localized Layer menu parent mapped");
+            let layer = open(&popup, &ApplicationMenu::Layer.localized_label(&w.localization()), &mut input);
+            let organize = open(&layer, &w.localization().text(MessageId::RESOURCES_LAYER_MENU_ORGANIZE), &mut input);
+            assert_ne!(edit, organize, "localized matching labels retain native submenu identities");
+            if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+                input.perform(serde_json::json!([{"wait_ms":200},{"capture":format!("organize-{}-{}", language.tag().to_lowercase(), format!("{theme:?}").to_lowercase())}]));
+            }
+            let count = ui_session(&w).engine().document().layers.len();
+            let checkpoint = ui_session(&w).engine().checkpoint();
+            input.click(screen_point(&button(&organize, &w.localization().text(MessageId::RESOURCES_LAYER_MENU_DUPLICATE)), &w.window, [0.5, 0.5]));
+            until(|| ui_session(&w).engine().document().layers.len() == count + 1, "native localized Organize Duplicate action");
+            new_photo::ready(&w);
+            w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+            new_photo::ready(&w);
+            assert_eq!(ui_session(&w).engine().document().layers.len(), count);
+            assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+        }
+    }
+    w.window.close();
+    pump(60);
+}
+
+#[test]
+#[ignore = "private display and hardware GPU live language switching"]
+fn native_preferences_text_menu_live_language() {
+    let (application, active) = crate::application("art.capycanvas.PreferencesTextMenuLanguages");
+    let app = NativeTestApp(application);
+    app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    app.activate_action("new-window", None);
+    until(|| !active.borrow().is_empty(), "preferences text-menu window");
+    let w = active.borrow().last().unwrap().clone();
+    new_photo::ready(&w);
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
+        until(|| w.preferences.dialog.is_mapped(), "preferences native input page");
+        let number = named::<crate::number_control::NumberControl>(w.preferences.dialog.upcast_ref(), "setting-prediction-horizon");
+        let entry = descendant::<gtk::Entry>(&number).unwrap();
+        let stack = descendant::<gtk::Stack>(&number).unwrap();
+        stack.set_visible_child_name("entry");
+        entry.grab_focus();
+        pump(120);
+        entry.set_text("tie\u{302}\u{301}ng ไทย 日本語");
+        let popup = named::<gtk::PopoverMenu>(w.preferences.dialog.upcast_ref(), "preference-context-menu");
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+            let choice = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32;
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(choice) } });
+            until(|| w.localization().language() == language, "preferences text-menu current language");
+            entry.grab_focus();
+            entry.select_region(1, 5);
+            let selection = entry.selection_bounds();
+            let draft = entry.text();
+            crate::preferences::show_reset_menu(&w, number.upcast_ref(), PreferenceId::PredictionHorizon, 1., 1.);
+            until(|| popup.is_mapped(), "native preferences text menu mapped");
+            let model = popup.menu_model().unwrap();
+            let editing = model.item_link(0, "section").unwrap();
+            let expected = layer_ui::text_edit_menu_localized(layer_ui::Platform::Gtk, &w.localization());
+            assert_eq!(editing.n_items(), expected.len() as i32);
+            for (index, item) in expected.iter().enumerate() {
+                assert_eq!(editing.item_attribute_value(index as i32, "label", None).unwrap().get::<String>().unwrap().as_str(), item.label.as_ref());
+            }
+            assert_eq!(entry.text(), draft);
+            assert_eq!(entry.selection_bounds(), selection);
+            let other = layer_ui::localization::SHIPPED_LANGUAGES.iter().copied().find(|candidate| *candidate != language).unwrap();
+            let next = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == other).unwrap() as u32;
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(next) } });
+            pump(50);
+            assert_eq!(w.localization().language(), language, "native menu owns publication boundary");
+            assert_eq!(popup.menu_model().unwrap(), model);
+            popup.activate_action("field.select-all", None).unwrap();
+            assert_eq!(entry.selection_bounds(), Some((0, draft.chars().count() as i32)));
+            popup.popdown();
+            until(|| w.localization().language() == other, "preferences language publishes after menu closes");
+            assert_eq!(named::<gtk::PopoverMenu>(w.preferences.dialog.upcast_ref(), "preference-context-menu"), popup);
+            assert_eq!(descendant::<gtk::Entry>(&number).unwrap(), entry);
+            assert_eq!(entry.text(), draft);
+        }
+        number.cancel_edit();
+        w.dispatch(UiAction::CloseSettings);
+        pump(60);
+    }
+    w.window.close();
+    pump(60);
+}
+
+#[test]
 #[ignore = "private display and hardware GPU live language switching"]
 fn native_live_language_switching() {
+    unsafe { std::env::set_var("GTK_A11Y", "test"); }
+    let artifacts = std::env::var("LAYER_TEST_ARTIFACTS").ok().map(std::path::PathBuf::from);
+    if let Some(path) = &artifacts { std::fs::create_dir_all(path).unwrap(); }
+    let input = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").map(|_| RefCell::new(RemoteInput::new().settle_ms(0).timeout_secs(30)));
+    if let Some(input) = &input { input.borrow().ready(); }
+    let choice_index = |language| 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32;
     let (application, active) = crate::application("art.capycanvas.LiveLanguageSwitching");
     let app = NativeTestApp(application);
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
@@ -13219,19 +13425,85 @@ fn native_live_language_switching() {
     let w = active.borrow().last().unwrap().clone();
     new_photo::ready(&w);
     until(|| find_named(w.window.upcast_ref(), "application-menu-File").is_some(), "language workspace menu ready");
+    let mut workspace = state(&w).workspace;
+    let first = workspace.layout.header.zones[HeaderZone::Left.index()].first().unwrap().id;
+    workspace.layout.header.add(HeaderZone::Left, Some(first), &[HeaderItem::Menu]).unwrap();
+    let literal_title = "Tool 🎨 {literal}";
+    let literal_toolbar = workspace.layout.add_toolbar(Some(workspace.layout.panel_group(Panel::Sizes).unwrap()), literal_title, &[]).unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    until(|| find_named(w.window.upcast_ref(), "application-menu-Primary").is_some_and(|menu| menu.is_mapped()), "mapped primary language menu ready");
+    let primary_menu = named::<gtk::MenuButton>(w.window.upcast_ref(), "application-menu-Primary");
+    let group = state(&w).workspace.layout.panel_group(Panel::Sizes).unwrap();
+    w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport: [w.surface.width() as f32, w.surface.height() as f32] });
+    enable_individual_column_panels(&w, group);
+
+    let assert_header_bounds = || {
+        if let Some(selector) = find_named(w.header.root.upcast_ref(), "header-workspace-selector").filter(|widget| widget.is_mapped()) {
+            let id = state(&w).workspace.layout.header.entries().find(|entry| entry.item == HeaderItem::Workspaces).unwrap().id;
+            let geometry = w.header.geometry_for_test();
+            let slot = geometry.items.iter().find(|item| item.id == id).unwrap().bounds;
+            let actual = selector.compute_bounds(&w.header.root).unwrap();
+            assert!(actual.x() >= slot.x - 1. && actual.x() + actual.width() <= slot.x + slot.width + 1., "localized workspace caption respects shared bounds: {actual:?}, {slot:?}");
+            let label = descendant::<gtk::Label>(&selector).unwrap();
+            assert_eq!(label.ellipsize(), gtk::pango::EllipsizeMode::End);
+        }
+    };
     for theme in [Theme::Light, Theme::Dark] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::Customize { action: CustomizationAction::ToggleColumnDrawer { group, panel: Panel::Sizes } });
+        until(|| find_named(w.window.upcast_ref(), "drawer-control-brush-size").is_some_and(|number| number.is_mapped()), "retained brush size drawer visible");
+        let drawer_number = named::<crate::number_control::NumberControl>(w.window.upcast_ref(), "drawer-control-brush-size");
+        let drawer_tabs = [Panel::ToolSettings, Panel::Sizes, literal_toolbar].map(|panel| {
+            assert_eq!(state(&w).workspace.layout.panel(panel).unwrap().custom_name(), (panel == literal_toolbar).then_some(literal_title));
+            let button = named::<gtk::Button>(w.window.upcast_ref(), &format!("column-drawer-tab-{panel:?}"));
+            let label = button.child().unwrap().last_child().and_downcast::<gtk::Label>().unwrap();
+            (panel, button, label)
+        });
+
+        assert!(ui_session(&w).engine().document().selection.is_none());
+        w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
+        new_photo::ready(&w);
+        let canvas_selection = ui_session(&w).engine().document().selection.clone().unwrap();
+        let canvas_bounds = canvas_selection.coverage_bounds();
+        assert_eq!(canvas_bounds.min, layer_core::Point { x: 0., y: 0. });
+        assert_eq!(canvas_bounds.max, layer_core::Point { x: ui_session(&w).engine().document().width as f32, y: ui_session(&w).engine().document().height as f32 });
+        assert_eq!(canvas_selection.contours()[0].len(), 4);
+        assert!(!canvas_selection.inverted);
+        let history_availability = (ui_session(&w).engine().can_undo(), ui_session(&w).engine().can_redo());
+        let checkpoint = ui_session(&w).engine().checkpoint();
         w.dispatch(UiAction::OpenSettings { page: SettingsPage::Appearance });
         pump(100);
         let choice = named::<adw::ComboRow>(w.preferences.dialog.upcast_ref(), "setting-language");
         let menus = ApplicationMenu::ALL.map(|id| (id, named::<gtk::MenuButton>(w.window.upcast_ref(), &format!("application-menu-{id:?}"))));
         let session = ui_session(&w).engine() as *const _ as usize;
         let document_revision = ui_session(&w).engine().document().revision;
-        for language in UiLanguage::ALL {
-            let selected = 1 + UiLanguage::ALL.iter().position(|candidate| *candidate == language).unwrap() as u32;
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+            let selected = choice_index(language);
+            let requested = Instant::now();
+            let previous_language = w.localization().language();
             choice.set_selected(selected);
             until(|| w.localization().language() == language, "language choice visible");
+            eprintln!("GTK language choice {} {theme:?}: publication observed {:?}", language.tag(), requested.elapsed());
             assert_eq!(ui_session(&w).localization().language(), language);
+            assert_eq!(w.size_number.imp().editor_title.borrow().as_str(), w.localization().text(MessageId::WORKSPACE_CONTROL_BRUSH_SIZE).as_ref());
+            assert_eq!(w.opacity.imp().editor_title.borrow().as_str(), w.localization().text(MessageId::TOOL_SETTING_OPACITY).as_ref());
+            assert_eq!(w.view_info.field.imp().editor_title.borrow().as_str(), w.localization().text(MessageId::MENU_ZOOM).as_ref());
+            assert_eq!(w.view_info.root.tooltip_text().as_deref(), Some(w.localization().text(MessageId::MENU_ZOOM).as_ref()));
+            assert_eq!(w.view_info.field.tooltip_text().as_deref(), Some(w.localization().text(MessageId::MENU_ZOOM).as_ref()));
+            assert_eq!(drawer_number.imp().editor_title.borrow().as_str(), w.localization().text(MessageId::WORKSPACE_CONTROL_BRUSH_SIZE).as_ref());
+            assert_eq!(named::<crate::number_control::NumberControl>(w.window.upcast_ref(), "drawer-control-brush-size"), drawer_number);
+            for (panel, button, label) in &drawer_tabs {
+                let title = state(&w).workspace.layout.panel(*panel).unwrap().title_localized(&w.localization());
+                assert_eq!(label.text().as_str(), title, "retained drawer tab {panel:?} follows {} {theme:?}", language.tag());
+                if previous_language != language { assert_eq!(button.tooltip_text().as_deref(), Some(title.as_str())); }
+                if *panel == literal_toolbar { assert_eq!(label.text().as_str(), literal_title); }
+                assert_eq!(named::<gtk::Button>(w.window.upcast_ref(), &format!("column-drawer-tab-{panel:?}")), *button);
+                assert_eq!(button.child().unwrap().last_child().and_downcast::<gtk::Label>().unwrap(), *label);
+                let expected = std::ffi::CString::new(title.as_str()).unwrap();
+                let difference = unsafe { gtk::ffi::gtk_test_accessible_check_property(button.as_ptr().cast(), gtk::ffi::GTK_ACCESSIBLE_PROPERTY_LABEL, expected.as_ptr()) };
+                let difference: Option<glib::GString> = unsafe { glib::translate::from_glib_full(difference) };
+                assert_eq!(difference, None, "retained drawer tab {panel:?} accessible title follows {} {theme:?}", language.tag());
+            }
             assert_eq!(w.preferences.dialog.title().as_str(), w.localization().text(MessageId::SETTINGS_TITLE).as_ref());
             assert_eq!(choice.title().as_str(), ui_session(&w).preferences().unwrap().pages.iter().flat_map(|page| &page.groups).flat_map(|group| &group.rows).find(|row| row.id == PreferenceId::Language).unwrap().title);
             assert_eq!(named::<adw::ComboRow>(w.preferences.dialog.upcast_ref(), "setting-language"), choice);
@@ -13241,8 +13513,42 @@ fn native_live_language_switching() {
             }
             assert_eq!(ui_session(&w).engine() as *const _ as usize, session);
             assert_eq!(ui_session(&w).engine().document().revision, document_revision);
-            assert_eq!(choice.pango_context().language().map(|language| language.to_string()), Some(gtk::pango::Language::from_string(language.tag()).to_string()));
+            assert_eq!(ui_session(&w).engine().document().selection.as_ref(), Some(&canvas_selection));
+            assert_eq!(ui_session(&w).engine().display_selection().as_deref(), Some(&canvas_selection));
+            assert_eq!(ui_session(&w).engine().document().selection.as_ref().unwrap().coverage_bounds(), canvas_bounds);
+            assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+            assert_eq!((ui_session(&w).engine().can_undo(), ui_session(&w).engine().can_redo()), history_availability);
+            let pango_language = choice.pango_context().language().unwrap().to_string();
+            if previous_language == language {
+                assert_eq!(layer_ui::resolve_launch_language(LanguagePreference::System, &[pango_language.as_str()]), language);
+            } else {
+                assert_eq!(pango_language, gtk::pango::Language::from_string(language.tag()).to_string());
+            }
+            assert_eq!(w.screen.button.tooltip_text().as_deref(), Some(w.localization().text(MessageId::NATIVE_SCREEN_DETAILS).as_ref()));
+            assert_eq!(named::<gtk::CheckButton>(w.screen.popover().upcast_ref(), "screen-mark-clipped").label().as_deref(), Some(w.localization().text(MessageId::NATIVE_HIGHLIGHT_CLIPPED_COLORS).as_ref()));
+            pump(40);
+            assert_header_bounds();
+            if let Some(path) = &artifacts {
+                save_snapshot(&w, 80, || path.join(format!("preferences-{}-{theme:?}.png", language.tag())));
+                if matches!(language, UiLanguage::German | UiLanguage::French | UiLanguage::Thai) {
+                    let settings = gtk::Settings::default().unwrap();
+                    let font = settings.gtk_font_name();
+                    let size = w.window.default_size();
+                    settings.set_property("gtk-font-name", "Sans 16");
+                    w.window.set_default_size(744, 780);
+                    save_snapshot(&w, 250, || path.join(format!("preferences-large-text-narrow-{}-{theme:?}.png", language.tag())));
+                    assert_header_bounds();
+                    assert_eq!(choice.title().as_str(), ui_session(&w).preferences().unwrap().pages.iter().flat_map(|page| &page.groups).flat_map(|group| &group.rows).find(|row| row.id == PreferenceId::Language).unwrap().title);
+                    eprintln!("GTK layout {} {theme:?}: requested 744 × 780, actual {} × {}, Sans 16", language.tag(), w.window.width(), w.window.height());
+                    settings.set_property("gtk-font-name", font);
+                    w.window.set_default_size(size.0, size.1);
+                    pump(100);
+                }
+            }
         }
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES { choice.set_selected(choice_index(language)); }
+        choice.set_selected(choice_index(UiLanguage::English));
+        until(|| w.localization().language() == UiLanguage::English, "latest rapid language choice visible");
         choice.set_selected(0);
         let languages = glib::language_names_with_category("LC_MESSAGES");
         let tags = languages.iter().map(|tag| tag.as_str()).collect::<Vec<_>>();
@@ -13253,7 +13559,7 @@ fn native_live_language_switching() {
         settings_search.set_text("language 日本語 draft");
         settings_search.select_region(1, 4);
         let selection = settings_search.selection_bounds();
-        choice.set_selected(1 + UiLanguage::ALL.iter().position(|language| *language == UiLanguage::Japanese).unwrap() as u32);
+        choice.set_selected(choice_index(UiLanguage::Japanese));
         until(|| w.localization().language() == UiLanguage::Japanese, "pending settings search language visible");
         assert_eq!(settings_search.text(), "language 日本語 draft");
         assert_eq!(settings_search.selection_bounds(), selection);
@@ -13270,8 +13576,8 @@ fn native_live_language_switching() {
         spin.select_region(1, 5);
         let selection = spin.selection_bounds();
         let revision = ui_session(&w).engine().document().revision;
-        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
-            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(1 + UiLanguage::ALL.iter().position(|candidate| *candidate == language).unwrap() as u32) } });
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(choice_index(language)) } });
             until(|| w.localization().language() == language, "dirty dialog language visible");
             assert_eq!(descendant::<gtk::SpinButton>(&number).unwrap(), spin);
             assert_eq!(spin.text(), "１２＋漢字 abc");
@@ -13283,7 +13589,7 @@ fn native_live_language_switching() {
         }
         w.dispatch(UiAction::CanvasSize { action: CanvasSizeAction::Cancel });
         let switch = |language| {
-            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(1 + UiLanguage::ALL.iter().position(|candidate| *candidate == language).unwrap() as u32) } });
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(choice_index(language)) } });
             until(|| w.localization().language() == language, "retained workflow language visible");
         };
         w.dispatch(UiAction::OpenSettings { page: SettingsPage::Shortcuts });
@@ -13307,7 +13613,7 @@ fn native_live_language_switching() {
         confirm.grab_focus();
         let focus = confirm.root().and_then(|root| root.focus());
         let chord = ui_session(&w).preferences().unwrap().capture.unwrap().chord;
-        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
             switch(language);
             let view = ui_session(&w).preferences().unwrap();
             let capture = view.capture.unwrap();
@@ -13340,7 +13646,7 @@ fn native_live_language_switching() {
         let selection = picker_search.selection_bounds();
         let focus = picker_search.root().and_then(|root| root.focus());
         let action = named::<adw::ActionRow>(w.window.upcast_ref(), "action-command.Undo");
-        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
             switch(language);
             assert_eq!(named::<gtk::SearchEntry>(w.window.upcast_ref(), "action-picker-search"), picker_search);
             assert_eq!(picker_search.text(), "Undo");
@@ -13352,6 +13658,55 @@ fn native_live_language_switching() {
         }
         w.dispatch(UiAction::Preferences { action: PreferenceAction::CloseActionPicker });
         w.dispatch(UiAction::CloseSettings);
+        w.dispatch(UiAction::Invoke { command: CommandId::SearchCommands });
+        let command_search = named::<gtk::SearchEntry>(w.window.upcast_ref(), "command-search");
+        let pencil_id = format!("command.{}", serde_json::to_value(CommandId::Pencil).unwrap().as_str().unwrap());
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+            switch(language);
+            for query in [CommandId::Pencil.localized_label(&w.localization()).to_string(), "Pencil".into()] {
+                command_search.set_text(&query);
+                until(|| state(&w).command_search.as_ref().is_some_and(|view| view.query == query), "native localized command query");
+                assert!(state(&w).command_search.unwrap().results.iter().any(|item| item.id == pencil_id));
+            }
+            if language == UiLanguage::German {
+                let image_id = format!("command.{}", serde_json::to_value(CommandId::ImageSize).unwrap().as_str().unwrap());
+                for query in ["BILDGRÖSSE", "BILDGRÖẞE", "IMAGE SIZE"] {
+                    command_search.set_text(query);
+                    until(|| state(&w).command_search.as_ref().is_some_and(|view| view.query == query), "native German sharp-S and English alias query");
+                    assert!(state(&w).command_search.unwrap().results.iter().any(|item| item.id == image_id), "native Image Size result for {query}");
+                }
+            }
+            command_search.set_text("İı Tiếng Việt ไทย {draft} 🎨");
+            command_search.select_region(1, 4);
+            let selection = command_search.selection_bounds();
+            switch(UiLanguage::English);
+            switch(language);
+            assert_eq!(command_search.text(), "İı Tiếng Việt ไทย {draft} 🎨");
+            assert_eq!(command_search.selection_bounds(), selection);
+            assert_eq!(named::<gtk::SearchEntry>(w.window.upcast_ref(), "command-search"), command_search);
+        }
+        w.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Close });
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+            let menu = &primary_menu;
+            assert!(menu.is_mapped());
+            menu.popup();
+            until(|| menu.popover().is_some_and(|popup| popup.is_mapped()), "open menu before language request");
+            let before = w.localization().language();
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(choice_index(language)) } });
+            pump(50);
+            assert_eq!(w.localization().language(), before, "open native menu defers language publication");
+            assert_eq!(named::<gtk::MenuButton>(w.window.upcast_ref(), "application-menu-Primary"), *menu);
+            menu.popdown();
+            until(|| w.localization().language() == language, "language publication after menu selection boundary");
+            menu.popup();
+            if let Some(path) = &artifacts {
+                save_snapshot(&w, 80, || path.join(format!("menu-{}-{theme:?}.png", language.tag())));
+            }
+            if let Some(input) = &input {
+                input.borrow_mut().perform(serde_json::json!([{"wait_ms":160},{"capture":format!("menu-{}-{}", language.tag().to_lowercase(), format!("{theme:?}").to_lowercase())}]));
+            }
+            menu.popdown();
+        }
         w.dispatch(UiAction::Customize { action: CustomizationAction::NewToolbar { group: None } });
         until(|| w.window.visible_dialog().is_some_and(|dialog| dialog.widget_name() == "tool-picker" && dialog.is_mapped()), "customization picker visible");
         let picker = w.window.visible_dialog().unwrap();
@@ -13370,7 +13725,7 @@ fn native_live_language_switching() {
         let control = ui_session(&w).tool_picker().unwrap().choices[0].control;
         let choice_name = format!("tool-choice-{}", serde_json::to_string(&control).unwrap());
         let choice = named::<gtk::CheckButton>(picker.upcast_ref(), &choice_name);
-        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
             switch(language);
             let view = ui_session(&w).tool_picker().unwrap();
             assert_eq!(picker.title().as_str(), view.title.as_ref());
@@ -13386,7 +13741,7 @@ fn native_live_language_switching() {
         let manager = w.window.visible_dialog().unwrap();
         let list = named::<gtk::ListBox>(manager.upcast_ref(), "managed-toolbars");
         let row = list.row_at_index(0).unwrap().downcast::<adw::ActionRow>().unwrap();
-        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
             switch(language);
             let view = ui_session(&w).toolbar_manager().unwrap();
             assert_eq!(manager.title().as_str(), view.title.as_ref());
@@ -13404,7 +13759,7 @@ fn native_live_language_switching() {
         width.select_region(1, 3);
         assert_eq!(width.text(), "0034");
         let selection = width.selection_bounds();
-        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
             switch(language);
             assert_eq!(named::<adw::SpinRow>(dialog.upcast_ref(), "new-document-width"), width);
             assert_eq!(width.text(), "0034");
@@ -13426,7 +13781,7 @@ fn native_live_language_switching() {
         entry.set_text("２３＋draft");
         entry.select_region(1, 4);
         let selection = entry.selection_bounds();
-        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
             switch(language);
             assert_eq!(named::<crate::number_control::NumberControl>(export.upcast_ref(), "export-width"), width);
             assert_eq!(entry.text(), "２３＋draft");
@@ -13447,7 +13802,7 @@ fn native_live_language_switching() {
         name.set_text("私のdraft");
         name.select_region(1, 3);
         let selection = name.selection_bounds();
-        for language in [UiLanguage::Japanese, UiLanguage::TraditionalChinese, UiLanguage::Korean, UiLanguage::English] {
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
             switch(language);
             assert_eq!(named::<adw::EntryRow>(name_dialog.upcast_ref(), "export-preset-name"), name);
             assert_eq!(name.text(), "私のdraft");
@@ -13469,7 +13824,187 @@ fn native_live_language_switching() {
         assert_eq!(ui_session(&other).localization().language(), UiLanguage::Japanese);
         other.window.close();
         pump(100);
+        assert_eq!(ui_session(&w).engine().document().selection.as_ref(), Some(&canvas_selection));
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        new_photo::ready(&w);
+        assert!(ui_session(&w).engine().document().selection.is_none());
+        w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+        new_photo::ready(&w);
+        assert_eq!(ui_session(&w).engine().document().selection.as_ref(), Some(&canvas_selection));
+        assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+        w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
+        new_photo::ready(&w);
     }
     w.window.close();
     pump(100);
+}
+
+#[test]
+#[ignore = "private display and hardware GPU localized documents and windows"]
+fn native_live_language_documents_light() { live_language_documents(Theme::Light); }
+
+#[test]
+#[ignore = "private display and hardware GPU localized documents and windows"]
+fn native_live_language_documents_dark() { live_language_documents(Theme::Dark); }
+
+#[allow(deprecated)]
+fn live_language_documents(theme: Theme) {
+    let output = std::env::var("LAYER_TEST_ARTIFACTS").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir().join(format!("capy-language-documents-{}", std::process::id())));
+    std::fs::create_dir_all(&output).unwrap();
+    let (application, active) = crate::application("art.capycanvas.LiveLanguageDocuments");
+    let app = NativeTestApp(application);
+    app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    app.activate_action("new-window", None);
+    until(|| !active.borrow().is_empty(), "language document window created");
+    let w = active.borrow().last().unwrap().clone();
+    new_photo::ready(&w);
+    app.activate_action("new-window", None);
+    until(|| active.borrow().len() == 2, "existing second language window");
+    let existing = active.borrow().last().unwrap().clone();
+    new_photo::ready(&existing);
+    let existing_engine = ui_session(&existing).engine() as *const _ as usize;
+    w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for &language in layer_ui::localization::SHIPPED_LANGUAGES {
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit {
+                id: PreferenceId::Language,
+                value: PreferenceValue::Choice(1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32),
+            } });
+            until(|| w.localization().language() == language && existing.localization().language() == language, "existing windows adopt language");
+            assert_eq!(ui_session(&existing).engine() as *const _ as usize, existing_engine);
+            let literal = format!("{} {theme:?} İı Tiếng Việt Tiếng Việt ไทย 日本語 🎨 {{draft}}", language.tag());
+            let layer = ui_session(&w).engine().document().active_layer.0;
+            w.dispatch(UiAction::Layer { action: LayerAction::BeginRename { id: layer } });
+            let row = named::<gtk::Widget>(w.window.upcast_ref(), &format!("art-layer-{layer}"));
+            let entry = find_css(&row, "layer-name-entry").unwrap().downcast::<gtk::Entry>().unwrap();
+            entry.set_text(&literal);
+            entry.select_region(1, 5);
+            let selection = entry.selection_bounds();
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(1) } });
+            until(|| w.localization().language() == layer_ui::localization::SHIPPED_LANGUAGES[0], "switch back while rename draft retained");
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: PreferenceValue::Choice(1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32) } });
+            until(|| w.localization().language() == language, "return to language with rename draft");
+            assert_eq!(entry.text(), literal);
+            assert_eq!(entry.selection_bounds(), selection);
+            assert_eq!(find_css(&row, "layer-name-entry").unwrap().downcast::<gtk::Entry>().unwrap(), entry);
+            entry.emit_activate();
+            until(|| ui_session(&w).engine().document().layer(layer_core::LayerId(layer)).unwrap().name.as_ref() == literal.as_str(), "Unicode layer name committed");
+            w.dispatch(UiAction::Invoke { command: CommandId::Pen });
+            w.dispatch(UiAction::SetBrushSize { value: 17. });
+            w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
+            new_photo::ready(&w);
+            let before = glib::MainContext::default().block_on(read_canvas_pixels(&w, 9910)).unwrap().bytes;
+            let y = (if theme == Theme::Dark { 190. } else { 30. }) + 7. * layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as f32;
+            native_pen_path(&w, &[[30., y], [60., y], [100., y]]);
+            new_photo::ready(&w);
+            let painted = glib::MainContext::default().block_on(read_canvas_pixels(&w, 9911)).unwrap().bytes;
+            assert_ne!(painted, before, "continued drawing {} {theme:?}", language.tag());
+            w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+            new_photo::ready(&w);
+            assert_eq!(glib::MainContext::default().block_on(read_canvas_pixels(&w, 9912)).unwrap().bytes, before);
+            w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+            new_photo::ready(&w);
+            assert_eq!(glib::MainContext::default().block_on(read_canvas_pixels(&w, 9913)).unwrap().bytes, painted);
+            let filename = format!("{}-{theme:?}-Tiếng Việt-ไทย-🎨.capy", language.tag());
+            new_photo::invoke(&w, CommandId::SaveDocumentAs);
+            let save = new_photo::chooser();
+            save.set_current_folder(Some(&gtk::gio::File::for_path(&output))).unwrap();
+            save.set_current_name(&filename);
+            pump(100);
+            save.response(gtk::ResponseType::Accept);
+            new_photo::finish(&w);
+            assert!(!state(&w).document_file.modified);
+            let path = output.join(&filename);
+            assert!(path.is_file());
+            let original = w.documents.selected();
+            let count = w.documents.len();
+            new_photo::invoke(&w, CommandId::OpenDocument);
+            let open = new_photo::chooser();
+            open.set_file(&gtk::gio::File::for_path(&path)).unwrap();
+            pump(100);
+            open.response(gtk::ResponseType::Accept);
+            new_photo::finish(&w);
+            until(|| w.documents.len() == count + 1 && w.documents.selected() != original, "saved Unicode drawing reopened in new tab");
+            new_photo::ready(&w);
+            assert_eq!(ui_session(&w).localization().language(), language);
+            assert_eq!(ui_session(&w).engine().document().layer(layer_core::LayerId(layer)).unwrap().name.as_ref(), literal.as_str());
+            assert_eq!(glib::MainContext::default().block_on(read_canvas_pixels(&w, 9914)).unwrap().bytes, painted);
+            let reopened = w.documents.selected();
+            new_photo::invoke(&w, CommandId::ExportDocument);
+            new_photo::response(&w, "export");
+            let save = new_photo::chooser();
+            let export_name = format!("{}-{theme:?}-Tiếng Việt-ไทย-🎨.png", language.tag());
+            save.set_current_folder(Some(&gtk::gio::File::for_path(&output))).unwrap();
+            save.set_current_name(&export_name);
+            pump(100);
+            save.response(gtk::ResponseType::Accept);
+            new_photo::finish(&w);
+            let image = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(output.join(export_name)).unwrap()), Default::default()).unwrap();
+            assert_eq!(image.extent, [ui_session(&w).engine().document().width, ui_session(&w).engine().document().height]);
+            w.documents.select(&w, reopened, true);
+            until(|| w.documents.len() == count && w.documents.selected() == original, "return to existing drawing tab");
+            new_photo::ready(&w);
+            assert_eq!(ui_session(&w).localization().language(), language);
+            assert_eq!(glib::MainContext::default().block_on(read_canvas_pixels(&w, 9915)).unwrap().bytes, painted);
+            let windows = active.borrow().len();
+            app.activate_action("new-window", None);
+            until(|| active.borrow().len() == windows + 1, "future window created in active language");
+            let future = active.borrow().last().unwrap().clone();
+            new_photo::ready(&future);
+            assert_eq!(future.localization().language(), language);
+            assert_eq!(ui_session(&future).localization().language(), language);
+            future.window.close();
+            until(|| active.borrow().len() == windows, "owned future window closed");
+            w.window.present();
+            save_snapshot(&w, 100, || output.join(format!("drawing-{}-{theme:?}.png", language.tag())));
+        }
+    existing.window.close();
+    w.window.close();
+    pump(100);
+}
+
+#[test]
+#[ignore = "private IBus engine and native compositor input"]
+fn native_genuine_language_composition() {
+    assert!(std::env::var("WAYLAND_DISPLAY").unwrap().starts_with("layer-bench-"));
+    for name in ["LAYER_SETTINGS_FILE", "CAPY_WORKSPACE_DIR", "CAPY_RECOVERY_DIR"] {
+        assert!(std::env::var_os(name).is_some(), "private fixture requires {name}");
+    }
+    let result = std::path::PathBuf::from(std::env::var_os("LAYER_IME_RESULT").unwrap());
+    assert!(!result.exists());
+    let (application, active) = crate::application("art.capycanvas.LocalizationResolutionIme");
+    let app = NativeTestApp(application);
+    app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    if let Some(photo) = std::env::var_os("CAPY_IME_TEST_PHOTO") {
+        app.open(&[gtk::gio::File::for_path(photo)], "");
+    } else {
+        app.activate();
+    }
+    let deadline = Instant::now() + Duration::from_secs(150);
+    let mut numeric_snapshot = None;
+    while !result.exists() {
+        assert!(Instant::now() < deadline, "genuine native engine acceptance timed out");
+        pump(20);
+        if let Some(w) = active.borrow().last() {
+            let dialog = &w.image_size.dialog;
+            let snapshot = if dialog.is_mapped() {
+                let field = find_named(dialog.upcast_ref(), "image-size-width").unwrap();
+                let number = descendant::<crate::number_control::NumberControl>(&field).unwrap();
+                let spin = descendant::<gtk::SpinButton>(&number).unwrap();
+                let text = spin.delegate().and_downcast::<gtk::Text>().unwrap();
+                let document = ui_session(w).engine().document().clone();
+                serde_json::json!({"dialog_visible":true,"language":w.localization().language().tag(),"draft":spin.text().to_string(),"selection":spin.selection_bounds(),"value":number.value(),"input_valid":number.input_valid(),"error_reason":number.imp().error.borrow().clone(),"error_caption":number.tooltip_text().map(|caption|caption.to_string()),"composing":number.composing(),"editor_size":[text.width(),text.height()],"editor_identity":format!("{:p}",text.as_ptr()),"control_identity":format!("{:p}",number.as_ptr()),"focused":text.has_focus(),"point":screen_point(text.upcast_ref(),&w.window,[0.5,0.5]),"apply_enabled":dialog.is_response_enabled("apply"),"document":[document.width,document.height,document.revision]})
+            } else { serde_json::json!({"dialog_visible":false}) };
+            if numeric_snapshot.as_ref() != Some(&snapshot) {
+                let state = result.with_file_name("numeric-state.json");
+                let temporary = state.with_extension("tmp");
+                std::fs::write(&temporary, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+                std::fs::rename(temporary, state).unwrap();
+                numeric_snapshot = Some(snapshot);
+            }
+        }
+    }
+    let evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(result).unwrap()).unwrap();
+    assert_eq!(evidence["entry_identity_preserved"], true);
+    drop(active);
+    app.quit();
 }

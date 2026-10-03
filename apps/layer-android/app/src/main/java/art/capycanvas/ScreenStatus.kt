@@ -36,7 +36,7 @@ import org.json.JSONObject
     WindowlessPopup(open, dismiss)
     Box {
         Surface(Modifier.glass(TileShape), color = palette.headerSurface, shape = TileShape) {
-            Row(Modifier.testTag("screen-status").opensWindowlessMenu(button, "Screen details") { load -> load(JSONObject()) }
+            Row(Modifier.testTag("screen-status").opensWindowlessMenu(button, host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("screen_details")) { load -> load(JSONObject()) }
                 .padding(horizontal = 10.dp, vertical = 3.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (chip.optBoolean("warning")) SharedIcon("warning", null, tint = warning)
@@ -55,8 +55,8 @@ import org.json.JSONObject
                     val toggle = { visible: Boolean -> host.dispatch(obj("type" to "show_clipped_colors", "visible" to visible)) }
                     Row(Modifier.fillMaxWidth().testTag("screen-highlight").toggleable(checked, role = Role.Checkbox, onValueChange = toggle),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        EditorCheck(checked, "Highlight these colors", Modifier.clearAndSetSemantics {}, true, toggle)
-                        Text("Highlight these colors", color = palette.text)
+                        EditorCheck(checked, host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("highlight_clipped_colors"), Modifier.clearAndSetSemantics {}, true, toggle)
+                        Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("highlight_clipped_colors"), color = palette.text)
                     }
                 }
             }

@@ -86,7 +86,7 @@ pub fn suggested_working_space(profile: &ColorProfile) -> Result<Option<RgbSpace
 
 fn label(profile: &Profile) -> Option<&str> {
     use moxcms::ProfileText;
-    let label = match &profile.description {
+    match &profile.description {
         Some(ProfileText::PlainString(s)) => Some(s.as_str()),
         Some(ProfileText::Localizable(strings)) => strings
             .iter()
@@ -99,8 +99,7 @@ fn label(profile: &Profile) -> Option<&str> {
             s.unicode_string.as_str()
         }),
         None => None,
-    };
-    label
+    }
 }
 
 #[cfg(test)]

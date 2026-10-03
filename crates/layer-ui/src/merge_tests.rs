@@ -80,7 +80,7 @@ mod merge_checks {
         let upper = s.engine.document().active_layer;
         let mut clip = Layer::paint(s.engine.allocate_layer_id(), "Shade");
         clip.properties.clipped = true;
-        s.layer_edit(Edit::InsertLayer { index: 0, layer: clip }).unwrap();
+        s.layer_edit(Edit::InsertLayer { index: 0, layer: Box::new(clip) }).unwrap();
         s.frame(3, 3).unwrap();
         assert_eq!(s.command(CommandId::MergeDown).label.as_ref(), "Merge Clipped Layers");
         let mut effect = s.engine.document().layer(upper).unwrap().clone();
@@ -90,7 +90,7 @@ mod merge_checks {
             layer_core::bundled_effect_catalog().get("levels").unwrap().program(),
         )));
         let id = effect.id;
-        s.layer_edit(Edit::InsertLayer { index: 0, layer: effect }).unwrap();
+        s.layer_edit(Edit::InsertLayer { index: 0, layer: Box::new(effect) }).unwrap();
         s.layer_edit(Edit::SetActiveLayer { id }).unwrap();
         s.frame(4, 4).unwrap();
         let state = s.state.commands.iter().find(|c| c.id == CommandId::MergeDown).unwrap();

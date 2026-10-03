@@ -52,7 +52,7 @@ fn levels_auto_uses_current_page_source_and_commits_one_undo_preserving_other_va
 
 #[test]
 fn levels_auto_invalid_or_wrong_results_preserve_complete_effect_and_history() {
-    for result in [Err(layer_render::BackendError("failed".into())),Ok(layer_render::SnapshotResult::ArtworkSample(layer_core::ArtworkSample::Empty)),Ok(layer_render::SnapshotResult::LevelsStatistics(layer_core::levels::LevelsStatistics {minimum:[0.;3],maximum:[0.;3],bins:std::array::from_fn(|_|{let mut bins=vec![0;4096];bins[0]=1000;bins}),pixels:1000}))] {
+    for result in [Err(layer_render::BackendError("failed")),Ok(layer_render::SnapshotResult::ArtworkSample(layer_core::ArtworkSample::Empty)),Ok(layer_render::SnapshotResult::LevelsStatistics(layer_core::levels::LevelsStatistics {minimum:[0.;3],maximum:[0.;3],bins:std::array::from_fn(|_|{let mut bins=vec![0;4096];bins[0]=1000;bins}),pixels:1000}))] {
         let mut s=levels_session();let before=s.engine.document().clone();let checkpoint=s.engine.checkpoint();levels_auto(&mut s);
         levels_reply(&mut s,result);assert!(s.auto_levels.is_none());assert_eq!(s.engine.document(),&before);assert_eq!(s.engine.checkpoint(),checkpoint);
     }
@@ -193,7 +193,7 @@ fn levels_auto_success_noop_and_refusal_restart_visible_histogram_without_anothe
             s.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(layer))).unwrap();s.refresh_document();
         }
         levels_auto(&mut s);let before=s.engine.document().layers.clone();
-        let result=if outcome==2 {Err(layer_render::BackendError("Refused Auto".into()))}else{Ok(layer_render::SnapshotResult::LevelsStatistics(levels_result()))};
+        let result=if outcome==2 {Err(layer_render::BackendError("Refused Auto"))}else{Ok(layer_render::SnapshotResult::LevelsStatistics(levels_result()))};
         levels_reply(&mut s,result);assert!(s.auto_levels.is_none());
         if outcome!=0 {assert_eq!(s.engine.document().layers,before);}
         assert!(s.tonal_histogram.demand,"completion must restore visible consumer {outcome}");

@@ -1,5 +1,6 @@
 use super::*;
 
+#[expect(clippy::large_enum_variant, reason = "Window images remain inline while display caches change during motion")]
 pub(super) enum Pixels {
     Window { root: Option<Image>, next: Option<Image> },
     Resident { levels: Arc<[Image]>, level: u32 },

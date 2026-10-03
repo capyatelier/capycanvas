@@ -552,6 +552,7 @@ impl SizePanel {
         let root = body();
         root.set_spacing(12);
         let number = NumberControl::new(layer_ui::NumericControl::brush_size(), &workspace.localization().text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE), "", workspace.localization().clone());
+        number.set_widget_name("drawer-control-brush-size");
         number.connect_value_changed(glib::clone!(
             #[weak]
             workspace,
@@ -570,7 +571,8 @@ impl SizePanel {
             buttons,
         }
     }
-    pub fn refresh(&self, brush: &layer_ui::BrushState) {
+    pub fn refresh(&self, workspace: &Workspace, brush: &layer_ui::BrushState) {
+        self.number.set_caption(&workspace.localization().text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE), "", workspace.localization().clone());
         self.number.set_value(brush.diameter as f64);
         for (value, button) in &self.buttons {
             selected(button, *value == brush.diameter);

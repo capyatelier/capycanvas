@@ -1,23 +1,25 @@
 import { zoomMenuPlacement } from "./zoom-readout.js";
+import { bindCopy } from "./localization.js";
 
 export function createScreenStatus({ root, workspace, canvas, element, icon, dispatch, doc = globalThis.document,
-  target = globalThis, viewport = () => ({ width: innerWidth, height: innerHeight }) }) {
+  nativeCopy, target = globalThis, viewport = () => ({ width: innerWidth, height: innerHeight }) }) {
+  const copy = nativeCopy.color;
   root.type = "button"; root.tabIndex = -1; root.hidden = true;
-  root.title = "Screen details";
+  bindCopy(root,()=>copy.screen_details,"title");
   root.setAttribute("aria-haspopup", "dialog"); root.setAttribute("aria-expanded", "false");
   const warning = icon("warning");
   warning.classList.add("warning");
   const label = element("span");
   root.append(warning, label);
   const popup = element("div", "screen-details");
-  popup.popover = "auto"; popup.setAttribute("role", "dialog"); popup.setAttribute("aria-label", "Screen details");
+  popup.popover = "auto"; popup.setAttribute("role", "dialog"); bindCopy(popup,()=>copy.screen_details,"ariaLabel");
   const title = element("div", "screen-details-title");
   const headline = element("div", "screen-details-headline");
   const body = element("p", "screen-details-body");
   const mark = element("label", "screen-details-mark");
   const check = element("input", "panel-check");
   check.type = "checkbox";
-  mark.append(check, element("span", "", "Highlight these colors"));
+  mark.append(check, element("span", "", ()=>copy.highlight_clipped_colors));
   popup.append(title, headline, body, mark);
   workspace.append(popup);
   check.addEventListener("change", () => dispatch({ type: "show_clipped_colors", visible: check.checked }));

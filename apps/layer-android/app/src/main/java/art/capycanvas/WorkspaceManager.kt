@@ -31,6 +31,7 @@ import org.json.JSONArray
 
 /** Compose owns focus/scroll/input; Rust owns records, selections and previews. */
 @Composable internal fun WorkspaceManager(host: CanvasHost) {
+    val copy = host.catalog.getJSONObject("native_copy").getJSONObject("header")
     val view = host.workspaceManager ?: return
     val page = view.optString("page").takeUnless { it == "null" || it.isEmpty() }
     val form = view.objectOrNull("prompt")
@@ -38,7 +39,7 @@ import org.json.JSONArray
     val busy = view.optBoolean("busy")
     val rowInteraction = remember { WorkspaceRowInteraction() }
     val focusWindow = view.optJSONObject("focus_window")?.optString("id")
-    LaunchedEffect(focusWindow) { if (focusWindow != null) host.reportActionError("This workspace is open in another window. Switch to that window to continue.") }
+    LaunchedEffect(focusWindow) { if (focusWindow != null) host.reportActionError(copy.getString("owned_elsewhere")) }
     val colors = LocalPalette.current
     fun send(type: String) = host.workspaceInput(obj("type" to type))
     val cancel = { send("cancel") }
@@ -55,7 +56,7 @@ import org.json.JSONArray
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(view.getString("title"), Modifier.weight(1f), fontWeight = FontWeight.Bold)
                     if (page != "history") FilledTonalIconButton({ host.workspaceInput(obj("type" to "form", "action" to obj("type" to "new"))) },
-                        enabled = !busy, modifier = Modifier.size(32.dp).testTag("new-workspace").semantics { contentDescription = "New Workspace" }, shape = RoundedCornerShape(6.dp)) { SharedIcon("plus", null) }
+                        enabled = !busy, modifier = Modifier.size(32.dp).testTag("new-workspace").semantics { contentDescription = copy.getString("new_workspace") }, shape = RoundedCornerShape(6.dp)) { SharedIcon("plus", null) }
                     IconButton(cancel, Modifier.size(32.dp).semantics { contentDescription = host.bootstrap!!.getJSONObject("common").getString("close") }) { SharedIcon("close", null) }
                 }
                 view.getString("intro").takeIf { it.isNotEmpty() }?.let { Text(it, color = colors.settingsSecondary) }
@@ -66,7 +67,7 @@ import org.json.JSONArray
                 if (error != null && form == null) Text(error, color = MaterialTheme.colorScheme.error)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(cancel, Modifier.weight(1f).testTag("workspace-cancel")) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
-                    if (view.optBoolean("retry")) TextButton({ send("retry") }, enabled = !busy) { Text("Retry") }
+                    if (view.optBoolean("retry")) TextButton({ send("retry") }, enabled = !busy) { Text(copy.getString("retry")) }
                     Button({ send("confirm") }, Modifier.weight(1f).testTag("workspace-confirm"), enabled = view.optBoolean("enabled") && !busy) { Text(view.getString("primary")) }
                 }
             }
@@ -85,18 +86,18 @@ import org.json.JSONArray
             }
         }, dismissButton = { TextButton(cancel) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } }, confirmButton = {
             TextButton({ host.workspaceInput(obj("type" to "submit", "name" to name)) }, enabled = !busy,
-                modifier = Modifier.testTag("workspace-submit")) { Text(if (view.optBoolean("retry") && action.getString("type") != "save_as_new") "Retry" else form.getString("confirm"),
+                modifier = Modifier.testTag("workspace-submit")) { Text(if (view.optBoolean("retry") && action.getString("type") != "save_as_new") copy.getString("retry") else form.getString("confirm"),
                 color = if (form.optBoolean("destructive")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
         })
     }
     var dismissedError by remember { mutableStateOf<String?>(null) }
     if (error == null) dismissedError = null
     if (error != null && page == null && form == null && error != dismissedError) AlertDialog(
-        onDismissRequest = { dismissedError = error; send("resume") }, title = { Text("Workspace could not be saved") }, text = { Text(error) },
+        onDismissRequest = { dismissedError = error; send("resume") }, title = { Text(copy.getString("workspaces")) }, text = { Text(error) },
         dismissButton = { TextButton({ dismissedError = error; send("resume") }) { Text(host.bootstrap!!.getJSONObject("common").getString("keep_open")) } }, confirmButton = {
             Column {
-                TextButton({ send("retry") }) { Text("Retry") }
-                TextButton({ host.workspaceInput(obj("type" to "form", "action" to obj("type" to "save_as_new"))) }) { Text("Save as New Workspace…") }
+                TextButton({ send("retry") }) { Text(copy.getString("retry")) }
+                TextButton({ host.workspaceInput(obj("type" to "form", "action" to obj("type" to "save_as_new"))) }) { Text(copy.getString("save_as_new_workspace")) }
             }
         })
 }
@@ -132,7 +133,7 @@ internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject = view?.optJSO
             SharedIcon("more", view.getString("switcher_options_label"), Modifier.size(16.dp), tint = colors.secondary)
         }
     }
-    if (!view.isNull("error")) TextButton({ host.workspaceInput(obj("type" to "retry")) }, enabled = !view.optBoolean("busy")) { Text("Retry workspace save") }
+    if (!view.isNull("error")) TextButton({ host.workspaceInput(obj("type" to "retry")) }, enabled = !view.optBoolean("busy")) { Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("retry")) }
 }
 
 @Composable private fun PreviewBackdrop() {

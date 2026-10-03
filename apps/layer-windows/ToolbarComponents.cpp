@@ -188,6 +188,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     void Update(J const& tile){
         auto value=object(tile,L"component");if(!value.Size())return;
         auto nextSchema=schemaKey(value);model=value;
+        tileLabel=str(tile,L"label");AutomationProperties::SetName(root,tileLabel);
         if(nextSchema!=schema){
             closePopup();
             for(auto& f:fields){if(f.dispose)f.dispose();uint32_t index;if(root.Children().IndexOf(f.row,index))root.Children().RemoveAt(index);}
@@ -210,6 +211,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         }
         if(!measured){layout();measured=true;}
         if(more){
+            auto title=data->caption(L"tool_controls",L"more_options");AutomationProperties::SetName(more,title);tooltip(more,title);
             auto facing=drawerFacing(data,item);
             more.Background(facing.empty()?clear():data->glass(L"open_tile"));
             more.CornerRadius(facingCorners(tileRadius*CornerFit,facing));
@@ -336,7 +338,9 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     void lost(){if(contact){contact.reset();closePopup();}}
     void updateSlider(){
         auto next=object(model,L"numeric");enabled=next.Size()!=0;
-        if(enabled)current=num(next,L"value");
+        if(enabled){field=next;current=num(next,L"value");}
+        auto title=enabled?str(next,L"label"):tileLabel;
+        AutomationProperties::SetName(cap,title);tooltip(cap,title);AutomationProperties::SetName(access,title);
         auto shown=numeric(data->localization.get(),spec,current,O({{L"type",S(L"format")}}));level=num(shown,L"fill");
         settingAccess=true;access.Value(level);settingAccess=false;
         access.IsEnabled(enabled);AutomationProperties::SetItemStatus(access,str(shown,L"text"));
@@ -465,9 +469,9 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         bool chosen=false;for(auto mark:array(model,L"bookmarks"))chosen=chosen||flag(mark.GetObject(),L"selected");
         if(chosen!=bookmarkSelected||glyph!=bookmarkIcon){
             bookmarkSelected=chosen;bookmarkIcon=glyph;bookmark.Content(icon(chosen?L"minus":L"plus",data->theme(),glyph));
-            auto tip=data->caption(L"tool_controls",chosen?L"remove_bookmark":L"bookmark_value");
-            tooltip(bookmark,tip);AutomationProperties::SetName(bookmark,tip);
         }
+        auto tip=data->caption(L"tool_controls",chosen?L"remove_bookmark":L"bookmark_value");
+        tooltip(bookmark,tip);AutomationProperties::SetName(bookmark,tip);
         auto anchor=root.TransformToVisual(nullptr).TransformBounds({0,0,float(root.ActualWidth()),float(root.ActualHeight())});
         auto window=root.XamlRoot().Size();
         double x=vertical?(anchor.X+anchor.Width+side+8<=window.Width?anchor.X+anchor.Width+8:anchor.X-side-8):anchor.X;
@@ -532,12 +536,13 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             faceValue.Text(text);
             faceValue.FontSize(self->data->textSize()*(self->tileStyle==L"small"&&text.size()>=4?.9:1.));
         };
-        face.Click([weak,state,settingSpec,title,set](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
+        face.Click([weak,state,settingSpec,currentTitle=presentation.title,set](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
             auto self=weak.lock();if(!self)return;
             if(std::exchange(state->scrubbed,false))return;
             self->closePopup();
             Bindings bindings;StackPanel content;content.MinWidth(220);content.MaxWidth(320);
-            content.Children().Append(number(self->data,title,settingSpec,[state]{return state->value;},set,bindings));
+            NumberPresentation presentation;presentation.title=currentTitle;
+            content.Children().Append(number(self->data,currentTitle(),settingSpec,[state]{return state->value;},set,bindings,nullptr,false,L"",false,presentation));
             for(auto const& bind:bindings)bind();
             self->editor=Flyout();self->editor.Content(content);TrackPopup(self->editor,self->data);
             self->editor.ShowAt(sender.as<FrameworkElement>());
@@ -600,10 +605,10 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             }
             updateFace();
         };
-        result.natural=[weak,title,info]{
+        result.natural=[weak,currentTitle=presentation.title,info]{
             auto self=weak.lock();if(!self)return winrt::Windows::Foundation::Size{};
             double value=0;for(auto sample:array(info,L"samples"))value=std::max(value,textWidth(self->data,eights(sample.GetString())));
-            double lead=self->text?textWidth(self->data,title):16;
+            double lead=self->text?textWidth(self->data,currentTitle()):16;
             return winrt::Windows::Foundation::Size{float(lead+4+value+14+(self->sliders?60:0)),24.f};
         };
         return result;
@@ -616,7 +621,8 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 self->send(O({{L"type",S(L"set_tool_setting")},{L"id",S(ids[index])},{L"value",N(value)}}));});
         Field result;result.row=range->root;result.intrinsic=true;
         result.update=[range](J const& option){
-            auto current=array(object(option,L"Range"),L"bounds");
+            auto interval=object(option,L"Range");auto current=array(interval,L"bounds");
+            range->Relabel(current.GetObjectAt(0),current.GetObjectAt(1),str(interval,L"label"));
             range->Update(num(current.GetObjectAt(0),L"value"),num(current.GetObjectAt(1),L"value"));
         };
         result.dispose=[range]{range->Dispose();};
@@ -652,8 +658,9 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 row.Children().Append(pick);buttons.push_back(pick);
             }
             result.row=row;result.segmented=int(items.Size());
-            result.update=[buttons,data=data](J const& option){
-                auto current=array(object(option,L"Choice"),L"items");
+            result.update=[row,buttons,data=data](J const& option){
+                auto spec=object(option,L"Choice");AutomationProperties::SetName(row,str(spec,L"label"));
+                auto current=array(spec,L"items");
                 for(uint32_t i=0;i<std::min<uint32_t>(current.Size(),uint32_t(buttons.size()));++i){
                     bool chosen=flag(current.GetObjectAt(i),L"selected");
                     buttons[i].Background(chosen?selected(data):clear());AutomationProperties::SetName(buttons[i],str(current.GetObjectAt(i),L"label"));tooltip(buttons[i],str(current.GetObjectAt(i),L"label"));AutomationProperties::SetItemStatus(buttons[i],chosen?data->caption(L"search",L"selected"):L"");
@@ -679,6 +686,15 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         pick.Padding({6,0,6,0});AutomationProperties::SetAutomationId(pick,L"toolbar-choice-"+id);
         tooltip(pick,str(choice,L"label"));
         auto labelText=std::make_shared<J>(choice);auto shown=std::make_shared<hstring>();
+        Grid content;content.ColumnSpacing(6);
+        for(auto columnWidth:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto}}){
+            ColumnDefinition column;column.Width(columnWidth);content.ColumnDefinitions().Append(column);
+        }
+        auto glyph=icon(L"settings",data->theme());content.Children().Append(glyph);
+        auto name=label(data,L"");name.TextTrimming(TextTrimming::CharacterEllipsis);
+        name.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(name,1);content.Children().Append(name);
+        auto chevron=icon(L"chevron-down",data->theme(),12);Grid::SetColumn(chevron,2);content.Children().Append(chevron);
+        pick.Content(content);
         pick.Click([weak,labelText](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
             auto self=weak.lock();if(!self)return;
             MenuFlyout menu;TrackPopup(menu,self->data);
@@ -692,23 +708,15 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             menu.ShowAt(sender.as<FrameworkElement>());
         });
         result.row=pick;
-        result.update=[weak,pick,labelText,shown](J const& option){
+        result.update=[weak,pick,labelText,shown,glyph,name](J const& option){
             auto self=weak.lock();if(!self)return;
             *labelText=object(option,L"Choice");auto current=array(*labelText,L"items");
             J chosen=current.Size()?current.GetObjectAt(0):J{};
             for(auto value:current)if(flag(value.GetObject(),L"selected"))chosen=value.GetObject();
-            auto key=str(chosen,L"label")+L"|"+str(chosen,L"icon");
-            if(key==*shown)return;
-            *shown=key;
-            Grid content;content.ColumnSpacing(6);
-            for(auto width:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto}}){
-                ColumnDefinition column;column.Width(width);content.ColumnDefinitions().Append(column);
-            }
-            auto glyph=icon(str(chosen,L"icon"),self->data->theme());content.Children().Append(glyph);
-            auto name=label(self->data,str(chosen,L"label"));name.TextTrimming(TextTrimming::CharacterEllipsis);
-            name.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(name,1);content.Children().Append(name);
-            auto chevron=icon(L"chevron-down",self->data->theme(),12);Grid::SetColumn(chevron,2);content.Children().Append(chevron);
-            pick.Content(content);AutomationProperties::SetItemStatus(pick,str(chosen,L"label"));
+            auto title=str(*labelText,L"label");AutomationProperties::SetName(pick,title);tooltip(pick,title);
+            name.Text(str(chosen,L"label"));AutomationProperties::SetItemStatus(pick,str(chosen,L"label"));
+            auto key=str(chosen,L"icon")+L"|"+self->data->theme();
+            if(key!=*shown){*shown=key;glyph.Source(icon(str(chosen,L"icon"),self->data->theme()).Source());}
         };
         result.orient=[weak,pick]{
             auto self=weak.lock();if(!self)return;

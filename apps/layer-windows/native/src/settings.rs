@@ -290,6 +290,7 @@ pub(crate) struct SettingsService {
     localization_input_busy: bool,
 }
 impl SettingsService {
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn launch(preferred_tags: &[&str]) -> Result<(NativeHost, PreparedSettings), String> {
         Self::launch_at(SettingsFile::environment(), preferred_tags)
     }

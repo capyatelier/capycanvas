@@ -63,8 +63,8 @@ fn proof_requires_complete_directions_matching_channels_and_an_image_profile() {
         num_input_channels: 3, num_output_channels: 3, num_clut_grid_points: 2,
         matrix: builtin(RgbSpace::Srgb).unwrap().colorant_matrix(),
         num_input_table_entries: 2, num_output_table_entries: 2,
-        input_table: LutStore::Store16(vec![0, 65535].repeat(3)),
-        output_table: LutStore::Store16(vec![0, 65535].repeat(3)),
+        input_table: LutStore::Store16([0, 65535].repeat(3)),
+        output_table: LutStore::Store16([0, 65535].repeat(3)),
         clut_table: LutStore::Store16(vec![0; 24]), lut_type: LutType::Lut16,
     });
     let mut profile = builtin(RgbSpace::Srgb).unwrap();
@@ -213,8 +213,8 @@ fn proof_matches_independent_cmm() {
             let result = proof.sample(rgb.try_into().unwrap()).unwrap();
             let xyz = [xyz[0] as f64, xyz[1] as f64, xyz[2] as f64];
             errors.push(distance(result.xyz, xyz));
-            for i in 0..3 {
-                max_xyz = max_xyz.max((result.xyz[i] - xyz[i]).abs());
+            for (actual, expected) in result.xyz.iter().zip(xyz) {
+                max_xyz = max_xyz.max((actual - expected).abs());
             }
             let ambiguous = gamut.iter().any(|v| (*v - 5.).abs() <= 1.);
             boundary += usize::from(ambiguous);

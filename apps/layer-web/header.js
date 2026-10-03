@@ -4,7 +4,7 @@ import {liveCopy,bindCopy} from './localization.js';
 import { pickerButtonAction } from './color-controls.js';
 
 export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
-  const copy=liveCopy(app,"catalog").native_copy.header;
+  const copy=liveCopy(app,"catalog").native_copy.header,common=liveCopy(app,"bootstrap_view").common,labels=liveCopy(app,"header_view");
   const root = document.querySelector('#header');
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
   const title = documents.title;
@@ -22,7 +22,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   });
   let menuModels, view, modelKey, geometry, metrics, insets = [0,0], size, editing = false, selected = null;
   let contact, ghost, frame = 0, measured = '', suppressed = null;
-  let buttonContact, measurementTheme, refreshKey;
+  let buttonContact, measurementTheme, refreshKey, allocatedWidth, allocatedModel, allocatedTheme;
   function clearButtonPress(e) {
     if(!buttonContact||(e&&e.pointerId!==buttonContact.id))return;
     buttonContact.node.removeAttribute('data-header-pressed');buttonContact=null;
@@ -45,7 +45,8 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   }
   function menu(model, label, glyph, className = '') {
     const node = element('details', `header-menu ${className}`); node.name = 'workspace-menu';
-    const summary = element('summary', '', glyph ? null : label); summary.setAttribute('aria-label', label);
+    const summary = element('summary', '', glyph ? null : label);
+    if(typeof label==='function')bindCopy(summary,label,'ariaLabel');else summary.setAttribute('aria-label',label);
     if (glyph) summary.append(icon(glyph));
     const contents = element('div', 'popover'); contents.setAttribute('role', 'menu'); node.append(summary, contents);
     node.refreshMenu = (reset=false) => {
@@ -53,7 +54,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       const r = node.getBoundingClientRect();
       contents.style.left = `${Math.min(0, innerWidth-r.x-contents.offsetWidth-6)}px`;
     };
-    node.addEventListener('toggle', () => {if(node.open)node.refreshMenu(true); updateZen();});
+    node.addEventListener('toggle', () => {if(node.open)node.refreshMenu(true);else queue(); updateZen();});
     return node;
   }
   const application = id => menuModels.find(m=>m.id===id).model;
@@ -80,10 +81,10 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     customization.refreshContextMenu();
     for(const node of root.querySelectorAll('details[open]'))node.refreshMenu?.();
   });
-  const recoveryMenu = menu(primary, 'Title bar recovery: menus and customization', 'menu');
+  const recoveryMenu = menu(primary, () => copy.menus, 'menu');
   recoveryMenu.id = 'header-recovery'; root.append(recoveryMenu);
   const overflow = zones.map((_, index) => {
-    const node = menu(() => ({title:'Title Bar',sections:[]}), `More ${['left','center','right'][index]} title-bar items`, 'menu', 'header-overflow');
+    const node = menu(() => ({title:copy.title_bar,sections:[]}), () => copy.more_items, 'menu', 'header-overflow');
     node.id = `header-overflow-${index}`;
     const rows=new Map();
     node.refreshMenu = (reset=false) => {
@@ -138,7 +139,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       if(command)b.dataset.command=command;
       content.append(b);
       if(kind==='tool'){r.variants=customization.variationButton({kind:'header',id:entry.id});content.append(r.variants);}
-    } else if(kind==='menu') content.append(menu(primary,'Main Menu','menu','header-menu-overflow'));
+    } else if(kind==='menu') content.append(menu(primary,()=>copy.main_menu,'menu','header-menu-overflow'));
     else if(kind==='menu_labels') {
       const labels=element('div','header-menu-labels');
       for(const spec of menuModels) {
@@ -146,41 +147,42 @@ export function createHeader({app, state, workspace, element, button, icon, plac
         if(spec.id==='window')m.querySelector('.popover').id='workspace-menu'; labels.append(m);
       }
       r.full=labels;
-      r.compact=menu(primary,'Application menus','menu','header-menu-labels-compact');
+      r.compact=menu(primary,()=>copy.menus,'menu','header-menu-labels-compact');
       content.append(labels,r.compact);
     } else if(kind==='workspaces') {
       r.full=switcher;
       content.append(switcher);
-      r.compact=menu(workspaceChoices,workspaceView().switcher_menu.title); r.compact.id='header-workspace-selector';
+      r.compact=menu(workspaceChoices,()=>workspaceView().switcher_menu.title); r.compact.id='header-workspace-selector';
       content.append(r.compact); workspaceOptions(r.compact);
       workspaceOptions(node);
     } else if(kind==='document_title') content.append(title);
     else if(kind==='clock'||kind==='battery') {
       r.status=kind==='clock'?systemStatus.clock:systemStatus.battery;
-      r.placeholder=element('span','header-status-placeholder',kind==='clock'?'Clock':'Battery');
+      r.placeholder=element('span','header-status-placeholder');bindCopy(r.placeholder,()=>kind==='clock'?copy.clock:copy.battery);
       content.append(r.status,r.placeholder);
     }
     root.append(node); return r;
   }
   function buildBank() {
     const glyphs={capy:'zen-looking-up',menu:'menu',menu_labels:'menu',settings:'settings',fullscreen:'fullscreen-enter',workspaces:'menu',document_title:'new-document'};
-    for(const spec of [{item:{kind:'tools'},label:'Add Tools…'},...view.components]) {
+    for(const spec of [{item:{kind:'tools'},label:copy.add_tools},...view.components]) {
       const kind=spec.item.kind, chip=element('div','header-component'); chip.dataset.headerComponent=kind;
-      chip.id=`header-component-${kind}`; chip.title=`Drag ${spec.label} into the title bar`;
-      chip.setAttribute('aria-label',spec.label);
+      const label=()=>kind==='tools'?copy.add_tools:labels.components.find(value=>value.item.kind===kind)?.label??spec.label;
+      chip.id=`header-component-${kind}`;bindCopy(chip,()=>app.native_caption({type:'header_drag',item:label()}),'title');
+      bindCopy(chip,label,'ariaLabel');
       const grip=element('span','header-component-grip'); grip.setAttribute('aria-hidden','true');grip.append(icon('grip'));chip.append(grip);
       if(glyphs[kind])chip.append(icon(glyphs[kind]));
-      chip.append(element('span','',spec.label)); bank.append(chip); chips.set(kind,{node:chip,spec});
+      const caption=element('span');bindCopy(caption,label);chip.append(caption); bank.append(chip); chips.set(kind,{node:chip,spec});
     }
     const options=element('div','header-editor-options'), choices=element('div','header-size-choices');
-    choices.setAttribute('role','group'); choices.setAttribute('aria-label','Title bar size');
+    choices.setAttribute('role','group');bindCopy(choices,()=>copy.title_bar_size,'ariaLabel');
     for(const s of view.sizes) {
-      const b=button(s.label,()=>send({type:'set_size',size:s.id})); b.dataset.headerSize=s.id; choices.append(b);
+      const b=button(()=>labels.sizes.find(value=>value.id===s.id).label,()=>send({type:'set_size',size:s.id})); b.dataset.headerSize=s.id; choices.append(b);
     }
     const label=element('label'), footer=element('input'); footer.type='checkbox'; footer.id='header-canvas-info';
-    footer.addEventListener('change',()=>send({type:'canvas_info',visible:footer.checked})); label.append(footer,'Show footer');
-    const cancel=button('Cancel',()=>send({type:'cancel'})); cancel.id='header-edit-cancel';
-    const done=button('Done',()=>send({type:'edit',editing:false}),'suggested-action'); done.id='header-edit-done';
+    footer.addEventListener('change',()=>send({type:'canvas_info',visible:footer.checked})); label.append(footer,element('span','',()=>copy.show_footer));
+    const cancel=button(()=>common.cancel,()=>send({type:'cancel'})); cancel.id='header-edit-cancel';
+    const done=button(()=>common.done,()=>send({type:'edit',editing:false}),'suggested-action'); done.id='header-edit-done';
     options.append(choices,label,cancel,done); bank.append(options);
   }
   function refresh() {
@@ -323,10 +325,12 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     frame=0; if(!view)return;
     if(contact?.active)return;
     const width=root.clientWidth;
+    if(geometry&&allocatedWidth===width&&allocatedModel===modelKey&&allocatedTheme===state().theme&&root.querySelector('details[open]'))return;
     recoveryMenu.hidden=editing||entries().some(e=>['capy','menu','menu_labels','workspaces'].includes(e.item.kind));
     insets=[0,recoveryMenu.hidden?0:size.tile];
     if(!recoveryMenu.hidden)place(recoveryMenu,{x:width-size.tile-6,y:6,width:size.tile,height:size.tile});
     metrics=measure();geometry=app.header_geometry(width,insets,metrics);present(geometry);
+    allocatedWidth=width;allocatedModel=modelKey;allocatedTheme=state().theme;
     const items=[...geometry.items];
     geometry.hidden.forEach((ids,i)=>{if(geometry.overflow[i])for(const id of ids)items.push({id,bounds:geometry.overflow[i]});});
     const height=size.height+(editing?bank.offsetHeight+12:0), key=JSON.stringify([height,items]);
@@ -442,6 +446,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   new ResizeObserver(()=>{if(contact&&contact.width!==root.clientWidth)end(null,true);queue();}).observe(root);
   new ResizeObserver(queue).observe(bank);
   document.fonts.addEventListener('loadingdone',queue);
+  new MutationObserver(queue).observe(document.documentElement,{attributes:true,attributeFilter:['style','class','lang']});
   new MutationObserver(()=>{
     if(contact&&(!contact.node.isConnected||contact.node.parentNode!==contact.parent))end(null,true);
     if(buttonContact&&(!buttonContact.node.isConnected||buttonContact.node.parentNode!==buttonContact.parent))clearButtonPress();

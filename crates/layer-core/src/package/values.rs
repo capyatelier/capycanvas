@@ -281,7 +281,7 @@ pub fn parse_proof<P>(value: &Value, profile: impl FnOnce(&Value) -> DecodeResul
         conversion: ConversionOptions { intent: optional(fields, "intent", RenderingIntent::RelativeColorimetric, parse_intent)?,
             black_point_compensation: optional(fields, "black_point_compensation", true, boolean)? },
         simulate_paper: optional(fields, "simulate_paper", false, boolean)?, simulate_black_ink: optional(fields, "simulate_black_ink", true, boolean)? };
-    result.validate()?;
+    result.validate().map_err(String::from)?;
     Ok(result)
 }
 pub fn encode_proof<P>(value: &ProofRecipe<P>, profile: impl FnOnce(&P) -> Result<Value, String>) -> Result<Value, String> {
@@ -422,9 +422,14 @@ mod tests {
         assert!(!proof.simulate_paper);
         assert!(proof.simulate_black_ink);
         assert_eq!(encode_proof(&proof,|v|Ok(v.clone())).unwrap(),minimal);
-        invalid(parse_proof(&json!({"name":"Printer", "profile":{}, "simulate_paper":true, "simulate_black_ink":false}),decode_profile));
-        invalid(parse_proof(&json!({"name":"Printer", "profile":{}, "intent":"absolute_colorimetric"}),decode_profile));
-        invalid(parse_proof(&json!({"name":"", "profile":{}}),decode_profile));
+        for (value, reason) in [
+            (json!({"name":"Printer", "profile":{}, "simulate_paper":true, "simulate_black_ink":false}), crate::color::ProofRecipeError::PaperRequiresBlackInk),
+            (json!({"name":"Printer", "profile":{}, "intent":"absolute_colorimetric"}), crate::color::ProofRecipeError::AbsoluteBlackPoint),
+            (json!({"name":"x".repeat(1025), "profile":{}}), crate::color::ProofRecipeError::NameLimit),
+        ] {
+            assert_eq!(parse_proof(&value,decode_profile).unwrap_err(), DecodeError::Invalid(reason.diagnostic().into()));
+        }
+        assert!(parse_proof(&json!({"name":"", "profile":{}}),decode_profile).unwrap().name.is_empty());
         unsupported(parse_proof(&json!({"name":"Printer", "profile":{}, "intent":"future"}),decode_profile));
         unsupported(parse_proof(&json!({"name":"Printer", "profile":{}, "future":true}),decode_profile));
         let absolute = parse_proof(&json!({"name":"Printer", "profile":{}, "intent":"absolute_colorimetric", "black_point_compensation":false}),decode_profile).unwrap();

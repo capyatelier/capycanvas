@@ -107,11 +107,10 @@ impl ViewportPresenter {
         renderer: &WgpuRasterizer,
         guide: Option<std::sync::Arc<crate::local_tone::GpuToneGuide>>,
     ) -> Result<(), GpuRasterError> {
-        if let Some(g) = &guide {
-            if g.device != *renderer.device || g.space != renderer.document_color.space {
+        if let Some(g) = &guide
+            && (g.device != *renderer.device || g.space != renderer.document_color.space) {
                 return Err(GpuRasterError::Color("Local tone guide belongs to a different device or color space".into()));
             }
-        }
         if match (&self.gpu_local_guide, &guide) {
             (None, None) => true,
             (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
@@ -259,7 +258,7 @@ impl ViewportPresenter {
         };
         if !same {
             let size = lut.as_ref().map_or(20, |l| l.byte_len()) as u64;
-            if size > renderer.device.limits().max_storage_buffer_binding_size as u64 {
+            if size > renderer.device.limits().max_storage_buffer_binding_size {
                 return Err(GpuRasterError::Color(
                     "Proof preview exceeds the GPU buffer limit".into(),
                 ));
@@ -986,7 +985,7 @@ impl ViewportPresenter {
             )?;
             self.overviews_changed = false;
         }
-        let extent = if self.quarter_turns % 2 == 0 {
+        let extent = if self.quarter_turns.is_multiple_of(2) {
             [view.width_px, view.height_px]
         } else {
             [view.height_px, view.width_px]
@@ -1139,8 +1138,8 @@ impl ViewportPresenter {
             // Scissoring alone does not limit attachment loads/stores on a
             // tile renderer. Narrow the native render area as well.
             #[cfg(any(target_os = "android", target_os = "linux"))]
-            if !full {
-                if let Some(target) = unsafe { pass_target.as_hal::<wgpu::hal::api::Vulkan>() } {
+            if !full
+                && let Some(target) = unsafe { pass_target.as_hal::<wgpu::hal::api::Vulkan>() } {
                     unsafe {
                         target.set_retained_render_area([
                             repaint.min_x(),
@@ -1150,7 +1149,6 @@ impl ViewportPresenter {
                         ]);
                     }
                 }
-            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

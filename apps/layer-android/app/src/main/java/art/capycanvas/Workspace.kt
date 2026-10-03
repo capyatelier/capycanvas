@@ -184,7 +184,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     }
                     host.dialogError?.takeIf { snapshot?.objectOrNull("preferences") == null }?.let { message ->
                         AlertDialog(onDismissRequest = host::clearActionError, text = { Text(message) },
-                            confirmButton = { TextButton(host::clearActionError) { Text("OK") } })
+                            confirmButton = { TextButton(host::clearActionError) { Text(host.bootstrap!!.getJSONObject("common").getString("ok")) } })
                     }
                     CommandSearch(host)
                     PreferencesOverlay(host, snapshot?.objectOrNull("preferences"))
@@ -204,7 +204,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                                 else NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("opacity"), state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
                                     host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
                                 }
-                            } }, confirmButton = { TextButton({ host.customize(obj("type" to "close_control")) }) { Text("Done") } })
+                            } }, confirmButton = { TextButton({ host.customize(obj("type" to "close_control")) }) { Text(host.bootstrap!!.getJSONObject("common").getString("done")) } })
                     }
                 }
             }
@@ -427,7 +427,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             val anchor = dock.contextAnchor
             Box(Modifier.offset { IntOffset(anchor.left.roundToInt(), anchor.top.roundToInt()) }
                 .size((anchor.width / density).dp, (anchor.height / density).dp)) {
-                WorkspaceMenu(host, menu, preserveContact = dock.contactHeld, dismiss = dock::closeContext)
+                WorkspaceMenu(host, menu, preserveContact = dock.contactHeld, copy = { dock.contextRequest?.let { host.menuCopy(it) } }, dismiss = dock::closeContext)
             }
         }
     }
@@ -549,7 +549,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                     }
                     Box(Modifier.width(20.dp).height(36.dp).testTag("group-grip-${group.getInt("id")}")
                         .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                            onLongClick = { dock.holdContext(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group") }
+                            onLongClick = { dock.holdContext(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip(host.catalog.getJSONObject("document_delivery_copy").getString("move_group")) }
                 }
             }
             Box(Modifier.weight(1f).testTag("panel-body-$active").then(if (tabsVisible) Modifier.background(colors.panelFill) else Modifier)) {
@@ -563,7 +563,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             group.objectOrNull("footer_grip")?.let { grip ->
                 Box(Modifier.fillMaxWidth().height(grip.number("height").dp).testTag("group-grip-${group.getInt("id")}").dragSource(dock, groupItem)
                     .combinedClickable(onClick = {},
-                        onLongClick = { dock.holdContext(groupItem) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group", vertical = true) }
+                        onLongClick = { dock.holdContext(groupItem) }), contentAlignment = Alignment.Center) { PanelGrip(host.catalog.getJSONObject("document_delivery_copy").getString("move_group"), vertical = true) }
             }
         }
     }

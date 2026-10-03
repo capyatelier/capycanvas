@@ -72,7 +72,7 @@ internal object Native {
     @JvmStatic external fun imageImportFree(task: Long)
     @JvmStatic external fun clipTask(handle: Long, request: Int): Long
     @JvmStatic external fun clipTaskLarge(task: Long): Boolean
-    @JvmStatic external fun clipTaskProgress(task: Long): String
+    @JvmStatic external fun documentRequestTitle(handle: Long, id: Int): String?
     @JvmStatic external fun clipRun(task: Long, control: Long, nonce: String): Long
     @JvmStatic external fun clipTaskFree(task: Long)
     @JvmStatic external fun clipWritePng(clip: Long, path: String)
@@ -121,6 +121,7 @@ internal object Native {
     @JvmStatic external fun proofPreservation(task: Long): ByteArray?
     @JvmStatic external fun proofApply(handle: Long, task: Long, preserved: Boolean)
     @JvmStatic external fun proofFailed(handle: Long, task: Long, error: String)
+    @JvmStatic external fun proofFailedReason(handle: Long, task: Long, reason: String)
     @JvmStatic external fun proofRelease(task: Long)
     @JvmStatic external fun captureCancel(control: Long)
     @JvmStatic external fun captureFree(control: Long)

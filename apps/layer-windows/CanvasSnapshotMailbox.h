@@ -9,6 +9,7 @@
 class CanvasSnapshotMailbox {
 public:
     struct Batch { std::string full, workspace, camera, search, localization; };
+    template<class Object,class Encode> static std::string Localization(Object const& object,Encode encode){return object.Size()?encode(object):std::string();}
     void Push(std::string snapshot,bool full,bool workspace,std::optional<std::string> camera={},bool search=false,std::string localization={}) {
         if(!localization.empty())pending.localization=std::move(localization);
         if(full){auto presentation=std::move(pending.localization);pending={std::move(snapshot),{},{},{},std::move(presentation)};return;}
@@ -16,7 +17,7 @@ public:
         else if(search)pending.search=std::move(snapshot);
         if(camera)pending.camera=std::move(*camera);
     }
-    Batch Take(){return std::exchange(pending,{});}
+    Batch Take(){auto batch=std::exchange(pending,{});if(batch.full.empty())pending.localization=std::exchange(batch.localization,{});return batch;}
 private:
     Batch pending;
 };

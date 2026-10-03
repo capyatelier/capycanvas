@@ -3,6 +3,21 @@ use super::profile::{ProfileChooser, ProfilePurpose};
 use super::*;
 use std::cell::RefCell;
 
+enum SourceProfileHint {
+    Reading,
+    Profile(layer_ui::ColorFeatureError),
+    Diagnostic(String),
+}
+impl SourceProfileHint {
+    fn message(&self, localization: &layer_ui::Localizer) -> String {
+        match self {
+            Self::Reading => localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_READING).to_string(),
+            Self::Profile(reason) => reason.profile_message(localization),
+            Self::Diagnostic(reason) => reason.clone(),
+        }
+    }
+}
+
 pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()));
     let localization = w.localization().clone();
@@ -34,8 +49,8 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         .build();
     current.set_use_markup(false);
     group.add(&current);
-    let chooser = ProfileChooser::new(w, copy.correct_profile.as_ref(), "source-profile-space", working,
-        ProfilePurpose::Source(original.interpretation.clone()));
+    let chooser = Rc::new(ProfileChooser::new(w, copy.correct_profile.as_ref(), "source-profile-space", working,
+        ProfilePurpose::Source(original.interpretation.clone())));
     let space = chooser.row.clone();
     group.add(&space);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -43,6 +58,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     content.append(&chooser.error);
     let hint = gtk::Label::builder().wrap(true).xalign(0.).build();
     hint.set_widget_name("source-profile-hint");
+    let hint_state = Rc::new(RefCell::new(None::<SourceProfileHint>));
     content.append(&hint);
     let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color(), &w.localization());
     comparison.bind_localization(w);
@@ -83,6 +99,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     )));
     let weak = dialog.downgrade(); let current = current.downgrade(); let space_weak = space.downgrade();
     let assumed = original.interpretation.profile_assumed;
+    let hint_weak = hint.downgrade(); let localized_hint = hint_state.clone();
     w.on_localization(move |localization| {
         let Some(dialog) = weak.upgrade() else { return false };
         let copy = layer_ui::color_feature_copy::DocumentColorCopy::new(localization);
@@ -91,6 +108,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         dialog.set_response_label("cancel", &copy.common.cancel);
         dialog.set_response_label("apply", if baked { &copy.add_source } else { &copy.apply_profile });
         if let Some(space) = space_weak.upgrade() { space.set_title(&copy.correct_profile); }
+        if let Some(hint) = hint_weak.upgrade() && let Some(reason) = localized_hint.borrow().as_ref() { hint.set_label(&reason.message(localization)); }
         if let Some(current) = current.upgrade() {
             current.set_title(&copy.current_source);
             let name = profile_description.clone().unwrap_or_else(|| localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string());
@@ -99,7 +117,6 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         }
         true
     });
-    let selected = chooser.selected.clone();
     chooser.connect_changed(glib::clone!(
         #[weak]
         w,
@@ -111,20 +128,29 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         workflow,
         #[strong]
         original_gpu,
+        #[weak]
+        chooser,
+        #[strong]
+        hint_state,
         move || {
-            let result = selected().and_then(|profile| {
-                let (corrected, _) = workflow.borrow().prepare(Some(profile.profile), layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || false)?;
+            let result = if chooser.is_pending() { Err(SourceProfileHint::Reading) } else {
+                (chooser.selected_typed)().map_err(SourceProfileHint::Profile)
+            }.and_then(|profile| {
+                let (corrected, _) = workflow.borrow().prepare(Some(profile.profile), layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || false).map_err(SourceProfileHint::Diagnostic)?;
                 let gpu = w.gpu.borrow();
-                let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-                workflow.borrow_mut().preview(session, corrected, false, original_gpu.same_device(&session.engine().backend().snapshot_gpu()?))
+                let session = &gpu.as_ref().ok_or_else(|| SourceProfileHint::Diagnostic("Canvas unavailable".into()))?.session;
+                let current = original_gpu.same_device(&session.engine().backend().snapshot_gpu().map_err(SourceProfileHint::Diagnostic)?);
+                workflow.borrow_mut().preview(session, corrected, false, current).map_err(SourceProfileHint::Diagnostic)
             });
             match result {
                 Ok(project) => {
+                    hint_state.borrow_mut().take();
                     hint.set_visible(false);
                     comparison.request(project, background, time);
                 }
-                Err(message) => {
-                    hint.set_label(&message);
+                Err(reason) => {
+                    hint.set_label(&reason.message(&w.localization()));
+                    *hint_state.borrow_mut() = Some(reason);
                     hint.set_visible(true);
                     comparison.invalidate(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()).choose_valid_profile.as_ref());
                 }

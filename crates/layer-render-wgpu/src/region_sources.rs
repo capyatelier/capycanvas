@@ -62,7 +62,7 @@ impl RawRegions {
             &include_str!("selection_clip.wgsl")
                 .replace("@group(1) @binding(1)", "@group(0) @binding(19)"),
         ]);
-        let shader = Deferred::wgsl(&device, "tiled region classification", format!("{shader_source}{}", include_str!("tonal_cache_write.wgsl")));
+        let shader = Deferred::wgsl(device, "tiled region classification", format!("{shader_source}{}", include_str!("tonal_cache_write.wgsl")));
         let mut entries: Vec<_> = (0..BATCH_TILES as u32)
             .map(|binding| crate::bindings::texture(binding, wgpu::ShaderStages::COMPUTE, false))
             .collect();
@@ -108,7 +108,7 @@ impl RawRegions {
         let cached_source = format!("{shader_source}{}", include_str!("tonal_cache_read.wgsl"));
         #[cfg(test)]
         let cached_source = cached_source + include_str!("tonal_streaming_test.wgsl");
-        let cached_shader = Deferred::wgsl(&device, "cached tonal scalars", cached_source);
+        let cached_shader = Deferred::wgsl(device, "cached tonal scalars", cached_source);
         let layout = crate::bindings::layout(device, "tiled region classification", &entries);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("tiled region classification"),

@@ -81,7 +81,7 @@ pub struct NativeHost {
     header_drag: Option<layer_ui::HeaderDrag>,
     preview_clock: std::time::Instant,
     filter_preview_image: Option<layer_render::FilterPreviewImage>,
-    catalog: layer_ui::UiCatalog,
+    catalog: Box<layer_ui::UiCatalog>,
     localization_generation: u64,
 }
 
@@ -133,7 +133,7 @@ impl NativeHost {
         if !self.session.set_localization(localization) {
             return false;
         }
-        self.catalog = layer_ui::ui_catalog_localized(self.session.localization());
+        *self.catalog = layer_ui::ui_catalog_localized(self.session.localization());
         self.localization_generation = self.localization_generation.saturating_add(1);
         self.last_snapshot = None;
         self.last_model_snapshot = None;
@@ -148,7 +148,7 @@ impl NativeHost {
         platform: layer_ui::Platform,
         localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Result<Self, String> {
-        let catalog = layer_ui::ui_catalog_localized(&localization);
+        let catalog = Box::new(layer_ui::ui_catalog_localized(&localization));
         let session = UiSession::blank_localized(Renderer::default(), [1, 1], platform, localization)?;
         Ok(Self {
             session,
@@ -659,6 +659,12 @@ impl NativeHost {
                 )
         })
     }
+    fn export_validation(&self, recipe: &layer_ui::ExportRecipe) -> Result<(), layer_ui::ColorFeatureError> {
+        recipe.validate()?;
+        let document = self.session.engine().document();
+        recipe.output_extent([document.width, document.height])?;
+        Ok(())
+    }
     pub fn query(&mut self, query: Value) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(rename_all = "snake_case")]
@@ -676,12 +682,23 @@ impl NativeHost {
             Requests,
             ProofPanel { action: Option<layer_ui::proof_panel::ProofAction> },
             ProofForm,
+            ProofCopy,
             ProofStatus,
             ExportForm,
             ExportValidate { recipe: layer_ui::ExportRecipe },
+            ExportValidation { recipe: layer_ui::ExportRecipe },
             ExportDraft { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction },
             Header { request: header::HeaderRequest },
             Catalog,
+            NativeCaption { caption: layer_ui::NativeCaption },
+            DocumentDeliveryMessage { message: layer_ui::DocumentDeliveryMessage },
+            ProfileEntriesCopy { entries: Vec<layer_ui::profile_library::ProfileEntry> },
+            ProfileNameCopy { name: Option<String> },
+            ExportProfileNameCopy { name: String },
+            ColorFeatureErrorCopy { reason: layer_ui::ColorFeatureError, profile: Option<bool>, proof: Option<bool> },
+            ExportPresetCopy { names: Vec<String> },
+            ExportMetadataCopy { format: layer_ui::ExportFormat, keep: layer_ui::MetadataKeep },
+            ExportProfileCaptionsCopy { captions: Vec<layer_ui::ExportProfileCaption> },
             ApplicationMenu {
                 menu: layer_ui::ApplicationMenu,
             },
@@ -798,15 +815,36 @@ impl NativeHost {
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Header { request } => self.header_request(request),
             Query::Catalog => json!(self.catalog),
+            Query::NativeCaption { caption } => json!(caption.message(self.session.localization())),
+            Query::DocumentDeliveryMessage { message } => json!(message.message(self.session.localization())),
+            Query::ProfileEntriesCopy { entries } => {
+                if entries.len() > layer_ui::profile_library::PROFILE_LIBRARY_ENTRIES { return Err(layer_ui::ColorFeatureError::ProfileLibraryLimit.message(self.session.localization())); }
+                json!(entries.into_iter().map(|mut entry| { entry.profile = None; entry.localized_view(self.session.localization()) }).collect::<Vec<_>>())
+            },
+            Query::ExportProfileNameCopy { name } => json!(layer_ui::ExportProfileCaption::for_name(name).message(self.session.localization())),
+            Query::ProfileNameCopy { name } => json!(layer_ui::profile_library::profile_description_name(name, self.session.localization())),
+            Query::ColorFeatureErrorCopy { reason, profile, proof } => json!(if proof == Some(true) { reason.proof_message(self.session.localization()) } else { match profile {
+                Some(true) => reason.profile_message(self.session.localization()),
+                Some(false) => reason.preset_message(self.session.localization()),
+                None => reason.message(self.session.localization()),
+            }}),
+            Query::ExportPresetCopy { names } => {
+                let mut view = layer_ui::ExportPresetView { names, index: None, recipe: None, changed: false };
+                view.localize_names(self.session.engine().document().color, self.session.localization());
+                json!(view.names)
+            },
+            Query::ExportProfileCaptionsCopy { captions } => json!(captions.iter().map(|caption| caption.message(self.session.localization())).collect::<Vec<_>>()),
+            Query::ExportMetadataCopy { format, keep } => json!(layer_ui::ExportMetadataView::localized_for(format, keep, self.session.localization())),
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
             Query::ProofForm => layer_ui::proof_workflow::proof_form(&self.session),
+            Query::ProofCopy => json!(layer_ui::proof_workflow::proof_copy(&self.session)),
             Query::ProofStatus => json!(self.proof.observe(&self.session)),
             Query::ProofPanel {action} => {
                 if let Some(action)=action {
                     let previous=self.session.state().revision;
-                    let change=layer_ui::proof_panel::apply(&mut self.session,action)?;
+                    let change=layer_ui::proof_panel::apply(&mut self.session,action).map_err(|reason|reason.proof_message(self.session.localization()))?;
                     self.apply_change(previous,change);
                 }
                 layer_ui::color_management::proof_view(&self.session)
@@ -816,11 +854,10 @@ impl NativeHost {
             Query::ExportForm => json!(layer_ui::ExportForm::new_localized(self.session.engine().document(), self.session.localization())),
             Query::ExportDraft { recipe, action } => json!(recipe.draft_localized(action, self.session.localization())),
             Query::ExportValidate { recipe } => {
-                let document = self.session.engine().document();
-                recipe.validate().map_err(|reason|reason.message(self.session.localization()))?;
-                recipe.output_extent([document.width, document.height]).map_err(|reason|reason.message(self.session.localization()))?;
+                self.export_validation(&recipe).map_err(|reason|reason.message(self.session.localization()))?;
                 json!(recipe)
             }
+            Query::ExportValidation { recipe } => json!(self.export_validation(&recipe).err()),
             Query::RendererStats => json!(self.session.renderer_stats()),
             Query::CommandReason { command } => json!(self.session.command_disabled_reason(command)),
             Query::FilterPreviews {
@@ -1104,6 +1141,59 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(first.session.localization(), &japanese));
         assert!(std::sync::Arc::ptr_eq(second.session.localization(), &korean));
         assert!(!std::sync::Arc::ptr_eq(first.session.localization(), second.session.localization()));
+    }
+
+    #[test]
+    fn typed_copy_queries_use_the_published_context_and_preserve_literal_names() {
+        let name = "İı Tiếng Việt Tie\u{302}\u{301}ng Vie\u{323}\u{302}t ไทย 🎨 {draft} \"quoted\"";
+        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        for language in layer_ui::UiLanguage::ALL {
+            let localization = layer_ui::Localizer::shared(language);
+            host.set_localization(localization.clone());
+            let catalog = host.query(json!({"type":"catalog"})).unwrap();
+            assert_eq!(catalog["profile_copy"]["library_title"], localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_LIBRARY_TITLE).as_ref());
+            assert_eq!(catalog["export_copy"]["title"], localization.text(layer_ui::MessageId::COLOR_FEATURES_EXPORT_TITLE).as_ref());
+            assert_eq!(catalog["document_color_copy"]["correct_profile"], localization.text(layer_ui::MessageId::COLOR_FEATURES_COLOR_CORRECT_PROFILE).as_ref());
+            assert_eq!(catalog["proof_copy"]["title"], localization.text(layer_ui::MessageId::COLOR_FEATURES_PROOF_TITLE).as_ref());
+            assert_eq!(catalog["document_delivery_copy"]["separate_copy"], localization.text(layer_ui::MessageId::DOCUMENTS_ERROR_SEPARATE_COPY).as_ref());
+            assert_eq!(catalog["document_delivery_copy"]["untitled"], localization.text(layer_ui::MessageId::DOCUMENTS_UNTITLED).as_ref());
+            let caption = host.query(json!({"type":"native_caption","caption":{"type":"drawing_title","title":name,"width":12,"height":34}})).unwrap();
+            assert_eq!(caption, layer_ui::NativeCaption::DrawingTitle { title:name.into(), width:12, height:34 }.message(&localization));
+            let filename = host.query(json!({"type":"document_delivery_message","message":{"type":"converted_name","name":name}})).unwrap();
+            assert_eq!(filename, layer_ui::DocumentDeliveryMessage::ConvertedName { name:name.into() }.message(&localization));
+            assert!(filename.as_str().unwrap().contains(name));
+            assert!(std::sync::Arc::ptr_eq(host.session.localization(), &localization));
+            assert!(host.session.renderer_mut().0.is_none());
+        }
+    }
+
+    #[test]
+    fn retained_color_metadata_queries_follow_context_without_profile_buffers_or_literal_changes() {
+        let literal = "İı ไทย Tie\u{302}\u{301}ng Vie\u{323}\u{302}t { $name } 🎨";
+        let metadata = json!({"id":"0123456789abcdef","bytes":1234,"name":"","channels":"Rgb","issue":"ProfileChanged"});
+        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        for language in layer_ui::UiLanguage::ALL {
+            let localization = layer_ui::Localizer::shared(language); host.set_localization(localization.clone());
+            let views = host.query(json!({"type":"profile_entries_copy","entries":[metadata]})).unwrap(); let view = &views[0];
+            assert_eq!(view["name"], localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).as_ref());
+            assert_eq!(view["issue"], localization.text(layer_ui::MessageId::COLOR_PROFILE_CHANGED_STORAGE).as_ref());
+            assert!(view["details"].as_str().unwrap().contains("1234")); assert!(view["details"].as_str().unwrap().contains("0123456789ab"));
+            assert!(view.get("profile").is_none()); assert_eq!(metadata["name"], ""); assert_eq!(metadata["issue"], "ProfileChanged");
+            for name in [Some(literal),Some("")] { assert_eq!(host.query(json!({"type":"profile_name_copy","name":name})).unwrap(), name.unwrap()); }
+            assert_eq!(host.query(json!({"type":"profile_name_copy","name":null})).unwrap(), localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).as_ref());
+            let names = host.query(json!({"type":"export_preset_copy","names":["","","","",literal]})).unwrap();
+            assert_eq!(names[0], localization.text(layer_ui::MessageId::COLOR_FEATURES_EXPORT_WEB_SHARE).as_ref()); assert_eq!(names[4], literal);
+            let refusal = host.query(json!({"type":"color_feature_error_copy","reason":"WebpLimit"})).unwrap();
+            assert_eq!(refusal, localization.text(layer_ui::MessageId::COLOR_EXPORT_WEBP_LIMIT).as_ref());
+            let metadata_view = host.query(json!({"type":"export_metadata_copy","format":"Exr","keep":"All"})).unwrap();
+            assert_eq!(metadata_view["available"], false); assert_eq!(metadata_view["note"], localization.text(layer_ui::MessageId::COLOR_FEATURES_EXPORT_METADATA_EXR).as_ref());
+            let mut invalid = layer_ui::ExportRecipe::web_share(); invalid.jpeg_quality = 0;
+            let raw = host.query(json!({"type":"export_validation","recipe":invalid})).unwrap();
+            assert_eq!(raw, "ExportQuality");
+            assert_eq!(host.query(json!({"type":"color_feature_error_copy","reason":raw})).unwrap(), localization.text(layer_ui::MessageId::COLOR_EXPORT_QUALITY_RANGE).as_ref());
+            assert!(host.query(json!({"type":"profile_entries_copy","entries":vec![metadata.clone();layer_ui::profile_library::PROFILE_LIBRARY_ENTRIES+1]})).is_err());
+            assert!(host.session.renderer_mut().0.is_none());
+        }
     }
 
     fn gpu_host(platform: layer_ui::Platform, size: [u32; 2]) -> (layer_render_wgpu::WgpuRasterizer, NativeHost) {

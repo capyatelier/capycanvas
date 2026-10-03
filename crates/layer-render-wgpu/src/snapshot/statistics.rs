@@ -44,15 +44,14 @@ impl SnapshotGpu {
         if request.selection && selection.is_none() { return Err("Select an area to inspect".into()); }
         let extent = snapshot.extent;
         let mut histogram = Histogram::new(snapshot.color());
-        if let layer_core::ArtworkSource::EffectInput(id) | layer_core::ArtworkSource::EffectChannels(id) = request.query.source {
-            if let Some(effect)=request.query.document.layer(id).and_then(|layer|layer.effect.as_ref())
+        if let layer_core::ArtworkSource::EffectInput(id) | layer_core::ArtworkSource::EffectChannels(id) = request.query.source
+            && let Some(effect)=request.query.document.layer(id).and_then(|layer|layer.effect.as_ref())
                 && matches!(effect.program.id.as_ref(),"curves"|"levels") {
                 histogram.domain = match (effect.choice("domain"),effect.value("hdr_stops")) {
                     (Some("Log HDR"),Some(layer_core::EffectValue::Number(stops)))=>layer_core::color::histogram::HistogramDomain::CurveLog {stops:*stops},
                     _=>layer_core::color::histogram::HistogramDomain::Encoded,
                 };
             }
-        }
         let pipeline = StatisticsPipeline::new(&self.device);
         let buffer = |label, size| self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label), size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,

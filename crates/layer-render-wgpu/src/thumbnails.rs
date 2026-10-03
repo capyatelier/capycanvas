@@ -641,6 +641,7 @@ impl BoundsPipeline {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         })
     }
+    #[expect(clippy::too_many_arguments, reason = "Thumbnail reduction keeps texture region and independent mask bindings explicit")]
     pub fn reduce(&self, device: &PipelineDevice, encoder: &mut crate::submission::CommandEncoder,
         output: &wgpu::Buffer, texture: &wgpu::Texture, origin: [u32; 2], extent: [u32; 2],
         mask: Option<(bool, Option<f32>)>, selection: Option<&wgpu::Buffer>,

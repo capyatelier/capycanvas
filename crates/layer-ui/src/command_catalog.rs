@@ -210,15 +210,11 @@ pub(super) fn identity(action: &UiAction) -> String {
         fields.remove("id");
         fields.remove("parent");
     }
-    if let UiAction::Layer { .. } = action {
-        if let Some(fields) = value["action"].as_object_mut() {
-            fields.remove("id");
-            if fields
-                .get("value")
-                .is_some_and(serde_json::Value::is_boolean)
-            {
-                fields.remove("value");
-            }
+    if let UiAction::Layer { .. } = action
+        && let Some(fields) = value["action"].as_object_mut() {
+        fields.remove("id");
+        if fields.get("value").is_some_and(serde_json::Value::is_boolean) {
+            fields.remove("value");
         }
     }
     format!("action:{}", value)
@@ -230,10 +226,9 @@ fn entry(
     action: UiAction,
     enabled: bool,
     selected: Option<bool>,
-    settings: &Settings,
-    platform: Platform,
-    l: &Localizer,
+    context: (&Settings, Platform, &Localizer),
 ) -> Entry {
+    let (settings, platform, l) = context;
     let label = label.as_ref();
     let category = category.as_ref();
     let action = crate::shortcuts::action_command(&action)
@@ -462,9 +457,7 @@ fn menu_entries(
                 alias(action),
                 item.enabled,
                 item.selected,
-                settings,
-                platform,
-                l,
+                (settings, platform, l),
             );
             if item_entry.descriptor.description.is_empty() {
                 item_entry.descriptor.description = command_text(l, MessageId::COMMANDS_MENU_LOCATION, &[("path", path.to_owned()), ("label", item.label.to_string())]);
@@ -477,9 +470,7 @@ fn menu_entries(
                 &command_text(l, MessageId::COMMANDS_PATH, &[("path", path.to_owned()), ("label", item.label.to_string())]),
                 entries,
                 alias,
-                settings,
-                platform,
-                l,
+                settings, platform, l,
             );
         }
     }
@@ -554,9 +545,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 &menu.localized_label(l),
                 &mut entries,
                 &alias,
-                settings,
-                platform,
-                l,
+                settings, platform, l,
             );
         }
         // Menus own their ordering and validation. Commands outside menus still
@@ -568,37 +557,31 @@ impl<R: CanvasRenderer> UiSession<R> {
             let state = self.command(command);
             entries.push(entry(
                 &state.label,
-                l.text(MessageId::COMMANDS_COMMANDS).to_string(),
+                l.text(MessageId::COMMANDS_COMMANDS),
                 UiAction::Invoke { command },
                 state.enabled,
                 state.checkable.then_some(state.selected),
-                settings,
-                platform,
-                l,
+                (settings, platform, l),
             ));
         }
         for family in ToolFamily::ALL {
             entries.push(entry(
                 family.localized_label(l),
-                l.text(MessageId::COMMANDS_TOOLS).to_string(),
+                l.text(MessageId::COMMANDS_TOOLS),
                 UiAction::CycleTool { family },
                 idle,
                 None,
-                settings,
-                platform,
-                l,
+                (settings, platform, l),
             ));
         }
         for brush in tools::brush_catalog_localized(l) {
             let mut item = entry(
                 &brush.label,
-                l.text(MessageId::COMMANDS_BRUSHES).to_string(),
+                l.text(MessageId::COMMANDS_BRUSHES),
                 UiAction::SelectBrush { id: brush.id },
                 idle,
                 None,
-                settings,
-                platform,
-                l,
+                (settings, platform, l),
             );
             item.category = EntryCategory::Brushes;
             item.descriptor.description = command_text(l, MessageId::COMMANDS_BRUSH_PRESET_HELP, &[("category", brush.category.to_string())]);
@@ -607,16 +590,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         let panels = &self.state.tool_panels;
         for set in panels.brush_sets.groups.iter().chain(&panels.sculpt_sets.groups) {
             let mut item = entry(
-                &command_text(l, MessageId::COMMANDS_BRUSH_SET_LABEL, &[("label", set.label.to_string())]),
-                l.text(MessageId::COMMANDS_BRUSH_SETS).to_string(),
+                command_text(l, MessageId::COMMANDS_BRUSH_SET_LABEL, &[("label", set.label.to_string())]),
+                l.text(MessageId::COMMANDS_BRUSH_SETS),
                 set.action.clone(),
                 idle,
                 None,
-                settings,
-                platform,
-                l,
+                (settings, platform, l),
             );
-            item.descriptor.description = l.text(MessageId::COMMANDS_USE_THE_LAST_BRUSH_CHOSEN_IN_THIS_SET).to_string().into();
+            item.descriptor.description = l.text(MessageId::COMMANDS_USE_THE_LAST_BRUSH_CHOSEN_IN_THIS_SET).to_string();
             entries.push(item);
         }
         let current = self.layer_interaction.tool;
@@ -641,14 +622,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             for item in view.groups.iter().chain(&view.subtools) {
                 if !matches!(item.action, UiAction::Invoke { .. }) {
                     entries.push(entry(
-                        &command_text(l, MessageId::COMMANDS_PATH, &[("path", family.to_string()), ("label", item.label.to_string())]),
-                        l.text(MessageId::COMMANDS_TOOL_OPTIONS).to_string(),
+                        command_text(l, MessageId::COMMANDS_PATH, &[("path", family.to_string()), ("label", item.label.to_string())]),
+                        l.text(MessageId::COMMANDS_TOOL_OPTIONS),
                         item.action.clone(),
                         idle,
                         Some(same && item.selected),
-                        settings,
-                        platform,
-                        l,
+                        (settings, platform, l),
                     ));
                 }
             }
@@ -664,14 +643,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let family = crate::shortcuts::tool_command(&item.action)
                         .map_or_else(|| label.to_string(), |command| self.command(command).label.to_string());
                     entries.push(entry(
-                        &command_text(l, MessageId::COMMANDS_PATH, &[("path", family.to_string()), ("label", item.label.to_string())]),
-                        l.text(MessageId::COMMANDS_TOOL_OPTIONS).to_string(),
+                        command_text(l, MessageId::COMMANDS_PATH, &[("path", family.to_string()), ("label", item.label.to_string())]),
+                        l.text(MessageId::COMMANDS_TOOL_OPTIONS),
                         item.action,
                         idle,
                         Some(item.selected),
-                        settings,
-                        platform,
-                        l,
+                        (settings, platform, l),
                     ));
                 }
             }
@@ -681,7 +658,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 format!("tool_setting.{}", setting.id),
                 &setting.label,
                 english.text(setting.label_id).as_ref(),
-                l.text(MessageId::COMMANDS_TOOL_SETTINGS).to_string(),
+                l.text(MessageId::COMMANDS_TOOL_SETTINGS),
                 &setting.label,
                 &setting.numeric,
                 setting.value,
@@ -690,9 +667,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     value: setting.value,
                 },
                 idle,
-                settings,
-                platform,
-                l,
+                settings, platform, l,
             );
             entries.push(item);
         }
@@ -723,28 +698,24 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 let canonical = canonical_properties.controls.iter().find(|item| item.key == control.key).expect("same property schema");
                                 command_text(&english, MessageId::COMMANDS_PROPERTY_LABEL, &[("context", canonical_properties.title.to_string()), ("label", canonical.label.to_string())])
                             },
-                            l.text(MessageId::COMMANDS_LAYER_PROPERTIES).to_string(),
+                            l.text(MessageId::COMMANDS_LAYER_PROPERTIES),
                             &context,
                             numeric,
                             *value,
                             set(&control.key, layer_core::EffectValue::Number(*value)),
                             properties.enabled,
-                            settings,
-                            platform,
-                            l,
+                            settings, platform, l,
                         ));
                     }
                     (PropertyKind::Choice { options }, layer_core::EffectValue::Choice(current)) => {
                         for (i, option) in options.iter().enumerate() {
                             let mut item = entry(
-                                &command_text(l, MessageId::COMMANDS_PROPERTY_CHOICE, &[("label", label.to_string()), ("option", option.to_string())]),
-                                l.text(MessageId::COMMANDS_LAYER_PROPERTIES).to_string(),
+                                command_text(l, MessageId::COMMANDS_PROPERTY_CHOICE, &[("label", label.to_string()), ("option", option.to_string())]),
+                                l.text(MessageId::COMMANDS_LAYER_PROPERTIES),
                                 set(&control.key, layer_core::EffectValue::Choice(i as u32)),
                                 properties.enabled,
                                 Some(i as u32 == *current),
-                                settings,
-                                platform,
-                                l,
+                                (settings, platform, l),
                             );
                             item.descriptor.description = context.clone();
                             entries.push(item);
@@ -753,13 +724,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     (PropertyKind::Toggle, layer_core::EffectValue::Toggle(on)) => {
                         let mut item = entry(
                             &label,
-                            l.text(MessageId::COMMANDS_LAYER_PROPERTIES).to_string(),
+                            l.text(MessageId::COMMANDS_LAYER_PROPERTIES),
                             set(&control.key, layer_core::EffectValue::Toggle(!on)),
                             properties.enabled,
                             Some(*on),
-                            settings,
-                            platform,
-                            l,
+                            (settings, platform, l),
                         );
                         item.descriptor.id = format!("layer_property.{}", control.key);
                         item.descriptor.description = context;
@@ -775,17 +744,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let current = choice.id == workspace.id;
                 let mut item = entry(
                     &choice.name,
-                    l.text(MessageId::COMMANDS_WORKSPACES).to_string(),
+                    l.text(MessageId::COMMANDS_WORKSPACES),
                     UiAction::WorkspaceManager {
                         command: WorkspaceCommand::Switch { id: choice.id.clone() },
                     },
                     switchable || current,
                     Some(current),
-                    settings,
-                    platform,
-                    l,
+                    (settings, platform, l),
                 );
-                item.descriptor.description = l.text(MessageId::COMMANDS_SWITCH_TO_THIS_WORKSPACE).to_string().into();
+                item.descriptor.description = l.text(MessageId::COMMANDS_SWITCH_TO_THIS_WORKSPACE).to_string();
                 entries.push(item);
             }
         }
@@ -798,15 +765,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             });
             let mut item = entry(
                 label,
-                l.text(MessageId::COMMANDS_COLOR).to_string(),
+                l.text(MessageId::COMMANDS_COLOR),
                 UiAction::Color { action: ColorAction::Select { slot } },
                 idle,
                 Some(self.state.colors.slot == slot),
-                settings,
-                platform,
-                l,
+                (settings, platform, l),
             );
-            item.descriptor.description = l.text(MessageId::COMMANDS_PAINT_WITH_THIS_COLOR).to_string().into();
+            item.descriptor.description = l.text(MessageId::COMMANDS_PAINT_WITH_THIS_COLOR).to_string();
             entries.push(item);
         }
         for (label, action) in [
@@ -816,30 +781,26 @@ impl<R: CanvasRenderer> UiSession<R> {
         ] {
             entries.push(entry(
                 label,
-                l.text(MessageId::COMMANDS_COLOR).to_string(),
+                l.text(MessageId::COMMANDS_COLOR),
                 UiAction::Color { action },
                 idle,
                 None,
-                settings,
-                platform,
-                l,
+                (settings, platform, l),
             ));
         }
         let mut pan = entry(
-            l.text(MessageId::COMMANDS_PAN_WHILE_HELD).to_string(),
-            l.text(MessageId::COMMANDS_NAVIGATION).to_string(),
+            l.text(MessageId::COMMANDS_PAN_WHILE_HELD),
+            l.text(MessageId::COMMANDS_NAVIGATION),
             UiAction::Invoke {
                 command: CommandId::Hand,
             },
             true,
             None,
-            settings,
-            platform,
-            l,
+            (settings, platform, l),
         );
         pan.descriptor.id = "canvas.pan".into();
         pan.descriptor.description =
-            l.text(MessageId::COMMANDS_TEMPORARILY_PAN_THE_VIEW_RELEASE_TO_RETURN_TO_THE_TOOL).to_string().into();
+            l.text(MessageId::COMMANDS_TEMPORARILY_PAN_THE_VIEW_RELEASE_TO_RETURN_TO_THE_TOOL).to_string();
         pan.descriptor.shortcut = settings.shortcut_label_localized("canvas.pan", platform, l);
         pan.action = None;
         entries.push(pan);
@@ -863,7 +824,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         _ => true,
                     };
                     let reason = (!enabled).then(|| self.action_disabled_reason(&action));
-                    let mut held = entry(definition.label.resolve(l), l.text(MessageId::COMMANDS_CANVAS).to_string(), *action, enabled, None, settings, platform, l);
+                    let mut held = entry(definition.label.resolve(l), l.text(MessageId::COMMANDS_CANVAS), *action, enabled, None, (settings, platform, l));
                     held.descriptor.disabled_reason = reason;
                     held.descriptor.id = definition.id.clone();
                     held.descriptor.description = if momentary {
@@ -880,7 +841,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     let enabled = matches!(&*action, UiAction::StepToolSetting { id, .. }
                         if self.state.tool_settings.iter().any(|c| c.id == *id));
-                    let mut step = entry(definition.label.resolve(l), l.text(MessageId::COMMANDS_TOOL_SETTINGS).to_string(), *action, enabled, None, settings, platform, l);
+                    let mut step = entry(definition.label.resolve(l), l.text(MessageId::COMMANDS_TOOL_SETTINGS), *action, enabled, None, (settings, platform, l));
                     step.descriptor.id = definition.id;
                     entries.push(step);
                 }
@@ -951,18 +912,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                     } else {
                         l.text(MessageId::COMMANDS_UNDO_COLOR_REORDER).to_string()
                     }
-                    .into();
-                    e.descriptor.category = l.text(MessageId::COMMANDS_PALETTE).to_string().into();
+                    ;
+                    e.descriptor.category = l.text(MessageId::COMMANDS_PALETTE).to_string();
                     e.descriptor.description = if redo {
                         l.text(MessageId::COMMANDS_REAPPLY_THE_LAST_UNDONE_COLOR_REORDER_IN_THIS_PALETTE).to_string()
                     } else {
                         l.text(MessageId::COMMANDS_RESTORE_THE_PREVIOUS_COLOR_ORDER_IN_THIS_PALETTE).to_string()
                     }
-                    .into();
+                    ;
                     e.descriptor.enabled =
                         self.state.colors.library.can_undo_reorder(palette, redo);
                     e.descriptor.disabled_reason =
-                        (!e.descriptor.enabled).then(|| l.text(MessageId::COMMANDS_NO_COLOR_REORDER_TO_RESTORE).to_string().into());
+                        (!e.descriptor.enabled).then(|| l.text(MessageId::COMMANDS_NO_COLOR_REORDER_TO_RESTORE).to_string());
                     e.search = crate::search::normalize(&format!("{} {}", e.descriptor.label, e.search));
                 }
             }
@@ -974,10 +935,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             ] {
                 if let Some(e) = entries.iter_mut().find(|e| e.descriptor.id == id) {
                     e.descriptor.label = label.clone();
-                    e.descriptor.category = l.text(MessageId::COMMANDS_TEXT_EDITING).to_string().into();
+                    e.descriptor.category = l.text(MessageId::COMMANDS_TEXT_EDITING).to_string();
                     e.descriptor.enabled = false;
                     e.descriptor.disabled_reason =
-                        Some(l.text(MessageId::COMMANDS_CLOSE_COMMAND_SEARCH_TO_UNDO_OR_REDO_IN_THE_TEXT_FIELD).to_string().into());
+                        Some(l.text(MessageId::COMMANDS_CLOSE_COMMAND_SEARCH_TO_UNDO_OR_REDO_IN_THE_TEXT_FIELD).to_string());
                     e.search = crate::search::normalize(&format!("{label} {}", e.search));
                 }
             }
@@ -995,23 +956,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         let l = self.localization();
         use CommandId as C;
         if !command.available_on(self.state.platform) {
-            return l.text(MessageId::COMMANDS_NOT_AVAILABLE_ON_THIS_PLATFORM).into();
+            return l.text(MessageId::COMMANDS_NOT_AVAILABLE_ON_THIS_PLATFORM);
         }
         if self.state.document_file.close_ready {
-            return l.text(MessageId::COMMANDS_THIS_DRAWING_IS_CLOSING).into();
+            return l.text(MessageId::COMMANDS_THIS_DRAWING_IS_CLOSING);
         }
         if self.workspace_read_only && !matches!(command, C::ApplyTransform | C::CancelTransform) {
             return if self.managed_workspace.is_none() {
                 l.text(MessageId::COMMANDS_THE_WORKSPACE_IS_STILL_LOADING)
             } else {
                 l.text(MessageId::COMMANDS_WORKSPACE_OWNERSHIP_NEEDS_RECOVERY)
-            }.into();
+            };
         }
         if self.workspace_transition {
-            return l.text(MessageId::COMMANDS_A_WORKSPACE_CHANGE_IS_IN_PROGRESS).into();
+            return l.text(MessageId::COMMANDS_A_WORKSPACE_CHANGE_IS_IN_PROGRESS);
         }
         if self.rendering_suspended && !Self::command_without_renderer(command) {
-            return l.text(MessageId::COMMANDS_PAINTING_IS_UNAVAILABLE_SAVE_THE_DRAWING_AND_REOPEN_IT).into();
+            return l.text(MessageId::COMMANDS_PAINTING_IS_UNAVAILABLE_SAVE_THE_DRAWING_AND_REOPEN_IT);
         }
         let gate = match command {
             C::SdrRendition
@@ -1158,7 +1119,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return document
                     .delete_layers_edit(&[document.active_layer])
                     .err()
-                    .map_or(l.text(MessageId::COMMANDS_THIS_LAYER_CAN_T_BE_DELETED).into(), |e| layer_error(e, l).into());
+                    .map_or(l.text(MessageId::COMMANDS_THIS_LAYER_CAN_T_BE_DELETED), |e| layer_error(e, l));
             }
             C::SdrRendition | C::PreviewSdr if !document.color.depth.is_float() => {
                 l.text(MessageId::COMMANDS_REQUIRES_A_HIGH_DYNAMIC_RANGE_DRAWING)
@@ -1288,7 +1249,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::LowerLayer => l.text(MessageId::COMMANDS_THE_LAYER_IS_ALREADY_AT_THE_BOTTOM),
             _ => l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET),
         };
-        reason.into()
+        reason
     }
 
     fn action_disabled_reason(&self, action: &UiAction) -> String {
@@ -1334,43 +1295,43 @@ impl<R: CanvasRenderer> UiSession<R> {
             | UiAction::Selection { .. }
                 if document.selection.is_none() && self.current_selection().is_none() =>
             {
-                Some(l.text(MessageId::COMMANDS_CREATE_A_SELECTION_FIRST).to_string().into())
+                Some(l.text(MessageId::COMMANDS_CREATE_A_SELECTION_FIRST).to_string())
             }
             UiAction::Layer { action: LayerAction::PasteMask { .. } }
                 if self.layer_interaction.clipboard_mask.is_none() =>
             {
-                Some(l.text(MessageId::COMMANDS_COPY_A_LAYER_MASK_FIRST).to_string().into())
+                Some(l.text(MessageId::COMMANDS_COPY_A_LAYER_MASK_FIRST).to_string())
             }
             UiAction::Layer { action: LayerAction::CopyMask { .. } | LayerAction::ApplyMask { .. } }
                 if document.layer(document.active_layer).is_some_and(|l| l.mask.is_none()) =>
             {
-                Some(l.text(MessageId::COMMANDS_THE_LAYER_HAS_NO_MASK).to_string().into())
+                Some(l.text(MessageId::COMMANDS_THE_LAYER_HAS_NO_MASK).to_string())
             }
             UiAction::Layer { action: LayerAction::ApplyMask { .. } } if apply_mask_refusal.is_some() => {
                 apply_mask_refusal.map(|reason| reason.to_string())
             }
             UiAction::Layer { action: LayerAction::ReferenceSelection } => {
-                Some(l.text(MessageId::COMMANDS_MARK_LAYERS_AS_REFERENCES_FIRST).to_string().into())
+                Some(l.text(MessageId::COMMANDS_MARK_LAYERS_AS_REFERENCES_FIRST).to_string())
             }
             UiAction::StepToolSetting { id, .. } if !self.state.tool_settings.iter().any(|c| c.id == *id) => {
                 Some(command_text(l, MessageId::COMMANDS_SETTING_UNAVAILABLE, &[("setting", id.to_string())]))
             }
             UiAction::Effect { .. } if self.selection_masks.target().is_some() || document.active_mask => {
-                Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_BEFORE_APPLYING_A_FILTER).to_string().into())
+                Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_BEFORE_APPLYING_A_FILTER).to_string())
             }
             UiAction::Layer { .. } | UiAction::Effect { .. } | UiAction::Selection { .. }
                 if document.is_locked(document.active_layer) =>
             {
-                Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string().into())
+                Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string())
             }
             UiAction::Layer { .. } | UiAction::Effect { .. }
                 if document.layer(document.active_layer).is_some_and(|l| l.kind == LayerKind::Background) =>
             {
-                Some(l.text(MessageId::COMMANDS_THE_BACKGROUND_CAN_T_BE_CHANGED_THIS_WAY).to_string().into())
+                Some(l.text(MessageId::COMMANDS_THE_BACKGROUND_CAN_T_BE_CHANGED_THIS_WAY).to_string())
             }
             _ => None,
         };
-        reason.unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string().into())
+        reason.unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string())
     }
     pub(super) fn refresh_command_search_localization(&mut self) {
         if self.state.command_search.is_none() { return; }
@@ -1380,11 +1341,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let selected = view.results.get(view.selected).map(|entry| entry.id.clone());
         view.results = view.results.iter().filter_map(|entry| descriptor(&entry.id)).collect();
         view.selected = selected.and_then(|id| view.results.iter().position(|entry| entry.id == id)).unwrap_or(0);
-        if let Some(parameter) = &mut view.parameter {
-            if let Some(mut current) = descriptor(&parameter.id) {
-                current.parameter = parameter.parameter.clone();
-                *parameter = current;
-            }
+        if let Some(parameter) = &mut view.parameter
+            && let Some(mut current) = descriptor(&parameter.id) {
+            current.parameter = parameter.parameter.clone();
+            *parameter = current;
         }
         if let Some(error) = &self.command_search.error_copy {
             view.error = match error {
@@ -1543,7 +1503,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(self.changed(0, false));
         }
         if self.command_search.epoch != self.state.document_file.epoch {
-            return Err(l.text(MessageId::COMMANDS_THIS_COMMAND_SEARCH_BELONGS_TO_A_PREVIOUS_DRAWING).to_string().into());
+            return Err(l.text(MessageId::COMMANDS_THIS_COMMAND_SEARCH_BELONGS_TO_A_PREVIOUS_DRAWING).to_string());
         }
         match action {
             A::Commit { text } => {
@@ -1660,7 +1620,7 @@ fn parameter_entry(
     let label = label.as_ref();
     let category = category.as_ref();
     let context = context.as_ref();
-    let mut item = entry(&command_text(l, MessageId::COMMANDS_PARAMETER_LABEL, &[("label", label.to_owned())]), category, action, enabled, None, settings, platform, l);
+    let mut item = entry(command_text(l, MessageId::COMMANDS_PARAMETER_LABEL, &[("label", label.to_owned())]), category, action, enabled, None, (settings, platform, l));
     item.canonical_search = crate::search::normalize(canonical_label);
     item.search.push(' ');
     item.search.push_str(&item.canonical_search);

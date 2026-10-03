@@ -2,8 +2,10 @@ use crate::{Localizer, MessageId, FluentArgs, DocumentTransportRefusal};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DocumentDeliveryCopy {
+    pub untitled: Arc<str>,
+    pub image_name: Arc<str>,
     pub clipboard_unavailable: Arc<str>,
     pub clipboard_too_large: Arc<str>,
     pub clipboard_empty: Arc<str>,
@@ -16,6 +18,7 @@ pub struct DocumentDeliveryCopy {
     pub cancelling: Arc<str>,
     pub switching_drawing: Arc<str>,
     pub converted_filename_invalid: Arc<str>,
+    pub separate_copy: Arc<str>,
     pub preparing_converted_copy: Arc<str>,
     pub writing_converted_copy: Arc<str>,
     pub drag_panel: Arc<str>,
@@ -36,6 +39,8 @@ pub struct DocumentDeliveryCopy {
 impl DocumentDeliveryCopy {
     pub fn new(localization: &Localizer) -> Self {
         Self {
+            untitled: localization.text(MessageId::DOCUMENTS_UNTITLED),
+            image_name: localization.text(MessageId::MENU_IMAGE),
             clipboard_unavailable: localization.text(MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_UNAVAILABLE),
             clipboard_too_large: localization.text(MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_TOO_LARGE),
             clipboard_empty: localization.text(MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_EMPTY),
@@ -48,6 +53,7 @@ impl DocumentDeliveryCopy {
             cancelling: localization.text(MessageId::DOCUMENTS_DELIVERY_CANCELLING),
             switching_drawing: localization.text(MessageId::DOCUMENTS_DELIVERY_SWITCHING_DRAWING),
             converted_filename_invalid: localization.text(MessageId::DOCUMENTS_DELIVERY_CONVERTED_FILENAME_INVALID),
+            separate_copy: localization.text(MessageId::DOCUMENTS_ERROR_SEPARATE_COPY),
             preparing_converted_copy: localization.text(MessageId::DOCUMENTS_DELIVERY_PREPARING_CONVERTED_COPY),
             writing_converted_copy: localization.text(MessageId::DOCUMENTS_DELIVERY_WRITING_CONVERTED_COPY),
             drag_panel: localization.text(MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL),
@@ -68,9 +74,14 @@ impl DocumentDeliveryCopy {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DocumentDeliveryMessage {
+    ClipboardUnavailable,
+    ClipboardTooLarge,
+    ClipboardEmpty,
+    ConvertedFilenameInvalid,
+    ChooseDifferent,
     DownloadConfirm { name: String },
     ClipboardShared { detail: String },
     ClipboardFormats { formats: String },
@@ -87,6 +98,11 @@ impl DocumentDeliveryMessage {
     pub fn message(&self, localization: &Localizer) -> String {
         let mut args = FluentArgs::new();
         let id = match self {
+            Self::ClipboardUnavailable => MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_UNAVAILABLE,
+            Self::ClipboardTooLarge => MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_TOO_LARGE,
+            Self::ClipboardEmpty => MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_EMPTY,
+            Self::ConvertedFilenameInvalid => MessageId::DOCUMENTS_DELIVERY_CONVERTED_FILENAME_INVALID,
+            Self::ChooseDifferent => MessageId::COLOR_FEATURES_COLOR_CHOOSE_DIFFERENT,
             Self::DownloadConfirm { name } => { args.set("name", name.as_str()); MessageId::DOCUMENTS_DELIVERY_DOWNLOAD_CONFIRM },
             Self::ClipboardShared { detail } => { args.set("detail", detail.as_str()); MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_SHARED },
             Self::ClipboardFormats { formats } => { args.set("formats", formats.as_str()); MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_FORMATS },

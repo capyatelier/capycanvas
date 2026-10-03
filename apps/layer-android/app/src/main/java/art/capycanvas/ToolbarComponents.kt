@@ -214,7 +214,8 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
 @Composable internal fun ToolOptionField(option: JSONObject, width: Float, vertical: Boolean, style: String, labeled: Boolean,
     preferences: JSONObject, tileWidth: Float, iconSize: Int, edit: (JSONObject) -> Unit,
     caption: String? = null, prefix: String = "toolbar", accent: Boolean = false,
-    choiceMenu: ((String, (JSONObject?) -> Unit) -> Unit)? = null) {
+    choiceMenu: ((String, (JSONObject?) -> Unit) -> Unit)? = null,
+    choiceCopy: (suspend (String) -> JSONObject?)? = null) {
     when {
         option.has("Range") -> option.getJSONObject("Range").let { range ->
             val fields = range.array("bounds").objects()
@@ -225,7 +226,7 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
         option.has("Numeric") -> ToolbarNumber(option.getJSONObject("Numeric"), vertical, style, labeled, preferences, edit)
         option.has("Choice") -> option.getJSONObject("Choice").let { choice ->
             ToolbarChoice(choice, vertical, labeled, caption == null && width < tileWidth * choice.array("items").length(),
-                iconSize, edit, prefix = prefix, height = if (caption != null) 32f else 24f, captions = caption != null, menu = choiceMenu)
+                iconSize, edit, prefix = prefix, height = if (caption != null) 32f else 24f, captions = caption != null, menu = choiceMenu, menuCopy = choiceCopy)
         }
         else -> option.getJSONObject("Action").let { action ->
             ToolOptionAction(action.getJSONObject("state"), action.optBoolean("checkable"), iconSize, caption, accent, prefix) {
@@ -271,8 +272,10 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
 /** A captioned item that opens its core menu without taking window focus. A
  * disabled primary command disables it and shows its reason, like an action. */
 @Composable internal fun ToolOptionMenu(id: String, icon: String, label: String, command: JSONObject?, prefix: String,
+    copy: (suspend () -> JSONObject?)? = null,
     load: ((JSONObject?) -> Unit) -> Unit) {
     val button = remember { WindowlessMenuButton() }
+    SideEffect { button.copy = copy }
     val enabled = command?.getBoolean("enabled") ?: true
     val reason = command?.takeIf { !enabled && !it.isNull("disabled_reason") }?.getString("disabled_reason")
     var reveal by remember { mutableIntStateOf(0) }
@@ -351,7 +354,8 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
 
 @Composable internal fun ToolbarChoice(choice: JSONObject, vertical: Boolean, labeled: Boolean, stacked: Boolean,
     iconSize: Int, edit: (JSONObject) -> Unit, prefix: String = "toolbar", height: Float = 24f, captions: Boolean = false,
-    menu: ((String, (JSONObject?) -> Unit) -> Unit)? = null) {
+    menu: ((String, (JSONObject?) -> Unit) -> Unit)? = null,
+    menuCopy: (suspend (String) -> JSONObject?)? = null) {
     val colors = LocalPalette.current
     val items = choice.array("items").objects()
     val id = choice.getString("id")
@@ -399,6 +403,7 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
     }
     var open by remember { mutableStateOf(false) }
     val button = remember { WindowlessMenuButton() }
+    SideEffect { button.copy = if (menuCopy == null) null else suspend { menuCopy(id) } }
     val selected = items.firstOrNull { it.getBoolean("selected") } ?: items.first()
     Box(Modifier.fillMaxSize().testTag("$prefix-choice-$id"), contentAlignment = Alignment.Center) {
         Row(Modifier.fillMaxWidth().then(if (vertical) Modifier.fillMaxHeight() else Modifier.height(height.dp)).clip(ControlShape)

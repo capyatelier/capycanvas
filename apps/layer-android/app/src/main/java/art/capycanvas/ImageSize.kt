@@ -21,31 +21,30 @@ import org.json.JSONObject
     val resampleMenu = remember { WindowlessMenuButton() }
     SizePanel(host, dock, workArea, "image_size", "image-size", view) { actions ->
         SizeAxes(actions, view, "image-size")
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SizeUnits(actions, view, "image-size", Modifier.weight(1f))
-            SizeCheck(actions, view.getString("constrain_label"), view.getBoolean("constrain"), "constrain", "image-size-constrain")
-        }
+        SizeUnits(actions, view, "image-size", Modifier.fillMaxWidth())
+        SizeCheck(actions, view.getString("constrain_label"), view.getBoolean("constrain"), "constrain", "image-size-constrain")
         SizeNumber(actions, view.getString("resolution_label"), view.number("resolution"), view.getJSONObject("resolution_numeric"),
             "image-size-resolution", "resolution")
         val resamples = view.getJSONArray("resamples").objects()
         val chosen = view.getString("resample")
+        val resampleCopy = obj("sections" to JSONArray().put(JSONArray(resamples.map { choice ->
+            val resample = choice.getString("resample")
+            obj("label" to choice.getString("label"), "selected" to (resample == chosen),
+                "command" to obj("op" to "resample", "resample" to resample))
+        })))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(view.getString("resample_label"))
             Box(Modifier.weight(1f)) {
                 Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).clip(ControlShape).background(colors.input)
                     .focusProperties { canFocus = false }.testTag("image-size-resample")
                     .opensWindowlessMenu(resampleMenu, view.getString("resample_label")) { open ->
-                        if (actions.endTyping()) open(obj("sections" to JSONArray().put(JSONArray(resamples.map { choice ->
-                            val resample = choice.getString("resample")
-                            obj("label" to choice.getString("label"), "selected" to (resample == chosen),
-                                "command" to obj("op" to "resample", "resample" to resample))
-                        }))))
+                        if (actions.endTyping()) open(resampleCopy)
                     }.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(resamples.first { it.getString("resample") == chosen }.getString("label"), Modifier.weight(1f),
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     SharedIcon("chevron-down", null, Modifier.size(12.dp))
                 }
-                WindowlessMenuHost(host, resampleMenu, actions::choose)
+                WindowlessMenuHost(host, resampleMenu, actions::choose, current = resampleCopy)
             }
         }
     }

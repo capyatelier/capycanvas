@@ -98,7 +98,7 @@ impl NativePromoter {
                         bind_group_layouts: &[Some(&layout)],
                         immediate_size: 0,
                     });
-                pipelines.push(crate::Deferred::compute(&device, "native canonical promotion", &pipeline_layout, &crate::Deferred::wgsl(&device, "native canonical promotion", source), "main"));
+                pipelines.push(crate::Deferred::compute(device, "native canonical promotion", &pipeline_layout, &crate::Deferred::wgsl(device, "native canonical promotion", source), "main"));
                 layouts.push(layout);
             }
         }

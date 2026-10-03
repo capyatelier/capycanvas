@@ -130,14 +130,13 @@ impl MotionState {
         &mut self,
         real: &[StrokePoint],
         motion: &motion_fit::MotionFit,
-        requested: u32,
-        now: u32,
-        lifetime: u32,
+        timing: (u32, u32, u32),
         transform: [f32; 6],
         config: InstantFeedbackConfig,
-        history: Option<drawing_state::DrawingState>,
-        continuity: f64,
+        drawing: (Option<drawing_state::DrawingState>, f64),
     ) -> Option<output::Output> {
+        let (requested, now, lifetime) = timing;
+        let (history, continuity) = drawing;
         let age = now.saturating_sub(real.last()?.elapsed_micros);
         let requested = requested
             .saturating_sub(now.max(real.last()?.elapsed_micros))
@@ -438,24 +437,18 @@ impl PredictionState {
                 let immediate = self.immediate.forecast(
                     real,
                     &motion,
-                    requested,
-                    now,
-                    lifetime,
+                    (requested, now, lifetime),
                     transform,
                     config,
-                    None,
-                    if interrupted { 0. } else { drawing.continuity },
+                    (None, if interrupted { 0. } else { drawing.continuity }),
                 );
                 let sustained = self.sustained.forecast(
                     real,
                     &motion,
-                    requested,
-                    now,
-                    lifetime,
+                    (requested, now, lifetime),
                     transform,
                     config,
-                    Some(drawing),
-                    0.,
+                    (Some(drawing), 0.),
                 );
                 let output = if drawing.speed < 1400. || interrupted || drawing.reach == 0. {
                     immediate

@@ -20,7 +20,7 @@ export function chooseColor({app, color, element, button, intensity, onIntensity
       input.dataset.colorField = i; label.append(text, input); return {label, text, input};
     });
     const footer = element('footer'), cancel = button(()=>common.cancel, () => root.close());
-    let result = null, view;
+    let result = null, view, failure;
     const apply = button(()=>copy.use_color, () => {
       if (!apply.disabled && view.value && app.state().document_file.epoch === epoch) { result = view.value; onIntensity?.(view.draft.intensity); root.close(); }
     }, 'suggested-action');
@@ -30,32 +30,36 @@ export function chooseColor({app, color, element, button, intensity, onIntensity
     const group=element('div','color-entry-group');group.append(modelRow,intensityRow,...fields.map(f=>f.label));
     form.append(title, description, comparison, group, warning, error, footer);
     root.append(form); document.body.append(root);
-    const render = (next, preserve=false) => {
-      view = next; intensityRow.hidden=view.draft.intensity==null;if(document.activeElement!==intensityInput)intensityInput.value=view.draft.intensity??0; if(view.draft.intensity==null)form.insertBefore(comparison,warning);description.textContent = view.description;
-      if (!model.options.length) for (const [id, name] of view.models) {
-        const option = element('option', '', name); option.value = id; model.append(option);
+    const project = next => {
+      description.textContent = next.description;
+      for (const [id, name] of next.models) {
+        let option = [...model.options].find(option=>option.value===id);
+        if (!option) { option=element('option');option.value=id;model.append(option); }
+        option.textContent = name;
       }
-      model.value = view.draft.model;
       fields.forEach(({label, text, input}, i) => {
-        label.hidden = !view.labels[i]; text.textContent = view.labels[i];
-        input.setAttribute('aria-label', view.labels[i]);
-        if (!preserve && input.value !== view.draft.fields[i]) input.value = view.draft.fields[i];
+        label.hidden = !next.labels[i]; text.textContent = next.labels[i];
+        input.setAttribute('aria-label', next.labels[i]);
       });
+      warning.textContent = next.validation??'';
+      error.textContent = failure??next.error??'';
+      apply.disabled = !view.value || !!next.error || failure!=null;
+    };
+    const render = next => {
+      view = next; intensityRow.hidden=view.draft.intensity==null;
+      if(document.activeElement!==intensityInput)intensityInput.value=view.draft.change_intensity_text??view.draft.intensity??0;
+      if(view.draft.intensity==null)form.insertBefore(comparison,warning);
+      project(view);model.value = view.draft.model;
+      fields.forEach(({input}, i) => { if (input.value !== view.draft.fields[i]) input.value = view.draft.fields[i]; });
       if (view.preview) preview.style.background = colorCss(view.preview);
       baseFigure.hidden=!view.base_preview;adjustedLabel.hidden=!view.base_preview;if(view.base_preview)basePreview.style.background=colorCss(view.base_preview);
-      warning.textContent = view.validation??'';
-      error.textContent = view.error ?? ''; apply.disabled = !view.value || !!view.error;
     };
     const query = request => {
       try {
-        if(view?.draft.intensity!=null){
-          const text=intensityInput.value.trim(),stops=Number(text);
-          if(!text||!Number.isFinite(stops))throw Error('Enter a finite EV value');
-          request={...request,change_intensity:stops};
-        }
-        render(app.color_ui({type: 'form', request}));
+        if(view?.draft.intensity!=null)request={...request,change_intensity_text:intensityInput.value};
+        failure=null;render(app.color_ui({type: 'form', request}));
       }
-      catch (e) { error.textContent = String(e); apply.disabled = true; }
+      catch (e) { failure=String(e);error.textContent=failure;apply.disabled=true; }
     };
     fields.forEach(({input}) => input.oninput = () => query({...view.draft, fields: fields.map(f => f.input.value)}));
     intensityInput.oninput=()=>query({...view.draft,fields:fields.map(f=>f.input.value)});
@@ -63,7 +67,7 @@ export function chooseColor({app, color, element, button, intensity, onIntensity
     form.onsubmit = e => { e.preventDefault(); apply.click(); };
     root.addEventListener('close', () => { root.remove(); resolve(result); }, {once: true});
     const panel=app.color_panel();query({color,document_depth:(app.state().layer_tools.mask_editing?.colors??app.state().colors).hdr_depth, document_space: panel.rgb_space, display_space:'Srgb',model:panel.hdr?'linear_rgb':'document_rgb',intensity:panel.hdr?(intensity??null):null,rendition:panel.rendition});
-    Object.defineProperty(form,'language',{set(){if(view)render(app.color_ui({type:'form',request:{...view.draft,fields:fields.map(f=>f.input.value)}}),true);}});
+    Object.defineProperty(form,'language',{set(){if(view)project(app.color_ui({type:'form_copy',copy:view.copy}));}});
     bindCopy(form,()=>app.language_tag(),'language');
     root.showModal(); fields[0].input.focus();
   });

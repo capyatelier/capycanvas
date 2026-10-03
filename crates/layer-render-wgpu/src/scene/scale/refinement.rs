@@ -5,12 +5,12 @@ impl Cache {
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
-        let Encoding { encoder, commands } = encoding;
-        let mut missing = self.invalidate_native(scene, r, packet, dirty, encoder, commands, tiles)?;
+        let mut missing = self.invalidate_native(scene, r, packet, dirty, encoding, tiles)?;
         if let Some(overview) = &mut self.overview {
-            missing.extend(overview.invalidate_native(scene, r, packet, dirty, encoder, commands, tiles)?);
+            missing.extend(overview.invalidate_native(scene, r, packet, dirty, encoding, tiles)?);
         }
         if missing.is_empty() { return Ok(PixelRect::EMPTY); }
+        let Encoding { encoder, commands } = encoding;
         self.admit_hierarchy(r, encoder, commands)?;
         let reverse = scene.native_reverse;
         scene.native_reverse = !reverse;
@@ -70,10 +70,11 @@ impl Cache {
     }
 
     fn invalidate_native(
-        &mut self, scene: &Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, dirty: PixelRect,
-        encoder: &mut crate::submission::CommandEncoder, commands: &mut Commands, tiles: Option<&BTreeSet<[u32; 2]>>,
+        &mut self, scene: &Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
+        dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<BTreeSet<[u32; 2]>, GpuRasterError> {
         if self.reuse_output { return Ok(BTreeSet::new()); }
+        let Encoding { encoder, commands } = encoding;
         let copied = self.copy_shifted(r, encoder);
         if !copied.is_empty() {
             let [x, y, width, height] = paint_transform::texel_rect(copied.window_local(self.plan.bounds), 1 << self.plan.level);

@@ -99,10 +99,8 @@ fn alpha_item(container: &Container<'_>, id: u32) -> Result<Option<u32>, String>
         if matches!(
             p.aux,
             Some(b"urn:mpeg:mpegB:cicp:systems:auxiliary:alpha" | b"urn:mpeg:hevc:2015:auxid:1")
-        ) {
-            if alpha.replace(reference.from).is_some() {
-                return Err("Multiple AVIF alpha images".into());
-            }
+        ) && alpha.replace(reference.from).is_some() {
+            return Err("Multiple AVIF alpha images".into());
         }
     }
     Ok(alpha)
@@ -329,8 +327,8 @@ fn decode_item(
             b"tmap" => return Err("AVIF tone-map integration is not yet available".into()),
             _ => return Err("Unsupported AVIF image item type".into()),
         };
-        if !alpha {
-            if let Some(alpha_id) = alpha_item(container, id)? {
+        if !alpha
+            && let Some(alpha_id) = alpha_item(container, id)? {
                 let alpha_p = Properties::read(container, alpha_id)?;
                 if alpha_p.geometry != p.geometry {
                     return Err("AVIF color and alpha transformations disagree".into());
@@ -341,7 +339,6 @@ fn decode_item(
                 let alpha = decode_item(container, alpha_id, None, true, stack, remaining, cancel)?;
                 image.merge_alpha(&alpha, cancel)?;
                 image.premultiplied = container.targets(id, b"prem")?.contains(&alpha_id);
-            }
         }
         Ok(image)
     })();
@@ -529,11 +526,7 @@ fn read_rendition(
             if image.premultiplied {
                 let alpha = u32::from(pixel[3]);
                 for c in &mut pixel[..3] {
-                    *c = if alpha == 0 {
-                        0
-                    } else {
-                        ((u32::from(*c) * max + alpha / 2) / alpha).min(max) as u16
-                    };
+                    *c = (u32::from(*c) * max + alpha / 2).checked_div(alpha).unwrap_or(0).min(max) as u16;
                 }
             }
             for (c, value) in pixel.into_iter().enumerate() {

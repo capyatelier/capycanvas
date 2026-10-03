@@ -273,7 +273,7 @@ impl SourceBuilder {
         }
         self.band.extend_from_slice(bytes);
         self.next_y += 1;
-        if self.next_y % TILE_SIZE == 0 || self.next_y == self.image.extent[1] {
+        if self.next_y.is_multiple_of(TILE_SIZE) || self.next_y == self.image.extent[1] {
             self.flush()?;
         }
         Ok(())

@@ -179,9 +179,7 @@ pub fn read(mut input: impl Read) -> io::Result<Vec<Record>> {
     match (records.first(), records.last()) {
         (Some(Record::Metadata(_)), Some(Record::Footer { records: count, .. }))
             if *count == records.len() as u64 - 1 =>
-        {
-            ()
-        }
+        {}
         _ => return Err(invalid("missing metadata/footer or incomplete recording")),
     }
     if records[1..records.len() - 1]

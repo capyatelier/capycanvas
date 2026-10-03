@@ -1612,7 +1612,7 @@ impl Document {
                     .iter()
                     .position(|l| l.kind == LayerKind::Background)
                     .unwrap_or(self.layers.len());
-                self.layers.insert(index.min(bottom), layer);
+                self.layers.insert(index.min(bottom), *layer);
                 Edit::RemoveLayer { id }
             }
             Edit::RemoveLayer { id } => {
@@ -1638,7 +1638,7 @@ impl Document {
                 }
                 let mut inverse = vec![Edit::InsertLayer {
                     index,
-                    layer: removed,
+                    layer: Box::new(removed),
                 }];
                 if selected {
                     inverse.extend([
@@ -1770,7 +1770,7 @@ pub enum Edit {
     SetRulers(Vec<Ruler>),
     InsertLayer {
         index: usize,
-        layer: Layer,
+        layer: Box<Layer>,
     },
     RemoveLayer {
         id: LayerId,
@@ -2381,8 +2381,7 @@ mod tests {
 
     #[test]
     fn brush_colors_preserve_finite_extended_rgb_and_validate_coverage_separately() {
-        let mut brush = BrushSnapshot::default();
-        brush.color_rgba_linear = [-0.3, 1.4, 0.7, 0.37];
+        let mut brush = BrushSnapshot { color_rgba_linear: [-0.3, 1.4, 0.7, 0.37], ..Default::default() };
         brush.color_dynamics.secondary_color_rgba_linear = [1.2, -0.1, 0.8, 1. / 65535.];
         brush.validate().unwrap();
         for secondary in [false, true] {

@@ -1693,6 +1693,7 @@ impl Workspace {
         popover: &gtk::PopoverMenu,
         menu: layer_ui::ContextMenu,
     ) -> gtk::gio::Menu {
+        popover.set_flags(gtk::PopoverMenuFlags::NESTED);
         fn model(
             w: &Rc<Workspace>,
             popup: &gtk::PopoverMenu,

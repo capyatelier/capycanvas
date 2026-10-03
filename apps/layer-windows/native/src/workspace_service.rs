@@ -77,6 +77,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         self.publish(native);
         result
     }
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn report_error(&mut self, native: &mut NativeHost, error: StoreError) {
         self.controller.set_error(error);
         self.publish(native);
@@ -139,6 +140,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
 pub(crate) enum WorkspaceAction {
     Input { input: WorkspaceInput },
     PreferencesRetry,
@@ -200,6 +202,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     }
 }
 impl WorkspaceService<layer_workspace::StoreWorker> {
+    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn backup_database(&mut self, native: &mut NativeHost, path: String) -> Result<()> {
         self.require_idle()?;
         crate::document_io::location(&path).map_err(StoreError::invalid)?;

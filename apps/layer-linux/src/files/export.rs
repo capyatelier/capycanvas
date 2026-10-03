@@ -1037,7 +1037,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         if range.selected()==2 && range.selected()!=exr_index {color_link.set_title(copy.background.as_ref()); color_link.set_subtitle(if flatten.is_active(){match read_background(){ExportBackground::Black=>copy.black.as_ref(),_=>copy.white.as_ref()}}else{copy.no_flatten.as_ref()});return;}
         color_link.set_title(copy.color_transparency.as_ref());
         if let Ok(profile) = selected_profile() {
-            color_link.set_subtitle(&format!("{} · {}-bit · {}", profile.name, if depth.selected() == 0 { 8 } else { 16 },
+            color_link.set_subtitle(&format!("{} · {}-bit · {}", profile.display_name(&w.localization()), if depth.selected() == 0 { 8 } else { 16 },
                 match read_background() { ExportBackground::Preserve => copy.transparent.as_ref(), ExportBackground::White => copy.white.as_ref(), ExportBackground::Black => copy.black.as_ref() }));
         }
     });

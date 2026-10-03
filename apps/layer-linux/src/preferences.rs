@@ -255,7 +255,7 @@ fn install_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId)
     widget.add_controller(keys);
 }
 
-fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x: f64, y: f64) {
+pub(crate) fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x: f64, y: f64) {
     let Some(reset) = preference(w, id).and_then(|r| r.reset) else {
         return;
     };
@@ -285,7 +285,7 @@ fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x:
     }
     if let Some(text) = editor {
         let editing = gtk::gio::Menu::new();
-        for item in layer_ui::text_edit_menu(layer_ui::Platform::Gtk) {
+        for item in layer_ui::text_edit_menu_localized(layer_ui::Platform::Gtk, &w.localization()) {
             use layer_ui::TextEditAction as E;
             let (name, command, enabled) = match item.action {
                 E::Cut => (

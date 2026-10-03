@@ -40,6 +40,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 
+@androidx.annotation.Keep
+internal class NumericFailure(encoded: String) : RuntimeException(JSONObject(encoded).getString("text")) {
+    val reason: Any = JSONObject(encoded).get("reason")
+}
+internal fun numericFailureCopy(error: Exception, language: String, fallback: String): String =
+    if (error is NumericFailure) JSONObject(Native.nativeCaption(obj("type" to "numeric_error", "reason" to error.reason).toString(), language)).getString("text")
+    else error.message ?: fallback
+
 /** A native text field and slider; Rust owns numeric semantics. Tapping a value
  * opens the keyboard. */
 @Composable internal fun NumericSetting(label: String, value: Float, control: JSONObject,
@@ -81,7 +89,8 @@ import org.json.JSONObject
     var fieldBounds by remember { mutableStateOf(Rect.Zero) }
     var text by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(shown.getString(displayKey))) }
     var fieldValue by remember { mutableDoubleStateOf(shown.getDouble("value")) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<Exception?>(null) }
+    val errorCaption = remember(error, host.languageTag) { error?.let { numericFailureCopy(it, host.languageTag, host.bootstrap!!.getString("action_failed")) } }
     val height = if (settings) 48.dp else if (ranged || toolbar) 24.dp else 32.dp
     val valuePadding = if (settings) 12.dp else if (toolbar && !showUnits && !valueOnly) 2.dp else 6.dp
     val measurer = rememberTextMeasurer()
@@ -111,7 +120,7 @@ import org.json.JSONObject
         shown = next; error = null
         if (changed) onChange(next.getDouble("value"))
         true
-        } catch (e: Exception) { error = e.message ?: host.bootstrap!!.getString("action_failed"); false }
+        } catch (e: Exception) { error = e; false }
     }
     fun finish(cancel: Boolean = false): Boolean {
         if (!cancel && text.composition != null) return false
@@ -126,9 +135,6 @@ import org.json.JSONObject
     DisposableEffect(registerCommit) {
         registerCommit(requester) { cancel -> commit(cancel) }
         onDispose { registerCommit(requester, null) }
-    }
-    LaunchedEffect(host.languageTag) {
-        if (error != null) error = runCatching { resolve(shown.getDouble("value"), obj("type" to "expression", "text" to text.text)) }.exceptionOrNull()?.message
     }
     LaunchedEffect(shown, dirty) {
         if (!dirty && (!focused || fieldValue != shown.getDouble("value"))) {
@@ -198,7 +204,7 @@ import org.json.JSONObject
                 else if (it.type == KeyEventType.KeyDown && it.key == Key.Enter) { if (finish()) focus.clearFocus(); true }
                 else false
             }.semantics { contentDescription = captions.getString("edit") }.testTag(if (settings) "setting-number-$id" else if (presentedText != null) "number-$id" else "number-$label"), enabled = enabled, singleLine = true,
-            textStyle = LocalTextStyle.current.copy(color = colors.text, textAlign = TextAlign.End),
+            textStyle = LocalTextStyle.current.copy(color = colors.text, textAlign = TextAlign.Start),
             cursorBrush = SolidColor(colors.accent), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (text.composition == null && finish()) focus.clearFocus() }),
             decorationBox = { input -> Box(Modifier.fillMaxSize().background(colors.input, shape).padding(horizontal = valuePadding), contentAlignment = Alignment.CenterEnd) { input() } })
@@ -239,6 +245,6 @@ import org.json.JSONObject
                 activeTrackColor = if (settings) colors.accent else colors.sliderFill)
             step(1, "plus")
         }
-        error?.let { Text(it, color = colors.accent, fontSize = 12.sp) }
+        errorCaption?.let { Text(it, Modifier.testTag("number-error-$id"), color = colors.accent, fontSize = 12.sp) }
     }
 }

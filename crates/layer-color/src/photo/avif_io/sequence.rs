@@ -73,10 +73,9 @@ impl<'a> Sequence<'a> {
         if matching.next().is_some() {
             return Err("Multiple AVIF alpha tracks".into());
         }
-        if let Some(alpha) = &alpha {
-            if alpha.properties.extent != color.properties.extent {
-                return Err("AVIF alpha track dimensions disagree".into());
-            }
+        if let Some(alpha) = &alpha
+            && alpha.properties.extent != color.properties.extent {
+            return Err("AVIF alpha track dimensions disagree".into());
         }
         Ok(Some(Self { color, alpha }))
     }

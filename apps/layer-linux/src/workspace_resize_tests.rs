@@ -11,6 +11,8 @@ fn native_workspace_resize_input() {
     pump(1600);
     let mut input = RemoteInput::new().settle_ms(0).timeout_secs(20);
     input.ready();
+    input.click(screen_point(w.header.root.upcast_ref(), &w.window, [0.5, 0.5]));
+    until(|| w.window.is_active(), "native resize window activation");
     let saved = || serde_json::to_value(state(&w).workspace).unwrap();
     let mut reports = Vec::new();
     for touch in [false, true] {
@@ -134,7 +136,7 @@ fn native_workspace_resize_input() {
             let refreshed = w.publication.refreshes.get() - refreshes;
             assert!(
                 cpu.len() > 100 && times.len() > 20,
-                "changing geometry, not idle frame callbacks"
+                "changing geometry: inputs {}, presentations {}, scenario {scenario}, touch {touch}", cpu.len(), times.len()
             );
             let expected = w
                 .resolved()

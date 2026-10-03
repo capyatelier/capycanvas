@@ -139,12 +139,10 @@ fn xmp_metadata(bytes: &[u8]) -> Result<Option<Metadata>, String> {
 fn metadata(segments: &[Segment<'_>]) -> Result<Option<Metadata>, String> {
     let mut iso = None;
     for s in segments {
-        if s.marker == 0xe2 {
-            if let Some(bytes) = s.bytes.strip_prefix(ISO) {
-                if iso.replace(iso_metadata(bytes)?).is_some() {
-                    return Err(INVALID.into());
-                }
-            }
+        if s.marker == 0xe2
+            && let Some(bytes) = s.bytes.strip_prefix(ISO)
+            && iso.replace(iso_metadata(bytes)?).is_some() {
+            return Err(INVALID.into());
         }
     }
     // ISO metadata takes precedence, including when an older XMP packet is
@@ -154,14 +152,11 @@ fn metadata(segments: &[Segment<'_>]) -> Result<Option<Metadata>, String> {
     }
     let mut xmp = None;
     for s in segments.iter().filter(|s| s.marker == 0xe1) {
-        if let Some(bytes) = s.bytes.strip_prefix(XMP) {
-            if bytes.windows(HDRGM.len()).any(|w| w == HDRGM) {
-                if let Some(value) = xmp_metadata(bytes)? {
-                    if xmp.replace(value).is_some() {
-                        return Err(INVALID.into());
-                    }
-                }
-            }
+        if let Some(bytes) = s.bytes.strip_prefix(XMP)
+            && bytes.windows(HDRGM.len()).any(|w| w == HDRGM)
+            && let Some(value) = xmp_metadata(bytes)?
+            && xmp.replace(value).is_some() {
+            return Err(INVALID.into());
         }
     }
     Ok(xmp)
@@ -208,17 +203,16 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Images<'_>, String> {
             return Err(INVALID.into());
         }
         previous_end = end;
-        if let Some(metadata) = metadata(&segments)? {
-            if selected
+        if let Some(metadata) = metadata(&segments)?
+            && selected
                 .replace(Images {
                     base: &bytes[..base_end],
                     gain: image,
                     metadata,
                 })
                 .is_some()
-            {
-                return Err("Multiple JPEG gain maps are not supported".into());
-            }
+        {
+            return Err("Multiple JPEG gain maps are not supported".into());
         }
     }
     selected.ok_or("JPEG gain-map image or metadata is missing".into())
@@ -305,9 +299,9 @@ mod tests {
         assert_eq!(m.max, [1., 2., 3.]);
         assert_eq!(m.gamma, [2.; 3]);
         let h = m.reconstruct([0.5; 3], [0.25; 3]);
-        for c in 0..3 {
+        for (c, &value) in h.iter().enumerate() {
             assert!(
-                (h[c] - ((0.5 + 1. / 64.) * (0.5 * (c + 1) as f32).exp2() - 1. / 64.)).abs() < 1e-6
+                (value - ((0.5 + 1. / 64.) * (0.5 * (c + 1) as f32).exp2() - 1. / 64.)).abs() < 1e-6
             );
         }
         let invalid = String::from_utf8(xml.to_vec())

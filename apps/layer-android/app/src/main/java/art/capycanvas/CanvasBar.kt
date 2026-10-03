@@ -117,6 +117,7 @@ private class BarFrame {
     fun choiceMenu(id: String, load: (JSONObject?) -> Unit) = host.query(obj("type" to "canvas_bar_choice_menu", "context" to context, "id" to id)) {
         load(it as? JSONObject)
     }
+    suspend fun choiceCopy(id: String) = host.menuCopy(obj("type" to "canvas_bar_choice_menu", "context" to context, "id" to id))
     Layout(content = {
         Box(Modifier.padding(BarShadowMargin).fillMaxSize().testTag("canvas-action-bar")
             .then(if (revealed) Modifier.chromeRegion(dock) else Modifier).onGloballyPositioned {
@@ -133,9 +134,9 @@ private class BarFrame {
                             Text(it, Modifier.width(labelWidth.dp).padding(horizontal = BarLabelPadding.dp).testTag("canvas-bar-label"),
                                 color = colors.secondary, maxLines = 1, softWrap = false)
                         }
-                        items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], ::edit, ::choiceMenu) }
+                        items.take(shown).forEachIndexed { index, item -> BarField(item, itemWidths[index], ::edit, ::choiceMenu, ::choiceCopy) }
                         CanvasBarMore(host, context, shown)
-                        completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], ::edit, ::choiceMenu) }
+                        completion.forEachIndexed { index, item -> BarField(item, completionWidths[index], ::edit, ::choiceMenu, ::choiceCopy) }
                     }
                 }
             }
@@ -147,19 +148,20 @@ private class BarFrame {
 }
 
 @Composable private fun BarField(item: JSONObject, width: Float, edit: (JSONObject) -> Unit,
-    choiceMenu: (String, (JSONObject?) -> Unit) -> Unit) {
+    choiceMenu: (String, (JSONObject?) -> Unit) -> Unit, choiceCopy: suspend (String) -> JSONObject?) {
     val option = item.getJSONObject("option")
     Box(Modifier.width(width.dp).height(BarItemHeight.dp), contentAlignment = Alignment.Center) {
         if (!item.isNull("menu")) item.getString("menu").let { menu ->
             ToolOptionMenu(menu, item.getString("icon"), item.getString("label"), option.optJSONObject("Action")?.getJSONObject("state"),
-                "canvas-bar") { choiceMenu(menu, it) }
+                "canvas-bar", copy = { choiceCopy(menu) }) { choiceMenu(menu, it) }
         } else ToolOptionField(option, width, false, "medium", false, BarItemStyle, BarItemHeight, 16, edit,
-            caption = item.getString("label"), prefix = "canvas-bar", accent = item.optBoolean("accent"), choiceMenu = choiceMenu)
+            caption = item.getString("label"), prefix = "canvas-bar", accent = item.optBoolean("accent"), choiceMenu = choiceMenu, choiceCopy = choiceCopy)
     }
 }
 
 @Composable private fun CanvasBarMore(host: CanvasHost, context: JSONObject, shown: Int) {
     val button = remember { WindowlessMenuButton() }
+    SideEffect { button.copy = { host.menuCopy(obj("type" to "canvas_bar_menu", "context" to context, "shown" to shown)) } }
     HoverTip(host.bootstrap!!.getJSONObject("common").getString("more")) {
         Box(Modifier.size(BarItemHeight.dp).testTag("canvas-bar-more").clip(ControlShape).focusProperties { canFocus = false }
             .opensWindowlessMenu(button, host.bootstrap!!.getJSONObject("common").getString("more")) { load ->

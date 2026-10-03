@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::CommonCopy;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ProofCopy {
     pub common: CommonCopy,
     pub unavailable: Arc<str>,
@@ -90,7 +90,7 @@ impl ProofCopy {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ProfileCopy {
     pub read_bytes: usize,
     pub read_limit: Arc<str>,
@@ -165,7 +165,7 @@ impl ProfileCopy {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ExportCopy {
     pub common: CommonCopy,
     pub title: Arc<str>,
@@ -412,7 +412,7 @@ impl ExportCopy {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DocumentColorCopy {
     pub common: CommonCopy,
     pub assign_title: Arc<str>,
@@ -580,7 +580,7 @@ pub fn proof_dial_value(recipe: layer_core::color::hdr::SdrRendition, localizer:
     format!("{} {:+.0}%, {} {:.0}%", balance, recipe.balance * 100., contrast, recipe.contrast * 100.)
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ComparisonCopy {
     pub before: Arc<str>,
     pub after: Arc<str>,

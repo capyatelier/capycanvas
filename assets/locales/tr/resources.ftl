@@ -494,6 +494,13 @@ resources-lookup-replace = Değiştir…
 resources-lookup-files = Renk eşleme dosyaları
 resources-lookup-unavailable = Bu platformda renk eşleme tablolarını içe aktarma henüz kullanılamıyor.
 resources-lookup-failed = Eşleme tablosu içe aktarılamadı.
+resources-layer-menu-stop-using-as-reference = Bu katmanı referans olarak kullanmayı bırak
+resources-coverage-from-layer-opacity = Katman Opaklığından
+resources-coverage-from-layer-mask = Katman Maskesinden
+resources-reference-empty-unmarked = Bu katman boş ve altındaki hiçbir katman referans olarak işaretlenmemiş
+resources-reference-tool-unmarked = Bu araç referans katmanlardan örnek alır ve hiçbiri işaretlenmemiş
+resources-reference-tool-mark-first = Bu araç referans katmanlardan örnek alır. Önce Katmanlar panelinde birini işaretleyin.
+resources-reference-use-layer = { $name } katmanını referans olarak kullan
 
 resources-analysis-updating = Güncelleniyor…
 resources-analysis-error = Bu ayar güncellenemedi.

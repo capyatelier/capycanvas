@@ -21,13 +21,20 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-internal fun ClipData.imageUris(): List<Uri> = (0 until itemCount).map { index ->
-    getItemAt(index).uri ?: error("Every item in the image batch must be a file")
+internal fun ClipData.imageUris(failure:String): List<Uri> = (0 until itemCount).map { index ->
+    getItemAt(index).uri ?: run { android.util.Log.e("CapyCanvas.ImageImport","Every item in the image batch must be a file");throw ImageImportMessage(failure) }
 }
+private class ImageImportMessage(message:String): IllegalStateException(message)
 internal data class IncomingImages(val uris: List<Uri>, val context: String, val release: () -> Unit, val finished: ((Boolean) -> Unit)? = null)
 
 /** One coroutine owns the picker, all provider grants and one private native batch. */
 internal class ImageImportController(private val host: CanvasHost, private val application: Application) {
+    private fun diagnostic(detail:String): String { android.util.Log.e("CapyCanvas.ImageImport",detail);return host.bootstrap!!.getString("action_failed") }
+    private fun failure(error:Exception): String {
+        if(error is ImageImportMessage)return error.message.orEmpty()
+        android.util.Log.e("CapyCanvas.ImageImport","Image import failed",error)
+        return host.bootstrap!!.getString("action_failed")
+    }
     val formats = JSONArray(Native.photoFormats()).objects()
     val mimeTypes = formats.flatMap { f -> f.getJSONArray("mime_types").let { a -> (0 until a.length()).map(a::getString) } }.toTypedArray()
     var choosing by mutableStateOf(false); private set
@@ -63,8 +70,8 @@ internal class ImageImportController(private val host: CanvasHost, private val a
     fun drop(activity: Activity, event: DragEvent, screen: JSONObject?, destination: JSONObject?): Boolean {
         if (!accepts(event)) return false
         val permission = activity.requestDragAndDropPermissions(event)
-        val uris = try { event.clipData?.imageUris().orEmpty().also { check(it.isNotEmpty()) { "No images to import" } } }
-        catch (e: Exception) { permission?.release(); host.reportActionError(e.message ?: "Cannot read dropped images"); return false }
+        val uris = try { event.clipData?.imageUris(host.bootstrap!!.getString("action_failed")).orEmpty().also { check(it.isNotEmpty()) { diagnostic("No images to import") } } }
+        catch (e: Exception) { permission?.release(); host.reportActionError(failure(e)); return false }
         receiving = true
         // Queue camera/identity capture immediately, before provider access.
         host.viewModelScope.launch {
@@ -73,7 +80,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                 val (context, request) = host.withNative { handle ->
                     val resolved = destination?.let { d ->
                         val hint = JSONObject(Native.query(handle, obj("type" to "image_layer_drop", "target" to d.getLong("target"), "fraction" to d.getDouble("fraction")).toString()))
-                        check(!hint.isNull("position")) { "Images cannot be placed at this layer boundary" }
+                        check(!hint.isNull("position")) { diagnostic("Images cannot be placed at this layer boundary") }
                         obj("target" to d.getLong("target"), "position" to hint.getString("position"))
                     }
                     val captured = Native.imageImportContext(handle, screen?.toString() ?: "null", resolved?.toString() ?: "null")
@@ -86,10 +93,10 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                 // provider filename guesses. Keep the original placement target.
                 val masters=withContext(Dispatchers.IO) {uris.filter {uri->
                     val prefix=ByteArray(4);var size=0
-                    val descriptor=application.contentResolver.openFileDescriptor(uri,"r",providerSignal)?:error("Dropped file cannot be read")
+                    val descriptor=application.contentResolver.openFileDescriptor(uri,"r",providerSignal)?:throw ImageImportMessage(diagnostic("Dropped file cannot be read"))
                     ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {input->
                         val poll=android.system.StructPollfd().apply{fd=descriptor.fileDescriptor;events=android.system.OsConstants.POLLIN.toShort()}
-                        while(size<4){ensureActive();check(!cancelled){"Drop cancelled"};if(android.system.Os.poll(arrayOf(poll),100)==0)continue;val read=input.read(prefix,size,4-size);if(read<0)break;size+=read}
+                        while(size<4){ensureActive();check(!cancelled){diagnostic("Drop cancelled")};if(android.system.Os.poll(arrayOf(poll),100)==0)continue;val read=input.read(prefix,size,4-size);if(read<0)break;size+=read}
                     }
                     Native.importSource(prefix.copyOf(size))=="\"Master\""
                 }}
@@ -103,7 +110,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                     })
                     start(request, false, fromDrop=true); host.documentChanged()
                 }
-            } catch (e: Exception) { permission?.release();if(requestId!=0)withContext(NonCancellable){runCatching{host.withNative{Native.documentComplete(it,requestId,false,JSONObject.quote(e.message?:"Cannot drop images"))}}};host.reportActionError(e.message ?: "Cannot drop images") }
+            } catch (e: Exception) { permission?.release();if(requestId!=0)withContext(NonCancellable){runCatching{host.withNative{Native.documentComplete(it,requestId,false,JSONObject.quote(failure(e)))}}};host.reportActionError(failure(e)) }
             finally { receiving = false }
         }
         return true
@@ -122,23 +129,23 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                 val context = drop?.context ?: host.withNative { Native.imageImportContext(it, "null", "null") }
                 task = host.withNative { Native.imageImportTask(it, id, context, control) }
                 val uris = drop?.uris ?: if (paste) {
-                    application.getSystemService(android.content.ClipboardManager::class.java).primaryClip?.imageUris()
-                        ?: error("Copy a supported image (${formats.joinToString { it.getString("name") }}) to paste.")
+                    application.getSystemService(android.content.ClipboardManager::class.java).primaryClip?.imageUris(host.bootstrap!!.getString("action_failed"))
+                        ?: throw ImageImportMessage(host.withNative { Native.query(it,obj("type" to "document_delivery_message","message" to obj("type" to "clipboard_formats","formats" to formats.joinToString { it.getString("name") })).toString()) }.let { org.json.JSONTokener(it).nextValue() as String })
                 } else {
                     val decision = CompletableDeferred<List<Uri>?>(); selection = decision; pickerLaunched = false; choosing = true
                     try { decision.await() } finally { selection = null; choosing = false; pickerLaunched = false }
                 }
                 if (uris == null || cancelled) { finish(id, false); return@launch }
-                check(uris.isNotEmpty()) { "Choose at least one image" }
+                check(uris.isNotEmpty()) { diagnostic("Choose at least one image") }
                 for (uri in uris) {
                     if (cancelled) { finish(id, false); return@launch }
                     withContext(Dispatchers.IO) {
                         val name = application.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null, providerSignal)?.use {
                             if (it.moveToFirst()) it.getString(0) else null
-                        } ?: uri.lastPathSegment ?: "Image"
-                        val descriptor = application.contentResolver.openFileDescriptor(uri, "r", providerSignal) ?: error("The selected image cannot be read")
+                        } ?: uri.lastPathSegment ?: host.catalog.getJSONObject("document_delivery_copy").getString("image_name")
+                        val descriptor = application.contentResolver.openFileDescriptor(uri, "r", providerSignal) ?: throw ImageImportMessage(diagnostic("The selected image cannot be read"))
                         descriptor.use {
-                            check(it.statSize <= 512L * 1024 * 1024) { "Image file exceeds 512 MiB" }
+                            check(it.statSize <= 512L * 1024 * 1024) { diagnostic("Image file exceeds 512 MiB") }
                             val seekable = try { android.system.Os.lseek(it.fileDescriptor,0,android.system.OsConstants.SEEK_CUR); true }
                                 catch (e: android.system.ErrnoException) { if (e.errno != android.system.OsConstants.ESPIPE) throw e; false }
                             if (seekable) Native.imageImportRead(task, it.detachFd(), name)
@@ -151,10 +158,10 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                                         val buffer = ByteArray(64 * 1024); var total = 0L
                                         val poll = android.system.StructPollfd().apply { fd = it.fileDescriptor; events = android.system.OsConstants.POLLIN.toShort() }
                                         while (true) {
-                                            check(!cancelled) { "Image import cancelled" }
+                                            check(!cancelled) { diagnostic("Image import cancelled") }
                                             if (android.system.Os.poll(arrayOf(poll), 100) == 0) continue
                                             val size = input.read(buffer); if (size < 0) break
-                                            total += size; check(total <= 512L * 1024 * 1024) { "Image file exceeds 512 MiB" }
+                                            total += size; check(total <= 512L * 1024 * 1024) { diagnostic("Image file exceeds 512 MiB") }
                                             output.write(buffer,0,size)
                                         }
                                     } }
@@ -175,7 +182,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                 host.withNative { Native.imageImportAdopt(it, task) }; adopted=true; host.documentChanged()
             } catch (e: CancellationException) {
                 withContext(NonCancellable) { finish(id, false) }; throw e
-            } catch (e: Exception) { finish(id, false, if (cancelled) null else e.message ?: "Could not import images") }
+            } catch (e: Exception) { finish(id, false, if (cancelled) null else failure(e)) }
             finally {
                 withContext(NonCancellable + Dispatchers.IO) { if (task != 0L) Native.imageImportFree(task) }
                 if (control != 0L) Native.captureFree(control)
@@ -185,7 +192,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
     }
     private suspend fun finish(id: Int, success: Boolean, message: String? = null) {
         try { host.withNative { Native.documentComplete(it, id, success, message?.let(JSONObject::quote) ?: "null") }; host.documentChanged() }
-        catch (e: Exception) { host.reportActionError(e.message ?: "Could not finish image import") }
+        catch (e: Exception) { host.reportActionError(failure(e)) }
     }
 }
 
@@ -194,12 +201,12 @@ internal class ImageImportController(private val host: CanvasHost, private val a
     if (images.working && !images.choosing) androidx.compose.ui.window.Popup(alignment = Alignment.BottomCenter) {
         Surface(Modifier.padding(12.dp), shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (images.cancelled) "Cancelling…" else "Preparing images…")
-                TextButton(images::cancel, enabled = !images.cancelled) { Text("Cancel") }
+                Text(if (images.cancelled) host.catalog.getJSONObject("document_delivery_copy").getString("cancelling") else host.bootstrap!!.getString("preparing_document"))
+                TextButton(images::cancel, enabled = !images.cancelled) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
             }
         }
     }
-    images.profilePrompt?.let { SourceProfileDialog(it, images::chooseProfile) }
+    images.profilePrompt?.let { SourceProfileDialog(host,it, images::chooseProfile) }
     val cancel = host.canvasBar?.array("completion")?.objects()?.mapNotNull { it.getJSONObject("option").optJSONObject("Action")?.getJSONObject("state") }
         ?.any { it.getString("id") == "cancel_transform" && it.getBoolean("enabled") } == true
     BackHandler(cancel) { host.invoke("cancel_transform") }

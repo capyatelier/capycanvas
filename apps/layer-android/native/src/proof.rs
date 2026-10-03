@@ -1,6 +1,7 @@
 //! JNI ownership: App stays on the render Looper; Task is borrowed by exactly
 //! one IO job at a time. CaptureControl alone is shared with cancellation.
-use crate::android::{app, error, fail, or_throw, read, string};
+use crate::color_preferences::{ColorCallError, color_or_throw};
+use crate::android::{app, error, fail, read, string};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
@@ -29,9 +30,9 @@ pub extern "system" fn Java_art_capycanvas_Native_proofTask(
     recipe: JString,
     control: jlong,
 ) -> jlong {
-    let result = (|| {
+    let result = (|| -> Result<_, ColorCallError> {
         let recipe: Option<layer_core::color::ProofRecipe> = serde_json::from_str(&read(&mut env, &recipe)?).map_err(error)?;
-        let job = if id < 0 { ProofPreparation::panel(&unsafe { app(handle) }.host.session, recipe.ok_or("Choose a proof profile")?)? } else { ProofPreparation::begin(
+        let job = if id < 0 { ProofPreparation::panel(&unsafe { app(handle) }.host.session, recipe.ok_or(layer_ui::ColorFeatureError::ProofChooseProfile)?)? } else { ProofPreparation::begin(
             &unsafe { app(handle) }.host.session,
             (id != 0).then_some(id as u32),
             recipe,
@@ -42,7 +43,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofTask(
             lut: None,
         })) as jlong)
     })();
-    or_throw(&mut env, result, 0)
+    color_or_throw(&mut env, result, 0)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_proofWork(mut env: JNIEnv, _: JClass, id: jlong) {
@@ -51,7 +52,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofWork(mut env: JNIEnv, _: 
         .job
         .build(|| t.control.is_cancelled())
         .map(|lut| t.lut = Some(lut));
-    fail(&mut env, result);
+    color_or_throw(&mut env, result.map_err(Into::into), ());
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_proofCheck(
@@ -61,13 +62,13 @@ pub extern "system" fn Java_art_capycanvas_Native_proofCheck(
     id: jlong,
 ) {
     let t = unsafe { crate::inspection::borrow::<Task>(id) };
-    fail(
+    color_or_throw(
         &mut env,
         if t.control.is_cancelled() {
-            Err("Proof preparation cancelled".into())
+            Err(layer_ui::ColorFeatureError::ProofCancelled)
         } else {
             t.job.validate(&unsafe { app(handle) }.host.session)
-        },
+        }.map_err(Into::into), (),
     );
 }
 #[unsafe(no_mangle)]
@@ -95,12 +96,12 @@ pub extern "system" fn Java_art_capycanvas_Native_proofApply(
     id: jlong,
     preserved: jboolean,
 ) {
-    let result = (|| {
+    let result = (|| -> Result<_, ColorCallError> {
         let (a, t) = unsafe { (app(handle), crate::inspection::borrow::<Task>(id)) };
         if t.control.is_cancelled() {
-            return Err("Proof preparation cancelled".into());
+            return Err(layer_ui::ColorFeatureError::ProofCancelled.into());
         }
-        let lut = t.lut.clone().ok_or("Proof preview is not prepared")?;
+        let lut = t.lut.clone().ok_or(layer_ui::ColorFeatureError::ProofPreviewNotPrepared)?;
         let previous = a.host.session.state().revision;
         let change = t.job.apply(&mut a.host.session, preserved != 0)?;
         a.host.proof.retain(&t.job, lut)?;
@@ -108,7 +109,7 @@ pub extern "system" fn Java_art_capycanvas_Native_proofApply(
         a.host.dirty = true;
         Ok(())
     })();
-    fail(&mut env, result);
+    color_or_throw(&mut env, result, ());
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_proofFailed(
@@ -122,6 +123,18 @@ pub extern "system" fn Java_art_capycanvas_Native_proofFailed(
         let message = read(&mut env, &message)?;
         let (a, t) = unsafe { (app(handle), crate::inspection::borrow::<Task>(id)) };
         a.host.proof.fail(&a.host.session, &t.job, message);
+        Ok(())
+    })();
+    fail(&mut env, result);
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_proofFailedReason(
+    mut env: JNIEnv, _: JClass, handle: jlong, id: jlong, reason: JString,
+) {
+    let result = (|| {
+        let reason = serde_json::from_str(&read(&mut env, &reason)?).map_err(error)?;
+        let (a, t) = unsafe { (app(handle), crate::inspection::borrow::<Task>(id)) };
+        a.host.proof.fail_reason(&a.host.session, &t.job, reason);
         Ok(())
     })();
     fail(&mut env, result);

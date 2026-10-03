@@ -6,7 +6,7 @@ use gtk::{gdk, glib};
 use layer_color::screen::edid::{self, Edid};
 use layer_color::screen::ScreenReport;
 use layer_core::color::RgbSpace;
-use layer_ui::{ScreenChip, ScreenDetails, UiAction};
+use layer_ui::{MessageId, ScreenChip, ScreenDetails, UiAction};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -46,7 +46,6 @@ impl ScreenView {
         button.add_css_class("flat");
         button.add_css_class("status-bubble");
         button.set_widget_name("screen-status");
-        button.set_tooltip_text(Some("Screen details"));
         let title = text("");
         title.add_css_class("caption");
         title.add_css_class("dim-label");
@@ -56,7 +55,7 @@ impl ScreenView {
         heading.append(&title);
         heading.append(&headline);
         let body = text("");
-        let mark = crate::panel_controls::check("Highlight these colors");
+        let mark = crate::panel_controls::check("");
         mark.set_widget_name("screen-mark-clipped");
         let content = gtk::Box::new(gtk::Orientation::Vertical, SPACING * 2);
         content.set_widget_name("screen-details");
@@ -84,6 +83,11 @@ impl ScreenView {
     }
 
     pub(crate) fn bind(self: &Rc<Self>, w: &Rc<Workspace>) {
+        w.on_localization(glib::clone!(#[weak(rename_to = this)] self, #[upgrade_or] false, move |localization| {
+            this.button.set_tooltip_text(Some(localization.text(MessageId::NATIVE_SCREEN_DETAILS).as_ref()));
+            this.mark.set_label(Some(localization.text(MessageId::NATIVE_HIGHLIGHT_CLIPPED_COLORS).as_ref()));
+            true
+        }));
         self.button.connect_clicked(glib::clone!(
             #[weak(rename_to = this)]
             self,
@@ -151,7 +155,7 @@ impl ScreenView {
     fn show_chip(&self, chip: Option<ScreenChip>) {
         self.button.set_visible(chip.is_some());
         if let Some(chip) = chip {
-            self.label.set_label(chip.label);
+            self.label.set_label(&chip.label);
             self.icon.set_visible(chip.warning);
         }
     }
@@ -161,7 +165,7 @@ impl ScreenView {
             return;
         }
         self.title.set_label(&details.title);
-        self.headline.set_label(details.headline);
+        self.headline.set_label(&details.headline);
         if details.warning {
             self.headline.add_css_class("warning");
         } else {

@@ -184,7 +184,8 @@ impl ColorLibrary {
         let max = r.max(g).max(b);
         let min = r.min(g).min(b);
         let delta = max - min;
-        let label = if max < 0.12 {
+
+        if max < 0.12 {
             crate::MessageId::CREATION_COLOR_INK
         } else if delta < 0.08 {
             if min > 0.9 {
@@ -225,8 +226,7 @@ impl ColorLibrary {
                 255..=284 => crate::MessageId::CREATION_COLOR_VIOLET,
                 _ => crate::MessageId::CREATION_COLOR_ROSE,
             }
-        };
-        label
+        }
     }
     pub fn current_name(&self, color: RgbColor) -> Option<&str> {
         self.pending_name
@@ -306,7 +306,7 @@ impl ColorLibrary {
         let numbered = |stem: &str, number: u32| numbered_name(localizer, stem, number);
         let unique = |base: String, names: Vec<String>| {
             UniqueNames { used: names.into_iter().map(|name| name.to_lowercase()).collect(), ..Default::default() }
-                .claim(base, &numbered)
+                .claim(base, numbered)
         };
         let swatch_name = |palette: u64, id: Option<u64>, value: String, color: RgbColor| {
             if !value.trim().is_empty() { return value; }
@@ -326,7 +326,7 @@ impl ColorLibrary {
                 let mut used = UniqueNames::default();
                 let swatches = swatches.into_iter().map(|(name, color)| {
                     let name = if name.trim().is_empty() { localizer.text(Self::suggested_name(color)).to_string() } else { name };
-                    let name = used.claim(checked_name(&name).unwrap_or(name), &numbered); (name, color)
+                    let name = used.claim(checked_name(&name).unwrap_or(name), numbered); (name, color)
                 }).collect();
                 ColorLibraryAction::Import { name, swatches }
             }
@@ -532,6 +532,12 @@ impl ColorLibrary {
     }
 }
 
+fn numbered_name(localizer: &crate::Localizer, stem: &str, number: u32) -> String {
+    let mut args = crate::FluentArgs::new();
+    args.set("name", stem); args.set("number", number);
+    localizer.format(crate::MessageId::CREATION_NUMBERED_NAME, &args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,10 +728,4 @@ mod tests {
         assert!(state.library.swatch(id).is_none());
         assert_eq!(state.definition(), color);
     }
-}
-
-fn numbered_name(localizer: &crate::Localizer, stem: &str, number: u32) -> String {
-    let mut args = crate::FluentArgs::new();
-    args.set("name", stem); args.set("number", number);
-    localizer.format(crate::MessageId::CREATION_NUMBERED_NAME, &args)
 }

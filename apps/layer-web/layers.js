@@ -37,7 +37,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     ["alpha-lock", ()=>copy.alpha_lock, "alpha_locked", "alpha_lock", "alpha_lock"],
     ["lock", ()=>copy.lock_editing, "locked", "lock", "edit_lock"],
     ["clip", ()=>copy.clip, "clipped", "clip", "clip"],
-    ["reference", ()=>copy.reference, "reference", "reference_selection", "reference"],
+    ["reference", ()=>state().layer_tools.reference_action_label, "reference", "reference_selection", "reference"],
   ]) {
     const getAction = () => op === "reference_selection" ? { op } : { op, id: active().id, value: !active()[property] };
     const b = glyphButton(glyph, label, () => send(getAction()), "", getAction);
@@ -60,11 +60,11 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   footer.append(glyphButton("selection-brush", ()=>copy.new_selection_layer, () => dispatch({type:"invoke",command:"new_selection_layer"})));
   const addMask = () => ({ op: "add_mask", id: active().id, replace: false });
   const maskButton = glyphButton("mask", ()=>copy.add_mask, () => send(addMask()), "", addMask); footer.append(maskButton);
-  footer.append(glyphButton("image", "Import image as layer", () => dispatch({type:"invoke",command:"import_image"})));
+  footer.append(glyphButton("image", ()=>copy.import_image, () => dispatch({type:"invoke",command:"import_image"})));
   const deleteAction = () => ({ op: "delete_selected" });
   const deleteButton = glyphButton("delete", ()=>copy.delete_selected, () => send(deleteAction()), "", deleteAction);
   footer.append(deleteButton);
-  const more = glyphButton("more", "Layer actions", () => more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true,
+  const more = glyphButton("more", ()=>copy.actions, () => more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true,
     clientX: more.getBoundingClientRect().left, clientY: more.getBoundingClientRect().top })));
   more.classList.add("layer-more"); menu(more, active, () => active()?.mask_selected ?? false); footer.append(more);
   panel.append(header, rows, footer);
@@ -72,14 +72,15 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   function makeRow(layer) {
     const root = element("div", "layer-swipe"), row = element("div", "layer-row"), record = { root, row, layer }; row.dataset.layer = String(layer.id);
     const get = () => record.layer, select = mask => send({ op: "select", id: get().id, mask });
-    const eye = glyphButton("eye", "Hide layer", () => dispatch({ type: "set_layer_visibility", id: get().id, visible: !get().visible }));
+    const eye = glyphButton("eye", ()=>get().selection_layer?(get().visible?copy.hide_selection:copy.show_selection):(get().visible?copy.hide:copy.show), () => dispatch({ type: "set_layer_visibility", id: get().id, visible: !get().visible }));
     eye.onpointerenter = () => { eye.title = app.action_tooltip(eye.getAttribute("aria-label"), { type: "set_layer_visibility", id: get().id, visible: !get().visible }); };
     const selection = () => ({ op: "toggle_selection", id: get().id });
-    const check = glyphButton("selection-empty", "Select layer without changing drawing target", () => send(selection()), "", selection);
+    const check = glyphButton("selection-empty", ()=>copy.select_row_help, () => send(selection()), "", selection);
     const thumbnails = element("div", "layer-thumbnails"), clipping = element("span", "layer-clipping");
     const thumb = (mask) => {
       const getAction = () => !mask && get().group ? { op: "collapse", id: get().id } : { op: "select", id: get().id, mask };
-      const b = glyphButton("mask", mask ? "Edit layer mask" : "Edit layer content", () => send(getAction()), "layer-thumbnail", getAction);
+      const readLabel = ()=>mask?copy.edit_mask:get().group?(get().collapsed?copy.expand:copy.collapse):get().selection_layer?copy.edit_selection:copy.edit_content;
+      const b = glyphButton("mask", readLabel, () => send(getAction()), "layer-thumbnail", getAction);
       const image = element("canvas"); image.width = image.height = 32; image.setAttribute("aria-hidden", "true");
       // These are already-rasterized GPU preview bytes. Keep their tiny UI
       // bitmap in host memory rather than invoking another GPU canvas path.
@@ -90,11 +91,11 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
         e.preventDefault();e.stopImmediatePropagation();
         dispatch({type:'selection',action:{op:'load_thumbnail',id:get().id,mask,shift:e.shiftKey,alt:e.altKey}});
       },{capture:true});
-      return { b, image };
+      return { b, image, readLabel };
     };
     const content = thumb(false), mask = thumb(true);
     const linkAction = () => ({ op: "link_mask", id: get().id, value: !get().mask_linked });
-    const link = glyphButton("link", "Link mask to layer", () => send(linkAction()), "layer-link", linkAction);
+    const link = glyphButton("link", ()=>get().mask_linked?copy.unlink_mask:copy.link_mask_to_layer, () => send(linkAction()), "layer-link", linkAction);
     thumbnails.append(clipping, content.b, link, mask.b);
     const text = element("div", "layer-text"), name = element("span", "layer-name"), meta = element("span", "layer-meta"); text.append(name, meta);
     const lock = element("span", "layer-lock"), grip = element("span", "layer-grip"); grip.append(icon("grip"));
@@ -105,7 +106,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     name.ondblclick = e => { e.stopPropagation(); if(get().can_rename) send({ op: "begin_rename", id: get().id }); };
     menu(row, get); menu(mask.b, get, true);
     Object.assign(record, { load, eye, check, thumbnails, clipping, content, mask, link, name, text, meta, lock, grip });
-    const remove = button("Delete", e => { e.stopPropagation(); send({ op: "delete", id: get().id }); }, "layer-swipe-delete");
+    const remove = button(()=>liveCopy(app,"bootstrap_view").common.delete, e => { e.stopPropagation(); send({ op: "delete", id: get().id }); }, "layer-swipe-delete");
     root.append(remove, row);
     let offset = 0, drag, suppressClick;
     const position = (value, animate = false) => {
@@ -248,6 +249,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       r.thumbnails.style.marginLeft = `${Math.min(layer.depth*8,24)}px`; r.clipping.style.opacity = layer.clipped ? 1 : 0;
       r.content.b.classList.toggle("editing-target", layer.editing && !layer.mask_selected);
       r.mask.b.classList.toggle("editing-target", layer.mask_selected);
+      for(const thumbnail of [r.content,r.mask])thumbnail.b.title=thumbnail.b.ariaLabel=thumbnail.readLabel();
       r.content.b.classList.toggle("layer-folder", layer.group);
       if (layer.group) r.content.b.replaceChildren(icon(layer.collapsed ? "folder" : "folder-open"));
       else if(layer.content_icon && !layer.selection_layer) {
@@ -259,7 +261,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
       else if (!r.content.image.isConnected) r.content.b.replaceChildren(r.content.image);
       r.mask.b.hidden = r.link.hidden = !layer.has_mask; r.mask.image.style.opacity = layer.mask_enabled ? 1 : .4;
-      r.link.style.opacity = layer.mask_linked ? 1 : .35; r.link.title = r.link.ariaLabel = layer.mask_linked ? "Unlink mask from layer" : "Link mask to layer";
+      r.link.style.opacity = layer.mask_linked ? 1 : .35; r.link.title = r.link.ariaLabel = layer.mask_linked ? copy.unlink_mask : copy.link_mask_to_layer;
       r.name.textContent = layer.label; r.name.title = layer.label;
       r.meta.textContent = layer.description;
       r.meta.hidden = !r.meta.textContent; r.lock.replaceChildren(icon(layer.locked ? "lock" : "alpha-lock")); r.lock.style.opacity = layer.locked || layer.alpha_locked ? 1 : 0;

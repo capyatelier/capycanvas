@@ -15,7 +15,7 @@ internal object ColorPreferencesStore {
         synchronized(lock){
             val file=File(directoryForTest?:context.filesDir,"color-export-presets.json")
             val atomic=AtomicFile(file)
-            val bytes=try{atomic.openRead().use {input->check(file.length()<=64L*1024*1024){"Export presets exceed 64 MiB"};input.readBytes()}}
+            val bytes=try{atomic.openRead().use {input->if(file.length()>64L*1024*1024)throw ColorFeatureFailure("PresetFileLimit");input.readBytes()}}
                 catch(e:java.io.FileNotFoundException){ByteArray(0)}
             val result=Native.exportPresets(bytes,request.toString(),color.toString())
             val next=result[1] as ByteArray?

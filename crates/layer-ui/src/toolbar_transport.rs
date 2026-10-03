@@ -60,6 +60,15 @@ pub enum ToolbarUiRequest {
     },
 }
 
+pub fn toolbar_number(request: NumericRequest, compact: bool, units: bool) -> Result<NumericValue, NumericError> {
+    let control = &request.control;
+    let mut result = control.resolve(request.value, request.operation)?;
+    if compact {
+        result.text = if units { control.compact_text(result.value) } else { control.compact_value(result.value) };
+    }
+    Ok(result)
+}
+
 pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<serde_json::Value, String> {
     use serde_json::json;
     Ok(match request {
@@ -118,16 +127,7 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
             compact,
             units,
         } => {
-            let control = &request.control;
-            let mut result = control.resolve(request.value, request.operation).map_err(|reason| reason.message(localizer))?;
-            if compact {
-                result.text = if units {
-                    control.compact_text(result.value)
-                } else {
-                    control.compact_value(result.value)
-                };
-            }
-            json!(result)
+            json!(toolbar_number(request, compact, units).map_err(|reason| reason.message(localizer))?)
         }
         ToolbarUiRequest::Style { style } => {
             json!({"size":style.size(), "gap":style.gap(), "icon":style.icon_size(), "labeled":style.label_lines()>0})

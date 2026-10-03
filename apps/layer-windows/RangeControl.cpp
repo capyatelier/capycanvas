@@ -32,10 +32,12 @@ void RangeControl::init(bool showTrack){
     }
     for(int i=0;i<2;i++){
         auto field=bounds[i];auto spec=object(field,L"numeric");
-        auto control=number(data,str(field,L"label")+L" — "+label,spec,
+        NumberPresentation presentation;
+        presentation.title=[weak,i]{if(auto self=weak.lock())return str(self->bounds[i],L"label")+L" — "+self->label;return hstring();};
+        auto control=number(data,presentation.title(),spec,
             [weak,i]{if(auto self=weak.lock())return self->values[i];return 0.;},
             [weak,i](double value){if(auto self=weak.lock())self->set(i,value);},
-            fields,nullptr,true,prefix+L"-"+str(field,L"id"));
+            fields,nullptr,true,prefix+L"-"+str(field,L"id"),false,presentation);
         control.Width(valueWidth(data,spec));control.VerticalAlignment(VerticalAlignment::Center);
         Grid::SetColumn(control,i?2:0);root.Children().Append(control);
     }
@@ -110,6 +112,15 @@ void RangeControl::end(bool cancel){
     auto finished=*contact;contact.reset();
     if(cancel)set(finished.index,finished.before);
     track.ReleasePointerCaptures();paint();
+}
+void RangeControl::Relabel(J const& lower,J const& upper,hstring const& currentLabel){
+    if(retired)return;
+    bool changed=label!=currentLabel||str(bounds[0],L"label")!=str(lower,L"label")||str(bounds[1],L"label")!=str(upper,L"label");
+    bounds={lower,upper};label=currentLabel;
+    if(changed){
+        AutomationProperties::SetName(root,label);AutomationProperties::SetName(track,label);
+        for(auto const& bind:fields)bind();
+    }
 }
 void RangeControl::Update(double lower,double upper){
     if(contact)return;

@@ -765,8 +765,8 @@ impl DockLayout {
             if expand_to_minimum {
                 // Measure the ordinary expanded column after removing its strip.
                 let node = self.node(root).unwrap();
-                tab_min_width(node, self)
-                    .max(ribbon_cross_min(node, Axis::Vertical, bounds.height, self))
+                tab_preferred_width(node, self)
+                    .max(ribbon_preferred_width(node, Axis::Vertical, bounds.height, self))
                     .max(TILE_SIZE)
             } else {
                 remembered
@@ -851,7 +851,7 @@ impl DockLayout {
             if self.is_collapsed(node.id()) || !self.is_top_level_column(node.id()) {
                 return None;
             }
-            let minimum = tab_min_width(node, self).max(ribbon_cross_min(
+            let minimum = tab_preferred_width(node, self).max(ribbon_preferred_width(
                 node,
                 Axis::Vertical,
                 divider.parent.height,
@@ -1002,8 +1002,8 @@ fn default_column_width(node: &mut DockNode, height: f32, layout: &DockLayout) -
                     p.default_width()
                 }
             })
-            .fold(layout.group_min_width(*id), f32::max)
-            .max(ribbon_cross_min(node, Axis::Vertical, height, layout)),
+            .fold(layout.group_preferred_width(*id), f32::max)
+            .max(ribbon_preferred_width(node, Axis::Vertical, height, layout)),
         DockNode::Split {
             axis,
             fraction,

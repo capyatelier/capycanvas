@@ -38,10 +38,9 @@ impl RgbColor {
         if !self.rgba.into_iter().all(f32::is_finite) || !(0.0..=1.0).contains(&self.rgba[3]) {
             return Err("Color requires finite RGB and alpha between 0 and 1".into());
         }
-        if let Some(linear) = self.linear_rgb {
-            if linear.iter().any(|v| !v.is_finite()) || linear.map(|v| self.space.encode(f64::from(v)) as f32) != self.rgba[..3] {
-                return Err("Linear color and encoded readout disagree".into());
-            }
+        if let Some(linear) = self.linear_rgb
+            && (linear.iter().any(|v| !v.is_finite()) || linear.map(|v| self.space.encode(f64::from(v)) as f32) != self.rgba[..3]) {
+            return Err("Linear color and encoded readout disagree".into());
         }
         Ok(())
     }

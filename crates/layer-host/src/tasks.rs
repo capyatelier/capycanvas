@@ -256,6 +256,7 @@ impl ColorTask {
 
 pub struct SourceTask {
     workflow: SourceWorkflow,
+    source_profile_name: Option<Option<String>>,
     candidate: Option<Project>,
     converted: Option<Arc<SourceImage>>,
     gpu: SnapshotGpu,
@@ -290,6 +291,7 @@ impl SourceTask {
         let gpu = gpu(session)?;
         Ok(Self {
             workflow,
+            source_profile_name: None,
             candidate: None,
             converted: None,
             gpu: gpu.snapshot_gpu(),
@@ -302,6 +304,13 @@ impl SourceTask {
         })
     }
 
+    pub fn prepare_metadata(&mut self) -> Result<(), String> {
+        if self.source_profile_name.is_none() {
+            self.source_profile_name = Some(layer_color::profile_description_optional(&self.workflow.original.interpretation.profile)?);
+        }
+        Ok(())
+    }
+
     pub fn work(
         &mut self,
         profile: Option<ColorProfile>,
@@ -310,6 +319,7 @@ impl SourceTask {
         if self.converted.is_some() {
             return Err("Source result was already prepared".into());
         }
+        self.prepare_metadata()?;
         let (source, clipped) = self.workflow.prepare(profile, encode_budget(), cancelled)?;
         self.clipped = clipped;
         self.converted = Some(source);
@@ -357,12 +367,14 @@ impl SourceTask {
             ColorProfile::Builtin(space) => Some(space),
             _ => None,
         };
+        let source_profile_name = self.source_profile_name.as_ref().ok_or("Source details are not prepared")?;
         Ok(json!({
             "color": self.workflow.project.document.color,
             "profile_builtin": builtin,
             "channels": original.interpretation.channels,
             "depth": original.interpretation.depth,
-            "source_profile": layer_ui::profile_library::profile_display_name(&original.interpretation.profile, localizer)?,
+            "source_profile": layer_ui::profile_library::profile_description_name(source_profile_name.clone(), localizer),
+            "source_profile_name": source_profile_name,
             "adds_layer": self.workflow.adds_layer(),
             "clipped_channels": self.clipped,
         }))
@@ -420,7 +432,7 @@ mod tests {
         .unwrap();
         invoke(&mut host, CommandId::ConvertColorSpace);
         let mut task = ColorTask::capture(&host.session, None, RgbSpace::Srgb).unwrap();
-        task.work(Some(convert.clone()), false, Default::default())
+        task.work(Some(convert), false, Default::default())
             .unwrap();
         assert_eq!(task.previews().len(), 2);
         assert!(
@@ -485,6 +497,16 @@ mod tests {
         let layer = host.session.engine().document().active_layer;
         invoke(&mut host, CommandId::RepairSourceProfile);
         let mut task = SourceTask::capture(&host.session, None, RgbSpace::Srgb).unwrap();
+        assert!(task.details_localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).is_err());
+        task.prepare_metadata().unwrap();
+        let original = task.workflow.original.clone();
+        Arc::make_mut(&mut task.workflow.original).interpretation.profile = ColorProfile::Icc(vec![0u8].into());
+        task.prepare_metadata().unwrap();
+        for language in layer_ui::UiLanguage::ALL {
+            let details = task.details_localized(&layer_ui::Localizer::shared(language)).unwrap();
+            assert_eq!(details["source_profile"], "sRGB"); assert_eq!(details["source_profile_name"], "sRGB");
+        }
+        task.workflow.original = original;
         task.work(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), || false)
             .unwrap();
         task.prepare(&host, false).unwrap();

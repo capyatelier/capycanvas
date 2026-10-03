@@ -495,6 +495,13 @@ resources-lookup-replace = Thay thế…
 resources-lookup-files = Tệp ánh xạ màu
 resources-lookup-unavailable = Nền tảng này chưa hỗ trợ nhập bảng tra màu.
 resources-lookup-failed = Không thể nhập bảng tra màu.
+resources-layer-menu-stop-using-as-reference = Ngừng dùng lớp này làm tham chiếu
+resources-coverage-from-layer-opacity = Từ độ đục lớp
+resources-coverage-from-layer-mask = Từ mặt nạ lớp
+resources-reference-empty-unmarked = Lớp này trống và không có lớp nào bên dưới được đánh dấu làm tham chiếu
+resources-reference-tool-unmarked = Công cụ này lấy mẫu các lớp tham chiếu nhưng chưa có lớp nào được đánh dấu
+resources-reference-tool-mark-first = Công cụ này lấy mẫu các lớp tham chiếu. Trước tiên hãy đánh dấu một lớp trong bảng Lớp.
+resources-reference-use-layer = Dùng { $name } làm tham chiếu
 
 resources-analysis-updating = Đang cập nhật…
 resources-analysis-error = Không thể cập nhật điều chỉnh này.

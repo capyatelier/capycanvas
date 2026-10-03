@@ -31,7 +31,8 @@ pub fn encode_pixel(pixel: [f32; 4]) -> Result<[u16; 4], &'static str> {
 
 /// Validate without quantizing. Signed RGB, subnormals and hidden RGB are valid;
 /// alpha is finite linear coverage in [0, 1]. Storage never silently clamps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HdrPixelError { ExpectedFloat, FiniteCoverage, StorageRange }
 impl HdrPixelError {
     pub fn diagnostic(self) -> &'static str {

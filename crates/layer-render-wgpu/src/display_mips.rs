@@ -117,7 +117,7 @@ impl Pipelines {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = Deferred::wgsl(&device, "display mip reduction", include_str!("display_mips.wgsl"));
+        let shader = Deferred::wgsl(device, "display mip reduction", include_str!("display_mips.wgsl"));
         let fused_layout = crate::bindings::layout(device, "four display mip levels", &[
             crate::bindings::texture(0, wgpu::ShaderStages::COMPUTE, false),
             native_tiles::buffer_entry(1, wgpu::BufferBindingType::Uniform, true, 16),
@@ -126,7 +126,7 @@ impl Pipelines {
         let fused_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("four display mip levels"), bind_group_layouts: &[Some(&fused_layout)], immediate_size: 0,
         });
-        let fused_shader = Deferred::wgsl(&device, "four display mip levels", include_str!("display_mips_fused.wgsl"));
+        let fused_shader = Deferred::wgsl(device, "four display mip levels", include_str!("display_mips_fused.wgsl"));
         let fused_reduce = Deferred::compute(device, "four display mip levels", &fused_pipeline_layout, &fused_shader, "reduce_four");
         let reduce = Deferred::compute(device, "display mip reduction", &pipeline_layout, &shader, "reduce");
         Self {

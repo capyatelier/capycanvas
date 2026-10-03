@@ -1993,10 +1993,10 @@ impl DockLayout {
         }
         // Newly opened Proof belongs with Color in existing workspaces too;
         // an already placed Proof tab keeps the user's own placement.
-        if panel == Panel::Proof {
-            if let Some(group) = self.panel_group(Panel::Color) {
-                return self.add_panel_to_group(panel, group);
-            }
+        if panel == Panel::Proof
+            && let Some(group) = self.panel_group(Panel::Color)
+        {
+            return self.add_panel_to_group(panel, group);
         }
         let mut next = self.clone();
         let group = next.allocate()?;
@@ -2450,7 +2450,7 @@ impl DockLayout {
     }
 
     fn group_min_width(&self, group: u32) -> f32 {
-        let content = self.group_panels(group).map_or(0.0, |panels| {
+        self.group_panels(group).map_or(0.0, |panels| {
             panels
                 .iter()
                 .map(|p| match p {
@@ -2464,8 +2464,11 @@ impl DockLayout {
                     _ => 0.0,
                 })
                 .fold(0.0, f32::max)
-        });
-        self.tab_width(group).max(content)
+        })
+    }
+
+    fn group_preferred_width(&self, group: u32) -> f32 {
+        self.group_min_width(group).max(self.tab_width(group))
     }
 
     pub fn move_panel(
@@ -2624,7 +2627,7 @@ impl DockLayout {
                 let width = self
                     .collapsed_column_for_group(source_group)
                     .map_or(moved_width, |column| self.expanded_column_width(column))
-                    .max(self.group_min_width(source_group))
+                    .max(self.group_preferred_width(source_group))
                     .clamp(128., 800.);
                 next.reclaim_removed_columns(self, &before);
                 next.collapsed.push(CollapsedColumn {
@@ -3114,7 +3117,7 @@ impl DockLayout {
             let open = resolved.collapsed.iter().find_map(|c| c.open.as_ref().filter(|o| o.column == column)).unwrap();
             let delta = coordinate - center;
             let width = open.bounds.width + if open.direction == Edge::Right { delta } else { -delta };
-            let minimum = expanded_tab_min_width(self.node(column).unwrap(), self).clamp(128., 800.);
+            let minimum = expanded_node_width(self.node(column).unwrap(), self, DockLayout::group_preferred_width).clamp(128., 800.);
             self.collapsed.iter_mut().find(|c| c.root == column).unwrap().expanded_width = width.clamp(minimum, 800.);
             return Ok(());
         }
@@ -3228,20 +3231,12 @@ impl DockLayout {
             } else {
                 remaining.height
             };
-            let ribbon_min =
-                ribbon_cross_min(&band.root, axis, length, self).max(if axis == Axis::Vertical {
-                    tab_min_width(&band.root, self)
-                } else {
-                    0.0
-                });
+            let ribbon_min = ribbon_cross_width(&band.root, axis, length, self, open_columns, false);
             let available = if band.edge.axis() == Axis::Horizontal {
                 remaining.width
             } else {
                 remaining.height
             };
-            // Use free canvas space before compressing a dock on small windows.
-            // Automatic growth is derived, not written back into the user's
-            // saved thickness. Widening/tallening the window can unwrap again.
             let minimum = if ribbon_min > 0.0 {
                 ribbon_min + WORKSPACE_SPACING
             } else {
@@ -3251,19 +3246,25 @@ impl DockLayout {
                 bands[band_index + 1..]
                     .iter()
                     .filter(|b| matches!(b.edge, Edge::Left | Edge::Right))
-                    .map(|b| tab_min_width(&b.root, self) + WORKSPACE_SPACING)
+                    .map(|b| {
+                        ribbon_cross_width(&b.root, Axis::Vertical, remaining.height, self, open_columns, false)
+                            + WORKSPACE_SPACING
+                    })
                     .sum::<f32>()
             } else {
                 0.
             };
-            // A narrow center must still fit several command tiles per row;
-            // otherwise a wrapped top ribbon can consume the entire canvas.
             let canvas_min = if axis == Axis::Vertical { 128.0 } else { 64.0 };
             let limit = (available - reserved_width - canvas_min)
                 .max(minimum)
                 .min(available)
                 .max(0.0);
-            let extent = band.extent.max(minimum).min(limit);
+            let preferred = if axis == Axis::Vertical {
+                ribbon_cross_width(&band.root, axis, length, self, open_columns, true) + WORKSPACE_SPACING
+            } else {
+                minimum
+            };
+            let extent = band.extent.max(minimum).max(preferred).min(limit);
             let mut bounds = remaining.strip(band.edge, extent);
             // The inside six logical units are a generous native drag handle.
             let opposite = match band.edge {
@@ -3370,7 +3371,7 @@ impl DockLayout {
             };
             let max_width = (width - WORKSPACE_SPACING * 2.0).max(1.0);
             let max_height = (height - top - WORKSPACE_SPACING).max(1.0);
-            let mut width = floating.width.max(self.group_min_width(*id)).min(max_width);
+            let mut width = floating.width.max(self.group_preferred_width(*id)).min(max_width);
             let natural = if toolbar {
                 let [tile_width, tile_height] = config.tile_style.size();
                 let gap = config.tile_style.gap();
@@ -4211,23 +4212,31 @@ fn finite_extent(value: f32) -> f32 {
 }
 
 fn tab_min_width(node: &DockNode, layout: &DockLayout) -> f32 {
+    node_width(node, layout, DockLayout::group_min_width)
+}
+
+fn tab_preferred_width(node: &DockNode, layout: &DockLayout) -> f32 {
+    node_width(node, layout, DockLayout::group_preferred_width)
+}
+
+fn node_width(node: &DockNode, layout: &DockLayout, group_width: fn(&DockLayout, u32) -> f32) -> f32 {
     if layout.is_collapsed(node.id()) {
         return TILE_SIZE;
     }
-    expanded_tab_min_width(node, layout)
+    expanded_node_width(node, layout, group_width)
 }
 
-fn expanded_tab_min_width(node: &DockNode, layout: &DockLayout) -> f32 {
+fn expanded_node_width(node: &DockNode, layout: &DockLayout, group_width: fn(&DockLayout, u32) -> f32) -> f32 {
     match node {
-        DockNode::Tabs { id, .. } => layout.group_min_width(*id),
+        DockNode::Tabs { id, .. } => group_width(layout, *id),
         DockNode::Split {
             axis,
             first,
             second,
             ..
         } => {
-            let a = tab_min_width(first, layout);
-            let b = tab_min_width(second, layout);
+            let a = node_width(first, layout, group_width);
+            let b = node_width(second, layout, group_width);
             if *axis == Axis::Horizontal && (a > 0.0 || b > 0.0) {
                 a + b + WORKSPACE_SPACING
             } else {
@@ -4237,18 +4246,33 @@ fn expanded_tab_min_width(node: &DockNode, layout: &DockLayout) -> f32 {
     }
 }
 
-// Intrinsic ribbon thickness, including ribbons nested beside other panels.
-// Use the same split fractions as allocation; no resize callbacks or feedback.
-fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &DockLayout) -> f32 {
+fn ribbon_preferred_width(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &DockLayout) -> f32 {
+    ribbon_cross_width(node, ribbon_axis, length, layout, false, true)
+}
+
+fn ribbon_cross_width(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &DockLayout, open_columns: bool, preferred: bool) -> f32 {
     if layout.is_collapsed(node.id()) {
-        return TILE_SIZE;
+        return TILE_SIZE + if open_columns {
+            layout.open_stack_column(node.id()).map_or(0., |member| {
+                expanded_ribbon_cross_width(node.find(member).unwrap(), ribbon_axis, length, layout, false, preferred) + WORKSPACE_SPACING * 2.
+            })
+        } else { 0. };
     }
+    expanded_ribbon_cross_width(node, ribbon_axis, length, layout, open_columns, preferred)
+}
+
+fn expanded_ribbon_cross_width(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &DockLayout, open_columns: bool, preferred: bool) -> f32 {
+    let group_width: fn(&DockLayout, u32) -> f32 = if preferred { DockLayout::group_preferred_width } else { DockLayout::group_min_width };
     let minimum = match node {
         DockNode::Tabs { panels, active, .. }
             if panels.len() == 1 && active.kind() == PanelKind::Tiles =>
         {
             let config = layout.panel(*active).unwrap();
-            toolbar_cross_extent(length, config.tiles(), config.tile_style, ribbon_axis)
+            if ribbon_axis == Axis::Vertical && !preferred {
+                config.tile_style.size()[0]
+            } else {
+                toolbar_cross_extent(length, config.tiles(), config.tile_style, ribbon_axis)
+            }
         }
         DockNode::Tabs { panels, .. } if panels.iter().any(|p| p.kind() == PanelKind::Tiles) => {
             // A tab bar must not consume the ribbon's entire old one-row
@@ -4286,15 +4310,17 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
                 } else {
                     usable * fraction
                 };
-                ribbon_cross_min(first, ribbon_axis, first_length, layout).max(ribbon_cross_min(
+                ribbon_cross_width(first, ribbon_axis, first_length, layout, open_columns, preferred).max(ribbon_cross_width(
                     second,
                     ribbon_axis,
                     usable - first_length,
                     layout,
+                    open_columns,
+                    preferred,
                 ))
             } else {
-                let a = ribbon_cross_min(first, ribbon_axis, length, layout);
-                let b = ribbon_cross_min(second, ribbon_axis, length, layout);
+                let a = ribbon_cross_width(first, ribbon_axis, length, layout, open_columns, preferred);
+                let b = ribbon_cross_width(second, ribbon_axis, length, layout, open_columns, preferred);
                 if a == 0.0 && b == 0.0 {
                     0.0
                 } else {
@@ -4306,7 +4332,7 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
     if ribbon_axis == Axis::Vertical
         && let DockNode::Tabs { id, .. } = node
     {
-        minimum.max(layout.group_min_width(*id))
+        minimum.max(group_width(layout, *id))
     } else {
         minimum
     }
@@ -4509,14 +4535,15 @@ fn resolve_node(
             let usable = length - gap;
             let mut first_size = usable * fraction;
             if *axis == Axis::Horizontal || *axis != orientation {
-                let minimum = |node: &DockNode| {
+                let minimum = |node: &DockNode, preferred: bool| {
+                    let group_width: fn(&DockLayout, u32) -> f32 = if preferred { DockLayout::group_preferred_width } else { DockLayout::group_min_width };
                     let tabs = if *axis == Axis::Horizontal {
-                        tab_min_width(node, layout)
+                        node_width(node, layout, group_width)
                     } else {
                         0.0
                     };
                     let ribbon = if *axis != orientation {
-                        ribbon_cross_min(
+                        ribbon_cross_width(
                             node,
                             orientation,
                             if orientation == Axis::Horizontal {
@@ -4525,36 +4552,33 @@ fn resolve_node(
                                 bounds.height
                             },
                             layout,
+                            open_columns,
+                            preferred,
                         )
                     } else {
                         0.0
                     };
                     tabs.max(ribbon)
                 };
-                let a = minimum(first);
-                let b = minimum(second);
+                let mut a = minimum(first, false);
+                let mut b = minimum(second, false);
+                if *axis == Axis::Horizontal {
+                    let preferred_a = minimum(first, true);
+                    let preferred_b = minimum(second, true);
+                    if preferred_a + preferred_b <= usable {
+                        a = preferred_a;
+                        b = preferred_b;
+                    }
+                }
                 first_size = split_size(usable, *fraction, a, b);
             } else if let Some(size) = layout.fitted_split(first, second, usable) {
                 first_size = size;
             }
             if *axis == Axis::Horizontal {
-                if layout.is_collapsed(first.id()) {
-                    first_size = (TILE_SIZE
-                        + if open_columns && layout.open_stack_column(first.id()).is_some() {
-                            layout.expanded_column_width(layout.open_stack_column(first.id()).unwrap()) + WORKSPACE_SPACING * 2.
-                        } else {
-                            0.
-                        })
-                    .min(usable);
-                } else if layout.is_collapsed(second.id()) {
-                    first_size = (usable
-                        - TILE_SIZE
-                        - if open_columns && layout.open_stack_column(second.id()).is_some() {
-                            layout.expanded_column_width(layout.open_stack_column(second.id()).unwrap()) + WORKSPACE_SPACING * 2.
-                        } else {
-                            0.
-                        })
-                    .max(0.);
+                if layout.is_collapsed(first.id()) && !(open_columns && layout.open_stack_column(first.id()).is_some()) {
+                    first_size = TILE_SIZE.min(usable);
+                } else if layout.is_collapsed(second.id()) && !(open_columns && layout.open_stack_column(second.id()).is_some()) {
+                    first_size = (usable - TILE_SIZE).max(0.);
                 }
             }
             let a = rest.strip(edge, first_size);
@@ -6161,6 +6185,91 @@ mod tests {
                     .all(|t| t.x + t.width <= group.bounds.width
                         && t.y + t.height <= group.bounds.height - 22.0)
             );
+        }
+    }
+
+    #[test]
+    fn fitted_tab_captions_preserve_opposing_dock_controls_on_narrow_windows() {
+        let mut layout = DockLayout::editor_default();
+        layout.bands[0].extent = 134.;
+        layout.fit_tab_groups = vec![6, 7, 14, 15, 16];
+        for text_scale in [1., 1.5] {
+            layout.measurements = [
+                (Panel::Brushes, 250.),
+                (Panel::ToolSettings, 260.),
+                (Panel::Sizes, 220.),
+                (Panel::Navigator, 200.),
+                (Panel::Stats, 180.),
+                (Panel::Properties, 240.),
+                (Panel::Adjustments, 240.),
+                (Panel::Layers, 220.),
+            ].into_iter().map(|(panel, width)| PanelMeasurement {
+                panel,
+                tab_width: width * text_scale,
+                content_height: 200.,
+                scroll: None,
+            }).collect();
+            let saved = serde_json::to_value(&layout).unwrap();
+            let wide = layout.workspace(1440., 900., 48., 28.);
+            assert!(group(&wide, Panel::ToolSettings).width >= 480. * text_scale + 22.);
+            for width in [640., 744., 1200., 1440., 640.] {
+                let resolved = layout.workspace(width, 900., 48., 28.);
+                let leading = group(&resolved, Panel::ToolSettings);
+                let trailing = group(&resolved, Panel::Layers);
+                assert!(leading.width >= TOOL_SETTINGS_MIN_WIDTH, "{width} {text_scale} {leading:?}");
+                assert!(trailing.width >= LAYERS_MIN_WIDTH, "{width} {text_scale} {trailing:?}");
+                assert!(group(&resolved, Panel::Navigator).width >= 192.);
+                assert!(leading.x + leading.width <= trailing.x);
+                assert!(resolved.work_area.width > 0.);
+                assert_eq!(serde_json::to_value(&layout).unwrap(), saved);
+            }
+            assert_eq!(
+                serde_json::to_value(layout.workspace(1440., 900., 48., 28.)).unwrap(),
+                serde_json::to_value(wide).unwrap(),
+            );
+            layout.bands.swap(1, 2);
+            let reversed = layout.workspace(744., 900., 48., 28.);
+            assert!(group(&reversed, Panel::ToolSettings).width >= TOOL_SETTINGS_MIN_WIDTH);
+            assert!(group(&reversed, Panel::Layers).width >= LAYERS_MIN_WIDTH);
+            assert!(group(&reversed, Panel::Navigator).width >= 192.);
+            layout.bands.swap(1, 2);
+            assert_eq!(serde_json::to_value(&layout).unwrap(), saved);
+        }
+    }
+
+    #[test]
+    fn open_collapsed_columns_reserve_controls_before_opposing_caption_growth() {
+        let mut layout = DockLayout::editor_default();
+        layout.set_panel_visible(Panel::Palettes, true).unwrap();
+        layout.move_panel(VIEWPORT, Panel::Palettes, DockTarget::Tab { group: 10, index: None }).unwrap();
+        layout.select_tab(10, Panel::Color).unwrap();
+        layout.collapsed.push(CollapsedColumn { root: 12, expanded_width: 254. });
+        layout.bands[1].extent = 248.;
+        layout.bands[2].extent = TILE_SIZE + WORKSPACE_SPACING;
+        layout.column_stack_mut(12).open_column = Some(12);
+        layout.fit_tab_groups = vec![6, 10, 14];
+        for scale in [1., 1.5] {
+            layout.measurements = [(Panel::Color, 70.), (Panel::Palettes, 95.), (Panel::Navigator, 140.)]
+                .into_iter().map(|(panel, width)| PanelMeasurement {
+                    panel, tab_width: width * scale, content_height: 200., scroll: None,
+                }).collect();
+            let saved = serde_json::to_value(&layout).unwrap();
+            for reversed in [false, true] {
+                if reversed { layout.bands.swap(1, 2); }
+                for viewport in [[744., 513.], [640., 513.], [1200., 900.], [640., 513.]] {
+                    let resolved = layout.workspace(viewport[0], viewport[1], 48., 28.);
+                    let layers = group(&resolved, Panel::Layers);
+                    let color = group(&resolved, Panel::Color);
+                    assert!(layers.width >= LAYERS_MIN_WIDTH, "{viewport:?} {scale} {layers:?}");
+                    assert!(color.width >= layout.group_min_width(10));
+                    assert!(color.x + color.width <= layers.x);
+                    assert!(resolved.work_area.width > 0.);
+                    let open = resolved.collapsed.iter().find_map(|c| c.open.as_ref()).unwrap();
+                    assert_eq!(open.bounds.width, layers.width);
+                }
+                if reversed { layout.bands.swap(1, 2); }
+                assert_eq!(serde_json::to_value(&layout).unwrap(), saved);
+            }
         }
     }
 
