@@ -26,24 +26,6 @@ impl Drop for PendingFrame {
         }
     }
 }
-/// Whether two composite snapshots draw the same pixels: the same raster,
-/// source, mask, effect, placement and appearance.
-pub(super) fn same_layer(a: &Layer, b: &Layer) -> bool {
-    a.id == b.id
-        && a.kind == b.kind
-        && a.visible == b.visible
-        && a.opacity == b.opacity
-        && a.raster == b.raster
-        && a.properties == b.properties
-        && a.mask == b.mask
-        && a.effect == b.effect
-        && match (&a.source, &b.source) {
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        }
-}
-
 impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
     /// Source identity and raster publication catch edits without scanning pixels.
@@ -58,7 +40,7 @@ impl Frame {
             && self.layers.iter().filter(artwork).count()
                 == packet.layers.iter().filter(artwork).count();
         for (a, b) in self.layers.iter().filter(artwork).zip(packet.layers.iter().filter(artwork)) {
-            if !same_layer(a, b) {
+            if !a.same_artwork(b) {
                 return false;
             }
         }

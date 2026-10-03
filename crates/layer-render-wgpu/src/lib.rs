@@ -3216,6 +3216,10 @@ impl CanvasRenderer for WgpuRasterizer {
                 request.effect_times = request.document.layers.iter().filter(|l| l.effect.is_some())
                     .map(|l| (l.id, effects::Gpu::effect_time(self, l, request.time))).collect();
             }
+            if let layer_render::SnapshotRequest::ArtworkSample(request) = &mut request {
+                request.effect_times = request.document.layers.iter().filter(|l| l.effect.is_some())
+                    .map(|l| (l.id, effects::Gpu::effect_time(self, l, request.time))).collect();
+            }
             snapshot::SnapshotJob::start(self.snapshot_worker_callback.clone()
                 .ok_or_else(|| GpuRasterError::Color("Snapshot worker unavailable".into()))?, request)
         };
@@ -5916,6 +5920,8 @@ mod tests {
 
 #[cfg(test)]
 mod content_bounds_tests;
+#[cfg(test)]
+mod artwork_sample_tests;
 #[cfg(target_arch = "wasm32")]
 impl WgpuRasterizer {
     pub fn set_snapshot_worker(&mut self, worker: snapshot::BrowserSnapshot) { self.snapshot_worker_callback = Some(worker); }

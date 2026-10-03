@@ -172,7 +172,7 @@ fn color_picker_cancellation_rejects_inflight_results_and_restores_wheel() {
         }
         picker_reply(&mut s, [1., 0., 0., 1.]);
         assert_eq!(s.state.colors, original);
-        assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Paint);
+        assert_eq!(s.state.layer_tools.tool, if cancel == 3 { LayerCanvasTool::Move } else { LayerCanvasTool::Paint });
         assert!(s.state.color_picker.preview.is_none());
         assert!(s.color_picker_overlay().is_none());
     }

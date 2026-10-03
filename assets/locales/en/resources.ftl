@@ -433,3 +433,9 @@ resources-selection-menu-subtract-mask-from-selection = Subtract Mask from Selec
 resources-selection-menu-subtract-opacity-from-selection = Subtract Opacity from Selection
 resources-selection-menu-unlock-editing = Unlock Editing
 resources-layer-menu-duplicate = Duplicate
+
+resources-picker-neutral = Pick neutral point
+resources-picker-prompt = Click a neutral point
+resources-picker-empty = Choose a point with visible color.
+resources-picker-neutral-failed = Choose another point. This color cannot be made neutral with White Balance.
+resources-picker-unavailable = Adjustment pickers are not available on this platform yet.

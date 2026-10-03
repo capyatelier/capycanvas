@@ -744,14 +744,16 @@
           {
             "default": {"kind":"number","value":0},
             "key": "temperature",
-            "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
+            "kind": {"decimals":3,"kind":"number","max":1000,"min":-1000,"step":1,"unit":""},
+            "soft_bounds": [-100,100],
             "label": {"message":"resources-parameter-white-balance-temperature"},
             "section": {"message":"resources-section-white-balance-white-balance"}
           },
           {
             "default": {"kind":"number","value":0},
             "key": "tint",
-            "kind": {"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":""},
+            "kind": {"decimals":3,"kind":"number","max":800,"min":-800,"step":1,"unit":""},
+            "soft_bounds": [-100,100],
             "label": {"message":"resources-parameter-white-balance-tint"}
           },
           {

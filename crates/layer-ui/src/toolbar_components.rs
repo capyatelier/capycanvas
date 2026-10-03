@@ -320,13 +320,13 @@ impl UiState {
                 self.localization.text(MessageId::TOOLBAR_VARIANT)
             };
             if self.layer_tools.tool.picks_color() {
-                options.extend(choice("picker-style", self.localization.text(MessageId::TOOLBAR_STYLE), false, variants));
+                if !self.color_picker.calibrating { options.extend(choice("picker-style", self.localization.text(MessageId::TOOLBAR_STYLE), false, variants)); }
                 let sources = [(MessageId::TOOLBAR_VISIBLE_COLOR, false), (MessageId::TOOLBAR_SELECTED_LAYER, true)].into_iter()
                     .filter(|(_, layer)| !layer || self.color_picker.can_sample_layer)
                     .map(|(label, layer)| ToolSetItem { label: self.localization.text(label), icon: if layer { "layers" } else { "eye" },
                         action: UiAction::ColorPicker { action: crate::ColorPickerAction::Source { layer } },
                         selected: self.color_picker.layer == layer, preview: None }).collect();
-                options.extend(choice("variant", self.localization.text(MessageId::TOOLBAR_SOURCE), false, sources));
+                if !self.color_picker.calibrating { options.extend(choice("variant", self.localization.text(MessageId::TOOLBAR_SOURCE), false, sources)); }
                 let sizes = [(MessageId::TOOLBAR_SINGLE_PIXEL,1),(MessageId::TOOLBAR_5_PX_CIRCLE,5),(MessageId::TOOLBAR_15_PX_CIRCLE,15),(MessageId::TOOLBAR_51_PX_CIRCLE,51),(MessageId::TOOLBAR_101_PX_CIRCLE,101)].into_iter()
                     .map(|(label,width)| ToolSetItem { label: self.localization.text(label), icon: "eyedropper", action: UiAction::SetColorSampleSize { width },
                         selected: self.color_picker.sample_width == width, preview: None }).collect();

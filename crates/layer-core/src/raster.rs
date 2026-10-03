@@ -11,7 +11,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -72,22 +72,26 @@ impl<T> Publication<T> {
     fn get(&self) -> Option<Result<Arc<T>, String>> {
         self.value.lock().ok()?.clone()
     }
-    #[cfg(target_arch = "wasm32")]
     fn wait(&self) -> Result<Arc<T>, String> {
-        // Blocking would prevent WebGPU's map callbacks from publishing.
+        self.wait_cancellable(None)
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn wait_cancellable(&self, cancelled: Option<&AtomicBool>) -> Result<Arc<T>, String> {
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) { return Err("Raster capture cancelled".into()); }
         self.get().ok_or("Raster capture is still pending")?
     }
     #[cfg(not(target_arch = "wasm32"))]
-    fn wait(&self) -> Result<Arc<T>, String> {
-        if let Some(value) = self.get() {
-            return value;
+    fn wait_cancellable(&self, cancelled: Option<&AtomicBool>) -> Result<Arc<T>, String> {
+        let deadline = std::time::Instant::now() + CAPTURE_TIMEOUT;
+        let mut state = self.value.lock().map_err(|_| "Raster publication failed")?;
+        loop {
+            if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) { return Err("Raster capture cancelled".into()); }
+            if let Some(value) = &*state { return value.clone(); }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() { return Err("Raster capture did not complete".into()); }
+            let interval = if cancelled.is_some() { remaining.min(Duration::from_millis(10)) } else { remaining };
+            (state, _) = self.ready.wait_timeout(state, interval).map_err(|_| "Raster publication failed")?;
         }
-        let state = self.value.lock().map_err(|_| "Raster publication failed")?;
-        let (state, _) = self
-            .ready
-            .wait_timeout_while(state, CAPTURE_TIMEOUT, |v| v.is_none())
-            .map_err(|_| "Raster publication failed")?;
-        state.clone().ok_or("Raster capture did not complete")?
     }
 }
 
@@ -309,6 +313,9 @@ impl RasterTile {
     pub fn wait_backing(&self) -> Result<Arc<TileBlob>, String> {
         self.0.data.wait()
     }
+    pub fn wait_backing_cancellable(&self, cancelled: &AtomicBool) -> Result<Arc<TileBlob>, String> {
+        self.0.data.wait_cancellable(Some(cancelled))
+    }
     pub fn same_capture(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
@@ -469,6 +476,9 @@ impl RasterRevision {
     }
     pub fn wait_data(&self) -> Result<Arc<RasterData>, String> {
         self.0.data.wait()
+    }
+    pub fn wait_data_cancellable(&self, cancelled: &AtomicBool) -> Result<Arc<RasterData>, String> {
+        self.0.data.wait_cancellable(Some(cancelled))
     }
     pub fn host_backed(&self) -> bool {
         matches!(self.try_data(), Some(Ok(data)) if data.host_backed())

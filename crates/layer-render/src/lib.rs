@@ -19,11 +19,13 @@ pub use telemetry::{RendererTelemetry, TimingSamples};
 
 #[derive(Clone, Debug)]
 pub enum SnapshotRequest {
+    ArtworkSample(layer_core::ArtworkSampleRequest),
     Bounds(layer_core::ContentBoundsRequest),
     TransformPixels(layer_core::TransformPixelsPlan),
 }
 #[derive(Clone, Debug)]
 pub enum SnapshotResult {
+    ArtworkSample(layer_core::ArtworkSample),
     Bounds(Rect),
     TransformPixels(Box<Layer>),
 }
@@ -348,6 +350,7 @@ pub struct EffectValidationResult {
 /// Display-only picker geometry in physical surface pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorPickerOverlay {
+    pub sample_color_only: bool,
     pub center: [f32; 2],
     pub sample: [f32; 2],
     pub scale: f32,
@@ -811,7 +814,7 @@ pub trait CanvasRenderer {
     fn take_content_bounds(&mut self) -> Option<Result<layer_core::Rect, Self::Error>> {
         self.take_snapshot().map(|result| result.map(|result| match result {
             SnapshotResult::Bounds(bounds) => bounds,
-            SnapshotResult::TransformPixels(_) => unreachable!(),
+            SnapshotResult::TransformPixels(_) | SnapshotResult::ArtworkSample(_) => unreachable!(),
         }))
     }
     fn cancel_content_bounds(&mut self) { self.cancel_snapshot(); }

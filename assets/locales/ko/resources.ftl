@@ -550,3 +550,9 @@ resources-layer-menu-duplicate = 복제
 
 resources-curves-help = 점을 끌어 톤을 조절하세요. 방향키로 선택한 점을 이동하고 Shift를 누르면 더 크게 이동합니다. 끝점이 아닌 점을 두 번 눌러 삭제할 수 있습니다.
 resources-curves-reset = 곡선 초기화
+
+resources-picker-neutral = 중성색 지점 선택
+resources-picker-prompt = 중성색 지점을 클릭하세요
+resources-picker-empty = 색이 보이는 지점을 선택하세요.
+resources-picker-neutral-failed = 다른 지점을 선택하세요. 이 색은 화이트 밸런스로 중성색을 만들 수 없습니다.
+resources-picker-unavailable = 이 플랫폼에서는 아직 조정 스포이드를 사용할 수 없습니다.

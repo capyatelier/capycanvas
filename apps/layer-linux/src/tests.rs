@@ -44,6 +44,8 @@ mod blend_menu;
 mod blending;
 #[path = "photo_edit_tests.rs"]
 mod photo_edit;
+#[path = "calibration_tests.rs"]
+mod calibration;
 #[path = "merge_tests.rs"]
 mod merge;
 #[path = "crop_tests.rs"]

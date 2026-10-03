@@ -436,16 +436,16 @@ struct PickerVertex {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) geometry: vec4<f32>,
-    @location(2) @interpolate(flat) sample: vec3<f32>,
-    @location(3) @interpolate(flat) original: vec3<f32>,
-    @location(4) @interpolate(flat) candidate: vec3<f32>,
+    @location(2) @interpolate(flat) sample: vec4<f32>,
+    @location(3) @interpolate(flat) original: vec4<f32>,
+    @location(4) @interpolate(flat) candidate: vec4<f32>,
 };
 @vertex fn picker_vertex(@builtin(vertex_index) index: u32,
     @location(0) geometry: vec4<f32>, @location(1) sample: vec4<f32>,
     @location(2) original: vec4<f32>, @location(3) candidate: vec4<f32>) -> PickerVertex {
     let corners = array(vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(-1.,1.),vec2(1.,-1.),vec2(1.,1.));
     let local = corners[index] * 48.;
-    return PickerVertex(surface_clip(geometry.xy + local * geometry.z), local, geometry, sample.xyz, original.rgb, candidate.rgb);
+    return PickerVertex(surface_clip(geometry.xy + local * geometry.z), local, geometry, sample, original, candidate);
 }
 // A small stacked-layer glyph accompanies the aim mark for raw-layer sampling.
 fn picker_layer_mark(p: vec2<f32>, center: vec2<f32>) -> f32 {
@@ -476,12 +476,15 @@ fn picker_layer_mark(p: vec2<f32>, center: vec2<f32>) -> f32 {
     let sample_surface = v.sample.xy + p * v.geometry.z * .5;
     let point = vec2(dot(camera.inverse.xz,sample_surface),dot(camera.inverse.yw,sample_surface)) + camera.offset_document.xy;
     var rgb = view_ui_rgb(camera.surround.rgb);
-    if all(point >= vec2(0.)) && all(point < camera.offset_document.zw) {
+    if v.sample.w > .5 {
+        let checker = select(.80,.94,(i32(floor(p.x/8.))+i32(floor(p.y/8.)))%2==0);
+        rgb = select(vec3(checker),view_working_rgb(v.candidate.rgb),v.candidate.a>0.);
+    } else if all(point >= vec2(0.)) && all(point < camera.offset_document.zw) {
         let paint = proof_artwork(canvas_linear(artwork_at(point,camera.inverse.xy*.5,camera.inverse.zw*.5)),point);
         let checker = select(.80,.94,(i32(floor(point.x/16.))+i32(floor(point.y/16.)))%2==0);
         rgb = view_working_rgb(paint.rgb) + vec3(checker)*(1.-paint.a);
     }
-    var ring = view_working_rgb(select(v.candidate,v.original,p.y>=0.));
+    var ring = view_working_rgb(select(v.candidate.rgb,v.original.rgb,p.y>=0.));
     let light = clamp(-p.y/46.*.5+.5,0.,1.);
     // Hairline edge reflections stay inside the glass, with no outer stroke or shadow.
     let outer_light = exp(-pow((radius-45.55)/.38,2.));

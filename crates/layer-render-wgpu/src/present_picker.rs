@@ -29,15 +29,15 @@ impl Picker {
                 o.sample[0],
                 o.sample[1],
                 f32::from(o.layer),
-                0.,
+                f32::from(o.sample_color_only),
                 o.original[0],
                 o.original[1],
                 o.original[2],
-                1.,
+                o.original[3],
                 o.candidate[0],
                 o.candidate[1],
                 o.candidate[2],
-                1.,
+                o.candidate[3],
             ]
         });
         if self.data == data {

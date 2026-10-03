@@ -10,6 +10,8 @@ use layer_render::CanvasRenderer;
 mod art_layers;
 #[path = "color_picker_session.rs"]
 mod color_picker_session;
+#[path = "calibration.rs"]
+pub(crate) mod calibration;
 #[path = "held_actions.rs"]
 mod held_actions;
 use held_actions::{ERASER_END, merge_change};
@@ -2659,8 +2661,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let was_zen = self.state.workspace.zen_mode;
         if self.picker_cancel_action(&action) {
             self.cancel_picker();
-            return Ok(self.changed(regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION | regions::COLOR_PREVIEW, true));
         }
+        if self.eyedropper.calibration.is_some() && matches!(&action, UiAction::Effect { .. } | UiAction::Layer { .. }
+            | UiAction::Invoke { command: CommandId::Undo | CommandId::Redo }) { self.cancel_picker(); }
         let tool_before = (self.state.brush.tool, self.layer_interaction.tool);
         let configuring_picker = self.eyedropper.picking.previous.is_some()
             && matches!(&action, UiAction::ColorPicker { .. });
@@ -3228,6 +3231,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW, true)
             }
             UiAction::SetColorSampleSize { width } => {
+                if let Some(calibration) = self.eyedropper.calibration.as_mut() {
+                    if !layer_core::ARTWORK_SAMPLE_WIDTHS.contains(&width) { return Err("Choose a supported sample size".into()); }
+                    if calibration.width == width || self.eyedropper.picking.finishing { return Ok(UiChange::default()); }
+                    calibration.width = width;
+                    if calibration.submitted { self.engine.backend_mut().cancel_snapshot(); }
+                    calibration.submitted = false;
+                    calibration.request = None;
+                    self.state.color_picker.preview = None;
+                    if let Some(position) = self.eyedropper.picking.position { self.picker_position(position); }
+                    self.refresh_tools();
+                    return Ok(self.changed(BRUSH | COLOR_PREVIEW, true));
+                }
                 use layer_render::ColorSampleArea;
                 let area = match width {
                     1 => ColorSampleArea::Point,
@@ -4262,6 +4277,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= regions::BRUSH;
         }
         let sample_space = self.engine.document().color.space;
+        changed |= self.poll_calibration();
         if !self.engine.has_pending_document_edits()
             && let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
             if self.eyedropper.picking.previous.is_some() {
@@ -4274,11 +4290,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 changed |= regions::BRUSH;
             }
         }
-        if self.eyedropper.picking.previous.is_some() && !self.eyedropper.busy()
+        if self.eyedropper.calibration.is_none() && self.eyedropper.picking.previous.is_some() && !self.eyedropper.busy()
             && self.eyedropper.sample.is_none() && self.state.color_picker.preview.take().is_some() {
             changed |= regions::COLOR_PREVIEW;
         }
-        if self.eyedropper.picking.finishing && !self.eyedropper.busy() {
+        if self.eyedropper.calibration.is_none() && self.eyedropper.picking.finishing && !self.eyedropper.busy() {
             if let Some(color) = self.eyedropper.sample {
                 if self.selection_masks.target().is_some() {
                     self.mask_color_action(ColorAction::Definition { color })?;
@@ -5234,7 +5250,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }).collect();
         }
         self.state.color_picker.layer = self.eyedropper.layer;
-        self.state.color_picker.sample_width = self.eyedropper.area.width();
+        self.state.color_picker.calibrating = self.eyedropper.calibration.is_some();
+        self.state.color_picker.sample_width = self.eyedropper.calibration.as_ref().map_or(self.eyedropper.area.width(), |calibration| calibration.width);
         self.state.color_picker.can_sample_layer = self.picker_layer_available();
         self.state.tool_panels = ToolPanels::new(&self.state.brush, self.layer_interaction.tool, &self.state.tool_set, &self.state.localization);
         self.state.tool_settings = if self.cropping() {
@@ -5652,6 +5669,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.layer_properties = selection_properties::properties(0, &self.localization().text(MessageId::COMMAND_QUICK_MASK), &self.selection_masks.quick_properties, self.state.settings.selection_painting, true, self.localization());
         }
         effects::publish_properties(&mut self.state.layer_properties,doc,&mut self.property_editor,self.effect_gesture.as_ref(),&self.state.localization);
+        if self.state.platform != Platform::Gtk { self.state.layer_properties.actions.clear(); }
         self.state.layer_tools.has_selection = self.current_selection().is_some();
         self.state.layer_tools.quick_mask = self.selection_masks.quick();
         self.state.layer_tools.tool = self.layer_interaction.tool;
@@ -6070,6 +6088,7 @@ mod tests {
     include!("command_catalog_tests.rs");
     include!("palette_tests.rs");
     include!("color_picker_tests.rs");
+    include!("calibration_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
     include!("selection_pixel_tests.rs");

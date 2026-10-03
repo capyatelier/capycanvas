@@ -50,6 +50,10 @@ mod canvas_geometry;
 pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits, ImageOrientation};
 mod content_bounds;
 pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope};
+mod artwork_query;
+pub use artwork_query::{ARTWORK_SAMPLE_WIDTHS, ArtworkSample, ArtworkSampleRequest, ArtworkSource, white_balance_neutral};
+#[cfg(test)]
+mod artwork_query_tests;
 mod merge;
 pub use merge::{MergeDown, MergeKind, MergePlan, MergeRefusal, bake_layers};
 mod retouch_layers;

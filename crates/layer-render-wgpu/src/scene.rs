@@ -117,7 +117,7 @@ fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blu
     wgpu::Color { r: f64::from(red), g: f64::from(green), b: f64::from(blue), a: f64::from(alpha) }
 }
 #[derive(Clone, Copy)]
-pub(super) enum Output { Artwork(Option<LayerId>), Display }
+pub(super) enum Output { Artwork(Option<LayerId>), EffectInput(LayerId), LayerContent(LayerId), Display }
 
 pub(super) struct Scene {
     valid: Arc<std::sync::atomic::AtomicBool>,
@@ -1373,7 +1373,7 @@ impl Scene {
             return Err(GpuRasterError::InvalidExtent);
         }
         let window = images::capture_window(packet.layers, region, packet.document_extent);
-        let dirty = match output { Output::Artwork(_) => window, Output::Display => PixelRect::EMPTY };
+        let dirty = match output { Output::Display => PixelRect::EMPTY, _ => window };
         self.prepare_region(r, packet, window, dirty, encoder)?;
         let destination = Image { texture: destination.clone(), view: destination.create_view(&Default::default()),
             plan: display_mips::Plan::window(packet.document_extent, 0, region) };
@@ -1421,6 +1421,18 @@ impl Scene {
                 Output::Artwork(parent) => {
                     let image = self.group(r, packet, parent, tile)?;
                     self.converted(r, image, Convert::linear(packet))
+                }
+                Output::EffectInput(id) => {
+                    let index = packet.layers.iter().position(|layer| layer.id == id).ok_or(GpuRasterError::InvalidExtent)?;
+                    let layer = &packet.layers[index];
+                    self.stop_before = Some((index, layer.properties.clipped));
+                    let image = self.group(r, packet, images::input_scope(packet.layers, layer), tile)?;
+                    self.stop_before = None;
+                    self.converted(r, image, Convert::linear(packet))
+                }
+                Output::LayerContent(id) => {
+                    let index = packet.layers.iter().position(|layer| layer.id == id).ok_or(GpuRasterError::InvalidExtent)?;
+                    self.paint_tile(r, packet, index, tile, 0)?
                 }
                 Output::Display => self.display_tile(r, packet, tile)?,
             };

@@ -261,7 +261,7 @@ fn input_indices(layers: &[Layer], index: usize) -> Vec<usize> {
 }
 /// The group a layer's input is composed in: its clipping stack's group, or
 /// the nearest group around it that does not pass through.
-fn input_scope(layers: &[Layer], layer: &Layer) -> Option<LayerId> {
+pub(super) fn input_scope(layers: &[Layer], layer: &Layer) -> Option<LayerId> {
     if layer.properties.clipped {
         layer.properties.parent
     } else {

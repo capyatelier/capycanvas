@@ -550,3 +550,9 @@ resources-layer-menu-duplicate = 复制
 
 resources-curves-help = 拖动控制点调整色调。方向键移动所选控制点；按住 Shift 可增大移动距离。双击内部控制点可将其删除。
 resources-curves-reset = 重置曲线
+
+resources-picker-neutral = 选取中性点
+resources-picker-prompt = 点击中性点
+resources-picker-empty = 请选择有可见颜色的点。
+resources-picker-neutral-failed = 请选择其他点。白平衡无法将此颜色调整为中性色。
+resources-picker-unavailable = 此平台暂不支持调整吸管。

@@ -188,6 +188,11 @@ are your task, and remove an entry when you fix it.
   expects 13 brush categories where the current catalog supplies 16.
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
+- Apple Rust `apple_photo_corrections_masks_and_original_samples_remain_revisable_after_worker_reopen`
+  and Windows Rust `property_wire_keeps_section_identity_and_choice_indices_with_equal_labels`
+  expect controls outside the selected Properties page. Apple Rust
+  `apple_current_main_drawers_paper_and_zen_use_shared_actions` compares the
+  transient Properties epoch across undo/redo. All three also fail at `b886ccf6b`.
 - Headless Web `--toolbar-components`, `--tonal-selection`, `--editor`, `--hdr`,
   `--proof`, `--raster`, `--selection-tools` and `--shared-workflows`, and 8 pen
   side-button cases in `pointer.test.mjs`.

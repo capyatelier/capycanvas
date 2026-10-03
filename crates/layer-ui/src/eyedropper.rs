@@ -5,7 +5,7 @@ use layer_core::color::{RgbColor, RgbSpace};
 use layer_render::{CanvasRenderer, ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 use serde::{Deserialize, Serialize};
 
-pub const COLOR_SAMPLE_WIDTHS: [u32; 5] = [1, 5, 15, 51, 101];
+pub const COLOR_SAMPLE_WIDTHS: [u32; 5] = layer_core::ARTWORK_SAMPLE_WIDTHS;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -24,6 +24,7 @@ pub enum ColorPickerAction {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorPickerState {
+    pub calibrating: bool,
     pub style: ColorPickerStyle,
     pub layer: bool,
     pub sample_width: u32,
@@ -33,7 +34,7 @@ pub struct ColorPickerState {
 }
 impl crate::UiState {
     pub fn preview_colors(&self) -> std::borrow::Cow<'_, ColorState> {
-        if let Some(sample) = self.color_picker.preview {
+        if !self.color_picker.calibrating && let Some(sample) = self.color_picker.preview {
             let mut colors = self.display_colors().clone();
             if colors.set_color(sample).is_ok() {
                 return std::borrow::Cow::Owned(colors);
@@ -56,6 +57,7 @@ pub(crate) struct Picking {
 
 #[derive(Default)]
 pub(crate) struct Eyedropper {
+    pub calibration: Option<crate::session::calibration::Calibration>,
     pub layer: bool,
     pub area: ColorSampleArea,
     pub picking: Picking,
@@ -92,7 +94,7 @@ impl Eyedropper {
         self.pending = false;
     }
     pub fn busy(&self) -> bool {
-        self.pending || self.queued.is_some()
+        self.pending || self.queued.is_some() || self.calibration.as_ref().is_some_and(|calibration| calibration.request.is_some())
     }
     pub fn poll<R: CanvasRenderer>(
         &mut self,
@@ -134,7 +136,7 @@ impl Eyedropper {
 
 impl Default for ColorPickerState {
     fn default() -> Self {
-        Self { style: ColorPickerStyle::Glass, layer: false, sample_width: 1,
+        Self { calibrating: false, style: ColorPickerStyle::Glass, layer: false, sample_width: 1,
             can_sample_layer: false, preview: None, sample_sizes: &COLOR_SAMPLE_WIDTHS }
     }
 }

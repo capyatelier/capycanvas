@@ -67,6 +67,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(crate) fn cancel_picker(&mut self) -> bool {
+        if self.eyedropper.calibration.take().is_some_and(|calibration| calibration.submitted) {
+            self.engine.backend_mut().cancel_snapshot();
+        }
         let Some(previous) = self.eyedropper.picking.previous.take() else {
             return false;
         };
@@ -110,6 +113,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             ColorPickerAction::Style { style } => self.state.color_picker.style = style,
             ColorPickerAction::Source { layer } => {
+                if self.eyedropper.calibration.is_some() { return Ok(()); }
                 if layer && !self.picker_layer_available() {
                     return Err("Select an editable paint layer to sample its color".into());
                 }
@@ -138,6 +142,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn finish_picker(&mut self, position: [f32; 2]) {
+        if self.eyedropper.calibration.is_some() {
+            self.eyedropper.picking.finishing = true;
+            self.picker_position(position);
+            return;
+        }
         // Hover may show the most recently completed sample during motion.
         // Acceptance must use this contact's exact point, never an older readback.
         if self.eyedropper.busy() {
@@ -157,6 +166,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             x: sample[0],
             y: sample[1],
         });
+        if self.eyedropper.calibration.is_some() {
+            self.queue_calibration([point.x, point.y]);
+            return;
+        }
         let doc = self.engine.document();
         // Even raw-layer sampling is limited to the document, never the surround.
         let inside = point.x >= 0.
@@ -199,15 +212,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !offset.is_finite()
                     || offset < 0.
                     || !position.into_iter().all(f32::is_finite)
-                    || self.eyedropper.picking.previous.is_some()
-                    || !self.touch.is_only_contact(id)
+                    || (self.eyedropper.calibration.is_none() && (self.eyedropper.picking.previous.is_some() || !self.touch.is_only_contact(id)))
+                    || (self.eyedropper.calibration.is_some() && self.eyedropper.picking.consumed.as_slice() != [(PointerKind::Touch, id)])
                     || self.interaction.pointer.is_some()
                     || self.state.settings_open
                     || self.require_idle().is_err()
                 {
                     return Ok(None);
                 }
-                self.start_picker()?;
+                if self.eyedropper.calibration.is_none() { self.start_picker()?; }
                 self.eyedropper.picking.touch = Some(id);
                 self.eyedropper.picking.touch_offset = offset;
                 self.eyedropper.picking.consumed.push((PointerKind::Touch, id));
@@ -274,7 +287,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                     })?;
                                     changed |= regions::BRUSH;
                                 }
-                            } else {
+                            } else if self.eyedropper.calibration.is_none() {
                                 self.cancel_picker();
                                 changed |=
                                     regions::BRUSH | regions::COMMANDS | regions::CUSTOMIZATION;
@@ -349,13 +362,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         let classic = self.state.color_picker.style == ColorPickerStyle::Eyedropper
             && picking.touch.is_none();
         Some(ColorPickerOverlay {
+            sample_color_only: self.eyedropper.calibration.is_some(),
             center: if classic { position } else { center },
             sample,
             scale,
             classic,
             layer: self.eyedropper.layer && self.picker_layer_available(),
-            original: old.linear_in(space).ok()?,
-            candidate: new.linear_in(space).ok()?,
+            original: if self.eyedropper.calibration.is_some() { self.state.color_picker.preview.map_or(Some([0.; 4]), |color| color.linear_in(space).ok())? } else { old.linear_in(space).ok()? },
+            candidate: if self.eyedropper.calibration.is_some() { self.state.color_picker.preview.map_or(Some([0.; 4]), |color| color.linear_in(space).ok())? } else { new.linear_in(space).ok()? },
         })
     }
 }

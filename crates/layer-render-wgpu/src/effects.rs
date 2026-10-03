@@ -687,9 +687,9 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
         let adjusted = if last { encoded(adjusted) } else { adjusted };
         source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=fx_position(v.position.xy); let adjusted={adjusted};\n"));
         if last && p.kind == EffectKind::Adjustment {
-            source.push_str(&format!("let c={};let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {{coverage=textureLoad(effect_mask_0,vec2<i32>(v.position.xy),0).a;}}let rgb=fx_output_range(blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y)));", encoded("fx_original(position)".into())));
+            source.push_str(&format!("let c={};let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {{coverage=textureLoad(effect_mask_0,vec2<i32>(v.position.xy),0).a;}}", encoded("fx_original(position)".into())));
             if p.alpha == layer_core::EffectAlpha::Filter {
-                source.push_str("if settings.options.y<.5 {return mix(c,vec4<f32>(rgb*adjusted.a,adjusted.a),controls.x*coverage);}");
+                source.push_str("if settings.options.y<.5 {if controls.y==0. {return mix(c,adjusted,controls.x*coverage);}let rgb=blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y));return mix(c,vec4<f32>(rgb*adjusted.a,adjusted.a),controls.x*coverage);}");
             }
             source.push_str("return fx_adjustment(c,adjusted,u32(controls.y),controls.x*coverage);}");
         } else {

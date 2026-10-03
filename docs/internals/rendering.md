@@ -626,6 +626,23 @@ pages needed by composition and its halos. Compressed backing remains shared;
 restoration uses the same integer decoder as live editing. Initial masks use the
 existing GPU crossing/coverage and affine-resampling shaders, with bounded
 output rectangles and row slices of immutable packed selection coverage.
+Waiting for pending raster roots or selected tiles observes worker cancellation;
+retiring a reader leaves the producer's publication available to other readers.
+
+Exact artwork samples use the same snapshot worker and region admission. Their
+typed source selects visible artwork, reference composition, placed layer content,
+an adjustment's input, or a substituted gesture baseline. Input scope is applied
+after region preparation, which resets composition state. Raw layer content skips
+its mask, opacity and effect stack. A request retains immutable backing and a
+frozen animation time; native snapshot handles also retain effect clocks, while
+Web serializes the captured phases to its worker.
+
+The GPU reduces a circular footprint in two passes: covered RGB/alpha maxima and
+normalized sums. Only a 32-byte summary reaches the CPU, which unscales it in
+f64 and validates the returned straight RGB. Covered transparent pixels affect
+mean alpha but carry no color weight. Empty and outside results are distinct.
+Calibration uses these linear samples; the paint picker's Oklab average remains
+on its existing request path.
 
 Snapshot PNG/TIFF output streams sixteen-row strips through the working-color
 encoder and profiled row writers. A matching, unmodified source with default

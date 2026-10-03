@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CanvasBarKind {
+    Picker,
     Placement,
     Transform,
     Polygon,
@@ -20,7 +21,7 @@ pub enum CanvasBarKind {
 impl CanvasBarKind {
     /// Kinds that keep their completion at the bottom edge while the bar is turned off.
     fn essential(self) -> bool {
-        matches!(self, Self::Placement | Self::Transform | Self::Polygon | Self::Crop)
+        matches!(self, Self::Placement | Self::Transform | Self::Polygon | Self::Crop | Self::Picker)
     }
 }
 
@@ -232,6 +233,7 @@ impl CanvasBarCaption {
 
 #[derive(Clone, PartialEq)]
 pub(super) struct CanvasBarKey {
+    sample_width: Option<u32>,
     language: UiLanguage,
     visible: bool,
     kind: CanvasBarKind,
@@ -438,6 +440,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn canvas_bar_plan(&self) -> Option<Plan> {
+        if self.eyedropper.calibration.is_some() {
+            return Some(Plan { kind: CanvasBarKind::Picker, label: Some(CanvasBarCaption::Message(MessageId::RESOURCES_PICKER_PROMPT)),
+                items: Vec::new(), completion: vec![PlanItem::Button(CommandId::Eyedropper, MessageId::TOOLBAR_CANCEL)],
+                placement: Some(CanvasBarPlacement::BottomEdge) });
+        }
         if self.content_bounds.baking() {
             return Some(Plan { kind: CanvasBarKind::Transform, label: Some(CanvasBarCaption::Message(MessageId::TRANSFORM_APPLYING)),
                 items: Vec::new(), completion: vec![PlanItem::Command(CommandId::CancelTransform)],
@@ -513,6 +520,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         match kind {
             CanvasBarKind::Placement | CanvasBarKind::Transform => self.transform_document_bounds(),
             CanvasBarKind::Polygon
+            | CanvasBarKind::Picker
             | CanvasBarKind::QuickMask
             | CanvasBarKind::SelectionLayer
             | CanvasBarKind::LayerMask
@@ -553,6 +561,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             plan.items.clear();
         }
         let key = CanvasBarKey {
+            sample_width: self.eyedropper.calibration.as_ref().map(|calibration| calibration.width),
             language: self.localization().language(),
             visible,
             kind: plan.kind,
@@ -580,6 +589,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.canvas_bar.generation += 1;
         }
         let mut items: Vec<CanvasBarItem> = Vec::new();
+        if plan.kind == CanvasBarKind::Picker && visible {
+            for option in self.state.tool_options().into_iter().filter(|option| matches!(option, ToolOption::Choice { id: "sample-size", .. })) {
+                items.push(CanvasBarItem { option, label: self.localization().text(MessageId::TOOLBAR_SAMPLE_SIZE), accent: false, menu: None, icon: None });
+            }
+        }
         for &entry in &plan.items {
             let PlanItem::Command(id) = entry else {
                 items.push(self.canvas_bar_item(entry));
@@ -644,7 +658,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CommandId::ApplyTransform | CommandId::CompleteSelection | CommandId::ReturnToArtwork | CommandId::EditLayerContent
             ),
             menu: None,
-            icon: None,
+            icon: matches!(item, PlanItem::Button(_, MessageId::TOOLBAR_CANCEL)).then_some("close"),
         }
     }
 
@@ -856,6 +870,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 points
             }
             CanvasBarKind::Polygon
+            | CanvasBarKind::Picker
             | CanvasBarKind::QuickMask
             | CanvasBarKind::SelectionLayer
             | CanvasBarKind::LayerMask
@@ -960,6 +975,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 sections.extend(self.application_menu(ApplicationMenu::Layer).sections)
             }
             CanvasBarKind::Placement
+            | CanvasBarKind::Picker
             | CanvasBarKind::Transform
             | CanvasBarKind::Polygon
             | CanvasBarKind::Guide

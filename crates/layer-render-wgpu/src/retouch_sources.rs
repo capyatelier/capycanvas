@@ -121,7 +121,7 @@ impl ReferenceKey {
             && self.background == frame.background
             && self.blend_space == frame.blend_space
             && Self::members(frame, members).count() == self.layers.len()
-            && Self::members(frame, members).zip(&self.layers).all(|(a, b)| artwork::same_layer(a, b))
+            && Self::members(frame, members).zip(&self.layers).all(|(a, b)| a.same_artwork(b))
     }
 }
 

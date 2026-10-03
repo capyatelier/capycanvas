@@ -47,7 +47,7 @@ toolbar styling and joins the open drawer with square corners. Press it
 or **I** to enter temporary picking; mouse/pen hover previews, mouse press
 accepts, and pen contact previews until release accepts. The previous tool
 returns. Press the button/I again, Escape, or tap with a finger to cancel.
-Pressing another tool also cancels and restores the previous tool. Sketch uses
+Pressing another tool cancels picking and activates the requested tool. Sketch uses
 a standalone Color Picker control that always starts the glass loupe; its
 double-press drawer contains only Source and Sample size. Paint and Photo use
 the Eyedropper category and pipette icon, with both Color Picker and Eyedropper
@@ -137,6 +137,28 @@ transformed to Oklab, averaged, then converted back to document-linear RGB.
 Point sampling bypasses this conversion and stays exact, including HDR values.
 Unrelated colors can still lose saturation: a true average cannot promise to
 preserve the saturation of arbitrary contrasting colors.
+
+## White Balance
+
+GTK Properties offers **Pick neutral point** for White Balance. The canvas bar
+keeps Sample size and Cancel available; calibration starts at 5 pixels. A mouse
+or pen release samples the input before that adjustment, including its actual
+group and clipping scope. Touch uses the lifted contact point. Its glass shows
+the sampled input color, with a checker while the asynchronous sample is pending.
+This color swatch stays independent of the corrected canvas and paint color wheel.
+
+Calibration averages alpha-weighted linear document RGB, using circular widths
+1, 5, 15, 51 or 101. Empty, nonpositive or unrepresentable samples leave the picker
+armed with a reason. A successful correction changes Temperature and Tint
+together as one undo step, preserving the paint color and returning to the prior
+tool. Exact Temperature/Tint values can extend beyond the sliders' usual
+−100…100 range, up to ±1000 and ±800 respectively.
+
+Released contacts wait for their own frozen sample. Source edits, another
+property or tool, document replacement, Escape and focus loss retire pending
+results. Advancing animation alone does not discard a released correction.
+Save waits for pending sampling to finish or be cancelled. Native hold timing
+stays in the host; source selection, validation and the correction live in Rust.
 
 ## Scope
 

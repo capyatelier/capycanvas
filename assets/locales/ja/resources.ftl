@@ -550,3 +550,9 @@ resources-layer-menu-duplicate = 複製
 
 resources-curves-help = ポイントをドラッグして階調を変更します。矢印キーで選択したポイントを移動し、Shiftキーで移動量を増やします。端点以外のポイントはダブルクリックで削除できます。
 resources-curves-reset = カーブをリセット
+
+resources-picker-neutral = 中間色の点を選択
+resources-picker-prompt = 中間色の点をクリック
+resources-picker-empty = 色が見える点を選択してください。
+resources-picker-neutral-failed = 別の点を選択してください。この色はホワイトバランスで中間色にできません。
+resources-picker-unavailable = このプラットフォームでは調整用スポイトはまだ利用できません。

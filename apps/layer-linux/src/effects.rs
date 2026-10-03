@@ -47,6 +47,7 @@ pub struct EffectPanels {
     recording_save_open: Cell<bool>,
     recording_was_active: Cell<bool>,
     page: gtk::DropDown,
+    property_actions: gtk::Box,
     properties_updating: Cell<bool>,
     title: gtk::Label,
     body: gtk::Box,
@@ -156,6 +157,8 @@ impl EffectPanels {
         page.set_widget_name("properties-page");
         properties.append(&title);
         properties.append(&page);
+        let property_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        properties.append(&property_actions);
         properties.append(&body);
         let stats = gtk::Box::new(gtk::Orientation::Vertical, 6);
         stats.add_css_class("renderer-stats");
@@ -229,6 +232,7 @@ impl EffectPanels {
             recording_save_open: Cell::new(false),
             recording_was_active: Cell::new(false),
             page,
+            property_actions,
             properties_updating: Cell::new(false),
             title,
             body,
@@ -603,6 +607,19 @@ impl EffectPanels {
         let language_changed = self.property_localization.borrow().as_ref().is_none_or(|old| !std::sync::Arc::ptr_eq(old, &localization));
         *self.property_localization.borrow_mut() = Some(localization);
         let view = &state.layer_properties;
+        if self.schema.borrow().as_ref().is_none_or(|old| old.actions != view.actions) {
+            while let Some(child) = self.property_actions.first_child() { self.property_actions.remove(&child); }
+            for action in &view.actions {
+                let button = gtk::Button::with_label(&action.label);
+                button.set_widget_name("property-picker");
+                let action = action.action.clone();
+                button.connect_clicked(glib::clone!(#[weak] w, move |_| {
+                    w.dispatch(UiAction::Effect { action: action.clone() });
+                }));
+                self.property_actions.append(&button);
+            }
+        }
+        self.property_actions.set_sensitive(view.enabled);
         self.title.set_text(&view.title);
         self.title.set_tooltip_text(Some(&view.description));
         self.body.set_sensitive(view.enabled);

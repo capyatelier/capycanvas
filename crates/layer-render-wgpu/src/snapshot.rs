@@ -182,7 +182,7 @@ impl SnapshotRenderer {
                 .chain(layer.masks().map(|m| (m.id, &m.raster)))
             {
                 control.check()?;
-                backing.insert(id, raster.wait_data().map_err(GpuRasterError::Color)?);
+                backing.insert(id, raster.wait_data_cancellable(control.cancellation_flag()).map_err(GpuRasterError::Color)?);
             }
         }
         control.check()?;
@@ -541,6 +541,9 @@ impl SnapshotRenderer {
             {
                 continue;
             }
+            for tile in data.tiles.values() {
+                tile.wait_backing_cancellable(self.control.cancellation_flag()).map_err(GpuRasterError::Color)?;
+            }
             r.restore_raster(
                 *id,
                 self.resident.get(id).unwrap_or(&RasterData::default()),
@@ -879,6 +882,7 @@ impl SnapshotPreview {
 }
 
 mod bounds;
+pub(crate) mod sample;
 mod transform_pixels;
 mod jobs;
 pub use jobs::SnapshotJob;

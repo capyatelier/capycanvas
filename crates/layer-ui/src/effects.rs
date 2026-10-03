@@ -259,6 +259,7 @@ fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EffectAction {
+    WhiteBalancePicker { layer: u64, epoch: u64 },
     SelectPage { layer:u64, page:String },
     CurveSelectPoint { layer:u64, key:String, epoch:u64, index:Option<usize> },
     CurveRemoveAt { layer:u64, key:String, epoch:u64, point:[f32;2], extent:[f32;2], point_count:Option<usize> },
@@ -372,6 +373,7 @@ pub(super) fn catalog(
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct LayerPropertiesView {
+    pub actions: Vec<PropertyActionView>,
     pub pages:Vec<PropertyPageView>,
     pub page:Option<String>,
     pub epoch:u64,
@@ -384,6 +386,8 @@ pub struct LayerPropertiesView {
     pub curve_max: Option<f32>,
     pub curve_white: Option<f32>,
 }
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PropertyActionView { pub label: String, pub action: EffectAction }
 #[derive(Clone,Debug,PartialEq,Serialize)]
 pub struct PropertyPageView { pub id:String, pub label:String }
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -597,6 +601,10 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
     view.pages=effect.map_or_else(Vec::new,|effect|effect.program.pages.iter().map(|page|PropertyPageView{id:page.id.to_string(),label:resource_label(&page.label,l).to_string()}).collect());
     state.sync(doc.id.clone(),view.layer,doc.revision,view.pages.iter().map(|page|page.id.clone()).collect(),gesture.is_some());
     view.epoch=state.epoch;view.page=state.page().map(str::to_string);
+    view.actions = effect.filter(|effect| effect.program.id.as_ref() == "white_balance").map(|_| PropertyActionView {
+        label: l.text(MessageId::RESOURCES_PICKER_NEUTRAL).to_string(),
+        action: EffectAction::WhiteBalancePicker { layer: view.layer.unwrap(), epoch: view.epoch },
+    }).into_iter().collect();
     view.controls.retain(|control|control.page.as_deref().is_none_or(|page|Some(page)==state.page()));
     let domain=effect.filter(|effect|effect.choice("domain")==Some("Log HDR")).and_then(|effect|match effect.value("hdr_stops"){Some(EffectValue::Number(stops))=>Some(CurveDomain::LogHdr{stops:*stops}),_=>None}).unwrap_or(CurveDomain::Encoded);
     for control in &mut view.controls {
@@ -747,6 +755,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
         if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_ARTWORK_REQUIRED).to_string());}
         match action {
+            EffectAction::WhiteBalancePicker { layer, epoch } => return self.start_white_balance_picker(layer, epoch),
             EffectAction::SelectPage{layer,page}=> {
                 if self.state.layer_properties.layer!=Some(layer) || self.state.layer_properties.page.as_deref()==Some(&page)
                     || !self.state.layer_properties.pages.iter().any(|candidate|candidate.id==page){return Ok(());}

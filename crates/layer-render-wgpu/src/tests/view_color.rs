@@ -121,6 +121,7 @@ fn presentation_wakes_for_visible_changes_and_skips_unchanged_frames() {
     p.set_cursor(r.device(), &[], 1.);
     draw(&mut p, &r, v);
     let mut picker = layer_render::ColorPickerOverlay {
+        sample_color_only: false,
         center: [100., 100.], scale: 1., classic: false, sample: [120., 120.],
         layer: false, original: [0.2, 0.2, 0.2, 1.], candidate: [0.5, 0.5, 0.5, 1.],
     };

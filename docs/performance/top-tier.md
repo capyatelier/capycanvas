@@ -33,6 +33,7 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Animated or warping filter: Domain Warp, Ripple | 120, soft | | |
 | Fill layer or gradient-fill edit | 120, soft | | |
 | Navigation with proof or tone guide shown | 120 | | |
+| Navigation with exact artwork sampling (61 MP) | 120 | **Not met.** 48.43–49.89 canvas presents/s; interval p99 25.00 ms | [Exact artwork samples](#exact-artwork-samples), 2026-10-02 |
 | Gradient drag | 120 | | |
 | Figure or ruler drag | 120 | | |
 | Layer opacity scrub | 120 | | |
@@ -48,6 +49,65 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Tool Options or panel content change | 120 | **Not met.** UI frame p50/p95 25.1/30.6 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 120 | | |
 | Menu open and close | 120 | Menu open adds no canvas frames; UI frame p50/p95 11.5/26.6 ms | Canvas-bar `selection-bar-menu-open`, 2026-09-27 |
+
+## Exact artwork samples
+
+Measured on 2026-10-02 on the reference tablet, using the original 9504 × 6336
+tier photo, a nondebuggable release-Rust benchmark build and a private application
+ID. The first 101-pixel circular Visible sample completes in 49.51 ms. Ten
+repetitions per width give worker medians of 11.88, 12.20, 11.00, 10.53 and
+10.76 ms for widths 1, 5, 15, 51 and 101. These exclude owner-side snapshot
+capture and UI publication; they do not establish tap-to-visible latency.
+LayerContent and retained-source reads also succeed after the live document is
+replaced. Cancellation 2.51 ms after launching a ready-source request returns
+29.76 ms later. Separate regressions cover cancellation during unpublished
+raster roots and tiles, without cancelling their producer.
+
+Three warmed five-second pan runs per condition use a 2880 × 1800 surface, Fit
+zoom 0.16534, the default Navigator, the photo and an empty paint layer.
+
+| Moving-window measurement | No queries | Concurrent 101-pixel queries |
+| --- | ---: | ---: |
+| Renderer submissions/s | 38.31–42.79 | 48.65–49.90 |
+| Completed canvas updates/s | 38.11–42.59 | 48.25–49.70 |
+| Completion-gap p99 | 32.42–33.59 ms | 24.15–25.80 ms |
+| Query completion median | — | 19.29–19.66 ms |
+| Query completion p99 | — | 27.20–29.13 ms |
+
+The query streams cover the entire motion window; 244–248 requests start during
+each contact. This comparison observes no sampling-related slowdown. Run order
+and clock scaling prevent attributing the higher rate to sampling.
+
+Three further warmed five-second contacts on the final integrated build measure
+actual presents from the private canvas SurfaceView's SurfaceFlinger latency
+records, deduplicated and restricted to the input window. Canvas presentation is
+48.43–49.89 Hz with 25.00 ms interval p99. Completed updates are 48.63–50.09/s;
+query medians are 19.22–19.52 ms and p99 is 26.45–27.60 ms. Both presentation
+targets are missed. Low and mid tiers remain unmeasured.
+
+A separate graphics trace shows stable source misses, upload drains and composite
+pixel counters during pan: navigation reuses prepared artwork. The viewport still
+draws 5.184 million pixels per moving frame and takes 9.72–11.77 ms on the GPU;
+glass backdrop work occurs in roughly half those frames. The diagnostic window
+is inferred from input counters and tracing adds overhead. These observations
+identify the remaining viewport workload, not an absolute hardware limit.
+
+Allocator boundaries around isolated sampling change from 2173.96 to 2174.15 MiB,
+with 2236.89 MiB reserved. After document replacement and the retained query,
+allocated memory falls to 9.14 MiB; after cancellation, reservation falls to
+56 MiB. The concurrent-query boundary is 2392.55 MiB allocated. The benchmark
+pre-captures 600 shared snapshots in 70–245 ms outside each motion window;
+interactive picking retains one active request and one newest point. These are
+boundary observations, not peaks or total process memory. PSS was not captured;
+post-run system MemAvailable is 6,820,124 kB and thermal status is zero. These
+overlapping measures must not be summed and do not qualify the memory target.
+
+Final benchmark APK SHA-256:
+`c23f0cb49f060da9ad19fd04649e66461a9e8ec99c1f209180234f1271c15b2c`.
+Raw records are under
+`artifacts/photo-editing-color/p15-performance/`, including
+`moving-comparison.json`, `final-sample-summary.json`,
+`final-navigation-summary.json` and `baseline2/diagnostic-audit.csv`.
 
 ## Transform snapping
 

@@ -59,6 +59,9 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
     renderer.set_snapshot_worker(Rc::new(|request, control| Box::pin(async move {
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
         let (project, task) = match request {
+            layer_render::SnapshotRequest::ArtworkSample(request) => (layer_core::Project { document: (*request.document).clone() },
+                SnapshotTask::ArtworkSample { source: request.source, position: request.position, width: request.width,
+                    time: request.time, effect_times: request.effect_times }),
             layer_render::SnapshotRequest::Bounds(request) => (layer_core::Project { document: (*request.document).clone() },
                 SnapshotTask::Bounds(request.scope, request.time, request.effect_times)),
             layer_render::SnapshotRequest::TransformPixels(plan) => (plan.input,
@@ -74,6 +77,7 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
         let result = call_cancellable("snapshot", &metadata, &buffers, control.clone()).await.map_err(|e| format!("{e:?}"))?;
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
         match task {
+            SnapshotTask::ArtworkSample { .. } => serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::ArtworkSample).map_err(|e| e.to_string()),
             SnapshotTask::Bounds(..) => serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::Bounds).map_err(|e| e.to_string()),
             SnapshotTask::TransformPixels { mut output, scope, .. } => {
                 let (metadata, buffers) = packed_parts(&result).map_err(|e| format!("{e:?}"))?;
@@ -155,6 +159,8 @@ fn encode_tiles(bytes: &[u8], descriptors: Vec<PixelDescriptor>) -> Result<Vec<T
 
 #[derive(Serialize, Deserialize)]
 enum SnapshotTask {
+    ArtworkSample { source: layer_core::ArtworkSource, position: [f32; 2], width: u32, time: f32,
+        effect_times: Vec<(layer_core::LayerId, f32)> },
     Bounds(layer_core::ContentScope, f32, Vec<(layer_core::LayerId, f32)>),
     TransformPixels { output: layer_core::Layer, target: layer_core::LayerId,
         scope: layer_core::TransformPixelsScope, geometry: layer_core::ImageTransform },
@@ -177,6 +183,12 @@ pub async fn raster_worker_snapshot(metadata: &str, buffers: js_sys::Array) -> R
     let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, project.document.color).map_err(js)?;
     renderer.set_browser_raster_encoder(Rc::new(|bytes, descriptors| Box::pin(async move { encode_tiles(&bytes, descriptors) })));
     match task {
+        SnapshotTask::ArtworkSample { source, position, width, time, effect_times } => {
+            let request = layer_core::ArtworkSampleRequest { document: std::sync::Arc::new(project.document), source,
+                position, width, time, effect_times };
+            let sample = renderer.snapshot_gpu().artwork_sample(request, Default::default()).await.map_err(js)?;
+            serialize(&sample)
+        }
         SnapshotTask::Bounds(scope, time, effect_times) => {
             let mut request = layer_core::ContentBoundsRequest::new(&project.document, scope);
             request.time = time;

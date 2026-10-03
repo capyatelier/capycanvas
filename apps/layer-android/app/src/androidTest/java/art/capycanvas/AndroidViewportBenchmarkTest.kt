@@ -40,6 +40,7 @@ class AndroidViewportBenchmarkTest {
         check(motion in listOf("stroke", "pan", "pinch"))
         val passThrough = args.getString("passThrough", "false") == "true"
         val navigator = args.getString("navigator", "true") == "true"
+        val artworkQueries = args.getString("artworkQueries", "false") == "true"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity: MainActivity
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -50,8 +51,12 @@ class AndroidViewportBenchmarkTest {
                 while (!condition()) { assertNull(host.failure); check(SystemClock.uptimeMillis() - start < 120_000) { "G-pen did not settle: ${host.actionError}" }; SystemClock.sleep(20) }
             }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
-            host.newDocument(args.getString("width")?.toInt() ?: size, args.getString("height")?.toInt() ?: size)
-            args.getString("photo")?.let { path ->
+            val openQueryPhoto = args.getString("openQueryPhoto", "false") == "true"
+            if (openQueryPhoto) {
+                host.openQueryPhoto(File(args.getString("photo", "/data/local/tmp/capy-brush-photo.jpg")!!))
+                scenario.onActivity { host.invoke("add_layer") }
+            } else host.newDocument(args.getString("width")?.toInt() ?: size, args.getString("height")?.toInt() ?: size)
+            args.getString("photo")?.takeUnless { openQueryPhoto }?.let { path ->
                 host.importImage(File(path))
                 waitFor { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") == "placement" }
                 scenario.onActivity { host.invoke("apply_transform") }
@@ -160,6 +165,9 @@ class AndroidViewportBenchmarkTest {
                     val left = began + (i * interval * 1e6).toLong() - System.nanoTime()
                     if (left > 0) java.util.concurrent.locks.LockSupport.parkNanos(left)
                     send(android.view.MotionEvent.ACTION_MOVE, 2, i * interval / 1000.0 * speed)
+                    if (i % 120 == 119 && activePresent != null) native {
+                        activePresent!!.put(JSONArray(Native.presentationTimings(it, true)))
+                    }
                 }
                 val end = count * interval / 1000.0 * speed
                 send(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl pointer), 2, end)
@@ -183,6 +191,14 @@ class AndroidViewportBenchmarkTest {
             assertEquals("Navigator visibility after adoption", navigator, info.getJSONObject("display").getInt("overview_count") > 0)
             native { Native.presentationTimings(it, true) }
             repeat(repeats) { run ->
+                val captureBegin = System.nanoTime()
+                val queryJobs = if (artworkQueries) List(args.getString("queryCount", "600")!!.toInt()) {
+                    native { Native.inspectionTask(it, 0) }
+                } else emptyList()
+                val captureEnd = System.nanoTime()
+                val captureMemory = if (artworkQueries) native { JSONObject(Native.rendererMemory(it)) } else null
+                val queryPool = java.util.concurrent.Executors.newSingleThreadExecutor()
+                val queryResults = JSONArray()
                 val beforeRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
                 host.measurementReport(true)
                 val present = JSONArray()
@@ -193,9 +209,17 @@ class AndroidViewportBenchmarkTest {
                 switchLanguage = switchedTag
                 val began = System.nanoTime()
                 val beganBoot = SystemClock.elapsedRealtimeNanos()
+                val queryFuture = queryPool.submit {
+                    queryJobs.forEach { job ->
+                        val start = System.nanoTime()
+                        val result = JSONObject(Native.inspectionSample(job, "\"Visible\"", 4752f, 3168f, 101))
+                        queryResults.put(result.put("begin_ns", start).put("end_ns", System.nanoTime()))
+                    }
+                }
                 if (motion == "stroke") stroke(run + 1, duration) else gesture(duration)
                 val ended = System.nanoTime()
                 val endedBoot = SystemClock.elapsedRealtimeNanos()
+                try { queryFuture.get(180, java.util.concurrent.TimeUnit.SECONDS) } finally { queryPool.shutdownNow() }
                 activePresent = null
                 val languageVisible = switchedTag?.let { tag -> waitFor { host.languageTag == tag }; System.nanoTime() }
                 val resumed = languageVisible?.let {
@@ -212,6 +236,9 @@ class AndroidViewportBenchmarkTest {
                 assertNull(host.actionError)
                 if (motion == "stroke") assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
                 val data = host.measurementReport(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
+                    .put("artwork_queries", queryResults)
+                    .put("query_capture_ms", (captureEnd - captureBegin) / 1e6)
+                    .put("query_capture_allocator", captureMemory)
                     .put("begin_boot_ns", beganBoot).put("end_boot_ns", endedBoot)
                     .put("revision_before", beforeRevision).put("revision_after", afterRevision)
                     .put("display", native { JSONObject(Native.displayStatus(it)) })

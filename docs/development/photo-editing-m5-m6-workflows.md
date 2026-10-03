@@ -176,8 +176,9 @@ Add optional picker metadata/actions to existing property descriptors; Color par
 UseCurrentColor. Canvas color destination stores a sampled tagged `RgbColor`; calibration is one
 effect/group action applying its complete validated solution. Arming preserves paint/mask colors and
 records original effect/tool. The bottom bar says Click a black/white/neutral point, with Sample size
-and Cancel. Mouse/pen tap selects; finger uses existing native hold/lifted loupe. Loupe reads the same
-source/coordinate as correction, not an unlabeled post-effect image. Hover previews location/readout
+and Cancel. Mouse/pen tap selects; finger uses existing native hold/lifted loupe. Calibration glass
+shows the sampled source color at that coordinate, with a checker while pending. This bounded
+swatch avoids showing the corrected canvas as though it were the pre-effect input. Hover previews location/readout
 only. Successful solve is one ReplaceLayer undo item; invalid/empty/unrepresentable input keeps the
 picker armed with a reason.
 

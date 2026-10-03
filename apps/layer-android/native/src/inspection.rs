@@ -67,6 +67,24 @@ struct Inspection {
     epoch: u64,
     control: CaptureControl,
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_inspectionSample(
+    mut env: JNIEnv, _: JClass, handle: jlong, source: jni::objects::JString,
+    x: jni::sys::jfloat, y: jni::sys::jfloat, width: jni::sys::jint,
+) -> jstring {
+    let job = unsafe { Box::from_raw(handle as *mut Inspection) };
+    let result = (|| {
+        let source: layer_core::ArtworkSource = serde_json::from_str(&crate::android::read(&mut env, &source)?).map_err(error)?;
+        on_worker("capy-artwork-sample", "Artwork sample worker failed", move || {
+            let mut request = layer_core::ArtworkSampleRequest::new(&job.project.document, source, [x, y], width as u32);
+            request.time = job.time;
+            let sample = pollster::block_on(job.gpu.artwork_sample(request, job.control))?;
+            serde_json::to_string(&serde_json::json!({"epoch":job.epoch,"revision":job.project.document.revision,"time":job.time,"sample":sample})).map_err(error)
+        })
+    })();
+    string(&mut env, result)
+}
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_inspectionTask(
     mut env: JNIEnv,
