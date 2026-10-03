@@ -26,7 +26,12 @@ GTK White Balance now has a neutral-point picker with linear, alpha-weighted
 sampling before the adjustment and one-step undo. Its exact query path preserves
 placed layer content, reference membership, nested adjustment input and frozen
 animation ownership. See [White Balance](../ui/color-picker.md#white-balance).
-The precision picker UI still needs Web and Android presentation.
+GTK also has a dockable GPU Histogram, input histograms in Levels and Curves,
+and canvas clipping overlays. Levels has per-channel stages, full-source Auto
+and black/neutral/white calibration; Curves has matching calibration and targeted
+image dragging. See [Properties](../ui/numeric-controls.md#properties-and-curves)
+and [calibration](../ui/color-picker.md#levels-and-curves).
+The precision adjustment UI still needs Web and Android presentation.
 
 ## Milestones
 

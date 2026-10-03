@@ -40,31 +40,45 @@ fn fx_log_curve_decode(x:vec3<f32>,span:f32) -> vec3<f32> {
     let knee=1.442695041/span;
     return select(exp2(x*span+FX_LOG_CURVE_FLOOR_STOPS),x*fx_log_curve_toe()*.6931471806*span,x<=vec3<f32>(knee));
 }
-fn capy_curves(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
-    if FX_EXTENDED && fx_parameter(base,0u).y==1. && fx_parameter(base,65u).y==1.
+fn fx_curves(c:vec4<f32>,base:u32,master:bool) -> vec4<f32> {
+    if FX_EXTENDED && (!master || fx_parameter(base,0u).y==1.) && fx_parameter(base,65u).y==1.
         && fx_parameter(base,130u).y==1. && fx_parameter(base,195u).y==1. {return c;}
     let hdr=fx_parameter(base,260u).x>0.5;
     let span=fx_parameter(base,261u).x-FX_LOG_CURVE_FLOOR_STOPS;
     var rgb=fx_rgb(c);
     if hdr {rgb=fx_log_curve_encode(fx_unassociate(c),span);}
     let channel=vec3<f32>(fx_lut(base,65u,rgb.r).r,fx_lut(base,130u,rgb.g).r,fx_lut(base,195u,rgb.b).r);
-    let result=vec3<f32>(fx_lut(base,0u,channel.r).r,fx_lut(base,0u,channel.g).r,fx_lut(base,0u,channel.b).r);
+    var result=channel;
+    if master {result=vec3<f32>(fx_lut(base,0u,channel.r).r,fx_lut(base,0u,channel.g).r,fx_lut(base,0u,channel.b).r);}
     if hdr {return vec4(fx_log_curve_decode(result,span)*c.a,c.a);}
     return fx_rgba(result,c.a);
 }
-fn capy_levels(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
-    let low=fx_parameter(base,0u).x; let high=fx_parameter(base,1u).x;
-    let gamma=fx_parameter(base,2u).x;let a=fx_parameter(base,3u).x;let b=fx_parameter(base,4u).x;
-    let clamp_input=fx_parameter(base,5u).x>.5;let clamp_output=fx_parameter(base,6u).x>.5;
-    if FX_EXTENDED && low==0. && high==1. && gamma==1. && a==0. && b==1.
-        && !clamp_input && !clamp_output {return c;}
-    var v=(fx_rgb(c)-low)/(high-low);
-    if clamp_input {v=clamp(v,vec3<f32>(0.),vec3<f32>(1.));}
-    if gamma!=1. {v=sign(v)*pow(abs(v),vec3<f32>(1./gamma));}
-    var out=a+(b-a)*v;
-    if clamp_output {out=clamp(out,vec3<f32>(0.),vec3<f32>(1.));}
-    return fx_rgba(out,c.a);
+fn capy_curves(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {return fx_curves(c,base,true);}
+fn capy_curves_channels(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {return fx_curves(c,base,false);}
+fn fx_levels_neutral(base:u32,offset:u32)->bool {
+    return fx_parameter(base,offset).x==0. && fx_parameter(base,offset+1u).x==1.
+        && fx_parameter(base,offset+2u).x==1. && fx_parameter(base,offset+3u).x==0. && fx_parameter(base,offset+4u).x==1.;
 }
+fn fx_levels_stage(x:f32,base:u32,offset:u32)->f32 {
+    let low=fx_parameter(base,offset).x;let high=fx_parameter(base,offset+1u).x;
+    let gamma=fx_parameter(base,offset+2u).x;let a=fx_parameter(base,offset+3u).x;let b=fx_parameter(base,offset+4u).x;
+    var u=(x-low)/(high-low);
+    if fx_parameter(base,5u).x>.5 {u=clamp(u,0.,1.);}
+    if gamma!=1. {u=sign(u)*pow(abs(u),1./gamma);}
+    var result=a+(b-a)*u;
+    if fx_parameter(base,6u).x>.5 {result=clamp(result,0.,1.);}
+    return result;
+}
+fn fx_levels(c:vec4<f32>,base:u32,master:bool)->vec4<f32> {
+    if (!master || fx_levels_neutral(base,0u)) && fx_levels_neutral(base,7u) && fx_levels_neutral(base,12u)
+        && fx_levels_neutral(base,17u) && fx_parameter(base,5u).x<.5 && fx_parameter(base,6u).x<.5 {return c;}
+    let input=fx_rgb(c);
+    var rgb=vec3(fx_levels_stage(input.r,base,7u),fx_levels_stage(input.g,base,12u),fx_levels_stage(input.b,base,17u));
+    if master {rgb=vec3(fx_levels_stage(rgb.r,base,0u),fx_levels_stage(rgb.g,base,0u),fx_levels_stage(rgb.b,base,0u));}
+    return fx_rgba(rgb,c.a);
+}
+fn capy_levels(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {return fx_levels(c,base,true);}
+fn capy_levels_channels(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {return fx_levels(c,base,false);}
 fn capy_brightness_contrast(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
     if FX_EXTENDED && fx_parameter(base,0u).x==0. && fx_parameter(base,1u).x==0. {return c;}
     let v=(fx_rgb(c)-.5)*exp2(fx_parameter(base,1u).x/50.)+.5+fx_parameter(base,0u).x/100.;

@@ -1762,6 +1762,7 @@ fn panel_visibility_label(l: &Localizer, panel: Panel) -> String {
         Panel::Navigator => MessageId::COMMANDS_SHOW_NAVIGATOR,
         Panel::Proof => MessageId::COMMANDS_SHOW_PROOF,
         Panel::CustomToolbar(_) => MessageId::COMMANDS_CUSTOM_TOOLBAR,
+        Panel::Histogram => MessageId::COMMANDS_SHOW_HISTOGRAM,
     };
     l.text(message).to_string()
 }

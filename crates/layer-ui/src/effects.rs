@@ -259,7 +259,9 @@ fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EffectAction {
-    WhiteBalancePicker { layer: u64, epoch: u64 },
+    AutoLevels {layer:u64,epoch:u64},
+    TargetCurve {layer:u64,epoch:u64},
+    Calibrate { layer: u64, epoch: u64, role:layer_core::levels::CalibrationRole },
     SelectPage { layer:u64, page:String },
     CurveSelectPoint { layer:u64, key:String, epoch:u64, index:Option<usize> },
     CurveRemoveAt { layer:u64, key:String, epoch:u64, point:[f32;2], extent:[f32;2], point_count:Option<usize> },
@@ -306,6 +308,17 @@ pub enum EffectAction {
         color: Option<layer_core::color::RgbColor>,
         remove: bool,
     },
+}
+impl EffectAction {
+    pub(super) fn property_owner(&self)->Option<(u64,u64)> {
+        match self {
+            Self::AutoLevels {layer,epoch}|Self::TargetCurve {layer,epoch}|Self::Calibrate {layer,epoch,..}
+            |Self::CurveSelectPoint {layer,epoch,..}|Self::CurveRemoveAt {layer,epoch,..}
+            |Self::CurveContact {layer,epoch,..}|Self::CurveKey {layer,epoch,..}|Self::CurveNumber {layer,epoch,..}=>Some((*layer,*epoch)),
+            Self::Gesture {action,..}=>action.property_owner(),
+            _=>None,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct AdjustmentChoice {
@@ -373,6 +386,7 @@ pub(super) fn catalog(
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct LayerPropertiesView {
+    pub histogram:bool,
     pub actions: Vec<PropertyActionView>,
     pub pages:Vec<PropertyPageView>,
     pub page:Option<String>,
@@ -509,25 +523,6 @@ fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &
         ..PropertyControl::new(&p.key, &resource_label(&p.label, l), kind, value, p.default.clone())
     }
 }
-/// Extend only the bundled linear algorithms, whose math is independent of
-/// sample depth. Embedded/custom programs retain their own declared contracts.
-fn float32_program(program: &Arc<layer_core::EffectProgram>, depth: layer_core::color::SampleDepth) -> Arc<layer_core::EffectProgram> {
-    if depth != layer_core::color::SampleDepth::F32 { return program.clone(); }
-    let (key, lower, upper) = match program.id.as_ref() {
-        "curves" => ("hdr_stops", 0., 127.),
-        "exposure" => ("exposure", -126., 126.),
-        _ => return program.clone(),
-    };
-    let Some(bundled) = layer_core::bundled_effect_catalog().get(&program.id) else { return program.clone(); };
-    if program.wgsl != bundled.program().wgsl || program.entry != bundled.program().entry { return program.clone(); }
-    let mut result = program.clone();
-    let parameters = &mut Arc::make_mut(&mut result).parameters;
-    for parameter in Arc::make_mut(parameters) {
-        if parameter.key.as_ref() == key && let EffectParameterKind::Number { min, max, .. } = &mut parameter.kind { *min = lower; *max = upper; }
-    }
-    result
-}
-
 pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBehavior, l: &Localizer) -> LayerPropertiesView {
     let Some(layer) = doc.layer(doc.active_layer) else {
         return LayerPropertiesView::default();
@@ -539,7 +534,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     let mut curve_max = None;
     let mut curve_white = None;
     let description = if let Some(effect) = &layer.effect {
-        let program = float32_program(&effect.program, doc.color.depth);
+        let program = effect.program.for_depth(doc.color.depth);
         controls.extend(
             program
                 .parameters
@@ -598,13 +593,24 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
 }
 pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,state:&mut PropertyEditorState,gesture:Option<&EffectGesture>,l:&Localizer) {
     let effect=if doc.active_mask {None} else {view.layer.and_then(|id|doc.layer(layer_core::LayerId(id))).and_then(|layer|layer.effect.as_ref())};
+    view.histogram=effect.is_some_and(|effect|effect.program.id.as_ref()=="levels");
     view.pages=effect.map_or_else(Vec::new,|effect|effect.program.pages.iter().map(|page|PropertyPageView{id:page.id.to_string(),label:resource_label(&page.label,l).to_string()}).collect());
     state.sync(doc.id.clone(),view.layer,doc.revision,view.pages.iter().map(|page|page.id.clone()).collect(),gesture.is_some());
     view.epoch=state.epoch;view.page=state.page().map(str::to_string);
-    view.actions = effect.filter(|effect| effect.program.id.as_ref() == "white_balance").map(|_| PropertyActionView {
-        label: l.text(MessageId::RESOURCES_PICKER_NEUTRAL).to_string(),
-        action: EffectAction::WhiteBalancePicker { layer: view.layer.unwrap(), epoch: view.epoch },
-    }).into_iter().collect();
+    view.actions=effect.map_or_else(Vec::new,|effect| {
+        use layer_core::levels::CalibrationRole;
+        let roles:&[_]=match effect.program.id.as_ref() {"white_balance"=>&[CalibrationRole::Gray],"levels"|"curves"=>&[CalibrationRole::Black,CalibrationRole::Gray,CalibrationRole::White],_=>&[]};
+        roles.iter().map(|role|PropertyActionView {
+            label:l.text(match role {CalibrationRole::Black=>MessageId::RESOURCES_PICKER_BLACK,CalibrationRole::Gray=>MessageId::RESOURCES_PICKER_NEUTRAL,CalibrationRole::White=>MessageId::RESOURCES_PICKER_WHITE}).to_string(),
+            action:EffectAction::Calibrate {layer:view.layer.unwrap(),epoch:view.epoch,role:*role},
+        }).collect()
+    });
+    if effect.is_some_and(|effect|effect.program.id.as_ref()=="levels") {
+        view.actions.push(PropertyActionView {label:l.text(MessageId::RESOURCES_LEVELS_AUTO).to_string(),action:EffectAction::AutoLevels {layer:view.layer.unwrap(),epoch:view.epoch}});
+    }
+    if effect.is_some_and(|effect|effect.program.id.as_ref()=="curves") {
+        view.actions.push(PropertyActionView {label:l.text(MessageId::RESOURCES_CURVE_TARGETED).to_string(),action:EffectAction::TargetCurve {layer:view.layer.unwrap(),epoch:view.epoch}});
+    }
     view.controls.retain(|control|control.page.as_deref().is_none_or(|page|Some(page)==state.page()));
     let domain=effect.filter(|effect|effect.choice("domain")==Some("Log HDR")).and_then(|effect|match effect.value("hdr_stops"){Some(EffectValue::Number(stops))=>Some(CurveDomain::LogHdr{stops:*stops}),_=>None}).unwrap_or(CurveDomain::Encoded);
     for control in &mut view.controls {
@@ -644,7 +650,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(true)
     }
 
-    fn effect_gesture_action(
+    pub(super) fn effect_gesture_action(
         &mut self,
         phase: ContactPhase,
         action: EffectAction,
@@ -659,7 +665,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | EffectAction::Set {
                 layer,
                 key,
-                value: EffectValue::Number(_) | EffectValue::Color(_),
+                value: EffectValue::Number(_) | EffectValue::Color(_) | EffectValue::Curve(_),
             } => (*layer, key.clone()),
             _ => return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_PROPERTY_NOT_DRAGGABLE).to_string()),
         };
@@ -755,13 +761,15 @@ impl<R: CanvasRenderer> UiSession<R> {
 
         if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_ARTWORK_REQUIRED).to_string());}
         match action {
-            EffectAction::WhiteBalancePicker { layer, epoch } => return self.start_white_balance_picker(layer, epoch),
+            EffectAction::TargetCurve {layer,epoch}=>return self.start_targeted_curve(layer,epoch),
+            EffectAction::AutoLevels {layer,epoch}=>return self.start_auto_levels(layer,epoch),
+            EffectAction::Calibrate { layer, epoch, role } => return self.start_calibration(layer, epoch, role),
             EffectAction::SelectPage{layer,page}=> {
                 if self.state.layer_properties.layer!=Some(layer) || self.state.layer_properties.page.as_deref()==Some(&page)
                     || !self.state.layer_properties.pages.iter().any(|candidate|candidate.id==page){return Ok(());}
-                self.cancel_effect_gesture()?;
+                self.cancel_targeted_contact()?;self.cancel_effect_gesture()?;
                 self.property_editor.select_page(layer,&page);
-                self.refresh_document();return Ok(());
+                self.refresh_document();self.sync_targeted_page();return Ok(());
             }
             EffectAction::CurveSelectPoint{layer,key,epoch,index}=> {
                 if !self.curve_action_target(layer,&key,epoch){return Ok(());}
@@ -797,7 +805,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let EffectValue::Curve(points)=self.effect_parameter(layer,&key)? else{return Ok(());};
                 if phase==ContactPhase::Down {
                     self.cancel_effect_gesture()?;
-                    let index=curves::hit(&points,point,extent).or_else(||points.iter().enumerate().filter(|(_,p)|(p[0]-point[0]/extent[0]).abs()<=0.002).min_by(|a,b|(a.1[0]-point[0]/extent[0]).abs().total_cmp(&(b.1[0]-point[0]/extent[0]).abs())).map(|(index,_)|index));
+                    let index=curves::hit(&points,point,extent).or_else(||layer_core::curves::curve_reusable_knot(&points,point[0]/extent[0]));
                     if let Some(index)=index {
                         self.property_editor.begin_contact(&key,index,point,extent,points[index]);
                         return self.effect_gesture_action(phase,EffectAction::CurvePoint{layer,key,index:Some(index),point:points[index],remove:false});
@@ -957,11 +965,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         points[i] = [x, point[1].clamp(0., 1.)];
                     }
                 } else if points.len() < 32 && !remove {
-                    let x = point[0].clamp(0., 1.);
-                    if points.iter().all(|p| (p[0] - x).abs() > 0.002) {
-                        points.push([x, point[1].clamp(0., 1.)]);
-                        points.sort_by(|a, b| a[0].total_cmp(&b[0]));
-                    }
+                    let _=layer_core::curves::curve_place_knot(&mut points,[point[0].clamp(0.,1.),point[1].clamp(0.,1.)]);
                 }
                 return self.effect_action(EffectAction::Set {
                     layer,
@@ -995,7 +999,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let id = layer.id;
                 layer.kind = LayerKind::Effect;
                 layer.properties.parent = parent;
-                let mut instance = EffectInstance::new(float32_program(&effect.program(), depth));
+                let mut instance = EffectInstance::new(effect.program().for_depth(depth));
                 if hdr && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
                 if generator && let Some(color) = instance.program.parameters.iter().find(|p| p.kind == EffectParameterKind::Color) {
                     instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
@@ -1059,7 +1063,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let effect = layer.effect.as_mut().ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_EFFECT_LAYER_REQUIRED).to_string())?;
                 let original = effect.clone();
                 let changed = Arc::make_mut(effect);
-                changed.program = float32_program(&changed.program, self.engine.document().color.depth);
+                changed.program = changed.program.for_depth(self.engine.document().color.depth);
                 changed.set(&key, value)
                     .map_err(str::to_string)?;
                 if *effect == original {

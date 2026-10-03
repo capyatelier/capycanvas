@@ -840,6 +840,7 @@ pub struct WgpuRasterizer {
     selection_painter: Option<selection_paint::SelectionPainter>,
     selection_overlay: Option<layer_render::SelectionOverlay>,
     crop_overlay: Option<layer_render::CropOverlay>,
+    clipping_preview: [bool; 2],
     selection_previews: selection_previews::SelectionPreviews,
     selection_paint_revision: u64,
     selection_paint_damage: PixelRect,
@@ -1166,6 +1167,7 @@ impl WgpuRasterizer {
             selection_painter: None,
             selection_overlay: None,
             crop_overlay: None,
+            clipping_preview: [false; 2],
             selection_previews: Default::default(),
             selection_paint_revision: 0,
             selection_paint_damage: PixelRect::EMPTY,
@@ -3160,6 +3162,7 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) { self.selection_overlay = overlay; }
     fn set_crop_overlay(&mut self, overlay: Option<layer_render::CropOverlay>) { self.crop_overlay = overlay; }
+    fn set_clipping_preview(&mut self, shadows: bool, highlights: bool) { self.clipping_preview = [shadows, highlights]; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry.enabled = enabled;
     }
@@ -3216,9 +3219,14 @@ impl CanvasRenderer for WgpuRasterizer {
                 request.effect_times = request.document.layers.iter().filter(|l| l.effect.is_some())
                     .map(|l| (l.id, effects::Gpu::effect_time(self, l, request.time))).collect();
             }
-            if let layer_render::SnapshotRequest::ArtworkSample(request) = &mut request {
-                request.effect_times = request.document.layers.iter().filter(|l| l.effect.is_some())
-                    .map(|l| (l.id, effects::Gpu::effect_time(self, l, request.time))).collect();
+            let query=match &mut request {
+                layer_render::SnapshotRequest::ArtworkSample(request)=>Some(&mut request.query),
+                layer_render::SnapshotRequest::ArtworkStatistics(request)=>Some(&mut request.query),
+                layer_render::SnapshotRequest::LevelsStatistics(query)=>Some(query),_=>None,
+            };
+            if let Some(query)=query {
+                query.effect_times=query.document.layers.iter().filter(|layer|layer.effect.is_some())
+                    .map(|layer|(layer.id,effects::Gpu::effect_time(self,layer,query.time))).collect();
             }
             snapshot::SnapshotJob::start(self.snapshot_worker_callback.clone()
                 .ok_or_else(|| GpuRasterError::Color("Snapshot worker unavailable".into()))?, request)
@@ -3319,6 +3327,12 @@ impl CanvasRenderer for WgpuRasterizer {
 }
 impl WgpuRasterizer {
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
+        let layers = (self.clipping_preview.iter().any(|enabled| *enabled)
+            && packet.layers.iter().any(|layer| layer.mask.as_ref().is_some_and(|mask| mask.show_area)))
+            .then(|| packet.layers.iter().map(|layer| {
+                let mut layer=layer.clone();if let Some(mask)=&mut layer.mask {mask.show_area=false;}layer
+            }).collect::<Vec<_>>());
+        let packet=FramePacket {layers:layers.as_deref().unwrap_or(packet.layers),..packet};
         if packet.document_extent.iter().any(|n| *n > self.max_document_dimension()) {
             return Err(GpuRasterError::ExtentUnsupported);
         }
@@ -5922,6 +5936,12 @@ mod tests {
 mod content_bounds_tests;
 #[cfg(test)]
 mod artwork_sample_tests;
+#[cfg(test)]
+mod artwork_statistics_tests;
+#[cfg(test)]
+mod levels_statistics_tests;
+#[cfg(test)]
+mod curves_calibration_tests;
 #[cfg(target_arch = "wasm32")]
 impl WgpuRasterizer {
     pub fn set_snapshot_worker(&mut self, worker: snapshot::BrowserSnapshot) { self.snapshot_worker_callback = Some(worker); }

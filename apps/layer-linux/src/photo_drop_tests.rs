@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 #[path = "photo_workflow_tests.rs"]
 mod workflow;
+pub(super) use workflow::frames;
 
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]

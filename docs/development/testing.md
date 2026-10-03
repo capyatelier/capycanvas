@@ -67,6 +67,22 @@ deadlines across compilation phases.
 Apple stateless ABI fixtures share string ownership while retaining each entry
 point's errors and independent color precision checks.
 
+Precision adjustment checks use `artwork_statistics_tests`,
+`levels_statistics_tests` and `curves_calibration_tests` in `layer-render-wgpu`,
+with independent scalar references and real source codecs. GTK journeys are
+`native_composite_histogram_updates_without_changing_the_drawing`,
+`native_curves_histogram_preserves_numeric_focus`,
+`native_levels_auto_and_calibration_atomic_history`,
+`native_curves_calibration_atomic_history`,
+`native_targeted_curves_rgb_contacts_and_cancel` and
+`native_targeted_curves_red_contacts_and_cancel`. Run the calibration and
+targeted journeys with `--tablet`
+for their pen contacts; run each at narrow and wide widths in both themes.
+`native_targeted_curves_motion_and_latency` measures mouse contacts on the
+private 120 Hz display. Run it with `LAYER_NATIVE_INPUT_TRACE=1` to record input,
+shared curve adoption and presentation times. Its small desktop fixture does
+not qualify the reference tablet canvases.
+
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
 `RUST_TEST_THREADS` or `--test-threads` says otherwise. Some Linux drivers limit

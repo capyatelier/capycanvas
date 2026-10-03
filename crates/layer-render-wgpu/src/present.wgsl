@@ -265,6 +265,15 @@ fn surface_color(vertex:Vertex,source:u32)->vec4<f32> {
     let paint = proof_artwork(artwork,p);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
     var rgb = screen_marked(paint, view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a), checker);
+    if (bitcast<u32>(artwork.a)&0x7fffffffu)!=0u {
+        let bits=bitcast<vec3<u32>>(artwork.rgb);
+        let shadows=camera.composite.z!=0. && (any((bits&vec3(0x7fffffffu))==vec3(0u)) || any((bits>>vec3(31u))!=vec3(0u)));
+        let highlights=camera.composite.w!=0. && any(select(vec3(false), bits>=vec3(bitcast<u32>(artwork.a)), bits<vec3(0x80000000u)));
+        let stripe=(u32(surface.x+surface.y)/4u)%2u==0u;
+        if shadows && highlights {rgb=vec3(select(0.,1.,stripe));}
+        else if shadows {rgb=select(vec3(0.02,0.05,0.5),vec3(0.12,0.3,1.),stripe);}
+        else if highlights {rgb=select(vec3(0.5,0.02,0.02),vec3(1.,0.2,0.05),stripe);}
+    }
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}
     // Raster-selection outlines are sampled at display resolution, never
     // traced/tessellated on the CPU or baked into the document composition.

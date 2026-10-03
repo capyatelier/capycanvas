@@ -67,6 +67,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(crate) fn cancel_picker(&mut self) -> bool {
+        if self.targeted_curve.is_some() {
+            if let Err(reason)=self.cancel_targeted_contact() {self.raise_notice(reason,None);}
+            self.targeted_curve=None;
+        }
         if self.eyedropper.calibration.take().is_some_and(|calibration| calibration.submitted) {
             self.engine.backend_mut().cancel_snapshot();
         }
@@ -97,6 +101,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn configure_picker(&mut self, action: ColorPickerAction) -> Result<(), String> {
         match action {
             ColorPickerAction::Settings { anchor } => {
+                if self.targeted_curve.is_some() {return Ok(());}
                 let action = match anchor {
                     DrawerAnchor::Tile { panel, tile } => CustomizationAction::ToggleToolDrawer { anchor: TileAnchor { panel, tile } },
                     DrawerAnchor::Header { id } => CustomizationAction::ToggleHeaderDrawer { id },
@@ -113,7 +118,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             ColorPickerAction::Style { style } => self.state.color_picker.style = style,
             ColorPickerAction::Source { layer } => {
-                if self.eyedropper.calibration.is_some() { return Ok(()); }
+                if self.eyedropper.calibration.is_some() || self.targeted_curve.is_some() { return Ok(()); }
                 if layer && !self.picker_layer_available() {
                     return Err("Select an editable paint layer to sample its color".into());
                 }
@@ -202,6 +207,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         &mut self,
         input: &UiInput,
     ) -> Result<Option<UiChange>, String> {
+        if self.targeted_curve.is_some() {return self.targeted_curve_input(input);}
         let mut changed = regions::COLOR_PREVIEW;
         match *input {
             UiInput::ColorPickerHold {
@@ -351,7 +357,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// lens samples the existing artwork texture without a CPU image readback.
     pub fn color_picker_overlay(&self) -> Option<ColorPickerOverlay> {
         let picking = &self.eyedropper.picking;
-        if picking.previous.is_none() || picking.finishing || self.state.settings_open {
+        if self.targeted_curve.is_some() || picking.previous.is_none() || picking.finishing || self.state.settings_open {
             return None;
         }
         let position = picking.position?;

@@ -3,6 +3,8 @@ use layer_core::{ArtworkSample, ArtworkSampleRequest, ArtworkSource, EffectValue
 use std::sync::Arc;
 
 pub(crate) struct Calibration {
+    pub role:layer_core::levels::CalibrationRole,
+    pub page:u8,
     pub original: Layer,
     pub epoch: u64,
     pub document_epoch: u64,
@@ -13,18 +15,19 @@ pub(crate) struct Calibration {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    pub(super) fn start_white_balance_picker(&mut self, layer: u64, epoch: u64) -> Result<(), String> {
+    pub(super) fn start_calibration(&mut self, layer: u64, epoch: u64, role:layer_core::levels::CalibrationRole) -> Result<(), String> {
         if self.state.platform != Platform::Gtk { return Err(self.localization().text(MessageId::RESOURCES_PICKER_UNAVAILABLE).to_string()); }
-        if !self.property_editor.accepts(layer, epoch) { return Ok(()); }
         self.require_idle()?;
         let doc = self.engine.document();
         let original = doc.layer(LayerId(layer)).filter(|layer| !doc.is_locked(layer.id)
-            && layer.effect.as_ref().is_some_and(|effect| effect.program.id.as_ref() == "white_balance"))
+            && layer.effect.as_ref().is_some_and(|effect| matches!(effect.program.id.as_ref(),"white_balance"|"levels"|"curves")))
             .ok_or_else(|| self.localization().text(MessageId::RESOURCES_ERROR_ARTWORK_REQUIRED).to_string())?.clone();
         self.cancel_picker();
+        self.cancel_auto_levels();self.cancel_histogram();
         self.start_picker()?;
         self.eyedropper.layer = false;
-        self.eyedropper.calibration = Some(Calibration { original, epoch, document_epoch: self.state.document_file.epoch,
+        let page=match self.state.layer_properties.page.as_deref() {Some("red")=>1,Some("green")=>2,Some("blue")=>3,_=>0};
+        self.eyedropper.calibration = Some(Calibration { role, page, original, epoch, document_epoch: self.state.document_file.epoch,
             width: 5, request: None, queued: None, submitted: false });
         self.eyedropper.cancel();
         self.layer_interaction.tool = LayerCanvasTool::PickVisible;
@@ -81,15 +84,25 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let ArtworkSample::Color([r, g, b, _]) = sample else {
                     return Err(self.localization().text(MessageId::RESOURCES_PICKER_EMPTY).to_string());
                 };
-                let mut layer = calibration.original.clone();
+                let original=self.engine.document().layer(calibration.original.id).ok_or("The adjustment was removed")?.clone();
+                let mut layer = original.clone();
                 let effect = Arc::make_mut(layer.effect.as_mut().ok_or("Missing adjustment")?);
-                let preserve = effect.value("preserve_luminance") == Some(&EffectValue::Toggle(true));
-                let values = layer_core::white_balance_neutral([r, g, b], self.engine.document().color.space, preserve)
-                    .map_err(|_| self.localization().text(MessageId::RESOURCES_PICKER_NEUTRAL_FAILED).to_string())?;
-                effect.set("temperature", EffectValue::Number(values[0])).map_err(str::to_string)?;
-                effect.set("tint", EffectValue::Number(values[1])).map_err(str::to_string)?;
+                effect.program=effect.program.for_depth(self.engine.document().color.depth);
+                if effect.program.id.as_ref()=="curves" {
+                    *effect=layer_core::curves::calibrate_curves(effect,[r,g,b],self.engine.document().color.space,calibration.page,calibration.role)
+                        .map_err(|_|self.localization().text(MessageId::RESOURCES_CALIBRATION_FAILED).to_string())?;
+                } else if effect.program.id.as_ref()=="levels" {
+                    *effect=layer_core::levels::calibrate_levels(effect,[r,g,b],self.engine.document().color.space,calibration.page,calibration.role)
+                        .map_err(|_|self.localization().text(MessageId::RESOURCES_CALIBRATION_FAILED).to_string())?;
+                } else {
+                    let preserve = effect.value("preserve_luminance") == Some(&EffectValue::Toggle(true));
+                    let values = layer_core::white_balance_neutral([r, g, b], self.engine.document().color.space, preserve)
+                        .map_err(|_| self.localization().text(MessageId::RESOURCES_PICKER_NEUTRAL_FAILED).to_string())?;
+                    effect.set("temperature", EffectValue::Number(values[0])).map_err(str::to_string)?;
+                    effect.set("tint", EffectValue::Number(values[1])).map_err(str::to_string)?;
+                }
                 self.cancel_picker();
-                if layer != calibration.original { self.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(layer)))?; }
+                if layer != original { self.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(layer)))?; }
                 Ok(())
             }))
         } else if !calibration.submitted && let Some(request) = &calibration.request {
@@ -108,6 +121,64 @@ impl<R: CanvasRenderer> UiSession<R> {
                 regions::BRUSH | regions::COMMANDS | regions::COLOR_PREVIEW
             }
             None => { self.eyedropper.calibration = Some(calibration); 0 }
+        }
+    }
+}
+
+pub(crate) struct AutoLevels {
+    original:Layer,
+    query:layer_core::ArtworkQuery,
+    epoch:u64,
+    document_epoch:u64,
+    page:u8,
+    submitted:bool,
+}
+impl<R:CanvasRenderer> UiSession<R> {
+    pub(super) fn cancel_auto_levels(&mut self) {
+        if self.auto_levels.take().is_some_and(|task|task.submitted) {self.engine.backend_mut().cancel_snapshot();}
+    }
+    pub(super) fn start_auto_levels(&mut self,layer:u64,epoch:u64)->Result<(),String> {
+        if self.state.platform!=Platform::Gtk {return Ok(());}
+        if self.auto_levels.is_some() {self.cancel_auto_levels();self.refresh_document();return Ok(());}
+        self.require_idle()?;
+        let document=self.engine.document();
+        let original=document.layer(LayerId(layer)).filter(|l|!document.is_locked(l.id)
+            && l.effect.as_ref().is_some_and(|e|e.program.id.as_ref()=="levels")).ok_or("Choose a Levels adjustment")?.clone();
+        let page=match self.state.layer_properties.page.as_deref() {Some("red")=>1,Some("green")=>2,Some("blue")=>3,_=>0};
+        let mut query=layer_core::ArtworkQuery::new(document,if page==0 {ArtworkSource::EffectChannels(original.id)} else {ArtworkSource::EffectInput(original.id)});
+        query.time=self.engine.animation_time();query.validate()?;
+        self.cancel_picker();self.cancel_histogram();
+        self.auto_levels=Some(AutoLevels {original,query,epoch,document_epoch:self.state.document_file.epoch,page,submitted:false});
+        self.refresh_document();Ok(())
+    }
+    pub(super) fn poll_auto_levels(&mut self)->u32 {
+        let Some(mut task)=self.auto_levels.take() else {return 0;};
+        let current=self.state.document_file.epoch==task.document_epoch && self.engine.document().active_layer==task.original.id
+            && self.property_editor.accepts(task.original.id.0,task.epoch) && task.query.matches_artwork(self.engine.document())
+            && self.panel_is_presented(Panel::Properties) && !self.rendering_suspended;
+        if !current {
+            if task.submitted {self.engine.backend_mut().cancel_snapshot();}
+            self.refresh_document();return regions::DOCUMENT;
+        }
+        let outcome=if task.submitted {
+            self.engine.backend_mut().take_snapshot().map(|result|result.map_err(error).and_then(|result| {
+                let layer_render::SnapshotResult::LevelsStatistics(statistics)=result else {return Err("Unexpected Auto statistics".into());};
+                let original=self.engine.document().layer(task.original.id).ok_or("The adjustment was removed")?.clone();
+                let mut layer=original.clone();
+                let mut effect=(**layer.effect.as_ref().ok_or("Missing adjustment")?).clone();
+                effect.program=effect.program.for_depth(self.engine.document().color.depth);
+                let candidate=layer_core::levels::auto_levels(&effect,&statistics,task.page).map_err(|_|self.localization().text(MessageId::RESOURCES_LEVELS_AUTO_FAILED).to_string())?;
+                layer.effect=Some(Arc::new(candidate));
+                if layer!=original {self.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(layer)))?;}Ok(())
+            }))
+        } else {
+            match self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::LevelsStatistics(task.query.clone())) {
+                Ok(submitted)=>{task.submitted=submitted;None},Err(reason)=>Some(Err(error(reason))),
+            }
+        };
+        match outcome {
+            None=>{self.auto_levels=Some(task);0},
+            Some(result)=>{if let Err(reason)=result {self.raise_notice(reason,None);}self.refresh_document();regions::DOCUMENT},
         }
     }
 }

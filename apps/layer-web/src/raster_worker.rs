@@ -59,9 +59,12 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
     renderer.set_snapshot_worker(Rc::new(|request, control| Box::pin(async move {
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
         let (project, task) = match request {
+            layer_render::SnapshotRequest::LevelsStatistics(query)=>(layer_core::Project {document:(*query.document).clone()},SnapshotTask::LevelsStatistics {source:query.source,time:query.time,effect_times:query.effect_times}),
+            layer_render::SnapshotRequest::ArtworkStatistics(request) => (layer_core::Project { document: (*request.query.document).clone() },
+                SnapshotTask::ArtworkStatistics { source: request.query.source, time: request.query.time, effect_times: request.query.effect_times, preview: request.preview, selection: request.selection }),
             layer_render::SnapshotRequest::ArtworkSample(request) => (layer_core::Project { document: (*request.document).clone() },
-                SnapshotTask::ArtworkSample { source: request.source, position: request.position, width: request.width,
-                    time: request.time, effect_times: request.effect_times }),
+                SnapshotTask::ArtworkSample { source: request.source.clone(), position: request.position, width: request.width,
+                    time: request.time, effect_times: request.effect_times.clone() }),
             layer_render::SnapshotRequest::Bounds(request) => (layer_core::Project { document: (*request.document).clone() },
                 SnapshotTask::Bounds(request.scope, request.time, request.effect_times)),
             layer_render::SnapshotRequest::TransformPixels(plan) => (plan.input,
@@ -77,6 +80,8 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
         let result = call_cancellable("snapshot", &metadata, &buffers, control.clone()).await.map_err(|e| format!("{e:?}"))?;
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
         match task {
+            SnapshotTask::LevelsStatistics {..}=>serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::LevelsStatistics).map_err(|e|e.to_string()),
+            SnapshotTask::ArtworkStatistics { .. } => serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::ArtworkStatistics).map_err(|e| e.to_string()),
             SnapshotTask::ArtworkSample { .. } => serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::ArtworkSample).map_err(|e| e.to_string()),
             SnapshotTask::Bounds(..) => serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::Bounds).map_err(|e| e.to_string()),
             SnapshotTask::TransformPixels { mut output, scope, .. } => {
@@ -159,6 +164,8 @@ fn encode_tiles(bytes: &[u8], descriptors: Vec<PixelDescriptor>) -> Result<Vec<T
 
 #[derive(Serialize, Deserialize)]
 enum SnapshotTask {
+    LevelsStatistics {source:layer_core::ArtworkSource,time:f32,effect_times:Vec<(layer_core::LayerId,f32)>},
+    ArtworkStatistics { source: layer_core::ArtworkSource, time: f32, effect_times: Vec<(layer_core::LayerId, f32)>, preview: bool, selection: bool },
     ArtworkSample { source: layer_core::ArtworkSource, position: [f32; 2], width: u32, time: f32,
         effect_times: Vec<(layer_core::LayerId, f32)> },
     Bounds(layer_core::ContentScope, f32, Vec<(layer_core::LayerId, f32)>),
@@ -183,9 +190,17 @@ pub async fn raster_worker_snapshot(metadata: &str, buffers: js_sys::Array) -> R
     let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, project.document.color).map_err(js)?;
     renderer.set_browser_raster_encoder(Rc::new(|bytes, descriptors| Box::pin(async move { encode_tiles(&bytes, descriptors) })));
     match task {
+        SnapshotTask::LevelsStatistics {source,time,effect_times}=> {
+            let query=layer_core::ArtworkQuery {document:std::sync::Arc::new(project.document),source,time,effect_times};
+            let result=renderer.snapshot_gpu().levels_statistics(query,Default::default()).await.map_err(js)?;serialize(&result)
+        }
+        SnapshotTask::ArtworkStatistics { source, time, effect_times, preview, selection } => {
+            let query = layer_core::ArtworkQuery { document: std::sync::Arc::new(project.document), source, time, effect_times };
+            let histogram = renderer.snapshot_gpu().artwork_statistics(layer_core::ArtworkStatisticsRequest { query, preview, selection }, Default::default()).await.map_err(js)?;
+            serialize(&histogram)
+        }
         SnapshotTask::ArtworkSample { source, position, width, time, effect_times } => {
-            let request = layer_core::ArtworkSampleRequest { document: std::sync::Arc::new(project.document), source,
-                position, width, time, effect_times };
+            let request = layer_core::ArtworkSampleRequest { query: layer_core::ArtworkQuery { document: std::sync::Arc::new(project.document), source, time, effect_times }, position, width };
             let sample = renderer.snapshot_gpu().artwork_sample(request, Default::default()).await.map_err(js)?;
             serialize(&sample)
         }

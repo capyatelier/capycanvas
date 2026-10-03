@@ -10,8 +10,13 @@ use layer_render::CanvasRenderer;
 mod art_layers;
 #[path = "color_picker_session.rs"]
 mod color_picker_session;
+#[path = "histogram.rs"]
+mod histogram;
+pub use histogram::{HistogramAction, HistogramView};
 #[path = "calibration.rs"]
 pub(crate) mod calibration;
+#[path="targeted_curve.rs"]
+mod targeted_curve;
 #[path = "held_actions.rs"]
 mod held_actions;
 use held_actions::{ERASER_END, merge_change};
@@ -179,6 +184,10 @@ struct CustomizationCopy {
 /// A host-owned session: call inline or put the entire owner behind a host
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
+    histogram: histogram::Statistics,
+    tonal_histogram: histogram::Statistics,
+    auto_levels:Option<calibration::AutoLevels>,
+    targeted_curve:Option<targeted_curve::TargetedCurve>,
     localization_generation: u64,
     preferences_revision: u64,
     panel_copy: Vec<(Panel, std::sync::Arc<customization::PanelCopy>)>,
@@ -350,6 +359,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         effects::validate_catalog_labels(&effect_catalog, &localization)?;
         let mut session = Self {
+            histogram: Default::default(),
+            tonal_histogram: Default::default(),
+            auto_levels:None,
+            targeted_curve:None,
             localization_generation: 0,
             preferences_revision: 0,
             panel_copy: Default::default(),
@@ -412,6 +425,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 hdr_display_available: false,
                 screen: Default::default(),
                 gamut_warning: false,
+                histogram: HistogramView::default(),
+                tonal_histogram: HistogramView::default(),
                 revision: 0,
                 fullscreen: false,
                 workspace: WorkspaceState::default(),
@@ -662,7 +677,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let labels = &copy.workspace_labels.as_ref().unwrap().labels;
         let restored = &copy.workspace_labels.as_ref().unwrap().restored;
-        let mut items: Vec<_> = labels.iter().filter(|(panel, _)| panel.kind() == kind).map(|(panel, label)| {
+        let mut items: Vec<_> = labels.iter().filter(|(panel, _)| panel.available_on(self.state.platform) && panel.kind() == kind).map(|(panel, label)| {
             let selected = layout.panel_group(*panel).is_some();
             let mut item = ContextMenuItem::edit(label, CustomizationAction::SetPanelVisible { panel: *panel, visible: !selected });
             item.selected = Some(selected);
@@ -2659,11 +2674,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         let was_expanded = self.state.customization.has_drawer();
         let was_filter_drawer = self.filter_drawer_open();
         let was_zen = self.state.workspace.zen_mode;
+        if let UiAction::Effect {action}=&action && action.property_owner().is_some_and(|(layer,epoch)|!self.property_editor.accepts(layer,epoch)) {
+            return Ok(UiChange::default());
+        }
         if self.picker_cancel_action(&action) {
             self.cancel_picker();
         }
         if self.eyedropper.calibration.is_some() && matches!(&action, UiAction::Effect { .. } | UiAction::Layer { .. }
             | UiAction::Invoke { command: CommandId::Undo | CommandId::Redo }) { self.cancel_picker(); }
+        if self.auto_levels.is_some() && matches!(&action,UiAction::Effect {action} if !matches!(action,EffectAction::AutoLevels {..})) {self.cancel_auto_levels();}
+        if self.targeted_curve.is_some() && matches!(&action,UiAction::Effect {action} if !matches!(action,EffectAction::TargetCurve {..}|EffectAction::SelectPage {..})) {self.cancel_picker();}
+        if self.targeted_curve.is_some() && matches!(&action,UiAction::Layer {..}|UiAction::Invoke {command:CommandId::Undo|CommandId::Redo}) {self.cancel_picker();}
         let tool_before = (self.state.brush.tool, self.layer_interaction.tool);
         let configuring_picker = self.eyedropper.picking.previous.is_some()
             && matches!(&action, UiAction::ColorPicker { .. });
@@ -2719,6 +2740,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::Histogram { action } => { self.histogram_action(action)?; (HISTOGRAM, true) }
             UiAction::CommandSearch { .. } => unreachable!("handled above"),
             UiAction::ToolbarEdit { .. } | UiAction::CanvasBarEdit { .. } | UiAction::Notice { .. } => {
                 unreachable!("validated before dispatch")
@@ -3231,6 +3253,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW, true)
             }
             UiAction::SetColorSampleSize { width } => {
+                if self.targeted_curve.is_some() {return Ok(UiChange::default());}
                 if let Some(calibration) = self.eyedropper.calibration.as_mut() {
                     if !layer_core::ARTWORK_SAMPLE_WIDTHS.contains(&width) { return Err("Choose a supported sample size".into()); }
                     if calibration.width == width || self.eyedropper.picking.finishing { return Ok(UiChange::default()); }
@@ -4224,9 +4247,12 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Includes shared background work as well as the drawing engine's needs.
     pub fn wants_continuous_frames(&self) -> bool {
-        self.interaction.axes.active()
+        (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
+            || self.interaction.axes.active()
             || self.engine.wants_continuous_frames()
             || self.pending_filters.is_some()
+            || self.targeted_curve_busy()
+            || self.auto_levels.is_some()
             || self.eyedropper.busy()
             || self.region_tools.busy()
             || self.selection_masks.refine.as_ref().is_some_and(|d| d.unsettled())
@@ -4278,6 +4304,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let sample_space = self.engine.document().color.space;
         changed |= self.poll_calibration();
+        changed |= self.poll_auto_levels();
+        changed |= self.poll_targeted_curve();
         if !self.engine.has_pending_document_edits()
             && let Some(color) = self.eyedropper.poll(self.engine.backend_mut(), sample_space)? {
             if self.eyedropper.picking.previous.is_some() {
@@ -4320,6 +4348,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let tonal_changed = std::mem::take(&mut self.tonal_tools.changed)
             | std::mem::take(&mut self.selection_masks.refine_changed);
         if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
+        changed |= self.poll_histogram(now_ns);
         let commands_changed = changed != 0 || !pending_edits || !self.engine.has_pending_document_edits()
             || command_activity != (self.canvas_idle(), self.engine.can_undo(), self.engine.can_redo());
         if commands_changed && self.refresh_commands() {
@@ -4382,6 +4411,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((COMMANDS, true))
             }
             CommandId::Histogram => {
+                if self.state.platform == Platform::Gtk {
+                    let change = self.reveal_panel(Panel::Histogram)?;
+                    return Ok((change.regions, true));
+                }
                 self.request(HostRequestKind::Histogram)?;
                 Ok((HOST, false))
             }
@@ -5250,8 +5283,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }).collect();
         }
         self.state.color_picker.layer = self.eyedropper.layer;
-        self.state.color_picker.calibrating = self.eyedropper.calibration.is_some();
-        self.state.color_picker.sample_width = self.eyedropper.calibration.as_ref().map_or(self.eyedropper.area.width(), |calibration| calibration.width);
+        self.state.color_picker.calibrating = self.eyedropper.calibration.is_some() || self.targeted_curve.is_some();
+        self.state.color_picker.sample_width = if self.targeted_curve.is_some() {5} else {self.eyedropper.calibration.as_ref().map_or(self.eyedropper.area.width(), |calibration| calibration.width)};
+        self.state.color_picker.sample_sizes = if self.targeted_curve.is_some() {&[5]} else {&COLOR_SAMPLE_WIDTHS};
         self.state.color_picker.can_sample_layer = self.picker_layer_available();
         self.state.tool_panels = ToolPanels::new(&self.state.brush, self.layer_interaction.tool, &self.state.tool_set, &self.state.localization);
         self.state.tool_settings = if self.cropping() {
@@ -5353,6 +5387,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     /// Reapply visibility-dependent sampling after a host attaches its GPU.
     pub fn sync_renderer_telemetry(&mut self) {
+        self.engine.backend_mut().set_clipping_preview(self.state.histogram.shadows, self.state.histogram.highlights);
         self.engine.backend_mut().set_telemetry_enabled(
             (self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats)
                 && self
@@ -5380,6 +5415,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
+        let canvas_wake=canvas_wake || (regions & (regions::LAYOUT|regions::CUSTOMIZATION)!=0 && self.histogram_visibility_changed());
         if regions & regions::COMMAND_SEARCH != 0 {
             self.command_search.revision += 1;
         }
@@ -5669,6 +5705,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.layer_properties = selection_properties::properties(0, &self.localization().text(MessageId::COMMAND_QUICK_MASK), &self.selection_masks.quick_properties, self.state.settings.selection_painting, true, self.localization());
         }
         effects::publish_properties(&mut self.state.layer_properties,doc,&mut self.property_editor,self.effect_gesture.as_ref(),&self.state.localization);
+        if self.auto_levels.is_some() {
+            for action in &mut self.state.layer_properties.actions {if matches!(action.action,EffectAction::AutoLevels {..}) {action.label=self.state.localization.text(MessageId::TOOLBAR_CANCEL).to_string();}}
+        }
         if self.state.platform != Platform::Gtk { self.state.layer_properties.actions.clear(); }
         self.state.layer_tools.has_selection = self.current_selection().is_some();
         self.state.layer_tools.quick_mask = self.selection_masks.quick();
@@ -6089,6 +6128,9 @@ mod tests {
     include!("palette_tests.rs");
     include!("color_picker_tests.rs");
     include!("calibration_tests.rs");
+    include!("levels_ui_tests.rs");
+    include!("targeted_curve_tests.rs");
+    include!("histogram_tests.rs");
     include!("session_source_tests.rs");
     include!("selection_tests.rs");
     include!("selection_pixel_tests.rs");

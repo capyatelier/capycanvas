@@ -163,6 +163,15 @@ pub struct ThemePalette {
     pub surround_linear: [f32; 4],
     pub glass: crate::GlassPalette,
 }
+impl ThemePalette {
+    pub fn histogram_colors(self) -> [HexColor; 4] {
+        if self.text.oklab()[0] > self.panel.oklab()[0] {
+            [HexColor([240,110,100]), HexColor([100,210,140]), HexColor([110,155,250]), self.text]
+        } else {
+            [HexColor([185,40,35]), HexColor([25,120,65]), HexColor([45,85,190]), self.text]
+        }
+    }
+}
 impl Settings {
     pub fn palette(
         &self,

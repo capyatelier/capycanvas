@@ -47,6 +47,13 @@ impl WorkspacePreset {
             }
             Self::Photographer => Self::photo_layout(platform),
         };
+        if self == Self::Photographer && platform == crate::Platform::Gtk {
+            if let Some(group) = layout.panel_group(Panel::Navigator) {
+                layout.set_panel_visible(Panel::Histogram, true).expect("registered panel");
+                layout.move_panel([1600., 1000.], Panel::Histogram, DockTarget::Tab { group, index: None }).expect("histogram tab");
+                layout.select_tab(group, Panel::Navigator).expect("navigator tab");
+            }
+        }
         for (panel, anchor) in [
             (Panel::Palettes, Panel::Color),
             (Panel::Proof, Panel::Navigator),
@@ -452,7 +459,7 @@ mod tests {
                 (16, vec![Panel::Layers]),
                 (6, vec![Panel::Brushes, Panel::Stats]),
                 (7, vec![Panel::ToolSettings, Panel::Sizes]),
-                (10, vec![Panel::Navigator, Panel::Proof]),
+                (10, if platform==crate::Platform::Gtk {vec![Panel::Navigator, Panel::Proof,Panel::Histogram]}else{vec![Panel::Navigator, Panel::Proof]}),
             ] {
                 let DockNode::Tabs { panels, active, .. } = layout.node(id).unwrap() else {
                     panic!("default tab group");

@@ -145,6 +145,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn request_content_bounds(&mut self, purpose: ContentUse) -> Result<(), String> {
+        self.cancel_auto_levels();self.cancel_histogram();
         self.require_content_idle(purpose)?;
         refused(self.content_bounds_refusal(purpose))?;
         let doc = self.engine.document();
@@ -298,6 +299,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let plan = doc.transform_pixels_plan(doc.active_target(), interpolation, Default::default())?;
         self.engine.validate_edit(&plan.reserved_edit()).map_err(error)?;
         let mut bake = PixelBake { epoch: self.state.document_file.epoch, revision: doc.revision, plan, submitted: false };
+        self.cancel_auto_levels();self.cancel_histogram();
         bake.submitted = self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::TransformPixels(bake.plan.clone())).map_err(error)?;
         self.content_bounds.bake = Some(bake);
         self.refresh_tools();

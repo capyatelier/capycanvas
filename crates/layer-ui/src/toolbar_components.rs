@@ -328,6 +328,7 @@ impl UiState {
                         selected: self.color_picker.layer == layer, preview: None }).collect();
                 if !self.color_picker.calibrating { options.extend(choice("variant", self.localization.text(MessageId::TOOLBAR_SOURCE), false, sources)); }
                 let sizes = [(MessageId::TOOLBAR_SINGLE_PIXEL,1),(MessageId::TOOLBAR_5_PX_CIRCLE,5),(MessageId::TOOLBAR_15_PX_CIRCLE,15),(MessageId::TOOLBAR_51_PX_CIRCLE,51),(MessageId::TOOLBAR_101_PX_CIRCLE,101)].into_iter()
+                    .filter(|(_,width)|self.color_picker.sample_sizes.contains(width))
                     .map(|(label,width)| ToolSetItem { label: self.localization.text(label), icon: "eyedropper", action: UiAction::SetColorSampleSize { width },
                         selected: self.color_picker.sample_width == width, preview: None }).collect();
                 options.extend(choice("sample-size", self.localization.text(MessageId::TOOLBAR_SAMPLE_SIZE), false, sizes));

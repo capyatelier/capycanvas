@@ -739,7 +739,7 @@ fn effect_result(v:Vertex)->vec4<f32> {
             source.push_str("c=adjusted; }\n");
         }
     }
-    source.push_str("if settings.options.x>.5 {c=blend_composite(c*settings.options.y,settings.backdrop,u32(settings.options.z));} return c; }\n");
+    source.push_str("if settings.options.x>.5 {c=blend_composite(select(c*settings.options.y,c,settings.options.y==1.),settings.backdrop,u32(settings.options.z));} return c; }\n");
     Ok(source)
 }
 

@@ -47,7 +47,8 @@ pub struct EffectPanels {
     recording_save_open: Cell<bool>,
     recording_was_active: Cell<bool>,
     page: gtk::DropDown,
-    property_actions: gtk::Box,
+    property_actions: adw::WrapBox,
+    tonal_histogram:Rc<crate::histogram::Inspector>,
     properties_updating: Cell<bool>,
     title: gtk::Label,
     body: gtk::Box,
@@ -157,8 +158,12 @@ impl EffectPanels {
         page.set_widget_name("properties-page");
         properties.append(&title);
         properties.append(&page);
-        let property_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let property_actions = adw::WrapBox::new();
+        property_actions.set_child_spacing(6);property_actions.set_line_spacing(6);
         properties.append(&property_actions);
+        let tonal_histogram=crate::histogram::Inspector::new();
+        tonal_histogram.root.set_widget_name("levels-histogram");tonal_histogram.root.set_visible(false);
+        properties.append(&tonal_histogram.root);
         properties.append(&body);
         let stats = gtk::Box::new(gtk::Orientation::Vertical, 6);
         stats.add_css_class("renderer-stats");
@@ -233,6 +238,7 @@ impl EffectPanels {
             recording_was_active: Cell::new(false),
             page,
             property_actions,
+            tonal_histogram,
             properties_updating: Cell::new(false),
             title,
             body,
@@ -595,6 +601,10 @@ impl EffectPanels {
             }
         }
     }
+    pub fn refresh_histograms(&self,w:&Rc<Workspace>,state:&UiState) {
+        if state.layer_properties.histogram {self.tonal_histogram.refresh_tonal(w,state);}
+        for field in self.fields.borrow().iter() {if let Field::Curve(editor)=field {editor.refresh_histogram(state);}}
+    }
     pub fn refresh(self: &Rc<Self>, w: &Rc<Workspace>, state: &UiState) {
         self.bind(w, state);
         if self.adjustments.parent().is_some() || self.filter_types.parent().is_some() {
@@ -620,6 +630,7 @@ impl EffectPanels {
             }
         }
         self.property_actions.set_sensitive(view.enabled);
+        self.tonal_histogram.root.set_visible(view.histogram);
         self.title.set_text(&view.title);
         self.title.set_tooltip_text(Some(&view.description));
         self.body.set_sensitive(view.enabled);
@@ -1162,10 +1173,17 @@ struct CurveEditor {
     coordinates: [NumberControl; 2],
     ev: [gtk::Label; 2],
     axes: [[gtk::Label; 3]; 2],
+    histogram: Rc<RefCell<layer_ui::HistogramView>>,
+    histogram_colors: Rc<Cell<[[u8;3];4]>>,
+    histogram_status: gtk::Label,
+    clipping: [gtk::CheckButton;2],
+    clipping_updating: Rc<Cell<bool>>,
 }
 impl CurveEditor {
     fn new(w: &Rc<Workspace>, layer: u64, control: &layer_ui::PropertyControl) -> Self {
         let curve = control.curve.as_ref().expect("shared curve controls");
+        let histogram=Rc::new(RefCell::new(layer_ui::HistogramView::default()));
+        let histogram_colors=Rc::new(Cell::new([[0;3];4]));
         let area = gtk::DrawingArea::builder().content_width(128).content_height(200)
             .hexpand(true).focusable(true).build();
         area.set_widget_name(&format!("property-{}-graph", control.key));
@@ -1174,7 +1192,7 @@ impl CurveEditor {
         area.set_tooltip_text(Some(&curve.help));
         area.update_property(&[gtk::accessible::Property::Label(&control.label)]);
         let view = Rc::new(RefCell::new(control.clone()));
-        area.set_draw_func(glib::clone!(#[strong] view, move |area, cr, width, height| {
+        area.set_draw_func(glib::clone!(#[strong] view, #[strong] histogram, #[strong] histogram_colors, move |area, cr, width, height| {
             let view = view.borrow();
             let Some(curve) = &view.curve else { return; };
             let EffectValue::Curve(points) = &view.value else { return; };
@@ -1182,6 +1200,7 @@ impl CurveEditor {
             let c = area.color();
             let color = |alpha| cr.set_source_rgba(f64::from(c.red()), f64::from(c.green()), f64::from(c.blue()), alpha);
             color(0.12); cr.paint().ok();
+            crate::histogram::draw(cr,&histogram.borrow(),histogram_colors.get(),width,height);
             color(0.2); cr.set_line_width(1.);
             for i in 1..4 {
                 let t = f64::from(i) / 4.;
@@ -1318,7 +1337,28 @@ impl CurveEditor {
             }));
             root.append(&input); root.append(&ev[index]); input
         });
-        let editor = Self { root, area, reset, view, coordinates, ev, axes }; editor.update(control, &w.localization()); editor
+        let histogram_status=gtk::Label::builder().xalign(0.).wrap(true).build();histogram_status.set_widget_name("curve-statistics");
+        root.append(&histogram_status);
+        let clipping_updating=Rc::new(Cell::new(false));
+        let clipping=std::array::from_fn(|index| {
+            let button=gtk::CheckButton::new();button.set_widget_name(if index==0 {"curve-shadows"} else {"curve-highlights"});
+            button.connect_toggled(glib::clone!(#[weak] w, #[strong] clipping_updating, move |button| {
+                if !clipping_updating.get() {w.dispatch(UiAction::Histogram {action:if index==0 {layer_ui::HistogramAction::Shadows {enabled:button.is_active()}}
+                    else {layer_ui::HistogramAction::Highlights {enabled:button.is_active()}}});}
+            }));root.append(&button);button
+        });
+        let editor = Self { root, area, reset, view, coordinates, ev, axes, histogram, histogram_colors, histogram_status, clipping, clipping_updating }; editor.update(control, &w.localization()); editor
+    }
+    fn refresh_histogram(&self,state:&UiState) {
+        *self.histogram.borrow_mut()=state.tonal_histogram.clone();
+        self.histogram_colors.set(state.palette.histogram_colors().map(|color|color.0));
+        self.histogram_status.set_label(&state.tonal_histogram.status);
+        self.clipping_updating.set(true);
+        for (index,button) in self.clipping.iter().enumerate() {
+            button.set_label(state.histogram.labels.get(index+1).map(|s|s.as_ref()));
+            button.set_active(if index==0 {state.histogram.shadows} else {state.histogram.highlights});
+        }
+        self.clipping_updating.set(false);self.area.queue_draw();
     }
     fn update(&self, control: &layer_ui::PropertyControl, localization: &std::sync::Arc<layer_ui::Localizer>) {
         *self.view.borrow_mut() = control.clone();

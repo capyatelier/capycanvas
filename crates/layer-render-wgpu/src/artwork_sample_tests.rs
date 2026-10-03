@@ -4,7 +4,7 @@ use layer_core::{ArtworkSample, ArtworkSampleRequest, ArtworkSource, Document, D
 use layer_core::color::{DocumentColor, SampleDepth};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
 
-fn gpu() -> SnapshotGpu {
+pub(super) fn gpu() -> SnapshotGpu {
     static GPU: std::sync::OnceLock<SnapshotGpu> = std::sync::OnceLock::new();
     GPU.get_or_init(|| WgpuRasterizer::new_native_headless(Default::default()).unwrap().snapshot_gpu()).clone()
 }
@@ -13,7 +13,7 @@ fn document(extent: [u32; 2], pixel: impl Fn(u32, u32) -> [f32; 4]) -> Document 
     document_in(extent, layer_core::color::RgbSpace::Srgb, pixel)
 }
 
-fn document_in(extent: [u32; 2], space: layer_core::color::RgbSpace, pixel: impl Fn(u32, u32) -> [f32; 4]) -> Document {
+pub(super) fn document_in(extent: [u32; 2], space: layer_core::color::RgbSpace, pixel: impl Fn(u32, u32) -> [f32; 4]) -> Document {
     let mut doc = Document::new("Sample", extent[0], extent[1], DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
     doc.color = DocumentColor { depth: SampleDepth::F32, space };
     doc.layers[1].visible = false;
@@ -108,7 +108,7 @@ fn artwork_sample_normalizes_large_finite_premultiplied_values_before_summing() 
     close(sample(&doc, ArtworkSource::Visible, [50., 50.], 101).unwrap(), [2e35, -4e35, 6e35, 0.5]);
 }
 
-fn doubled_effect(id: u64) -> layer_core::Layer {
+pub(super) fn doubled_effect(id: u64) -> layer_core::Layer {
     let mut program = (*crate::tests::fixture("exposure").program()).clone();
     program.wgsl = "fn double_color(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(2.*c.rgb,c.a);}".into();
     program.entry = "double_color".into();

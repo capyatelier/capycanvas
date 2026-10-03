@@ -85,6 +85,41 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionSample(
     })();
     string(&mut env, result)
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_inspectionStatistics(
+    mut env: JNIEnv, _: JClass, handle: jlong, source: jni::objects::JString,
+    preview: jni::sys::jboolean, selection: jni::sys::jboolean,
+) -> jstring {
+    let job = unsafe { Box::from_raw(handle as *mut Inspection) };
+    let result = (|| {
+        let source: layer_core::ArtworkSource = serde_json::from_str(&crate::android::read(&mut env, &source)?).map_err(error)?;
+        on_worker("capy-artwork-statistics", "Artwork statistics worker failed", move || {
+            let mut query = layer_core::ArtworkQuery::new(&job.project.document, source);
+            query.time = job.time;
+            let request = layer_core::ArtworkStatisticsRequest { query, preview: preview != 0, selection: selection != 0 };
+            let histogram = pollster::block_on(job.gpu.artwork_statistics(request, job.control))?;
+            serde_json::to_string(&serde_json::json!({"epoch":job.epoch,"revision":job.project.document.revision,"time":job.time,"histogram":histogram})).map_err(error)
+        })
+    })();
+    string(&mut env, result)
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_inspectionLevelsStatistics(
+    mut env: JNIEnv, _: JClass, handle: jlong, source: jni::objects::JString,
+) -> jstring {
+    let job = unsafe { Box::from_raw(handle as *mut Inspection) };
+    let result = (|| {
+        let source: layer_core::ArtworkSource = serde_json::from_str(&crate::android::read(&mut env, &source)?).map_err(error)?;
+        on_worker("capy-levels-statistics", "Levels statistics worker failed", move || {
+            let mut query = layer_core::ArtworkQuery::new(&job.project.document, source);
+            query.time = job.time;
+            let statistics = pollster::block_on(job.gpu.levels_statistics(query, job.control))?;
+            serde_json::to_string(&serde_json::json!({"epoch":job.epoch,"revision":job.project.document.revision,"time":job.time,"statistics":statistics})).map_err(error)
+        })
+    })();
+    string(&mut env, result)
+}
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_inspectionTask(
     mut env: JNIEnv,

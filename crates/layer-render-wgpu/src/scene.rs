@@ -117,7 +117,7 @@ fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blu
     wgpu::Color { r: f64::from(red), g: f64::from(green), b: f64::from(blue), a: f64::from(alpha) }
 }
 #[derive(Clone, Copy)]
-pub(super) enum Output { Artwork(Option<LayerId>), EffectInput(LayerId), LayerContent(LayerId), Display }
+pub(super) enum Output { Artwork(Option<LayerId>), EffectInput(LayerId), EffectChannels(LayerId), LayerContent(LayerId), Display }
 
 pub(super) struct Scene {
     valid: Arc<std::sync::atomic::AtomicBool>,
@@ -135,6 +135,7 @@ pub(super) struct Scene {
     pool: Vec<PageSurface>,
     used: Vec<bool>,
     jobs: Vec<Job>,
+    source_jobs: Vec<std::ops::Range<usize>>,
     // Retain table capacity across tile batches, but release resource handles
     // after encoding so these tables cannot pin evicted paint/source pages.
     source_bindings: RecentBindings<[wgpu::TextureView; 3]>,
@@ -252,7 +253,7 @@ impl Scene {
         Ok(())
     }
     pub fn initialize_source_paint(&mut self, r: &mut WgpuRasterizer, layers: &[Layer], encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
-        self.jobs.clear();
+        self.jobs.clear();self.source_jobs.clear();
         for layer in layers {
             if layer.source.is_none() && r.native_backing(layer.id).is_none() {
                 continue;
@@ -271,7 +272,7 @@ impl Scene {
         damage: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        self.jobs.clear();
+        self.jobs.clear();self.source_jobs.clear();
         let stored = r.paint_layers.iter().find(|p| p.id == layer.id);
         let pages: Vec<_> = r
             .preview_pages
@@ -334,7 +335,7 @@ impl Scene {
             pipeline,
             ..
         } = r.scene_pipelines.clone();
-        let stride = device.limits().min_uniform_buffer_offset_alignment.max(128) as usize;
+        let stride = device.limits().min_uniform_buffer_offset_alignment.max(144) as usize;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene uniform records"),
             size: stride as u64 * 128,
@@ -368,6 +369,7 @@ impl Scene {
             pool: Vec::new(),
             used: Vec::new(),
             jobs: Vec::new(),
+            source_jobs: Vec::new(),
             source_bindings: Default::default(),
             compute_bindings: Default::default(),
             output_bindings: Default::default(),
@@ -1162,7 +1164,7 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         use layer_core::LayerOperationKind;
-        self.jobs.clear();
+        self.jobs.clear();self.source_jobs.clear();
         self.clear_material_pages();
         self.used.fill(false);
         let layer = &packet.layers[layer_index];
@@ -1335,7 +1337,7 @@ impl Scene {
     pub(super) fn release_capture_window(&mut self, window: PixelRect) {
         // The snapshot owner has completed its previous readback. Release job
         // references and old image windows before restoring the next inputs.
-        self.jobs.clear();
+        self.jobs.clear();self.source_jobs.clear();
         if self.images.bounds != window {
             self.retire_images(|scene| scene.images = images::ImageStages::default());
         }
@@ -1367,6 +1369,13 @@ impl Scene {
         output: Output,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
+        self.capture_query_region(r, packet, destination, region, output, false, encoder)
+    }
+
+    pub(super) fn capture_query_region(
+        &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &wgpu::Texture,
+        region: PixelRect, output: Output, preview: bool, encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
         if region.is_empty() || region.intersect(PixelRect::full(packet.document_extent)) != region
             || destination.width() < region.width() || destination.height() < region.height()
         {
@@ -1377,7 +1386,7 @@ impl Scene {
         self.prepare_region(r, packet, window, dirty, encoder)?;
         let destination = Image { texture: destination.clone(), view: destination.create_view(&Default::default()),
             plan: display_mips::Plan::window(packet.document_extent, 0, region) };
-        self.capture_prepared_region(r, packet, &destination, region, output, encoder)
+        self.capture_prepared_regions(r, packet, &destination, &[region], output, preview, encoder)
     }
 
     fn prepare_region(
@@ -1401,18 +1410,44 @@ impl Scene {
         result.map(|_| ())
     }
 
+    pub(super) async fn capture_query_tiles(
+        &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect, output: Output, preview:bool, tiles_per_submission:u32,
+        encoder: &mut crate::submission::CommandEncoder,
+        mut consume: impl FnMut(&mut WgpuRasterizer, &wgpu::TextureView, PixelRect, &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError>,
+    ) -> Result<(), GpuRasterError> {
+        let window = images::capture_window(packet.layers, region, packet.document_extent);
+        self.prepare_region(r, packet, window, window, encoder)?;
+        let (texture, view) = create_color_target(&r.device, [PAGE_SIZE;2], "statistics tile");
+        let mut tiles=0;
+        for tile in page_coordinates(region) {
+            let grid = [tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]];
+            if preview && query_grid_size(grid).contains(&0) {continue;}
+            let region = page_rect(tile).intersect(region);
+            let destination = Image {texture:texture.clone(),view:view.clone(),plan:display_mips::Plan::window(packet.document_extent,0,region)};
+            self.capture_prepared_regions(r, packet, &destination, &[region], output, preview, encoder)?;
+            consume(r, &view, region, encoder)?;
+            tiles+=1;
+            if !preview && tiles%tiles_per_submission==0 {
+                r.uploads.finish(encoder);
+                std::mem::replace(encoder, crate::submission::CommandEncoder::new(&r.device, &Default::default())).submit(&r.queue);
+                crate::local_tone::wait_async(&r.device, &r.queue).await.map_err(GpuRasterError::Color)?;
+            }
+        }
+        Ok(())
+    }
+
     fn capture_prepared_region(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &Image,
         region: PixelRect, output: Output, encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        self.capture_prepared_regions(r, packet, destination, &[region], output, encoder)
+        self.capture_prepared_regions(r, packet, destination, &[region], output, false, encoder)
     }
 
     fn capture_prepared_regions(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &Image,
-        regions: &[PixelRect], output: Output, encoder: &mut crate::submission::CommandEncoder,
+        regions: &[PixelRect], output: Output, preview: bool, encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        self.jobs.clear();
+        self.jobs.clear();self.source_jobs.clear();
         self.clear_material_pages();
         self.used.fill(false);
         self.stop_before = None;
@@ -1422,12 +1457,13 @@ impl Scene {
                     let image = self.group(r, packet, parent, tile)?;
                     self.converted(r, image, Convert::linear(packet))
                 }
-                Output::EffectInput(id) => {
+                Output::EffectInput(id) | Output::EffectChannels(id) => {
                     let index = packet.layers.iter().position(|layer| layer.id == id).ok_or(GpuRasterError::InvalidExtent)?;
                     let layer = &packet.layers[index];
                     self.stop_before = Some((index, layer.properties.clipped));
                     let image = self.group(r, packet, images::input_scope(packet.layers, layer), tile)?;
                     self.stop_before = None;
+                    let image = if matches!(output,Output::EffectChannels(_)) {self.effect(r,packet,&[index],tile,image)?} else {image};
                     self.converted(r, image, Convert::linear(packet))
                 }
                 Output::LayerContent(id) => {
@@ -1437,6 +1473,7 @@ impl Scene {
                 Output::Display => self.display_tile(r, packet, tile)?,
             };
             self.copy_window_tile(image, destination, tile);
+            if preview { self.encode_query_jobs(r, encoder, Some([tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]]))?; }
         }
         self.encode_jobs(r, encoder)
     }
@@ -1522,11 +1559,15 @@ impl Scene {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        let result = self.encode_jobs_inner(r, encoder);
+        self.encode_query_jobs(r, encoder, None)
+    }
+
+    fn encode_query_jobs(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, grid: Option<[u32;4]>) -> Result<(), GpuRasterError> {
+        let result = self.encode_jobs_inner(r, encoder, grid);
         self.mask_bindings.clear();
         if result.is_err() {
             // Dropping unencoded reservations invalidates their source keys.
-            self.jobs.clear();
+            self.jobs.clear();self.source_jobs.clear();
         }
         result
     }
@@ -1535,7 +1576,10 @@ impl Scene {
         &mut self,
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
+        grid: Option<[u32;4]>,
     ) -> Result<(), GpuRasterError> {
+        let source_jobs = self.source_jobs.clone();
+        let job_grid = |i| grid.filter(|_| !source_jobs.iter().any(|range| range.contains(&i)));
         let base = self.record_count;
         self.effects.encode_preparation(encoder);
         self.record_count += self.jobs.len();
@@ -1552,6 +1596,8 @@ impl Scene {
         }
         self.upload.resize(self.jobs.len() * self.stride, 0);
         for (i, job) in self.jobs.iter().enumerate() {
+            let sampling = if matches!(job, Job::Draw {..} | Job::Effect {..}) {job_grid(i).unwrap_or_default()} else {[0;4]};
+            self.upload[i*self.stride+128..i*self.stride+144].copy_from_slice(&sampling.into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>());
             let mut captured;
             let data: Option<&[f32]> = match job {
                 Job::Effect { data, .. } if r.capture_frame.is_some() => {
@@ -1689,7 +1735,8 @@ impl Scene {
                     pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                     pass.set_bind_group(1, input, &[]);
                     pass.set_bind_group(2, output, &[]);
-                    pass.dispatch_workgroups((data[2] as u32).div_ceil(32), (data[3] as u32).div_ceil(2), 1);
+                    let size = job_grid(j).map_or([data[2] as u32,data[3] as u32], query_grid_size);
+                    pass.dispatch_workgroups(size[0].div_ceil(32), size[1].div_ceil(2), 1);
                 }
                 encoded_through = end;
                 continue;
@@ -1839,7 +1886,9 @@ impl Scene {
                                 clip.width(),
                                 clip.height(),
                             );
-                            pass.draw(0..3, 0..1);
+                            if let Some(grid) = job_grid(j) {
+                                let size=query_grid_size(grid);pass.draw(0..6, 0..size[0]*size[1]);
+                            } else {pass.draw(0..3, 0..1);}
                         }
                         drop(pass);
                     }
@@ -1850,7 +1899,7 @@ impl Scene {
                 }
             }
         }
-        self.jobs.clear();
+        self.jobs.clear();self.source_jobs.clear();
         Ok(())
     }
 }
@@ -1865,7 +1914,7 @@ impl Pipelines {
             wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
             wgpu::BufferBindingType::Uniform,
             true,
-            NonZeroU64::new(128),
+            NonZeroU64::new(144),
         )]);
         let layout = crate::bindings::layout(device, "scene sources", &[
             texture_entry(0),
@@ -1956,7 +2005,7 @@ fn uniform_binding(
     buffer: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     crate::bindings::group(device, "scene uniform binding", layout, [
-        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer, offset: 0, size: NonZeroU64::new(128), }),
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer, offset: 0, size: NonZeroU64::new(144), }),
     ])
 }
 fn local_rect(c: [u32; 2], offset: layer_core::Point, tile: [u32; 2]) -> [f32; 4] {
@@ -2122,4 +2171,10 @@ fn source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &
         wgpu::BindingResource::TextureView(&sources[1]),
         wgpu::BindingResource::Sampler(&r.sampler),
     ])
+}
+
+fn query_grid_size([x,y,w,h]:[u32;4])->[u32;2] {
+    [(x,w),(y,h)].map(|(origin,extent)| (0..extent.min(256)).filter(|i| {
+        let p=(2*i+1)*extent/(2*extent.min(256));p>=origin && p<origin+PAGE_SIZE
+    }).count() as u32)
 }

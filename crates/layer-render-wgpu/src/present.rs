@@ -729,6 +729,7 @@ impl ViewportPresenter {
             || previous.screen != self.screen_options
             || self.overlays_changed
             || self.picker.changed()
+            || self.camera_data.is_none_or(|old| old[62..64] != renderer.clipping_preview.map(f32::from))
             || (!self.overviews.is_empty() && previous.navigator_revision != renderer.navigator.revision)
             || previous.overviews != self.overviews
             || self.backdrop.as_ref().is_some_and(|b| b.needs_refresh())
@@ -928,6 +929,7 @@ impl ViewportPresenter {
         }
         data[60] = f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual);
         data[61] = renderer.navigator.scale();
+        data[62..64].copy_from_slice(&renderer.clipping_preview.map(f32::from));
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(&data))

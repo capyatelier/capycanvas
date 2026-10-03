@@ -106,6 +106,30 @@ Its native numeric draft, selection and edit focus use Compose saved state acros
 Activity recreation; an in-progress IME composition is still owned by the input
 method.
 
+GTK Levels has RGB, Red, Green and Blue pages. Channel stages run before RGB;
+the two clipping controls apply to every stage. Floating documents allow input
+and output anchors from −65504 to 65504, with the slider concentrated on 0–1.
+Input white must exceed black by at least .001, including after Float32 rounding.
+Output endpoints may cross to invert the result.
+New integer-document adjustments use 0–1 anchor bounds. An adjustment created
+with floating ranges retains those ranges when the document depth changes, so
+conversion does not silently clamp its existing values.
+
+Auto analyzes the full adjustment input for the selected page. RGB includes the
+channel corrections before stretching all three channels together. It changes
+input black, input white and gamma as one edit, preserving output anchors and
+other pages. Empty, constant or unrepresentable results leave the layer unchanged.
+The button becomes Cancel while analysis is pending. Switching pages, hiding
+Properties or changing the source retires that result.
+
+Levels and Curves show live input statistics in GTK Properties. RGB displays
+the channel-corrected input before master; individual pages display their input
+before correction. Curves uses its selected Encoded RGB or Log HDR domain.
+Statistics updates retain numerical drafts and focus. The same
+[calibration controls](color-picker.md#levels-and-curves) serve both adjustments.
+Changing the adjustment's mask, opacity or blend preserves these input
+statistics; changes below the adjustment update them.
+
 ## Checks
 
 `native_number_controls` (an ignored Wayland widget test) writes a dark/light

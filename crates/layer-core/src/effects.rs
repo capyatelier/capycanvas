@@ -506,9 +506,8 @@ impl EffectInstance {
             };
             if !gap.is_finite()
                 || *gap < 0.
-                || number(&self.values[a])? + gap > number(&self.values[b])? + f32::EPSILON
-                || number(&self.program.parameters[a].default)? + gap
-                    > number(&self.program.parameters[b].default)? + f32::EPSILON
+                || f64::from(number(&self.values[b])?) - f64::from(number(&self.values[a])?) < f64::from(*gap)
+                || f64::from(number(&self.program.parameters[b].default)?) - f64::from(number(&self.program.parameters[a].default)?) < f64::from(*gap)
             {
                 return Err("Invalid ordered parameter range");
             }
@@ -546,10 +545,14 @@ impl EffectInstance {
                 match (&self.values[a], &self.values[b]) {
                     (EffectValue::Number(x), EffectValue::Number(y)) => {
                         if i == a {
-                            high = high.min(y - gap);
+                            let limit=f64::from(*y)-f64::from(*gap);
+                            let rounded=limit as f32;
+                            high=high.min(if f64::from(rounded)>limit {rounded.next_down()} else {rounded});
                         }
                         if i == b {
-                            low = low.max(x + gap);
+                            let limit=f64::from(*x)+f64::from(*gap);
+                            let rounded=limit as f32;
+                            low=low.max(if f64::from(rounded)<limit {rounded.next_up()} else {rounded});
                         }
                     }
                     _ => return Err("Ordered parameters must be numeric"),
@@ -712,20 +715,32 @@ fn curve_tangent(points: &[[f32; 2]], j: usize) -> f64 {
     let w1 = h1 + 2. * h0;
     (w0 + w1) / (w0 / a + w1 / b)
 }
+fn curve_coefficients(points:&[[f32;2]],i:usize)->([f64;4],f64) {
+    let h=f64::from(points[i+1][0])-f64::from(points[i][0]);
+    let delta=f64::from(points[i+1][1])-f64::from(points[i][1]);
+    let d0=h*curve_tangent(points,i);let d1=h*curve_tangent(points,i+1);
+    ([f64::from(points[i][1]),d0,3.*delta-2.*d0-d1,-2.*delta+d0+d1],d1)
+}
 fn curve_segment(points: &[[f32; 2]], i: usize) -> [[f32; 4]; 2] {
-    let h = f64::from(points[i + 1][0]) - f64::from(points[i][0]);
-    let delta = f64::from(points[i + 1][1]) - f64::from(points[i][1]);
-    let d0 = h * curve_tangent(points, i);
-    let d1 = h * curve_tangent(points, i + 1);
-    [
-        [points[i][0], points[i + 1][0], points[i + 1][1], d1 as f32],
-        [
-            points[i][1],
-            d0 as f32,
-            (3. * delta - 2. * d0 - d1) as f32,
-            (-2. * delta + d0 + d1) as f32,
-        ],
-    ]
+    let (coefficient,d1)=curve_coefficients(points,i);
+    [[points[i][0],points[i+1][0],points[i+1][1],d1 as f32],coefficient.map(|v|v as f32)]
+}
+pub fn curve_inverse(points:&[[f32;2]],target:f32,current:f32)->Option<f32> {
+    if points.len()<2 || !target.is_finite() || !current.is_finite() {return None;}
+    let target=f64::from(target);let current=f64::from(current);
+    let root=(0..points.len()-1).filter_map(|i| {
+        let [x0,y0]=points[i].map(f64::from);let [x1,y1]=points[i+1].map(f64::from);
+        if target<y0.min(y1) || target>y0.max(y1) {return None;}
+        if y0==y1 {return Some(current.clamp(x0,x1));}
+        if target==y0 {return Some(x0);}if target==y1 {return Some(x1);}
+        let (c,_)=curve_coefficients(points,i);let mut low=0.;let mut high=1.;
+        for _ in 0..48 {
+            let t=(low+high)*0.5;let y=((c[3]*t+c[2])*t+c[1])*t+c[0];
+            if (y<target)==(y0<y1) {low=t;} else {high=t;}
+        }
+        Some(x0+(x1-x0)*(low+high)*0.5)
+    }).min_by(|a,b|(a-current).abs().total_cmp(&(b-current).abs()).then(a.total_cmp(b)))? as f32;
+    ((f64::from(curve_value(points,root))-target).abs()<=f64::from(8.*f32::EPSILON)).then_some(root)
 }
 fn curve_parameters(points: &[[f32; 2]]) -> [[f32; 4]; EFFECT_TABLE_VECTORS] {
     let mut data = [[0.; 4]; EFFECT_TABLE_VECTORS];
@@ -981,7 +996,9 @@ mod tests {
         assert!(fx.set("black", EffectValue::Toggle(true)).is_err());
         fx.set("black", EffectValue::Number(0.8)).unwrap();
         fx.set("white", EffectValue::Number(0.2)).unwrap();
-        assert_eq!(fx.values[1], EffectValue::Number(0.801));
+        let EffectValue::Number(white)=fx.values[1] else {panic!()};
+        assert!(f64::from(white)-f64::from(0.8f32)>=f64::from(0.001f32));
+        assert!(f64::from(white.next_down())-f64::from(0.8f32)<f64::from(0.001f32));
         fx.validate().unwrap();
     }
     #[test]
@@ -1007,6 +1024,7 @@ mod tests {
             panic!()
         };
         *max = 0.2;
+        black.soft_bounds=Some([0.,0.2]);
         let rebound = instance.rebind(Arc::new(program)).unwrap();
         assert_eq!(rebound.value("black"), Some(&EffectValue::Number(0.)));
         assert_eq!(rebound.value("white"), instance.value("white"));
@@ -1185,5 +1203,36 @@ mod tests {
         for exponent in [f64::NAN,0.124,8.001] {
             Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters)[2].mapping=NumericMapping::Power{exponent};assert!(effect.validate().is_err());
         }
+    }
+}
+
+pub fn log_curve_encode(value:f64, stops:f64)->f64 {
+    let span=stops+8.;let toe=(-8f64).exp2()*std::f64::consts::E;
+    if value<=toe {value/(toe*std::f64::consts::LN_2*span)}else{(value.log2()+8.)/span}
+}
+pub fn log_curve_decode(x:f64, stops:f64)->f64 {
+    let span=stops+8.;let toe=(-8f64).exp2()*std::f64::consts::E;let knee=1./(std::f64::consts::LN_2*span);
+    if x<=knee {x*toe*std::f64::consts::LN_2*span}else{(x*span-8.).exp2()}
+}
+
+impl EffectProgram {
+    pub fn for_depth(self:&Arc<Self>,depth:crate::color::SampleDepth)->Arc<Self> {
+        let selected=match self.id.as_ref() {
+            "levels" if depth.is_float()=>None,
+            "curves" if depth==crate::color::SampleDepth::F32=>Some(("hdr_stops",0.,127.)),
+            "exposure" if depth==crate::color::SampleDepth::F32=>Some(("exposure",-126.,126.)),
+            _=>return self.clone(),
+        };
+        let Some(bundled)=crate::bundled_effect_catalog().get(&self.id) else {return self.clone();};
+        if self.wgsl!=bundled.program().wgsl || self.entry!=bundled.program().entry {return self.clone();}
+        let mut result=self.clone();
+        for parameter in Arc::make_mut(&mut Arc::make_mut(&mut result).parameters) {
+            if let EffectParameterKind::Number {min,max,..}=&mut parameter.kind {
+                if let Some((key,lower,upper))=selected {
+                    if parameter.key.as_ref()==key {*min=lower;*max=upper;}
+                } else if !parameter.key.ends_with("gamma") {*min= -65504.;*max=65504.;}
+            }
+        }
+        result
     }
 }

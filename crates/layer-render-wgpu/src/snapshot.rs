@@ -422,6 +422,16 @@ impl SnapshotRenderer {
         &mut self, [x, y, width, height]: [u32; 4], reserved_bytes: u64,
         consume: impl FnOnce(&mut WgpuRasterizer, FramePacket<'_>, PixelRect, &mut submission::CommandEncoder) -> Result<T, GpuRasterError>,
     ) -> Result<T, GpuRasterError> {
+        let (r, packet, region, mut encoder) = self.prepare_region_gpu([x,y,width,height], reserved_bytes)?;
+        let result = consume(r, packet, region, &mut encoder)?;
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
+        self.control.observe_allocations(&self.renderer.device);
+        Ok(result)
+    }
+
+    fn prepare_region_gpu(&mut self, [x,y,width,height]:[u32;4], reserved_bytes:u64)
+        -> Result<(&mut WgpuRasterizer, FramePacket<'_>, PixelRect, submission::CommandEncoder),GpuRasterError> {
         self.check_cancelled()?;
         let region = PixelRect::new(
             x,
@@ -583,11 +593,40 @@ impl SnapshotRenderer {
             &mut r.selection_clip,
             Some(&masks),
         )?;
-        let result = consume(r, packet, region, &mut encoder)?;
-        r.uploads.finish(&encoder);
-        encoder.submit(&r.queue);
-        self.control.observe_allocations(&r.device);
-        Ok(result)
+        Ok((r, packet, region, encoder))
+    }
+
+    async fn capture_query_gpu(&mut self, output:scene::Output, preview:bool, tiles_per_submission:u32, reserved:u64,
+        selection:Option<&Arc<layer_core::Selection>>,
+        mut consume:impl FnMut(&mut WgpuRasterizer,&wgpu::TextureView,PixelRect,&mut submission::CommandEncoder)->Result<(),GpuRasterError>,
+    )->Result<(),GpuRasterError> {
+        let extent=self.extent;let control=self.control.clone();
+        for y in (0..extent[1]).step_by(1024) {for x in (0..extent[0]).step_by(1024) {
+            let mut regions=vec![[x,y,(extent[0]-x).min(1024),(extent[1]-y).min(1024)]];
+            while let Some(region)=regions.pop() {
+                control.check()?;
+                let work=async {
+                    let (r,packet,region,mut encoder)=self.prepare_region_gpu(region,reserved)?;
+                    if let Some(selection)=selection {r.selection_clip.prepare_region(&r.device,&mut encoder,extent,selection,Some(region))?;}
+                    let mut scene=r.scene.take().unwrap_or_else(||scene::Scene::new(r));
+                    let result=scene.capture_query_tiles(r,packet,region,output,preview,tiles_per_submission,&mut encoder,|r,view,region,encoder| {
+                        control.check()?;consume(r,view,region,encoder)
+                    }).await;
+                    r.scene=Some(scene);result?;
+                    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+                    control.observe_allocations(&r.device);
+                    crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)
+                }.await;
+                match work {
+                    Err(GpuRasterError::CaptureBudget {..}) if region[2].max(region[3])>16=> {
+                        let axis=usize::from(region[3]>region[2]);let mut first=region;first[axis+2]/=2;
+                        let mut second=region;second[axis]+=first[axis+2];second[axis+2]-=first[axis+2];regions.extend([second,first]);
+                    },
+                    result=>result?,
+                }
+            }
+        }}
+        control.check()
     }
 
     fn prepare_region(&mut self, region: [u32; 4]) -> Result<RegionReadback, GpuRasterError> {
@@ -883,8 +922,13 @@ impl SnapshotPreview {
 
 mod bounds;
 pub(crate) mod sample;
+pub(crate) mod statistics;
+pub(crate) mod levels;
 mod transform_pixels;
 mod jobs;
+#[cfg(test)]
+#[path="query_capture_tests.rs"]
+mod query_capture_tests;
 pub use jobs::SnapshotJob;
 #[cfg(target_arch = "wasm32")]
 pub use jobs::BrowserSnapshot;

@@ -41,6 +41,10 @@ class AndroidViewportBenchmarkTest {
         val passThrough = args.getString("passThrough", "false") == "true"
         val navigator = args.getString("navigator", "true") == "true"
         val artworkQueries = args.getString("artworkQueries", "false") == "true"
+        val statisticsPreview = args.getString("statisticsPreview", "false") == "true"
+        val statisticsExact = args.getString("statisticsExact", "false") == "true"
+        val levelsStatistics = args.getString("levelsStatistics", "false") == "true"
+        val clippingPreview = args.getString("clippingPreview", "false") == "true"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity: MainActivity
             scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -56,6 +60,19 @@ class AndroidViewportBenchmarkTest {
                 host.openQueryPhoto(File(args.getString("photo", "/data/local/tmp/capy-brush-photo.jpg")!!))
                 scenario.onActivity { host.invoke("add_layer") }
             } else host.newDocument(args.getString("width")?.toInt() ?: size, args.getString("height")?.toInt() ?: size)
+            if (levelsStatistics) {
+                host.drain()
+                val photo = host.snapshot!!.getJSONObject("state").array("layers").objects().single { it.getBoolean("can_rename") && !it.getBoolean("selected") }.getLong("id")
+                host.drain(obj("type" to "select_layer", "id" to photo))
+                host.drain(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "levels")))
+            }
+            if (clippingPreview) {
+                host.drain(obj("type" to "histogram", "action" to obj("type" to "shadows", "enabled" to true)))
+                host.drain(obj("type" to "histogram", "action" to obj("type" to "highlights", "enabled" to true)))
+                val histogram = JSONObject(native { Native.dispatch(it, obj("type" to "close_settings").toString()); Native.snapshot(it)!! }).getJSONObject("state").getJSONObject("histogram")
+                check(histogram.getBoolean("shadows") && histogram.getBoolean("highlights"))
+            }
+            val querySource = if (levelsStatistics) obj("EffectChannels" to host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").getLong("layer")).toString() else "\"Visible\""
             args.getString("photo")?.takeUnless { openQueryPhoto }?.let { path ->
                 host.importImage(File(path))
                 waitFor { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") == "placement" }
@@ -93,6 +110,13 @@ class AndroidViewportBenchmarkTest {
             val radiusX = args.getString("radiusX")?.toDouble() ?: radius
             val radiusY = args.getString("radiusY")?.toDouble() ?: radius * .65
             val output = File(activity.getExternalFilesDir(null), "viewport-benchmark").apply { mkdirs() }
+            if (clippingPreview) {
+                File(output, "$label-clipping-state.json").writeText(native { Native.dispatch(it, obj("type" to "close_settings").toString()); Native.snapshot(it)!! })
+                val image = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                checkNotNull(image)
+                File(output, "$label-clipping.png").outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                image.recycle()
+            }
             var activePresent: JSONArray? = null
             var switchLanguage: String? = null
             var languageRequested = 0L
@@ -212,7 +236,9 @@ class AndroidViewportBenchmarkTest {
                 val queryFuture = queryPool.submit {
                     queryJobs.forEach { job ->
                         val start = System.nanoTime()
-                        val result = JSONObject(Native.inspectionSample(job, "\"Visible\"", 4752f, 3168f, 101))
+                        val result = JSONObject(if (levelsStatistics) Native.inspectionLevelsStatistics(job, querySource)
+                            else if (statisticsPreview || statisticsExact) Native.inspectionStatistics(job, querySource, !statisticsExact, false)
+                            else Native.inspectionSample(job, "\"Visible\"", 4752f, 3168f, 101))
                         queryResults.put(result.put("begin_ns", start).put("end_ns", System.nanoTime()))
                     }
                 }
@@ -237,6 +263,10 @@ class AndroidViewportBenchmarkTest {
                 if (motion == "stroke") assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
                 val data = host.measurementReport(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
                     .put("artwork_queries", queryResults)
+                    .put("statistics_preview", statisticsPreview)
+                    .put("statistics_exact", statisticsExact)
+                    .put("levels_statistics", levelsStatistics)
+                    .put("clipping_preview", clippingPreview)
                     .put("query_capture_ms", (captureEnd - captureBegin) / 1e6)
                     .put("query_capture_allocator", captureMemory)
                     .put("begin_boot_ns", beganBoot).put("end_boot_ns", endedBoot)
@@ -261,6 +291,24 @@ class AndroidViewportBenchmarkTest {
                     scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
                     SystemClock.sleep(1500)
                 }
+            }
+            if (clippingPreview) {
+                host.drain(obj("type" to "set_color", "rgba" to JSONArray(listOf(1.0, 0.0, 0.0, 1.0))))
+                host.drain(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "solid_color")))
+                SystemClock.sleep(1500)
+                waitFor { !native { Native.renderingPending(it) } }
+                val image = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+                var black = 0
+                var white = 0
+                for (y in image.height / 2 - 32 until image.height / 2 + 32) for (x in image.width / 2 - 32 until image.width / 2 + 32) {
+                    val rgb = image.getPixel(x, y) and 0xffffff
+                    if (rgb == 0) black++
+                    if (rgb == 0xffffff) white++
+                }
+                File(output, "$label-clipping-marker.png").outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                image.recycle()
+                File(output, "$label-clipping-marker.json").writeText(obj("black_pixels" to black, "white_pixels" to white).toString())
+                check(black > 100 && white > 100) { "Native clipping presentation must show both marker stripes: $black/$white" }
             }
             assertNull(host.failure)
             native { Native.presentationTimings(it, false) }

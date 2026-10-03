@@ -55,7 +55,7 @@ impl ImageComposition {
             wgpu::BindingResource::TextureView(&back.view),
             wgpu::BindingResource::Sampler(&r.sampler),
         ]);
-        let mut data = [0f32; 32];
+        let mut data = [0f32; 36];
         let [w, h] = [bounds.width(), bounds.height()].map(|v| v as f32);
         data[..6].copy_from_slice(&[0., 0., w, h, w, h]);
         data[8] = 4.;

@@ -967,7 +967,7 @@ pub struct Workspace {
     pub(crate) command_bar: crate::command_bar::CommandBar,
     pub(crate) workspaces: manager::NativeWorkspaces,
     pub(crate) servicing: Cell<bool>,
-    pub(crate) histogram: RefCell<Option<Rc<crate::histogram::Inspector>>>,
+    pub(crate) histogram: Rc<crate::histogram::Inspector>,
     pub(crate) open_document: RefCell<Option<crate::files::OpenDocument>>,
     pub(crate) image_drop: RefCell<Option<crate::files::drop::Incoming>>,
     pub(crate) image_drop_label: gtk::Label,
@@ -1139,6 +1139,7 @@ impl Workspace {
         let proof = crate::proof_view::ProofView::new();
         let local_tone=crate::local_tone_view::LocalToneView::new();
         let proof_panel = crate::files::proof::ProofPanel::new();
+        let histogram = crate::histogram::Inspector::new();
         status_bar.append(&proof.label);
         status_bar.append(&local_tone.label);
         let screen = crate::screen_view::ScreenView::new();
@@ -1274,6 +1275,7 @@ impl Workspace {
                 (Panel::Stats, scroll(&effects.stats)),
                 (Panel::Navigator, navigator.root.clone().upcast()),
                 (Panel::Proof, proof_panel.root.clone().upcast()),
+                (Panel::Histogram, scroll(&histogram.root)),
             ],
             commands: RefCell::new(Vec::new()),
             tool_set,
@@ -1314,7 +1316,7 @@ impl Workspace {
             command_bar: crate::command_bar::CommandBar::new(),
             workspaces,
             servicing: Cell::new(false),
-            histogram: RefCell::new(None),
+            histogram,
             open_document: RefCell::new(None),
             initial_project: RefCell::new(project),
             initial_settings: RefCell::new(None),
@@ -1436,6 +1438,7 @@ impl Workspace {
         );
         self.customization
             .track(Panel::Stats, PanelControl::Stats, &self.effects.stats);
+        self.customization.track(Panel::Histogram, PanelControl::Histogram, &self.histogram.root);
         self.customization.track(
             Panel::Layers,
             PanelControl::LayerActions,
@@ -2718,6 +2721,9 @@ impl Workspace {
         if regions & (regions::DOCUMENT | regions::COMMANDS | regions::LAYOUT) != 0 {
             self.proof_panel.refresh(self, &state);
         }
+        if regions & (regions::HISTOGRAM | regions::SETTINGS | regions::LAYOUT | regions::DOCUMENT) != 0 {
+            self.histogram.refresh(self, &state);self.effects.refresh_histograms(self,&state);
+        }
         self.documents.refresh(self);
         if regions != regions::CAMERA {
             self.header.refresh(self, &state);
@@ -2767,7 +2773,7 @@ impl Workspace {
         }
         if regions & regions::DOCUMENT != 0 {
             self.layer_panel.refresh(&state);
-            self.effects.refresh(self, &state);
+            self.effects.refresh(self, &state);self.effects.refresh_histograms(self,&state);
             if let Some(tab) = state.tabs.first() {
                 let modified = if state.document_file.modified {
                     "• "
@@ -2846,7 +2852,8 @@ impl Workspace {
                 | regions::LAYOUT
                 | regions::BRUSH
                 | regions::COMMANDS
-                | regions::DOCUMENT)
+                | regions::DOCUMENT
+                | regions::HISTOGRAM)
             != 0
         {
             self.customization.refresh(self);

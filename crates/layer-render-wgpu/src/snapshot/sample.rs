@@ -53,15 +53,8 @@ impl SamplePipeline {
 }
 
 impl SnapshotGpu {
-    pub async fn artwork_sample(&self, request: ArtworkSampleRequest, control: CaptureControl) -> Result<ArtworkSample, String> {
-        control.check().map_err(|e| e.to_string())?;
+    pub(super) fn artwork_capture(&self, request: &layer_core::ArtworkQuery, control: CaptureControl) -> Result<(SnapshotRenderer, scene::Output), String> {
         request.validate()?;
-        let extent = [request.document.width, request.document.height];
-        if request.position.iter().zip(extent).any(|(p, size)| *p < 0. || *p >= size as f32) { return Ok(ArtworkSample::Outside); }
-        let center = request.position.map(|v| v.floor() as u32);
-        let radius = request.width / 2;
-        let origin = center.map(|v| v.saturating_sub(radius));
-        let size = std::array::from_fn::<_, 2, _>(|i| (center[i] + radius + 1).min(extent[i]) - origin[i]);
         let mut document = (*request.document).clone();
         let output = match &request.source {
             ArtworkSource::Visible => scene::Output::Artwork(None),
@@ -70,10 +63,15 @@ impl SnapshotGpu {
                 *document.layers.iter_mut().find(|layer| layer.id == original.id).unwrap() = original.composite_snapshot();
                 scene::Output::Artwork(None)
             }
-            ArtworkSource::EffectInput(id) => {
+            ArtworkSource::EffectInput(id) | ArtworkSource::EffectChannels(id) => {
                 let index = document.layers.iter().position(|layer| layer.id == *id).unwrap();
                 for layer in &mut document.layers[..=index] { if layer.kind != LayerKind::Group { layer.visible = false; } }
-                scene::Output::EffectInput(*id)
+                if matches!(request.source,ArtworkSource::EffectChannels(_)) {
+                    let layer = &mut document.layers[index];layer.opacity=1.;layer.mask=None;layer.properties.blend=layer_core::LayerBlend::Normal;
+                    let effect=Arc::make_mut(layer.effect.as_mut().unwrap());
+                    let program=Arc::make_mut(&mut effect.program);program.entry=format!("{}_channels",program.entry).into();
+                    scene::Output::EffectChannels(*id)
+                } else {scene::Output::EffectInput(*id)}
             }
             ArtworkSource::LayerContent(id) => {
                 for layer in &mut document.layers { layer.visible = layer.id == *id || layer.kind == LayerKind::Group;layer.mask = None; }
@@ -85,11 +83,24 @@ impl SnapshotGpu {
             .transpose()?.unwrap_or([0.; 4]);
         let mut snapshot = self.capture(Project { document }, background, request.time, control.clone()).map_err(|e| e.to_string())?;
         snapshot.planned_pixel_bytes = 256 * 1024 * 1024;
-        for (id, phase) in request.effect_times {
+        for (id, phase) in request.effect_times.iter().copied() {
             if let Some(effect) = snapshot.layers.iter().find(|layer| layer.id == id).and_then(|layer| layer.effect.as_ref()) {
                 snapshot.renderer.effect_clocks.insert(id, (effect.program.id.clone(), layer_core::EffectClock::at(effect, request.time, phase)));
             }
         }
+        Ok((snapshot, output))
+    }
+
+    pub async fn artwork_sample(&self, request: ArtworkSampleRequest, control: CaptureControl) -> Result<ArtworkSample, String> {
+        control.check().map_err(|e| e.to_string())?;
+        request.validate()?;
+        let extent = [request.document.width, request.document.height];
+        if request.position.iter().zip(extent).any(|(p, size)| *p < 0. || *p >= size as f32) { return Ok(ArtworkSample::Outside); }
+        let center = request.position.map(|v| v.floor() as u32);
+        let radius = request.width / 2;
+        let origin = center.map(|v| v.saturating_sub(radius));
+        let size = std::array::from_fn::<_, 2, _>(|i| (center[i] + radius + 1).min(extent[i]) - origin[i]);
+        let (mut snapshot, output) = self.artwork_capture(&request.query, control.clone())?;
         let pipeline = SamplePipeline::new(&self.device);
         let summary = snapshot.with_region_gpu([origin[0], origin[1], size[0], size[1]], 64,
             |r, packet, region, encoder| {

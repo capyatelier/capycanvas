@@ -12911,6 +12911,9 @@ mod document_color;
 #[path = "histogram_tests.rs"]
 mod histogram;
 
+#[path = "tonal_tests.rs"]
+mod tonal;
+
 #[path = "color_preferences_tests.rs"]
 mod color_preferences;
 

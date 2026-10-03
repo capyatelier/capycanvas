@@ -1241,6 +1241,7 @@ impl Workspace {
             PanelControl::Adjustments
             | PanelControl::Properties
             | PanelControl::Stats
+            | PanelControl::Histogram
             | PanelControl::Navigator
             | PanelControl::ToolSettings
             | PanelControl::SculptSets

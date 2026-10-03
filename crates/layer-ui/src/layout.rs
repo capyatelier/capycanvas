@@ -639,10 +639,11 @@ pub enum Panel {
     Stats,
     Navigator,
     Proof,
+    Histogram,
     CustomToolbar(u32),
 }
 
-const PANEL_NAMES: [(Panel, &str); 17] = [
+const PANEL_NAMES: [(Panel, &str); 18] = [
     (Panel::Toolbar, "toolbar"),
     (Panel::Commands, "commands"),
     (Panel::Brushes, "brushes"),
@@ -660,6 +661,7 @@ const PANEL_NAMES: [(Panel, &str); 17] = [
     (Panel::Stats, "stats"),
     (Panel::Navigator, "navigator"),
     (Panel::Proof, "proof"),
+    (Panel::Histogram, "histogram"),
 ];
 impl From<Panel> for String {
     fn from(panel: Panel) -> Self {
@@ -695,13 +697,14 @@ pub enum PanelKind {
 }
 
 impl Panel {
+    pub fn available_on(self, platform: crate::Platform) -> bool { self != Self::Histogram || platform == crate::Platform::Gtk }
     /// Normal starting column width, excluding its divider. Allocation may
     /// raise this to a measured minimum or fit it into a smaller viewport.
     pub fn default_width(self) -> f32 {
         match self {
             Self::BrushSets | Self::SculptSets | Self::FilterTypes => 160.,
             Self::Tools | Self::Brushes | Self::ToolSettings | Self::Color | Self::Sizes => 242.,
-            Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator => {
+            Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator | Self::Histogram => {
                 254.
             }
             Self::Palettes => 280.,
@@ -720,7 +723,7 @@ impl Panel {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Toolbar,
         Self::Commands,
         Self::Brushes,
@@ -734,6 +737,7 @@ impl Panel {
         Self::Stats,
         Self::Navigator,
         Self::Proof,
+        Self::Histogram,
         Self::BrushSets,
         Self::Tools,
         Self::SculptSets,
@@ -761,6 +765,7 @@ impl Panel {
             Self::Stats => "stats",
             Self::Navigator => "navigator",
             Self::Proof => "image",
+            Self::Histogram => "stats",
         }
     }
 }

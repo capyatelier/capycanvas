@@ -29,7 +29,7 @@ fn distribution(mut values: Vec<f64>) -> Value {
         "p95": values[((values.len() as f64 * 0.95).ceil() as usize - 1).min(values.len() - 1)],
         "max": values.last().unwrap()})
 }
-fn frames(stats: &Arc<Mutex<crate::timing::Stats>>) -> Value {
+pub(crate) fn frames(stats: &Arc<Mutex<crate::timing::Stats>>) -> Value {
     let stats = stats.lock().unwrap();
     let presented: Vec<_> = stats.presented.iter().filter(|v| v[3] == 1).collect();
     let mut previous_pose = None;

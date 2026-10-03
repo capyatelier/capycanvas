@@ -94,11 +94,17 @@ fn blend(s: vec3<f32>, d: vec3<f32>, code: u32) -> vec3<f32> {
 }
 // Premultiplied source over a premultiplied backdrop.
 fn blend_composite(src: vec4<f32>, dst: vec4<f32>, code: u32) -> vec4<f32> {
+    if (bitcast<u32>(src.a)&0x7fffffffu)==0u {return dst;}
+    if (bitcast<u32>(dst.a)&0x7fffffffu)==0u {return src;}
+    if blend_mode(code)==0u {return src+dst*(1.-src.a);}
     let b = blend(working_unassociate(src),working_unassociate(dst),code);
     return vec4<f32>((1.-src.a)*dst.rgb+(1.-dst.a)*src.rgb+src.a*dst.a*b,src.a+dst.a*(1.-src.a));
 }
 // A clipped source blends only where its base has coverage, keeping that alpha.
 fn blend_clip(src: vec4<f32>, dst: vec4<f32>, code: u32) -> vec4<f32> {
+    if (bitcast<u32>(src.a)&0x7fffffffu)==0u {return dst;}
+    if (bitcast<u32>(dst.a)&0x7fffffffu)==0u {return vec4<f32>(0.);}
+    if blend_mode(code)==0u {return vec4<f32>(src.rgb*dst.a+dst.rgb*(1.-src.a),dst.a);}
     let b = blend(working_unassociate(src),working_unassociate(dst),code);
     return vec4<f32>(working_mix(dst.rgb,b*dst.a,src.a),dst.a);
 }

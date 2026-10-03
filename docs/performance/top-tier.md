@@ -34,6 +34,10 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Fill layer or gradient-fill edit | 120, soft | | |
 | Navigation with proof or tone guide shown | 120 | | |
 | Navigation with exact artwork sampling (61 MP) | 120 | **Not met.** 48.43–49.89 canvas presents/s; interval p99 25.00 ms | [Exact artwork samples](#exact-artwork-samples), 2026-10-02 |
+| Navigation with Histogram Preview (61 MP) | 120 | **Not met.** 38.94–41.24 canvas presents/s; interval p99 33.33–41.67 ms | [Artwork statistics](#artwork-statistics), 2026-10-03 |
+| Navigation with Histogram Exact (61 MP) | 120 | **Not met.** 36.61–39.30 canvas presents/s; interval p99 33.33–41.67 ms | [Artwork statistics](#artwork-statistics), 2026-10-03 |
+| Navigation with clipping preview (61 MP) | 120 | **Not met.** 36.01–38.50 canvas presents/s; interval p99 33.33–41.67 ms | [Clipping preview](#clipping-preview), 2026-10-03 |
+| Navigation with pending Auto statistics (61 MP) | 120 | **Not met.** 39.40–40.04 canvas presents/s; interval p99 33.33 ms | [Auto statistics worker](#auto-statistics-worker), 2026-10-03 |
 | Gradient drag | 120 | | |
 | Figure or ruler drag | 120 | | |
 | Layer opacity scrub | 120 | | |
@@ -108,6 +112,136 @@ Raw records are under
 `artifacts/photo-editing-color/p15-performance/`, including
 `moving-comparison.json`, `final-sample-summary.json`,
 `final-navigation-summary.json` and `baseline2/diagnostic-audit.csv`.
+
+## Artwork statistics
+
+Measured on 2026-10-02–03 on the reference tablet, with the original 9504 × 6336
+photo and private, nondebuggable ARM64 benchmark using release Rust. Visible
+Preview counts 65,536 deterministic original-grid positions; Exact counts all
+60,217,344 pixels. Counts and channel totals pass in every reported request.
+First requests start after photo import and source preparation, so they do not
+measure cold import or tap-to-visible UI latency.
+
+Warm Preview improves from 17.19 s to 1.636 s through sparse composition, fewer
+idle classifier groups and workgroup counters. Exact improves from 45.50 s
+(45.07 s first request) to 10.464 s (7.903 s first request). Classifier changes
+preserve exact boundary correction and move rare wide luminance work to a
+separate kernel. An intermediate GPU trace measures counting falling from
+34.55 s to 2.00 s. With that classifier and 950 prepared windows, warm worker
+time is 11.36 s: preparation, restoration and submission outside the capture
+callback take 5.21 s, while completion waits take 5.33 s. The captured GPU span
+is 2.53 s and excludes preceding upload commands; it must not be added to
+worker elapsed time.
+
+Preparing 1024-pixel source windows reduces Exact to 5.59 s, but submitting all
+16 native tiles together lowers navigation to 19.96–22.75 presents/s, with
+75–100 ms interval p99 and 89 ms cancellation return. The current implementation
+retains that source preparation and submits and waits per 256-pixel Exact tile.
+Exact cancellation returns in 15.19 ms after cancellation at 100 ms; Preview
+returns in 7.25 ms. This restores short submission boundaries at the cost of
+longer query completion.
+
+Nine final five-second OS two-finger pan contacts use a 2880 × 1800 surface,
+Fit zoom 0.16534, default Navigator, the photo and an empty paint layer.
+
+| Moving-window measurement | No queries | Histogram Preview | Histogram Exact |
+| --- | ---: | ---: | ---: |
+| Actual canvas presents/s | 36.72–41.63 | 38.94–41.24 | 36.61–39.30 |
+| Presented interval p99 | 33.33–41.67 ms | 33.33–41.67 ms | 33.33–41.67 ms |
+| Completed updates/s | 36.92–41.63 | 39.14–41.44 | 36.81–39.30 |
+| Completion-gap p99 | 32.73–35.08 ms | 35.99–37.20 ms | 35.99–36.31 ms |
+
+Four sequential immutable requests cover each complete moving window. Preview
+streams last 8.14–8.32 s; the Exact request overlapping motion lasts
+12.28–12.64 s. Post-motion drain, 3.12–3.31 s for Preview and 36.20–38.95 s for
+the four Exact requests, is excluded from cadence. Actual presents come from
+the owned SurfaceView's SurfaceFlinger latency records, deduplicated and
+restricted to each input window. All nine GPU timing assertions pass. The large
+Exact interference regression is absent in these contacts; Preview has slightly
+larger completion tails. Sequential run order and uncontrolled clock scaling
+prevent claiming an average-rate improvement. Neither condition meets the
+presentation target, and these results do not establish a hardware ceiling.
+
+Separate tracked requests on the final algorithm observe shared-device peaks
+of 2267.17 MiB allocated/2332.89 MiB reserved for Preview and
+2252.03 MiB allocated/2316.89 MiB reserved for Exact, at 70 capture boundaries
+per request. They include the live canvas and exclude CPU sources and
+private driver memory; continuous transient peaks and motion PSS remain
+unverified. Thermal status is zero. Low/mid tiers, effects, animated sources
+and full Histogram UI publication are not qualified by this static Visible
+transport workload. The tracked APK hash differs from the ordinary timing
+APK and is recorded in `p17-performance/final-allocator-summary.json`.
+
+Final benchmark APK SHA-256:
+`53985e0cf0bce0d0ed4f986e1d72b0b5fd8e3a815f4c4c0eb54ed2dbfb73f8b2`.
+Records are under `artifacts/photo-editing-color/p16-performance/`, including
+`baseline-summary.json`, `fallback-diagnostic-summary.json`,
+`shared-window-navigation-summary.json`, `tile-submit-summary.json`,
+`tile-submit-navigation-summary.json`, `common-capture-navigation-summary.json`
+and paired APK/source hashes.
+
+## Clipping preview
+
+Three five-second contacts on the same 61 MP photo, with both clipping flags
+enabled and no query workers, present at 36.01–38.50/s. Presented interval p99
+is 33.33–41.67 ms; completion-gap p99 is 34.58–35.47 ms. Matched Histogram
+controls above use the same photo and Navigator. All three presentation
+assertions pass, but the 120 fps target is not met. The full shared snapshot
+confirms both flags. The filtered photo capture at Fit does not contain
+identifiable clipping-marker pixels; a separate known clipped solid-color
+capture checks the native marker presentation outside the timing workload,
+with 882 black and 877 white marker pixels in a 64 × 64 center sample.
+This does not qualify the full Histogram UI or different source/view workloads.
+Raw frames, flags and timing are under
+`artifacts/photo-editing-color/p16-performance/final-clipping-motion2/` and
+`final-clipping-navigation-summary.json`; the separate marker frame is in
+`final-clipping-marker/`.
+
+## Auto statistics worker
+
+On the same reference tablet and original 61 MP photo, the real Levels
+EffectChannels query improves from 23.56/25.29 s first/warm to 15.35/15.11 s.
+It prepares bounded 1024-pixel source windows, submits four 256-pixel min/max
+tiles per boundary and one counting tile per boundary, uses 16 counting shards
+instead of 64, and folds once after counting. All channel totals pass.
+Cancellation at 100 ms returns in 10.12 ms.
+
+Before the last change, Android GPU timestamps show warm min/max taking
+7.85 s with 0.83 s of captured GPU work, and counting taking 14.46 s with
+3.81 s of GPU work. CPU submission and completion waits take 7.03/13.34 s
+across 950 tiles per pass. Source preparation is small and the final fold takes
+2 ms. These intervals overlap GPU execution; they do not sum to independent
+costs or establish a hardware ceiling.
+
+Three matched five-second navigation controls use the same default Levels
+fixture and present at 36.68–39.08/s, with interval p99 33.33–41.67 ms.
+Three contacts with one pending Auto query present at 39.40–40.04/s, with
+33.33 ms interval p99 and 32.24–32.79 ms completion-gap p99. The requests last
+16.49–16.91 s, covering each moving window; post-motion drain is excluded.
+Separate tracked Auto observations find 2257.34 MiB allocated and 2316.89 MiB
+reserved over 140 capture boundaries, including the live canvas. They exclude
+CPU and driver-private memory and do not measure a continuous peak.
+All six presentation assertions pass. Sequential run order and clock scaling
+prevent claiming a rate improvement, and neither workload meets 120 fps.
+This measures the shared statistics worker, not complete Android Auto UI
+publication or parameter adoption. Records and APK hashes are under
+`artifacts/photo-editing-color/p17-performance/`, including
+`batch4-shards16-summary.json`, `batch4-shards16-navigation-summary.json` and
+`diagnostic-summary.json`. Temporary profiling code is removed.
+
+## GTK targeted Curves diagnostic
+
+A private 1100 × 800, 120 Hz headless Mutter display on NVIDIA RTX PRO 6000
+Blackwell Max-Q/Vulkan measures a 256 × 256 opaque sRGB U8 colored gradient.
+After warm-up, three five-second native mouse gestures per theme use requested
+8 ms input intervals. Changed-preview presentations run at 117.57–118.40/s,
+with moving interval p99 8.519–16.677 ms. Injected Down to first observed curve
+adoption takes 28.434–39.184 ms; first changed-preview presentation takes
+37.372–48.234 ms. The requested 1 ms GLib observer includes routing and polling
+uncertainty, so this is not pure GPU request latency. The small canvas and
+non-reference hardware do not qualify a tier. Raw records:
+`artifacts/photo-editing-color/p17-p18-gtk/targeted-timing-1100.json`;
+host details: `artifacts/photo-editing-color/batch-host-inventory.json`.
 
 ## Transform snapping
 

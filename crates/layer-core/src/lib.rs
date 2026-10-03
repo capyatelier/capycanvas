@@ -29,6 +29,12 @@ mod retouch;
 pub use retouch::{CloneSource, Retouch, RetouchSource};
 mod selection;
 pub mod tonal;
+pub mod levels;
+pub mod curves;
+#[cfg(test)]
+mod curves_tests;
+#[cfg(test)]
+mod levels_tests;
 pub use selection::*;
 pub use effects::*;
 mod presets;
@@ -51,7 +57,7 @@ pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPla
 mod content_bounds;
 pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope};
 mod artwork_query;
-pub use artwork_query::{ARTWORK_SAMPLE_WIDTHS, ArtworkSample, ArtworkSampleRequest, ArtworkSource, white_balance_neutral};
+pub use artwork_query::{ARTWORK_SAMPLE_WIDTHS, ArtworkSample, ArtworkSampleRequest, ArtworkQuery, ArtworkStatisticsRequest, ArtworkSource, white_balance_neutral};
 #[cfg(test)]
 mod artwork_query_tests;
 mod merge;

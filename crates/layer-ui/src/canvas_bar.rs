@@ -440,8 +440,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn canvas_bar_plan(&self) -> Option<Plan> {
-        if self.eyedropper.calibration.is_some() {
-            return Some(Plan { kind: CanvasBarKind::Picker, label: Some(CanvasBarCaption::Message(MessageId::RESOURCES_PICKER_PROMPT)),
+        if self.targeted_curve.is_some() {
+            return Some(Plan {kind:CanvasBarKind::Picker,label:Some(CanvasBarCaption::Message(MessageId::RESOURCES_CURVE_TARGETED_PROMPT)),
+                items:Vec::new(),completion:vec![PlanItem::Button(CommandId::Eyedropper,MessageId::COMMON_DONE)],placement:Some(CanvasBarPlacement::BottomEdge)});
+        }
+        if let Some(calibration)=&self.eyedropper.calibration {
+            let prompt=match calibration.role {layer_core::levels::CalibrationRole::Black=>MessageId::RESOURCES_PICKER_BLACK_PROMPT,layer_core::levels::CalibrationRole::White=>MessageId::RESOURCES_PICKER_WHITE_PROMPT,_=>MessageId::RESOURCES_PICKER_PROMPT};
+            return Some(Plan { kind: CanvasBarKind::Picker, label: Some(CanvasBarCaption::Message(prompt)),
                 items: Vec::new(), completion: vec![PlanItem::Button(CommandId::Eyedropper, MessageId::TOOLBAR_CANCEL)],
                 placement: Some(CanvasBarPlacement::BottomEdge) });
         }

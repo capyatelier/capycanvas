@@ -33,15 +33,13 @@ impl CurveDomain {
     pub fn decode(self,x:f64)->f64 {
         match self {
             Self::Encoded=>x,
-            Self::LogHdr{stops}=>{let span=f64::from(stops)+8.;let toe=(-8f64).exp2()*std::f64::consts::E;let knee=1./(std::f64::consts::LN_2*span);
-                if x<=knee {x*toe*std::f64::consts::LN_2*span}else{(x*span-8.).exp2()}}
+            Self::LogHdr{stops}=>layer_core::log_curve_decode(x,f64::from(stops))
         }
     }
     pub fn encode(self,value:f64)->f64 {
         match self {
             Self::Encoded=>value,
-            Self::LogHdr{stops}=>{let span=f64::from(stops)+8.;let toe=(-8f64).exp2()*std::f64::consts::E;
-                if value<=toe {value/(toe*std::f64::consts::LN_2*span)}else{(value.log2()+8.)/span}}
+            Self::LogHdr{stops}=>layer_core::log_curve_encode(value,f64::from(stops))
         }
     }
     pub fn numeric(self)->NumericControl {
@@ -65,14 +63,7 @@ impl CurveDomain {
         }
     }
 }
-pub(super) fn point_between(value:f32,lower:f32,upper:f32)->Option<f32> {
-    if !value.is_finite() || !lower.is_finite() || !upper.is_finite() {return None;}
-    let first=lower.next_up();let last=upper.next_down();
-    if first>last {return None;}
-    let gap=((upper-lower)*0.25).min(0.001);
-    let low=(lower+gap).max(first);let high=(upper-gap).min(last);
-    Some(value.clamp(if low<=high {low}else{first},if low<=high {high}else{last}))
-}
+pub(super) use layer_core::curves::curve_point_between as point_between;
 pub(super) fn hit(points:&[[f32;2]],point:[f32;2],extent:[f32;2])->Option<usize> {
     if extent.iter().any(|x|!x.is_finite() || *x<=0.) || point.iter().any(|x|!x.is_finite()) {return None;}
     points.iter().enumerate().filter_map(|(index,p)| {

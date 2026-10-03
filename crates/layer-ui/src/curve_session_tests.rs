@@ -66,7 +66,9 @@ fn quick_mask_properties_replace_owner_pages_and_invalidate_stale_curve_epoch() 
     assert!(app.state.layer_properties.page.is_none());
     assert_ne!(app.state.layer_properties.epoch, epoch);
     let before = app.engine.document().clone();
-    assert!(app.dispatch(UiAction::Effect { action: EffectAction::CurveSelectPoint { layer, key, epoch, index: Some(0) } }).is_err());
+    let revision=app.state.revision;let checkpoint=app.engine.checkpoint();
+    let change=app.dispatch(UiAction::Effect { action: EffectAction::CurveSelectPoint { layer, key, epoch, index: Some(0) } }).unwrap();
+    assert_eq!(change.regions,0);assert_eq!(app.state.revision,revision);assert_eq!(app.engine.checkpoint(),checkpoint);
     assert_eq!(app.engine.document(), &before);
     assert!(app.effect_gesture.is_none());
 }

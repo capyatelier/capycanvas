@@ -7,13 +7,31 @@ struct Settings {
     backdrop: vec4<f32>,
     operation_linear: vec4<f32>,
     operation_offset: vec4<f32>,
+    query_grid: vec4<u32>,
 }
 @group(0) @binding(0) var<uniform> settings: Settings;
 @group(1) @binding(0) var front: texture_2d<f32>;
 @group(1) @binding(1) var back: texture_2d<f32>;
 @group(1) @binding(2) var sampling: sampler;
 struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }
-@vertex fn vertex_main(@builtin(vertex_index) i: u32) -> Vertex {
+fn query_grid_begin(origin:vec2<u32>)->vec2<u32> {
+    let extent=settings.query_grid.zw;let size=min(extent,vec2(256u));
+    return vec2<u32>(max(vec2(0), (2*vec2<i32>(size*origin)-vec2<i32>(extent)+2*vec2<i32>(extent)-1)/(2*vec2<i32>(extent))));
+}
+fn query_grid_size()->vec2<u32> {
+    return min(query_grid_begin(settings.query_grid.xy+vec2(256u)),min(settings.query_grid.zw,vec2(256u)))-query_grid_begin(settings.query_grid.xy);
+}
+fn query_grid_pixel(index:vec2<u32>)->vec2<f32> {
+    let extent=settings.query_grid.zw;let size=min(extent,vec2(256u));
+    return vec2<f32>(((2u*(query_grid_begin(settings.query_grid.xy)+index)+1u)*extent)/(2u*size)-settings.query_grid.xy);
+}
+@vertex fn vertex_main(@builtin(vertex_index) i: u32, @builtin(instance_index) instance:u32) -> Vertex {
+    if settings.query_grid.z!=0u {
+        let size=query_grid_size();
+        let corners=array<vec2<f32>,6>(vec2(0.,0.),vec2(1.,0.),vec2(0.,1.),vec2(0.,1.),vec2(1.,0.),vec2(1.,1.));
+        let p=query_grid_pixel(vec2(instance%size.x,instance/size.x))+corners[i];
+        return Vertex(vec4(p.x/settings.extent.x*2.-1.,1.-p.y/settings.extent.y*2.,0.,1.),(p-settings.rect.xy)/settings.rect.zw);
+    }
     var corners = array<vec2<f32>,3>(vec2<f32>(0.,0.),vec2<f32>(2.,0.),vec2<f32>(0.,2.));
     let uv = corners[i];
     let p = settings.rect.xy + uv*settings.rect.zw;
@@ -197,7 +215,7 @@ fn scene_value(v: Vertex) -> vec4<f32> {
     if op == 16u { return raw * settings.options.y + dst * settings.options.z; }
     if op == 3u { return raw*mix(dst.a,1.-dst.a,settings.options.z); }
     if op == 5u { let a = (1.-raw.a)*.42; return scene_space(vec4<f32>(.46,.12,.8,1.)*a); }
-    let src = raw*settings.options.y;
+    let src = select(raw*settings.options.y,raw,settings.options.y==1.);
     if settings.options.w > .5 { return blend_clip(src,dst,u32(settings.options.z)); }
     return blend_composite(src,dst,u32(settings.options.z));
 }

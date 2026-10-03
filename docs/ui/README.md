@@ -52,6 +52,25 @@ while file dialogs, focus and accessibility follow the platform.
 - [Color picking](color-picker.md), [color palettes](color-palettes.md) and the
   [color-management journeys](color-management.md).
 
+## Histogram
+
+GTK Histogram is a normal dockable panel, initially an inactive Photo workspace
+tab. Its command reveals the existing panel wherever it was placed. Visible,
+Selected layer, Reference and Selection choose the source; RGB, individual
+channels and luminance choose the plotted counts. Log counts changes only the
+vertical scale. Details reports covered and transparent pixels and clipping.
+
+Preview uses estimated counts while input changes; Exact scans the frozen source
+after it settles. Updating keeps that distinction visible. Hiding every view
+retires its work and data. Levels and Curves have embedded input statistics in
+Properties, sharing the same query and display rules.
+
+Shadows and Highlights mark pixels at or beyond zero and one. Floating documents
+label these SDR thresholds. The overlays apply to the canvas after proof and
+screen transforms; they never change artwork, exported pixels or histogram
+counts. While either is active it takes precedence over mask tint and gamut
+warning. Their settings remain intact and their display returns afterward.
+
 ## Different workflows, shared tools
 
 The interface serves digital painters, photographers and comic artists. Their

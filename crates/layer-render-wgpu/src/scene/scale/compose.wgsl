@@ -10,7 +10,7 @@ fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
             below = preview + below * (1. - preview.a);
         }
         if (region.flags & 2048u) != 0u { below = working_encode(below); }
-        below *= region.opacity.z;
+        if region.opacity.z!=1. {below *= region.opacity.z;}
     }
     let coordinate = p + region.source_origin;
     var color = textureLoad(source, coordinate, 0);
@@ -25,7 +25,7 @@ fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
         color = preview + color * (1. - preview.a);
     }
     if (region.flags & 1024u) != 0u { color = working_encode(color); }
-    color *= region.opacity.x;
+    if region.opacity.x!=1. {color *= region.opacity.x;}
     if (region.flags & 4096u) != 0u {
         textureStore(output, p, working_decode(color));
         return;

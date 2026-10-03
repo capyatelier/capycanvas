@@ -160,6 +160,26 @@ results. Advancing animation alone does not discard a released correction.
 Save waits for pending sampling to finish or be cancelled. Native hold timing
 stays in the host; source selection, validation and the correction live in Rust.
 
+## Levels and Curves
+
+GTK Properties offers black, neutral and white point calibration. These actions
+use the same sample sizes, contact ownership and exact pre-adjustment input as
+White Balance. The RGB page corrects the three channels together while preserving
+master settings; a channel page changes only that channel. Black and white target
+linear zero and one. Neutral retains the processed sample's brightness, using
+encoded luminance for Levels and linear luminance for Curves. Unreachable targets
+leave the adjustment unchanged and keep the picker armed.
+
+Curves also offers targeted adjustment. Press on the image and drag vertically
+to adjust the sampled tone; up raises the curve. RGB targets the luminance after
+the channel curves, while a channel page targets that channel's input. The sampled
+input uses a five-pixel circle and remains fixed throughout the contact,
+including changes in canvas zoom or rotation. Each 255 logical pixels moves
+through the full output range. Release
+commits one edit; Escape or cancelled input restores the starting curve. The mode
+stays armed between contacts, with Done in the canvas bar. Sampling may finish
+after release without losing the accepted drag distance.
+
 ## Scope
 
 Navigator sampling is explicitly excluded because it would conflict with its

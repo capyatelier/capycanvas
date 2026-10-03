@@ -48,6 +48,12 @@ Apply the selected channel's stage, then the RGB/master stage, matching current 
 
 Ranges: gamma `[0.1,10]`, step `.05`, two decimals; anchors step `.01`, at least three displayed decimals, soft range `[0,1]`. For integer documents keep hard anchor range `[0,1]`; for float documents use finite encoded anchor hard bounds `[-65504,65504]`. This is a deliberate editable-anchor limit, not a claim to address the complete Float32 exponent range. Extended pixels outside those anchors continue through the signed formula. Input white must exceed black by `.001`; output endpoints may cross (inversion). Fix ordered-number validation to test a finite positive difference and the required gap, rather than assuming `black + .001` remains distinct at large magnitudes. Parameter-setting constraints and renderer validation must agree. No silently equal input endpoints after numeric rounding.
 
+Depth conversion preserves an existing adjustment's stored schema and values,
+as it does for Curves and Exposure. Thus integer-document anchor bounds apply
+to new integer adjustments; an adjustment with floating bounds retains them
+after conversion. Rebinding it to narrow bounds would silently change the
+correction or make otherwise unrelated controls fail validation.
+
 **Auto:** the action belongs to the selected page. It is a one-shot edit of ordinary parameters and never becomes a permanently auto-adjusting effect.
 
 1. Capture the exact effect input at its stack insertion point, before its mask, opacity and blend. Histogram semantics match existing `Histogram`: every pixel with `alpha > 0` counts once; unassociate RGB; alpha zero contributes nothing. Do not weight counts by alpha or drop tiny positive coverage. Non-finite input makes the operation fail visibly without a partial edit.

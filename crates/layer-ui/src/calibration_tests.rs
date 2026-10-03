@@ -5,9 +5,21 @@ fn calibration_session() -> UiSession<Recorder> {
     s
 }
 fn arm_calibration(s: &mut UiSession<Recorder>) {
-    s.dispatch(UiAction::Effect { action: EffectAction::WhiteBalancePicker {
+    s.dispatch(UiAction::Effect { action: EffectAction::Calibrate { role:layer_core::levels::CalibrationRole::Gray,
         layer: s.engine.document().active_layer.0, epoch: s.state.layer_properties.epoch,
     } }).unwrap();
+}
+#[test]
+fn calibration_stale_toolbar_action_preserves_released_pending_sample() {
+    let mut s=calibration_session();arm_calibration(&mut s);release_calibration(&mut s);
+    let requests=s.engine.backend().snapshot_requests.len();let cancels=s.engine.backend().snapshot_cancels;
+    let before=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
+    for action in stale_property_actions(s.engine.document().active_layer.0,s.state.layer_properties.epoch.wrapping_sub(1)) {
+        s.dispatch(UiAction::Effect {action}).unwrap();
+        assert!(s.eyedropper.calibration.as_ref().is_some_and(|calibration|calibration.submitted));
+        assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert_eq!(s.engine.backend().snapshot_cancels,cancels);
+        assert_eq!(s.engine.document(),&before);assert_eq!(s.engine.checkpoint(),checkpoint);
+    }
 }
 fn release_calibration(s: &mut UiSession<Recorder>) {
     pen_at(s, 1, PenPhase::Down, [400., 400.]);
@@ -112,7 +124,7 @@ fn calibration_cancellation_discards_late_reply_and_restores_or_selects_requeste
 #[test]
 fn calibration_stale_epoch_and_changed_artwork_cannot_publish() {
     let mut s = calibration_session();
-    s.dispatch(UiAction::Effect { action: EffectAction::WhiteBalancePicker {
+    s.dispatch(UiAction::Effect { action: EffectAction::Calibrate { role:layer_core::levels::CalibrationRole::Gray,
         layer: s.engine.document().active_layer.0, epoch: s.state.layer_properties.epoch.wrapping_add(1),
     } }).unwrap();
     assert!(s.eyedropper.calibration.is_none());
@@ -289,7 +301,7 @@ fn calibration_unported_hosts_hide_picker_and_refuse_direct_action_without_editi
         let tool = s.state.layer_tools.tool;
         let colors = s.state.preview_colors().into_owned();
         let unavailable = s.localization().text(MessageId::RESOURCES_PICKER_UNAVAILABLE).to_string();
-        let result = s.dispatch(UiAction::Effect { action: EffectAction::WhiteBalancePicker {
+        let result = s.dispatch(UiAction::Effect { action: EffectAction::Calibrate { role:layer_core::levels::CalibrationRole::Gray,
             layer: s.engine.document().active_layer.0, epoch: s.state.layer_properties.epoch,
         } });
         assert_eq!(result.unwrap_err(), unavailable);

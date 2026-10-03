@@ -19,12 +19,16 @@ pub use telemetry::{RendererTelemetry, TimingSamples};
 
 #[derive(Clone, Debug)]
 pub enum SnapshotRequest {
+    LevelsStatistics(layer_core::ArtworkQuery),
+    ArtworkStatistics(layer_core::ArtworkStatisticsRequest),
     ArtworkSample(layer_core::ArtworkSampleRequest),
     Bounds(layer_core::ContentBoundsRequest),
     TransformPixels(layer_core::TransformPixelsPlan),
 }
 #[derive(Clone, Debug)]
 pub enum SnapshotResult {
+    LevelsStatistics(layer_core::levels::LevelsStatistics),
+    ArtworkStatistics(layer_core::color::histogram::Histogram),
     ArtworkSample(layer_core::ArtworkSample),
     Bounds(Rect),
     TransformPixels(Box<Layer>),
@@ -771,6 +775,7 @@ pub trait CanvasRenderer {
     fn set_quick_mask_thumbnail(&mut self, _selection: Option<&layer_core::Selection>) {}
     fn set_selection_overlay(&mut self, _overlay: Option<SelectionOverlay>) {}
     fn set_crop_overlay(&mut self, _overlay: Option<CropOverlay>) {}
+    fn set_clipping_preview(&mut self, _shadows: bool, _highlights: bool) {}
     fn set_telemetry_enabled(&mut self, _enabled: bool) {}
     fn telemetry(&self) -> RendererTelemetry {
         RendererTelemetry::default()
@@ -814,7 +819,7 @@ pub trait CanvasRenderer {
     fn take_content_bounds(&mut self) -> Option<Result<layer_core::Rect, Self::Error>> {
         self.take_snapshot().map(|result| result.map(|result| match result {
             SnapshotResult::Bounds(bounds) => bounds,
-            SnapshotResult::TransformPixels(_) | SnapshotResult::ArtworkSample(_) => unreachable!(),
+            SnapshotResult::LevelsStatistics(_) | SnapshotResult::TransformPixels(_) | SnapshotResult::ArtworkSample(_) | SnapshotResult::ArtworkStatistics(_) => unreachable!(),
         }))
     }
     fn cancel_content_bounds(&mut self) { self.cancel_snapshot(); }

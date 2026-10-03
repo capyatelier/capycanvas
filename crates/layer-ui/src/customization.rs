@@ -212,6 +212,7 @@ pub enum PanelControl {
     Properties,
     Stats,
     Navigator,
+    Histogram,
 }
 impl PanelControl {
     pub fn canonical_label(self) -> std::sync::Arc<str> {
@@ -237,6 +238,7 @@ impl PanelControl {
             Self::Properties => localization.text(MessageId::WORKSPACE_CONTROL_PROPERTIES),
             Self::Stats => localization.text(MessageId::WORKSPACE_CONTROL_STATS),
             Self::Navigator => localization.text(MessageId::WORKSPACE_CONTROL_NAVIGATOR),
+            Self::Histogram => localization.text(MessageId::NATIVE_COLOR_HISTOGRAM),
         }
     }
     pub fn available(panel: Panel) -> &'static [Self] {
@@ -264,6 +266,7 @@ impl PanelControl {
             Panel::Properties => &[Self::Properties],
             Panel::Stats => &[Self::Stats],
             Panel::Navigator => &[Self::Navigator],
+            Panel::Histogram => &[Self::Histogram],
             _ => &[],
         }
     }
@@ -276,6 +279,7 @@ impl PanelControl {
             | Panel::Properties
             | Panel::Stats
             | Panel::Navigator
+            | Panel::Histogram
             | Panel::ToolSettings
             | Panel::BrushSets
             | Panel::FilterTypes
@@ -334,6 +338,7 @@ impl Panel {
             Self::Stats => localization.text(MessageId::WORKSPACE_PANEL_STATS),
             Self::Navigator => localization.text(MessageId::WORKSPACE_PANEL_NAVIGATOR),
             Self::Proof => localization.text(MessageId::WORKSPACE_PANEL_PROOF),
+            Self::Histogram => localization.text(MessageId::NATIVE_COLOR_HISTOGRAM),
             Self::CustomToolbar(_) => localization.text(MessageId::WORKSPACE_PANEL_CUSTOM_TOOLBAR),
         }
     }
@@ -1324,7 +1329,7 @@ fn tool_available(control: ToolbarControl, platform: Platform) -> bool {
         ToolbarControl::Command { command } => command.available_on(platform),
         ToolbarControl::Brush { id } => preset(id).is_ok(),
         ToolbarControl::Size { pixels } => BRUSH_SIZES.iter().any(|size| *size as u16 == pixels),
-        ToolbarControl::Panel { panel } => Panel::ALL.contains(&panel) && panel.kind() == PanelKind::Content,
+        ToolbarControl::Panel { panel } => panel.available_on(platform) && Panel::ALL.contains(&panel) && panel.kind() == PanelKind::Content,
         _ => true,
     }
 }
@@ -1343,7 +1348,7 @@ pub(crate) fn tool_catalog_localized(platform: Platform, localization: &Localize
         .chain(
             Panel::ALL
                 .into_iter()
-                .filter(move |p| p.kind() == PanelKind::Content)
+                .filter(move |p| p.available_on(platform) && p.kind() == PanelKind::Content)
                 .map(|panel| ToolbarControl::Panel { panel }),
         )
         .chain(crate::tools::brush_catalog_localized(localization).map(|b| ToolbarControl::Brush { id: b.id }))
@@ -3048,6 +3053,7 @@ mod tests {
                     .iter()
                     .filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web))
                     .count()
+                + Panel::ALL.iter().filter(|panel| panel.kind()==PanelKind::Content && panel.available_on(Platform::Gtk) && !panel.available_on(Platform::Web)).count()
         );
         assert!(native.iter().any(|c| c.control == ToolbarControl::ColorPicker));
         assert!(web.iter().any(|c| c.control == ToolbarControl::ColorPicker));

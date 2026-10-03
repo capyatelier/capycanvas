@@ -44,6 +44,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.return_to_artwork()?;
         self.release_idle_document_buffers();
+        self.cancel_auto_levels();self.cancel_histogram();
         self.rendering_suspended = true;
         self.refresh_commands();
         Ok(tiles)
@@ -202,6 +203,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.filter_load.error =
                 Some("Filter validation stopped because painting is unavailable".into());
         }
+        self.cancel_auto_levels();self.cancel_histogram();
         self.rendering_suspended = true;
         let recovered = self.engine.recover_failed_rasters().map_err(error);
         self.refresh_document();

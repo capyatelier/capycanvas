@@ -113,6 +113,7 @@ mod workspace_manager_ui;
 pub use session::{ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerDropPosition, LayersView, RegionSource};
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
+pub use session::{HistogramAction, HistogramView};
 pub use session::{
     AdjustmentChoice, ApplicationLink, ApplicationMenu, ClipboardCapture, CloseDecision,
     LARGE_CLIP_PIXELS, PasteMode, PixelClip,
@@ -1184,6 +1185,8 @@ pub struct DocumentTab {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UiState {
+    pub histogram: HistogramView,
+    pub tonal_histogram: HistogramView,
     #[serde(skip)]
     pub(crate) localization: std::sync::Arc<Localizer>,
     pub command_search: Option<CommandSearchView>,
@@ -1241,6 +1244,7 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    Histogram { action: HistogramAction },
     CommandSearch { action: CommandSearchAction },
     Selection { action: SelectionAction },
     CanvasSize { action: CanvasSizeAction },
@@ -1538,7 +1542,8 @@ pub mod regions {
     pub const COLOR_PREVIEW: u32 = 256;
     pub const COMMAND_SEARCH: u32 = 512;
     pub const CANVAS_BAR: u32 = 1024;
-    pub const ALL: u32 = 2047;
+    pub const HISTOGRAM: u32 = 2048;
+    pub const ALL: u32 = 4095;
 }
 
 #[cfg(test)]

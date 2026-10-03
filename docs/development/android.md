@@ -364,6 +364,27 @@ APK calls, so test-APK benchmarks use the unminified build.
   diagnostic; tier measurements retain the default workspace. Pull
   `files/viewport-benchmark/` from the app's external storage and summarize it
   with `python3 tools/performance/android-viewport-report.py DIRECTORY`.
+- **Artwork query workers.** `AndroidArtworkQueryBenchmarkTest#exactSamples`
+  runs with `-e artworkQueryBenchmark true`; `#artworkStatistics` uses
+  `-e artworkStatisticsBenchmark true -e statisticsMode preview|exact|auto`.
+  `-e photo /data/local/tmp/FILE.jpg` opens the original photo at its native
+  dimensions. The Auto statistics fixture inserts a Levels adjustment and
+  queries its shared EffectChannels source; it does not measure UI adoption.
+  Results and cancellation latency appear in `files/artwork-query-benchmark/`
+  or `files/artwork-statistics-benchmark/`. For navigation interference, use
+  `AndroidViewportBenchmarkTest` with `-e openQueryPhoto true`,
+  `-e artworkQueries true -e queryCount N`, and `-e statisticsPreview true`,
+  `-e statisticsExact true` or `-e levelsStatistics true`. Levels controls also
+  use `levelsStatistics true` with `artworkQueries false` to retain the same
+  fixture. Query timestamps and owner capture costs are separate from the input
+  window; choose enough requests to cover that window and report later drain
+  separately. Actual presentation requires the owned SurfaceView's timestamps,
+  not renderer submission counts. Use FrameTimeline without graphics tracing
+  for rate collection; graphics tracing consumes renderer timing samples.
+  `-e clippingPreview true` enables both shared clipping flags without query
+  workers, records the applied state and photo frame, and checks a known
+  clipped solid-color frame after motion. Use `-e repeats 0` for that
+  presentation check alone; it does not provide motion qualification.
 - **UI startup.** With an `-PcapyOptimize` build under an isolated ID, run
   `adb shell am instrument -w -e uiStartupAudit true -e auditLabel LABEL <id>/art.capycanvas.UiStartupInstrumentation`.
   It records first draw, Settings responses, UI frame intervals and publication

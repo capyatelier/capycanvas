@@ -176,7 +176,7 @@ impl Workspace {
                                 HostRequestKind::SdrRendition => crate::hdr::open(&w),
                                 HostRequestKind::SoftProofSetup => proof::run(&w),
                                 HostRequestKind::Histogram => {
-                                    crate::histogram::show(&w);
+                                    w.dispatch(layer_ui::UiAction::Invoke { command: layer_ui::CommandId::Histogram });
                                     Ok(())
                                 }
                                 HostRequestKind::SetFullscreen { fullscreen } => {

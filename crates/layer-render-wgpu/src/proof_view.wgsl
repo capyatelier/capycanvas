@@ -67,6 +67,6 @@ fn proof_artwork(source: vec4<f32>, position: vec2<f32>) -> vec4<f32> {
         + b * (p2.distances - p1.distances) + c * (p3.distances - p2.distances);
     if proof_options.z == 0u { rgb = paint.rgb / paint.a; }
     let score = select(distances.x / max(distances.y, 0.000001), distances.x, distances.y < 5.);
-    if proof_options.w != 0u && (outside || score > 5.) { rgb = vec3(0.5); }
+    if proof_options.w != 0u && all(camera.composite.zw==vec2(0.)) && (outside || score > 5.) { rgb = vec3(0.5); }
     return vec4(rgb * paint.a, paint.a);
 }

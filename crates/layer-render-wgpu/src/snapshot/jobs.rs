@@ -5,6 +5,8 @@ impl SnapshotGpu {
     async fn run_snapshot(&self, request: layer_render::SnapshotRequest, control: CaptureControl)
         -> Result<layer_render::SnapshotResult, String> {
         match request {
+            layer_render::SnapshotRequest::LevelsStatistics(query)=>self.levels_statistics(query,control).await.map(layer_render::SnapshotResult::LevelsStatistics),
+            layer_render::SnapshotRequest::ArtworkStatistics(request) => self.artwork_statistics(request, control).await.map(layer_render::SnapshotResult::ArtworkStatistics),
             layer_render::SnapshotRequest::ArtworkSample(request) => self.artwork_sample(request, control).await.map(layer_render::SnapshotResult::ArtworkSample),
             layer_render::SnapshotRequest::Bounds(request) => self.content_bounds(request, control).await.map(layer_render::SnapshotResult::Bounds),
             layer_render::SnapshotRequest::TransformPixels(plan) => self.transform_pixels(plan, control).await

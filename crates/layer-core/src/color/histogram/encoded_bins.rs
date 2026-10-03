@@ -59,6 +59,8 @@ impl EncodedBins {
         Self { boundaries, seeds }
     }
 
+    pub(super) fn boundaries(&self) -> &[f64; 257] { &self.boundaries }
+
     pub(super) fn index(&self, linear: f64) -> usize {
         // Histogram::add validates finite pixels and positive, finite alpha.
         // Their Float64 ratio remains finite even for Float32 subnormal alpha.

@@ -69,6 +69,31 @@ fn reference_query_identity_rejects_changed_membership() {
 }
 
 #[test]
+fn effect_source_identity_ignores_own_composition_but_keeps_lower_source_dependencies_strict() {
+    for effect in ["curves","levels"] {
+        let mut doc=document();for _ in 0..100 {doc.allocate_layer_id();}
+        let mut layer=crate::Layer::paint(LayerId(91),effect);
+        layer.kind=crate::LayerKind::Effect;layer.effect=Some(std::sync::Arc::new(crate::EffectInstance::new(crate::bundled_effect_catalog().get(effect).unwrap().program())));
+        doc.layers.insert(0,layer);
+        let mutations:[fn(&mut crate::Layer);3]=[
+            |layer|layer.opacity=0.5,
+            |layer|{let mut mask=crate::LayerMask::reveal_all(LayerId(99),Point::default());mask.default_coverage=0.5;layer.mask=Some(mask);},
+            |layer|layer.properties.blend=crate::LayerBlend::Multiply,
+        ];
+        for source in [ArtworkSource::EffectInput(LayerId(91)),ArtworkSource::EffectChannels(LayerId(91))] {
+            let query=crate::ArtworkQuery::new(&doc,source);
+            for mutate in mutations {
+                let mut own=doc.clone();mutate(&mut own.layers[0]);
+                assert!(query.matches_source(&own),"{effect}: own composition excluded");
+                assert!(!query.matches_artwork(&own),"explicit corrections require strict frozen state");
+                let mut lower=doc.clone();mutate(&mut lower.layers[1]);
+                assert!(!query.matches_source(&lower),"{effect}: lower composition contributes");
+            }
+        }
+    }
+}
+
+#[test]
 fn white_balance_solver_matches_independent_gain_ratios_without_rounding() {
     for space in [crate::color::RgbSpace::Srgb, crate::color::RgbSpace::DisplayP3, crate::color::RgbSpace::ProPhoto] {
         for preserve in [false, true] {
@@ -120,4 +145,30 @@ fn artwork_sample_identity_freezes_source_backing_and_raster_roots() {
         crate::raster::RasterTile::backed(crate::raster::TileBlob::encode(doc.color.paint_descriptor(), &[0; 256 * 256 * 4]).unwrap()));
     changed.layers[0].raster = crate::raster::RasterRevision::backed(data);
     assert!(!request.matches_artwork(&changed));
+}
+
+#[test]
+fn histogram_typed_curve_domains_use_coordinate_bins_for_rgb_and_luminance() {
+    use crate::color::{DocumentColor,RgbSpace,SampleDepth,histogram::{Histogram,HistogramDomain}};
+    let pixels=[[0.0625,0.25,0.375,0.5],[-0.5,0.5,4.,1.],[0.;4]];
+    for space in RgbSpace::ALL {for domain in [HistogramDomain::Encoded,HistogramDomain::CurveLog{stops:4.}] {
+        let mut actual=Histogram::new(DocumentColor{space,depth:SampleDepth::F32});actual.domain=domain;
+        actual.add(&pixels).unwrap();
+        let mut bins:[Vec<u64>;4]=std::array::from_fn(|_|vec![0;256]);
+        for pixel in &pixels[..2] {
+            let rgb=[0,1,2].map(|c|f64::from(pixel[c])/f64::from(pixel[3]));
+            let weights=space.to_xyz()[1];let y=rgb[1]+weights[0]*(rgb[0]-rgb[1])+weights[2]*(rgb[2]-rgb[1]);
+            for (channel,value) in [rgb[0],rgb[1],rgb[2],y].into_iter().enumerate() {
+                let coordinate=match domain {
+                    HistogramDomain::Encoded=>space.encode(value),
+                    _=>{let toe=std::f64::consts::E/256.;if value<=toe {value/(toe*12.*std::f64::consts::LN_2)}else{(value.log2()+8.)/12.}},
+                };
+                bins[channel][(coordinate.clamp(0.,1.)*256.).floor().min(255.) as usize]+=1;
+            }
+        }
+        for (channel,expected) in actual.channels.iter().zip(bins) {assert_eq!(channel.bins,expected,"{space:?} {domain:?}");}
+        assert_eq!((actual.pixels,actual.transparent),(2,1));
+        assert_eq!(actual.plot_bins(),0..256);
+        assert_eq!(actual.axis().bins,[0,256]);assert!(actual.axis().stops.is_none());
+    }}
 }

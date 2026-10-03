@@ -114,7 +114,7 @@ impl Cache {
         }
         let batched = self.hierarchy.is_some()
             && prepared.is_some_and(|prepared| regions.iter().all(|r| r.intersect(prepared) == *r));
-        if batched { scene.capture_prepared_regions(r, packet, &image, &regions, scene::Output::Display, encoder)?; }
+        if batched { scene.capture_prepared_regions(r, packet, &image, &regions, scene::Output::Display, false, encoder)?; }
         let mut changed = PixelRect::EMPTY;
         for (coordinate, region) in pages.into_iter().zip(regions) {
             if !prepared.is_some_and(|prepared| region.intersect(prepared) == region) {

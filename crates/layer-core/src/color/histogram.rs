@@ -4,7 +4,10 @@ mod encoded_bins;
 
 pub const BINS: usize = 256;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum HistogramDomain { #[default] Artwork, Encoded, CurveLog {stops:f32} }
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Channel {
     pub bins: Vec<u64>,
     /// Values outside the SDR range, before histogram bin clamping.
@@ -30,27 +33,36 @@ impl Channel {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Histogram {
     pub color: DocumentColor,
+    pub domain: HistogramDomain,
     /// Profile-encoded document RGB followed by linear relative luminance Y.
     pub channels: [Channel; 4],
     /// Each nontransparent pixel counts once, regardless of partial coverage.
     pub pixels: u64,
     pub transparent: u64,
-    #[serde(skip)]
-    luminance: [f64; 3],
 }
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HistogramAxis {
     pub bins: [usize; 2],
     pub stops: Option<[f64; 2]>,
     pub white: Option<f64>,
 }
 impl Histogram {
+    pub fn boundaries(&self, channel: usize) -> [f64; 257] {
+        if let HistogramDomain::CurveLog {stops} = self.domain {
+            std::array::from_fn(|i| crate::effects::log_curve_decode(i as f64/256.,f64::from(stops)))
+        } else if self.domain == HistogramDomain::Encoded { *encoded_bins::for_space(self.color.space).boundaries() }
+        else if self.color.depth.is_float() {
+            std::array::from_fn(|i| if i == 0 { 0. } else { 2f64.powf(self.hdr_bin_stops(i)) })
+        } else if channel < 3 { *encoded_bins::for_space(self.color.space).boundaries() }
+        else { std::array::from_fn(|i| i as f64 / 256.) }
+    }
+
     pub fn axis(&self) -> HistogramAxis {
         let bins=self.plot_bins();
-        let stops=self.color.depth.is_float().then(|| [self.hdr_bin_stops(bins.start),self.hdr_bin_stops(bins.end-1)]);
+        let stops=(self.domain==HistogramDomain::Artwork && self.color.depth.is_float()).then(|| [self.hdr_bin_stops(bins.start),self.hdr_bin_stops(bins.end-1)]);
         HistogramAxis {bins:[bins.start,bins.end],white:stops.map(|s| -s[0]/(s[1]-s[0])),stops}
     }
 
@@ -63,7 +75,7 @@ impl Histogram {
         if self.color.depth == super::SampleDepth::F32 { (bin.saturating_sub(1) as f64 / 254.) * 277. - 149. } else { hdr_bin_stops(bin) }
     }
     pub fn plot_bins(&self) -> std::ops::Range<usize> {
-        if !self.color.depth.is_float() { return 0..BINS; }
+        if self.domain!=HistogramDomain::Artwork || !self.color.depth.is_float() { return 0..BINS; }
         let occupied = |i| self.channels.iter().any(|c| c.bins[i] > 0);
         let first = (1..BINS).find(|&i| occupied(i)).unwrap_or(self.hdr_bin(1.));
         let last = (1..BINS).rev().find(|&i| occupied(i)).unwrap_or(self.hdr_bin(1.));
@@ -74,10 +86,10 @@ impl Histogram {
     pub fn new(color: DocumentColor) -> Self {
         Self {
             color,
+            domain: HistogramDomain::Artwork,
             channels: std::array::from_fn(|_| Channel::new()),
             pixels: 0,
             transparent: 0,
-            luminance: color.space.to_xyz()[1],
         }
     }
 
@@ -86,6 +98,7 @@ impl Histogram {
     /// feed a downsampled preview: averaging changes the distribution.
     pub fn add(&mut self, pixels: &[[f32; 4]]) -> Result<(), &'static str> {
         let encoded = encoded_bins::for_space(self.color.space);
+        let domain = (self.domain != HistogramDomain::Artwork).then(|| self.boundaries(0));
         for pixel in pixels {
             if pixel.iter().any(|v| !v.is_finite()) || !(0. ..=1.).contains(&pixel[3]) {
                 return Err("Invalid histogram pixel");
@@ -101,16 +114,18 @@ impl Histogram {
                 [0, 1, 2].map(|c| f64::from(pixel[c]) / f64::from(pixel[3]))
             };
             for c in 0..3 {
-                let bin = if self.color.depth.is_float() { self.hdr_bin(rgb[c]) } else { encoded.index(rgb[c]) };
+                let bin = if let Some(bounds)=&domain {bounds.partition_point(|bound|rgb[c]>=*bound).saturating_sub(1).min(255)}
+                    else if self.color.depth.is_float() { self.hdr_bin(rgb[c]) } else { encoded.index(rgb[c]) };
                 self.channels[c].add(bin, rgb[c]);
             }
             // Algebraically equal to dot(Y, RGB), with neutral values exact at
             // the endpoints instead of depending on rounded coefficient sums.
             let y = rgb[1]
-                + self.luminance[0] * (rgb[0] - rgb[1])
-                + self.luminance[2] * (rgb[2] - rgb[1]);
+                + self.color.space.to_xyz()[1][0] * (rgb[0] - rgb[1])
+                + self.color.space.to_xyz()[1][2] * (rgb[2] - rgb[1]);
             self.channels[3].add(
-                if self.color.depth.is_float() { self.hdr_bin(y) } else { (y.clamp(0., 1.) * BINS as f64)
+                if let Some(bounds)=&domain {bounds.partition_point(|bound|y>=*bound).saturating_sub(1).min(255)}
+                else if self.color.depth.is_float() { self.hdr_bin(y) } else { (y.clamp(0., 1.) * BINS as f64)
                     .floor()
                     .min((BINS - 1) as f64) as usize },
                 y,

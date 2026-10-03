@@ -1,0 +1,383 @@
+use crate::artwork_sample_tests::{document_in, doubled_effect, gpu};
+use crate::snapshot::CaptureControl;
+use layer_core::{ArtworkQuery, ArtworkSource, ArtworkStatisticsRequest, BlendSpace, Document, Selection, SelectionPixels};
+use layer_core::color::{DocumentColor, RgbSpace, SampleDepth, histogram::Histogram};
+use std::sync::Arc;
+
+pub(super) fn generated(extent: [u32; 2], color: DocumentColor, pixels: &[[f32; 4]]) -> Document {
+    let mut doc = document_in(extent, color.space, |_, _| [0.; 4]);
+    doc.color = color;
+    doc.layers[0].raster = Default::default();
+    doc.blend_space = BlendSpace::Linear;
+    let mut layer = doubled_effect(10);
+    let effect = Arc::make_mut(layer.effect.as_mut().unwrap());
+    let program = Arc::make_mut(&mut effect.program);
+    program.kind = layer_core::EffectKind::Generator;
+    program.alpha = layer_core::EffectAlpha::Filter;
+    program.entry = "statistics_fixture".into();
+    let cases: String = pixels.iter().enumerate().map(|(i, pixel)| {
+        let bits = pixel.map(f32::to_bits);
+        format!("case {i}u:{{return bitcast<vec4<f32>>(vec4<u32>({}u,{}u,{}u,{}u));}}", bits[0], bits[1], bits[2], bits[3])
+    }).collect();
+    program.wgsl = format!("fn statistics_fixture(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{let i=(u32(floor(p.x))+3u*u32(floor(p.y)))%{}u;switch i{{{cases}default:{{return vec4<f32>(0.);}}}}}}", pixels.len()).into();
+    doc.layers.insert(0, layer);
+    doc
+}
+
+fn statistics(doc: &Document, preview: bool, selection: bool) -> Result<Histogram, String> {
+    pollster::block_on(gpu().artwork_statistics(ArtworkStatisticsRequest {
+        query: ArtworkQuery::new(doc, ArtworkSource::Visible), preview, selection,
+    }, CaptureControl::default()))
+}
+
+fn oracle(doc: &Document, pixels: &[[f32; 4]], preview: bool, admitted: impl Fn(u32, u32) -> bool) -> Histogram {
+    let mut result = Histogram::new(doc.color);
+    let extent = [doc.width, doc.height];
+    let counts = if preview { extent.map(|v| v.min(256)) } else { extent };
+    for iy in 0..counts[1] {
+        for ix in 0..counts[0] {
+            let x = if preview { ((2 * u64::from(ix) + 1) * u64::from(extent[0]) / (2 * u64::from(counts[0]))) as u32 } else { ix };
+            let y = if preview { ((2 * u64::from(iy) + 1) * u64::from(extent[1]) / (2 * u64::from(counts[1]))) as u32 } else { iy };
+            if admitted(x, y) { result.add(&[pixels[((x + 3 * y) as usize) % pixels.len()]]).unwrap(); }
+        }
+    }
+    result
+}
+
+fn same(actual: Histogram, expected: Histogram, context: impl std::fmt::Debug) {
+    assert_eq!((actual.color,actual.domain),(expected.color,expected.domain),"{context:?}: interpretation");
+    assert_eq!((actual.pixels, actual.transparent), (expected.pixels, expected.transparent), "{context:?}: counts");
+    for (index, (a, e)) in actual.channels.iter().zip(&expected.channels).enumerate() {
+        assert_eq!((a.below, a.above, a.black, a.white), (e.below, e.above, e.black, e.white), "{context:?}: channel {index} endpoints");
+        let differences: Vec<_> = a.bins.iter().zip(&e.bins).enumerate().filter(|(_, (a, e))| a != e).collect();
+        assert!(differences.is_empty(), "{context:?}: channel {index} bins {differences:?}");
+    }
+}
+
+#[test]
+fn statistics_exact_matches_f64_oracle_at_every_profile_and_depth() {
+    let pixels = [[0.; 4], [1., 1., 1., 1.], [0.125, 0.25, 0.375, 0.5], [-0.25, 0.5, 1.5, 1.], [0.01, 0.005, 0.0025, 0.125], [0.75, 0.25, 0.125, 1.]];
+    for space in RgbSpace::ALL {
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+            let doc = generated([31, 19], DocumentColor { space, depth }, &pixels);
+            same(statistics(&doc, false, false).unwrap(), oracle(&doc, &pixels, false, |_, _| true), (space, depth));
+        }
+    }
+}
+
+#[test]
+fn statistics_preview_samples_original_grid_without_replacing_transparent_points() {
+    let pixels = [[0.; 4], [0.125, 0.25, 0.5, 1.], [4., -0.125, 2., 0.5], [1., 1., 1., 1.], [0.25, 0.125, 0.0625, 0.25]];
+    for extent in [[513, 273], [257, 3], [1, 517], [17, 13]] {
+        let doc = generated(extent, DocumentColor { depth: SampleDepth::F32, ..Default::default() }, &pixels);
+        let expected = oracle(&doc, &pixels, true, |_, _| true);
+        let actual = statistics(&doc, true, false).unwrap();
+        assert_eq!(actual.pixels + actual.transparent, u64::from(extent[0].min(256)) * u64::from(extent[1].min(256)));
+        same(actual, expected, extent);
+    }
+}
+
+fn coverage_selection(extent: [u32; 2]) -> Selection {
+    let mut words = vec![0u32; (extent[0].div_ceil(4) * extent[1]) as usize];
+    for y in 0..extent[1] {
+        for x in 0..extent[0] {
+            let value = [0, 1, 17, 128, 255][((x + 3 * y) % 5) as usize];
+            words[(y * extent[0].div_ceil(4) + x / 4) as usize] |= value << ((x % 4) * 8);
+        }
+    }
+    Selection::pixels(Arc::new(SelectionPixels::bytes(extent, [0, 0, extent[0], extent[1]], words).unwrap()))
+}
+
+#[test]
+fn statistics_selection_counts_partial_coverage_once_in_exact_and_preview() {
+    let pixels = [[0.25, 0.125, 0.0625, 0.25], [0.5, 0.25, 0.125, 0.5], [0.; 4], [1.; 4]];
+    let mut doc = generated([513, 273], DocumentColor { depth: SampleDepth::F32, ..Default::default() }, &pixels);
+    doc.selection = Some(coverage_selection([doc.width, doc.height]));
+    for preview in [false, true] {
+        same(statistics(&doc, preview, true).unwrap(), oracle(&doc, &pixels, preview, |x, y| (x + 3 * y) % 5 != 0), preview);
+    }
+    doc.selection.as_mut().unwrap().inverted = true;
+    for preview in [false, true] {
+        same(statistics(&doc, preview, true).unwrap(), oracle(&doc, &pixels, preview, |x, y| (x + 3 * y) % 5 != 4), (preview, "inverted"));
+    }
+    doc.selection = None;
+    assert!(statistics(&doc, false, true).is_err());
+}
+
+#[test]
+fn statistics_frozen_source_and_cancel_do_not_publish_changed_pixels() {
+    let mut doc = generated([17, 13], DocumentColor { depth: SampleDepth::F32, ..Default::default() }, &[[0.25, 0.5, 1., 1.]]);
+    let request = ArtworkStatisticsRequest { query: ArtworkQuery::new(&doc, ArtworkSource::Visible), preview: false, selection: false };
+    let expected = oracle(&doc, &[[0.25, 0.5, 1., 1.]], false, |_, _| true);
+    doc.layers[0] = doubled_effect(10);
+    assert!(!request.query.matches_artwork(&doc));
+    assert_eq!(pollster::block_on(gpu().artwork_statistics(request.clone(), CaptureControl::default())).unwrap(), expected);
+    let control = CaptureControl::default();
+    control.cancel();
+    assert!(pollster::block_on(gpu().artwork_statistics(request, control)).is_err());
+}
+
+#[test]
+fn statistics_extreme_finite_rgb_uses_f64_classification_without_unassociation_overflow() {
+    let pixels = [[1e10, 5e9, 2.5e9, 1e-30], [f32::MAX, f32::MAX, f32::MAX, 1.], [-f32::MAX, -f32::MAX, -f32::MAX, 1.], [f32::from_bits(1); 4], [0., 0., 0., 1.], [1.; 4]];
+    for space in RgbSpace::ALL {
+        for (index, pixel) in pixels.iter().enumerate() {
+            let doc = generated([1, 1], DocumentColor { space, depth: SampleDepth::F32 }, std::slice::from_ref(pixel));
+            same(statistics(&doc, false, false).unwrap_or_else(|error| panic!("{space:?} pixel {index} {pixel:?}: {error}")), oracle(&doc, std::slice::from_ref(pixel), false, |_, _| true), (space, index));
+        }
+    }
+}
+
+#[test]
+fn statistics_reads_real_source_codecs_at_every_profile_and_depth() {
+    let pixels = [[0., 0., 0., 1.], [1.; 4], [1., 0., 0., 1.], [0., 1., 0., 1.], [0., 0., 1., 1.], [0.; 4]];
+    for space in RgbSpace::ALL {
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+            let mut doc = document_in([pixels.len() as u32, 1], space, |_, _| [0.; 4]);
+            doc.color = DocumentColor { space, depth };
+            doc.blend_space = BlendSpace::Linear;
+            doc.layers[0].raster = Default::default();
+            doc.layers[0].source = Some(crate::test_support::depth_source([pixels.len() as u32, 1], depth, space, 8 * 1024 * 1024, |x, _| pixels[x as usize]));
+            same(statistics(&doc, false, false).unwrap(), oracle(&doc, &pixels, false, |_, _| true), (space, depth));
+        }
+    }
+}
+
+#[test]
+fn statistics_luminance_preserves_sign_and_bins_under_extreme_cancellation() {
+    for space in RgbSpace::ALL {
+        let red = 1e30f32;
+        let weight = space.to_xyz()[1][0];
+        let green = (-f64::from(red) * weight / (1. - weight)) as f32;
+        let pixels: Vec<_> = (-8i32..=8).map(|offset| {
+            let value = f32::from_bits((i64::from(green.to_bits()) + i64::from(offset)) as u32);
+            [red, value, value, 1.]
+        }).collect();
+        let doc = generated([pixels.len() as u32, 1], DocumentColor { space, depth: SampleDepth::F32 }, &pixels);
+        same(statistics(&doc, false, false).unwrap(), oracle(&doc, &pixels, false, |_, _| true), space);
+    }
+}
+
+#[test]
+fn statistics_luminance_bins_match_f64_on_both_sides_of_boundaries() {
+    for space in RgbSpace::ALL {
+        for depth in [SampleDepth::U8, SampleDepth::F16] {
+            let color = DocumentColor { space, depth };
+            let weights = space.to_xyz()[1];
+            let pixels: Vec<_> = Histogram::new(color).boundaries(3).into_iter().skip(1).take(255).flat_map(|boundary| {
+                let green = (boundary / (1. - weights[0] - weights[2])) as f32;
+                [green.to_bits() - 1, green.to_bits(), green.to_bits() + 1].map(|bits| [0., f32::from_bits(bits), 0., 1.])
+            }).collect();
+            let doc = generated([pixels.len() as u32, 1], color, &pixels);
+            same(statistics(&doc, false, false).unwrap(), oracle(&doc, &pixels, false, |_, _| true), (space, depth));
+        }
+    }
+}
+
+#[test]
+fn statistics_rgb_exact_correction_matches_f64_at_boundary_neighbors() {
+    for space in RgbSpace::ALL {
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+            let color = DocumentColor { space, depth };
+            let pixels: Vec<_> = Histogram::new(color).boundaries(0).into_iter().skip(1).take(255).flat_map(|boundary| {
+                let value = (boundary * 0.5) as f32;
+                let bits = value.to_bits();
+                [bits.saturating_sub(1), bits, bits + 1].map(|bits| {
+                    let value = f32::from_bits(bits);
+                    [value, value, value, 0.5]
+                })
+            }).collect();
+            let doc = generated([pixels.len() as u32, 1], color, &pixels);
+            same(statistics(&doc, false, false).unwrap(), oracle(&doc, &pixels, false, |_, _| true), (space, depth));
+        }
+    }
+}
+
+#[test]
+fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics() {
+    use layer_render::CanvasRenderer;
+    let pixels = [[0.;4],[-0.25,0.25,0.125,1.],[-0.25,1.,0.125,1.],[0.25,0.5,0.125,0.5],[0.,0.125,0.25,0.5],[0.1,0.2,0.3,1.],[0.5;4],[-0.5,-0.25,-0.125,0.5]];
+    let extent = [8,8];
+    let mut doc = generated(extent, DocumentColor { depth:SampleDepth::F32, ..Default::default() }, &pixels);
+    let mut mask=layer_core::LayerMask::reveal_all(layer_core::LayerId(65),layer_core::Point::default());
+    mask.default_coverage=0.5;doc.layers[0].mask=Some(mask);
+    let mut r = crate::WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let view = crate::test_support::view(extent);
+    r.submit(layer_render::FramePacket { blend_space:doc.blend_space, ..crate::test_support::packet(&doc.layers, extent) }).unwrap();
+    while r.has_pending_work() {r.wait_idle().unwrap();r.submit(layer_render::FramePacket { blend_space:doc.blend_space, composite_all:false, ..crate::test_support::packet(&doc.layers, extent) }).unwrap();}
+    let mut presenter = crate::test_support::float_presenter(&r);
+    let (texture,target) = crate::create_target(&r.device,extent,wgpu::TextureFormat::Rgba32Float,"clipping regression");
+    presenter.present(&r,&target,view,[0.;4]).unwrap();
+    let baseline = crate::test_support::float_pixels(&r,&texture);
+    let artwork = r.readback_srgb_rgba8().unwrap();
+    let request = ArtworkStatisticsRequest {query:ArtworkQuery::new(&doc,ArtworkSource::Visible),preview:false,selection:false};
+    let before = pollster::block_on(r.snapshot_gpu().artwork_statistics(request.clone(),CaptureControl::default())).unwrap();
+    let mut references=Vec::new();
+    for (shadows,highlights) in [(true,false),(false,true),(true,true)] {
+        r.set_clipping_preview(shadows,highlights);
+        assert!(presenter.needs_present(&r,view,[0.;4]));
+        presenter.present(&r,&target,view,[0.;4]).unwrap();
+        let actual = crate::test_support::float_pixels(&r,&texture);
+        references.push(actual.clone());
+        for y in 0..extent[1] {for x in 0..extent[0] {
+            let color = pixels[((x+3*y) as usize)%pixels.len()];
+            let index = (y*extent[0]+x) as usize;
+            let dark = color[3]>0. && shadows && color[..3].iter().any(|v| *v<=0.);
+            let light = color[3]>0. && highlights && color[..3].iter().any(|v| *v>=color[3]);
+            let stripe = ((x+y+1)/4)%2==0;
+            let expected = match (dark,light) {
+                (true,true) => [if stripe {1.}else{0.};3],
+                (true,false) => if stripe {[0.12,0.3,1.]}else{[0.02,0.05,0.5]},
+                (false,true) => if stripe {[1.,0.2,0.05]}else{[0.5,0.02,0.02]},
+                _ => baseline[index][..3].try_into().unwrap(),
+            };
+            for channel in 0..3 {assert!((actual[index][channel]-expected[channel]).abs()<2e-5,"flags {shadows}/{highlights}, pixel {x}/{y}, channel {channel}: {:?} != {expected:?}",actual[index]);}
+        }}
+        assert_eq!(r.readback_srgb_rgba8().unwrap(),artwork);
+        assert_eq!(pollster::block_on(r.snapshot_gpu().artwork_statistics(request.clone(),CaptureControl::default())).unwrap(),before);
+    }
+    doc.layers[0].mask.as_mut().unwrap().show_area=true;
+    let masked_request=ArtworkStatisticsRequest {query:ArtworkQuery::new(&doc,ArtworkSource::Visible),preview:false,selection:false};
+    let mut attached=crate::AttachedRenderer(Some(Box::new(r)));
+    attached.set_clipping_preview(false,false);
+    attached.submit(layer_render::FramePacket {blend_space:doc.blend_space,..crate::test_support::packet(&doc.layers,extent)}).unwrap();
+    let r=attached.0.as_mut().unwrap();
+    presenter.present(r,&target,view,[0.;4]).unwrap();
+    let tinted=crate::test_support::float_pixels(r,&texture);
+    assert!(tinted.iter().zip(&baseline).any(|(a,b)|a.iter().zip(b).any(|(a,b)|(a-b).abs()>0.01)));
+    for ((shadows,highlights),expected) in [(true,false),(false,true),(true,true)].into_iter().zip(references) {
+        attached.set_clipping_preview(shadows,highlights);
+        attached.submit(layer_render::FramePacket {blend_space:doc.blend_space,..crate::test_support::packet(&doc.layers,extent)}).unwrap();
+        let r=attached.0.as_mut().unwrap();
+        presenter.present(r,&target,view,[0.;4]).unwrap();
+        let actual=crate::test_support::float_pixels(r,&texture);
+        assert!(actual.iter().zip(expected).all(|(a,b)|a.iter().zip(b).all(|(a,b)|(a-b).abs()<2e-5)),"mask tint changed clipping {shadows}/{highlights}");
+        assert_eq!(r.readback_srgb_rgba8().unwrap(),artwork);
+        assert_eq!(pollster::block_on(r.snapshot_gpu().artwork_statistics(masked_request.clone(),CaptureControl::default())).unwrap(),before);
+        assert!(doc.layers[0].mask.as_ref().unwrap().show_area);
+    }
+    attached.set_clipping_preview(false,false);
+    attached.submit(layer_render::FramePacket {blend_space:doc.blend_space,..crate::test_support::packet(&doc.layers,extent)}).unwrap();
+    let r=attached.0.as_mut().unwrap();
+    presenter.present(r,&target,view,[0.;4]).unwrap();
+    assert_eq!(crate::test_support::float_pixels(r,&texture),tinted);
+    assert_eq!(r.readback_srgb_rgba8().unwrap(),artwork);
+}
+
+fn dense_preview_oracle(doc: &Document) -> Histogram {
+    let mut snapshot = gpu().capture(layer_core::Project {document:doc.clone()},[0.;4],0.,CaptureControl::default()).unwrap();
+    let pixels = snapshot.read_region([0,0,doc.width,doc.height]).unwrap();
+    let mut result = Histogram::new(doc.color);
+    let grid = [doc.width.min(256),doc.height.min(256)];
+    for row in 0..grid[1] {for column in 0..grid[0] {
+        let x = ((2*u64::from(column)+1)*u64::from(doc.width)/(2*u64::from(grid[0]))) as usize;
+        let y = ((2*u64::from(row)+1)*u64::from(doc.height)/(2*u64::from(grid[1]))) as usize;
+        result.add(&[pixels[y*doc.width as usize+x]]).unwrap();
+    }}
+    result
+}
+
+#[test]
+fn sparse_statistics_transformed_source_matches_original_dense_pixels_across_windows() {
+    let extent = [1033,517];
+    let mut doc = document_in(extent,RgbSpace::DisplayP3,|_,_|[0.;4]);
+    doc.blend_space = BlendSpace::Linear;
+    doc.layers[0].raster = Default::default();
+    let source_extent = [797,401];
+    doc.layers[0].source = Some(crate::test_support::depth_source(source_extent,SampleDepth::F32,doc.color.space,32*1024*1024,|x,y| {
+        let alpha = [0.,0.125,0.5,1.][((x/7+y/11)%4) as usize];
+        [0.1+x as f32/397.,0.2+y as f32/199.,0.37,alpha]
+    }));
+    doc.layers[0].properties.placement = layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(layer_core::Rect::from_extent(source_extent),
+        [[7.,13.],[1021.,1.],[1000.,499.],[-12.,507.]].map(|[x,y]|layer_core::Point{x,y})).unwrap());
+    same(statistics(&doc,true,false).unwrap(),dense_preview_oracle(&doc),"transformed source");
+}
+
+#[test]
+fn sparse_statistics_nested_clipped_spatial_and_document_image_match_dense_pixels() {
+    for global in [false,true] {
+        let extent = [1033,517];
+        let pixels = [[0.2,0.1,0.4,0.5],[0.75,0.25,0.5,1.],[0.;4]];
+        let mut doc = generated(extent,DocumentColor {depth:SampleDepth::F32,..Default::default()},&pixels);
+        let mut base = doc.layers.remove(0);
+        doc.active_layer = base.id;
+        let mut group = layer_core::Layer::paint(layer_core::LayerId(50),"Isolated");
+        group.kind = layer_core::LayerKind::Group;
+        group.opacity = 0.79;
+        let mut spatial = crate::tests::image_windows::effect(51,false,global);
+        spatial.opacity = 0.63;
+        spatial.properties.clipped = true;
+        let mut mask = layer_core::LayerMask::reveal_all(layer_core::LayerId(52),layer_core::Point{x:7.,y:-9.});
+        mask.default_coverage = 0.;
+        mask.initial = Some(Selection::polygon([[0.,0.],[1020.,99.],[440.,517.]].map(|[x,y]|layer_core::Point{x,y}).to_vec()).unwrap());
+        spatial.mask = Some(mask);
+        spatial.properties.parent = Some(group.id);
+        base.properties.parent = Some(group.id);
+        let outside = crate::tests::image_windows::effect(53,true,false);
+        doc.layers = vec![group,spatial,base,outside];
+        same(statistics(&doc,true,false).unwrap(),dense_preview_oracle(&doc),("nested clipped image",global));
+    }
+}
+
+fn curve_coordinate(value:f64, space:RgbSpace, logarithmic:bool) -> f64 {
+    if !logarithmic {return space.encode(value);}
+    let toe = std::f64::consts::E/256.;
+    if value<=toe {value/(toe*12.*std::f64::consts::LN_2)}else{(value.log2()+8.)/12.}
+}
+fn curve_linear(value:f64, space:RgbSpace, logarithmic:bool) -> f64 {
+    if !logarithmic {return space.decode(value);}
+    let knee = 1./(12.*std::f64::consts::LN_2);
+    if value<=knee {value*(std::f64::consts::E/256.)*12.*std::f64::consts::LN_2}else{2f64.powf(12.*value-8.)}
+}
+fn curve_histogram_oracle(doc:&Document,pixels:&[[f32;4]],logarithmic:bool,channels:bool) -> Histogram {
+    use layer_core::color::histogram::HistogramDomain;
+    let mut result = Histogram::new(doc.color);
+    result.domain = if logarithmic {HistogramDomain::CurveLog{stops:4.}}else{HistogramDomain::Encoded};
+    for pixel in pixels {
+        if pixel[3]==0. {result.transparent+=1;continue;}
+        result.pixels+=1;
+        let mut rgb = [0,1,2].map(|c|f64::from(pixel[c])/f64::from(pixel[3]));
+        if channels {for (value,factor) in rgb.iter_mut().zip([0.5,1.,0.75]) {
+            *value=curve_linear(curve_coordinate(*value,doc.color.space,logarithmic)*factor,doc.color.space,logarithmic);
+        }}
+        let weights = doc.color.space.to_xyz()[1];
+        let y = rgb[1]+weights[0]*(rgb[0]-rgb[1])+weights[2]*(rgb[2]-rgb[1]);
+        for (channel,value) in result.channels.iter_mut().zip([rgb[0],rgb[1],rgb[2],y]) {
+            let coordinate = curve_coordinate(value,doc.color.space,logarithmic);
+            let index = (coordinate.clamp(0.,1.)*256.).floor().min(255.) as usize;
+            channel.bins[index]+=1;
+            channel.below+=u64::from(value<0.);channel.above+=u64::from(value>1.);
+            channel.black+=u64::from(value<=0.);channel.white+=u64::from(value>=1.);
+        }
+    }
+    result
+}
+
+#[test]
+fn statistics_curve_input_and_channels_use_typed_domain_without_master_mask_or_opacity() {
+    use layer_core::{EffectInstance,EffectValue,LayerId,LayerMask,Point};
+    for space in RgbSpace::ALL {for logarithmic in [false,true] {for channels in [false,true] {
+        let pixels = if logarithmic {[[0.05,0.2,0.75,1.],[0.025,0.05,0.1,0.5],[2.3,4.7,8.9,1.],[0.;4]]}
+            else {[[0.05,0.2,0.75,1.],[0.025,0.05,0.1,0.5],[0.17,0.39,0.81,1.],[0.;4]]};
+        let mut doc = generated([pixels.len() as u32,1],DocumentColor {space,depth:SampleDepth::F32},&pixels);
+        let mut adjustment = layer_core::Layer::paint(LayerId(60),"Curves");
+        adjustment.kind = layer_core::LayerKind::Effect;
+        let mut effect = EffectInstance::new(crate::tests::fixture("curves").program());
+        effect.set("domain",EffectValue::Choice(u32::from(logarithmic))).unwrap();
+        effect.set("curve_0",EffectValue::Curve(vec![[0.,0.],[1.,0.25]].into())).unwrap();
+        if channels {
+            effect.set("curve_1",EffectValue::Curve(vec![[0.,0.],[1.,0.5]].into())).unwrap();
+            effect.set("curve_3",EffectValue::Curve(vec![[0.,0.],[1.,0.75]].into())).unwrap();
+        }
+        adjustment.effect = Some(Arc::new(effect));adjustment.opacity=0.;
+        let mut mask = LayerMask::reveal_all(LayerId(61),Point::default());mask.default_coverage=0.;
+        adjustment.mask=Some(mask);
+        doc.layers.insert(0,adjustment);
+        for source in [ArtworkSource::EffectInput(LayerId(60)),ArtworkSource::EffectChannels(LayerId(60))] {
+            let channel_source = matches!(source,ArtworkSource::EffectChannels(_));
+            let expected = curve_histogram_oracle(&doc,&pixels,logarithmic,channels && channel_source);
+            let actual = pollster::block_on(gpu().artwork_statistics(ArtworkStatisticsRequest {query:ArtworkQuery::new(&doc,source.clone()),preview:false,selection:false},CaptureControl::default())).unwrap();
+            same(actual,expected,(space,logarithmic,channels,source));
+        }
+    }}}
+}

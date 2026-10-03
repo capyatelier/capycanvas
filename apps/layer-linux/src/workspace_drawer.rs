@@ -70,6 +70,7 @@ enum Body {
     Effects(Panel, Rc<EffectPanels>),
     Navigator(crate::navigator::Navigator),
     Proof(Rc<crate::files::proof::ProofPanel>),
+    Histogram(Rc<crate::histogram::Inspector>),
 }
 struct ToolbarBody {
     panel: Panel,
@@ -122,6 +123,7 @@ impl Body {
             Self::Layers(v) => v.root.clone().upcast(),
             Self::Navigator(v) => v.root.clone().upcast(),
             Self::Proof(v) => v.root.clone().upcast(),
+            Self::Histogram(v) => v.root.clone().upcast(),
             Self::Effects(panel, v) => match panel {
                 Panel::Adjustments => v.adjustments.clone().upcast(),
                 Panel::FilterTypes => v.filter_types.clone().upcast(),
@@ -142,6 +144,7 @@ impl Body {
             Self::Sizes(_) => regions::BRUSH,
             Self::Layers(_) | Self::Effects(_, _) => regions::DOCUMENT,
             Self::Proof(_) => regions::DOCUMENT | regions::COMMANDS | regions::LAYOUT,
+            Self::Histogram(_) => regions::HISTOGRAM | regions::SETTINGS | regions::LAYOUT,
             Self::Navigator(_) => {
                 regions::CAMERA | regions::LAYOUT | regions::DOCUMENT | regions::COMMANDS
             }
@@ -159,6 +162,7 @@ impl Body {
             Self::Layers(v) => v.refresh(state),
             Self::Navigator(v) => v.refresh(state),
             Self::Proof(v) => v.refresh(w, state),
+            Self::Histogram(v) => v.refresh(w, state),
             Self::Effects(_, v) => v.refresh(w, state),
         }
         true
@@ -247,6 +251,7 @@ impl View {
                         Body::Palettes(v)
                     }
                     Panel::Proof => Body::Proof(w.proof_panel.duplicate(w)),
+                    Panel::Histogram => Body::Histogram(w.histogram.duplicate(w)),
                     Panel::Sizes => Body::Sizes(crate::tool_panels::SizePanel::new(w)),
                     Panel::Navigator => {
                         let v = crate::navigator::Navigator::new(&w.navigator_overviews);

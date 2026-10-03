@@ -838,10 +838,6 @@ impl Documents {
         }
         w.proof.pause().await;
         w.local_tone.pause().await;
-        let histogram = w.histogram.borrow_mut().take();
-        if let Some(histogram) = histogram {
-            histogram.retire().await;
-        }
         let capture = w.gpu.borrow().as_ref().and_then(|g| {
             (!g.session.rendering_suspended() && !g.session.state().document_file.close_ready)
                 .then(|| g.session.retained_document_tiles())

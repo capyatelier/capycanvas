@@ -100,6 +100,7 @@ fn native_levels_clipping_is_explicit_and_matches_profiled_signed_gamma_referenc
                         set(&mut fx, "clamp_input", EffectValue::Toggle(clamp_input));
                         set(&mut fx, "clamp_output", EffectValue::Toggle(clamp_output));
                         let expected = encoded.map(|v| {
+                            let v = if clamp_input || clamp_output { v.clamp(0., 1.) } else { v };
                             let mut x = (v - 0.125) / 0.75;
                             if clamp_input {
                                 x = x.clamp(0., 1.);

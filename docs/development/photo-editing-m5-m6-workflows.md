@@ -131,8 +131,9 @@ bins. Selecting channel/log-count display is view state. Admission constants lan
 Histogram and embedded tonal controls offer Shadows/Highlights clipping preview. Straight artwork RGB
 tests any channel <=0 or >=1; alpha0 is unmarked, both tests use a distinct combined pattern. Float
 labels name **SDR** bounds. Presentation-only marks stay below selection/handles and never enter
-readings/export/proof. Active clipping preview temporarily takes precedence over gamut warning,
-preserving its prior toggle. No selection or history edit is created.
+readings/export/proof. Active clipping preview temporarily takes precedence over gamut warning and layer-mask area tint,
+preserving their prior toggles. Mask tint is suppressed during clipping inspection so it cannot alter
+the artwork classification; selection outlines and handles remain visible. No selection or history edit is created.
 
 ### Finite-range reduction arithmetic
 

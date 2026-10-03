@@ -171,7 +171,9 @@ impl Scene {
             let mut scratch = Vec::with_capacity(piece.sources.len());
             let mut leases = Vec::with_capacity(piece.sources.len());
             for c in piece.sources {
+                let first = self.jobs.len();
                 let (ColorInput { view, lease }, page) = source(self, c)?;
+                if first < self.jobs.len() {self.source_jobs.push(first..self.jobs.len());}
                 sources.push((c, view));
                 scratch.extend(page);
                 leases.extend(lease);

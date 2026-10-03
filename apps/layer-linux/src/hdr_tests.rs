@@ -291,13 +291,12 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     assert_eq!(pixels(&photo), painted);
     invoke(&photo, CommandId::Histogram);
     finish(&photo);
-    let inspector = photo.histogram.borrow().as_ref().unwrap().clone();
-    until(|| inspector.result.borrow().is_some(), "histogram result");
-    let histogram = inspector.result.borrow().clone().unwrap();
+    until(|| state(&photo).histogram.data.is_some(), "histogram result");
+    let histogram = state(&photo).histogram.data.unwrap();
     assert_eq!(histogram.color.depth, SampleDepth::F16);
     assert!(histogram.channels[0].above > 0);
-    crate::snapshot_window(&inspector.window, 1.).save_to_png(directory.join("hdr-histogram.png")).unwrap();
-    inspector.window.close();
+    crate::snapshot(&photo).save_to_png(directory.join("hdr-histogram.png")).unwrap();
+    photo.dispatch(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: Panel::Histogram, visible: false } });
     let master = directory.join("HDR master.capy");
     invoke(&photo, CommandId::SaveDocument);
     let file = chooser();

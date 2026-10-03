@@ -644,6 +644,28 @@ mean alpha but carry no color weight. Empty and outside results are distinct.
 Calibration uses these linear samples; the paint picker's Oklab average remains
 on its existing request path.
 
+Histogram uses GPU reductions on the same immutable queries. Preview samples a
+256-by-256 stratified grid in original document coordinates; Exact visits every
+pixel. Prepared source windows cover at most 1024-by-1024 pixels and split under
+the capture budget. Exact submits and waits between native 256-pixel tiles so
+navigation and cancellation can proceed without repeating source preparation.
+Four channel histograms and coverage/clipping counts occupy a 4 KiB readback;
+no full-resolution image reaches the panel. Positive alpha counts once, including
+subnormal coverage. Nonfinite color rejects the result. RGB bin boundaries use
+exact ratio comparisons, and ambiguous luminance boundaries use a separate wide
+integer reduction so ordinary pixels avoid its register cost.
+
+Auto Levels has a separate two-pass GPU summary: encoded extrema and 4096 bins
+per channel over each channel's observed range. Both summaries share bounded
+source capture and fold cumulative GPU counters once per pass. Min/max submits
+at most four native tiles together; the heavier bin pass yields after each tile.
+RGB queries apply channel stages before master; individual queries inspect the
+original adjustment input. Shared Rust selects the .1% and 99.9% nearest ranks
+from those bins, with value error at
+most range/4096, validates the candidate and commits once. Explicit calibration
+and Auto preempt live statistics. Hidden panels release statistics and resume
+only on demand; old owner, page, source and device results cannot publish.
+
 Snapshot PNG/TIFF output streams sixteen-row strips through the working-color
 encoder and profiled row writers. A matching, unmodified source with default
 conversion and no matte bypasses composition to preserve exact integer samples,

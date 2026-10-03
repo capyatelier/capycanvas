@@ -652,6 +652,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(crate) fn require_raster_snapshot(&self) -> Result<(), String> {
         if self.painted_selections.busy() { return Err(FileFailure::SelectionCapture.message(self.localization())); }
         if self.sdr_gesture.is_some()
+            || self.targeted_curve_busy() || self.auto_levels.is_some()
             || self.eyedropper.calibration.as_ref().is_some_and(|calibration| calibration.request.is_some())
             || self.operation.active()
             || (self.region_tools.busy() && !self.refine_previewing())
@@ -674,6 +675,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else if self.operation.active() {
             Err(self.operation_refusal().to_string())
         } else if (self.region_tools.busy() && !self.refine_previewing())
+            || self.targeted_curve_busy() || self.auto_levels.is_some()
             || self.eyedropper.calibration.as_ref().is_some_and(|calibration| calibration.request.is_some()) {
             Err(FileFailure::CanvasOperation.message(self.localization()))
         } else {
