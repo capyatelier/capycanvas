@@ -17,14 +17,15 @@ export async function checkColorPanel({call,evaluate,settle}) {
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const read=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state().colors,(_,v)=>typeof v==="bigint"?String(v):v))');
   const root='.dock-group .color-wheel-control';
+  const inputReports=[];
   const bounds=selector=>evaluate(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
   const point=async(selector,fx=.5,fy=.5)=>{const r=await bounds(selector);return{x:r.x+r.width*fx,y:r.y+r.height*fy};};
   const gesture=async(device,from,to=from,cancel=false)=>{
     // Chrome can synthesize a touch click after its pointer-up acknowledgement.
     // Wait for that event and verify its target instead of racing a fixed delay.
-    const tap=!cancel&&from.x===to.x&&from.y===to.y&&await evaluate(`(()=>{const target=document.elementFromPoint(${from.x},${from.y})?.closest('button');if(!target)return false;window.colorPanelTap=new Promise(resolve=>{const done=e=>{clearTimeout(timer);document.removeEventListener('click',done,true);resolve(!!e&&target.contains(e.target));};const timer=setTimeout(()=>done(null),2000);document.addEventListener('click',done,true);});return true;})()`);
+    const tap=!cancel&&from.x===to.x&&from.y===to.y&&await evaluate(`(()=>{const target=document.elementFromPoint(${from.x},${from.y})?.closest('button');if(!target)return false;window.colorPanelTap=new Promise(resolve=>{const events=[],record=e=>events.push({type:e.type,x:e.clientX,y:e.clientY,button:e.button,pointer:e.pointerType,slot:e.target.closest('[data-color-slot]')?.dataset.colorSlot,label:e.target.closest('button')?.getAttribute('aria-label')});for(const type of ['pointerdown','pointerup','click'])document.addEventListener(type,record,true);const done=e=>{clearTimeout(timer);document.removeEventListener('click',done,true);for(const type of ['pointerdown','pointerup','click'])document.removeEventListener(type,record,true);resolve({hit:!!e&&target.contains(e.target),events});};const timer=setTimeout(()=>done(null),2000);document.addEventListener('click',done,true);});return true;})()`);
     if(native&&device!=='pen'&&!cancel) {
-      const events=device==='touch'?[{touch:'down',point:[from.x,from.y]},{touch:'move',point:[to.x,to.y]},{touch:'up'}]:[{point:[from.x,from.y],down:true},{point:[to.x,to.y]},{down:false}];
+      const events=device==='touch'?[{touch:'down',point:[from.x,from.y]},{touch:'move',point:[to.x,to.y]},{touch:'up'}]:[{point:[from.x,from.y]},{down:true},{point:[to.x,to.y]},{down:false}];
       await performNative(events);
     } else if(device==='touch') {
       await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...from,id:1}]});
@@ -37,9 +38,59 @@ export async function checkColorPanel({call,evaluate,settle}) {
       for(const [type,p,buttons] of [['mousePressed',from,1],['mouseMoved',to,1],['mouseReleased',to,0]])
         await call('Input.dispatchMouseEvent',{type,...p,buttons,button:'left',clickCount:1,pointerType:device});
     }
-    if(tap)assert.ok(await evaluate('colorPanelTap.then(result=>{delete window.colorPanelTap;return result})'),`${device}: tap reaches its button`);
+    if(tap){const result=await evaluate('colorPanelTap.then(result=>{delete window.colorPanelTap;return result})');inputReports.push({device,from,...result});await writeFile(`${output}/input.json`,JSON.stringify(inputReports,null,2));assert.ok(result.hit,`${device}: tap reaches its button: ${JSON.stringify(result)}`);}
     await settle();
     await evaluate('new Promise(r=>setTimeout(r,100))');
+  };
+  const swatch=slot=>`${root} [data-color-slot="${slot}"]`;
+  const hoverAt=async selector=>{
+    const p=await point(selector);
+    if(native)await performNative([{point:[p.x,p.y]}]);
+    else await call('Input.dispatchMouseEvent',{type:'mouseMoved',...p,buttons:0,pointerType:'mouse'});
+    await settle();
+    assert.ok(await evaluate(`document.querySelector(${JSON.stringify(selector)}).matches(':hover')&&!document.documentElement.hasAttribute('data-touch')`),'Mouse motion establishes the swatch hover');
+  };
+  const overlap=()=>evaluate(`(()=>{const a=document.querySelector(${JSON.stringify(swatch('foreground'))}).getBoundingClientRect(),b=document.querySelector(${JSON.stringify(swatch('background'))}).getBoundingClientRect(),x=a.x+a.width/2,y=a.y+a.height/2,dx=b.x+b.width/2-x,dy=b.y+b.height/2-y,d=Math.hypot(dx,dy),t=(d-b.width/2+a.width/2)/2;return{x:x+dx*t/d,y:y+dy*t/d};})()`);
+  const front=async expected=>{
+    const p=await overlap();
+    assert.equal(await evaluate(`document.elementFromPoint(${p.x},${p.y})?.closest('[data-color-slot]')?.dataset.colorSlot`),expected,'The remembered paint swatch receives the overlap');
+    assert.equal(await evaluate('layerApp.app.color_panel().front_swatch'),expected);
+  };
+  const rim=async(selector,name)=>{
+    const r=await bounds(selector),viewport=await evaluate('({width:innerWidth,height:innerHeight})');
+    const shot=await call('Page.captureScreenshot',{format:'png',fromSurface:false});
+    await writeFile(`${output}/${name.replace(/[^a-z0-9]+/gi,'-')}-displayed.png`,Buffer.from(shot.data,'base64'));
+    const sample=await evaluate(`(async()=>{
+      const image=new Image();image.src=${JSON.stringify('data:image/png;base64,'+shot.data)};await image.decode();
+      const c=document.createElement('canvas');c.width=image.width;c.height=image.height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);
+      const n=document.querySelector(${JSON.stringify(selector)}),s=getComputedStyle(n),r=${JSON.stringify(r)},sx=c.width/${viewport.width},sy=c.height/${viewport.height},cx=r.x+r.width/2,cy=r.y+r.height/2,radius=r.width/2-1;
+      const pixels=Array.from({length:16},(_,i)=>{
+        const a=i*Math.PI/8,px=cx+radius*Math.cos(a),py=cy+radius*Math.sin(a);
+        if(!n.contains(document.elementFromPoint(px,py)))return null;
+        const candidates=Array.from({length:9},(_,j)=>{
+          const x=Math.floor(px*sx)+j%3-1,y=Math.floor(py*sy)+Math.floor(j/3)-1,lx=(x+.5)/sx,ly=(y+.5)/sy;
+          const minimum=Math.hypot(Math.max(x/sx-cx,0,cx-(x+1)/sx),Math.max(y/sy-cy,0,cy-(y+1)/sy));
+          const maximum=Math.max(...[[0,0],[1,0],[0,1],[1,1]].map(([dx,dy])=>Math.hypot((x+dx)/sx-cx,(y+dy)/sy-cy)));
+          return{x,y,withinRim:minimum>=radius-1+.02&&maximum<=radius+1-.02,score:4*Math.abs(Math.hypot(lx-cx,ly-cy)-radius)+Math.hypot(lx-px,ly-py)};
+        })
+          .filter(({x,y,withinRim})=>withinRim&&[[.01,.01],[.99,.01],[.01,.99],[.99,.99]].every(([dx,dy])=>n.contains(document.elementFromPoint((x+dx)/sx,(y+dy)/sy))))
+          .sort((a,b)=>a.score-b.score);
+        return candidates.length?[...ctx.getImageData(candidates[0].x,candidates[0].y,1,1).data]:null;
+      }).filter(Boolean);
+      ctx.fillStyle=s.color;ctx.fillRect(0,0,1,1);const text=[...ctx.getImageData(0,0,1,1).data];ctx.clearRect(0,0,1,1);ctx.fillStyle=s.backgroundColor;ctx.fillRect(0,0,1,1);
+      return{pixels,text,backingAlpha:ctx.getImageData(0,0,1,1).data[3],hover:n.matches(':hover'),touch:document.documentElement.hasAttribute('data-touch'),shadow:getComputedStyle(n,'::after').boxShadow};
+    })()`);
+    if(selector.includes('data-color-slot')){
+      assert.ok(sample.pixels.length>=6,`${name}: exposed rim samples`);
+      assert.ok(sample.pixels.every(pixel=>pixel.slice(0,3).every((v,i)=>Math.abs(v-sample.text[i])<=40)),`${name}: the complete 2 px rim appears above the paint: ${JSON.stringify(sample)}`);
+      assert.ok(sample.pixels.every(pixel=>pixel[3]===255),`${name}: opaque rim`);
+    }
+    assert.match(sample.shadow,/0px 0px 0px 2px inset$/,`${name}: selected or hovered rim`);
+    assert.equal(sample.backingAlpha,255,`${name}: opaque backing`);
+  };
+  const capturePanel=async name=>{
+    const r=await bounds(root),shot=await call('Page.captureScreenshot',{format:'png',clip:{x:r.x-8,y:r.y-44,width:r.width+16,height:r.height+52,scale:1}});
+    await writeFile(`${output}/${name}.png`,Buffer.from(shot.data,'base64'));
   };
   await send({type:'invoke',command:'reset_layout'});
   await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function poll(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy&&!v.dirty)resolve();else if(performance.now()>end)reject(Error('Workspace reset timed out'));else setTimeout(poll,30);}poll();})`);
@@ -136,10 +187,11 @@ export async function checkColorPanel({call,evaluate,settle}) {
   })()`);
   await writeFile(`${output}/raster-resolution.json`,JSON.stringify(sampling,null,2));
   for(const sample of sampling)assert.ok(sample.maximum<=2,`Disc interpolation: ${JSON.stringify(sample)}`);
-  if(native)await writeFile(`${inputDir}/ready`,'ready');
+  if(native){await writeFile(`${inputDir}/ready`,'ready');await performNative([]);}
   for(const device of ['mouse','touch','pen']) {
     console.log('Color panel input:',device);
     await gesture(device,await point(`${root} [data-color-slot="foreground"]`));
+    await front('foreground');
     await send({type:'set_color',rgba:[.2,.72,.58,1]});
     const before=await read();
     await gesture(device,await point(`${root} .color-wheel`,.935,.5),await point(`${root} .color-wheel`,.5,.935));
@@ -152,7 +204,10 @@ export async function checkColorPanel({call,evaluate,settle}) {
     }
     const backgroundPoint=await point(`${root} [data-color-slot="background"]`);
     assert.ok(await evaluate(`document.querySelector(${JSON.stringify(root+' [data-color-slot="background"]')}).contains(document.elementFromPoint(${backgroundPoint.x},${backgroundPoint.y}))`),'Background center receives input');
-    await gesture(device,backgroundPoint);assert.equal((await read()).slot,'background');
+    await gesture(device,backgroundPoint);assert.equal((await read()).slot,'background');await front('background');
+    await gesture(device,await point(`${root} [data-color-slot="transparent"]`));assert.equal((await read()).slot,'transparent');
+    await front('background');
+    await gesture(device,await overlap());assert.equal((await read()).slot,'background',`${device}: overlap resumes its front paint`);
     await gesture(device,await point(`${root} [data-color-slot="transparent"]`));assert.equal((await read()).slot,'transparent');
     await gesture(device,await point(`${root} .color-wheel`,.5,.5),await point(`${root} .color-wheel`,.55,.45));assert.equal((await read()).slot,'background','Picking resumes the remembered paint');
     const pair=await read();await gesture(device,await point(`${root} [data-color-slot="transparent"]`));
@@ -160,6 +215,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
       await gesture(device,await point(`${root} [data-quick-color="${name}"]`));
       const colors=await read();assert.equal(colors.slot,'temporary');assert.deepEqual(colors.temporary.rgba,rgba);
       assert.deepEqual([colors.foreground,colors.background],[pair.foreground,pair.background]);
+      await front('foreground');
     }
     await gesture(device,await point(`${root} [data-color-slot="background"]`));
     for(const shape of ['circle','square','triangle','circle']) {
@@ -170,6 +226,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
     }
     const swatches=await read();await gesture(device,await point(`${root} .color-swap`));
     assert.deepEqual((await read()).foreground,swatches.background);assert.deepEqual((await read()).background,swatches.foreground);
+    await front('background');
     for(let i=0;i<2;i++) {
       const before=await read(),expected={shape:'rgb',rgb:'shape'}[before.readout];
       await gesture(device,await point(`${root} .color-readout`,.12,.07));
@@ -185,6 +242,35 @@ export async function checkColorPanel({call,evaluate,settle}) {
       await gesture(device,await point(`${root} .color-wheel`,.935,.5),await point(`${root} .color-wheel`,.5,.935));
       assert.ok(Math.abs((await evaluate('layerApp.app.color_panel().wheel_components[1]'))-values[1])<.001,'Hue at black preserves saturation');
     }
+  }
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});await resizePanel(280);
+    await evaluate(`window.retainedColorSwatches=[...document.querySelectorAll(${JSON.stringify(root+' [data-color-slot]')})]`);
+    for(const slot of ['background','foreground']) {
+      await gesture('mouse',await point(swatch(slot)));await front(slot);
+      await rim(swatch(slot),`${theme}: selected ${slot}`);
+      await capturePanel(`${theme}-${slot}-front`);
+      const rear=slot==='background'?'foreground':'background';
+      await hoverAt(swatch(rear));
+      await front(slot);await rim(swatch(rear),`${theme}: hovered ${rear}`);
+      const backing=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(swatch(rear))}),s=getComputedStyle(n),c=document.createElement('canvas').getContext('2d');c.fillStyle=s.backgroundColor;const actual=c.fillStyle;c.fillStyle=s.getPropertyValue('--panel').trim();return[actual,c.fillStyle];})()`);
+      assert.equal(backing[0],backing[1],`${theme}: hover retains the panel backing`);
+    }
+    for(const [slot,key,code,windowsVirtualKeyCode] of [['background','Enter','Enter',13],['foreground',' ','Space',32]]) {
+      await evaluate(`document.querySelector(${JSON.stringify(swatch(slot))}).focus()`);
+      if(native)await performNative([{key:key===' '?32:65293,down:true},{key:key===' '?32:65293,down:false}]);
+      else for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode,...(key==='Enter'&&type==='keyDown'?{text:'\r'}:{})});
+      await settle();assert.equal((await read()).slot,slot);await front(slot);
+      await gesture('mouse',await point(swatch('transparent')));await front(slot);
+    }
+    for(const name of ['black','white']) {
+      const selector=`${root} [data-quick-color="${name}"]`;
+      await hoverAt(selector);await rim(selector,`${theme}: hovered ${name}`);
+    }
+    await gesture('mouse',await point(swatch('transparent')));await rim(swatch('transparent'),`${theme}: selected transparent`);
+    await capturePanel(`${theme}-transparent`);
+    assert.ok(await evaluate(`retainedColorSwatches.every(n=>n===document.querySelector(${JSON.stringify(root)}).querySelector('[data-color-slot="'+n.dataset.colorSlot+'"]'))`),'Selection and hover retain the swatch controls');
+    await evaluate('delete window.retainedColorSwatches');
   }
   // The readout has neither a tooltip nor hover decoration; native key activation remains.
   const readout=`${root} .color-readout`,p=await point(readout,.12,.07);
@@ -204,5 +290,5 @@ export async function checkColorPanel({call,evaluate,settle}) {
   const hover=await point(`${root} .color-wheel`,.9,.5);
   await call('Input.dispatchMouseEvent',{type:'mouseMoved',...hover,buttons:0,pointerType:'pen'});await settle();assert.deepEqual(await read(),cancelled,'Cancellation releases color contact');
   if(native)await writeFile(`${inputDir}/finished`,'done');
-  console.log(`Color panel: ${reports.length} layouts and both-resolution captures; ${native?'native mouse/touch + CDP pen':'CDP mouse/touch/pen'}; shape/readout buttons, swap, black position, keyboard, and cancellation passed`);
+  console.log(`Color panel: ${reports.length} layouts and both-resolution captures; ${native?'native mouse/touch + CDP pen':'CDP mouse/touch/pen'}; selected swatch overlap and rims, shape/readout buttons, swap, black position, keyboard, and cancellation passed`);
 }

@@ -56,12 +56,34 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Panel, tab, column or toolbar drag and docking | 120 | **Not met.** Toolbar or component drag 103–119 fps | `dc27e04d`, 2026-09-23 |
 | Panel or column resize | 120 | | |
 | Drawer open and close | 120 | | |
-| Colour wheel or picker drag | 120 | Picker callback p95 3.8–4.5 ms (callback time, not presented rate) | `3e521c63`, 2026-09-24 |
+| Colour wheel or picker drag | 120 | Picker callback p95 3.8–4.5 ms; GTK 2× diagnostic below remains below 120 Hz | `3e521c63`, 2026-09-24; [GTK swatch diagnostic](#gtk-selected-swatch-diagnostic), 2026-10-03 |
 | Slider scrub: size, opacity, flow | 120 | | |
 | Canvas action bar show, hide and move | 120 | **Not met.** UI frame p50/p95: 63.2/90.0 ms moving the bar, 23.0/34.6 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
 | Tool Options or panel content change | 120 | **Not met.** UI frame p50/p95 25.1/30.6 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 120 | | |
 | Menu open and close | 120 | Menu open adds no canvas frames; UI frame p50/p95 11.5/26.6 ms | Canvas-bar `selection-bar-menu-open`, 2026-09-27 |
+
+## GTK selected swatch diagnostic
+
+Measured 2026-10-03 with the selected-swatch change based on `b112ce6ff`, in a
+release build on NVIDIA RTX PRO 6000 Blackwell Max-Q/Vulkan. The private Mutter
+display is 3200 × 2000 at 120 Hz and 2× scale. The existing
+`native_color_picker_preview_pacing` fixture uses its 2048 × 1536 painted document,
+three 6.6-second moving gestures per condition and 16 ms input intervals.
+
+| Document / Color panel | Canvas presents/s | Present interval p95 |
+| --- | --- | --- |
+| SDR / closed | 83.74–87.68 | 20.02–20.41 ms |
+| SDR / docked | 72.33–75.96 | 27.98–28.55 ms |
+| HDR / closed | 84.95–86.17 | 20.24–20.32 ms |
+| HDR / docked | 67.06–70.35 | 29.33–36.64 ms |
+
+Docked wheel snapshot p95 is 0.38–0.48 ms and refresh p95 is 0.16–0.20 ms.
+The complete GTK paint phase reaches 11.48–19.68 ms p95. These are workstation
+results with p95 intervals, a small document and no paired GTK baseline; they
+neither qualify the 61 MP tablet target nor establish a before/after comparison.
+HDR here means a float document, not a physical HDR display. Binary identity,
+raw records and summaries are under `artifacts/color-overlap/pacing/`.
 
 ## Photo color adjustments
 

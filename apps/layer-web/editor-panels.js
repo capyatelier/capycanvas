@@ -148,7 +148,6 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     },"color-edit color-utility");
     bindCopy(edit,()=>copy.color.edit_menu,"title");bindCopy(edit,()=>copy.color.edit,"ariaLabel");edit.append(icon("pencil"));stage.append(edit);
     const wheel=element("canvas","color-wheel");bindCopy(wheel,()=>copy.color.wheel,"ariaLabel");stage.append(wheel);
-    // Paint order also controls hit testing in the intentional swatch overlap.
     const quickColors=[true,false].map(white=>{
       const node=button("",()=>color({op:"quick_color",white}),"color-swatch");node.dataset.quickColor=white?"white":"black";
       const paint=element("span");node.append(paint);stage.append(node);return{white,node,paint};
@@ -320,6 +319,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       edit.disabled=displayColors().slot==="transparent";
       quickColors.forEach(({white,node,paint})=>{const preset=view.quick_colors.find(p=>p.white===white);node.title=preset.label;node.setAttribute("aria-label",preset.label);node.setAttribute("aria-pressed",String(preset.selected));paint.style.background=rgba(preset.rgba);});
       choices.forEach(choice=>{
+        const zIndex=choice.slot===view.front_swatch?"1":"0";
+        if(choice.node.style.zIndex!==zIndex)choice.node.style.zIndex=zIndex;
         const {slot,node,paint}=choice,swatch=view.swatches.find(s=>s.slot===slot),key=JSON.stringify(swatch);if(choice.key===key)return;choice.key=key;
         if(node.title!==swatch.label){node.setAttribute("aria-label",swatch.label);node.title=swatch.label;}
         const pressed=String(swatch.selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);

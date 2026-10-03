@@ -49,6 +49,7 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.*
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
@@ -127,10 +128,9 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                         }
                     }
                 }
-                // Foreground paints/hits above background in their shared overlap.
                 for (slot in listOf("background", "foreground", "transparent")) {
                     val swatch = view.array("swatches").objects().first { it.getString("slot") == slot }
-                    ColorSwatch(host, swatch, Modifier.place(layout.array(slot)), ::color)
+                    ColorSwatch(host, swatch, Modifier.place(layout.array(slot)).zIndex(if (slot == view.getString("front_swatch")) 1f else 0f), ::color)
                 }
                 view.array("other_shapes").values().forEachIndexed { index, value ->
                     val shape = value as String

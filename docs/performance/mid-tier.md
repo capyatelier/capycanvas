@@ -49,7 +49,7 @@ canvas is 6000 × 4000.
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms | `cbfad9e5`, 2026-09-26 |
 | Panel or column resize | 90 | | |
 | Drawer open and close | 90 | | |
-| Colour wheel or picker drag | 90 | Huion: frame CPU p50 4.6–5.1 ms, p95 under 9.6 ms (hover, 200 Hz pen) | [Colour picker](../ui/color-picker.md), 2026-09-24 |
+| Colour wheel or picker drag | 90 | Huion: frame CPU p50 4.6–5.1 ms, p95 under 9.6 ms; XP-Pen swatch comparison below is diagnostic only | [Colour picker](../ui/color-picker.md); [swatch comparison](#selected-swatch-comparison), 2026-10-03 |
 | Slider scrub: size, opacity, flow | 90 | | |
 | Canvas action bar show, hide and move | 90 | **Not met.** UI frame p50: 22.8 ms show and hide, 34.8 ms moving the bar | `cbfad9e5`, 2026-09-26 |
 | Tool Options or panel content change | 90 | **Not met.** UI frame p50 21.4 ms | `cbfad9e5`, 2026-09-26 |
@@ -67,6 +67,28 @@ Chrome 137, injected pen input through DevTools and Chrome's
 Raw frame data, Chrome traces and fixture details are in
 `artifacts/swipe-alpha-lock/`; Android's repeatable entry point is
 `AndroidTitleBarTest#layerSwipeFrameTiming` ([layer gesture checks](../ui/drag-and-reorder.md#required-validation-when-implementing)).
+
+## Selected swatch comparison
+
+Measured 2026-10-03 on the XP-Pen Magic Note Pad (MNP1095), at its default
+90 Hz and thermal status 0. The benchmark APKs share the same Rust library;
+the candidate adds Android stacking from the shared front-swatch field. Both
+builds start from `62b01a884`. APK and native-library hashes and raw records are
+in `artifacts/android-color-overlap/provenance.json` and `motion-summary.json`.
+
+Three warmed five-second gestures per device use the existing color-panel
+fixture and its small default document:
+
+| Input | Before, UI frames/s | After, UI frames/s |
+| --- | --- | --- |
+| Mouse | 88.62–89.01 | 88.97–89.05 |
+| Touch | 88.83–89.08 | 88.79–89.05 |
+
+Both builds have FrameMetrics vsync-interval p95 of 11.15–11.19 ms and publish
+no retained workspace snapshots or panel contents during the valid runs. The
+first cold baseline run failed that retention assertion with two snapshots;
+its record is retained separately. This comparison uses a non-reference device,
+a small document and p95 rather than p99, so it does not qualify the 24 MP target.
 
 ## Language-change diagnostic
 

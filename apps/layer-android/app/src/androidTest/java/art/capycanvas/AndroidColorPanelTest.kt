@@ -98,7 +98,8 @@ class AndroidColorPanelTest {
         val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 7; toolType = tool })
         val coords = arrayOf(MotionEvent.PointerCoords().apply { x = next.x; y = next.y; pressure = if (action in listOf(MotionEvent.ACTION_UP,MotionEvent.ACTION_HOVER_ENTER,MotionEvent.ACTION_HOVER_MOVE,MotionEvent.ACTION_HOVER_EXIT)) 0f else .7f })
         val source = when (tool) { MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS; MotionEvent.TOOL_TYPE_MOUSE -> InputDevice.SOURCE_MOUSE; else -> InputDevice.SOURCE_TOUCHSCREEN }
-        val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) button else 0
+        val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL,
+            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_HOVER_EXIT)) button else 0
         deliver(MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, buttons, 1f, 1f, 0, 0, source, 0))
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) contact = false
     }
@@ -108,7 +109,11 @@ class AndroidColorPanelTest {
                 val origin = replayOrigin ?: IntArray(2).also { instrumentation.runOnMainSync { owner.view.getLocationOnScreen(it) } }
                 motion.offsetLocation(origin[0].toFloat(), origin[1].toFloat())
                 assertTrue("Android accepts typed pointer input", instrumentation.uiAutomation.injectInputEvent(motion, waitForInput))
-            } else instrumentation.runOnMainSync { owner.view.dispatchTouchEvent(motion) }
+            } else instrumentation.runOnMainSync {
+                if (motion.actionMasked in listOf(MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_HOVER_EXIT))
+                    owner.view.dispatchGenericMotionEvent(motion)
+                else owner.view.dispatchTouchEvent(motion)
+            }
         } finally { motion.recycle() }
     }
     private fun tap(at: Offset) { event(MotionEvent.ACTION_DOWN, at); SystemClock.sleep(30); event(MotionEvent.ACTION_UP); settle() }
@@ -490,6 +495,98 @@ class AndroidColorPanelTest {
         var present = false
         instrumentation.runOnMainSync { present = findTag("color-swap-menu") != null }
         return present
+    }
+    @Test fun selectedSwatchOwnsOverlapAndKeepsItsRim() {
+        fun sample(front: String, predicate: (Float, Float) -> Boolean, score: (Float, Float) -> Float): Offset {
+            val back = if (front == "foreground") "background" else "foreground"
+            val b = bounds("color-swatch-$front")
+            val behind = bounds("color-swatch-$back")
+            val stage = bounds("color-panel")
+            fun inset(at: Offset) = b.width / 2 - (at - b.center).getDistance()
+            fun backInset(at: Offset) = behind.width / 2 - (at - behind.center).getDistance()
+            return (floor(b.top - stage.top).toInt()..ceil(b.bottom - stage.top).toInt()).flatMap { y ->
+                (floor(b.left - stage.left).toInt()..ceil(b.right - stage.left).toInt()).map { x ->
+                    stage.topLeft + Offset(x + .5f, y + .5f)
+                }
+            }.filter { predicate(inset(it), backInset(it)) }
+                .maxByOrNull { score(inset(it), backInset(it)) }
+                ?: error("No $front overlap sample")
+        }
+        fun pixel(shot: Bitmap, at: Offset) = bounds("color-panel").let { stage ->
+            shot.getPixel(floor(at.x - stage.left).toInt(), floor(at.y - stage.top).toInt())
+        }
+        fun assertPixel(label: String, actual: Int, expected: Int) {
+            for (channel in listOf(16, 8, 0)) assertEquals("$label channel $channel",
+                (expected shr channel and 255).toDouble(), (actual shr channel and 255).toDouble(), 8.0)
+        }
+        for (theme in listOf("light", "dark")) for (width in listOf(144, 280)) {
+            resize(width)
+            action(obj("type" to "set_theme", "theme" to theme))
+            color(obj("op" to "select", "slot" to "foreground"))
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.85, .12, .18, 1))))
+            color(obj("op" to "select", "slot" to "background"))
+            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.08, .28, .9, 1))))
+            val identities = listOf("foreground", "background", "transparent").associateWith { node("color-swatch-$it").id }
+            val paints = listOf("foreground", "background").associateWith { colors().getJSONObject(it).toString() }
+            for (pointer in tools) for (front in listOf("foreground", "background")) {
+                tool = pointer
+                color(obj("op" to "select", "slot" to front))
+                assertEquals(front, view().getString("front_swatch"))
+                identities.forEach { (slot, id) -> assertEquals("Retained $slot control", id, node("color-swatch-$slot").id) }
+                val back = if (front == "foreground") "background" else "foreground"
+                val frontPadding = if (front == "foreground") 3 else 1
+                val backPadding = if (back == "foreground") 3 else 1
+                val overlap = sample(front, { a, b -> a > (frontPadding + 2) * density && b > (backPadding + 2) * density }, ::min)
+                val rim = sample(front, { a, b -> abs(a - density) < .3f * density && b > (backPadding + 2) * density }, { a, _ -> -abs(a - density) })
+                val clipped = sample(front, { a, b -> a < -density && b > (backPadding + 2) * density }, { a, b -> min(-a, b) })
+                val rgba = view().array("swatches").objects().first { it.getString("slot") == front }.array("rgba")
+                val fill = android.graphics.Color.rgb((rgba.getDouble(0) * 255).roundToInt(), (rgba.getDouble(1) * 255).roundToInt(), (rgba.getDouble(2) * 255).roundToInt())
+                val text = android.graphics.Color.parseColor(state().getJSONObject("palette").getString("text"))
+                capture("overlap-$theme-$width-$pointer-$front").let { shot ->
+                    assertPixel("Selected $front overlap", pixel(shot, overlap), fill)
+                    assertPixel("Selected $front rim over $back", pixel(shot, rim), text)
+                    shot.recycle()
+                }
+                color(obj("op" to "select", "slot" to "transparent"))
+                assertEquals("Transparent keeps remembered paint in front", front, view().getString("front_swatch"))
+                capture("transparent-overlap-$theme-$width-$pointer-$front").let { shot ->
+                    assertPixel("Remembered $front overlap", pixel(shot, overlap), fill)
+                    shot.recycle()
+                }
+                if (pointer != MotionEvent.TOOL_TYPE_FINGER) {
+                    event(MotionEvent.ACTION_HOVER_ENTER, bounds("color-swatch-$back").center)
+                    event(MotionEvent.ACTION_HOVER_MOVE, overlap)
+                    event(MotionEvent.ACTION_HOVER_MOVE, overlap + Offset(.5f, .5f))
+                    capture("hover-overlap-$theme-$width-$pointer-$front").let { shot ->
+                        assertPixel("Hovered remembered $front rim", pixel(shot, rim), text)
+                        shot.recycle()
+                    }
+                    assertEquals("Hover preserves transparency", "transparent", colors().getString("slot"))
+                    color(obj("op" to "select", "slot" to back))
+                    color(obj("op" to "select", "slot" to "transparent"))
+                    event(MotionEvent.ACTION_HOVER_MOVE, overlap + Offset(1f, 0f))
+                    val movedRim = sample(back, { a, b -> abs(a - density) < .3f * density && b > (frontPadding + 2) * density }, { a, _ -> -abs(a - density) })
+                    val rearRim = sample(front, { a, b -> abs(a - .5f * density) < .2f * density && b < -2 * density }, { a, _ -> -abs(a - .5f * density) })
+                    val panel = android.graphics.Color.parseColor(state().getJSONObject("palette").getString("panel"))
+                    fun faded(channel: Int) = ((text shr channel and 255) * .25 + (panel shr channel and 255) * .75).roundToInt()
+                    val quiet = android.graphics.Color.rgb(faded(16), faded(8), faded(0))
+                    capture("hover-switch-$theme-$width-$pointer-$back").let { shot ->
+                        assertPixel("Hover follows newly visible $back after selection", pixel(shot, movedRim), text)
+                        assertPixel("Hover leaves rear $front after selection", pixel(shot, rearRim), quiet)
+                        shot.recycle()
+                    }
+                    event(MotionEvent.ACTION_HOVER_EXIT)
+                    color(obj("op" to "select", "slot" to front))
+                    color(obj("op" to "select", "slot" to "transparent"))
+                }
+                SystemClock.sleep(ViewConfiguration.getDoubleTapTimeout().toLong() + 30)
+                tap(overlap)
+                assertEquals("Visible overlap receives $pointer contact", front, colors().getString("slot"))
+                tap(clipped)
+                assertEquals("Circular clipping lets $pointer reach $back", back, colors().getString("slot"))
+                paints.forEach { (slot, paint) -> assertEquals("Contact preserves $slot paint", paint, colors().getJSONObject(slot).toString()) }
+            }
+        }
     }
     @Test fun swatchMenusAndTransparentMemory() {
         for (pointer in tools) {

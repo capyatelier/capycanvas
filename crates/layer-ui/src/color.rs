@@ -171,6 +171,7 @@ pub struct ColorPanelView {
     /// Opaque marker preview of the remembered paint, including transparent mode.
     pub marker_color: [f32; 3],
     pub components: [ColorComponentView; 3],
+    pub front_swatch: ColorSlot,
     pub swatches: [ColorSwatchView; 3],
     pub quick_colors: [QuickColorView; 2],
 }
@@ -323,6 +324,7 @@ impl ColorState {
                 value: components[i],
                 numeric: Self::component_control(i).unwrap(),
             }),
+            front_swatch: self.front_swatch(),
             quick_colors: self.quick_colors_localized(localizer),
             swatches: {
                 let rgba = [
@@ -340,6 +342,12 @@ impl ColorState {
                     }
                 })
             },
+        }
+    }
+    pub fn front_swatch(&self) -> ColorSlot {
+        match self.paint_slot {
+            ColorSlot::Background => ColorSlot::Background,
+            _ => ColorSlot::Foreground,
         }
     }
     pub fn definition(&self) -> RgbColor {
@@ -1088,6 +1096,12 @@ pub struct ColorPanelLayout {
     pub intensity_caption: [f32; 3],
 }
 impl ColorPanelLayout {
+    pub fn circle_contains([x, y, width, height]: [f32; 4], point: [f32; 2]) -> bool {
+        [x, y, width, height, point[0], point[1]].into_iter().all(f32::is_finite)
+            && width > 0. && height > 0.
+            && (point[0] - x - width * 0.5).hypot(point[1] - y - height * 0.5)
+                <= width.min(height) * 0.5
+    }
     /// Keep the remembered swatches clear of the HDR arc and align the shortcuts.
     pub fn with_hdr(size: f32) -> Option<Self> {
         let mut layout = Self::new(size)?;
@@ -1357,6 +1371,54 @@ fn triangle_weights(triangle: [[f32; 2]; 3], p: [f32; 2]) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn swatch_stacking_follows_the_remembered_paint() {
+        let mut colors = ColorState::default();
+        let check = |colors: &ColorState, front| {
+            let view = colors.view();
+            assert_eq!(colors.front_swatch(), front);
+            assert_eq!(view.front_swatch, front);
+            assert_eq!(view.swatches.each_ref().map(|s| s.slot),
+                [ColorSlot::Foreground, ColorSlot::Background, ColorSlot::Transparent]);
+            assert_eq!(serde_json::to_value(&view).unwrap()["front_swatch"],
+                serde_json::to_value(front).unwrap());
+        };
+        check(&colors, ColorSlot::Foreground);
+        for slot in [ColorSlot::Background, ColorSlot::Foreground] {
+            colors.apply_canonical(ColorAction::Select { slot }).unwrap();
+            check(&colors, slot);
+            colors.apply_canonical(ColorAction::Swap).unwrap();
+            check(&colors, slot);
+            colors.apply_canonical(ColorAction::ToggleTransparent).unwrap();
+            check(&colors, slot);
+            colors.apply_canonical(ColorAction::ToggleTransparent).unwrap();
+            check(&colors, slot);
+            colors.apply_canonical(ColorAction::Select { slot: ColorSlot::Transparent }).unwrap();
+            check(&colors, slot);
+            colors.apply_canonical(ColorAction::QuickColor { white: true }).unwrap();
+            assert_eq!(colors.slot, ColorSlot::Temporary);
+            check(&colors, ColorSlot::Foreground);
+        }
+    }
+
+    #[test]
+    fn swatch_hit_regions_include_the_visible_rim() {
+        for inset in [0., 1., 3.] {
+            let bounds = [-inset, -inset, 38., 38.];
+            let center = 19. - inset;
+            for angle in 0..360 {
+                let angle = (angle as f32).to_radians();
+                for (radius, inside) in [(18.5, true), (19.5, false)] {
+                    assert_eq!(ColorPanelLayout::circle_contains(bounds,
+                        [center + radius * angle.cos(), center + radius * angle.sin()]), inside);
+                }
+            }
+            assert!(!ColorPanelLayout::circle_contains(bounds, [-inset, -inset]));
+            assert!(!ColorPanelLayout::circle_contains(bounds, [f32::NAN, center]));
+        }
+        assert!(!ColorPanelLayout::circle_contains([0.; 4], [0.; 2]));
+    }
+
     #[test]
     fn active_color_projection_localizes_labels_without_changing_numeric_geometry() {
         let en = crate::Localizer::shared(crate::UiLanguage::English);

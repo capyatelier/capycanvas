@@ -756,11 +756,13 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .color-wheel-square { position:absolute; width:min(100cqw,100cqh); height:min(100cqw,100cqh); left:50%; top:50%; transform:translate(-50%,-50%); }
 .color-wheel { position:absolute; display:block; touch-action:none; }
 .color-wheel-control :is(.color-swatch,.color-utility,.color-shape,.color-readout) { position:absolute; touch-action:manipulation; display:grid; place-items:center; min-width:0; min-height:0; padding:3px; border-radius:50%; clip-path:circle(50%); }
-.color-wheel-control .color-swatch { background:var(--panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 25%,transparent); }
+.color-wheel-control .color-swatch { background:var(--panel); box-shadow:none; }
+.color-wheel-control .color-swatch::after { content:""; position:absolute; inset:0; border-radius:50%; corner-shape:round; pointer-events:none; box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 25%,transparent); }
 .color-wheel-control .color-swatch:is([data-color-slot="background"],[data-color-slot="transparent"],[data-quick-color]) { padding:1px; }
 .color-wheel-control .color-swatch > span { pointer-events:none; display:block; width:100%; height:100%; border-radius:50%; }
-.color-wheel-control .color-swatch[aria-pressed="true"] { box-shadow:inset 0 0 0 2px var(--text); }
-:where(:root:not([data-touch])) .color-wheel-control .color-swatch:hover { box-shadow:inset 0 0 0 2px var(--text); }
+.color-wheel-control .color-swatch[aria-pressed="true"]::after { box-shadow:inset 0 0 0 2px var(--text); }
+:where(:root:not([data-touch])) .color-wheel-control .color-swatch:hover::after { box-shadow:inset 0 0 0 2px var(--text); }
+.color-wheel-control button.color-swatch:is(:hover,:active):not(:disabled) { background:var(--panel); }
 .color-wheel-control .color-utility { padding:2px; background:transparent; }
 :where(:root:not([data-touch])) .color-wheel-control .color-utility:hover { background:color-mix(in srgb,var(--text) 12%,transparent); }
 .color-wheel-control :is(.color-shape,.color-utility) svg { pointer-events:none; width:16px; height:16px; }

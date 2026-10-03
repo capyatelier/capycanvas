@@ -77,6 +77,111 @@ fn assert_hue_guide_colors(w: &Workspace, texture: &gtk::gdk::Texture) {
     );
 }
 
+
+fn paint_swatches(w: &Workspace) -> [(layer_ui::ColorSlot, gtk::Widget); 2] {
+    [
+        (layer_ui::ColorSlot::Foreground, find_named(w.color_panel.root.upcast_ref(), "color-Foreground").unwrap()),
+        (layer_ui::ColorSlot::Background, find_named(w.color_panel.root.upcast_ref(), "color-Background").unwrap()),
+    ]
+}
+
+fn swatch_contains(bounds: &gtk::graphene::Rect, point: [f32; 2]) -> bool {
+    let radius = bounds.width().min(bounds.height()) * 0.5;
+    (point[0] - bounds.x() - bounds.width() * 0.5)
+        .hypot(point[1] - bounds.y() - bounds.height() * 0.5) <= radius
+}
+
+fn assert_swatch_picks(w: &Workspace, front: layer_ui::ColorSlot) {
+    let root = &w.color_panel.root;
+    let swatches = paint_swatches(w);
+    let bounds = swatches.each_ref().map(|(_, button)| button.compute_bounds(root).unwrap());
+    let expected = |point| {
+        [front, if front == layer_ui::ColorSlot::Foreground {
+            layer_ui::ColorSlot::Background
+        } else {
+            layer_ui::ColorSlot::Foreground
+        }].into_iter().find_map(|slot| {
+            let index = usize::from(slot == layer_ui::ColorSlot::Background);
+            swatch_contains(&bounds[index], point).then_some(&swatches[index].1)
+        })
+    };
+    for (index, (_, button)) in swatches.iter().enumerate() {
+        let b = bounds[index];
+        for degrees in (0..360).step_by(5) {
+            let angle = (degrees as f32).to_radians();
+            for inset in [0.25, 1., 2., b.width() * 0.25] {
+                let radius = b.width() * 0.5 - inset;
+                let point = [b.x() + b.width() * 0.5 + radius * angle.cos(),
+                    b.y() + b.height() * 0.5 + radius * angle.sin()];
+                let hit = root.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
+                let target = expected(point).unwrap();
+                assert!(hit == *target || hit.is_ancestor(target),
+                    "front {front:?}, {} rim {degrees}° inset {inset}: picked {} instead of {}",
+                    button.widget_name(), hit.widget_name(), target.widget_name());
+            }
+        }
+    }
+    for y in 0..=(bounds[1].y() + bounds[1].height()).ceil() as i32 {
+        for x in 0..=(bounds[1].x() + bounds[1].width()).ceil() as i32 {
+            let point = [x as f32 + 0.5, y as f32 + 0.5];
+            let hit = root.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
+            if let Some(target) = expected(point) {
+                assert!(hit.as_ref().is_some_and(|hit| hit == target || hit.is_ancestor(target)),
+                    "front {front:?}: paint at {point:?} must pick {}", target.widget_name());
+            } else {
+                assert!(!swatches.iter().any(|(_, button)| hit.as_ref()
+                    .is_some_and(|hit| hit == button || hit.is_ancestor(button))),
+                    "front {front:?}: outside both circles at {point:?} cannot pick paint");
+            }
+        }
+    }
+}
+
+fn assert_swatch_pixels(w: &Workspace, output: &std::path::Path, name: &str, front: layer_ui::ColorSlot) {
+    let wheel = named::<crate::tool_panels::ColorWheel>(w.color_panel.root.upcast_ref(), "color-wheel");
+    let parent = wheel.parent().unwrap();
+    let snapshot = gtk::Snapshot::new();
+    snapshot.scale(4., 4.);
+    parent.snapshot_child(&wheel, &snapshot);
+    let b = wheel.compute_bounds(&parent).unwrap();
+    let bounds = gtk::graphene::Rect::new(b.x() * 4., b.y() * 4., b.width() * 4., b.height() * 4.);
+    let texture = w.window.renderer().unwrap().render_texture(&snapshot.to_node().unwrap(), Some(&bounds));
+    texture.save_to_png(output.join(format!("{name}-{front:?}-swatches-4x.png"))).unwrap();
+    let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
+    texture.download(&mut pixels, texture.width() as usize * 4);
+    let pixel = |point: [f32; 2]| {
+        let offset = ((point[1] * 4.).floor() as usize * texture.width() as usize
+            + (point[0] * 4.).floor() as usize) * 4;
+        <[u8; 4]>::try_from(&pixels[offset..offset + 4]).unwrap()
+    };
+    let difference = |a: [u8; 4], b: [u8; 4]| a.into_iter().zip(b).map(|(a, b)| a.abs_diff(b)).max().unwrap();
+    let swatches = paint_swatches(w);
+    let boxes = swatches.each_ref().map(|(_, button)| button.compute_bounds(&wheel).unwrap());
+    let fg = boxes[0];
+    let bg = boxes[1];
+    let overlap = [bg.x() + bg.width() * 0.35, bg.y() + bg.height() * 0.35];
+    assert!(swatch_contains(&fg, overlap) && swatch_contains(&bg, overlap));
+    let center = |b: gtk::graphene::Rect| [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
+    let expected = pixel(center(boxes[usize::from(front == layer_ui::ColorSlot::Background)]));
+    assert!(difference(pixel(overlap), expected) <= 4,
+        "{name}: {front:?} fill covers the overlap: {:?} versus {expected:?}", pixel(overlap));
+    if front == layer_ui::ColorSlot::Background
+        || swatches[1].1.state_flags().contains(gtk::StateFlags::PRELIGHT) {
+        let x = bg.x() + bg.width() * 0.5;
+        let bottom = bg.y() + bg.height();
+        let outer = pixel([x, bottom - 0.75]);
+        let inner = pixel([x, bottom - 1.5]);
+        let paint = pixel([x, bottom - 2.75]);
+        assert!(difference(outer, inner) <= 12 && difference(inner, paint) > 40,
+            "{name}: selected secondary has a complete two-pixel rim: {outer:?}, {inner:?}, {paint:?}");
+    }
+}
+
+fn swatch_selection(w: &Rc<Workspace>, slot: layer_ui::ColorSlot) {
+    w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Select { slot } });
+    pump(30);
+}
+
 #[test]
 #[ignore = "isolated Mutter input driver: --color-panel"]
 fn native_color_panel_input() {
@@ -124,6 +229,16 @@ fn native_color_panel_input() {
             w.dispatch(UiAction::SetColor {
                 rgba: [0.2, 0.72, 0.58, 1.],
             });
+            for (slot, front) in [
+                (layer_ui::ColorSlot::Foreground, layer_ui::ColorSlot::Foreground),
+                (layer_ui::ColorSlot::Transparent, layer_ui::ColorSlot::Foreground),
+                (layer_ui::ColorSlot::Background, layer_ui::ColorSlot::Background),
+                (layer_ui::ColorSlot::Transparent, layer_ui::ColorSlot::Background),
+            ] {
+                swatch_selection(&w, slot);
+                assert_swatch_picks(&w, front);
+            }
+            swatch_selection(&w, layer_ui::ColorSlot::Foreground);
             for shape in [
                 layer_ui::ColorShape::Circle,
                 layer_ui::ColorShape::Square,
@@ -526,6 +641,125 @@ fn native_color_panel_input() {
         serde_json::to_vec_pretty(&reports).unwrap(),
     )
     .unwrap();
+    input.finish();
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "isolated Mutter mouse, touch and pen driver: --tablet"]
+fn native_color_swatch_overlap_input() {
+    use super::crop::{Device, tap};
+    use layer_ui::ColorSlot::{Background, Foreground, Transparent};
+    let mut input = RemoteInput::new().timeout_secs(20);
+    let output = std::env::var_os("LAYER_TEST_ARTIFACTS").map_or(input.dir.clone(), Into::into);
+    std::fs::create_dir_all(&output).unwrap();
+    let app = native_test_app("art.capycanvas.ColorSwatchOverlap");
+    let w = fixture_workspace(&app);
+    let click_delay = gtk::Settings::for_display(&w.surface.display()).gtk_double_click_time().max(0) as u64 + 20;
+    w.window.maximize();
+    w.window.present();
+    pump(1400);
+    wait_workspaces(&w);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut fixture = layer_ui::WorkspaceState::default();
+    fixture.layout.set_panel_visible(Panel::Color, true).unwrap();
+    fixture.layout.move_panel(viewport, Panel::Color,
+        DockTarget::Float { position: [480., 120.] }).unwrap();
+    input.ready();
+    for theme in [Theme::Dark, Theme::Light] {
+        for width in [144., 160., 200., 280., 360.] {
+            for float in &mut fixture.layout.floating {
+                if let DockNode::Tabs { panels, .. } = &float.root {
+                    if panels.contains(&Panel::Color) {
+                        float.width = width;
+                        float.height = Some(width + 36.);
+                    }
+                }
+            }
+            w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture.clone()) });
+            w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            swatch_selection(&w, Foreground);
+            w.dispatch(UiAction::SetColor { rgba: [0., 0., 0., 1.] });
+            swatch_selection(&w, Background);
+            w.dispatch(UiAction::SetColor { rgba: [1., 0., 0., 1.] });
+            pump(100);
+            let swatches = paint_swatches(&w);
+            let boxes = swatches.each_ref().map(|(_, button)| button.compute_bounds(&w.window).unwrap());
+            let fg = boxes[0];
+            let bg = boxes[1];
+            let overlap = [bg.x() + bg.width() * 0.35, bg.y() + bg.height() * 0.35];
+            let outer_fg = [fg.x() + fg.width() * 0.5, fg.y() + 0.75];
+            let outer_bg = [bg.x() + bg.width() * 0.5, bg.y() + bg.height() - 0.75];
+            for front in [Foreground, Background] {
+                swatch_selection(&w, front);
+                assert_swatch_picks(&w, front);
+                let name = format!("{theme:?}-{width}");
+                assert_swatch_pixels(&w, &output, &name, front);
+                capture_reference(&w, output.join(format!("{name}-{front:?}.png")).to_str().unwrap(), 2.);
+                swatch_selection(&w, Transparent);
+                let colors = state(&w).colors;
+                for point in [outer_fg, outer_bg, overlap] {
+                    input.perform(serde_json::json!([{ "point": point }]));
+                    assert_eq!(state(&w).colors, colors, "mouse hover preserves paint and selection");
+                    assert_swatch_picks(&w, front);
+                    if point == outer_bg && front == Foreground && (width == 144. || width == 280.) {
+                        assert!(swatches[1].1.state_flags().contains(gtk::StateFlags::PRELIGHT));
+                        assert_swatch_pixels(&w, &output, &format!("{name}-hover-background"), front);
+                    }
+                    input.perform(serde_json::json!([{ "pen": "move", "point": point }, { "pen": "leave" }]));
+                    assert_eq!(state(&w).colors, colors, "pen hover preserves paint and selection");
+                    assert_swatch_picks(&w, front);
+                }
+                if width == 144. || width == 280. {
+                    for device in [Device::Mouse, Device::Touch, Device::Pen] {
+                        for (point, slot) in [(overlap, front), (outer_fg, Foreground), (outer_bg, Background)] {
+                            swatch_selection(&w, front);
+                            swatch_selection(&w, Transparent);
+                            let button = &swatches[usize::from(slot == Background)].1;
+                            let hit = w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
+                            assert!(hit == *button || hit.is_ancestor(button),
+                                "{theme:?} {width}px {device:?} at {point:?}: window picks {} instead of {slot:?}", hit.widget_name());
+                            pump(click_delay);
+                            tap(&mut input, device, point);
+                            assert!(w.window.visible_dialog().is_none(), "single swatch contact cannot open an editor");
+                            assert_eq!(state(&w).colors.slot, slot,
+                                "{theme:?} {width}px {device:?} at {point:?} selects visible {slot:?}");
+                            assert_eq!((state(&w).colors.foreground, state(&w).colors.background),
+                                (colors.foreground, colors.background), "swatch input preserves remembered paint");
+                            assert_swatch_picks(&w, slot);
+                        }
+                    }
+                }
+            }
+            swatch_selection(&w, Foreground);
+            let fg_button = &swatches[0].1;
+            assert!(fg_button.grab_focus());
+            swatch_selection(&w, Background);
+            assert_eq!(fg_button.root().and_then(|root| root.focus()), Some(fg_button.clone()),
+                "moving the other swatch forward retains keyboard focus");
+            input.key(32);
+            assert_eq!(state(&w).colors.slot, Foreground);
+            let bg_button = &swatches[1].1;
+            assert!(bg_button.grab_focus());
+            input.key(65293);
+            assert_eq!(state(&w).colors.slot, Background);
+            swatch_selection(&w, Transparent);
+            w.dispatch(UiAction::Color { action: layer_ui::ColorAction::QuickColor { white: false } });
+            assert_eq!(state(&w).colors.slot, layer_ui::ColorSlot::Temporary);
+            assert_swatch_picks(&w, Foreground);
+            swatch_selection(&w, Background);
+            let before = state(&w).colors;
+            pump(click_delay);
+            input.perform(serde_json::json!([
+                { "point": outer_fg, "down": true },
+                { "point": [fg.x() - 12., fg.y()] },
+                { "down": false }
+            ]));
+            assert_eq!(state(&w).colors, before, "releasing outside cancels a swatch press");
+            assert_swatch_picks(&w, Background);
+        }
+    }
     input.finish();
     w.window.destroy();
     pump(100);

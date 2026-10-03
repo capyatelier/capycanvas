@@ -603,6 +603,13 @@ mod wheel_button {
     }
     impl ObjectImpl for WheelButton {}
     impl WidgetImpl for WheelButton {
+        fn state_flags_changed(&self, previous: &gtk::StateFlags) {
+            self.parent_state_flags_changed(previous);
+            if self.obj().state_flags().contains(gtk::StateFlags::PRELIGHT)
+                != previous.contains(gtk::StateFlags::PRELIGHT) {
+                self.obj().queue_draw();
+            }
+        }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let o = self.obj();
             let center = gtk::graphene::Point::new(o.width() as f32 * 0.5, o.height() as f32 * 0.5);
@@ -611,6 +618,16 @@ mod wheel_button {
             snapshot.rotate(self.rotation.get());
             snapshot.translate(&gtk::graphene::Point::new(-center.x(), -center.y()));
             self.parent_snapshot(snapshot);
+            if o.has_css_class("color-swatch") && let Some(bounds) = o.compute_bounds(&*o) {
+                let highlighted = o.has_css_class("selected-tool")
+                    || o.state_flags().contains(gtk::StateFlags::PRELIGHT);
+                let mut ink = o.color();
+                if !highlighted { ink.set_alpha(ink.alpha() * 0.25); }
+                snapshot.append_border(
+                    &gtk::gsk::RoundedRect::from_rect(bounds, bounds.width().min(bounds.height()) * 0.5),
+                    &[if highlighted { 2. } else { 1. }; 4], &[ink; 4],
+                );
+            }
             if self.readout.get() && let Some(wheel) = o.parent().and_downcast::<ColorWheel>() {
                 crate::color_readout::draw(o.upcast_ref(), snapshot, &wheel.imp().color.borrow(), wheel.imp().view.get());
             }
@@ -619,16 +636,15 @@ mod wheel_button {
         fn contains(&self, x: f64, y: f64) -> bool {
             let o = self.obj();
             let (w, h) = (o.width() as f64, o.height() as f64);
-            if x < 0. || y < 0. || x > w || y > h {
-                return false;
-            }
             if self.readout.get() {
                 let r = ColorPanelLayout::new((w * 2.) as f32)
                     .map(|layout| layout.wheel[2] as f64 * 0.49 + 2.)
                     .unwrap_or(1.);
-                (x - w).hypot(y - h) >= r
+                x >= 0. && y >= 0. && x <= w && y <= h && (x - w).hypot(y - h) >= r
             } else {
-                (x - w * 0.5).hypot(y - h * 0.5) <= w.min(h) * 0.5
+                o.compute_bounds(&*o).is_some_and(|b| ColorPanelLayout::circle_contains(
+                    [b.x(), b.y(), b.width(), b.height()], [x as f32, y as f32],
+                ))
             }
         }
     }
@@ -637,6 +653,14 @@ mod wheel_button {
 glib::wrapper! {
     pub struct WheelButton(ObjectSubclass<wheel_button::WheelButton>) @extends gtk::Button, gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Actionable;
+}
+impl WheelButton {
+    fn set_selected(&self, active: bool) {
+        if self.has_css_class("selected-tool") != active {
+            selected(self, active);
+            self.queue_draw();
+        }
+    }
 }
 #[path = "color_wheel_field.rs"]
 mod field;
@@ -813,14 +837,10 @@ mod wheel {
                 draw_wheel(snapshot, &state, &geometry, view, self.headroom.get());
                 snapshot.restore();
             }
-            if let Some(intensity) = self.intensity.borrow().as_ref().filter(|i| i.is_visible()) {
-                self.obj().snapshot_child(intensity, snapshot);
-            }
-            for button in self.corners.borrow().iter() {
-                self.obj().snapshot_child(button, snapshot);
-            }
-            if let Some(menu) = self.menu.borrow().as_ref() {
-                self.obj().snapshot_child(menu, snapshot);
+            let mut child = self.obj().first_child();
+            while let Some(widget) = child {
+                if widget.is_visible() { self.obj().snapshot_child(&widget, snapshot); }
+                child = widget.next_sibling();
             }
             crate::squircle::append_round(output, content);
             #[cfg(test)]
@@ -1320,15 +1340,17 @@ impl ColorPanel {
         self.readout.queue_draw();
         for (white, button, sample) in &self.quick_colors {
             let preset = &state.quick_colors_localized(&localization)[usize::from(*white)];
-            selected(button, preset.selected);
+            button.set_selected(preset.selected);
             sample.set_display_color(if *white { layer_core::color::RgbColor::WHITE } else { layer_core::color::RgbColor::BLACK }, ViewColor::Srgb, 1.);
         }
+        let front = self.swatches.iter().find(|(slot, _, _)| *slot == state.front_swatch()).unwrap();
+        let rear = self.swatches.iter().find(|(slot, _, _)|
+            matches!(slot, ColorSlot::Foreground | ColorSlot::Background) && *slot != front.0).unwrap();
+        if front.1.prev_sibling().as_ref() != Some(rear.1.upcast_ref()) {
+            front.1.insert_after(&self.wheel, Some(&rear.1));
+        }
         for (slot, button, sample) in &self.swatches {
-            if *slot == state.slot {
-                button.add_css_class("selected-tool");
-            } else {
-                button.remove_css_class("selected-tool");
-            }
+            button.set_selected(*slot == state.slot);
             let color = match slot { ColorSlot::Foreground => state.foreground, ColorSlot::Background => state.background, ColorSlot::Temporary => state.temporary, ColorSlot::Transparent => layer_core::color::RgbColor { linear_rgb: None, space: state.rgb_space(), rgba: [0.; 4] } };
             sample.set_display_color(color, view, headroom);
         }

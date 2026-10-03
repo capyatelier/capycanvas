@@ -23,6 +23,13 @@ are kept per paint, so neutral colors keep their hue. Hit testing, conversions,
 component values and the selected swatch live in Rust
 ([`color.rs`](../../crates/layer-ui/src/color.rs)).
 
+GTK, Web and Android place the selected paint circle above the other circle,
+including its border and pointer target. Hover leaves that order unchanged. Transparent paint
+keeps the remembered paint circle in front; temporary black or white uses the
+primary circle. Rust publishes the front swatch with the color panel view.
+The visible circular rim belongs to the button's hit area, and the selection or
+hover border covers the paint fill.
+
 The HDR intensity arc uses the shared round-cap geometry at both ends. Android
 receives its pointer contact through the color panel so an empty corner of the
 wheel's rectangular view does not hide either cap; occupied wheel and swatch
@@ -192,6 +199,7 @@ library access.
 ## Checks
 
 ```sh
+LAYER_NATIVE_EVENT_MS=8 tools/performance/workspace-motion.sh gtk --native-test=native_color_swatch_overlap_input --tablet
 LAYER_NATIVE_EVENT_MS=60 tools/performance/workspace-motion.sh gtk --native-test=native_color_picker_input --tablet
 LAYER_NATIVE_EVENT_MS=8 LAYER_MOTION_VIEWPORT=4800x3000 LAYER_MOTION_SCALE=3 \
   tools/performance/workspace-motion.sh gtk --native-test=native_color_picker_preview_pacing
@@ -200,6 +208,9 @@ node apps/layer-web/test.mjs --color-picker                   # device.test.mjs 
 ./apps/layer-windows/scripts/exercise-color-picker.ps1 -Executable artifacts/windows/Release/CapyCanvas.exe
 ```
 
+- `native_color_swatch_overlap_input` checks circle borders, overlap ownership,
+  selection and hover with mouse, pen and touch in both themes. The regular
+  `--color-panel` journey also checks rim hit areas at five panel widths.
 - `native_color_picker_input` drives mouse, pen and touch in both themes. Popup
   checks run before synthetic tablet injection, whose serials cannot authorize
   compositor popup grabs.
