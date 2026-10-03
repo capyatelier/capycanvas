@@ -1021,6 +1021,131 @@ class AndroidHostTest {
         }
     }
 
+    @Test fun selectiveColorAndMixerRetainNativePagesAndHiddenValues() {
+        fun p22Capture(name: String) {
+            host.drain(); settle()
+            compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true && !state().getJSONObject("filter_load").getBoolean("pending") }
+            capture(name)
+        }
+        fun properties() = state().getJSONObject("layer_properties")
+        fun controls() = properties().array("controls").objects()
+        fun value(key: String) = controls().first { it.getString("key") == key }.getJSONObject("value").getDouble("value")
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        fun page(index: Int) {
+            val selected = properties().array("pages").getJSONObject(index)
+            if (properties().getString("page") == selected.getString("id")) return
+            compose.onNodeWithTag("properties-page").performScrollTo().performClick()
+            compose.onNode(hasText(selected.getString("label")) and hasClickAction()).performClick()
+            waitState { properties().getString("page") == selected.getString("id") }
+        }
+        fun edit(key: String, literal: String) {
+            val label = controls().first { it.getString("key") == key }.getString("label")
+            compose.onNodeWithTag("number-value-$key").performScrollTo().performClick()
+            val field = compose.onNodeWithTag("number-$label")
+            field.performTextReplacement(literal); field.performImeAction()
+            waitState { kotlin.math.abs(value(key) - literal.toDouble()) < .0001 }
+        }
+        fun toggle(key: String) {
+            val label = controls().first { it.getString("key") == key }.getString("label")
+            compose.onNode(isToggleable() and hasAnySibling(hasText(label))).performScrollTo().performClick()
+            settle()
+        }
+        action(obj("type" to "set_brush_size", "value" to 120))
+        for ((index, color) in listOf(listOf(.9,.12,.08,1), listOf(.08,.7,.15,1), listOf(.1,.2,.9,1)).withIndex()) {
+            action(obj("type" to "set_color", "rgba" to JSONArray(color)))
+            val x = .4f + index * .1f
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(androidx.compose.ui.geometry.Offset(x, .4f)), MotionEvent.TOOL_TYPE_STYLUS)
+            canvasEvent(MotionEvent.ACTION_MOVE, listOf(androidx.compose.ui.geometry.Offset(x + .03f, .6f)), MotionEvent.TOOL_TYPE_STYLUS)
+            canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(x + .03f, .6f)), MotionEvent.TOOL_TYPE_STYLUS)
+        }
+        host.drain(); settle()
+        for (panel in listOf("navigator", "proof", "layers")) customize(obj("type" to "set_panel_visible", "panel" to panel, "visible" to false))
+        fun numberUndo(key: String) {
+            val label = controls().first { it.getString("key") == key }.getString("label")
+            val slider = compose.onNodeWithTag("number-slider-$label").performScrollTo()
+            for (tool in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
+                val before = value(key)
+                when (tool) {
+                    MotionEvent.TOOL_TYPE_FINGER -> slider.performTouchInput { swipe(androidx.compose.ui.geometry.Offset(width * .4f, height * .5f), androidx.compose.ui.geometry.Offset(width * .6f, height * .5f), 250) }
+                    MotionEvent.TOOL_TYPE_MOUSE -> slider.performMouseInput {
+                        moveTo(androidx.compose.ui.geometry.Offset(width * .3f, height * .5f)); press()
+                        moveTo(androidx.compose.ui.geometry.Offset(width * .55f, height * .5f)); release()
+                    }
+                    else -> {
+                        val node = slider.fetchSemanticsNode(); val owner = node.root as ViewRootForTest
+                        val bounds = node.boundsInRoot; val downAt = SystemClock.uptimeMillis()
+                        val start = androidx.compose.ui.geometry.Offset(bounds.left + bounds.width * .2f, bounds.center.y)
+                        val end = androidx.compose.ui.geometry.Offset(bounds.left + bounds.width * .7f, bounds.center.y)
+                        touch(owner.view, downAt, MotionEvent.ACTION_DOWN, start, tool)
+                        touch(owner.view, downAt, MotionEvent.ACTION_MOVE, end, tool)
+                        touch(owner.view, downAt, MotionEvent.ACTION_UP, end, tool)
+                    }
+                }
+                host.drain(); settle()
+                val after = value(key); assertNotEquals(before, after)
+                invoke("undo"); assertEquals(before, value(key), 0.0)
+                invoke("redo"); assertEquals(after, value(key), 0.0)
+                invoke("undo")
+            }
+        }
+        fun cancelDraft(key: String) {
+            val before = value(key)
+            val label = controls().first { it.getString("key") == key }.getString("label")
+            compose.onNodeWithTag("number-value-$key").performScrollTo().performClick()
+            val field = compose.onNodeWithTag("number-$label")
+            field.assertIsFocused(); field.performTextReplacement("47.125")
+            val now = SystemClock.uptimeMillis()
+            for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
+                assertTrue(instrumentation.uiAutomation.injectInputEvent(KeyEvent(now, now, phase, KeyEvent.KEYCODE_ESCAPE, 0), true))
+            host.drain(); settle()
+            assertEquals(before, value(key), 0.0)
+        }
+        fun choice(key: String, index: Int) {
+            val c = controls().first { it.getString("key") == key }
+            compose.onNodeWithTag("property-$key").performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .8f, height * .5f)) }
+            compose.onNodeWithText(c.getJSONObject("kind").array("options").getString(index)).performClick()
+            host.drain(); settle()
+            assertEquals(index, controls().first { it.getString("key") == key }.getJSONObject("value").getInt("value"))
+        }
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "selective_color")))
+            val ranges = listOf("reds", "yellows", "greens", "cyans", "blues", "magentas", "whites", "neutrals", "blacks")
+            assertEquals(ranges, properties().array("pages").objects().map { it.getString("id") })
+            for ((index, range) in ranges.withIndex()) {
+                page(index)
+                for ((key, literal) in listOf("cyan" to "-17.25", "magenta" to "23.5", "yellow" to "-31.75", "black" to "9.25")) edit("${range}_$key", literal)
+                if (index == 0) { cancelDraft("reds_cyan"); numberUndo("reds_cyan") }
+                p22Capture("p22-$theme-selective-$range")
+            }
+            choice("mode", 1)
+            page(0); assertEquals(-17.25, value("reds_cyan"), 0.0)
+            choice("mode", 0)
+            for ((index, range) in ranges.withIndex()) { page(index); assertEquals(9.25, value("${range}_black"), 0.0) }
+            action(obj("type" to "set_layer_visibility", "id" to properties().getLong("layer"), "visible" to false))
+            action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "channel_mixer")))
+            assertEquals(listOf("red", "green", "blue"), properties().array("pages").objects().map { it.getString("id") })
+            for ((index, channel) in listOf("red", "green", "blue").withIndex()) {
+                page(index)
+                for ((key, literal) in listOf("red" to "83.25", "green" to "-12.5", "blue" to "24.75", "constant" to "3.25")) edit("${channel}_$key", literal)
+                p22Capture("p22-$theme-mixer-$channel")
+            }
+            cancelDraft("blue_red"); numberUndo("blue_red")
+            toggle("monochrome")
+            assertEquals(listOf("gray"), properties().array("pages").objects().map { it.getString("id") })
+            compose.onNodeWithTag("properties-page").assertDoesNotExist()
+            assertEquals(listOf("gray_red", "gray_green", "gray_blue", "gray_constant", "monochrome"), controls().map { it.getString("key") })
+            for ((key, literal) in listOf("red" to "31.25", "green" to "62.5", "blue" to "6.25", "constant" to "-4.25")) edit("gray_$key", literal)
+            numberUndo("gray_green"); p22Capture("p22-$theme-mixer-gray")
+            toggle("monochrome")
+            assertEquals(3, properties().array("pages").length())
+            for ((index, channel) in listOf("red", "green", "blue").withIndex()) { page(index); assertEquals(83.25, value("${channel}_red"), 0.0) }
+            toggle("monochrome"); assertEquals(31.25, value("gray_red"), 0.0)
+            action(obj("type" to "set_layer_visibility", "id" to properties().getLong("layer"), "visible" to false))
+            assertNull(host.failure); assertNull(host.actionError)
+        }
+    }
+
     @Test fun adjustmentPanelsUseSharedSchema() {
         action(obj("type" to "set_theme", "theme" to "dark"))
         action(obj("type" to "set_brush_size", "value" to 220))
@@ -1032,7 +1157,7 @@ class AndroidHostTest {
             canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(x+.03f,.6f)), MotionEvent.TOOL_TYPE_STYLUS)
         }
         val choices=state().array("adjustments").objects().map { it.getString("id") }
-        assertEquals(46, choices.size)
+        assertEquals(48, choices.size)
         assertEquals("The picker lists both fill generators", listOf("solid_color","gradient_fill"), choices.filter { it in listOf("solid_color","gradient_fill") })
         action(obj("type" to "select_panel_tab", "group" to group("adjustments").getLong("id"), "panel" to "adjustments"))
         compose.waitUntil(20_000) { host.filterPreviewCache.images[choices.first()] != null }

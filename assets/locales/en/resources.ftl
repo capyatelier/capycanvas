@@ -474,3 +474,14 @@ resources-parameter-hue-saturation-colorize = Colorize
 resources-parameter-photo-filter-color = Color
 resources-parameter-photo-filter-density = Density
 resources-parameter-threshold-threshold = Threshold
+
+resources-filter-selective-color = Selective Color
+resources-filter-channel-mixer = Channel Mixer
+resources-page-selective-color-whites = Whites
+resources-page-selective-color-neutrals = Neutrals
+resources-page-selective-color-blacks = Blacks
+resources-parameter-selective-color-mode = Method
+resources-choice-selective-color-relative = Relative
+resources-choice-selective-color-absolute = Absolute
+resources-parameter-channel-mixer-constant = Constant
+resources-parameter-channel-mixer-monochrome = Monochrome

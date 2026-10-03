@@ -26,6 +26,23 @@ its strength. Invert, Desaturate and Photo Filter use display-resolution preview
 after passing the reduced-graph quality checks. Threshold stays at native
 resolution because thresholding averaged colors loses narrow black/white edges.
 
+Selective Color has nine pages: six hue families, Whites, Neutrals and Blacks.
+Each page contributes Cyan, Magenta, Yellow and Black corrections. Relative
+scales the changes by existing ink; Absolute applies them directly. Membership
+uses original physical Oklab hue and bounded encoded chroma, with Color Balance's
+shared tonal weights for the remaining membership. Corrections combine once;
+Black uses the original color and extended RGB residuals remain intact. A small
+GPU preparation packs the corrections once per edit; unchanged hue or tonal
+sections skip their pixel calculations. This is
+Capy's documented formula, not a reproduction of proprietary pixel math.
+
+Channel Mixer has Red, Green and Blue output pages with three coefficients and a
+Constant. Monochrome shows its independent Gray row while preserving the RGB
+rows. Coefficients are percentages, without automatic normalization; the default
+Gray row is 21.26 / 71.52 / 7.22. Neutral Selective Color and the identity RGB
+matrix preserve the input pixel exactly. Both use qualified display-resolution
+previews; export evaluates their native pixels.
+
 The [tone and color contract](../development/photo-editing-m5-m6-color.md#huesaturation-by-range)
 defines the equations and bounds. All controls, validation, history and saved
 values use the existing runtime schema on GTK, Web, Android and Windows.

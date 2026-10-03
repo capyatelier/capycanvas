@@ -591,3 +591,14 @@ resources-parameter-hue-saturation-colorize = 색상 입히기
 resources-parameter-photo-filter-color = 색상
 resources-parameter-photo-filter-density = 농도
 resources-parameter-threshold-threshold = 임계값
+
+resources-filter-selective-color = 선택 색상
+resources-filter-channel-mixer = 채널 믹서
+resources-page-selective-color-whites = 흰색 계열
+resources-page-selective-color-neutrals = 중간색 계열
+resources-page-selective-color-blacks = 검정 계열
+resources-parameter-selective-color-mode = 방식
+resources-choice-selective-color-relative = 상대값
+resources-choice-selective-color-absolute = 절대값
+resources-parameter-channel-mixer-constant = 상수
+resources-parameter-channel-mixer-monochrome = 단색

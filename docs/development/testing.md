@@ -88,6 +88,9 @@ the Colorize and Threshold Properties tests in `layer-ui`, and `native_effects::
 and `scale::tests::color_effects` in `layer-render-wgpu`. The GPU references
 cover physical hue membership, extended RGB, tiny alpha, tagged colors and
 reduced-resolution previews independently of catalog screenshots.
+Selective Color references lock original-color membership and Black scaling;
+Channel Mixer references cover signed coefficients, constants and independent
+Monochrome rows. Both preserve hidden page values through undo and project I/O.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless

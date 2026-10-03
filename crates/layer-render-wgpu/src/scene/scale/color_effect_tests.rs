@@ -101,7 +101,7 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                 else if name == "threshold" { layer_core::color::source::rgba8_source(extent, |x, y| {
                     let gray = if (x / 3 + y / 2) % 2 == 0 { 126 } else { 130 }; [gray, gray, gray, 255]
                 }) } else { document_at(extent).layers[0].source.as_ref().unwrap().clone() });
-            let states = if name == "photo_filter" { 3 } else { 1 };
+            let states = match name { "photo_filter" => 3, "selective_color" | "channel_mixer" => 5, _ => 1 };
             for state in 0..states {
                 doc.layers.retain(|layer| layer.id != LayerId(99));
                 let program = crate::tests::fixture(name).program().for_depth(SampleDepth::F32);
@@ -116,6 +116,7 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                     effect.set("preserve_luminance", EffectValue::Toggle(state == 1)).unwrap();
                     effect.set("color", EffectValue::Color(RgbColor::new(RgbSpace::DisplayP3, [0.9, 0.2, 0.15, 1.]).unwrap())).unwrap();
                 }
+                if matches!(name, "selective_color" | "channel_mixer") { mixing_state(&mut effect, name, state); }
                 let mut adjustment = Layer::paint(LayerId(99), "Display candidate");
                 adjustment.kind = LayerKind::Effect; adjustment.effect = Some(Arc::new(effect));
                 if source == 0 {
@@ -171,6 +172,55 @@ fn p21_photo_filter_display_candidate_qualification() {
     assert_eq!(crate::tests::fixture("photo_filter").program().resolution, EffectResolution::Display);
     let error = candidate_errors("photo_filter");
     assert!(error[0] < 0.002 && error[1] < 0.015, "{error:?}");
+}
+
+fn mixing_state(effect: &mut EffectInstance, name: &str, state: usize) {
+    if name == "selective_color" {
+        let mild = [[0.; 4], [0.; 4], [0.; 4], [0.; 4], [0.; 4], [0.; 4], [0., 0., 8., 0.], [2., -2., 6., 0.], [0.; 4]];
+        let strong = [[45., -25., 10., 20.], [-25., 35., 40., 10.], [35., 15., -35., 20.],
+            [30., -30., 35., 15.], [-35., 35., 15., 20.], [40., 25., -35., 15.],
+            [15., -10., 20., 15.], [-15., 20., 10., -15.], [20., -20., 15., 30.]];
+        let values = match state { 0 | 1 => mild, 2 | 3 => strong, _ => [[100., -100., 100., 75.]; 9] };
+        for (family, row) in ["reds", "yellows", "greens", "cyans", "blues", "magentas", "whites", "neutrals", "blacks"].into_iter().zip(values) {
+            for (component, value) in ["cyan", "magenta", "yellow", "black"].into_iter().zip(row) {
+                effect.set(&format!("{family}_{component}"), EffectValue::Number(value)).unwrap();
+            }
+        }
+        effect.set("mode", EffectValue::Choice(u32::from(state % 2 == 1))).unwrap();
+    } else {
+        let rows = match state {
+            0 => [[0., 100., 0., 0.], [0., 0., 100., 0.], [100., 0., 0., 0.]],
+            1 => [[80., -20., 50., 10.], [-30., 120., 20., -15.], [25., 35., 70., 5.]],
+            _ => [[-125., 80., 145., 35.], [200., -200., 0., -100.], [0., 0., 0., 75.]],
+        };
+        for (output, row) in ["red", "green", "blue"].into_iter().zip(rows) {
+            for (input, value) in ["red", "green", "blue", "constant"].into_iter().zip(row) {
+                effect.set(&format!("{output}_{input}"), EffectValue::Number(value)).unwrap();
+            }
+        }
+        effect.set("monochrome", EffectValue::Toggle(state >= 3)).unwrap();
+        if state == 4 {
+            for (input, value) in ["red", "green", "blue", "constant"].into_iter().zip([150., -75., 25., -20.]) {
+                effect.set(&format!("gray_{input}"), EffectValue::Number(value)).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn selective_color_display_candidate_qualification() {
+    let error = candidate_errors("selective_color");
+    let eligible = error[0] < 0.002 && error[1] < 0.015;
+    assert!(eligible, "Display Selective Color must earn its approximation: {error:?}");
+    assert_eq!(crate::tests::fixture("selective_color").program().resolution, EffectResolution::Display);
+}
+
+#[test]
+fn channel_mixer_display_candidate_qualification() {
+    let error = candidate_errors("channel_mixer");
+    let eligible = error[0] < 0.002 && error[1] < 0.015;
+    assert!(eligible, "Display Channel Mixer must earn its approximation: {error:?}");
+    assert_eq!(crate::tests::fixture("channel_mixer").program().resolution, EffectResolution::Display);
 }
 
 #[test]

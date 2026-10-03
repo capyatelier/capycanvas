@@ -30,6 +30,8 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 120, soft | **Not met for Hue.** Master 102.54–109.43, Range 106.57–111.08 presents/s | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |
 | Colorize Saturation and Photo Filter Density | 120, soft | **Not met.** 112.58–115.04 and 110.26–114.09 presents/s | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |
 | Threshold slider, exact native resolution | 120, soft | **Not met.** 4.75–4.79 presents/s, interval p99 241.67 ms | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |
+| Selective Color, neutral and red-family corrections | 120, soft | **Not met.** 110.35–113.31 and 113.89–114.09 presents/s | [Selective Color and Channel Mixer](#selective-color-and-channel-mixer), 2026-10-03 |
+| Channel Mixer, coefficient and Constant | 120, soft | **Not met.** 112.20–115.25 and 109.06–112.53 presents/s | [Selective Color and Channel Mixer](#selective-color-and-channel-mixer), 2026-10-03 |
 | Curves point drag (61 MP) | 120, soft | **Not met.** 72.07–74.61 completed canvas updates/s; native UI 76.51–78.53 frames/s | [Curves editing](#curves-editing), 2026-10-02 |
 | Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 120, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 120, soft | | |
@@ -129,6 +131,53 @@ only native scheduling changed afterward, with matching shader and manifest
 hashes. Full source identities, corrected input records, calibration provenance
 and measurements are in
 `artifacts/photo-editing-color/p21-performance/p21-final-evidence.json`.
+
+## Selective Color and Channel Mixer
+
+Measured on 2026-10-03 on the reference tablet, with the original 9504 × 6336
+Sony photo, Fit, Navigator, default display settings and glass, and a private
+release-Rust benchmark application. Three warmed five-second native slider
+contacts per control use 40% travel and a 0.5-second triangle period. Actual
+SurfaceView presents inside each contact are counted; all controls traverse
+enough numeric steps to change faster than the target rate.
+
+| Motion | Actual presents/s, three contacts | Moving interval p99 |
+| --- | --- | --- |
+| Selective Color, Neutrals Cyan | 110.814 / 110.349 / 113.314 | 16.667–25.001 ms |
+| Selective Color, Reds Cyan | 113.889 / 113.982 / 114.089 | 16.667 ms |
+| Channel Mixer, Red Green coefficient | 112.983 / 115.249 / 112.204 | 16.667 ms |
+| Channel Mixer, Red Constant | 109.058 / 112.526 / 109.257 | 16.667 ms |
+
+None meets the sustained 120/s target. The initial Selective Color shader scanned
+36 controls per pixel and evaluated hue even when only neutral corrections were
+active. Preparing nine correction vectors and two section flags once per edit
+removes those scans and skips inactive calculations. Neutrals Cyan improves from
+65.33–73.73 presents/s to 110.35–113.31; the unchanged Mixer coefficient previously
+presented at 111.24–113.28. Independent numerical and photographic comparisons
+remain unchanged. Both effects pass reduced-graph quality checks and retain
+native evaluation for exact export.
+
+Separate traced profiles put Neutrals Cyan composition at 10.768 ms median /
+10.908 ms p95 before preparation and 5.953 / 6.377 ms afterward. Source admissions
+are close (769 versus 760 slots), both retain five hierarchy levels, and the
+motion windows record 12 versus 16 source misses with no upload drains. Owner
+CPU medians are 7.305 and 7.803 ms. The two live parameter buffers grow from
+1,280 to 1,664 bytes. Tracing reduces presentation rates and GPU scopes include
+scheduling gaps; these profiles diagnose work, not the sustained rate. The
+remaining miss is not evidence of a hardware ceiling.
+
+The benchmark awaits completion of Properties scrolling on Compose's UI frame
+clock before locating the visible track. Earlier fire-and-return scrolling and
+fixed-delay setup did not establish scroll completion and sometimes produced no
+value change. Those failed preparations and screenshot-assisted diagnostic passes are
+excluded from the table. The final twelve contacts pass without screenshots or
+diagnostic probes. Physical pen input and changed-preview latency remain
+unverified, as do low/mid reference tiers and continuous process/driver peaks.
+
+Benchmark APK SHA-256:
+`5219219a6e6ebec0fd20e30b32f3ac3eb1404c8b2afbd193b44ee053d7275746`.
+Full input records, source identities, profiles and setup diagnostics are in
+`artifacts/photo-editing-color/p22-performance/p22-final-evidence.json`.
 
 ## Exact artwork samples
 

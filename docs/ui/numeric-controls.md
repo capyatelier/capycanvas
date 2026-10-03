@@ -119,6 +119,11 @@ floating documents. Existing floating bounds and values survive depth changes.
 Photo Filter uses the shared tagged color editor, Density and Preserve luminosity.
 Invert and Desaturate apply directly without numeric controls.
 
+Selective Color keeps its Relative/Absolute choice visible on every ink page.
+Channel Mixer's Monochrome switch changes between the stored RGB output rows and
+the Gray row. Switching pages or modes preserves hidden values and the common
+control's keyboard focus. Each scrub remains one undo step.
+
 GTK Levels has RGB, Red, Green and Blue pages. Channel stages run before RGB;
 the two clipping controls apply to every stage. Floating documents allow input
 and output anchors from −65504 to 65504, with the slider concentrated on 0–1.

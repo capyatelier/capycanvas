@@ -56,6 +56,13 @@ fn toggle(w: &Rc<Workspace>, input: &mut RemoteInput, key: &str) {
     let switch=switch(w,key);
     scroll_to(switch.upcast_ref());input.click(screen_point(switch.upcast_ref(),&w.window,[0.5,0.5]));ready(w);
 }
+fn canvas_pixel(w: &Rc<Workspace>) -> Vec<u8> {
+    let texture=crate::snapshot(w);let mut pixels=vec![0;texture.width() as usize*texture.height() as usize*4];texture.download(&mut pixels,texture.width() as usize*4);
+    let m=state(w).camera.document_to_surface();let bounds=w.area.compute_bounds(&w.window).unwrap();let scale=w.area.scale_factor() as f32;
+    let x=(bounds.x()+(m[0]*64.+m[2]*192.+m[4])/scale) as usize;
+    let y=(bounds.y()+(m[1]*64.+m[3]*192.+m[5])/scale) as usize;
+    pixels[(y*texture.width() as usize+x)*4..(y*texture.width() as usize+x)*4+4].to_vec()
+}
 
 #[test]
 #[ignore = "private display and hardware GPU"]
@@ -63,13 +70,7 @@ fn native_colorize_threshold_visible_artwork() {
     let app=native_test_app("art.capycanvas.PointwiseSmoke");let w=start(&app);
     let output=std::path::Path::new(artifact_dir("../../artifacts/photo-editing-color/p21-gtk"));
     let mut input=RemoteInput::new().timeout_secs(30);input.ready();let source=document(&w);
-    let pixel=|| {
-        let texture=crate::snapshot(&w);let mut pixels=vec![0;texture.width() as usize*texture.height() as usize*4];texture.download(&mut pixels,texture.width() as usize*4);
-        let m=state(&w).camera.document_to_surface();let bounds=w.area.compute_bounds(&w.window).unwrap();let scale=w.area.scale_factor() as f32;
-        let x=(bounds.x()+(m[0]*64.+m[2]*192.+m[4])/scale) as usize;
-        let y=(bounds.y()+(m[1]*64.+m[3]*192.+m[5])/scale) as usize;
-        pixels[(y*texture.width() as usize+x)*4..(y*texture.width() as usize+x)*4+4].to_vec()
-    };
+    let pixel=||canvas_pixel(&w);
     let mut samples=Vec::new();
     for theme in [Theme::Light,Theme::Dark] {
         w.dispatch(UiAction::SetTheme {theme:Some(theme)});ready(&w);
@@ -176,6 +177,61 @@ fn motion(w: &Rc<Workspace>, input: &mut RemoteInput, key: &str) -> serde_json::
     report["input_trace"]=trace;report["motion_window_ns"]=json!([start,end]);
     report["moving_presentation_intervals_ms"]=json!(moving.windows(2).map(|pair|pair[1][1].saturating_sub(pair[0][1]) as f64/1e6).collect::<Vec<_>>());
     report["moving_presentations_per_s"]=json!(moving.len() as f64/((end-start) as f64/1e9));report["moving_presentations"]=json!(moving);report["reference_tier_qualification"]=json!(false);report
+}
+
+#[test]
+#[ignore = "private display and hardware GPU"]
+fn native_selective_color_pages_and_persistence() { native_color_pages("selective_color"); }
+#[test]
+#[ignore = "private display and hardware GPU"]
+fn native_channel_mixer_monochrome_retains_values_and_focus() { native_color_pages("channel_mixer"); }
+fn native_color_pages(effect: &str) {
+    let app=native_test_app(if effect=="selective_color" {"art.capycanvas.SelectiveColor"}else{"art.capycanvas.ChannelMixer"});let w=start(&app);
+    let output=std::path::Path::new(artifact_dir("../../artifacts/photo-editing-color/p22-gtk"));
+    let mut input=RemoteInput::new().timeout_secs(30);input.ready();let source=document(&w);let width=w.window.width();let mut samples=Vec::new();
+    for theme in [Theme::Light,Theme::Dark] {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)});ready(&w);let original=canvas_pixel(&w);insert(&w,effect);
+        assert_eq!(canvas_pixel(&w),original,"neutral adjustment retains visible artwork");
+        if effect=="selective_color" {
+            let pages=["reds","yellows","greens","cyans","blues","magentas","whites","neutrals","blacks"];
+            assert_eq!(state(&w).layer_properties.pages.iter().map(|p|p.id.as_str()).collect::<Vec<_>>(),pages);
+            assert_eq!(document(&w).layer(document(&w).active_layer).unwrap().effect.as_ref().unwrap().program.parameters.len(),37);
+            let before=super::place_source::snapshot(&w);for index in 0..9 {choose(&w,&mut input,"properties-page",index);}assert_eq!(super::place_source::snapshot(&w),before);
+            for (index,page) in pages.iter().enumerate() {
+                choose(&w,&mut input,"properties-page",index as u32);
+                for (ink,text) in [("cyan",((index+1)*2).to_string()),("magenta","-1.25".into()),("yellow","1.5".into()),("black","0.5".into())] {edit(&w,&mut input,&format!("{page}_{ink}"),&text);}
+            }
+            for (index,page) in pages.iter().enumerate() {choose(&w,&mut input,"properties-page",index as u32);for (ink,expected) in [("cyan",((index+1)*2) as f32),("magenta",-1.25),("yellow",1.5),("black",0.5)] {assert_eq!(value(&w,&format!("{page}_{ink}")),EffectValue::Number(expected));}}
+            choose(&w,&mut input,"properties-page",3);let relative=canvas_pixel(&w);assert_ne!(relative,original);capture(&w,output,&format!("selective-relative-{width}-{theme:?}"));
+            let before=document(&w).layers;choose(&w,&mut input,"property-mode",1);ready(&w);assert_eq!(value(&w,"mode"),EffectValue::Choice(1));let absolute=canvas_pixel(&w);assert_ne!(absolute,relative);
+            let after=document(&w).layers;w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before);w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);assert_eq!(document(&w).layers,after);
+            capture(&w,output,&format!("selective-absolute-{width}-{theme:?}"));samples.push(json!({"theme":format!("{theme:?}"),"original":original,"relative":relative,"absolute":absolute}));
+        } else {
+            assert_eq!(state(&w).layer_properties.pages.iter().map(|p|p.id.as_str()).collect::<Vec<_>>(),["red","green","blue"]);
+            assert_eq!(document(&w).layer(document(&w).active_layer).unwrap().effect.as_ref().unwrap().program.parameters.len(),17);
+            let before=super::place_source::snapshot(&w);for index in 0..3 {choose(&w,&mut input,"properties-page",index);}assert_eq!(super::place_source::snapshot(&w),before);
+            for (index,page) in ["red","green","blue"].iter().enumerate() {choose(&w,&mut input,"properties-page",index as u32);for channel in ["red","green","blue"] {edit(&w,&mut input,&format!("{page}_{channel}"),if channel==*page {"85"}else if channel=="red" {"15"}else {"-5"});}edit(&w,&mut input,&format!("{page}_constant"),"1.25");}
+            let retained=["red_red","green_green","blue_blue","red_constant"].map(|key|value(&w,key));let rgb=canvas_pixel(&w);assert_ne!(rgb,original);capture(&w,output,&format!("mixer-rgb-{width}-{theme:?}"));
+            let mono=switch(&w,"monochrome");scroll_to(mono.upcast_ref());mono.grab_focus();input.key(32);ready(&w);
+            assert_eq!(value(&w,"monochrome"),EffectValue::Toggle(true));assert_eq!(state(&w).layer_properties.page.as_deref(),Some("gray"));assert_eq!(state(&w).layer_properties.pages.len(),1);
+            assert_eq!(gtk::prelude::RootExt::focus(&w.window).as_ref(),Some(switch(&w,"monochrome").upcast_ref::<gtk::Widget>()));
+            assert!(!named::<gtk::DropDown>(w.window.upcast_ref(),"properties-page").is_mapped());
+            for (key,text) in [("gray_red","60"),("gray_green","20"),("gray_blue","20"),("gray_constant","1.25")] {edit(&w,&mut input,key,text);}
+            let control=number(&w,"gray_constant");let display=find_css(control.upcast_ref(),"number-value").unwrap();input.click(screen_point(&display,&w.window,[0.5,0.5]));let entry=descendant::<gtk::Entry>(&control).unwrap();entry.set_text("77.");let focus=gtk::prelude::RootExt::focus(&w.window);
+            w.dispatch(UiAction::Effect {action:EffectAction::Set {layer:state(&w).layer_properties.layer.unwrap(),key:"gray_red".into(),value:EffectValue::Number(65.)}});ready(&w);
+            assert_eq!(number(&w,"gray_constant"),control);assert_eq!(entry.text(),"77.");assert_eq!(gtk::prelude::RootExt::focus(&w.window),focus);
+            let before_cancel=document(&w).layers;input.key(0xff1b);ready(&w);assert_eq!(document(&w).layers,before_cancel);assert_eq!(value(&w,"gray_constant"),EffectValue::Number(1.25));
+            w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(value(&w,"gray_red"),EffectValue::Number(60.));w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);assert_eq!(value(&w,"gray_red"),EffectValue::Number(65.));
+            let gray=canvas_pixel(&w);assert!(gray[3]==255&&gray[..3].iter().max().unwrap()-gray[..3].iter().min().unwrap()<=2);capture(&w,output,&format!("mixer-gray-{width}-{theme:?}"));
+            let mono=switch(&w,"monochrome");mono.grab_focus();let before=document(&w).layers;input.key(32);ready(&w);assert_eq!(value(&w,"monochrome"),EffectValue::Toggle(false));assert_eq!(gtk::prelude::RootExt::focus(&w.window).as_ref(),Some(switch(&w,"monochrome").upcast_ref::<gtk::Widget>()));
+            assert_eq!(["red_red","green_green","blue_blue","red_constant"].map(|key|value(&w,key)),retained);assert_eq!(value(&w,"gray_red"),EffectValue::Number(65.));
+            assert_eq!(["gray_red","gray_green","gray_blue","gray_constant"].map(|key|value(&w,key)),[65.,20.,20.,1.25].map(EffectValue::Number));assert_eq!(canvas_pixel(&w),rgb);
+            let after=document(&w).layers;w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before);w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);assert_eq!(document(&w).layers,after);
+            samples.push(json!({"theme":format!("{theme:?}"),"original":original,"rgb":rgb,"gray":gray}));
+        }
+        unchanged_sources(&w,&source);persist(&w,output,&format!("{effect}-{width}-{theme:?}"));w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);
+    }
+    std::fs::write(output.join(format!("{effect}-pixels-{width}.json")),serde_json::to_vec_pretty(&samples).unwrap()).unwrap();input.finish();w.window.destroy();pump(100);
 }
 
 #[test]

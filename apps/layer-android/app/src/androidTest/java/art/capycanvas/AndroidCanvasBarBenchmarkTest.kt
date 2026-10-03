@@ -161,7 +161,9 @@ class AndroidCanvasBarBenchmarkTest {
                     (anchor.getDouble(1) + fraction * (anchor.getDouble(3) - anchor.getDouble(1))) * zoom + translation.getDouble(1)
             }
             fun corner() = anchorPoint(1.0)
+            var lastDownInjectionNs = 0L
             fun inject(action: Int, down: Long, x: Double, y: Double, pressure: Float) {
+                val injectionBegan = System.nanoTime()
                 val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 5; toolType = MotionEvent.TOOL_TYPE_STYLUS })
                 val coords = arrayOf(MotionEvent.PointerCoords().apply {
                     this.x = x.toFloat() + host.surfaceOrigin.x; this.y = y.toFloat() + host.surfaceOrigin.y; this.pressure = pressure
@@ -169,7 +171,7 @@ class AndroidCanvasBarBenchmarkTest {
                 val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_STYLUS, 0)
                 try { check(instrumentation.uiAutomation.injectInputEvent(event, action != MotionEvent.ACTION_MOVE) || action == MotionEvent.ACTION_CANCEL) {
                     "Stylus injection failed: $event"
-                } } finally { event.recycle() }
+                } } finally { event.recycle(); if (action == MotionEvent.ACTION_DOWN) lastDownInjectionNs = System.nanoTime() - injectionBegan }
             }
             var measuring = false
             var mark = 0L
@@ -519,6 +521,10 @@ class AndroidCanvasBarBenchmarkTest {
                     Scrub("hue_saturation", "colorize_saturation", "Saturation", "effect-colorize-saturation-drag", .35, colorize = true, span = .4),
                     Scrub("threshold", "threshold", "Threshold", "effect-threshold-drag", .35, span = .4),
                     Scrub("photo_filter", "density", "Density", "effect-photo-filter-drag", .35, span = .4),
+                    Scrub("selective_color", "neutrals_cyan", "Cyan", "effect-selective-neutrals-cyan-drag", .3, page = "neutrals", span = .4),
+                    Scrub("selective_color", "reds_cyan", "Cyan", "effect-selective-reds-cyan-drag", .3, page = "reds", span = .4),
+                    Scrub("channel_mixer", "red_green", "Green", "effect-channel-mixer-coefficient-drag", .3, page = "red", span = .4),
+                    Scrub("channel_mixer", "red_constant", "Constant", "effect-channel-mixer-constant-drag", .3, page = "red", span = .4),
                     Scrub("exposure", "exposure", "Exposure", "effect-chain-exposure-drag", .45, true),
                 )
                 val selectedLabels = args.getString("labels")?.split(',')
@@ -548,6 +554,15 @@ class AndroidCanvasBarBenchmarkTest {
                     waitFor("${scrub.title} control") { findTag("number-slider-${scrub.title}") != null }
                     invoke("fit_canvas")
                     effectZoom?.let { action(obj("type" to "set_zoom", "zoom" to it)) }
+                    waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
+                    runBlocking { kotlinx.coroutines.withContext(androidx.compose.ui.platform.AndroidUiDispatcher.Main) {
+                        val node = findTag("number-slider-${scrub.title}")!!.second
+                        if (node.boundsInRoot.height < node.size.height * .9f) {
+                            val scroll = generateSequence(node.parent) { it.parent }.first { it.config.getOrNull(SemanticsActions.ScrollByOffset) != null }
+                            scroll.config[SemanticsActions.ScrollByOffset].invoke(androidx.compose.ui.geometry.Offset(0f, node.positionInRoot.y + node.size.height * .5f - scroll.boundsInRoot.center.y))
+                        }
+                    } }
+                    waitFor("${scrub.title} slider visible") { findTag("number-slider-${scrub.title}")!!.second.let { it.boundsInRoot.height >= it.size.height * .9f } }
                     var track = android.graphics.RectF()
                     instrumentation.runOnMainSync {
                         val (root, node) = findTag("number-slider-${scrub.title}")!!
@@ -560,7 +575,8 @@ class AndroidCanvasBarBenchmarkTest {
                     val start = track.left + track.width() * scrub.start - host.surfaceOrigin.x to track.centerY() - host.surfaceOrigin.y.toDouble()
                     val before = value()
                     drag(start, 250) { t -> track.width() * .1 * t / .25 to 0.0 }
-                    waitFor("${scrub.title} gesture changes its value") { value() != before }
+                    val warmupDownInjectionMs = lastDownInjectionNs / 1e6
+                    host.awaitMain("${scrub.title} gesture changes its value", 10_000, condition = { value() != before })
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
                     val preparationMs = (System.nanoTime() - preparedAt) / 1e6
                     val effectRepeats = args.getString("effectRepeats", "1")!!.toInt().also { require(it > 0) }
@@ -584,7 +600,7 @@ class AndroidCanvasBarBenchmarkTest {
                         }
                         val result = File(output, "$label.json")
                         result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted()))
-                            .put("slider_travel_fraction", scrub.span).put("triangle_period_seconds", .5).put("preparation_ms", preparationMs).put("effect_id", scrub.id).put("effect_key", scrub.key).put("effect_page", scrub.page ?: "rgb").put("colorize", scrub.colorize).put("theme", state().getString("theme"))
+                            .put("warmup_down_injection_ms", warmupDownInjectionMs).put("down_injection_ms", lastDownInjectionNs / 1e6).put("slider_travel_fraction", scrub.span).put("triangle_period_seconds", .5).put("preparation_ms", preparationMs).put("effect_id", scrub.id).put("effect_key", scrub.key).put("effect_page", scrub.page ?: "rgb").put("colorize", scrub.colorize).put("theme", state().getString("theme"))
                             .put("first_value_observed_ns", firstChanged.get().takeIf { it > 0 } ?: JSONObject.NULL)
                             .put("down_to_first_value_observed_ms", firstChanged.get().takeIf { it > 0 && gestureDown.get() > 0 }?.let { (it - gestureDown.get()) / 1e6 } ?: JSONObject.NULL)
                             .put("photo_fixture_visible_layer_ids", JSONArray(fixtureVisibleLayerIds)).put("photo_fixture_visible_layer_count", fixtureVisibleLayerIds.size).put("slider_bounds",

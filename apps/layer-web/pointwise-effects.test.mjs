@@ -3,7 +3,7 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import {placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
 import {png} from './clone-journey.test.mjs';
 
-export async function checkPointwiseEffects({call,evaluate,settle,motion=true,widths=[640,1100],effects=['invert','threshold','desaturate','photo_filter']}) {
+export async function checkPointwiseEffects({call,evaluate,settle,motion=true,widths=[640,1100],effects=['invert','threshold','desaturate','photo_filter'],colorPages=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/photo-editing-color/p21-web';
   await mkdir(directory,{recursive:true});
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function poll(){if(${condition})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-900)));else setTimeout(poll,40)}poll()})`);
@@ -63,6 +63,47 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
       await invoke('open_document');await idle();
       const actual=await unchanged();assert.deepEqual(actual.document.layers,expected.document.layers,'Native archive retains exact effect values and sources');
     };
+    if(colorPages) {
+      const samples=[];
+      const nativeChoice=async(selector,index)=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);assert.equal(await evaluate(`Number(document.querySelector(${JSON.stringify(selector)}).value)`),index);};
+      const layers=async()=>(await save()).document.layers;
+      for(const width of widths) {
+        await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
+        await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','properties'].includes(id)}})`);await settle();await invoke('fit_canvas');
+        for(const theme of ['light','dark']) {
+          await send({type:'set_theme',theme});const original=await canvasPixel();assert.ok(original[1]>original[0]+60&&original[3]===255);
+          await send({type:'effect',action:{op:'insert',effect:'selective_color'}});assert.deepEqual(await canvasPixel(),original);
+          const pages=['reds','yellows','greens','cyans','blues','magentas','whites','neutrals','blacks'];assert.deepEqual((await properties()).pages.map(p=>p.id),pages);
+          let owner=(await properties()).layer,before=await layers();assert.equal(before.find(l=>l.id===owner)?.effect.values.length,37);
+          for(const id of pages)await page(id);assert.deepEqual(await layers(),before);
+          const inks=['cyan','magenta','yellow','black'];
+          for(let i=0;i<pages.length;i++){await page(pages[i]);for(const [j,text] of [String((i+1)*2),'-1.25','1.5','0.5'].entries())await edit(`${pages[i]}_${inks[j]}`,text);}
+          for(let i=0;i<pages.length;i++){await page(pages[i]);for(const [j,n] of [(i+1)*2,-1.25,1.5,.5].entries())assert.ok(Math.abs((await value(`${pages[i]}_${inks[j]}`)).value-n)<1e-6);}
+          await page('cyans');const relative=await canvasPixel();assert.notDeepEqual(relative,original);await capture(`selective-relative-${width}-${theme}`);
+          before=await layers();await nativeChoice(`${selector('mode')} select`,1);assert.equal((await value('mode')).value,1);const absolute=await canvasPixel();assert.notDeepEqual(absolute,relative);
+          const after=await layers();await invoke('undo');assert.deepEqual(await layers(),before);await invoke('redo');assert.deepEqual(await layers(),after);
+          await capture(`selective-absolute-${width}-${theme}`);await reopen(`selective-${width}-${theme}`);await send({type:'layer',action:{op:'delete_selected'}});
+          await send({type:'effect',action:{op:'insert',effect:'channel_mixer'}});assert.deepEqual(await canvasPixel(),original);assert.deepEqual((await properties()).pages.map(p=>p.id),['red','green','blue']);
+          owner=(await properties()).layer;before=await layers();assert.equal(before.find(l=>l.id===owner)?.effect.values.length,17);for(const id of ['red','green','blue'])await page(id);assert.deepEqual(await layers(),before);
+          for(const output of ['red','green','blue']){await page(output);for(const channel of ['red','green','blue'])await edit(`${output}_${channel}`,channel===output?'85':channel==='red'?'15':'-5');await edit(`${output}_constant`,'1.25');}
+          const stored=(await layers()).find(l=>l.id===owner).effect.values.slice();const rgb=await canvasPixel();assert.notDeepEqual(rgb,original);await capture(`mixer-rgb-${width}-${theme}`);
+          await evaluate(`document.querySelector('${selector('monochrome')} input').focus()`);await key(' ',32);assert.equal((await value('monochrome')).value,true);assert.equal((await properties()).page,'gray');assert.deepEqual((await properties()).pages.map(p=>p.id),['gray']);
+          assert.ok(await evaluate(`document.activeElement===document.querySelector('${selector('monochrome')} input')&&document.querySelector('[data-properties-page]').hidden`));
+          for(const [name,text]of [['gray_red','60'],['gray_green','20'],['gray_blue','20'],['gray_constant','1.25']])await edit(name,text);
+          await click(`${selector('gray_constant')} .number-value`);await evaluate(`window.pointwiseFocus=document.querySelector('${selector('gray_constant')} .number-entry');pointwiseFocus.focus();pointwiseFocus.value='77.';pointwiseFocus.dispatchEvent(new Event('input',{bubbles:true}));`);
+          await send({type:'effect',action:{op:'set',layer:(await properties()).layer,key:'gray_red',value:{kind:'number',value:65}}});
+          assert.ok(await evaluate(`pointwiseFocus===document.activeElement&&pointwiseFocus===document.querySelector('${selector('gray_constant')} .number-entry')&&pointwiseFocus.value==='77.'`));
+          const beforeCancel=(await properties()).controls.map(c=>({key:c.key,value:c.value}));await key('Escape',27);assert.deepEqual((await properties()).controls.map(c=>({key:c.key,value:c.value})),beforeCancel);assert.equal((await value('gray_constant')).value,1.25);
+          await invoke('undo');assert.equal((await value('gray_red')).value,60);await invoke('redo');assert.equal((await value('gray_red')).value,65);
+          const gray=await canvasPixel();assert.ok(gray[3]===255&&Math.max(...gray.slice(0,3))-Math.min(...gray.slice(0,3))<=2);await capture(`mixer-gray-${width}-${theme}`);
+          await evaluate(`document.querySelector('${selector('monochrome')} input').focus()`);before=await layers();await key(' ',32);assert.equal((await value('monochrome')).value,false);assert.ok(await evaluate(`document.activeElement===document.querySelector('${selector('monochrome')} input')`));
+          const current=(await layers()).find(l=>l.id===owner).effect.values;assert.deepEqual(current.slice(0,12),stored.slice(0,12));assert.deepEqual(current.slice(12,16).map(v=>v.value),[65,20,20,1.25]);assert.deepEqual(await canvasPixel(),rgb);
+          const restored=await layers();await invoke('undo');assert.deepEqual(await layers(),before);await invoke('redo');assert.deepEqual(await layers(),restored);
+          await reopen(`mixer-${width}-${theme}`);await send({type:'layer',action:{op:'delete_selected'}});samples.push({width,theme,original,relative,absolute,rgb,gray});
+        }
+      }
+      await writeFile(`${directory}/color-pages-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: Selective Color nine pages/modes and Channel Mixer RGB/Gray, native keyboard/drafts, Undo/source/archive/artwork in both themes and widths');return;
+    }
     for(const width of widths) {
       await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
       await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','properties'].includes(id)}})`);await settle();

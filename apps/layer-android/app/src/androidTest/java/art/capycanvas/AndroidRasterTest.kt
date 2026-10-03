@@ -2553,6 +2553,66 @@ class AndroidRasterTest {
         }
     }
 
+    @Test fun selectiveColorAndMixerPersistHiddenParametersAndOriginalSource() {
+        for ((space, depth) in listOf("Srgb" to "U8", "DisplayP3" to "U16", "ProPhoto" to "F16", "Srgb" to "F32")) {
+            val task = native { handle ->
+                val (id, file) = request(handle, "new_document")
+                Native.projectTask(handle, id, "null", file.getLong("epoch"), file.getLong("revision"))
+            }
+            try {
+                Native.projectOptions(task, obj("extent" to org.json.JSONArray(listOf(128, 128)), "color" to obj("space" to space, "depth" to depth), "background" to "White").toString())
+                Native.projectWork(task, -1, 128, 128); native { Native.projectAdopt(it, task, "null") }
+            } finally { Native.projectFree(task) }
+            refresh(); invoke("fit_canvas"); stroke(0.0)
+            png("p22-source.png", builtinRecipe(2).put("format", "Png").put("depth", "U8"))
+            val imported = native { handle ->
+                val (id, file) = request(handle, "import_image")
+                Native.projectTask(handle, id, obj("uri" to "test:p22-source.png", "name" to "p22-source.png").toString(), file.getLong("epoch"), file.getLong("revision"))
+            }
+            try {
+                Native.projectWork(imported, ParcelFileDescriptor.open(File(files, "p22-source.png"), ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
+                native { Native.projectAdopt(it, imported, "null") }
+            } finally { Native.projectFree(imported) }
+            refresh(); invoke("apply_transform")
+            val original = sourceIdentity(manifest(save("p22-original.capy")))
+            val originalPixels = hash(png("p22-original.png", builtinRecipe(2).put("format", "Png").put("depth", "U8")))
+            for (id in listOf("selective_color", "channel_mixer")) {
+                send(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
+                val layer = native { state(it).getJSONObject("layer_properties").getLong("layer") }
+                fun set(key: String, kind: String, value: Any) = send(obj("type" to "effect", "action" to obj("op" to "set", "layer" to layer, "key" to key, "value" to obj("kind" to kind, "value" to value))))
+                if (id == "selective_color") {
+                    for (range in listOf("reds", "yellows", "greens", "cyans", "blues", "magentas", "whites", "neutrals", "blacks"))
+                        for ((key, value) in listOf("cyan" to -17.25, "magenta" to 23.5, "yellow" to -31.75, "black" to 9.25)) set("${range}_$key", "number", value)
+                    set("mode", "choice", 1)
+                } else {
+                    for (channel in listOf("red", "green", "blue", "gray"))
+                        for ((key, value) in listOf("red" to 83.25, "green" to -12.5, "blue" to 24.75, "constant" to 3.25)) set("${channel}_$key", "number", value)
+                    set("monochrome", "toggle", true)
+                }
+            }
+            val pixels = hash(png("p22-adjusted.png", builtinRecipe(2).put("format", "Png").put("depth", "U8")))
+            assertNotEquals(originalPixels, pixels)
+            val name = "p22-$space-$depth.capy"
+            val saved = manifest(save(name))
+            assertEquals(original, sourceIdentity(saved))
+            open(File(files, name)); refresh()
+            val reopened = manifest(save("p22-reopened.capy"))
+            assertEquals(saved.getJSONObject("document").getJSONArray("layers").toString(), reopened.getJSONObject("document").getJSONArray("layers").toString())
+            assertEquals(saved.getJSONObject("document").get("color").toString(), reopened.getJSONObject("document").get("color").toString())
+            assertEquals(original, sourceIdentity(reopened))
+            assertEquals(pixels, hash(png("p22-reopened.png", builtinRecipe(2).put("format", "Png").put("depth", "U8"))))
+            scenario.recreate(); scenario.onActivity { activity = it }
+            compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+            refresh()
+            val recreated = manifest(save("p22-recreated.capy"))
+            assertEquals(reopened.getJSONObject("document").getJSONArray("layers").toString(), recreated.getJSONObject("document").getJSONArray("layers").toString())
+            assertEquals(original, sourceIdentity(recreated))
+            assertEquals(pixels, hash(png("p22-recreated.png", builtinRecipe(2).put("format", "Png").put("depth", "U8"))))
+            assertNull(host.failure); assertNull(host.actionError)
+        }
+    }
+
+
     @Test fun retainedPlacePasteAndDocumentDetails() {
         fun fresh(space:String, depth:String) {
             val task=native { h -> val(id,f)=request(h,"new_document")

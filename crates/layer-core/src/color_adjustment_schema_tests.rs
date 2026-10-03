@@ -49,3 +49,36 @@ fn threshold_depth_bounds_preserve_existing_float_schema_without_clamping() {
         } else {assert!(threshold.set("threshold",EffectValue::Number(-0.01)).is_err());}
     }
 }
+
+fn color_bounds(effect:&EffectInstance,key:&str)->(f64,f64) {
+    let parameter=effect.program.parameters.iter().find(|parameter|parameter.key.as_ref()==key).unwrap();
+    let EffectParameterKind::Number {min,max,..}=parameter.kind else {panic!("expected number {key}")};(f64::from(min),f64::from(max))
+}
+
+#[test]
+fn selective_color_schema_is_neutral_with_independent_bounded_ink_pages() {
+    let mut effect=color_effect("selective_color");let pages=["reds","yellows","greens","cyans","blues","magentas","whites","neutrals","blacks"];
+    assert_eq!(effect.program.parameters.len(),37);
+    assert_eq!(effect.program.pages.iter().map(|page|page.id.as_ref()).collect::<Vec<_>>(),pages);
+    assert_eq!(effect.value("mode"),Some(&EffectValue::Choice(0)));
+    for page in pages {for ink in ["cyan","magenta","yellow","black"] {
+        let key=format!("{page}_{ink}");assert_eq!(effect.value(&key),Some(&EffectValue::Number(0.)));assert_eq!(color_bounds(&effect,&key),(-100.,100.));
+        for value in [-100.,100.] {effect.set(&key,EffectValue::Number(value)).unwrap();}
+        let before=effect.clone();assert!(effect.set(&key,EffectValue::Number(100f32.next_up())).is_err());assert_eq!(effect,before);
+    }}
+    effect.set("mode",EffectValue::Choice(1)).unwrap();let before=effect.clone();assert!(effect.set("mode",EffectValue::Choice(2)).is_err());assert_eq!(effect,before);
+}
+
+#[test]
+fn channel_mixer_schema_has_identity_rgb_and_explicit_gray_defaults() {
+    let mut effect=color_effect("channel_mixer");assert_eq!(effect.program.parameters.len(),17);
+    assert_eq!(effect.program.pages.iter().map(|page|page.id.as_ref()).collect::<Vec<_>>(),["red","green","blue","gray"]);
+    assert_eq!(effect.value("monochrome"),Some(&EffectValue::Toggle(false)));
+    for (row,page) in ["red","green","blue","gray"].into_iter().enumerate() {for (column,input) in ["red","green","blue","constant"].into_iter().enumerate() {
+        let key=format!("{page}_{input}");let expected=if row==3 {[21.26,71.52,7.22,0.][column]}else if row==column {100.}else{0.};
+        assert_eq!(effect.value(&key),Some(&EffectValue::Number(expected)));
+        let limit=if input=="constant" {100.}else{200.};assert_eq!(color_bounds(&effect,&key),(-f64::from(limit),f64::from(limit)));
+        for value in [-limit,limit] {effect.set(&key,EffectValue::Number(value)).unwrap();}
+        let before=effect.clone();assert!(effect.set(&key,EffectValue::Number(limit.next_up())).is_err());assert_eq!(effect,before);
+    }}
+}

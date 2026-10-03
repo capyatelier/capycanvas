@@ -1,6 +1,9 @@
 use super::*;
 use layer_core::color::RgbColor;
 
+#[path = "mixing.rs"]
+mod mixing;
+
 const RANGES: [&str; 6] = ["reds", "yellows", "greens", "cyans", "blues", "magentas"];
 const CENTERS: [f64; 6] = [30., 110., 145., 195., 265., 330.];
 

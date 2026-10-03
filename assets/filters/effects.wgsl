@@ -157,9 +157,55 @@ fn capy_photo_filter(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
     if fx_parameter(base,2u).x>.5 {result=fx_preserve_luma(result,fx_luma(rgb));}
     return fx_rgba(result,c.a);
 }
+fn fx_tonal_weights(l:f32)->vec3<f32> {
+    let shadow=1.-smoothstep(0.,.5,l);let high=smoothstep(.5,1.,l);return vec3(shadow,1.-shadow-high,high);
+}
+fn fx_percent4(base:u32,page:u32)->vec4<f32> {
+    let offset=page*4u;
+    return vec4(fx_parameter(base,offset).x,fx_parameter(base,offset+1u).x,fx_parameter(base,offset+2u).x,fx_parameter(base,offset+3u).x)*.01;
+}
+fn capy_selective_color(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
+    if c.a<=0. {return c;}
+    let sections=fx_lookup(base,0u,0u).xy;
+    if all(sections==vec2(0.)) {return c;}
+    let rgb=fx_rgb(c);let bounded=clamp(rgb,vec3(0.),vec3(1.));
+    let chroma=max(bounded.r,max(bounded.g,bounded.b))-min(bounded.r,min(bounded.g,bounded.b));
+    var correction=vec4(0.);
+    if sections.x>0. && chroma>0. {
+        let centers=array<f32,7>(30.,110.,145.,195.,265.,330.,390.);
+        var hue=fx_hue_coordinates(c).x;if hue<30. {hue+=360.;}
+        for(var i=0u;i<6u;i++) {
+            if hue>=centers[i] && hue<centers[i+1u] {
+                let fraction=(hue-centers[i])/(centers[i+1u]-centers[i]);
+                correction=chroma*mix(fx_lookup(base,0u,i+1u),fx_lookup(base,0u,(i+1u)%6u+1u),fraction);
+                break;
+            }
+        }
+    }
+    if sections.y>0. {
+        let tones=fx_tonal_weights(fx_luma(bounded))*(1.-chroma);
+        correction+=fx_lookup(base,0u,7u)*tones.z+fx_lookup(base,0u,8u)*tones.y+fx_lookup(base,0u,9u)*tones.x;
+    }
+    let relative=fx_parameter(base,36u).x<.5;
+    let ink=vec3(1.)-bounded;
+    let new_ink=clamp(ink+correction.rgb*select(vec3(1.),ink,relative),vec3(0.),vec3(1.));
+    let black_scale=select(1.,1.-max(bounded.r,max(bounded.g,bounded.b)),relative);
+    let mapped=clamp(vec3(1.)-new_ink-correction.a*black_scale,vec3(0.),vec3(1.));
+    return fx_rgba(rgb+(mapped-bounded),c.a);
+}
+fn capy_channel_mixer(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
+    if c.a<=0. {return c;}
+    let mono=fx_parameter(base,16u).x>.5;
+    let red=fx_percent4(base,0u);let green=fx_percent4(base,1u);let blue=fx_percent4(base,2u);
+    if !mono && all(red==vec4(1.,0.,0.,0.)) && all(green==vec4(0.,1.,0.,0.)) && all(blue==vec4(0.,0.,1.,0.)) {return c;}
+    let input=vec4(fx_rgb(c),1.);
+    var result=vec3(dot(red,input),dot(green,input),dot(blue,input));
+    if mono {result=vec3(dot(fx_percent4(base,3u),input));}
+    return fx_rgba(result,c.a);
+}
 fn capy_color_balance(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
-    let rgb=fx_rgb(c); let l=fx_luma(rgb);
-    let shadow=1.-smoothstep(0.,.5,l); let high=smoothstep(.5,1.,l); let mid=1.-shadow-high;
+    let rgb=fx_rgb(c);let l=fx_luma(rgb);let weights=fx_tonal_weights(l);
+    let shadow=weights.x;let mid=weights.y;let high=weights.z;
     let s=vec3<f32>(fx_parameter(base,0u).x,fx_parameter(base,1u).x,fx_parameter(base,2u).x);
     let m=vec3<f32>(fx_parameter(base,3u).x,fx_parameter(base,4u).x,fx_parameter(base,5u).x);
     let h=vec3<f32>(fx_parameter(base,6u).x,fx_parameter(base,7u).x,fx_parameter(base,8u).x);

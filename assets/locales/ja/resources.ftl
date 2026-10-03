@@ -591,3 +591,14 @@ resources-parameter-hue-saturation-colorize = 着色
 resources-parameter-photo-filter-color = 色
 resources-parameter-photo-filter-density = 適用量
 resources-parameter-threshold-threshold = しきい値
+
+resources-filter-selective-color = 特定色域の補正
+resources-filter-channel-mixer = チャンネルミキサー
+resources-page-selective-color-whites = ホワイト系
+resources-page-selective-color-neutrals = 中間色系
+resources-page-selective-color-blacks = ブラック系
+resources-parameter-selective-color-mode = 補正方法
+resources-choice-selective-color-relative = 相対値
+resources-choice-selective-color-absolute = 絶対値
+resources-parameter-channel-mixer-constant = 定数
+resources-parameter-channel-mixer-monochrome = モノクロ

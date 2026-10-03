@@ -591,3 +591,14 @@ resources-parameter-hue-saturation-colorize = 著色
 resources-parameter-photo-filter-color = 顏色
 resources-parameter-photo-filter-density = 濃度
 resources-parameter-threshold-threshold = 臨界值
+
+resources-filter-selective-color = 選取顏色
+resources-filter-channel-mixer = 色版混合器
+resources-page-selective-color-whites = 白色
+resources-page-selective-color-neutrals = 中性色
+resources-page-selective-color-blacks = 黑色
+resources-parameter-selective-color-mode = 方式
+resources-choice-selective-color-relative = 相對
+resources-choice-selective-color-absolute = 絕對
+resources-parameter-channel-mixer-constant = 常數
+resources-parameter-channel-mixer-monochrome = 單色
