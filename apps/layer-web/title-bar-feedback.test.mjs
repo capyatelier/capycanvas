@@ -57,7 +57,7 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
     for (const size of ['small','large','medium']) {
       await send({type:'customize',action:{type:'header',action:{type:'edit',editing:true}}});
       await click(`[data-header-size="${size}"]`); await click('#header-edit-done');
-      const pill = await evaluate("(()=>{const p=document.querySelector('.workspace-switcher'),r=p.getBoundingClientRect(),h=document.querySelector('#header').getBoundingClientRect();return{height:r.height,center:r.y+r.height/2,headerCenter:h.y+h.height/2,buttons:[...p.children].map(n=>n.getBoundingClientRect().height)}})()");
+      const pill = await evaluate("(()=>{const p=document.querySelector('.workspace-switcher'),r=p.getBoundingClientRect(),h=document.querySelector('#header').getBoundingClientRect();return{height:r.height,center:r.y+r.height/2,headerCenter:h.y+h.height/2,buttons:[...p.querySelectorAll('[data-workspace-id]')].map(n=>n.getBoundingClientRect().height)}})()");
       assert.ok(Math.abs(pill.height-36)<.02); assert.ok(pill.buttons.every(height=>Math.abs(height-26)<.02));
       assert.ok(Math.abs(pill.center-pill.headerCenter)<.1,'Pill remains centered without growing');
       await wait("!layerApp.state().customization.header_editing && !!document.querySelector('#header .header-bar:not([hidden])')");

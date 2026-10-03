@@ -209,7 +209,7 @@ like a slider track, with a subtle accent for the active choice, and scrolls
 horizontally when its choices overflow. By default it sits to the right of the
 document title; Sketch centers it, and the title-bar editor can move it.
 
-On GTK, a vertical **⋮** at the end of the switcher well opens **Workspace
+On GTK and Web, a vertical **⋮** at the end of the switcher well opens **Workspace
 options**. The button stays fixed while the choices scroll. Its **Show in top
 bar** checklist includes every workspace in the saved order; checking a row
 changes its saved visibility without switching or previewing a workspace.
@@ -271,6 +271,9 @@ bash tools/performance/workspace-motion.sh gtk --native-test=native_paint_fitted
 bash tools/performance/workspace-motion.sh gtk --native-test=native_brush_drawer_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_unreadable_workspace_storage_input --native-storage
 node apps/layer-web/test.mjs --workspace-switcher
+node apps/layer-web/test.mjs --workspace-options
+node apps/layer-web/device.test.mjs --workspace-options
+node apps/layer-web/device.test.mjs --compact-workspaces
 node apps/layer-web/test.mjs --headless --stale-storage
 node apps/layer-web/device.test.mjs --paint-columns
 ```

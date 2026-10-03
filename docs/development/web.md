@@ -110,7 +110,7 @@ first matching row and its error check, or leaves the default journey to the hos
 | Photo files and export | `--portable-photo`, `--export-metadata` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--drawer-drag`, `--drawer-style` |
-| Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
+| Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-options`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
 | Settings | `--preferences`, `--settings-audit`, `--language-switching` |
 
 `--language-switching` visits all shipped languages in light and dark themes,

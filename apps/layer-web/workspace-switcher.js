@@ -1,16 +1,12 @@
 // DOM gestures and chrome only. Rust owns visibility, order and publication.
-export function workspaceSwitcherMenu(view) {
-  return {title:"Workspaces", sections:[(view?.switcher_display || []).map(row => ({
-    label:row.title, selected:row.id === view.id,
-    enabled:view.ready && !view.busy && !view.page && !view.prompt,
-    action:{type:"workspace_manager", command:{type:"switch", id:row.id}}, sections:[],
-  }))]};
-}
-
 export function createWorkspaceSwitcher({dialog, list, element, button, icon, send, getView, redraw}) {
   const root = element("div", "workspace-switcher");
-  root.setAttribute("role", "group"); root.setAttribute("aria-label", "Workspaces");
+  root.tabIndex = -1; root.setAttribute("role", "group");
   document.querySelector("#document-title").after(root);
+  const choices = element("div", "workspace-switcher-choices");
+  const options = button("", () => root.openOptions?.(options), "workspace-switcher-options");
+  options.append(icon("more")); options.setAttribute("aria-haspopup", "menu");
+  root.append(choices, options);
   const buttons = new Map();
   const menu = element("div", "workspace-row-menu");
   menu.popover = "manual"; menu.setAttribute("role", "menu"); dialog.append(menu);
@@ -170,7 +166,7 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     if (e.key === "Tab") closeMenu();
   });
   function render(view) {
-    const previousFirst = root.firstElementChild?.dataset.workspaceId;
+    const previousFirst = choices.firstElementChild?.dataset.workspaceId;
     // A background preference refresh leaves workspace switching available.
     const switchUnavailable = !view.ready || view.busy || !!view.page || !!view.prompt;
     const ids = new Set(view.switcher_display.map(row => row.id));
@@ -178,12 +174,16 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     for (const [index, item] of view.switcher_display.entries()) {
       let node = buttons.get(item.id);
       if (!node) { node = button("", () => send({type:"switch",id:item.id})); node.append(element("span")); node.dataset.workspaceId = item.id; buttons.set(item.id,node); }
-      if (root.children[index] !== node) root.insertBefore(node, root.children[index] ?? null);
+      if (choices.children[index] !== node) choices.insertBefore(node, choices.children[index] ?? null);
       node.firstElementChild.textContent = item.title; node.title = `Switch to ${item.title} workspace`;
       node.setAttribute("aria-pressed", String(item.id === view.id)); node.disabled = switchUnavailable;
     }
+    options.title = view.switcher_options_label;
+    options.setAttribute("aria-label", view.switcher_options_label);
+    root.setAttribute("aria-label", view.switcher_menu.title);
+    options.disabled = switchUnavailable;
     root.hidden = !ids.size;
-    if (view.id !== previousFirst && view.switcher_display[0]?.id === view.id) root.scrollLeft = 0;
+    if (view.id !== previousFirst && view.switcher_display[0]?.id === view.id) choices.scrollLeft = 0;
     if (!view.page || view.prompt || (contact && !view.order.includes(contact.row.dataset.id))) { finish(); closeMenu(); }
     for (const more of list.querySelectorAll(".workspace-options")) more.disabled = unavailable();
   }

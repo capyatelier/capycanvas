@@ -1,6 +1,120 @@
 import assert from "node:assert/strict";
 import {mkdir, writeFile} from "node:fs/promises";
 
+export async function checkWorkspaceOptions({call, evaluate, settle}) {
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const view = () => evaluate("JSON.parse(layerApp.app.workspace_view())");
+  const idle = async () => {
+    for (let i=0;i<200;i++) {
+      const v = await view();
+      if (v?.ready && !v.busy && !v.switcher_busy && !v.dirty) { await settle(); return; }
+      await pause(50);
+    }
+    throw Error("Workspace options did not settle");
+  };
+  const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await idle(); };
+  const input = async value => { await evaluate(`layerApp.app.workspace_input(${JSON.stringify(JSON.stringify(value))});null`); await idle(); };
+  const center = selector => evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)}),r=n?.getBoundingClientRect();if(!r?.width||!r.height)throw Error('Hidden '+${JSON.stringify(selector)});return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+  let device = "mouse", point;
+  const pointer = async (type, p=point, button="left") => {
+    point = p;
+    if (device === "touch") await call("Input.dispatchTouchEvent", {type:{down:"touchStart",move:"touchMove",up:"touchEnd",cancel:"touchCancel"}[type], touchPoints:["up","cancel"].includes(type)?[]:[{id:1,...p}]});
+    else await call("Input.dispatchMouseEvent", {type:{down:"mousePressed",move:"mouseMoved",up:"mouseReleased"}[type],...p,pointerType:device,button,buttons:type==="up"?0:button==="right"?2:1,clickCount:1});
+    await pause(30);
+  };
+  const click = async selector => { await pointer("down",await center(selector)); await pointer("up"); await idle(); };
+  const key = async (name, modifiers=0) => {
+    for (const type of ["keyDown","keyUp"]) await call("Input.dispatchKeyEvent", {type,key:name,code:name,modifiers,windowsVirtualKeyCode:{Escape:27,Enter:13,F10:121}[name]});
+    await idle();
+  };
+  const menu = ".panel-context-menu";
+  const opened = () => evaluate(`document.querySelector('${menu}').matches(':popover-open')`);
+  const check = async () => {
+    assert.equal(await opened(),true);
+    const current=await view();
+    const rows=await evaluate(`Array.from(document.querySelectorAll('${menu} button'),b=>({label:b.querySelector('.menu-label').textContent,selected:b.hasAttribute('aria-checked')?b.getAttribute('aria-checked')==='true':null,enabled:!b.disabled}))`);
+    assert.deepEqual(rows,current.switcher_options.sections.flat().map(row=>({label:row.label,selected:row.selected,enabled:row.enabled})));
+    assert.equal(await evaluate(`document.querySelector('${menu} .menu-section-label').textContent`),current.switcher_options.title);
+    assert.equal(current.page,null);
+  };
+  const dir=process.env.LAYER_TEST_ARTIFACTS||"artifacts/workspace-options/web";
+  await mkdir(dir,{recursive:true});
+  const shot=async name=>{const image=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${dir}/${name}.png`,Buffer.from(image.data,"base64"));};
+  await idle();
+  const created=[];
+  const original=await view(), saved=await evaluate("layerApp.app.workspace_persistence()"), theme=await evaluate("layerApp.state().theme");
+  const fixture=structuredClone(saved);
+  fixture.layout.header={size:"small",zones:[[],[{id:1,item:{kind:"workspaces"}}],[]],next_id:2};
+  const dots=".workspace-switcher-options";
+  const choice=id=>`.workspace-switcher [data-workspace-id=${JSON.stringify(id)}]`;
+  try {
+    for (const theme of ["dark","light"]) {await send({type:"set_theme",theme});await shot(`${theme}-default-header`);}
+    for (const theme of ["dark","light"]) {
+      await send({type:"restore_workspace",workspace:fixture});
+      await send({type:"set_theme",theme});
+      await shot(`${theme}-closed-header`);
+      const before=await evaluate("layerApp.app.workspace_capture()"), active=(await view()).id, inactive=(await view()).switcher_display.find(row=>row.id!==active).id;
+      assert.equal(await evaluate(`document.querySelector('${dots}').getAttribute('aria-label')`),(await view()).switcher_options_label);
+      for (const kind of ["mouse","touch","pen"]) {
+        device=kind;await click(dots);await check();await shot(`${theme}-${kind}`);await key("Escape");
+        assert.equal(await evaluate(`document.activeElement.matches('${dots}')`),true,"Escape returns focus to dots");
+      }
+      device="mouse";
+      const well=await evaluate("(()=>{const r=document.querySelector('.workspace-switcher').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+1}})()");
+      for (const p of [await center(choice(active)),await center(choice(inactive)),await center(dots),well]) {
+        await pointer("down",p,"right");await pointer("up",p,"right");await check();assert.equal((await view()).id,active);await key("Escape");
+      }
+      await evaluate(`document.querySelector('${dots}').focus()`);await key("F10",8);await check();await key("Escape");
+      for (const kind of ["touch","pen"]) {
+        device=kind;await pointer("down",await center(choice(inactive)));await pause(600);await check();await pointer("up");await idle();
+        assert.equal((await view()).id,active,"hold release does not switch");await key("Escape");
+        await pointer("down",await center(choice(inactive)));await pointer("move",{x:point.x,y:point.y+60});await pointer("up");await pause(550);assert.equal(await opened(),false,"motion cancels pending hold");
+      }
+      device="mouse";
+      const toggle=async id=>{
+        await click(dots);await check();const index=(await view()).switcher_options.sections[0].findIndex(row=>row.action.command.id===id);
+        await click(`${menu} button:nth-of-type(${index+1})`);assert.equal(await opened(),false,"visibility activation closes menu");
+      };
+      for (const row of (await view()).switcher_options.sections[0].filter(row=>row.selected))await toggle(row.action.command.id);
+      assert.deepEqual((await view()).switcher,[]);assert.equal((await view()).id,active);
+      assert.deepEqual((await view()).switcher_display.map(row=>row.id),[active]);
+      await click(dots);await check();assert.ok((await view()).switcher_options.sections[0].every(row=>!row.selected));await key("Escape");
+      for (const row of original.switcher)await toggle(row.id);
+      assert.equal(await evaluate("layerApp.app.workspace_capture()"),before,"pin changes preserve workspace and history");
+      await click(dots);await click(`${menu} button:last-of-type`);assert.equal((await view()).page,"workspaces");
+      await click(".workspace-manager footer button");assert.equal((await view()).page,null);
+      await send({type:"customize",action:{type:"header",action:{type:"edit",editing:true}}});
+      const header=await evaluate("layerApp.state().workspace.layout.header");
+      await click(dots);await check();await shot(`${theme}-title-bar-edit`);await key("Escape");
+      for (const selector of [choice(active),choice(inactive),dots]) {
+        const p=await center(selector);await pointer("down",p,"right");await pointer("up",p,"right");await check();await key("Escape");
+      }
+      await evaluate(`document.querySelector('[data-kind="workspaces"]').focus()`);await key("F10",8);await check();await key("Escape");
+      assert.deepEqual(await evaluate("layerApp.state().workspace.layout.header"),header);
+      await click("#header-edit-cancel");
+      await click(choice(inactive));assert.equal((await view()).id,inactive,"left click switches");await input({type:"switch",id:active});
+    }
+    for (let n=0;n<28;n++) {
+      await input({type:"form",action:{type:"new"}});await input({type:"submit",name:`Wide 水彩 painting workspace ${n}`});created.push((await view()).id);
+    }
+    await input({type:"switch",id:original.id});
+    for (const id of created)await input({type:"edit_switcher",edit:{type:"show",id,visible:false}});
+    await send({type:"restore_workspace",workspace:fixture});
+    for (const theme of ["dark","light"]) {
+      await send({type:"set_theme",theme});
+      const geometry=await evaluate(`(()=>{const p=document.querySelector('.workspace-switcher'),c=p.querySelector('.workspace-switcher-choices'),b=p.querySelector('${dots}');p.style.width='130px';const before=b.getBoundingClientRect().toJSON();c.scrollLeft=c.scrollWidth;return{before,after:b.getBoundingClientRect().toJSON(),scrolled:c.scrollLeft>0}})()`);
+      assert.equal(geometry.scrolled,true);assert.deepEqual(geometry.before,geometry.after,"dots stay fixed while choices scroll");
+      await evaluate("document.querySelector('.workspace-switcher').style.removeProperty('width')");await settle();
+      device="mouse";await click(dots);await check();
+      const scroll=await evaluate(`(()=>{const n=document.querySelector('${menu}'),r=n.getBoundingClientRect();n.scrollTop=n.scrollHeight;return{overflow:n.scrollHeight>n.clientHeight,scrolled:n.scrollTop>0,top:r.top,bottom:r.bottom,height:innerHeight}})()`);
+      assert.ok(scroll.overflow&&scroll.scrolled);assert.ok(scroll.top>=0&&scroll.bottom<=scroll.height);
+      await shot(`${theme}-long-list`);await key("Escape");
+    }
+    console.log("PASS: Web workspace options, all secondary-click targets, mouse/touch/pen dots, touch/pen hold and cancellation, keyboard/Escape focus, no pins, visibility history isolation, Manage, title-bar editor, fixed dots during choice scrolling and long hidden/localized lists in both themes");
+  } catch (error) {await shot("failure");throw error;}
+  finally {await input({type:"switch",id:original.id});for(const id of created){await input({type:"form",action:{type:"delete",value:id}});await input({type:"submit",name:""});}await send({type:"restore_workspace",workspace:saved});await send({type:"set_theme",theme});}
+}
+
 export async function checkWorkspaceFocus({evaluate, settle}) {
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+5000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v.ready&&!v.busy&&!v.switcher_busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup did not finish'));else setTimeout(check,20);}check();})`);
   const originalTheme = await evaluate("layerApp.state().theme");
@@ -9,8 +123,8 @@ export async function checkWorkspaceFocus({evaluate, settle}) {
     await settle();
     const result = await evaluate(`(async () => {
       const root=document.querySelector('.workspace-switcher');
-      const snapshot=()=>[...root.children].map(node=>({id:node.dataset.workspaceId,disabled:node.disabled,opacity:getComputedStyle(node).opacity,color:getComputedStyle(node).color,active:node.getAttribute('aria-pressed')}));
-      const before=snapshot(), nodes=[...root.children], samples=[];
+      const snapshot=()=>[...root.querySelectorAll("[data-workspace-id]")].map(node=>({id:node.dataset.workspaceId,disabled:node.disabled,opacity:getComputedStyle(node).opacity,color:getComputedStyle(node).color,active:node.getAttribute('aria-pressed')}));
+      const before=snapshot(), nodes=[...root.querySelectorAll("[data-workspace-id]")], samples=[];
       for(let attempt=0;attempt<3;attempt++) {
         window.dispatchEvent(new Event('blur'));
         window.dispatchEvent(new Event('focus'));
@@ -22,7 +136,7 @@ export async function checkWorkspaceFocus({evaluate, settle}) {
         } while(JSON.parse(layerApp.app.workspace_view()).switcher_busy);
         samples.push(snapshot());
       }
-      return {before,samples,sameNodes:nodes.every((node,index)=>root.children[index]===node)};
+      return {before,samples,sameNodes:nodes.every((node,index)=>root.querySelectorAll("[data-workspace-id]")[index]===node)};
     })()`);
     assert.ok(result.before.length && result.before.every(node=>!node.disabled));
     assert.ok(result.sameNodes,"focusing retains the header buttons");
@@ -31,14 +145,14 @@ export async function checkWorkspaceFocus({evaluate, settle}) {
   await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(originalTheme)}})`); await settle();
   const switching = await evaluate(`(async () => {
     const view=()=>JSON.parse(layerApp.app.workspace_view()), original=view().id;
-    const next=[...document.querySelectorAll('.workspace-switcher button')].find(node=>node.dataset.workspaceId!==original);
+    const next=[...document.querySelectorAll('.workspace-switcher button[data-workspace-id]')].find(node=>node.dataset.workspaceId!==original);
     const wait=async id=>{const deadline=performance.now()+5000;while(view().id!==id||view().busy||view().switcher_busy){if(performance.now()>deadline)throw Error('Switch did not finish');await new Promise(resolve=>setTimeout(resolve,20));}};
     window.dispatchEvent(new Event('focus'));
     const refreshing=view().switcher_busy;
     next.click();
-    const busy=view().busy, disabled=[...document.querySelectorAll('.workspace-switcher button')].every(node=>node.disabled);
+    const busy=view().busy, disabled=[...document.querySelectorAll('.workspace-switcher button[data-workspace-id]')].every(node=>node.disabled);
     await wait(next.dataset.workspaceId);
-    [...document.querySelectorAll('.workspace-switcher button')].find(node=>node.dataset.workspaceId===original).click();
+    [...document.querySelectorAll('.workspace-switcher button[data-workspace-id]')].find(node=>node.dataset.workspaceId===original).click();
     await wait(original);
     return {refreshing,busy,disabled};
   })()`);
@@ -81,7 +195,7 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
   const pins = async () => (await view()).switcher.map(row=>row.id);
   const durable = () => evaluate("JSON.parse(layerApp.app.workspace_capture())");
   const layout = () => evaluate("layerApp.state().workspace.layout");
-  const shown = () => evaluate("[...document.querySelectorAll('.workspace-switcher button')].map(node=>node.dataset.workspaceId)");
+  const shown = () => evaluate("[...document.querySelectorAll('.workspace-switcher button[data-workspace-id]')].map(node=>node.dataset.workspaceId)");
   const options = async (id, action) => { await click(`${row(id)} .workspace-options`); await click(`.workspace-row-menu [data-action="${action}"]`); };
   const drag = async (id, target, after, sourceDevice, handle=false, hold=false) => {
     device=sourceDevice;

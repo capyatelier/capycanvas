@@ -2,7 +2,6 @@ import {liveCopy,bindCopy} from './localization.js';
 // Retained DOM projection of Rust's title bar. DOM measurements are inputs;
 // allocation, overflow, drag slots, validation and publication stay in Rust.
 import { pickerButtonAction } from './color-controls.js';
-import { workspaceSwitcherMenu } from './workspace-switcher.js';
 
 export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
   const copy=liveCopy(app,"catalog").native_copy.header;
@@ -59,7 +58,24 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   }
   const application = id => menuModels.find(m=>m.id===id).model;
   const primary = () => app.header_view().primary_menu;
-  const workspaceChoices = () => workspaceSwitcherMenu(JSON.parse(app.workspace_view()));
+  const workspaceView = () => JSON.parse(app.workspace_view());
+  const workspaceChoices = () => workspaceView().switcher_menu;
+  function workspaceOptions(node) {
+    if (!node.dataset.context) customization.target(node, {kind:'header', id:null});
+    node.menuModel = () => workspaceView().switcher_options;
+    node.dataset.workspaceOptions = 'true';
+    node.addEventListener('contextmenu', e => {
+      e.preventDefault(); e.stopPropagation();
+      customization.openMenu(node, [e.clientX, e.clientY], e.target.closest('button,summary') || node);
+    });
+    node.addEventListener('keydown', e => {
+      if (e.key === 'ContextMenu' || e.key === 'F10' && e.shiftKey) {
+        e.preventDefault(); e.stopPropagation(); customization.openMenu(node, null, e.target);
+      }
+    });
+  }
+  workspaceOptions(switcher);
+  switcher.openOptions = node => customization.openMenu(switcher, null, node);
   const recoveryMenu = menu(primary, 'Title bar recovery: menus and customization', 'menu');
   recoveryMenu.id = 'header-recovery'; root.append(recoveryMenu);
   const overflow = zones.map((_, index) => {
@@ -125,8 +141,9 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     } else if(kind==='workspaces') {
       r.full=switcher;
       content.append(switcher);
-      r.compact=menu(workspaceChoices,'Workspaces'); r.compact.id='header-workspace-selector';
-      content.append(r.compact);
+      r.compact=menu(workspaceChoices,workspaceView().switcher_menu.title); r.compact.id='header-workspace-selector';
+      content.append(r.compact); workspaceOptions(r.compact);
+      workspaceOptions(node);
     } else if(kind==='document_title') content.append(title);
     else if(kind==='clock'||kind==='battery') {
       r.status=kind==='clock'?systemStatus.clock:systemStatus.battery;
@@ -192,7 +209,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     bank.style.maxHeight=`${Math.max(1,workspace.clientHeight-size.height-12)}px`;
     for(const [id,r] of records) {
       const spec=view.items.find(i=>i.id===id); r.root.setAttribute('aria-label',spec.label);
-      r.root.tabIndex=editing?0:-1; r.content.inert=editing; r.grip.hidden=!editing;
+      r.root.tabIndex=editing?0:-1; r.content.inert=editing && r.entry.item.kind!=='workspaces'; r.grip.hidden=!editing;
       if(r.button) {
         const kind=r.entry.item.kind, command=state().commands.find(c=>c.id===r.button.dataset.command);
         const glyph=command?.icon||spec.icon;
@@ -205,6 +222,10 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       if(r.full)for(const menu of r.full.querySelectorAll('[data-menu]')) {
         const label=menuModels.find(m=>m.id===menu.dataset.menu)?.label;
         if(label){const summary=menu.querySelector('summary');summary.textContent=label;summary.setAttribute('aria-label',label);}
+      }
+      if(r.entry.item.kind==='workspaces') {
+        const label=workspaceView().switcher_menu.title, summary=r.compact.querySelector('summary');
+        summary.textContent=label; summary.setAttribute('aria-label',label);
       }
       if(r.status)r.placeholder.hidden=!editing||!r.status.hidden;
     }
@@ -237,7 +258,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       if(omitted)return{id:entry.id,width:0,compact:0};
       const kind=entry.item.kind;
       let width=size.tile,compact;
-      if(kind==='workspaces'){width=Math.max(144,switcher.scrollWidth);compact=144;}
+      if(kind==='workspaces'){width=Math.max(144,switcher.querySelector('.workspace-switcher-choices').scrollWidth + switcher.querySelector('.workspace-switcher-options').offsetWidth + 12);compact=144;}
       else if(kind==='document_title'){width=180;compact=80;}
       else if(kind==='menu_labels'){width=Math.max(width,r.full.offsetWidth);compact=size.tile;}
       else if(['clock','battery'].includes(kind))width=Math.max(width,r.content.scrollWidth);
@@ -302,7 +323,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   }
   function queue(){if(!frame)frame=requestAnimationFrame(allocate);}
   function start(e) {
-    if(!editing||e.button!==0||contact)return;
+    if(!editing||e.button!==0||contact||e.target.closest('.workspace-switcher-options'))return;
     const overflowItem=e.target.closest('[data-header-overflow-item],[data-header-overflow-source]');
     if(e.target.closest('.popover')&&!overflowItem)return;
     const item=overflowItem||e.target.closest('[data-header-item]'),chip=e.target.closest('[data-header-component]');
@@ -364,6 +385,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     if(c.source?.kind==='item')select(entries().some(i=>i.id===c.source.value)?c.source.value:null,true);
     queue();
   }
+  root.addEventListener('workspace-context-claimed', e => {if(e.target.closest('[data-workspace-options]')&&!contact?.active)end(null,true);});
   root.addEventListener('pointerdown',start);bank.addEventListener('pointerdown',start);
   // Chromium synthesizes touch mousedown/up together on release, so :active
   // alone supplies no held feedback. Track only the visual contact here;
@@ -386,7 +408,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   window.addEventListener('blur',()=>end(null,true));
   window.addEventListener('resize',()=>{end(null,true);queue();});
   window.addEventListener('click',e=>{
-    if(e.pointerId===suppressed||editing&&e.target.closest('.header-item-content,[data-header-component]')) {
+    if(e.pointerId===suppressed||editing&&e.target.closest('.header-item-content,[data-header-component]')&&!e.target.closest('.workspace-switcher-options')) {
       suppressed=null;e.preventDefault();e.stopImmediatePropagation();
     }
   },{capture:true});
@@ -394,6 +416,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     if(e.key==='Escape')clearButtonPress();
     if(e.isComposing||e.target.closest('input,select,textarea,[contenteditable=true],dialog[open],.popover,.panel-context-menu'))return;
     if(e.key==='Escape'&&contact){end(null,true);e.preventDefault();e.stopImmediatePropagation();return;}
+    if((e.key==='ContextMenu'||e.key==='F10'&&e.shiftKey)&&e.target.closest('[data-workspace-options]'))return;
     if(!editing||!(root.contains(e.target)||e.target===root)||selected==null)return;
     let action;
     if(e.key==='Delete'||e.key==='Backspace')action={type:'customize',action:{type:'header',action:{type:'remove',id:selected}}};

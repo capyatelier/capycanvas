@@ -15,6 +15,8 @@ import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs"
 import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkHdr} from "./hdr.test.mjs";
 import {checkProof} from "./proof.test.mjs";
+import {checkCompactWorkspaces} from "./compact-workspaces.test.mjs";
+import {checkWorkspaceOptions} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
 import {checkStagedStartup} from "./startup.test.mjs";
 import {checkFilterPreviews} from "./filter-previews.test.mjs";
@@ -56,7 +58,7 @@ const endpoint=process.env.LAYER_DEVICE_CDP||"http://127.0.0.1:9228";
 const url=process.env.LAYER_WEB_URL||"http://127.0.0.1:8127/";
 const directory=process.env.LAYER_TEST_ARTIFACTS||"artifacts/web";
 const cdp=await connectTab(endpoint,t=>t.url===url,{
-  timeout:process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery'].includes(x))?300000:180000,
+  timeout:process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--workspace-options','--compact-workspaces'].includes(x))?300000:180000,
   onEvent:m=>{
     if(m.method==="Log.entryAdded"&&m.params.entry.level==="error")cdp.report(m.params.entry.text);
     else if(m.method==="Runtime.consoleAPICalled"&&m.params.type==="error")cdp.report(m.params.args.map(a=>a.value||a.description).join(" "));
@@ -81,7 +83,7 @@ try {
   // Allow its ordinary beforeunload confirmation, which this harness accepts.
   await call("Runtime.evaluate",{expression:"void 0",userGesture:true});
   await reload();
-  await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
+  await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--workspace-options','--compact-workspaces'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
   if (process.argv.some(flag=>['--selection-tools','--tonal-selection','--color-panel','--color-picker','--paint-columns','--palettes','--zen','--proof-performance','--proof-memory','--crop','--image-commands','--clone','--heal','--retouch-layers'].includes(flag))) {
     // Recovery discovery can finish after startup and workspace switching.
@@ -103,6 +105,8 @@ try {
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
   const checkErrors = () => assert.deepEqual(errors, []);
   if (!await runJourney([
+    [process.argv.includes("--compact-workspaces"), () => checkCompactWorkspaces({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--workspace-options"), () => checkWorkspaceOptions({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--binary-transfer"), () => checkBinaryTransfer({evaluate},process.env.LAYER_BINARY_FIXTURE_URL), checkErrors],
     [process.argv.includes("--tonal-selection"), () => checkTonalSelections({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--toolbar-components"), () => checkToolbarComponents({call,evaluate,settle}), checkErrors],

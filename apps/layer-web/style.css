@@ -87,9 +87,12 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 .workspace-form footer { margin:18px 0 0; flex-wrap:wrap; }
 .workspace-form .destructive-action { background:#b33; }
 .workspace-switcher, .header-menu-labels { display:flex; align-items:center; gap:2px; height:36px; padding:5px; border:0; border-radius:999px; background:var(--tabbar); text-shadow:none; }
-.workspace-switcher { flex:0 1 auto; min-width:0; max-width:min(420px,40vw); overflow-x:auto; scrollbar-width:none; }
+.workspace-switcher { flex:0 1 auto; min-width:0; max-width:min(420px,40vw); overflow:hidden; }
+.workspace-switcher-choices { flex:1 1 auto; display:flex; align-items:center; gap:2px; min-width:0; overflow-x:auto; scrollbar-width:none; }
 /* Override the general 36px header button height inside the shared 36px track. */
 #header .workspace-switcher button { flex:none; max-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#header .workspace-switcher .workspace-switcher-options { width:26px; height:36px; min-height:36px; padding:0 5px; margin:-5px 0; color:color-mix(in srgb,var(--text) 70%,transparent); }
+#header .workspace-switcher-options svg { width:16px; height:16px; }
 #header .workspace-switcher button > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 body[data-theme="light"] { color-scheme: light; --bg: #b8b8b8; --panel: #ededed; --tabbar: #d2d2d2; --input: #fafafa; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; --settings: #fafafb; --sidebar: #ebebed; --card-shade: rgb(0 0 6 / 7%); }
 * { box-sizing: border-box; }
@@ -251,6 +254,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .zoom-menu-items { display: flex; flex-direction: column; }
 .zoom-menu-items button { width: 100%; text-align: left; }
 .workspace-menu-items button { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-weight: 400; white-space: nowrap; }
+.menu-section-label { padding:4px 8px; color:color-mix(in srgb,var(--text) 70%,transparent); }
 .menu-check { flex: none; width: 16px; height: 16px; }
 .menu-label { flex: 1; min-width: 0; }
 .submenu-arrow { transform: rotate(-90deg); margin-left: auto; }
@@ -908,6 +912,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .header-editing :is([data-header-overflow-item],[data-header-overflow-source]) { touch-action:none; cursor:grab; user-select:none; }
 .header-overflow-preview { display:flex; align-items:center; justify-content:flex-start; }
 .header-editing .header-item-content { pointer-events:none; user-select:none; }
+.header-editing [data-kind="workspaces"] .header-item-content { pointer-events:auto; }
 .header-editing .header-item.editing-selection { outline:2px solid var(--accent); outline-offset:-2px; }
 .header-zone { position:absolute; pointer-events:none; border-block:1px solid color-mix(in srgb,var(--accent) 35%,transparent); }
 .header-zone.header-drop-zone { border-color:var(--accent); }

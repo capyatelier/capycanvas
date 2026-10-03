@@ -30,7 +30,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   window.addEventListener("keydown", (e) => {
     if (composingKey(e)) return;
     if (e.key === "Escape" && context.matches(":popover-open")) {
-      context.hidePopover(); e.preventDefault(); e.stopPropagation();
+      context.hidePopover(); context.menuFocus?.focus({preventScroll:true}); e.preventDefault(); e.stopPropagation();
     }
   }, { capture: true });
   popup.addEventListener("toggle", () => {
@@ -47,6 +47,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     container.classList.add("workspace-menu-items");
     container.setAttribute("aria-label", model.title);
     container.replaceChildren();
+    if (container === context && context.menuOwner?.dataset.workspaceOptions && !parents.length) container.append(element("div", "menu-section-label", model.title));
     if (parents.length) {
       const back = button(model.title, () => {
         const previous = parents.at(-1);
@@ -86,18 +87,19 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     }
     renderMenu(container,model,close,parents,container.menuPath?.slice(0,parents.length)??[]);
   }
-  function showContext(node, point) {
+  function showContext(node, point, focus = node) {
     const claimed = new Event("workspace-context-claimed", { bubbles: true, cancelable: true });
     if (!node.dispatchEvent(claimed)) return;
     const model = node.menuModel ? node.menuModel() : node.layerMenu ? node.layerMenu() : app.context_menu(JSON.parse(node.dataset.context));
     menuCommand = node.menuCommand ?? null;
-    anchor = point; context.menuOwner = node;
+    anchor = point; context.menuOwner = node; context.menuFocus = focus;
     renderMenu(context, model, () => context.hidePopover());
     context.showPopover(); positionPopup(context);
   }
-  function openMenu(node) {
+  function openMenu(node, point, focus = node) {
     const r = node.getBoundingClientRect();
-    showContext(node, [r.left, r.bottom, r.top]);
+    showContext(node, point || [r.left, r.bottom, r.top], focus);
+    context.querySelector("button:not(:disabled)")?.focus({preventScroll:true});
     return context;
   }
   function positionPopup(node) {
@@ -106,6 +108,12 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     node.style.left = `${Math.max(6, Math.min(x, innerWidth - r.width - 6))}px`;
     node.style.top = `${Math.max(6, Math.min(above ? top - r.height : y, innerHeight - r.height - 6))}px`;
   }
+  context.addEventListener("keydown", e => {
+    const items = [...context.querySelectorAll("button:not(:disabled)")], current = items.indexOf(document.activeElement);
+    const next = {ArrowDown:(current+1)%items.length, ArrowUp:(current-1+items.length)%items.length, Home:0, End:items.length-1}[e.key];
+    if (next != null) { e.preventDefault(); items[next]?.focus({preventScroll:true}); }
+    if (e.key === "Tab") context.hidePopover();
+  });
   function contextTarget(node) {
     if (node.closest("input,select,textarea,[contenteditable=true],.scroll-thumb,[data-toolbar-field]")) return null;
     return node.closest("[data-context]");
@@ -133,7 +141,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       cancelHold();
       if (!node.isConnected || node.parentNode !== parent) return;
       heldPointer = e.pointerId;
-      if (menuHold) showContext(node, [e.clientX, e.clientY]);
+      if (menuHold) showContext(node, [e.clientX, e.clientY], e.target.closest("button,summary") || node);
       else node.dispatchEvent(new Event("workspace-drag-held", { bubbles: true }));
     }, 500) };
   });

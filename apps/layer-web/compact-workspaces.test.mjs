@@ -37,12 +37,27 @@ export async function checkCompactWorkspaces({call,evaluate,settle}) {
     const dimensions=await evaluate(`Array.from(document.querySelectorAll('.header-overflow:not([hidden]) > summary > svg'),n=>{const r=n.getBoundingClientRect(),p=n.parentElement.getBoundingClientRect();return{width:r.width,height:r.height,dx:r.x+r.width/2-p.x-p.width/2,dy:r.y+r.height/2-p.y-p.height/2}})`);
     assert.ok(dimensions.length);
     for(const r of dimensions){assert.equal(r.width,[20,28,36][index]);assert.equal(r.height,r.width);assert.ok(Math.abs(r.dx)<1&&Math.abs(r.dy)<1);}
+    const contextPoint=await evaluate("(()=>{const r=document.querySelector('#header-workspace-selector > summary').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()");
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...contextPoint,button:'right',buttons:type==='mousePressed'?2:0,clickCount:1,pointerType:'mouse'});
+    await settle();
+    const contextRows=await evaluate("Array.from(document.querySelectorAll('.panel-context-menu:popover-open button'),b=>({label:b.querySelector('.menu-label').textContent,checked:b.getAttribute('aria-checked')}))");
+    assert.deepEqual(contextRows,(await view()).switcher_options.sections.flat().map(row=>({label:row.label,checked:row.selected==null?null:String(row.selected)})));
+    for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await settle();
+    assert.equal(await evaluate("document.activeElement.matches('#header-workspace-selector > summary')"),true);
     await click('#header-workspace-selector > summary',device);
     const current=await view(),choices=current.switcher_display;
     const menu='#header-workspace-selector .popover';
     const rows=await evaluate(`Array.from(document.querySelectorAll('${menu} button'),b=>({label:b.querySelector('.menu-label').textContent,checked:b.getAttribute('aria-checked')}))`);
-    assert.deepEqual(rows,choices.map(row=>({label:row.title,checked:String(row.id===current.id)})));
+    assert.deepEqual(rows,current.switcher_menu.sections.flat().map(row=>({label:row.label,checked:row.selected==null?null:String(row.selected)})));
+    await click(`${menu} button:nth-of-type(${choices.length+1})`,device);
+    const options=await evaluate(`Array.from(document.querySelectorAll('${menu} button:not(.submenu-back)'),b=>({label:b.querySelector('.menu-label').textContent,checked:b.getAttribute('aria-checked')}))`);
+    assert.deepEqual(options,current.switcher_options.sections[0].map(row=>({label:row.label,checked:String(row.selected)})));
+    await click(`${menu} .submenu-back`,device);
     await shot(`${theme}-${size}`);
+    await click(`${menu} button:last-of-type`,device);assert.equal((await view()).page,'workspaces');
+    await click('.workspace-manager footer button',device);assert.equal((await view()).page,null);
+    await click('#header-workspace-selector > summary',device);
     const active=(await view()).id,target=choices.find(row=>row.id!==active);
     await click(`${menu} button:nth-child(${choices.indexOf(target)+1})`,device);
     assert.equal((await view()).id,target.id);
@@ -61,5 +76,6 @@ export async function checkCompactWorkspaces({call,evaluate,settle}) {
   await pause(150);await idle();assert.equal((await view()).id,target.id);
   await input({type:'switch',id:original});
   await send({type:'restore_workspace',workspace:saved});
+  await call('Emulation.clearDeviceMetricsOverride');
   console.log('PASS: compact and overflow workspace choices, configured order/current selection, mouse/touch/pen/keyboard, all icon sizes, both themes and 1x/2x');
 }
