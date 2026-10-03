@@ -22,7 +22,7 @@ impl StatisticsPipeline {
                 storage(2, true), storage(3, false), storage(4, false), storage(5, true),
             ]);
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("artwork statistics"), source: wgpu::ShaderSource::Wgsl(include_str!("statistics.wgsl").into()),
+                label: Some("artwork statistics"), source: wgpu::ShaderSource::Wgsl(concat!(include_str!("../float_number.wgsl"),"\n",include_str!("statistics.wgsl")).into()),
             });
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("artwork statistics"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
@@ -39,7 +39,7 @@ impl StatisticsPipeline {
 impl SnapshotGpu {
     pub async fn artwork_statistics(&self, request: ArtworkStatisticsRequest, control: CaptureControl) -> Result<Histogram, String> {
         control.check().map_err(|e| e.to_string())?;
-        let (mut snapshot, output) = self.artwork_capture(&request.query, control.clone())?;
+        let (mut snapshot, output) = self.artwork_capture(&request.query, control.clone()).await?;
         let selection = request.selection.then(|| request.query.document.selection.clone().map(Arc::new)).flatten();
         if request.selection && selection.is_none() { return Err("Select an area to inspect".into()); }
         let extent = snapshot.extent;

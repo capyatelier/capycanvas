@@ -6,6 +6,12 @@ use layer_render::{BackendError, FilterPreviewImage, FilterPreviewRequest, Frame
 /// Protocol recorder only: no canvas storage or software rasterization.
 #[derive(Default)]
 pub(crate) struct Recorder {
+    pub(crate) analysis_requests: Vec<layer_core::ArtworkQuery>,
+    pub(crate) analysis_reply: Option<Result<(), BackendError>>,
+    pub(crate) analysis_accepts: usize,
+    pub(crate) analysis_cancels: usize,
+    pub(crate) analysis_retain_fails: bool,
+    pub(crate) analysis_retained: Vec<Vec<layer_core::LayerId>>,
     pub(crate) clipping_previews: Vec<(bool,bool)>,
     pub(crate) settling: bool,
     pub(crate) color: layer_core::color::DocumentColor,
@@ -105,6 +111,11 @@ impl CanvasRenderer for Recorder {
     fn cancel_region(&mut self) {
         self.region_cancels += 1;
     }
+    fn request_effect_analysis(&mut self, query: layer_core::ArtworkQuery) -> Result<bool, Self::Error> {self.analysis_requests.push(query);Ok(true)}
+    fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> {self.analysis_reply.take()}
+    fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> {self.analysis_accepts+=1;Ok(())}
+    fn cancel_effect_analysis(&mut self) {self.analysis_cancels+=1;self.analysis_reply=None;}
+    fn retain_effect_analyses(&mut self, layers:&[layer_core::LayerId]) -> Result<(),Self::Error> {self.analysis_retained.push(layers.to_vec());if self.analysis_retain_fails {Err(BackendError("retain failed"))} else {Ok(())}}
     fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
         if self.snapshot_fails { return Err(BackendError("snapshot request failed")); }
         if self.snapshot_wait { return Ok(false); }

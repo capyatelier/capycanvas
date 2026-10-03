@@ -495,3 +495,11 @@ resources-lookup-replace = แทนที่…
 resources-lookup-files = ไฟล์ตารางแปลงสี
 resources-lookup-unavailable = แพลตฟอร์มนี้ยังไม่รองรับการนำเข้าตารางแปลงสี
 resources-lookup-failed = นำเข้าตารางแปลงสีไม่ได้
+
+resources-analysis-updating = กำลังอัปเดต…
+resources-analysis-error = ไม่สามารถอัปเดตการปรับแต่งนี้ได้
+resources-filter-shadows-highlights = เงา/ไฮไลต์
+resources-filter-clarity = ความชัดเจน
+resources-local-shadows = เงา
+resources-local-highlights = ไฮไลต์
+resources-local-amount = ปริมาณ

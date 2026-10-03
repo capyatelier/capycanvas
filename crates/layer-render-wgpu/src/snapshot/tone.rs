@@ -38,19 +38,29 @@ impl SnapshotRenderer {
     pub async fn gpu_local_tone_guide_async(
         &mut self,
     ) -> Result<Arc<crate::local_tone::GpuToneGuide>, String> {
-        use crate::local_tone::{Builder, range_async, wait_async};
         self.check_cancelled().map_err(|e| e.to_string())?;
         if let Some(guide) = &self.gpu_local_tone {
             return Ok(guide.clone());
         }
+        self.prepare_effect_analysis_async(scene::Output::Artwork(None)).await?;
+        let guide = self.build_tone_guide_async(scene::Output::Artwork(None)).await?;
+        self.gpu_local_tone = Some(guide.clone());
+        Ok(guide)
+    }
+    pub(super) async fn build_tone_guide_async(&mut self, output: scene::Output)
+        -> Result<Arc<crate::local_tone::GpuToneGuide>, String> {
+        use crate::local_tone::{Builder, range_async, wait_async};
         let reserved = Builder::allocation_bound(self.extent)?;
-        if reserved > self.planned_pixel_bytes {
+        if reserved.saturating_add(self.renderer.analysis_bytes()) > self.planned_pixel_bytes {
             return Err(GpuRasterError::CaptureBudget {
-                required: reserved,
+                required: reserved.saturating_add(self.renderer.analysis_bytes()),
                 limit: self.planned_pixel_bytes,
             }
             .to_string());
         }
+        let mut lease = if matches!(output, scene::Output::EffectInput(_)) {
+            Some(crate::effect_analysis::Lease::reserve(&self.renderer.device, reserved)?)
+        } else { None };
         Builder::prepare_pipelines(&self.renderer.device).await?;
         self.check_cancelled().map_err(|e| e.to_string())?;
         let builder = Builder::new(&self.renderer.device, self.extent, self.color().space)?;
@@ -68,7 +78,7 @@ impl SnapshotRenderer {
                 ]];
                 while let Some(region) = regions.pop() {
                     self.check_cancelled().map_err(|e| e.to_string())?;
-                    match self.capture_region_gpu(region, reserved, |_, texture, encoder| {
+                    match self.capture_output_region_gpu(region, output, reserved, |_, texture, encoder| {
                         builder.reduce(encoder, texture, [region[0], region[1]])
                     }) {
                         Err(GpuRasterError::CaptureBudget { .. })
@@ -104,11 +114,14 @@ impl SnapshotRenderer {
         }
         self.check_cancelled().map_err(|e| e.to_string())?;
         let mut encoder = submission::CommandEncoder::new(&device, &Default::default());
-        let guide = builder.finish(&mut encoder, peak);
+        let mut guide = builder.finish(&mut encoder, peak);
+        if let Some(lease) = &mut lease {
+            let retained = lease.split(guide.byte_len());
+            Arc::get_mut(&mut guide).unwrap().analysis_lease = Some(retained);
+        }
         encoder.submit(&queue);
         wait_async(&device, &queue).await?;
         self.check_cancelled().map_err(|e| e.to_string())?;
-        self.gpu_local_tone = Some(guide.clone());
         Ok(guide)
     }
 }

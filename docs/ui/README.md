@@ -104,6 +104,8 @@ the host to rebuild the layer list. A *view* here is a description of UI state,
 such as layer rows and available actions, rather than rendered pixels. Hosts
 cache these descriptions and update affected controls; this also avoids
 replacing a widget while a user is dragging or editing it.
+Panel customization refreshes only the captions it creates. Properties and
+other state-driven panel contents keep their own headings and status text.
 
 Commands have stable identities and shared availability rules. A button, menu item
 and shortcut invoke the same action and agree on whether it is enabled.

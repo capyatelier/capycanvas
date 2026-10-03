@@ -16,7 +16,7 @@ impl SamplePipeline {
                 crate::bindings::buffer(2, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Storage { read_only: false }, false, NonZeroU64::new(32)),
             ]);
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("artwork sample"), source: wgpu::ShaderSource::Wgsl(include_str!("sample.wgsl").into()),
+                label: Some("artwork sample"), source: wgpu::ShaderSource::Wgsl(concat!(include_str!("../float_number.wgsl"),"\n",include_str!("sample.wgsl")).into()),
             });
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("artwork sample"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
@@ -53,7 +53,12 @@ impl SamplePipeline {
 }
 
 impl SnapshotGpu {
-    pub(super) fn artwork_capture(&self, request: &layer_core::ArtworkQuery, control: CaptureControl) -> Result<(SnapshotRenderer, scene::Output), String> {
+    pub fn artwork_source_project(request: &layer_core::ArtworkQuery) -> Result<Project, String> {
+        let (mut document, _) = Self::artwork_document(request)?;
+        discard_hidden_backing(&mut document);
+        Ok(Project { document })
+    }
+    fn artwork_document(request: &layer_core::ArtworkQuery) -> Result<(layer_core::Document, scene::Output), String> {
         request.validate()?;
         let mut document = (*request.document).clone();
         let output = match &request.source {
@@ -65,23 +70,38 @@ impl SnapshotGpu {
             }
             ArtworkSource::EffectInput(id) | ArtworkSource::EffectChannels(id) => {
                 let index = document.layers.iter().position(|layer| layer.id == *id).unwrap();
-                for layer in &mut document.layers[..=index] { if layer.kind != LayerKind::Group { layer.visible = false; } }
-                if matches!(request.source,ArtworkSource::EffectChannels(_)) {
-                    let layer = &mut document.layers[index];layer.opacity=1.;layer.mask=None;layer.properties.blend=layer_core::LayerBlend::Normal;
-                    let effect=Arc::make_mut(layer.effect.as_mut().unwrap());
-                    let program=Arc::make_mut(&mut effect.program);program.entry=format!("{}_channels",program.entry).into();
-                    scene::Output::EffectChannels(*id)
-                } else {scene::Output::EffectInput(*id)}
+                let mut included = vec![false; document.layers.len()];
+                for i in layer_core::composite_input_layers(&document.layers, index) { included[i] = true; }
+                for (i, layer) in document.layers.iter_mut().enumerate() {
+                    if !included[i] && layer.kind != LayerKind::Group { layer.visible = false; }
+                }
+                if matches!(request.source, ArtworkSource::EffectChannels(_)) { scene::Output::EffectChannels(*id) }
+                else { scene::Output::EffectInput(*id) }
             }
             ArtworkSource::LayerContent(id) => {
                 for layer in &mut document.layers { layer.visible = layer.id == *id || layer.kind == LayerKind::Group;layer.mask = None; }
                 scene::Output::LayerContent(*id)
             }
         };
+        Ok((document, output))
+    }
+    pub(super) async fn artwork_capture(&self, request: &layer_core::ArtworkQuery, control: CaptureControl) -> Result<(SnapshotRenderer, scene::Output), String> {
+        let (mut document, output) = Self::artwork_document(request)?;
+        let identity = Arc::new(document.clone());
+        if let ArtworkSource::EffectChannels(id) = request.source {
+            let layer = document.layers.iter_mut().find(|layer| layer.id == id).unwrap();
+            layer.opacity = 1.; layer.mask = None; layer.properties.blend = layer_core::LayerBlend::Normal;
+            let effect = Arc::make_mut(layer.effect.as_mut().unwrap());
+            let program = Arc::make_mut(&mut effect.program); program.entry = format!("{}_channels", program.entry).into();
+        }
         let background = document.layers.iter().find(|layer| layer.kind == LayerKind::Background)
             .map(|layer| layer.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE).linear_in(document.color.space))
             .transpose()?.unwrap_or([0.; 4]);
+        discard_hidden_backing(&mut document);
+        #[cfg(target_arch = "wasm32")]
+        if let Some(waiter) = &self.analysis_backing_waiter { waiter(Arc::new(document.clone()), control.clone()).await?; }
         let mut snapshot = self.capture(Project { document }, background, request.time, control.clone()).map_err(|e| e.to_string())?;
+        snapshot.document = identity;
         snapshot.planned_pixel_bytes = 256 * 1024 * 1024;
         for (id, phase) in request.effect_times.iter().copied() {
             if let Some(effect) = snapshot.layers.iter().find(|layer| layer.id == id).and_then(|layer| layer.effect.as_ref()) {
@@ -100,7 +120,8 @@ impl SnapshotGpu {
         let radius = request.width / 2;
         let origin = center.map(|v| v.saturating_sub(radius));
         let size = std::array::from_fn::<_, 2, _>(|i| (center[i] + radius + 1).min(extent[i]) - origin[i]);
-        let (mut snapshot, output) = self.artwork_capture(&request.query, control.clone())?;
+        let (mut snapshot, output) = self.artwork_capture(&request.query, control.clone()).await?;
+        snapshot.prepare_effect_analysis_async(output).await?;
         let pipeline = SamplePipeline::new(&self.device);
         let summary = snapshot.with_region_gpu([origin[0], origin[1], size[0], size[1]], 64,
             |r, packet, region, encoder| {

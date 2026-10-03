@@ -33,9 +33,9 @@ impl CanvasRenderer for AttachedRenderer {
     fn max_document_dimension(&self) -> u32 {
         self.0.as_deref().map_or(u32::MAX, CanvasRenderer::max_document_dimension)
     }
-    fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
+    fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>) -> bool {
         self.0
-            .as_ref()
+            .as_mut()
             .is_none_or(|gpu| gpu.raster_dependencies_ready(packet))
     }
     fn can_capture_raster(&self) -> bool {
@@ -81,6 +81,13 @@ impl CanvasRenderer for AttachedRenderer {
         preview: Option<&layer_render::TransformPreview>,
     ) -> Result<(), Self::Error> {
         self.gpu()?.set_transform_preview(preview)
+    }
+    fn request_effect_analysis(&mut self, query: layer_core::ArtworkQuery) -> Result<bool, Self::Error> { self.gpu()?.request_effect_analysis(query) }
+    fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> { self.0.as_mut()?.take_effect_analysis() }
+    fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> { self.gpu()?.accept_effect_analysis() }
+    fn cancel_effect_analysis(&mut self) { if let Some(gpu) = self.0.as_mut() { gpu.cancel_effect_analysis(); } }
+    fn retain_effect_analyses(&mut self, layers: &[layer_core::LayerId]) -> Result<(), Self::Error> {
+        self.0.as_mut().map_or(Ok(()), |gpu| gpu.retain_effect_analyses(layers))
     }
     fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
         self.gpu()?.request_snapshot(request)
@@ -211,4 +218,12 @@ impl CanvasRenderer for AttachedRenderer {
 #[test]
 fn renderer_replacement_keeps_native_stack_usage_bounded() {
     assert_eq!(std::mem::size_of::<AttachedRenderer>(), std::mem::size_of::<usize>());
+}
+
+#[test]
+fn analysis_retention_before_device_attachment_needs_no_gpu() {
+    let mut renderer=AttachedRenderer::default();
+    renderer.retain_effect_analyses(&[layer_core::LayerId(3),layer_core::LayerId(7)]).unwrap();
+    renderer.retain_effect_analyses(&[]).unwrap();
+    assert!(renderer.0.is_none());
 }

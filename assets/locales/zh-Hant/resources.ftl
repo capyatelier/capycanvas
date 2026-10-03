@@ -612,3 +612,11 @@ resources-lookup-import = 匯入…
 resources-lookup-replace = 取代…
 resources-lookup-files = 顏色查找檔案
 resources-lookup-unavailable = 此平台尚不支援匯入顏色查找檔案。
+
+resources-analysis-updating = 正在更新…
+resources-analysis-error = 無法更新此調整。
+resources-filter-shadows-highlights = 陰影/亮部
+resources-filter-clarity = 清晰度
+resources-local-shadows = 陰影
+resources-local-highlights = 亮部
+resources-local-amount = 數量

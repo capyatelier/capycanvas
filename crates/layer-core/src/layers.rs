@@ -100,6 +100,42 @@ pub fn backdrop_layers(layers: &[Layer], index: usize) -> Vec<usize> {
         .collect()
 }
 
+pub fn composite_input_scope(layers: &[Layer], layer: &Layer) -> Option<LayerId> {
+    if layer.properties.clipped { layer.properties.parent }
+    else { isolated_scope(layers, layer.properties.parent) }
+}
+
+pub fn composite_input_layers(layers: &[Layer], index: usize) -> Vec<usize> {
+    let layer = &layers[index];
+    if layer.kind == LayerKind::Group {
+        return layers.iter().enumerate().filter_map(|(i, child)|
+            (child.is_artwork() && descends_from(layers, child, Some(layer.id))).then_some(i)).collect();
+    }
+    if !layer.effect.as_ref().is_some_and(|e| e.program.kind == EffectKind::Adjustment) { return Vec::new(); }
+    if !layer.properties.clipped {
+        let mut input = backdrop_layers(layers, index);
+        input.retain(|&i| layers[i].is_artwork() && layers[i].kind != LayerKind::Background);
+        if composite_input_scope(layers, layer).is_none()
+            && let Some(paper) = layers.iter().position(|l| l.kind == LayerKind::Background) { input.push(paper); }
+        input.sort_unstable();
+        return input;
+    }
+    let parent = layer.properties.parent;
+    let end = layers.iter().enumerate().skip(index + 1).find(|(_, l)|
+        l.is_artwork() && l.kind != LayerKind::Background && l.properties.parent == parent && !l.properties.clipped)
+        .map_or(layers.len(), |(i, _)| i);
+    (0..layers.len()).filter(|&i| {
+        if !layers[i].is_artwork() || layers[i].kind == LayerKind::Background { return false; }
+        let mut root = i;
+        for _ in 0..layers.len() {
+            if layers[root].properties.parent == parent { return root > index && root <= end; }
+            let Some(next) = layers[root].properties.parent.and_then(|id| layers.iter().position(|l| l.id == id)) else { return false; };
+            root = next;
+        }
+        false
+    }).collect()
+}
+
 /// Whether `layer` lies inside `scope`, where None is the document.
 pub fn descends_from(layers: &[Layer], layer: &Layer, scope: Option<LayerId>) -> bool {
     let Some(scope) = scope else {
@@ -1617,4 +1653,15 @@ impl Document {
         }
         Ok(Edit::ReplaceLayer(Box::new(layer)))
     }
+}
+
+pub fn layer_is_visible(layers: &[Layer], id: LayerId) -> bool {
+    let mut current = Some(id);
+    for _ in 0..=layers.len() {
+        let Some(id) = current else { return true; };
+        let Some(layer) = layers.iter().find(|layer| layer.id == id) else { return false; };
+        if !layer.visible { return false; }
+        current = layer.properties.parent;
+    }
+    false
 }

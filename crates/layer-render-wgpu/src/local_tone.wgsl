@@ -13,26 +13,23 @@ struct Plane { pixels: array<vec4<f32>> }
 fn reduce_source(@builtin(global_invocation_id) id: vec3<u32>) {
     let cell = id.xy + p.size.zw;
     if any(cell >= p.size.xy) { return; }
-    let scale = vec2<f32>(p.size.xy) / vec2<f32>(p.aux.zw);
-    // Inverse coordinates can round across a cell boundary. Include one extra
-    // source pixel at each edge; the exact forward area gives it zero weight.
-    let start = max(vec2<u32>(max(vec2<i32>(floor(vec2<f32>(cell) / scale)) - 1, vec2<i32>(0))), p.aux.xy);
-    let end = min(vec2<u32>(ceil(vec2<f32>(cell + 1u) / scale)) + 1u, p.aux.xy + textureDimensions(source));
+    let first = cell * p.aux.zw;
+    let last = (cell + 1u) * p.aux.zw;
+    let start = max(first / p.size.xy, p.aux.xy);
+    let end = min((last + p.size.xy - 1u) / p.size.xy, p.aux.xy + textureDimensions(source));
     var sum = dst.pixels[cell.y * p.size.x + cell.x];
     for (var y = start.y; y < end.y; y++) {
-        let wy = max(0.0, min(f32(y + 1u) * scale.y, f32(cell.y + 1u)) - max(f32(y) * scale.y, f32(cell.y)));
+        let wy = min((y + 1u) * p.size.y, last.y) - max(y * p.size.y, first.y);
         for (var x = start.x; x < end.x; x++) {
             let pixel = textureLoad(source, vec2<i32>(vec2<u32>(x, y) - p.aux.xy), 0);
-            if any((bitcast<vec4<u32>>(pixel) & vec4<u32>(0x7fffffffu)) >= vec4<u32>(0x7f800000u)) || pixel.a < 0.0 || pixel.a > 1.0 {
-                sum.w = 1.0;
-                continue;
-            }
-            if pixel.a == 0.0 { continue; }
-            let luminance = dot(pixel.rgb, p.weights.xyz) / pixel.a;
-            let weight = wy * max(0.0, min(f32(x + 1u) * scale.x, f32(cell.x + 1u)) - max(f32(x) * scale.x, f32(cell.x)));
-            sum.x += log2(max(luminance, exp2(-24.0))) * weight * pixel.a;
-            sum.y += weight * pixel.a;
-            sum.z = max(sum.z, luminance);
+            let sample = guide_luminance(pixel, p.weights.xyz);
+            if sample.w == 4. { sum.w = 1.; continue; }
+            if sample.w == 0. || sample.w == 2. { continue; }
+            let wx = min((x + 1u) * p.size.x, last.x) - max(x * p.size.x, first.x);
+            let weight = f32(wx * wy) / f32(p.aux.z * p.aux.w);
+            sum.x += sample.x * weight * sample.z;
+            sum.y += weight * sample.z;
+            sum.z = max(sum.z, sample.y);
         }
     }
     dst.pixels[cell.y * p.size.x + cell.x] = sum;

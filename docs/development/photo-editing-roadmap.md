@@ -42,6 +42,11 @@ Intensity and undoable replacement. Projects embed and deduplicate table data;
 Web and Android preserve loaded tables and expose their numeric controls.
 Their file import presentation remains pending. See
 [runtime filters](../reference/runtime-filters.md#imported-color-lookup-tables).
+Shadows/Highlights and Clarity use shared source-aware illumination guides and
+ordinary Properties controls. Amount changes reuse their guide; exact capture
+prepares matching lower-to-upper dependencies. Dehaze remains an independent
+photographic quality gate. See [local adjustments](../reference/runtime-filters.md#shadowshighlights-and-clarity).
+
 
 ## Milestones
 

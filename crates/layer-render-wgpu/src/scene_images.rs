@@ -232,65 +232,6 @@ pub(super) fn capture_window(layers: &[Layer], region: PixelRect, extent: [u32; 
         .unwrap_or(PixelRect::full(extent))
 }
 
-// Dependencies follow the same isolated group / clipping-stack boundaries as
-// composition, through Pass Through groups. Build on structural edits only,
-// not on every dab or frame.
-fn input_indices(layers: &[Layer], index: usize) -> Vec<usize> {
-    let layer = &layers[index];
-    let adjustment = layer
-        .effect
-        .as_ref()
-        .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment);
-    if layer.kind == LayerKind::Group {
-        return below_indices(layers, index, Some(layer.id), layers.len());
-    }
-    if !adjustment {
-        return Vec::new();
-    }
-    if !layer.properties.clipped {
-        return layer_core::backdrop_layers(layers, index);
-    }
-    let parent = layer.properties.parent;
-    let end = layers
-        .iter()
-        .enumerate()
-        .skip(index + 1)
-        .find(|(_, l)| l.properties.parent == parent && !l.properties.clipped)
-        .map_or(layers.len(), |(i, _)| i);
-    below_indices(layers, index, parent, end)
-}
-/// The group a layer's input is composed in: its clipping stack's group, or
-/// the nearest group around it that does not pass through.
-pub(super) fn input_scope(layers: &[Layer], layer: &Layer) -> Option<LayerId> {
-    if layer.properties.clipped {
-        layer.properties.parent
-    } else {
-        layer_core::isolated_scope(layers, layer.properties.parent)
-    }
-}
-fn below_indices(
-    layers: &[Layer],
-    index: usize,
-    parent: Option<LayerId>,
-    end: usize,
-) -> Vec<usize> {
-    (index + 1..layers.len())
-        .filter(|&i| {
-            let mut root = i;
-            while layers[root].properties.parent != parent {
-                let Some(id) = layers[root].properties.parent else {
-                    return false;
-                };
-                let Some(next) = layers.iter().position(|l| l.id == id) else {
-                    return false;
-                };
-                root = next;
-            }
-            root > index && root <= end
-        })
-        .collect()
-}
-
 fn clip_input(layers: &[Layer], index: usize) -> Option<ClipInput> {
     let layer = &layers[index];
     if !visible(layers, layer)
@@ -362,7 +303,7 @@ impl Scene {
                 self.used.fill(false);
                 self.stop_before = Some((base_index, false));
                 for tile in page_coordinates(backdrop.damage) {
-                    let pixels = self.group(r, packet, input_scope(packet.layers, base), tile)?;
+                    let pixels = self.group(r, packet, layer_core::composite_input_scope(packet.layers, base), tile)?;
                     self.capture_tile(r, pixels, &backdrop.image, tile, Convert::None);
                 }
                 self.stop_before = None;
@@ -511,8 +452,7 @@ impl Scene {
                 Some(Job::Effect { target, sources, data, prepared, .. }) if prepared.pointwise => Some((target, sources, data, None)),
                 _ => None,
             };
-            if (extent == [bounds.width(), bounds.height()] || region == page_rect(tile))
-                && destination.texture.usage().contains(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING)
+            if destination.texture.usage().contains(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING)
                 && let Some((target, sources, data, clip)) = direct
                 && target == view && !sources.contains(view) && !sources.contains(&destination.view)
                 && data[..4] == [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32]
@@ -654,7 +594,7 @@ impl Scene {
                 })
         {
             self.images.inputs = (0..packet.layers.len())
-                .map(|i| input_indices(packet.layers, i))
+                .map(|i| layer_core::composite_input_layers(packet.layers, i))
                 .collect();
             self.images.clips = (0..packet.layers.len())
                 .map(|i| clip_input(packet.layers, i))
@@ -825,7 +765,7 @@ impl Scene {
                     ));
                 } else {
                     for tile in page_coordinates(input_dirty) {
-                        let pixels = self.group(r, packet, input_scope(packet.layers, layer), tile)?;
+                        let pixels = self.group(r, packet, layer_core::composite_input_scope(packet.layers, layer), tile)?;
                         self.capture_tile(r, pixels, &cached.input, tile, input);
                     }
                 }

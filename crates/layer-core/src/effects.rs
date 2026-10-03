@@ -202,9 +202,17 @@ pub struct EffectLookup {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EffectAuxiliary {
     Lut3d { resource: Arc<str>, color_space: Arc<str> },
+    Analysis { analysis: EffectAnalysisKind },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectAnalysisKind { LocalIllumination }
+
 impl EffectProgram {
+    pub fn analysis(&self) -> Option<EffectAnalysisKind> {
+        match self.auxiliary { Some(EffectAuxiliary::Analysis {analysis}) => Some(analysis), _ => None }
+    }
     pub fn image_boundary(&self) -> bool {
         !self.passes.is_empty()
             || self.time
@@ -332,7 +340,7 @@ impl EffectClock {
 }
 impl EffectInstance {
     pub fn lut3d(&self) -> Option<&Arc<crate::Lut3d>> {
-        let EffectAuxiliary::Lut3d { resource, .. } = self.program.auxiliary.as_ref()?;
+        let EffectAuxiliary::Lut3d { resource, .. } = self.program.auxiliary.as_ref()? else { return None; };
         match self.value(resource) { Some(EffectValue::Lut3d(resource)) => resource.as_ref(), _ => None }
     }
     pub fn resources(&self) -> impl Iterator<Item = &Arc<crate::Lut3d>> {
@@ -340,6 +348,9 @@ impl EffectInstance {
             .filter_map(|v| match v { EffectValue::Lut3d(Some(r)) => Some(r), _ => None })
     }
     fn auxiliary_indices(&self) -> Result<Option<(usize,usize)>, &'static str> {
+        if self.program.analysis().is_some() && self.program.kind != EffectKind::Adjustment {
+            return Err("Source analysis requires an adjustment");
+        }
         let count = self.program.parameters.iter().filter(|p| p.kind == EffectParameterKind::Lut3d).count();
         let Some(EffectAuxiliary::Lut3d {resource,color_space}) = &self.program.auxiliary else {
             return if count == 0 { Ok(None) } else { Err("Color lookup requires its auxiliary declaration") };

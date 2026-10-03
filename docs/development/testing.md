@@ -94,6 +94,18 @@ Selective Color references lock original-color membership and Black scaling;
 Channel Mixer references cover signed coefficients, constants and independent
 Monochrome rows. Both preserve hidden page values through undo and project I/O.
 
+Source-aware Shadows/Highlights and Clarity use `effect_analysis_tests` in
+`layer-ui`, `snapshot::tests::local_adjustments` and `effect_analysis_lease_tests`
+in `layer-render-wgpu`. Exercise first use without a settled preview, two stacked
+effects, noncontiguous group storage, clipped input, retained geometry, hidden
+failed backing, animated frozen phases, cancellation and renderer replacement.
+Exact consumers include merge, Frequency Separation, color conversion and Clone
+reference sampling. The existing `local_tone` GPU fixtures compare fractional
+area reduction, finite/subnormal input and actual consumers against independent
+f64 equations. Lease tests count real guide identities and request/publication
+callbacks across 100 amount edits, including snapshot retention after live
+removal; reserved bytes are not a driver allocation peak.
+
 Color Lookup uses `lut3d_tests` in `layer-core`, `layer-ui` and
 `layer-render-wgpu`. These cover parser bounds, indexed payload integrity,
 history ownership, stale imports, independent tetrahedral/profile references,

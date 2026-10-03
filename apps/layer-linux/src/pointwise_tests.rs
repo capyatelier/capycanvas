@@ -366,3 +366,61 @@ fn native_color_lookup_import_replace_and_persistence() {
     std::fs::write(output.join(format!("lookup-pixels-{}.json",w.window.width())),serde_json::to_vec_pretty(&pixels).unwrap()).unwrap();
     input.finish();w.window.destroy();pump(100);
 }
+
+#[test]
+#[ignore = "private display and hardware GPU"]
+fn native_local_adjustments_analysis_history_and_recreation() {
+    let app=native_test_app("art.capycanvas.LocalAdjustments");let w=start(&app);
+    let output=std::path::Path::new(artifact_dir("../../artifacts/photo-editing-color/p25-gtk"));
+    let sample=|w:&Rc<Workspace>| {let camera=state(w).camera;let m=camera.document_to_surface();let mut published=None;until(||{match ui_session(w).engine().backend().capture_in(w.view_color()) {Ok(image)=>{published=Some(image);true},Err(error) if error=="Canvas has not rendered"=>false,Err(error)=>panic!("local-analysis readback: {error}")}},"local-analysis artwork frame publication");let image=published.unwrap();let scale=[image.width as f32/camera.viewport[0] as f32,image.height as f32/camera.viewport[1] as f32];std::fs::write(output.join("readback-extent.json"),serde_json::to_vec_pretty(&json!({"image":[image.width,image.height],"viewport":camera.viewport,"scale":scale})).unwrap()).unwrap();[[32.,32.],[64.,192.],[192.,64.],[224.,224.]].map(|[dx,dy]| {let x=((m[0]*dx+m[2]*dy+m[4])*scale[0]) as usize;let y=((m[1]*dx+m[3]*dy+m[5])*scale[1]) as usize;let offset=y*image.stride as usize+x*4;image.bytes[offset..offset+4].to_vec()})};
+    let width=w.window.width();let mut input=RemoteInput::new().timeout_secs(30);input.ready();let mut samples=Vec::new();
+    let settled=|w:&Rc<Workspace>| {
+        let deadline=Instant::now()+Duration::from_secs(60);
+        loop {
+            pump(20);let view=state(w);
+            assert!(view.host_error.is_none(),"analysis host error {:?}",view.host_error);
+            assert_ne!(view.layer_properties.description,"Could not update this adjustment.");
+            if view.layer_properties.description!="Updating…" && !ui_session(w).wants_continuous_frames() {break;}
+            assert!(Instant::now()<deadline,"local analysis timeout: {}",view.layer_properties.description);
+        }
+        ready(w);until(||ui_session(w).engine().backend().frames_idle() && w.frame_timer.borrow().is_none(),"published local-analysis canvas frames");pump(100);
+    };
+    for theme in [Theme::Light,Theme::Dark] {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)});ready(&w);let source=document(&w);let original=sample(&w);
+        insert(&w,"hue_saturation");let lower=document(&w).active_layer;
+        insert(&w,"shadows_highlights");let shadows=document(&w).active_layer;let view=state(&w).layer_properties;let title=w.effects.properties.first_child().unwrap().downcast::<gtk::Label>().unwrap();assert_eq!(title.text().as_str(),view.title,"native Properties heading follows shared effect/analysis title");if view.description=="Updating…" {assert!(title.text().contains("Updating"));capture(&w,output,&format!("analysis-pending-{width}-{theme:?}"));}settled(&w);assert_eq!(title.text().as_str(),state(&w).layer_properties.title);
+        assert_eq!(state(&w).layer_properties.controls.iter().map(|c|c.key.as_str()).collect::<Vec<_>>(),["shadows","highlights"]);
+        let before=document(&w).layers;edit(&w,&mut input,"shadows","65");edit(&w,&mut input,"highlights","45");settled(&w);
+        let adjusted=sample(&w);assert_ne!(adjusted,original);capture(&w,output,&format!("shadows-highlights-{width}-{theme:?}"));
+        let after=document(&w).layers;w.dispatch(UiAction::Invoke {command:CommandId::Undo});settled(&w);assert_eq!(value(&w,"highlights"),EffectValue::Number(0.));
+        w.dispatch(UiAction::Invoke {command:CommandId::Redo});settled(&w);assert_eq!(document(&w).layers,after);assert_ne!(before,after);
+        insert(&w,"clarity");let clarity=document(&w).active_layer;settled(&w);assert_eq!(state(&w).layer_properties.controls.iter().map(|c|c.key.as_str()).collect::<Vec<_>>(),["amount"]);
+        edit(&w,&mut input,"amount","55");settled(&w);let positive=sample(&w);capture(&w,output,&format!("clarity-positive-{width}-{theme:?}"));
+        let control=number(&w,"amount");scroll_to(control.upcast_ref());let display=find_css(control.upcast_ref(),"number-value").unwrap();input.click(screen_point(&display,&w.window,[0.5,0.5]));
+        let entry=descendant::<gtk::Entry>(&control).unwrap();entry.set_text("99.");let before_cancel=document(&w).layers;input.key(0xff1b);settled(&w);assert_eq!(document(&w).layers,before_cancel);
+        edit(&w,&mut input,"amount","-55");settled(&w);let negative=sample(&w);capture(&w,output,&format!("clarity-negative-{width}-{theme:?}"));assert_ne!(positive,negative);
+        w.dispatch(UiAction::Invoke {command:CommandId::Undo});settled(&w);assert_eq!(value(&w,"amount"),EffectValue::Number(55.));
+        w.dispatch(UiAction::Invoke {command:CommandId::Redo});settled(&w);assert_eq!(value(&w,"amount"),EffectValue::Number(-55.));
+        w.dispatch(UiAction::Effect {action:EffectAction::Set {layer:lower.0,key:"lightness".into(),value:EffectValue::Number(-20.)}});settled(&w);
+        let changed=sample(&w);assert_ne!(changed,negative);capture(&w,output,&format!("clarity-stacked-{width}-{theme:?}"));unchanged_sources(&w,&source);
+        let bytes=super::place_source::snapshot(&w);std::fs::write(output.join(format!("local-adjustments-{width}-{theme:?}.capy")),&bytes).unwrap();
+        let reopened=layer_core::Project::read(std::io::Cursor::new(bytes),Default::default()).unwrap();assert_eq!(reopened.document.layers,document(&w).layers);
+        w.documents.enqueue(&w,(reopened,None,None));ready(&w);settled(&w);assert_eq!(sample(&w),changed);
+        w.restart_gpu();ready(&w);settled(&w);assert_eq!(sample(&w),changed,"recreated GPU rebuilds live analysis");capture(&w,output,&format!("local-recreated-{width}-{theme:?}"));
+        samples.push(json!({"theme":format!("{theme:?}"),"original":original,"shadows_highlights":adjusted,"clarity_positive":positive,"clarity_negative":negative,"lower_changed":changed}));
+        for id in [clarity,shadows,lower] {w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::Select {id:id.0,mask:false}});w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);}assert_eq!(document(&w).layers,source.layers);
+        w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Adjustments,visible:true});w.customize(CustomizationAction::CloseExpanded);
+        w.dispatch(UiAction::MovePanel {panel:Panel::Adjustments,target:DockTarget::Edge {edge:Edge::Right,outer:false},viewport:[width as f32,800.]});
+        w.dispatch(UiAction::FilterPicker {action:layer_ui::FilterPickerAction::Category {category:None}});
+        for (id,query) in [("shadows_highlights","Shadows"),("clarity","Clarity")] {
+            w.dispatch(UiAction::FilterPicker {action:layer_ui::FilterPickerAction::Search {query:query.into()}});pump(100);
+            let row=named::<gtk::Button>(w.window.upcast_ref(),&format!("adjustment-{id}"));scroll_to(row.upcast_ref());
+            let picture=descendant::<gtk::Picture>(&row).unwrap();until(||picture.paintable().is_some(),"local adjustment catalog thumbnail");
+            let texture=picture.paintable().unwrap().downcast::<gtk::gdk::Texture>().unwrap();let mut bytes=vec![0;texture.width() as usize*texture.height() as usize*4];texture.download(&mut bytes,texture.width() as usize*4);
+            assert!(bytes.chunks_exact(4).any(|p|p[..3].iter().max().unwrap()-p[..3].iter().min().unwrap()>20),"source-aware {id} thumbnail contains gradient colors");
+            capture(&w,output,&format!("catalog-{id}-{width}-{theme:?}"));
+        }
+        w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Adjustments,visible:false});assert_eq!(document(&w).layers,source.layers);
+    }
+    std::fs::write(output.join(format!("local-pixels-{width}.json")),serde_json::to_vec_pretty(&samples).unwrap()).unwrap();input.finish();w.window.destroy();pump(100);
+}

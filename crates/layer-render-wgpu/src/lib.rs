@@ -9,6 +9,7 @@
 pub mod native_tiles;
 pub mod snapshot;
 pub mod local_tone;
+pub mod effect_analysis;
 mod attached;
 pub use attached::AttachedRenderer;
 mod portable_blend;
@@ -882,6 +883,13 @@ pub struct WgpuRasterizer {
     artwork_frame: Option<Arc<artwork::Frame>>,
     settling: Option<artwork::PendingFrame>,
     effect_clocks: effects::Clocks,
+    effect_analyses: Vec<Arc<effect_analysis::Prepared>>,
+    analysis_job: Option<effect_analysis::Job>,
+    analysis_candidate: Option<effect_analysis::Candidate>,
+    analysis_dirty: bool,
+    bake_analyses: Vec<effect_analysis::BakeTask>,
+    #[cfg(target_arch = "wasm32")]
+    analysis_backing_waiter: Option<effect_analysis::BackingWaiter>,
     filter_source_epoch: u64,
     tiled_sources: std::collections::BTreeMap<LayerId, Arc<layer_core::color::source::SourceImage>>,
     preview_pages: Vec<LayerPage>,
@@ -1193,6 +1201,13 @@ impl WgpuRasterizer {
             artwork_frame: None,
             settling: None,
             effect_clocks: Default::default(),
+            effect_analyses: Vec::new(),
+            analysis_job: None,
+            analysis_candidate: None,
+            analysis_dirty: false,
+            bake_analyses: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            analysis_backing_waiter: None,
             filter_source_epoch: 0,
             display_pipelines: None,
             scale_display: None,
@@ -3028,8 +3043,8 @@ impl CanvasRenderer for WgpuRasterizer {
     fn max_document_dimension(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
     }
-    fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
-        self.raster_restore_ready(packet)
+    fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>) -> bool {
+        self.raster_restore_ready(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet)
     }
     fn has_pending_submission(&self) -> bool { self.settling.is_some() }
     fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
@@ -3098,7 +3113,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.moving_pixels = pixels;
     }
     fn has_pending_work(&self) -> bool {
-        self.settling.is_some() || self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
+        self.analysis_dirty || self.settling.is_some() || self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
             || self.navigator.pending()
             || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
     }
@@ -3184,6 +3199,7 @@ impl CanvasRenderer for WgpuRasterizer {
             + 160 + self.dry_records.storage_bytes()
             + self.material_gather.as_ref().map_or(0, material_sources::Gather::storage_bytes)
             + self.device.effect_resources.lock().unwrap().bytes()
+            + *self.device.analysis_memory.lock().unwrap()
             + m.retouch_storage_bytes
             + self
                 .transforms
@@ -3208,6 +3224,27 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.take()
+    }
+    fn request_effect_analysis(&mut self, query: layer_core::ArtworkQuery) -> Result<bool, Self::Error> {
+        if self.analysis_job.is_some() || self.analysis_candidate.is_some() { return Ok(false); }
+        self.analysis_job = Some(effect_analysis::Job::start(self.snapshot_gpu(), query).map_err(GpuRasterError::Effect)?);
+        Ok(true)
+    }
+    fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> {
+        let result = self.analysis_job.as_mut()?.take()?;
+        self.analysis_job = None;
+        Some(result.map(|candidate| self.analysis_candidate = Some(candidate)).map_err(GpuRasterError::Effect))
+    }
+    fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> {
+        if let Some(candidate) = self.analysis_candidate.take() { self.apply_effect_analysis(candidate); }
+        Ok(())
+    }
+    fn cancel_effect_analysis(&mut self) { self.analysis_job = None; self.analysis_candidate = None; }
+    fn retain_effect_analyses(&mut self, layers: &[LayerId]) -> Result<(), Self::Error> {
+        let before = self.effect_analyses.len();
+        self.effect_analyses.retain(|entry| layers.contains(&entry.layer()));
+        if self.effect_analyses.len() != before { self.analysis_changed(); }
+        Ok(())
     }
     fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
         if self.snapshot_job.is_some() { return Ok(false); }
@@ -3328,6 +3365,7 @@ impl CanvasRenderer for WgpuRasterizer {
 }
 impl WgpuRasterizer {
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
+        let packet = FramePacket {composite_all: packet.composite_all || std::mem::take(&mut self.analysis_dirty), ..packet};
         let layers = (self.clipping_preview.iter().any(|enabled| *enabled)
             && packet.layers.iter().any(|layer| layer.mask.as_ref().is_some_and(|mask| mask.show_area)))
             .then(|| packet.layers.iter().map(|layer| {

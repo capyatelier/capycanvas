@@ -2630,7 +2630,7 @@ mod tests {
             self.prepared_color = None;
             Ok(true)
         }
-        fn raster_dependencies_ready(&self, _packet: FramePacket<'_>) -> bool {
+        fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>) -> bool {
             !self.restore_blocked
         }
         fn can_capture_raster(&self) -> bool {

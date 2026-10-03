@@ -6,6 +6,7 @@ use layer_core::{Affine, Document, EffectInstance, LayerMask, Point, Selection, 
 use std::io::Cursor;
 
 mod placement;
+mod local_adjustments;
 
 fn gpu() -> SnapshotGpu {
     static GPU: std::sync::OnceLock<SnapshotGpu> = std::sync::OnceLock::new();

@@ -612,3 +612,11 @@ resources-lookup-import = 読み込む…
 resources-lookup-replace = 置き換える…
 resources-lookup-files = カラールックアップファイル
 resources-lookup-unavailable = このプラットフォームではカラールックアップをまだ読み込めません。
+
+resources-analysis-updating = 更新中…
+resources-analysis-error = この調整を更新できませんでした。
+resources-filter-shadows-highlights = シャドウ／ハイライト
+resources-filter-clarity = 明瞭度
+resources-local-shadows = シャドウ
+resources-local-highlights = ハイライト
+resources-local-amount = 量

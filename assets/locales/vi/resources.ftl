@@ -495,3 +495,11 @@ resources-lookup-replace = Thay thế…
 resources-lookup-files = Tệp ánh xạ màu
 resources-lookup-unavailable = Nền tảng này chưa hỗ trợ nhập bảng tra màu.
 resources-lookup-failed = Không thể nhập bảng tra màu.
+
+resources-analysis-updating = Đang cập nhật…
+resources-analysis-error = Không thể cập nhật điều chỉnh này.
+resources-filter-shadows-highlights = Vùng tối/Vùng sáng
+resources-filter-clarity = Độ rõ nét
+resources-local-shadows = Vùng tối
+resources-local-highlights = Vùng sáng
+resources-local-amount = Mức độ

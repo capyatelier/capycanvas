@@ -494,3 +494,11 @@ resources-lookup-replace = Değiştir…
 resources-lookup-files = Renk eşleme dosyaları
 resources-lookup-unavailable = Bu platformda renk eşleme tablolarını içe aktarma henüz kullanılamıyor.
 resources-lookup-failed = Eşleme tablosu içe aktarılamadı.
+
+resources-analysis-updating = Güncelleniyor…
+resources-analysis-error = Bu ayar güncellenemedi.
+resources-filter-shadows-highlights = Gölgeler/Parlak alanlar
+resources-filter-clarity = Netlik
+resources-local-shadows = Gölgeler
+resources-local-highlights = Parlak alanlar
+resources-local-amount = Miktar

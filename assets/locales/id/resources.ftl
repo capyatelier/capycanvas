@@ -926,3 +926,11 @@ resources-lookup-replace = Ganti…
 resources-lookup-files = Berkas pemetaan warna
 resources-lookup-unavailable = Impor tabel pemetaan warna belum tersedia di platform ini.
 resources-lookup-failed = Tidak dapat mengimpor tabel pemetaan.
+
+resources-analysis-updating = Memperbarui…
+resources-analysis-error = Penyesuaian ini tidak dapat diperbarui.
+resources-filter-shadows-highlights = Bayangan/Sorotan
+resources-filter-clarity = Kejernihan
+resources-local-shadows = Bayangan
+resources-local-highlights = Sorotan
+resources-local-amount = Intensitas

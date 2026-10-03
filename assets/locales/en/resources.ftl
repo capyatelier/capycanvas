@@ -495,3 +495,11 @@ resources-lookup-replace = Replace…
 resources-lookup-files = Color Lookup files
 resources-lookup-unavailable = Color Lookup import is not available on this platform yet.
 resources-lookup-failed = Could not import the lookup table.
+
+resources-analysis-updating = Updating…
+resources-analysis-error = Could not update this adjustment.
+resources-filter-shadows-highlights = Shadows/Highlights
+resources-filter-clarity = Clarity
+resources-local-shadows = Shadows
+resources-local-highlights = Highlights
+resources-local-amount = Amount

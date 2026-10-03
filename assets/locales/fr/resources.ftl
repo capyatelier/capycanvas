@@ -494,3 +494,11 @@ resources-lookup-replace = Remplacer…
 resources-lookup-files = Fichiers de correspondance de couleurs
 resources-lookup-unavailable = L’importation de tables de correspondance de couleurs n’est pas encore disponible sur cette plateforme.
 resources-lookup-failed = Impossible d’importer la table de correspondance.
+
+resources-analysis-updating = Mise à jour…
+resources-analysis-error = Impossible de mettre à jour ce réglage.
+resources-filter-shadows-highlights = Tons foncés/Tons clairs
+resources-filter-clarity = Clarté
+resources-local-shadows = Tons foncés
+resources-local-highlights = Tons clairs
+resources-local-amount = Intensité

@@ -9,7 +9,7 @@ export async function checkIcons({call, evaluate, settle, only}) {
   await mkdir(output, {recursive: true});
   if(!only)await checkIconControls({call,evaluate,settle},output);
   const available = (await readdir(new URL("./icons/", import.meta.url))).filter(n => n.endsWith(".svg")).sort();
-  const icons=only?available.filter(name=>name===only):available;
+  const icons=only?available.filter(name=>Array.isArray(only)?only.includes(name):name===only):available;
   assert.ok(icons.length,"Requested icon exists");
   const commands = await evaluate("layerApp.state().commands.map(({id,icon})=>({id,icon}))");
   for (const command of commands) {
@@ -41,7 +41,7 @@ export async function checkIcons({call, evaluate, settle, only}) {
     }
     await evaluate(`(async()=>{
       const frame=document.createElement('iframe');frame.id='icon-audit';frame.title='Icon rendering fixture';
-      frame.style.cssText='position:fixed;left:0;top:0;width:${only?48:576}px;height:${Math.ceil(icons.length/12)*48}px;border:0;z-index:2147483647';
+      frame.style.cssText='position:fixed;left:0;top:0;width:${only?Math.min(icons.length,12)*48:576}px;height:${Math.ceil(icons.length/12)*48}px;border:0;z-index:2147483647';
       document.body.append(frame);const d=frame.contentDocument;d.body.style.margin='0';
       for(const [index,file] of ${JSON.stringify(icons)}.entries()) {
         const response=await fetch('./icons/'+file);if(!response.ok)throw Error('Missing '+file);
@@ -52,7 +52,7 @@ export async function checkIcons({call, evaluate, settle, only}) {
       }
     })()`);
     for (const theme of ["light","dark"]) for (const size of [16,24,32]) for (const state of ["normal","accent","disabled"]) {
-      const fixture = {name:`${theme}-${size}-${state}`,theme,size,width:only?48:576,height:Math.ceil(icons.length/12)*48,
+      const fixture = {name:`${theme}-${size}-${state}`,theme,size,width:only?Math.min(icons.length,12)*48:576,height:Math.ceil(icons.length/12)*48,
         foreground:state==="accent"?"#3584e4":theme==="light"?"#292a2d":"#f0f0f1",
         background:theme==="light"?"#fafafa":"#242629",opacity:state==="disabled"?.35:1,
         icons:icons.map(n=>n.replace(/\.svg$/,""))};

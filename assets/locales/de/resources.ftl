@@ -494,3 +494,11 @@ resources-lookup-replace = Ersetzen…
 resources-lookup-files = Dateien für Farbzuordnungen
 resources-lookup-unavailable = Das Importieren von Farbzuordnungstabellen ist auf dieser Plattform noch nicht verfügbar.
 resources-lookup-failed = Die Zuordnungstabelle konnte nicht importiert werden.
+
+resources-analysis-updating = Wird aktualisiert…
+resources-analysis-error = Diese Anpassung konnte nicht aktualisiert werden.
+resources-filter-shadows-highlights = Tiefen/Lichter
+resources-filter-clarity = Klarheit
+resources-local-shadows = Tiefen
+resources-local-highlights = Lichter
+resources-local-amount = Stärke

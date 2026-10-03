@@ -13,13 +13,9 @@ fn included(i:u32)->bool {
     return 4*(p.x*p.x+p.y*p.y)<=i32(area.width*area.width);
 }
 fn normalized(value:f32,maximum:u32)->f32 {
-    let bits=bitcast<u32>(value);let absolute=bits&0x7fffffffu;
-    if absolute==0u || maximum==0u {return 0.;}
-    var mantissa=(absolute&0x7fffffu)|0x800000u;var exponent=i32(absolute>>23u)-127;
-    if absolute<0x800000u {let shift=countLeadingZeros(absolute)-8u;mantissa=absolute<<shift;exponent= -126-i32(shift);}
-    var denominator=(maximum&0x7fffffu)|0x800000u;var scale=i32(maximum>>23u)-127;
-    if maximum<0x800000u {let shift=countLeadingZeros(maximum)-8u;denominator=maximum<<shift;scale= -126-i32(shift);}
-    return select(1.,-1.,bits>>31u!=0u)*(f32(mantissa)/f32(denominator))*exp2(f32(exponent-scale));
+    let numerator=float_number(value);let denominator=float_number(bitcast<f32>(maximum));
+    if numerator.mantissa==0u || denominator.mantissa==0u {return 0.;}
+    return select(1.,-1.,numerator.negative)*(f32(numerator.mantissa)/f32(denominator.mantissa))*exp2(f32(numerator.exponent-denominator.exponent));
 }
 @compute @workgroup_size(64)
 fn measure(@builtin(local_invocation_index) lane:u32) {

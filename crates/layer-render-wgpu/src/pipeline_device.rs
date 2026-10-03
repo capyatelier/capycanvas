@@ -35,6 +35,7 @@ pub(crate) struct PipelineDevice {
     pub levels_pipeline:std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::levels::LevelsPipeline>>>,
     pub statistics_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::statistics::StatisticsPipeline>>>,
     pub sample_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::snapshot::sample::SamplePipeline>>>,
+    pub analysis_memory: std::sync::Arc<std::sync::Mutex<u64>>,
     pub effect_resources: std::sync::Arc<std::sync::Mutex<super::effects::resources::Cache>>,
     pub native_transfers: std::sync::Arc<std::sync::Mutex<super::native_tiles::transfer::Tables>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -51,6 +52,7 @@ impl From<wgpu::Device> for PipelineDevice {
             levels_pipeline:Default::default(),
             native_transfers: Default::default(),
             effect_resources: Default::default(),
+            analysis_memory: Default::default(),
             blend_pipelines: Default::default(),
             working_space: Default::default(),
             hdr: false,

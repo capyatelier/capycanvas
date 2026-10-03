@@ -68,6 +68,15 @@ class AndroidCanvasBarBenchmarkTest {
             fun waitFor(label: String, condition: () -> Boolean) = host.awaitMain(label, 120_000, condition = condition)
             fun action(value: JSONObject) = host.drain(value, 30)
             fun state() = host.snapshot!!.getJSONObject("state")
+            fun waitGuide(label: String) {
+                waitFor(label) { state().getJSONObject("layer_properties").optString("description") != "Updating…" }
+                check(state().getJSONObject("layer_properties").optString("description") != "Could not update this adjustment.")
+                val deadline = SystemClock.uptimeMillis() + 120_000
+                while (native { Native.renderingPending(it) }) {
+                    check(SystemClock.uptimeMillis() < deadline) { "$label raster work did not finish" }
+                    SystemClock.sleep(16)
+                }
+            }
             fun invoke(command: String) {
                 val deadline = SystemClock.uptimeMillis() + 120_000
                 while (native { Native.query(it, obj("type" to "command_reason", "command" to command).toString()) } != "null") {
@@ -141,12 +150,20 @@ class AndroidCanvasBarBenchmarkTest {
                     Native.projectWork(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
                     native { Native.projectAdopt(it, task, "null") }
                 } finally { Native.projectFree(task) }
+                val adopted = native { handle ->
+                    val now = System.nanoTime(); Native.frame(handle, now, now + 16_666_667)
+                    JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
+                }
+                val adoptedEpoch = adopted.getJSONObject("document_file").getLong("epoch")
+                val adoptedPhoto = adopted.array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
                 instrumentation.runOnMainSync { host.documentChanged() }
                 waitFor("tier photo document") { host.snapshot?.optBoolean("shaders_ready") == true &&
+                    state().getJSONObject("document_file").getLong("epoch") == adoptedEpoch &&
+                    state().array("layers").objects().any { it.optBoolean("editing") && it.getLong("id") == adoptedPhoto } &&
                     state().array("tabs").objects().any { it.optBoolean("active") && it.optInt("width") == width && it.optInt("height") == height } }
                 documentExtent = "${width}x$height"
                 blending?.let { invoke("blend_$it") }
-                val photoLayer = state().array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
+                val photoLayer = adoptedPhoto
                 for (layer in state().array("layers").objects().filter { it.getLong("id") != photoLayer })
                     action(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to false))
                 invoke("add_layer")
@@ -521,6 +538,76 @@ class AndroidCanvasBarBenchmarkTest {
                 val radius = minOf(area.getDouble(2), area.getDouble(3)) * .3
                 measure("paint-strokes") { drag(center, duration) { t -> radius * sin(t * 3.2) to radius * .65 * sin(t * 4.7) } }
             }
+            if (wanted("local-analysis-export")) {
+                val photoLayer = photoDocument()
+                action(obj("type" to "select_layer", "id" to photoLayer))
+                fun edit(value: JSONObject) = action(obj("type" to "effect", "action" to value))
+                edit(obj("op" to "insert", "effect" to "shadows_highlights"))
+                val lower = state().getJSONObject("layer_properties").getLong("layer")
+                edit(obj("op" to "set", "layer" to lower, "key" to "shadows", "value" to obj("kind" to "number", "value" to 63)))
+                edit(obj("op" to "insert", "effect" to "clarity"))
+                val upper = state().getJSONObject("layer_properties").getLong("layer")
+                edit(obj("op" to "set", "layer" to upper, "key" to "amount", "value" to obj("kind" to "number", "value" to 28)))
+                val color = native { JSONObject(Native.query(it, obj("type" to "document_color").toString())) }
+                val recipe = runBlocking { ColorPreferencesStore.presets(activity, color, obj("type" to "get", "index" to 0)) }.getJSONObject("recipe")
+                    .put("format", "Png").put("size", "Original").put("resolution", "Master")
+                fun export(label: String): JSONObject {
+                    val began = SystemClock.elapsedRealtimeNanos()
+                    val statusBefore = state().getJSONObject("layer_properties").optString("description")
+                    val memoryBefore = native { JSONObject(Native.rendererMemory(it)) }
+                    val id = native { documentRequest(it, "export_document").first }
+                    var task = 0L
+                    val deadline = SystemClock.uptimeMillis() + 120_000
+                    while (task == 0L) {
+                        check(SystemClock.uptimeMillis() < deadline) { "Exact export capture did not become ready" }
+                        task = native { Native.projectExportTask(it, id, System.nanoTime()) }
+                        if (task == 0L) { host.documentChanged(); SystemClock.sleep(16) }
+                    }
+                    val captured = SystemClock.elapsedRealtimeNanos()
+                    val statusCaptured = native { Native.dispatch(it, obj("type" to "close_settings").toString()); JSONObject(Native.snapshot(it)!!).getJSONObject("state").getJSONObject("layer_properties").optString("description") }
+                    val file = File(output, "$label.png")
+                    try {
+                        Native.projectExportOptions(task, recipe.toString())
+                        Native.projectWork(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(), 0, 0)
+                        native { Native.documentComplete(it, id, true, "null") }
+                    } catch (error: Exception) {
+                        native { Native.documentComplete(it, id, false, JSONObject.quote(error.message ?: "Export failed")) }
+                        throw error
+                    } finally { Native.projectFree(task) }
+                    val completed = SystemClock.elapsedRealtimeNanos()
+                    val dimensions = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    android.graphics.BitmapFactory.decodeFile(file.path, dimensions)
+                    check(dimensions.outWidth == width && dimensions.outHeight == height)
+                    val digest = java.security.MessageDigest.getInstance("SHA-256")
+                    file.inputStream().use { stream ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) { val count = stream.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
+                    }
+                    val result = obj("label" to label, "canvas" to documentExtent, "begin_boot_ns" to began,
+                        "captured_boot_ns" to captured, "completed_boot_ns" to completed, "capture_ms" to (captured - began) / 1e6,
+                        "worker_ms" to (completed - captured) / 1e6, "guide_status_before" to statusBefore,
+                        "guide_status_at_capture" to statusCaptured, "guide_pending_at_capture" to (statusCaptured == "Updating…"),
+                        "recipe" to recipe, "file_bytes" to file.length(), "sha256" to digest.digest().joinToString("") { "%02x".format(it) },
+                        "memory_before" to memoryBefore, "memory_after" to native { JSONObject(Native.rendererMemory(it)) },
+                        "pss_after_bytes" to android.os.Debug.getPss().toLong() * 1024)
+                    File(output, "$label.json").writeText(result.toString(2))
+                    file.delete()
+                    return result
+                }
+                val cold = export("local-guide-first-export")
+                waitGuide("stacked guides published")
+                val warm = export("local-guide-warm-export")
+                check(cold.getString("sha256") == warm.getString("sha256")) { "Exact stacked export changed without a source edit" }
+                action(obj("type" to "select_layer", "id" to photoLayer))
+                val sourceEditBegan = SystemClock.elapsedRealtimeNanos()
+                action(obj("type" to "set_layer_opacity", "opacity" to .75))
+                action(obj("type" to "select_layer", "id" to upper))
+                waitGuide("source edit guides published")
+                File(output, "local-guide-source-rebuild.json").writeText(obj("begin_boot_ns" to sourceEditBegan,
+                    "ready_boot_ns" to SystemClock.elapsedRealtimeNanos(), "lower" to lower, "upper" to upper,
+                    "status" to state().getJSONObject("layer_properties").optString("description"),
+                    "memory_after" to native { JSONObject(Native.rendererMemory(it)) }).toString(2))
+            }
             if (wanted("effects") || wanted("spatial-effects")) {
                 data class Scrub(val id: String, val key: String, val title: String, val label: String, val start: Double, val chain: Boolean = false, val page: String? = null, val colorize: Boolean = false, val span: Double = .1)
                 val scrubs = if (wanted("spatial-effects")) listOf(
@@ -539,6 +626,9 @@ class AndroidCanvasBarBenchmarkTest {
                     Scrub("channel_mixer", "red_green", "Green", "effect-channel-mixer-coefficient-drag", .3, page = "red", span = .4),
                     Scrub("channel_mixer", "red_constant", "Constant", "effect-channel-mixer-constant-drag", .3, page = "red", span = .4),
                     Scrub("color_lookup", "intensity", "Intensity", "effect-color-lookup-intensity-drag", .3, span = .4),
+                    Scrub("shadows_highlights", "shadows", "Shadows", "effect-shadows-drag", .3, span = .4),
+                    Scrub("shadows_highlights", "highlights", "Highlights", "effect-highlights-drag", .3, span = .4),
+                    Scrub("clarity", "amount", "Amount", "effect-clarity-drag", .3, span = .4),
                     Scrub("exposure", "exposure", "Exposure", "effect-chain-exposure-drag", .45, true),
                 )
                 val selectedLabels = args.getString("labels")?.split(',')
@@ -546,6 +636,8 @@ class AndroidCanvasBarBenchmarkTest {
                     val preparedAt = System.nanoTime()
                     val lookup = if (scrub.id == "color_lookup") lookupDocument() else null
                     val photoLayer = lookup?.first ?: photoDocument()
+                    val sourceMemoryBeforeEffect = if (scrub.id in listOf("shadows_highlights", "clarity")) native { JSONObject(Native.rendererMemory(it)) } else null
+                    val sourceDisplayBeforeEffect = if (scrub.id in listOf("shadows_highlights", "clarity")) native { JSONObject(Native.displayStatus(it)) } else null
                     val fixtureVisibleLayerIds = state().array("layers").objects().filter { it.optBoolean("visible") }.map { it.getLong("id") }
                     check(fixtureVisibleLayerIds.size == (if (lookup == null) 2 else 3) && photoLayer in fixtureVisibleLayerIds) { "Effect fixture has unexpected visible layers" }
                     action(obj("type" to "select_layer", "id" to photoLayer))
@@ -556,9 +648,15 @@ class AndroidCanvasBarBenchmarkTest {
                             "key" to "gamma", "value" to obj("kind" to "number", "value" to 1.25)))
                         effect(obj("op" to "insert", "effect" to "vibrance"))
                     }
+                    val guideBegan = SystemClock.elapsedRealtimeNanos()
                     if (lookup == null) effect(obj("op" to "insert", "effect" to scrub.id))
                     else action(obj("type" to "select_layer", "id" to lookup.second))
                     val effectLayer = state().getJSONObject("layer_properties").getLong("layer")
+                    val hasGuide = scrub.id in listOf("shadows_highlights", "clarity")
+                    if (hasGuide) {
+                        waitGuide("local guide published")
+                    }
+                    val guideReady = SystemClock.elapsedRealtimeNanos()
                     scrub.page?.let { effect(obj("op" to "select_page", "layer" to effectLayer, "page" to it)) }
                     if (scrub.colorize) effect(obj("op" to "set", "layer" to effectLayer, "key" to "colorize", "value" to obj("kind" to "toggle", "value" to true)))
                     action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
@@ -616,6 +714,8 @@ class AndroidCanvasBarBenchmarkTest {
                         }
                         val result = File(output, "$label.json")
                         result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted()))
+                            .put("source_memory_before_effect", sourceMemoryBeforeEffect).put("source_display_before_effect", sourceDisplayBeforeEffect)
+                            .put("guide_wait_ms", if (hasGuide) (guideReady - guideBegan) / 1e6 else JSONObject.NULL).put("guide_wait_begin_boot_ns", if (hasGuide) guideBegan else JSONObject.NULL).put("guide_ready_boot_ns", if (hasGuide) guideReady else JSONObject.NULL)
                             .put("warmup_down_injection_ms", warmupDownInjectionMs).put("down_injection_ms", lastDownInjectionNs / 1e6).put("slider_travel_fraction", scrub.span).put("triangle_period_seconds", .5).put("preparation_ms", preparationMs).put("effect_id", scrub.id).put("effect_key", scrub.key).put("effect_page", scrub.page ?: "rgb").put("colorize", scrub.colorize).put("theme", state().getString("theme"))
                             .put("first_value_observed_ns", firstChanged.get().takeIf { it > 0 } ?: JSONObject.NULL)
                             .put("down_to_first_value_observed_ms", firstChanged.get().takeIf { it > 0 && gestureDown.get() > 0 }?.let { (it - gestureDown.get()) / 1e6 } ?: JSONObject.NULL)
@@ -638,7 +738,7 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("pointwise-navigation")) {
                 val selectedLabels = args.getString("labels")?.split(',')
-                for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter", "color_lookup")) {
+                for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter", "color_lookup", "shadows_highlights", "clarity")) {
                     val label = "effect-$id-pan"
                     if (selectedLabels != null && label !in selectedLabels) continue
                     val preparedAt = System.nanoTime()
@@ -647,6 +747,13 @@ class AndroidCanvasBarBenchmarkTest {
                     action(obj("type" to "select_layer", "id" to photoLayer))
                     val appliedAt = System.nanoTime()
                     if (id != "none" && lookup == null) action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
+                    val hasGuide = id in listOf("shadows_highlights", "clarity")
+                    if (hasGuide) {
+                        val layer = state().getJSONObject("layer_properties").getLong("layer")
+                        action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to layer,
+                            "key" to if (id == "clarity") "amount" else "shadows", "value" to obj("kind" to "number", "value" to if (id == "clarity") 28 else 63))))
+                        waitGuide("navigation guide published")
+                    }
                     val applicationMs = (System.nanoTime() - appliedAt) / 1e6
                     invoke("hand"); invoke("fit_canvas")
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }

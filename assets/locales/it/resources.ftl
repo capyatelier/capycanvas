@@ -495,3 +495,11 @@ resources-lookup-replace = Sostituisci…
 resources-lookup-files = File di mappatura colori
 resources-lookup-unavailable = L’importazione di tabelle di mappatura colori non è ancora disponibile su questa piattaforma.
 resources-lookup-failed = Impossibile importare la tabella di mappatura.
+
+resources-analysis-updating = Aggiornamento…
+resources-analysis-error = Impossibile aggiornare questa regolazione.
+resources-filter-shadows-highlights = Ombre/Luci
+resources-filter-clarity = Chiarezza
+resources-local-shadows = Ombre
+resources-local-highlights = Luci
+resources-local-amount = Intensità

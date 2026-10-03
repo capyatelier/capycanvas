@@ -52,7 +52,7 @@ fn check(@builtin(global_invocation_id) id:vec3<u32>) {
 }
 fn query(extent:[u32;2],control:CaptureControl)->(SnapshotGpu,SnapshotRenderer,scene::Output) {
     let doc=generated(extent,DocumentColor {depth:SampleDepth::F32,..Default::default()},&PIXELS);
-    let gpu=gpu();let (capture,output)=gpu.artwork_capture(&ArtworkQuery::new(&doc,ArtworkSource::Visible),control).unwrap();
+    let gpu=gpu();let (capture,output)=pollster::block_on(gpu.artwork_capture(&ArtworkQuery::new(&doc,ArtworkSource::Visible),control)).unwrap();
     (gpu,capture,output)
 }
 fn required(result:Result<(&mut WgpuRasterizer,FramePacket<'_>,PixelRect,submission::CommandEncoder),GpuRasterError>)->u64 {

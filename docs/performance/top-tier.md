@@ -34,6 +34,9 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Channel Mixer, coefficient and Constant | 120, soft | **Not met.** 112.20–115.25 and 109.06–112.53 presents/s | [Selective Color and Channel Mixer](#selective-color-and-channel-mixer), 2026-10-03 |
 | Color Lookup Intensity, native 65³ table | 120, soft | **Not met.** 2.94–3.19 presents/s; interval p99 325.01–333.34 ms | [Color Lookup](#color-lookup), 2026-10-03 |
 | Navigation with Color Lookup, native 65³ table | 120 | **Not met.** 41.34–51.29 presents/s; interval p99 25.00–33.33 ms | [Color Lookup](#color-lookup), 2026-10-03 |
+| Shadows and Highlights sliders, native | 120, soft | **Not met.** Shadows 3.16–4.00, Highlights 1.40–1.59 presents/s | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
+| Clarity slider, native | 120, soft | **Not met.** 1.98–2.20 presents/s; interval p99 483.35–716.69 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
+| Navigation with Shadows/Highlights or Clarity | 120 | **Not met.** 41.09–55.07 presents/s; interval p99 25.00–33.33 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
 | Curves point drag (61 MP) | 120, soft | **Not met.** 72.07–74.61 completed canvas updates/s; native UI 76.51–78.53 frames/s | [Curves editing](#curves-editing), 2026-10-02 |
 | Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 120, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 120, soft | | |
@@ -240,6 +243,69 @@ completion wake/error handling. These do not change the measured loaded-project
 slider or navigation path. Raw records, workload/source hashes,
 CPU memory scope and the failed observer run are retained in
 `artifacts/photo-editing-color/p23-performance/p23-final-evidence.json`.
+
+## Local guide adjustments
+
+Measured on 2026-10-03 on the reference tablet using the original 9504 × 6336
+photo, Fit zoom 0.17329544, Navigator, default glass and the private release
+benchmark. Each motion has three warmed five-second contacts. Rates count the
+owned SurfaceView's actual presents inside input windows; thermal status is zero.
+Both effects retain native evaluation: reduced evaluation with the same frozen
+guide exceeds the photographic error bounds in 53 of 168 GPU comparisons.
+
+| Motion | Actual presents/s, three contacts | Moving interval p99 |
+| --- | --- | --- |
+| Shadows | 3.996 / 3.742 / 3.160 | 291.68–341.68 ms |
+| Highlights | 1.398 / 1.593 / 1.398 | 675.02–850.03 ms |
+| Clarity | 2.197 / 1.999 / 1.981 | 483.35–716.69 ms |
+| Hand navigation, Shadows/Highlights | 55.073 / 42.992 / 43.135 | 25.00–33.33 ms |
+| Hand navigation, Clarity | 44.675 / 41.088 / 41.707 | 25.00–33.33 ms |
+
+The path without an admitted full composition pyramid initially uses 950 effect
+passes per update and about 1.52 seconds of renderer-owner CPU. Horizontal
+working strips reduce this to 75, but per-tile reductions still produce about
+2,504 total command passes. Batching those reductions brings a matched Clarity
+trace to about 754 total passes and 457–462 ms of owner CPU, from 1.31–1.33
+seconds. Source allowance is closely matched: 445.6 versus 444.6 MB, 425 versus
+424 observed source allocations, and approximately 528 misses and 422 hits per
+950-tile update. Independent exact-pixel tests reduce 72 cached tiles from 152
+total passes to 24, including sparse updates, masks and shifted windows.
+
+The final five-second diagnostic observes six composition updates. Nested spans
+include 3.860 seconds of composition, 2.210 seconds of bounded waits, 1.443
+seconds of command finalization and 15.4 ms of queue submission. These durations
+are not additive. The preceding strip checkpoint spends 1.340 seconds submitting
+commands in its corresponding contact. Ordinary Highlights contacts with similar
+admission reduce late owner CPU from 1.157–1.198 seconds to 338–342 ms. Remaining
+native work, repeated decoding under bounded admission and driver costs are
+measured misses; these observations do not establish a hardware ceiling. Even a
+single RGBA32Float native read/write moves 1.927 GB, or 28.7 ms at the tablet's
+67.2 GB/s theoretical peak; actual paths do more work. This arithmetic does not
+excuse avoidable CPU or scheduling costs.
+
+Initial guide publication and settling take 1.192 seconds for Shadows, 1.250 for
+Highlights and 1.156 for Clarity. The 768 × 512 guide occupies one observed
+6,291,520-byte allocation. Independent GPU and shared-state observers verify
+reuse across 100 own-parameter edits, snapshot leases and release on error or
+cancellation. An in-flight 42,119,200-byte reservation releases 5.460 ms after
+cancellation in the workstation diagnostic; tablet build/upload counts are not
+observed directly.
+
+A real stacked 61 MP export uses Shadows 63 and Clarity 28. Guide-cold capture
+takes 1.391 seconds and its PNG worker 27.860 seconds; warm capture takes 20.956
+ms and its worker 16.883 seconds. Both original-resolution U8 sRGB PNGs are
+140,470,997 bytes with identical SHA-256. Worker time includes exact rendering,
+readback, conversion and encoding. A source-opacity change rebuilds both guides
+and settles the live renderer in 15.346 seconds.
+
+These rows do not meet 120 Hz. An eight-millisecond parameter observer includes
+drag slop and does not establish changed-preview or physical pen latency.
+Source allocation counts are boundary observations, not a decoded-slot census;
+continuous process/driver peaks and low/mid-tier qualification remain unverified.
+Measured APK SHA-256 is
+`6a47d7166150ea05e0533a19dd431f36e5a4ad4d5f93c3b83c7ba151b9ad4e66`.
+Raw records, source hashes, diagnostics and observer evidence are under
+`artifacts/photo-editing-color/p25-performance/final-evidence.json`.
 
 ## Exact artwork samples
 

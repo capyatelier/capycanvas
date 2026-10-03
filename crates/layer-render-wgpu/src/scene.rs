@@ -175,6 +175,9 @@ pub(super) struct Pipelines {
 }
 
 impl Scene {
+    pub(super) fn analysis_changed(&mut self) {
+        self.retire_images(|scene| scene.images = images::ImageStages::default());
+    }
     fn begin_write(&mut self, r: &WgpuRasterizer) -> crate::submission::CacheWrite {
         if !self.valid.load(std::sync::atomic::Ordering::Acquire) { *self = Self::new(r); }
         crate::submission::CacheWrite::shared(self.valid.clone())
@@ -1464,7 +1467,7 @@ impl Scene {
                     let index = packet.layers.iter().position(|layer| layer.id == id).ok_or(GpuRasterError::InvalidExtent)?;
                     let layer = &packet.layers[index];
                     self.stop_before = Some((index, layer.properties.clipped));
-                    let image = self.group(r, packet, images::input_scope(packet.layers, layer), tile)?;
+                    let image = self.group(r, packet, layer_core::composite_input_scope(packet.layers, layer), tile)?;
                     self.stop_before = None;
                     let image = if matches!(output,Output::EffectChannels(_)) {self.effect(r,packet,&[index],tile,image)?} else {image};
                     self.converted(r, image, Convert::linear(packet))

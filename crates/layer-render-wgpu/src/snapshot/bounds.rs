@@ -186,6 +186,7 @@ impl SnapshotGpu {
                 snapshot.renderer.effect_clocks.insert(*id, (effect.program.id.clone(), layer_core::EffectClock::at(effect, request.time, *phase)));
             }
         }
+        if target.is_none() { snapshot.prepare_effect_analysis_async(scene::Output::Artwork(None)).await?; }
         let device = snapshot.renderer.device.clone();
         let queue = snapshot.renderer.queue.clone();
         let pipeline = crate::thumbnails::BoundsPipeline::new(&device);

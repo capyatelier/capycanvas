@@ -16,6 +16,7 @@ pub struct GpuToneGuide {
     pub peak: f32,
     pub(crate) device: wgpu::Device,
     pub(crate) buffer: wgpu::Buffer,
+    pub(crate) analysis_lease: Option<Arc<crate::effect_analysis::Lease>>,
 }
 impl GpuToneGuide {
     #[cfg(test)]
@@ -36,6 +37,7 @@ impl GpuToneGuide {
             peak: guide.peak,
             device: (*renderer.device).clone(),
             buffer,
+            analysis_lease: None,
         }
     }
     pub fn byte_len(&self) -> u64 {
@@ -118,7 +120,7 @@ impl Pipelines {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let module = Deferred::wgsl(device, "local tone compute", include_str!("local_tone.wgsl"));
+        let module = Deferred::wgsl(device, "local tone compute", concat!(include_str!("float_number.wgsl"),"\n",include_str!("guide_luminance.wgsl"),"\n",include_str!("local_tone.wgsl")));
         let pipelines = ENTRIES
             .iter()
             .map(|entry| Deferred::compute(device, entry, &pipeline_layout, &module, entry))
@@ -543,6 +545,7 @@ impl Builder {
             groups(extent),
         );
         Arc::new(GpuToneGuide {
+            analysis_lease: None,
             extent,
             document_extent: self.document,
             space: self.space,
@@ -809,6 +812,203 @@ mod tests {
                 [1., 0., 0., 1.01],
             ] {
                 assert!(build(&r, [1, 1], &[pixel], 1).is_err());
+            }
+        }
+    }
+    #[test]
+    fn gpu_guide_preserves_exact_black_edges_in_rational_area_reduction() {
+        let renderer = crate::WgpuRasterizer::new_native_headless(DocumentColor {
+            space: RgbSpace::Srgb,
+            depth: SampleDepth::F32,
+        }).unwrap();
+        for extent in [[769, 3], [997, 61]] {
+            let pixels: Vec<[f32; 4]> = (0..extent[1]).flat_map(|y| (0..extent[0]).map(move |x| {
+                let alpha = if y == extent[1] / 2 && x % 2 == 0 { 0.5 } else { 1. };
+                let rgb = if x % 7 == 0 || y % 11 == 0 { [0.; 3] } else { [0.02, 0.6, 0.05] };
+                [rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha]
+            })).collect();
+            let log: Vec<f64> = pixels.iter().map(|pixel| {
+                let y = (pixel[0] as f64 * 0.2126390058715104
+                    + pixel[1] as f64 * 0.715168678767756
+                    + pixel[2] as f64 * 0.07219231536073371) / pixel[3] as f64;
+                y.max(2f64.powi(-24)).log2()
+            }).collect();
+            let gpu = build(&renderer, extent, &pixels, 127).unwrap();
+            let actual = pollster::block_on(gpu.download_async(&renderer.queue)).unwrap();
+            let mut error = [0f64; 2];
+            for gy in 0..actual.extent[1] {
+                for gx in 0..actual.extent[0] {
+                    let first = [gx * extent[0], gy * extent[1]];
+                    let last = [(gx + 1) * extent[0], (gy + 1) * extent[1]];
+                    let start = [first[0] / actual.extent[0], first[1] / actual.extent[1]];
+                    let end = [last[0].div_ceil(actual.extent[0]), last[1].div_ceil(actual.extent[1])];
+                    let mut sum = [0f64; 2];
+                    for sy in start[1]..end[1] {
+                        let wy = ((sy + 1) * actual.extent[1]).min(last[1])
+                            - (sy * actual.extent[1]).max(first[1]);
+                        for sx in start[0]..end[0] {
+                            let wx = ((sx + 1) * actual.extent[0]).min(last[0])
+                                - (sx * actual.extent[0]).max(first[0]);
+                            let index = (sy * extent[0] + sx) as usize;
+                            let weight = wx as f64 * wy as f64 / (extent[0] as f64 * extent[1] as f64)
+                                * pixels[index][3] as f64;
+                            sum[0] += log[index] * weight;
+                            sum[1] += weight;
+                        }
+                    }
+                    let sample = actual.samples[(gy * actual.extent[0] + gx) as usize];
+                    error[0] = error[0].max((sample[0] as f64 - sum[0] / sum[1]).abs());
+                    error[1] = error[1].max((sample[2] as f64 - sum[1]).abs());
+                }
+            }
+            eprintln!("P25_AREA_EDGE_ORACLE {extent:?} maximum_log_coverage_error={error:?}");
+            assert!(error[0] <= 1e-5 && error[1] <= 2e-7, "{extent:?} {error:?}");
+        }
+    }
+    #[test]
+    fn gpu_guide_keeps_finite_extreme_pixels_bounded_and_excludes_unrepresentable_rgb() {
+        let renderer = crate::WgpuRasterizer::new_native_headless(DocumentColor {
+            space: RgbSpace::Srgb,
+            depth: SampleDepth::F32,
+        }).unwrap();
+        let tiny = f32::from_bits(1);
+        for pixel in [
+            [f32::MAX, f32::MAX, f32::MAX, 1.],
+            [f32::MAX, f32::MAX, -f32::MAX, 1.],
+            [1., 1., 1., 1e-16],
+            [f32::MAX, f32::MAX, f32::MAX, 1e-16],
+            [1., 1., 1., tiny],
+            [tiny, tiny, tiny, tiny],
+            [f32::MIN_POSITIVE; 4],
+            [tiny, tiny, tiny, 1.],
+            [-f32::MAX, 0., 0., 1.],
+            [f32::MAX, -f32::MAX, 1., 0.],
+        ] {
+            let gpu = build(&renderer, [7, 3], &[pixel; 21], 127).unwrap();
+            let actual = pollster::block_on(gpu.download_async(&renderer.queue)).unwrap();
+            let representable = pixel[3] > 0. && pixel[..3].iter().all(|v|
+                f64::from(v.abs()) / f64::from(pixel[3]) <= f64::from(f32::MAX));
+            let y = if representable {
+                (f64::from(pixel[0]) * 0.2126390058715104 + f64::from(pixel[1]) * 0.715168678767756
+                    + f64::from(pixel[2]) * 0.07219231536073371) / f64::from(pixel[3])
+            } else { 0. };
+            let peak = y.max(1.).min(f64::from(f32::MAX));
+            assert!(actual.peak.is_finite());
+            assert!((f64::from(actual.peak) - peak).abs() <= 1e-5 * peak, "{pixel:?} peak={}", actual.peak);
+            for sample in actual.samples {
+                assert!(sample.iter().all(|v| v.is_finite()), "{pixel:?} {sample:?}");
+                let coverage = if representable { f64::from(pixel[3]) } else { 0. };
+                assert!((f64::from(sample[2]) - coverage).abs() <= 2e-7, "{pixel:?} {sample:?}");
+                let expected = if sample[2] > 0. { y.max(2f64.powi(-24)).log2() } else { -24. };
+                assert!((f64::from(sample[0]) - expected).abs() <= 1e-5, "{pixel:?} {sample:?} expected={expected}");
+            }
+        }
+        let mut mixed = [[0.18, 0.18, 0.18, 1.]; 21];
+        for pixel in &mut mixed[7..14] { *pixel = [f32::MAX, f32::MAX, f32::MAX, 1e-16]; }
+        let gpu = build(&renderer, [7, 3], &mixed, 127).unwrap();
+        let actual = pollster::block_on(gpu.download_async(&renderer.queue)).unwrap();
+        for (index, sample) in actual.samples.iter().enumerate() {
+            if (7..14).contains(&index) { assert_eq!(sample[2], 0.); }
+            else {
+                assert_eq!(sample[2], 1.);
+                assert!((f64::from(sample[0]) - f64::from(0.18_f32).log2()).abs() <= 1e-5);
+            }
+        }
+    }
+    #[test]
+    fn gpu_local_adjustment_consumers_preserve_finite_extremes_and_match_representable_gain() {
+        use wgpu::util::DeviceExt;
+        let renderer = crate::WgpuRasterizer::new_native_headless(DocumentColor {
+            space: RgbSpace::Srgb, depth: SampleDepth::F32,
+        }).unwrap();
+        let wrapper = r#"
+struct Params { kind:vec4<u32>, amounts:vec4<f32> }
+@group(0) @binding(0) var<uniform> params:Params;
+@group(0) @binding(1) var<storage,read> input:array<vec4<f32>>;
+@group(0) @binding(2) var<storage,read> auxiliary:array<vec4<f32>>;
+@group(0) @binding(3) var<storage,read_write> output:array<vec4<f32>>;
+const FX_LUMA:vec3<f32> =vec3(0.2126390058715104,0.715168678767756,0.07219231536073371);
+fn fx_auxiliary(index:u32)->vec4<f32>{return auxiliary[index];}
+fn fx_parameter(base:u32,index:u32)->vec4<f32>{return vec4(0.);}
+@compute @workgroup_size(1) fn consume(){output[0]=fx_local_adjustment(input[0],vec2(.5),params.amounts.xyz*.01,params.kind.x==1u);}
+"#;
+        let shader = renderer.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("finite local adjustment oracle"),
+            source: wgpu::ShaderSource::Wgsl(format!("{}{}{}{}", include_str!("float_number.wgsl"),
+                include_str!("guide_luminance.wgsl"), wrapper,
+                include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/filters/local-adjustments.wgsl"))).into()),
+        });
+        let layout = crate::bindings::layout(&renderer.device, "finite local adjustment", &[
+            crate::bindings::buffer(0, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Uniform, false, None),
+            crate::bindings::buffer(1, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Storage { read_only: true }, false, None),
+            crate::bindings::buffer(2, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Storage { read_only: true }, false, None),
+            crate::bindings::buffer(3, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Storage { read_only: false }, false, None),
+        ]);
+        let pipeline_layout = renderer.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("finite local adjustment"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
+        });
+        let pipeline = renderer.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("finite local adjustment"), layout: Some(&pipeline_layout), module: &shader,
+            entry_point: Some("consume"), compilation_options: Default::default(), cache: None,
+        });
+        let tiny = f32::from_bits(1);
+        for pixel in [[f32::MAX, f32::MAX, f32::MAX, 1.], [f32::MAX, f32::MAX, -f32::MAX, 1.],
+            [1., 1., 1., 1e-16], [f32::MAX, f32::MAX, f32::MAX, 1e-16], [tiny; 4],
+            [f32::MIN_POSITIVE; 4], [tiny, -tiny, tiny, 1.], [tiny * 3., tiny * 5., -tiny, tiny * 8.],
+            [f32::MIN_POSITIVE, f32::MIN_POSITIVE, -f32::MIN_POSITIVE, f32::MIN_POSITIVE], [-f32::MAX, 0., 0., 1.], [f32::MAX, -f32::MAX, 1., 0.]] {
+            let guide = build(&renderer, [1, 1], &[pixel], 1).unwrap();
+            let bytes = pixel.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+            let input = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("finite pixel"), contents: &bytes, usage: wgpu::BufferUsages::STORAGE,
+            });
+            for amounts in [[0., 0., 0.], [100., 0., 0.], [-100., 0., 0.], [0., 100., 0.],
+                [0., -100., 0.], [0., 0., 100.], [0., 0., -100.]] {
+                let mut uniform = [u32::from(amounts[2] != 0.), 0, 0, 0].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
+                uniform.extend([amounts[0], amounts[1], amounts[2], 0.].into_iter().flat_map(f32::to_le_bytes));
+                let params = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("finite amounts"), contents: &uniform, usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let output = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("finite result"), size: 16, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+                });
+                let reference_y = (f64::from(pixel[0]) * 0.2126390058715104 + f64::from(pixel[1]) * 0.715168678767756
+                    + f64::from(pixel[2]) * 0.07219231536073371) / f64::from(pixel[3]);
+                let log_y = reference_y.max(2f64.powi(-24)).log2() as f32;
+                let mut custom_bytes = [1u32; 4].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
+                custom_bytes.extend([log_y, log_y - 0.75, 1., 0.].into_iter().flat_map(f32::to_le_bytes));
+                let custom = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("independent clarity guide"), contents: &custom_bytes, usage: wgpu::BufferUsages::STORAGE,
+                });
+                let selected_guide = if amounts[2] != 0. { &custom } else { &guide.buffer };
+                let group = crate::bindings::group(&renderer.device, "finite local adjustment", &layout,
+                    [params.as_entire_binding(), input.as_entire_binding(), selected_guide.as_entire_binding(), output.as_entire_binding()]);
+                let mut encoder = CommandEncoder::new(&renderer.device, &Default::default());
+                { let mut pass = encoder.begin_compute_pass(&Default::default()); pass.set_pipeline(&pipeline);
+                    pass.set_bind_group(0, &group, &[]); pass.dispatch_workgroups(1, 1, 1); }
+                encoder.submit(&renderer.queue);
+                let actual = pollster::block_on(read_buffer_async(&renderer.device, &renderer.queue, &output)).unwrap();
+                let actual: [f32; 4] = std::array::from_fn(|c| f32::from_le_bytes(actual[c * 4..c * 4 + 4].try_into().unwrap()));
+                assert_eq!(actual[3].to_bits(), pixel[3].to_bits());
+                assert!(actual.iter().all(|v| v.is_finite()), "{pixel:?} {amounts:?} {actual:?}");
+                if amounts == [0.; 3] { assert_eq!(actual.map(f32::to_bits), pixel.map(f32::to_bits)); }
+                let representable = pixel[3] > 0. && pixel[..3].iter().all(|v|
+                    f64::from(v.abs()) / f64::from(pixel[3]) <= f64::from(f32::MAX));
+                let y = if representable { (f64::from(pixel[0]) * 0.2126390058715104
+                    + f64::from(pixel[1]) * 0.715168678767756 + f64::from(pixel[2]) * 0.07219231536073371)
+                    / f64::from(pixel[3]) } else { 0. };
+                let smooth = |low: f64, high: f64, value: f64| { let t = ((value - low) / (high - low)).clamp(0., 1.); t * t * (3. - 2. * t) };
+                let log = y.max(2f64.powi(-24)).log2(); let middle = 0.18_f64.log2();
+                let delta = if amounts[2] != 0. { f64::from(amounts[2]) * 0.0075 } else { 2. * f64::from(amounts[0]) * 0.01 * (1. - smooth(middle - 4., middle, log))
+                    - 2. * f64::from(amounts[1]) * 0.01 * smooth(middle, middle + 4., log) };
+                let requested = delta.exp2();
+                let gain = if !representable || y <= 0. || pixel[..3].iter().any(|v|
+                    f64::from(v.abs()) * requested > f64::from(f32::MAX)) { 1. } else { requested };
+                for c in 0..3 {
+                    let expected = (f64::from(pixel[c]) * gain) as f32;
+                    let scale = f64::from(pixel[3]).max(f64::from(expected.abs()));
+                    assert!((f64::from(actual[c]) - f64::from(expected)).abs() <= 1e-5 * scale,
+                        "{pixel:?} {amounts:?} actual={actual:?} expected={expected} gain={gain}");
+                }
             }
         }
     }

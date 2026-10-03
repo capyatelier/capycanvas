@@ -724,7 +724,7 @@ pub trait CanvasRenderer {
     /// A restore may depend on an earlier asynchronous capture. Returning false
     /// retains this prepared frame for retry without consuming further input.
     /// Failed dependencies return true so submit can report their concrete error.
-    fn raster_dependencies_ready(&self, _packet: FramePacket<'_>) -> bool {
+    fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>) -> bool {
         true
     }
     /// Work that later frames finish without new input, such as the
@@ -810,6 +810,11 @@ pub trait CanvasRenderer {
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         None
     }
+    fn request_effect_analysis(&mut self, _query: layer_core::ArtworkQuery) -> Result<bool, Self::Error> { Ok(false) }
+    fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> { None }
+    fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> { Ok(()) }
+    fn cancel_effect_analysis(&mut self) {}
+    fn retain_effect_analyses(&mut self, _layers: &[LayerId]) -> Result<(), Self::Error> { Ok(()) }
     fn request_snapshot(&mut self, _request: SnapshotRequest) -> Result<bool, Self::Error> { Ok(false) }
     fn take_snapshot(&mut self) -> Option<Result<SnapshotResult, Self::Error>> { None }
     fn cancel_snapshot(&mut self) {}

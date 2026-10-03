@@ -79,6 +79,9 @@ pub struct SnapshotGpu {
     #[cfg(target_arch = "wasm32")]
     encoder: Option<raster::BrowserRasterEncoder>,
     effect_clocks: effects::Clocks,
+    analyses: Vec<Arc<crate::effect_analysis::Prepared>>,
+    #[cfg(target_arch = "wasm32")]
+    analysis_backing_waiter: Option<crate::effect_analysis::BackingWaiter>,
     scene_pipelines: scene::Pipelines,
     adapter: wgpu::Adapter,
     device: PipelineDevice,
@@ -98,6 +101,9 @@ impl WgpuRasterizer {
     pub fn snapshot_gpu(&self) -> SnapshotGpu {
         SnapshotGpu {
             effect_clocks: self.effect_clocks.clone(),
+            analyses: self.effect_analyses.clone(),
+            #[cfg(target_arch = "wasm32")]
+            analysis_backing_waiter: self.analysis_backing_waiter.clone(),
             scene_pipelines: self.scene_pipelines.clone(),
             #[cfg(target_arch = "wasm32")]
             encoder: self.browser_raster_encoder(),
@@ -133,7 +139,16 @@ impl SnapshotGpu {
     }
 }
 
+fn discard_hidden_backing(document: &mut layer_core::Document) {
+    let visible: Vec<_> = document.layers.iter().map(|layer| document.layer_is_visible(layer.id)).collect();
+    for (layer, visible) in document.layers.iter_mut().zip(visible) {
+        if !visible { layer.raster = Default::default(); layer.source = None; layer.mask = None; layer.pending_operations.clear(); }
+    }
+}
+
 pub struct SnapshotRenderer {
+    document: Arc<layer_core::Document>,
+    analysis_ready: std::collections::HashSet<LayerId>,
     pub(crate) sdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
     local_tone: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
     gpu_local_tone: Option<Arc<crate::local_tone::GpuToneGuide>>,
@@ -203,12 +218,15 @@ impl SnapshotRenderer {
             renderer.set_browser_raster_encoder(encoder);
         }
         renderer.effect_clocks = gpu.effect_clocks.clone();
+        renderer.effect_analyses = gpu.analyses.clone();
         renderer.ensure_document_metadata(extent, &layers)?;
         let mut background = background;
         if let Some(paper) = layers.iter().find(|l| l.kind == LayerKind::Background) {
             background[3] *= if paper.visible { paper.opacity } else { 0. };
         }
         Ok(Self {
+            document: Arc::new(project.document.clone()),
+            analysis_ready: Default::default(),
             sdr_rendition: project
                 .document
                 .color
@@ -408,10 +426,15 @@ impl SnapshotRenderer {
         reserved_bytes: u64,
         consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
     ) -> Result<T, GpuRasterError> {
+        self.capture_output_region_gpu([x, y, width, height], scene::Output::Artwork(None), reserved_bytes, consume)
+    }
+    fn capture_output_region_gpu<T>(&mut self, [x,y,width,height]: [u32;4], output: scene::Output, reserved_bytes:u64,
+        consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
+    ) -> Result<T, GpuRasterError> {
         self.with_region_gpu([x, y, width, height], reserved_bytes, |r, packet, region, encoder| {
             let (target, _) = create_color_target(&r.device, [width, height], "snapshot region");
             let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
-            let captured = scene.capture_region(r, packet, &target, region, scene::Output::Artwork(None), encoder);
+            let captured = scene.capture_region(r, packet, &target, region, output, encoder);
             r.scene = Some(scene);
             captured?;
             Ok(consume(&r.device, &target, encoder))
@@ -456,6 +479,7 @@ impl SnapshotRenderer {
         let mut planned = scene::Scene::capture_image_bound(&self.layers, window)
             .saturating_add(scene::Scene::geometry_bytes(&self.layers,self.renderer.scene.as_ref()))
             .saturating_add(reserved_bytes)
+            .saturating_add(self.renderer.analysis_bytes())
             .saturating_add(region.area().saturating_mul(32)) // output and mapping
             .saturating_add((self.layers.len() as u64 * 3 + 32 + material_pages) * 256 * 256 * 16);
         for layer in &self.layers {
@@ -600,6 +624,7 @@ impl SnapshotRenderer {
         selection:Option<&Arc<layer_core::Selection>>,
         mut consume:impl FnMut(&mut WgpuRasterizer,&wgpu::TextureView,PixelRect,&mut submission::CommandEncoder)->Result<(),GpuRasterError>,
     )->Result<(),GpuRasterError> {
+        self.prepare_effect_analysis_async(output).await.map_err(GpuRasterError::Effect)?;
         let extent=self.extent;let control=self.control.clone();
         for y in (0..extent[1]).step_by(1024) {for x in (0..extent[0]).step_by(1024) {
             let mut regions=vec![[x,y,(extent[0]-x).min(1024),(extent[1]-y).min(1024)]];
@@ -668,6 +693,7 @@ impl SnapshotRenderer {
         &mut self,
         region: [u32; 4],
     ) -> Result<Vec<[f32; 4]>, GpuRasterError> {
+        self.prepare_effect_analysis_async(scene::Output::Artwork(None)).await.map_err(GpuRasterError::Effect)?;
         let readback = self.prepare_region(region)?;
         #[cfg(not(target_arch = "wasm32"))]
         let (tx, rx) = mpsc::channel();
@@ -883,6 +909,7 @@ mod flatten;
 #[cfg(not(target_arch = "wasm32"))]
 mod output;
 mod tone;
+mod analysis;
 #[cfg(not(target_arch = "wasm32"))]
 mod preview;
 /// Linear premultiplied viewing pixels. Hosts apply their view-only checkerboard

@@ -47,6 +47,59 @@ The [tone and color contract](../development/photo-editing-m5-m6-color.md#huesat
 defines the equations and bounds. All controls, validation, history and saved
 values use the existing runtime schema on GTK, Web, Android and Windows.
 
+## Shadows/Highlights and Clarity
+
+Shadows/Highlights raises dark illumination and lowers bright illumination by
+up to two stops. Clarity changes local contrast by up to two stops. Both preserve
+alpha and hue ratios; zero amounts bypass exactly. They use the same bounded
+local-illumination analysis as the HDR viewing pipeline, without applying HDR
+viewing tone compression to document artwork. Their controls use the ordinary
+Properties schema on GTK, Web and Android.
+
+`auxiliary: {"kind":"analysis","analysis":"local_illumination"}` requests the
+renderer-owned guide at group 2, binding 1. Only adjustments can request it.
+Each guide analyzes the actual input before its adjustment's amount, mask,
+opacity and blend, including lower adjustments, clipping and group isolation.
+Source identity follows contributing layers and their ancestors, independently
+of storage order. Unrelated upper layers do not supply pixels or backing work.
+Own amount changes reuse the guide; lower artwork, placement, mask, color or
+effect changes invalidate it. Lower animated phases are frozen for each job.
+
+Guides retain at most a 768-pixel edge in document coordinates. GPU region
+reduction and local-tone passes prepare them asynchronously, with cancellation
+between bounded submissions. Exact queries, export, merge, frequency separation,
+color conversion and reference retouching prepare all required guides in dependency
+order before consuming pixels. Catalog previews prepare their full insertion-source
+guides before choosing a crop, share each analysis kind between rows, and release
+them when cancelled or hidden. Live rendering shows unchanged input when no guide
+exists, or the last compatible guide while a replacement is pending. Properties
+shows updating or failure in its existing heading. Failed inputs retry after relevant source changes;
+amount drags never start a redundant analysis. Live publication waits for an idle
+document and rejects stale sources and owners.
+
+Immutable device resources are shared by live rendering and frozen snapshots.
+Admission reserves guide and intermediate storage before allocation, then retains
+only the output charge. The device-wide analysis allowance is at most 512 MiB;
+native admission also uses available system/GPU headroom. Web uses that fixed
+capacity bound because measured headroom is unavailable. Capture pixel admission
+separately includes source/dependency windows and retained guides. Cancellation,
+replacement and the last owner's release return their charges. Telemetry includes
+the device-wide analysis reservation, including conservative scratch during a
+build; it is not an isolated renderer's allocation peak.
+
+Area overlap uses integer document/guide coordinates. Four-neighbor sampling
+keeps the quotient and remainder separate until computing local fractions, avoiding
+loss of precision at distant guide-cell boundaries. Luminance measurement uses
+mantissa/exponent normalization for finite extended RGB and tiny alpha. Invalid
+pixels fail analysis; unrepresentable straight RGB has no guide coverage and is
+preserved by the consumer. Nonpositive luminance keeps its coverage at the log
+floor and passes unchanged through the adjustment. An overflowing adjusted result
+preserves its source; subnormal outputs use explicit nearest-even packing.
+
+The [local-adjustment contract](../development/photo-editing-m5-m6-color.md#local-adjustments-and-source-aware-analysis)
+defines the equations and photographic acceptance. The guide is a fixed spatial
+approximation, independent of zoom; effects retain native-resolution evaluation.
+
 ## Imported color lookup tables
 
 Color Lookup imports a bounded 3D `.cube` table. GTK Properties has Import/Replace,

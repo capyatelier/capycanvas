@@ -602,6 +602,14 @@ inside that window. Shaders keep document coordinates for their calculations.
 Output, current-pass input and original input each carry their own bounds and
 texel footprint through the shared image-grid descriptor. Reduced inputs use
 the centers of their actual covered cells, including partial boundary cells.
+Native composition batches up to sixteen source tiles even when a full display
+pyramid is not admitted. A bounded horizontal strip replaces the single-tile
+working image; each reduction reads its own document-space offset. Admission
+includes the strip's one to sixteen MiB, according to document width. Full
+pyramids retain their existing destination and batching. Root reductions share
+one compute pass per batch, then update the adjacent display level together.
+Sparse batches reduce only their covered source rectangles.
+
 Filter-picker previews use the same coordinate contract. Native one-to-one
 image reads use fragment positions directly, avoiding a
 window-size-dependent interpolation error from reconstructed UV coordinates.

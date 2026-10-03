@@ -167,6 +167,29 @@ fn artwork_sample_effect_input_respects_isolated_group_and_clipped_base() {
 }
 
 #[test]
+fn artwork_sample_effect_input_follows_group_roots_instead_of_descendant_storage_order() {
+    use layer_core::{Layer, LayerBlend, LayerId, LayerKind};
+    for clipped in [false, true] {
+        let mut doc = document([16, 16], |_, _| [0.125, 0.25, 0.5, 0.5]);
+        let mut lower = Layer::paint(LayerId(30), "Lower group");
+        lower.kind = LayerKind::Group; lower.properties.blend = LayerBlend::Normal;
+        let mut child = doc.layers[0].clone(); child.properties.parent = Some(lower.id);
+        let mut target = doubled_effect(20); target.properties.clipped = clipped;
+        let mut upper = Layer::paint(LayerId(10), "Unrelated upper group");
+        upper.kind = LayerKind::Group; upper.properties.blend = LayerBlend::Normal;
+        let mut upper_effect = doubled_effect(11); upper_effect.properties.parent = Some(upper.id);
+        let mut upper_child = document([16, 16], |_, _| [0.5, 0.125, 0.25, 1.]).layers[0].clone();
+        upper_child.id = LayerId(12); upper_child.properties.parent = Some(upper.id);
+        doc.layers = vec![upper, child, target, upper_effect, lower, upper_child];
+        close(sample(&doc, ArtworkSource::Visible, [8.; 2], 1).unwrap(), [1., 0.25, 0.5, 1.]);
+        close(sample(&doc, ArtworkSource::EffectInput(LayerId(20)), [8.; 2], 1).unwrap(), [0.25, 0.5, 1., 0.5]);
+        doc.layers = [0, 3, 5, 2, 4, 1].map(|i| doc.layers[i].clone()).into();
+        close(sample(&doc, ArtworkSource::Visible, [8.; 2], 1).unwrap(), [1., 0.25, 0.5, 1.]);
+        close(sample(&doc, ArtworkSource::EffectInput(LayerId(20)), [8.; 2], 1).unwrap(), [0.25, 0.5, 1., 0.5]);
+    }
+}
+
+#[test]
 fn artwork_sample_tiny_covered_alpha_preserves_representable_extended_color() {
     let doc = document([5, 5], |_, _| [1., -0.5, 0.25, 1e-30]);
     close(sample(&doc, ArtworkSource::Visible, [2.; 2], 5).unwrap(), [1e30, -5e29, 2.5e29, 1e-30]);

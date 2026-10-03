@@ -9,23 +9,13 @@ struct Selection { rect:vec4<u32>, info:vec4<u32>, values:array<u32> }
 const PENDING:u32=66752u;
 var<workgroup> counts:array<atomic<u32>,1043>;
 
-struct Number { mantissa:u32, exponent:i32, negative:bool }
-fn number(value:f32)->Number {
-    let bits=bitcast<u32>(value);let absolute=bits&0x7fffffffu;
-    if absolute==0u {return Number(0u,0,false);}
-    if absolute<0x800000u {
-        let shift=countLeadingZeros(absolute)-8u;
-        return Number(absolute<<shift,-126-i32(shift),bits>>31u!=0u);
-    }
-    return Number((absolute&0x7fffffu)|0x800000u,i32(absolute>>23u)-127,bits>>31u!=0u);
-}
 fn product(a:u32,b:u32)->vec2<u32> {
     let low=(a&65535u)*(b&65535u);
     let cross=(a>>16u)*(b&65535u)+(low>>16u);
     let middle=(a&65535u)*(b>>16u)+(cross&65535u);
     return vec2<u32>((middle<<16u)|(low&65535u),(a>>16u)*(b>>16u)+(cross>>16u)+(middle>>16u));
 }
-fn at_least(p:Number,a:Number,b:vec4<u32>)->bool {
+fn at_least(p:FloatNumber,a:FloatNumber,b:vec4<u32>)->bool {
     if p.negative || p.mantissa==0u {return false;}
     let difference=p.exponent-a.exponent-bitcast<i32>(b.z);
     if difference>=2 {return true;}
@@ -37,7 +27,7 @@ fn at_least(p:Number,a:Number,b:vec4<u32>)->bool {
     let rhs=vec3<u32>(low.x,middle,high.y+u32(middle<low.y));
     return lhs.z>rhs.z || (lhs.z==rhs.z && (lhs.y>rhs.y || (lhs.y==rhs.y && lhs.x>=rhs.x)));
 }
-fn bin(p:Number,a:Number,channel:u32)->u32 {
+fn bin(p:FloatNumber,a:FloatNumber,channel:u32)->u32 {
     if p.mantissa==0u || p.negative {return 0u;}
     let logarithm=log2(f32(p.mantissa)/f32(a.mantissa))+f32(p.exponent-a.exponent);
     var low=select(0u,1u,area.flags.w!=0u);var high=255u;
@@ -51,21 +41,21 @@ fn bin(p:Number,a:Number,channel:u32)->u32 {
     while low>minimum && !at_least(p,a,boundaries[offset+low]) {low-=1u;}
     return low;
 }
-fn classification(value:Number,alpha:Number,channel:u32)->vec2<u32> {
+fn classification(value:FloatNumber,alpha:FloatNumber,channel:u32)->vec2<u32> {
     let zero=value.mantissa==0u;let below=value.negative && !zero;
     let equal= !value.negative && value.mantissa==alpha.mantissa && value.exponent==alpha.exponent;
     let white=at_least(value,alpha,vec4<u32>(0u,0x100000u,0u,0u));
     return vec2<u32>(bin(value,alpha,channel),u32(below)|(u32(white && !equal)<<1u)|(u32(below || zero)<<2u)|(u32(white)<<3u));
 }
-fn normalized(value:Number,exponent:i32)->f32 {
+fn normalized(value:FloatNumber,exponent:i32)->f32 {
     if value.mantissa==0u {return 0.;}
     return select(1.,-1.,value.negative)*f32(value.mantissa)*exp2(f32(value.exponent-exponent-23));
 }
-fn approximate_luminance(rgb:array<Number,3>,alpha:Number)->vec2<u32> {
+fn approximate_luminance(rgb:array<FloatNumber,3>,alpha:FloatNumber)->vec2<u32> {
     let exponent=max(max(select(-149,rgb[0].exponent,rgb[0].mantissa!=0u),select(-149,rgb[1].exponent,rgb[1].mantissa!=0u)),select(-149,rgb[2].exponent,rgb[2].mantissa!=0u));
     let r=normalized(rgb[0],exponent);let g=normalized(rgb[1],exponent);let b=normalized(rgb[2],exponent);
     let value=g+area.weights.x*(r-g)+area.weights.y*(b-g);
-    var low=number(value-0.000003814697265625);var high=number(value+0.000003814697265625);
+    var low=float_number(value-0.000003814697265625);var high=float_number(value+0.000003814697265625);
     low.exponent+=exponent;high.exponent+=exponent;
     let first=classification(low,alpha,3u);let last=classification(high,alpha,3u);
     if all(first==last) {return first;}
@@ -116,7 +106,7 @@ fn wide_subtract(a:Wide,b:Wide)->Wide {
     }
     return result;
 }
-fn luminance(rgb:array<Number,3>)->Wide {
+fn luminance(rgb:array<FloatNumber,3>)->Wide {
     var positive:Wide;var negative:Wide;
     for(var i=0u;i<3u;i++) {
         let value=rgb[i];let coefficient=boundaries[514u+i];
@@ -126,10 +116,10 @@ fn luminance(rgb:array<Number,3>)->Wide {
     if wide_compare(positive,negative)>=0 {return wide_subtract(positive,negative);}
     var result=wide_subtract(negative,positive);result.negative=true;return result;
 }
-fn boundary_product(alpha:Number,b:vec4<u32>)->Wide {
+fn boundary_product(alpha:FloatNumber,b:vec4<u32>)->Wide {
     return wide(multiply(alpha.mantissa,b),alpha.exponent+bitcast<i32>(b.z)+181);
 }
-fn luminance_bin(value:Wide,alpha:Number)->u32 {
+fn luminance_bin(value:Wide,alpha:FloatNumber)->u32 {
     if value.negative {return 0u;}
     var zero:Wide;if wide_compare(value,zero)==0 {return 0u;}
     var low=select(0u,1u,area.flags.w!=0u);var high=255u;
@@ -173,7 +163,7 @@ fn count(@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:
         if any(absolute>=vec4<u32>(0x7f800000u)) || absolute.a>0x3f800000u || (bits.a>>31u!=0u && absolute.a!=0u) {atomicOr(&counts[1042u],1u);continue;}
         if absolute.a==0u {atomicAdd(&counts[1041u],1u);continue;}
         atomicAdd(&counts[1040u],1u);
-        let alpha=number(color.a);let rgb=array<Number,3>(number(color.r),number(color.g),number(color.b));
+        let alpha=float_number(color.a);let rgb=array<FloatNumber,3>(float_number(color.r),float_number(color.g),float_number(color.b));
         let neutral=rgb[0].mantissa==rgb[1].mantissa && rgb[1].mantissa==rgb[2].mantissa
             && rgb[0].exponent==rgb[1].exponent && rgb[1].exponent==rgb[2].exponent
             && rgb[0].negative==rgb[1].negative && rgb[1].negative==rgb[2].negative;
@@ -203,7 +193,7 @@ fn resolve(@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) grou
         var world=area.region.xy+vec2(index%size.x,index/size.x);
         if area.flags.z!=0u {world=((2u*(begin+vec2(index%size.x,index/size.x))+1u)*area.flags.xy)/(2u*min(area.flags.xy,vec2(256u)));}
         let color=textureLoad(pixels,vec2<i32>(world-area.region.xy),0);
-        let alpha=number(color.a);let value=luminance(array(number(color.r),number(color.g),number(color.b)));
+        let alpha=float_number(color.a);let value=luminance(array(float_number(color.r),float_number(color.g),float_number(color.b)));
         var zero:Wide;let black=value.negative || wide_compare(value,zero)==0;
         let relation=wide_compare(value,boundary_product(alpha,vec4<u32>(0u,0x100000u,0u,0u)));
         let flags=u32(value.negative)|(u32(!black && relation>0)<<1u)|(u32(black)<<2u)|(u32(!black && relation>=0)<<3u);

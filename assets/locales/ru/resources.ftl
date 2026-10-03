@@ -495,3 +495,11 @@ resources-lookup-replace = Заменить…
 resources-lookup-files = Файлы таблиц соответствия цветов
 resources-lookup-unavailable = Импорт таблиц соответствия цветов пока недоступен на этой платформе.
 resources-lookup-failed = Не удалось импортировать таблицу соответствия.
+
+resources-analysis-updating = Обновление…
+resources-analysis-error = Не удалось обновить эту коррекцию.
+resources-filter-shadows-highlights = Тени/Света
+resources-filter-clarity = Чёткость
+resources-local-shadows = Тени
+resources-local-highlights = Света
+resources-local-amount = Интенсивность

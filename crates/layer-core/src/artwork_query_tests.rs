@@ -172,3 +172,79 @@ fn histogram_typed_curve_domains_use_coordinate_bins_for_rgb_and_luminance() {
         assert_eq!(actual.axis().bins,[0,256]);assert!(actual.axis().stops.is_none());
     }}
 }
+
+fn input_key_effect(id:u64)->crate::Layer {
+    let mut layer=crate::Layer::paint(LayerId(id),"Exposure");layer.kind=crate::LayerKind::Effect;
+    layer.effect=Some(std::sync::Arc::new(crate::bundled_effect_catalog().get("exposure").unwrap().preview().unwrap()));layer
+}
+fn input_key_document()->Document {
+    let mut doc=document();for _ in 0..100 {doc.allocate_layer_id();}
+    doc.layers.insert(0,input_key_effect(20));doc.layers.insert(0,input_key_effect(30));doc
+}
+#[test]
+fn effect_input_key_ignores_upper_changes_and_own_consuming_values() {
+    let doc=input_key_document();let query=crate::ArtworkQuery::new(&doc,ArtworkSource::EffectInput(LayerId(20)));
+    let mutations:[fn(&mut crate::Layer);5]=[
+        |l|l.opacity=0.4,|l|l.properties.blend=crate::LayerBlend::Multiply,
+        |l|l.properties.offset=Point{x:4.,y:7.},
+        |l|{let mut m=crate::LayerMask::reveal_all(LayerId(99),Point::default());m.default_coverage=0.25;l.mask=Some(m);},
+        |l|{std::sync::Arc::make_mut(l.effect.as_mut().unwrap()).set("exposure",crate::EffectValue::Number(1.)).unwrap();},
+    ];
+    for mutate in mutations {let mut changed=doc.clone();mutate(&mut changed.layers[0]);assert!(query.matches_source(&changed),"upper");}
+    for mutate in [mutations[0],mutations[1],mutations[3],mutations[4]] {let mut changed=doc.clone();mutate(&mut changed.layers[1]);assert!(query.matches_source(&changed),"own consuming state");}
+    let mut inserted=doc.clone();inserted.layers.insert(0,input_key_effect(40));assert!(query.matches_source(&inserted));
+    let mut removed=doc.clone();removed.layers.remove(0);assert!(query.matches_source(&removed));
+    let mut lower=doc.clone();lower.layers[2].opacity=0.3;assert!(!query.matches_source(&lower));
+    let mut lower=doc.clone();lower.layers.swap(2,3);assert!(!query.matches_source(&lower));
+    let mut lower=doc.clone();lower.layers.insert(2,input_key_effect(40));assert!(!query.matches_source(&lower));
+}
+
+#[test]
+fn effect_input_key_tracks_noncontiguous_group_contributors_and_clipping() {
+    for pass_through in [false,true] {for clipped in [false,true] {
+        let mut doc=document();for _ in 0..100 {doc.allocate_layer_id();}
+        let mut child=crate::Layer::paint(LayerId(1),"Child");child.properties.parent=Some(LayerId(10));
+        let mut target=input_key_effect(20);target.properties.clipped=clipped;
+        let mut group=crate::Layer::paint(LayerId(10),"Lower group");group.kind=crate::LayerKind::Group;
+        group.properties.blend=if pass_through {crate::LayerBlend::PassThrough}else{crate::LayerBlend::Normal};
+        doc.layers=vec![child,target,group];
+        let key=crate::artwork_query::EffectInputKey::new(std::sync::Arc::new(doc.clone()),LayerId(20)).unwrap();
+        assert!(key.contributors().any(|l|l.id==LayerId(1)),"pass-through={pass_through} clipped={clipped}");
+        let query=crate::ArtworkQuery::new(&doc,ArtworkSource::EffectInput(LayerId(20)));
+        for mutate in [|l:&mut crate::Layer|l.opacity=0.4,|l:&mut crate::Layer|l.properties.offset=Point{x:1.,y:2.},|l:&mut crate::Layer|{let mut m=crate::LayerMask::reveal_all(LayerId(99),Point::default());m.default_coverage=0.2;l.mask=Some(m);}] {
+            let mut changed=doc.clone();mutate(&mut changed.layers[0]);assert!(!query.matches_source(&changed));
+        }
+        let mut changed=doc.clone();changed.layers[2].opacity=0.4;assert!(!query.matches_source(&changed));
+        let mut changed=doc.clone();changed.layers[0].properties.parent=None;assert!(!query.matches_source(&changed));
+    }}
+}
+
+#[test]
+fn artwork_query_public_source_and_snapshot_mutations_cannot_reuse_an_obsolete_input_key() {
+    let doc=input_key_document();let mut query=crate::ArtworkQuery::new(&doc,ArtworkSource::EffectInput(LayerId(20)));
+    query.source=ArtworkSource::EffectInput(LayerId(30));
+    let mut changed=doc.clone();std::sync::Arc::make_mut(changed.layers[1].effect.as_mut().unwrap()).set("exposure",crate::EffectValue::Number(1.)).unwrap();
+    assert!(!query.matches_source(&changed),"old target is now a contributing lower adjustment");
+    query.source=ArtworkSource::EffectInput(LayerId(20));
+    let mut snapshot=doc.clone();snapshot.layers[2].opacity=0.25;query.document=std::sync::Arc::new(snapshot.clone());
+    assert!(query.matches_source(&snapshot));assert!(!query.matches_source(&doc));
+    let snapshot=std::sync::Arc::make_mut(&mut query.document);snapshot.layers[2].opacity=0.75;
+    assert!(query.matches_source(&query.document));assert!(!query.matches_source(&doc));
+}
+
+#[test]
+fn effect_input_key_distinguishes_isolated_and_pass_through_ancestor_backdrops() {
+    for pass_through in [false,true] {for clipped in [false,true] {
+        let mut doc=document();for _ in 0..100 {doc.allocate_layer_id();}
+        let mut target=input_key_effect(20);target.properties.parent=Some(LayerId(10));target.properties.clipped=clipped;
+        let mut sibling=crate::Layer::paint(LayerId(1),"Lower sibling");sibling.properties.parent=Some(LayerId(10));
+        let mut group=crate::Layer::paint(LayerId(10),"Parent");group.kind=crate::LayerKind::Group;group.properties.blend=if pass_through {crate::LayerBlend::PassThrough}else{crate::LayerBlend::Normal};
+        doc.layers=vec![target,sibling,group,crate::Layer::paint(LayerId(2),"Root backdrop")];
+        let query=crate::ArtworkQuery::new(&doc,ArtworkSource::EffectInput(LayerId(20)));
+        let mut changed=doc.clone();changed.layers[1].opacity=0.25;assert!(!query.matches_source(&changed));
+        let mut changed=doc.clone();changed.layers[3].opacity=0.25;
+        assert_eq!(query.matches_source(&changed),!pass_through||clipped,"pass-through={pass_through} clipped={clipped}");
+        let mut changed=doc.clone();changed.layers[2].properties.offset=Point{x:2.,y:3.};assert!(!query.matches_source(&changed));
+        let mut changed=doc.clone();changed.layers[2].properties.blend=if pass_through {crate::LayerBlend::Normal}else{crate::LayerBlend::PassThrough};assert!(!query.matches_source(&changed));
+    }}
+}

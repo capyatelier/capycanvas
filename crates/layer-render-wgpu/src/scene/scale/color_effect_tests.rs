@@ -231,7 +231,7 @@ fn resident_native_pointwise_batches_preserve_odd_edges_masks_clipping_and_windo
 }
 
 fn native_pointwise_batches(preload: bool, admitted: bool) {
-    let extent = [1795, 773];
+    let extent = [if admitted {1795} else {4355}, 773];
     let mut doc = document_at(extent);
     doc.layers.truncate(1);
     doc.layers[0].source = Some(rgba8_source(extent, |x, y| [
@@ -262,8 +262,8 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
         if state == 2 {
             let mut mask = layer_core::LayerMask::reveal_all(LayerId(98), layer_core::Point { x: 11., y: -7. });
             mask.initial = Some(layer_core::Selection::polygon(vec![
-                layer_core::Point { x: 109., y: 37. }, layer_core::Point { x: 1781., y: 91. },
-                layer_core::Point { x: 1589., y: 767. }, layer_core::Point { x: 7., y: 599. },
+                layer_core::Point { x: 109., y: 37. }, layer_core::Point { x: (extent[0]-14) as f32, y: 91. },
+                layer_core::Point { x: (extent[0]-206) as f32, y: 767. }, layer_core::Point { x: 7., y: 599. },
             ]).unwrap());
             doc.layers[0].mask = Some(mask); doc.layers[0].opacity = 0.61; doc.layers[0].properties.clipped = true;
         }
@@ -271,9 +271,12 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         if state == 3 {
             frame.view.width_px = 43; frame.view.height_px = 25;
-            frame.view.document_to_surface = [0.25, 0., 0., 0.25, -810. * 0.25, -410. * 0.25];
+            frame.view.document_to_surface = [0.25, 0., 0., 0.25, -(extent[0] as f32-305.) * 0.25, -410. * 0.25];
         }
-        cached.submit(frame).unwrap(); exact.submit(packet(&doc.layers, extent)).unwrap();
+        let command_passes = cached.metrics.command_passes;
+        cached.submit(frame).unwrap();
+        let command_passes = cached.metrics.command_passes - command_passes;
+        exact.submit(packet(&doc.layers, extent)).unwrap();
         let cache = cached.scale_display.as_ref().unwrap();
         assert_eq!(cache.hierarchy.is_some(), admitted);
         assert_eq!(matches!(cache.pixels, hierarchy::Pixels::Resident { .. }), admitted);
@@ -305,8 +308,41 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
             let passes = cached.scene.as_ref().unwrap().effect_passes;
             eprintln!("resident pointwise native pages={pages} effect_passes={passes}");
             if admitted { assert!(passes <= u64::from(pages.div_ceil(SOURCE_SLOTS as u32)), "warm direct-output effects must batch: {passes} for {pages} pages"); }
+            else {
+                let [columns,rows]=extent.map(|n|n.div_ceil(PAGE_SIZE));
+                let batches = u64::from(rows*(columns.div_ceil(SOURCE_SLOTS as u32)+1));
+                assert!(passes<=batches,
+                    "bounded working strips must batch native effects: {passes} for {columns}x{rows} pages");
+                eprintln!("native working strip command_passes={command_passes} effect_passes={passes} permitted_batches={batches}");
+                assert!(command_passes <= 3 * batches + 8,
+                    "working-strip composition and both display reductions must batch: {command_passes} command passes for {pages} pages");
+            }
         }
+        if !admitted {assert_eq!(cache.exact_tile.as_ref().unwrap().texture.size().width,PAGE_SIZE*SOURCE_SLOTS as u32);
+            assert_eq!(cache.exact_tile.as_ref().unwrap().texture.size().height,PAGE_SIZE);}
         let bytes = cached.source_tiles.borrow().gpu_bytes();
         if let Some(expected) = source_bytes { assert_eq!(bytes, expected); } else { source_bytes = Some(bytes); }
+    }
+    if !admitted {
+        let mut frame=packet(&doc.layers,extent);frame.composite_all=false;
+        frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+        cached.submit(frame).unwrap();exact.submit(frame).unwrap();
+        let strip=cached.scale_display.as_ref().unwrap().exact_tile.as_ref().unwrap().texture.clone();
+        for positions in [[[73.,67.],[4117.,613.]],[[4117.,613.],[73.,67.]]] {
+            let dabs=positions.map(|point|crate::tests::test_dab(point,[0.91,0.12,0.67,1.],0.8));
+            let mut batch=dab_batch(doc.layers[1].id,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dabs[0].bounds().union(dabs[1].bounds()));
+            batch.dab_count=2;
+            let stroke=FramePacket{dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..frame};
+            let work=cached.metrics.composited_pixels;
+            let reverse=cached.scene.as_ref().unwrap().native_reverse;
+            cached.submit(stroke).unwrap();exact.submit(stroke).unwrap();
+            assert_ne!(cached.scene.as_ref().unwrap().native_reverse,reverse);
+            let cache=cached.scale_display.as_ref().unwrap();
+            assert!(cache.hierarchy.is_none());assert!(!cache.has_pending_work(&cached));
+            assert_eq!(cache.exact_tile.as_ref().unwrap().texture,strip);
+            let error=quality(&display_pixels(&cached),&pixels(&exact,crate::test_support::document_texture(&exact)),cache.plan);
+            assert!(error[2]<2e-5,"sparse disjoint working-strip contacts {positions:?}: {error:?}");
+            assert!(cached.metrics.composited_pixels-work<=4*u64::from(PAGE_SIZE).pow(2),"sparse contacts recompose only affected native pages");
+        }
     }
 }

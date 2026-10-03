@@ -4,6 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use wgpu::util::DeviceExt;
 
 pub(crate) const CACHE_BYTES: u64 = 608 * 1024 * 1024;
+fn exact_strip(extent: [u32; 2]) -> [u32; 2] {
+    [PAGE_SIZE * extent[0].div_ceil(PAGE_SIZE).next_power_of_two().min(SOURCE_SLOTS as u32), PAGE_SIZE]
+}
+fn exact_strip_bytes(extent: [u32; 2]) -> u64 {exact_strip(extent).map(u64::from).into_iter().product::<u64>() * 16}
 
 mod sources;
 mod graph;
@@ -331,7 +335,7 @@ pub(crate) fn request(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Result<Req
     let plan = view_plan(packet, level, evaluation).ok_or(GpuRasterError::InvalidExtent)?;
     let output_bytes = |p: display_mips::Plan| p.level_bytes(p.level) + p.level_bytes(p.level + 1) + 32;
     let material_pages = if targets(r, packet).any(|(_, id)| mapped_material(r, packet, id)) { Scene::MATERIAL_CACHE_PAGES as u64 } else { 0 };
-    let native_bytes = Scene::geometry_bytes(packet.layers,r.scene.as_ref()) + output_bytes(plan) + u64::from(PAGE_SIZE).pow(2) * 16 * (1 + material_pages)
+    let native_bytes = Scene::geometry_bytes(packet.layers,r.scene.as_ref()) + output_bytes(plan) + exact_strip_bytes(packet.document_extent) + u64::from(PAGE_SIZE).pow(2) * 16 * material_pages
         + if plan.bounds == PixelRect::full(plan.extent) { 0 } else { output_bytes(overview_plan(plan)) };
     if plan.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) || native_bytes > CACHE_BYTES {
         return Err(GpuRasterError::ExtentUnsupported);
@@ -484,7 +488,7 @@ fn allocation_with_tiles(r: &WgpuRasterizer, plan: display_mips::Plan, packet: F
         u64::from(PAGE_SIZE).pow(2) * 16 * (images + pixel_transform::TRANSFORM_SLOTS as u64)
     } else { input.level_bytes(input.level) * (images - 1) };
     let own = [source_bytes, Scene::geometry_bytes(layers,scene) + output + working + root_mips + plan.level_bytes(plan.level + 1) + records + 32 + transform
-        + u64::from(PAGE_SIZE).pow(2) * 16 * (1 + u64::from(material) * Scene::MATERIAL_CACHE_PAGES as u64)];
+        + exact_strip_bytes(plan.extent) + u64::from(PAGE_SIZE).pow(2) * 16 * u64::from(material) * Scene::MATERIAL_CACHE_PAGES as u64];
     if plan.bounds == PixelRect::full(plan.extent) { own }
     else {
         let overview = allocation_for(r, overview_plan(plan), packet, sources, false, scene);

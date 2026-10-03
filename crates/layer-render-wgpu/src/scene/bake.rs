@@ -60,6 +60,7 @@ impl Scene {
         let plan = windows::Plan::new(&layers, extent, budget)?;
         let regions: Vec<_> = plan.map_or_else(|| vec![(damage, Self::capture_window(&layers, damage, extent))], |plan| plan.regions(damage).collect());
         let multiple = regions.len() > 1;
+        let previous = r.bake_analysis_entries(members, offset, extent)?.map(|entries| std::mem::replace(&mut r.effect_analyses, entries));
         let result = (|| {
             for (output, window) in regions {
                 let pages: Vec<_> = pages.iter().filter(|(c, _)| !output.page_local(*c).is_empty()).collect();
@@ -80,6 +81,7 @@ impl Scene {
             }
             Ok(())
         })();
+        if let Some(previous) = previous { r.effect_analyses = previous; }
         self.image_window = None;
         self.retire_images(|scene| scene.images = images::ImageStages::default());
         result

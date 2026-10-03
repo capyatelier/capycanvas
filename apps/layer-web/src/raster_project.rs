@@ -70,11 +70,15 @@ enum Part {
 }
 
 pub(super) async fn wait_backing(project: &Project) -> Result<(), JsValue> {
+    wait_backing_cancellable(project, None).await
+}
+pub(super) async fn wait_backing_cancellable(project: &Project, control: Option<&layer_render_wgpu::snapshot::CaptureControl>) -> Result<(), JsValue> {
     let start = js_sys::Date::now();
     loop {
+        if control.is_some_and(|control| control.is_cancelled()) { return Err(js("Operation cancelled")); }
         let mut ready = true;
         for layer in &project.document.layers {
-            for raster in std::iter::once(&layer.raster).chain(layer.mask.iter().map(|m| &m.raster))
+            for raster in std::iter::once(&layer.raster).chain(layer.masks().map(|m| &m.raster))
             {
                 match raster.try_data() {
                     None => ready = false,

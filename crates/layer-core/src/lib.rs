@@ -63,7 +63,7 @@ pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPla
 mod content_bounds;
 pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope};
 mod artwork_query;
-pub use artwork_query::{ARTWORK_SAMPLE_WIDTHS, ArtworkSample, ArtworkSampleRequest, ArtworkQuery, ArtworkStatisticsRequest, ArtworkSource, white_balance_neutral};
+pub use artwork_query::{ARTWORK_SAMPLE_WIDTHS, ArtworkSample, ArtworkSampleRequest, ArtworkQuery, ArtworkStatisticsRequest, ArtworkSource, EffectInputKey, white_balance_neutral};
 #[cfg(test)]
 mod artwork_query_tests;
 mod merge;

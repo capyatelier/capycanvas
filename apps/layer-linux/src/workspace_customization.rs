@@ -118,6 +118,7 @@ struct ControlWidget {
     panel: Panel,
     control: PanelControl,
     widget: gtk::Widget,
+    caption: Option<gtk::Label>,
     value: Option<FieldValue>,
     configuration: bool,
 }
@@ -532,6 +533,7 @@ impl Customization {
             panel,
             control,
             widget: widget.clone().upcast(),
+            caption: None,
             value: None,
             configuration: false,
         });
@@ -988,7 +990,7 @@ impl Customization {
         for field in self.controls.borrow().iter() {
             let localization = w.localization();
             let caption = field.control.localized_label(&localization);
-            if let Some(label) = field.widget.first_child().and_downcast::<gtk::Label>() { label.set_text(&caption); }
+            if let Some(label) = &field.caption { label.set_text(&caption); }
             if let Some(FieldValue::Size(number) | FieldValue::Opacity(number) | FieldValue::LayerOpacity(number)) = &field.value {
                 number.set_caption(&caption, "", localization.clone());
             }
@@ -1208,6 +1210,7 @@ impl Workspace {
                     panel,
                     control,
                     widget: group.upcast(),
+                    caption: label.parent().is_some().then_some(label),
                     value,
                     configuration: false,
                 });
@@ -1231,6 +1234,7 @@ impl Workspace {
                 panel,
                 control,
                 widget: group.upcast(),
+                caption: None,
                 value,
                 configuration: true,
             });

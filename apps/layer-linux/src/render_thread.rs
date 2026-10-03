@@ -116,6 +116,9 @@ enum Command {
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
+    Analysis(layer_core::ArtworkQuery, mpsc::Sender<Result<layer_render_wgpu::effect_analysis::Job, String>>),
+    AcceptAnalysis(layer_render_wgpu::effect_analysis::Candidate),
+    RetainAnalyses(Vec<layer_core::LayerId>),
     Snapshot(layer_render::SnapshotRequest, mpsc::Sender<Result<layer_render_wgpu::snapshot::SnapshotJob, String>>),
     ColorSample(layer_render::ColorSampleRequest),
     FilterPreviews(u64, layer_render::FilterPreviewRequest),
@@ -170,14 +173,25 @@ pub(crate) fn pause_next_startup() -> Arc<AtomicBool> {
     pause
 }
 
-enum SnapshotJobState {
-    Preparing(mpsc::Receiver<Result<layer_render_wgpu::snapshot::SnapshotJob, String>>),
-    Running(layer_render_wgpu::snapshot::SnapshotJob),
+enum WorkerJob<T> { Preparing(mpsc::Receiver<Result<T, String>>), Running(T) }
+impl<T> WorkerJob<T> {
+    fn ready(&mut self) -> Result<Option<&mut T>, BackendError> {
+        if let Self::Preparing(receiver) = self {
+            match receiver.try_recv() {
+                Ok(Ok(job)) => *self = Self::Running(job),
+                Err(mpsc::TryRecvError::Empty) => return Ok(None),
+                _ => return Err(BackendError("Could not start the operation")),
+            }
+        }
+        let Self::Running(job) = self else { unreachable!() }; Ok(Some(job))
+    }
 }
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
-    snapshot_job: Option<SnapshotJobState>,
+    snapshot_job: Option<WorkerJob<layer_render_wgpu::snapshot::SnapshotJob>>,
+    analysis_job: Option<WorkerJob<layer_render_wgpu::effect_analysis::Job>>,
+    analysis_candidate: Option<layer_render_wgpu::effect_analysis::Candidate>,
     shader_activity: Option<layer_render_wgpu::ShaderActivity>,
     #[cfg(test)]
     startup_pause: Option<Arc<AtomicBool>>,
@@ -376,6 +390,8 @@ impl RenderWorker {
             .map_err(error)?;
         Ok(Self {
             snapshot_job: None,
+            analysis_job: None,
+            analysis_candidate: None,
             shader_activity: None,
             #[cfg(test)]
             startup_pause,
@@ -787,26 +803,43 @@ impl CanvasRenderer for RenderWorker {
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.pop_front().map(Ok)
     }
+    fn request_effect_analysis(&mut self, query: layer_core::ArtworkQuery) -> Result<bool, Self::Error> {
+        if self.analysis_job.is_some() || self.analysis_candidate.is_some() { return Ok(false); }
+        let (sender, receiver) = mpsc::channel();
+        self.send(Command::Analysis(query, sender))?;
+        self.analysis_job = Some(WorkerJob::Preparing(receiver));
+        Ok(true)
+    }
+    fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> {
+        let result = match self.analysis_job.as_mut()?.ready() {
+            Ok(Some(job)) => job.take()?,
+            Ok(None) => return None,
+            Err(error) => { self.analysis_job = None; return Some(Err(error)); }
+        };
+        self.analysis_job = None;
+        Some(result.map(|candidate| self.analysis_candidate = Some(candidate)).map_err(|_| BackendError("Could not update the adjustment")))
+    }
+    fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> {
+        if let Some(candidate) = self.analysis_candidate.take() { self.send(Command::AcceptAnalysis(candidate))?; }
+        Ok(())
+    }
+    fn cancel_effect_analysis(&mut self) { self.analysis_job = None; self.analysis_candidate = None; }
+    fn retain_effect_analyses(&mut self, layers: &[layer_core::LayerId]) -> Result<(), Self::Error> {
+        self.send(Command::RetainAnalyses(layers.to_vec()))
+    }
     fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
         if self.snapshot_job.is_some() { return Ok(false); }
         let (sender, receiver) = mpsc::channel();
         self.send(Command::Snapshot(request, sender))?;
-        self.snapshot_job = Some(SnapshotJobState::Preparing(receiver));
+        self.snapshot_job = Some(WorkerJob::Preparing(receiver));
         Ok(true)
     }
     fn take_snapshot(&mut self) -> Option<Result<layer_render::SnapshotResult, Self::Error>> {
-        if let SnapshotJobState::Preparing(receiver) = self.snapshot_job.as_mut()? {
-            match receiver.try_recv() {
-                Ok(Ok(job)) => self.snapshot_job = Some(SnapshotJobState::Running(job)),
-                Err(mpsc::TryRecvError::Empty) => return None,
-                _ => {
-                    self.snapshot_job = None;
-                    return Some(Err(BackendError("Could not start the operation")));
-                }
-            }
-        }
-        let SnapshotJobState::Running(job) = self.snapshot_job.as_mut()? else { unreachable!() };
-        let result = job.take()?;
+        let result = match self.snapshot_job.as_mut()?.ready() {
+            Ok(Some(job)) => job.take()?,
+            Ok(None) => return None,
+            Err(error) => { self.snapshot_job = None; return Some(Err(error)); }
+        };
         self.snapshot_job = None;
         Some(result.map_err(|_| BackendError("Could not complete the operation")))
     }
@@ -1098,6 +1131,7 @@ impl Worker {
             while startup_progress.canvas_ready && self.renderer.can_submit()
                 && pending_frames.front().is_some_and(|f| f.dabs.is_empty() || startup_progress.brush_ready)
             {
+                if !self.renderer.raster_dependencies_ready(pending_frames.front().unwrap().packet()) { break; }
                 let mut frame = pending_frames.pop_front().unwrap();
                 #[cfg(test)]
                 timing.begin(frame.queued_ns);
@@ -1216,6 +1250,9 @@ impl Worker {
                     Command::Region(..)
                         | Command::SelectionPaint(..)
                         | Command::Thumbnail(..)
+                        | Command::Analysis(..)
+                        | Command::AcceptAnalysis(..)
+                        | Command::RetainAnalyses(..)
                         | Command::Snapshot(..)
                         | Command::ColorSample(_)
                         | Command::FilterPreviews(..)
@@ -1358,6 +1395,11 @@ impl Worker {
                 Command::Thumbnail(id, target) => {
                     pending_thumbnails.push_back((id, target));
                 }
+                Command::Analysis(query, sender) => {
+                    let _ = sender.send(layer_render_wgpu::effect_analysis::Job::start(self.renderer.snapshot_gpu(), query));
+                }
+                Command::AcceptAnalysis(candidate) => { self.renderer.apply_effect_analysis(candidate); self.report_frame(report); },
+                Command::RetainAnalyses(layers) => { self.renderer.retain_effect_analyses(&layers).map_err(error)?; self.report_frame(report); },
                 Command::Snapshot(request, sender) => {
                     let _ = sender.send(layer_render_wgpu::snapshot::SnapshotJob::start(self.renderer.snapshot_gpu(), request));
                 }
@@ -1383,7 +1425,8 @@ impl Worker {
                     if fail_next_frame {
                         self.inject_validation_failure();
                     }
-                    if !self.renderer.can_submit() || !pending_frames.is_empty() || self.paper_submitted
+                    if !self.renderer.can_submit() || !pending_frames.is_empty()
+                        || !self.renderer.raster_dependencies_ready(frame.packet()) || self.paper_submitted
                         && (!startup_progress.canvas_ready
                             || (!frame.dabs.is_empty() && !startup_progress.brush_ready))
                     {

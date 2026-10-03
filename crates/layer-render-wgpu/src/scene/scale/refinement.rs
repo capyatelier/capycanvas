@@ -22,9 +22,9 @@ impl Cache {
         let mut image = match &self.hierarchy {
             Some(hierarchy) => hierarchy.root().clone(),
             None => self.exact_tile.get_or_insert_with(|| Image::new(r,
-                display_mips::Plan::at([PAGE_SIZE; 2], 0), "exact composition working tile")).clone(),
+                display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone(),
         };
-        let (texture, view) = (image.texture.clone(), image.view.clone());
+        let texture = image.texture.clone();
         let mut batch = Vec::with_capacity(SOURCE_SLOTS);
         if plan.is_some() {
             Scene::submit_chunk(r, encoder, "before native filter windows")?;
@@ -35,23 +35,28 @@ impl Cache {
             if plan.is_some() {
                 r.metrics.image_window_peak_bytes = r.metrics.image_window_peak_bytes.max(scene.images.storage_bytes());
             }
-            let mut coordinates = page_coordinates(output).filter(|c| missing.contains(c));
+            let mut coordinates: Vec<_> = page_coordinates(output).filter(|c| missing.contains(c)).collect();
+            if reverse {coordinates.reverse();}
+            let mut coordinates = coordinates.into_iter().peekable();
             loop {
-                batch.clear();
-                for _ in 0..if self.hierarchy.is_some() { SOURCE_SLOTS } else { 1 } {
-                    let Some(coordinate) = (if reverse { coordinates.next_back() } else { coordinates.next() }) else { break; };
-                    batch.push(page_rect(coordinate).intersect(PixelRect::full(packet.document_extent)));
+                batch.clear();let mut bounds = PixelRect::EMPTY;
+                while batch.len() < SOURCE_SLOTS {
+                    let Some(&coordinate) = coordinates.peek() else {break;};
+                    let region = page_rect(coordinate).intersect(PixelRect::full(packet.document_extent));
+                    let combined = bounds.union(region);
+                    if self.hierarchy.is_none() && (combined.width() > image.texture.width() || combined.height() > image.texture.height()) {break;}
+                    coordinates.next();bounds = combined;batch.push(region);
                 }
-                if batch.is_empty() { break; }
-                if self.hierarchy.is_none() { image.plan = display_mips::Plan::window(packet.document_extent, 0, batch[0]); }
+                if batch.is_empty() {break;}
+                if self.hierarchy.is_none() {image.plan = display_mips::Plan::window(packet.document_extent, 0, bounds);}
                 scene.capture_prepared_regions(r, packet, &image, &batch, scene::Output::Display, false, encoder)?;
                 for &region in &batch {
                     let coordinate = [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE];
                     if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, &texture, coordinate, region); }
-                    self.write_exact(r, encoder, commands, &view, coordinate, region)?;
-                    if let Some(overview) = &mut self.overview { overview.write_exact(r, encoder, commands, &view, coordinate, region)?; }
                     r.metrics.composited_pixels += region.area();
                 }
+                self.write_exact(r, encoder, commands, &image, &batch)?;
+                if let Some(overview) = &mut self.overview { overview.write_exact(r, encoder, commands, &image, &batch)?; }
             }
             if let Some(hierarchy) = &mut self.hierarchy { hierarchy.flush(encoder); }
             if plan.is_some() {
@@ -110,10 +115,9 @@ impl Cache {
         let mut image = match &self.hierarchy {
             Some(hierarchy) => hierarchy.root().clone(),
             None => self.exact_tile.get_or_insert_with(|| Image::new(r,
-                display_mips::Plan::at([PAGE_SIZE; 2], 0), "exact composition working tile")).clone(),
+                display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone(),
         };
         let texture = image.texture.clone();
-        let view = image.view.clone();
         let mut seen = BTreeSet::new();
         let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(4).collect();
         let regions: Vec<_> = pages.iter().map(|c| page_rect(*c).intersect(PixelRect::full(self.plan.extent))).collect();
@@ -140,9 +144,9 @@ impl Cache {
             if self.hierarchy.is_none() { image.plan = display_mips::Plan::window(packet.document_extent, 0, region); }
             if !batched { scene.capture_prepared_region(r, packet, &image, region, scene::Output::Display, encoder)?; }
             if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, &texture, coordinate, region); }
-            self.write_exact(r, encoder, commands, &view, coordinate, region)?;
+            self.write_exact(r, encoder, commands, &image, &[region])?;
             if let Some(overview) = &mut self.overview {
-                overview.write_exact(r, encoder, commands, &view, coordinate, region)?;
+                overview.write_exact(r, encoder, commands, &image, &[region])?;
             }
             r.metrics.composited_pixels += region.area();
             changed = changed.union(region);
@@ -153,23 +157,42 @@ impl Cache {
 
     fn write_exact(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
-        commands: &mut Commands, source: &wgpu::TextureView, coordinate: [u32; 2], region: PixelRect,
+        commands: &mut Commands, source: &Image, regions: &[PixelRect],
     ) -> Result<(), GpuRasterError> {
-        let covered = region.intersect(self.plan.bounds);
-        if covered.is_empty() || self.refined.contains(&coordinate) { return Ok(()); }
+        let mut regions: Vec<PixelRect> = regions.iter().filter_map(|region| {
+            let covered = region.intersect(self.plan.bounds);
+            let coordinate = [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE];
+            if covered.is_empty() || !self.refined.insert(coordinate) {return None;}
+            self.valid.insert(coordinate);Some(covered)
+        }).collect();
+        if regions.is_empty() {return Ok(());}
         self.pixels.ensure(r, self.plan);
-        self.refined.insert(coordinate);
-        self.valid.insert(coordinate);
         if matches!(self.pixels, hierarchy::Pixels::Resident { .. }) {
             if self.placed.is_some() && self.next_exact_page().is_none() { self.placed = None; }
             return Ok(());
         }
-        let [x, y, width, height] = paint_transform::texel_rect(covered.window_local(self.plan.bounds), 1 << self.plan.level);
-        let mut values = [0; 20];
-        values[..8].copy_from_slice(&[x, y, width, height, region.width(), region.height(), 1 << self.plan.level, 0]);
-        let binding = Commands::binding(r, source, &r.empty_view, &self.pixels.root().unwrap().view);
-        commands.reduce(r, encoder, values, &binding, "reduce exact composition into display")?;
-        let mut changed = PixelRect::new(x, y, x + width, y + height);
+        regions.dedup_by(|next, previous| {
+            let combined = previous.union(*next);
+            if combined.area() == previous.area() + next.area() {*previous = combined;true} else {false}
+        });
+        let binding = Commands::binding(r, &source.view, &r.empty_view, &self.pixels.root().unwrap().view);
+        let mut changed = PixelRect::EMPTY;
+        let mut records = Vec::with_capacity(regions.len());
+        for covered in regions {
+            let [x, y, width, height] = paint_transform::texel_rect(covered.window_local(self.plan.bounds), 1 << self.plan.level);
+            let mut values = [0; 20];
+            values[..8].copy_from_slice(&[x, y, width, height, source.plan.bounds.width(), source.plan.bounds.height(), 1 << self.plan.level, 0]);
+            values[14] = (-(covered.min_x() as f32 - source.plan.bounds.min_x() as f32)).to_bits();
+            values[15] = (-(covered.min_y() as f32 - source.plan.bounds.min_y() as f32)).to_bits();
+            let offset = commands.record(r, encoder, values)?;records.push((offset,[width,height]));
+            changed = changed.union(PixelRect::new(x, y, x + width, y + height));
+        }
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("reduce exact composition into display"),timestamp_writes:None});
+        pass.set_pipeline(&r.scene_pipelines.scale.reduce);pass.set_bind_group(1,&binding,&[]);
+        for (offset,size) in records {
+            pass.set_bind_group(0,&commands.record_binding,&[offset]);pass.dispatch_workgroups(size[0].div_ceil(8),size[1].div_ceil(8),1);
+        }
+        drop(pass);
         if self.placed.is_some() {
             if self.next_exact_page().is_some() { return Ok(()); }
             self.placed = None;

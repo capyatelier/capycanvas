@@ -11,6 +11,8 @@ pub struct ColorCanvas {
     time: f32,
     control: CaptureControl,
     validating: bool,
+    analysis: Option<crate::effect_analysis::Job>,
+    analysed: bool,
     submitted: bool,
     finished: Arc<AtomicBool>,
 }
@@ -37,6 +39,9 @@ impl SnapshotGpu {
         if let Some(encoder) = self.encoder.clone() {
             renderer.set_browser_raster_encoder(encoder);
         }
+        renderer.effect_clocks = self.effect_clocks.clone();
+        #[cfg(target_arch = "wasm32")]
+        { renderer.analysis_backing_waiter = self.analysis_backing_waiter.clone(); }
         renderer.resize_surface(view.width_px, view.height_px)?;
         let mut programs = Vec::new();
         for effect in project
@@ -67,6 +72,8 @@ impl SnapshotGpu {
             time,
             control,
             validating,
+            analysis: None,
+            analysed: false,
             submitted: false,
             finished: Default::default(),
         })
@@ -101,6 +108,21 @@ impl ColorCanvas {
             return Ok(false);
         }
         let document = &self.project.document;
+        if !self.analysed && document.layers.iter().any(|layer| document.layer_is_visible(layer.id)
+            && layer.effect.as_ref().is_some_and(|effect| effect.program.analysis().is_some())) {
+            if let Some(job) = &mut self.analysis {
+                let Some(candidate) = job.take() else { return Ok(false); };
+                renderer.apply_effect_analysis(candidate.map_err(GpuRasterError::Effect)?);
+                self.analysis = None; self.analysed = true;
+            } else {
+                self.analysis = Some(crate::effect_analysis::Job::frame(renderer.snapshot_gpu(), crate::effect_analysis::BakeInput {
+                    members: document.layers.clone().into(), offset: layer_core::Point::default(), extent: [document.width, document.height],
+                    color: document.color, blend: document.blend_space, background: self.view.background_rgba_linear, time: self.time,
+                }).map_err(GpuRasterError::Effect)?);
+                return Ok(false);
+            }
+        }
+
         let restored: Vec<_> = document
             .layers
             .iter()

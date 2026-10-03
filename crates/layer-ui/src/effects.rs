@@ -608,7 +608,7 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
             action:EffectAction::Calibrate {layer:view.layer.unwrap(),epoch:view.epoch,role:*role},
         }).collect()
     });
-    if let Some(effect) = effect.filter(|effect| effect.program.auxiliary.is_some()) {
+    if let Some(effect) = effect.filter(|effect| matches!(effect.program.auxiliary, Some(layer_core::EffectAuxiliary::Lut3d {..}))) {
         if let Some(resource) = effect.lut3d() {
             let name = if resource.title().is_empty() {l.text(MessageId::RESOURCES_LOOKUP_TABLE).to_string()} else {resource.title().to_string()};
             view.description = name.clone(); view.resource_name = Some(name);
@@ -1222,7 +1222,7 @@ mod resource_tests {
                 assert!(validate_catalog_labels(&custom, &l).is_err(), "field {field}: {key}");
                 if field != 0 {
                     let mut document = Document::new("resource", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-                    document.layers[0].effect = Some(Arc::new(EffectInstance::new(custom.filters()[0].program())));
+                    document.layers[0].effect = Some(Arc::new(EffectInstance::new(custom.get("curves").unwrap().program())));
                     assert!(validate_document_labels(&document, &l).is_err(), "embedded field {field}: {key}");
                 }
             }

@@ -10,6 +10,8 @@ use layer_render::CanvasRenderer;
 mod art_layers;
 #[path = "color_picker_session.rs"]
 mod color_picker_session;
+#[path = "effect_analysis.rs"]
+mod effect_analysis;
 #[path = "histogram.rs"]
 mod histogram;
 pub use histogram::{HistogramAction, HistogramView};
@@ -185,6 +187,7 @@ struct CustomizationCopy {
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
     histogram: histogram::Statistics,
+    effect_analyses: effect_analysis::Analyses,
     tonal_histogram: histogram::Statistics,
     auto_levels:Option<calibration::AutoLevels>,
     targeted_curve:Option<targeted_curve::TargetedCurve>,
@@ -361,6 +364,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         effects::validate_catalog_labels(&effect_catalog, &localization)?;
         let mut session = Self {
             histogram: Default::default(),
+            effect_analyses: Default::default(),
             tonal_histogram: Default::default(),
             auto_levels:None,
             targeted_curve:None,
@@ -4250,7 +4254,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Includes shared background work as well as the drawing engine's needs.
     pub fn wants_continuous_frames(&self) -> bool {
-        (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
+        self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
             || self.interaction.axes.active()
             || self.engine.wants_continuous_frames()
             || self.pending_filters.is_some()
@@ -4352,6 +4356,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | std::mem::take(&mut self.selection_masks.refine_changed);
         if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
         changed |= self.poll_histogram(now_ns);
+        let analyses_changed = self.poll_effect_analyses(now_ns)?;
+        changed |= analyses_changed;
         let commands_changed = changed != 0 || !pending_edits || !self.engine.has_pending_document_edits()
             || command_activity != (self.canvas_idle(), self.engine.can_undo(), self.engine.can_redo());
         if commands_changed && self.refresh_commands() {
@@ -4359,7 +4365,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         Ok(self.changed(
             changed,
-            tonal_changed || self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
+            analyses_changed != 0 || tonal_changed || self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
         ))
     }
 
@@ -5710,6 +5716,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.layer_properties = selection_properties::properties(0, &self.localization().text(MessageId::COMMAND_QUICK_MASK), &self.selection_masks.quick_properties, self.state.settings.selection_painting, true, self.localization());
         }
         effects::publish_properties(&mut self.state.layer_properties,doc,&mut self.property_editor,self.effect_gesture.as_ref(),&self.state.localization);
+        if let Some(id) = self.state.layer_properties.layer.and_then(|id| self.effect_analyses.status(LayerId(id))) {
+            let status = self.state.localization.text(id);
+            self.state.layer_properties.title = format!("{} · {status}", self.state.layer_properties.title);
+            self.state.layer_properties.description = status.to_string();
+        }
         if self.auto_levels.is_some() {
             for action in &mut self.state.layer_properties.actions {if matches!(action.action,EffectAction::AutoLevels {..}) {action.label=self.state.localization.text(MessageId::TOOLBAR_CANCEL).to_string();}}
         }
@@ -6136,6 +6147,7 @@ mod tests {
     include!("levels_ui_tests.rs");
     include!("color_adjustment_tests.rs");
     include!("lut3d_tests.rs");
+    include!("effect_analysis_tests.rs");
     include!("targeted_curve_tests.rs");
     include!("histogram_tests.rs");
     include!("session_source_tests.rs");
@@ -9295,7 +9307,7 @@ mod tests {
                 result: Ok(()),
             });
             s.frame(0, 0).unwrap();
-            assert_eq!(s.state.adjustments.len(), 50);
+            assert_eq!(s.state.adjustments.len(), 52);
             assert_eq!(
                 s.state.filter_categories.last().unwrap().label.as_ref(),
                 "Examples"

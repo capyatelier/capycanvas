@@ -3,7 +3,7 @@ import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
 import {png} from './clone-journey.test.mjs';
 
-export async function checkPointwiseEffects({call,evaluate,settle,motion=true,widths=[640,1100],effects=['invert','threshold','desaturate','photo_filter'],colorPages=false}) {
+export async function checkPointwiseEffects({call,evaluate,settle,motion=true,widths=[640,1100],effects=['invert','threshold','desaturate','photo_filter'],colorPages=false,localAdjustments=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/photo-editing-color/p21-web';
   await mkdir(directory,{recursive:true});
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function poll(){if(${condition})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-900)));else setTimeout(poll,40)}poll()})`);
@@ -27,8 +27,8 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
   };
   const keyPress=()=>key('Enter',13);
   const capture=async name=>{await evaluate('layerApp.app.wait_for_canvas()');await settle();const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,'base64'));};
-  const canvasPixel=async()=>{
-    const point=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(64*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(192*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
+  const canvasPixel=async([docX,docY]=[64,192])=>{
+    const point=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${docX}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${docY}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
     const shot=await call('Page.captureScreenshot',{format:'png',clip:{...point,width:1,height:1,scale:1}});
     const pixel=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);return Array.from(context.getImageData(0,0,1,1).data)})()`);
     return pixel;
@@ -63,6 +63,47 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
       await invoke('open_document');await idle();
       const actual=await unchanged();assert.deepEqual(actual.document.layers,expected.document.layers,'Native archive retains exact effect values and sources');
     };
+    if(localAdjustments) {
+      await evaluate(`window.localAnalysisFrames=[];window.localAnalysisFrame=layerApp.app.frame.bind(layerApp.app);layerApp.app.frame=(...args)=>{const change=localAnalysisFrame(...args);localAnalysisFrames.push({time:performance.now(),change,properties:layerApp.state().layer_properties});return change};`);
+      const samples=[];const sample=async()=>{
+        await evaluate('layerApp.app.wait_for_canvas()');await settle();
+        const points=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return [[32,32],[64,192],[192,64],[224,224]].map(([x,y])=>[r.x+(x*c.zoom+c.translation[0])*r.width/c.viewport[0],r.y+(y*c.zoom+c.translation[1])*r.height/c.viewport[1]])})()`);
+        const shot=await call('Page.captureScreenshot',{format:'png'});
+        return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);return ${JSON.stringify(points)}.map(([x,y])=>{if(x<0||y<0||x>=image.width||y>=image.height)throw Error('Artwork probe outside screenshot '+[x,y,image.width,image.height]);return Array.from(context.getImageData(Math.floor(x),Math.floor(y),1,1).data)})})()`);
+      };
+      const analyzed=async()=>{await wait(`layerApp.state().layer_properties.description!=='Updating…'`);assert.notEqual((await properties()).description,'Could not update this adjustment.');await evaluate('layerApp.app.wait_for_canvas()');await settle();};
+      const layers=async()=>(await save()).document.layers;
+      for(const width of widths) {
+        await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
+        await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','properties'].includes(id)}})`);await settle();await invoke('fit_canvas');
+        for(const theme of ['light','dark']) {
+          await send({type:'set_theme',theme});const original=await sample();await capture(`local-source-${width}-${theme}`);await writeFile(`${directory}/layout-${width}-${theme}.json`,JSON.stringify(await call('Page.getLayoutMetrics'),null,2));
+          await send({type:'effect',action:{op:'insert',effect:'hue_saturation'}});const lower=(await properties()).layer;
+          await send({type:'effect',action:{op:'insert',effect:'shadows_highlights'}});const shadows=(await properties()).layer;if((await properties()).description==='Updating…')await capture(`analysis-pending-${width}-${theme}`);await analyzed();assert.deepEqual((await properties()).controls.map(c=>c.key),['shadows','highlights']);
+          await edit('shadows','65');await edit('highlights','45');await analyzed();const adjusted=await sample();await capture(`shadows-highlights-${width}-${theme}`);await writeFile(`${directory}/analysis-status-${width}-${theme}.json`,JSON.stringify(await evaluate('JSON.parse(JSON.stringify({properties:layerApp.state().layer_properties,stats:layerApp.app.renderer_stats(),camera:layerApp.app.camera(),notices:layerApp.state().notices,frames:localAnalysisFrames,scroll:[scrollX,scrollY],canvasRect:layerApp.canvas.getBoundingClientRect().toJSON()},(_,v)=>typeof v==="bigint"?Number(v):v))'),(_,v)=>typeof v==='bigint'?Number(v):v,2));assert.notDeepEqual(adjusted,original);
+          const after=await layers();await invoke('undo');await analyzed();assert.equal((await value('highlights')).value,0);await invoke('redo');await analyzed();assert.deepEqual(await layers(),after);
+          await send({type:'effect',action:{op:'insert',effect:'clarity'}});const clarity=(await properties()).layer;await analyzed();assert.deepEqual((await properties()).controls.map(c=>c.key),['amount']);
+          await edit('amount','55');await analyzed();const positive=await sample();
+          await click(`${selector('amount')} .number-value`);await evaluate(`document.querySelector('${selector('amount')} .number-entry').value='99.'`);const beforeCancel=await layers();await key('Escape',27);assert.deepEqual(await layers(),beforeCancel);
+          await edit('amount','-55');await analyzed();const negative=await sample();assert.notDeepEqual(positive,negative);
+          await invoke('undo');await analyzed();assert.equal((await value('amount')).value,55);await invoke('redo');await analyzed();assert.equal((await value('amount')).value,-55);
+          await send({type:'effect',action:{op:'set',layer:lower,key:'lightness',value:{kind:'number',value:-20}}});await analyzed();const changed=await sample();assert.notDeepEqual(changed,negative);await capture(`clarity-stacked-${width}-${theme}`);
+          await reopen(`local-adjustments-${width}-${theme}`);await analyzed();assert.deepEqual(await sample(),changed);
+          await evaluate('layerApp.restartGpu()');await idle();await analyzed();assert.deepEqual(await sample(),changed);await unchanged();await capture(`local-recreated-${width}-${theme}`);
+          samples.push({width,theme,original,adjusted,positive,negative,changed});for(const id of [clarity,shadows,lower]){await send({type:'layer',action:{op:'select',id,mask:false}});await send({type:'layer',action:{op:'delete_selected'}});}await unchanged();
+          await send({type:'customize',action:{type:'set_panel_visible',panel:'adjustments',visible:true}});
+          await send({type:'move_panel',panel:'adjustments',target:{kind:'edge',edge:'right',outer:false},viewport:[width,800]});
+          await send({type:'filter_picker',action:{op:'category',category:null}});
+          for(const [id,query] of [['shadows_highlights','Shadows'],['clarity','Clarity']]) {
+            await send({type:'filter_picker',action:{op:'search',query}});
+            await wait(`(()=>{const c=[...document.querySelectorAll('[data-effect="${id}"] canvas')].find(c=>c.getBoundingClientRect().height>0);return c?.width>0&&c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i,a)=>i%4===0&&Math.max(a[i],a[i+1],a[i+2])-Math.min(a[i],a[i+1],a[i+2])>20)})()`);
+            await capture(`catalog-${id}-${width}-${theme}`);
+          }
+          await send({type:'customize',action:{type:'set_panel_visible',panel:'adjustments',visible:false}});await unchanged();
+        }
+      }
+      await writeFile(`${directory}/local-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: Shadows/Highlights and Clarity generic controls, stacked live analysis, Undo/source/archive/recreation in both themes and widths');return;
+    }
     if(colorPages) {
       const samples=[];
       const nativeChoice=async(selector,index)=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);assert.equal(await evaluate(`Number(document.querySelector(${JSON.stringify(selector)}).value)`),index);};
@@ -181,7 +222,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
     }
     if(motion)await writeFile(`${directory}/hue-motion.json`,JSON.stringify({hardware:(await call('SystemInfo.getInfo',{},null)).gpu.devices,runs:reports},null,2));
     console.log(`PASS: Hue42 pages, Colorize retention/focus/artwork, ${effects.join(', ')}, Undo/source invariants/archive reopen at ${widths.join('/')} in both themes${motion?', native slider motion':''}`);
-  } finally {await evaluate('window.showOpenFilePicker=pointwiseFiles.open;window.showSaveFilePicker=pointwiseFiles.save;delete window.pointwiseFiles;delete window.placementTest');}
+  } finally {await evaluate('if(window.localAnalysisFrame){layerApp.app.frame=localAnalysisFrame;delete window.localAnalysisFrame;}window.showOpenFilePicker=pointwiseFiles.open;window.showSaveFilePicker=pointwiseFiles.save;delete window.pointwiseFiles;delete window.placementTest');}
 }
 
 export async function checkLookupTransport({call,evaluate,settle}) {

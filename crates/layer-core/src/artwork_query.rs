@@ -20,6 +20,74 @@ pub struct ArtworkQuery {
     pub source: ArtworkSource,
     pub time: f32,
     pub effect_times: Vec<(LayerId, f32)>,
+    input: Option<EffectInputKey>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EffectInputKey {
+    document: Arc<Document>,
+    target: usize,
+    input: Vec<usize>,
+    ancestors: Vec<usize>,
+}
+impl EffectInputKey {
+    pub fn new(document: Arc<Document>, id: LayerId) -> Option<Self> {
+        let target = document.layers.iter().position(|l| l.id == id)?;
+        let input = crate::composite_input_layers(&document.layers, target);
+        let ancestors = Self::ancestors(&document.layers, target);
+        Some(Self { document, target, input, ancestors })
+    }
+    pub fn layer(&self) -> LayerId { self.document.layers[self.target].id }
+    pub fn contributors(&self) -> impl Iterator<Item = &Layer> { self.input.iter().map(|&i| &self.document.layers[i]) }
+    fn ancestors(layers: &[Layer], index: usize) -> Vec<usize> {
+        let mut result = Vec::new();
+        let mut parent = layers[index].properties.parent;
+        while let Some(i) = parent.and_then(|id| layers.iter().position(|l| l.id == id)) {
+            if result.len() >= layers.len() { break; }
+            result.push(i); parent = layers[i].properties.parent;
+        }
+        result
+    }
+    pub fn matches_source(&self, document: &Document) -> bool { self.matches(document, true, false) }
+    pub fn matches_identity(&self, document: &Document) -> bool { self.matches(document, false, false) }
+    fn matches(&self, document: &Document, values: bool, channels: bool) -> bool {
+        let old = &self.document;
+        if old.id != document.id || old.width != document.width || old.height != document.height
+            || old.color != document.color || old.blend_space != document.blend_space { return false; }
+        let Some(target) = document.layers.iter().position(|l| l.id == self.layer()) else { return false; };
+        let (a, b) = (&old.layers[self.target], &document.layers[target]);
+        if a.kind != b.kind || a.properties.parent != b.properties.parent || a.properties.clipped != b.properties.clipped { return false; }
+        match (&a.effect, &b.effect) {
+            (Some(a), Some(b)) if a.program == b.program => {
+                if channels && values && !a.program.parameters.iter().zip(a.values.iter().zip(&b.values))
+                    .all(|(p, (a, b))| p.page.as_deref() == Some("rgb") || a == b) { return false; }
+            }
+            _ => return false,
+        }
+        let same_structure = old.layers.len() == document.layers.len() && old.layers.iter().zip(&document.layers).all(|(a, b)|
+            a.id == b.id && a.kind == b.kind && a.properties.parent == b.properties.parent
+                && a.properties.clipped == b.properties.clipped && a.passes_through() == b.passes_through());
+        let input;
+        let ancestors;
+        let (current_input, current_ancestors) = if same_structure { (&self.input, &self.ancestors) } else {
+            input = crate::composite_input_layers(&document.layers, target);
+            ancestors = Self::ancestors(&document.layers, target);
+            (&input, &ancestors)
+        };
+        self.input.len() == current_input.len() && self.ancestors.len() == current_ancestors.len()
+            && self.input.iter().zip(current_input).all(|(&a, &b)| {
+                let (a, b) = (&old.layers[a], &document.layers[b]);
+                a.same_backing(b) && if values { a.effect == b.effect }
+                    else { a.effect.as_ref().map(|e| &e.program) == b.effect.as_ref().map(|e| &e.program) }
+            })
+            && self.ancestors.iter().zip(current_ancestors).all(|(&a, &b)| {
+                let (a, b) = (&old.layers[a], &document.layers[b]);
+                a.id == b.id && a.kind == b.kind && a.visible == b.visible
+                    && a.properties.parent == b.properties.parent && a.properties.clipped == b.properties.clipped
+                    && a.passes_through() == b.passes_through() && a.properties.offset == b.properties.offset
+                    && a.properties.placement == b.properties.placement && a.properties.extent == b.properties.extent
+            })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -70,7 +138,15 @@ impl ArtworkQuery {
             snapshot.pending_operations = layer.pending_operations.clone();
             snapshot
         }).collect();
-        Self { document: Arc::new(document), source, time: 0., effect_times: Vec::new() }
+        Self::from_snapshot(Arc::new(document), source, 0., Vec::new())
+    }
+
+    pub fn from_snapshot(document: Arc<Document>, source: ArtworkSource, time: f32, effect_times: Vec<(LayerId, f32)>) -> Self {
+        let input = match source {
+            ArtworkSource::EffectInput(id) | ArtworkSource::EffectChannels(id) => EffectInputKey::new(document.clone(), id),
+            _ => None,
+        };
+        Self { document, source, time, effect_times, input }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -104,24 +180,20 @@ impl ArtworkQuery {
 
     fn matches(&self, document:&Document,source_only:bool,values:bool)->bool {
         let old = &self.document;
+        if source_only && let ArtworkSource::EffectInput(id) | ArtworkSource::EffectChannels(id) = self.source {
+            let channels = matches!(self.source, ArtworkSource::EffectChannels(_));
+            return self.input.as_ref().filter(|key| Arc::ptr_eq(&key.document, old) && key.layer() == id)
+                .map_or_else(|| EffectInputKey::new(old.clone(), id).is_some_and(|key| key.matches(document, values, channels)),
+                    |key| key.matches(document, values, channels));
+        }
         old.id == document.id && old.color == document.color && old.width == document.width
             && old.height == document.height && old.blend_space == document.blend_space
             && (!matches!(self.source, ArtworkSource::Reference) || old.reference_layers == document.reference_layers)
             && old.layers.len() == document.layers.len()
             && old.layers.iter().zip(&document.layers).all(|(a,b)| {
                 if !source_only {return a.same_artwork(b);}
-                let channels=match self.source {
-                    ArtworkSource::EffectInput(id) if id==a.id=>false,
-                    ArtworkSource::EffectChannels(id) if id==a.id=>true,
-                    _=>return a.same_backing(b) && if values {a.effect==b.effect}
-                        else {a.effect.as_ref().map(|e|&e.program)==b.effect.as_ref().map(|e|&e.program)},
-                };
-                a.id==b.id && a.kind==b.kind && a.properties.parent==b.properties.parent && a.properties.clipped==b.properties.clipped
-                    && match (&a.effect,&b.effect) {
-                    (Some(a),Some(b)) if a.program==b.program=>!values || !channels || a.program.parameters.iter().zip(a.values.iter().zip(&b.values))
-                        .all(|(parameter,(a,b))| parameter.page.as_deref()==Some("rgb") || a==b),
-                    _=>false,
-                }
+                a.same_backing(b) && if values {a.effect==b.effect}
+                    else {a.effect.as_ref().map(|e|&e.program)==b.effect.as_ref().map(|e|&e.program)}
             })
     }
 }

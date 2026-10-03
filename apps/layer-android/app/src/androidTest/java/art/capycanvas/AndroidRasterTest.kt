@@ -2553,6 +2553,96 @@ class AndroidRasterTest {
         }
     }
 
+    @Test fun localAdjustmentsUpdateStackedSourcesAndPersistExactOutput() {
+        val recipe = builtinRecipe(2).put("format", "Png").put("depth", "U8")
+        fun pixels(name: String) = hash(png(name, recipe))
+        fun properties() = native { state(it).getJSONObject("layer_properties") }
+        fun ready() {
+            compose.waitUntil(120_000) {
+                tick()
+                val description = properties().getString("description")
+                assertNotEquals("Could not update this adjustment.", description)
+                description != "Updating…"
+            }
+            refresh(); assertNull(host.failure); assertNull(host.actionError)
+        }
+        fun select(layer: Long) { action(obj("type" to "select_layer", "id" to layer)); ready() }
+        fun value(key: String) = properties().getJSONArray("controls").objects().first { it.getString("key") == key }.getJSONObject("value").getDouble("value")
+        fun edit(key: String, literal: String) {
+            val label = properties().getJSONArray("controls").objects().first { it.getString("key") == key }.getString("label")
+            compose.onNodeWithTag("number-value-$key").performScrollTo().performClick()
+            val field = compose.onNodeWithTag("number-$label")
+            field.assertIsFocused(); field.performTextReplacement(literal); field.performImeAction()
+            compose.waitUntil(30_000) { kotlin.math.abs(value(key) - literal.toDouble()) < .0001 }
+            ready()
+            compose.waitUntil(10_000) { activity.window.decorView.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) != true }
+        }
+        fun paint(y: Double) {
+            val camera = native { state(it).getJSONObject("camera") }
+            val pan = camera.getJSONArray("translation"); val viewport = camera.getJSONArray("viewport")
+            val zoom = camera.getDouble("zoom")
+            fun contact(phase: Int, x: Double) = point(phase, pan.getDouble(0) + x * zoom - viewport.getDouble(0) * .5, pan.getDouble(1) + y * zoom - viewport.getDouble(1) * .5)
+            contact(1, 80.0)
+            for (i in 1..6) { SystemClock.sleep(10); contact(2, 80.0 + i * 12) }
+            contact(3, 152.0)
+        }
+        for (theme in listOf("light", "dark")) {
+            val task = native { handle -> val (id, file) = request(handle, "new_document")
+                Native.projectTask(handle, id, "null", file.getLong("epoch"), file.getLong("revision")) }
+            try {
+                Native.projectOptions(task, obj("extent" to org.json.JSONArray(listOf(256, 256)), "color" to obj("space" to "Srgb", "depth" to "U8"), "background" to "White").toString())
+                Native.projectWork(task, -1, 256, 256); native { Native.projectAdopt(it, task, "null") }
+            } finally { Native.projectFree(task) }
+            refresh(); invoke("fit_canvas"); action(obj("type" to "set_theme", "theme" to theme))
+            val sourceLayer = native { state(it).getJSONObject("layer_properties").getLong("layer") }
+            action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(.02,.02,.02,1))))
+            invoke("select_all"); invoke("fill_selection"); invoke("deselect"); invoke("pen")
+            action(obj("type" to "set_brush_size", "value" to 64))
+            for ((index, color) in listOf(listOf(.12,.08,.2,1), listOf(.7,.4,.18,1), listOf(.25,.7,.45,1)).withIndex()) {
+                action(obj("type" to "set_color", "rgba" to org.json.JSONArray(color))); paint(96.0 + index * 32)
+            }
+            val original = pixels("p25-$theme-source.png")
+            val layers = mutableListOf<Long>()
+            for ((effect, keys) in listOf("shadows_highlights" to listOf("shadows", "highlights"), "clarity" to listOf("amount"))) {
+                send(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to effect))); refresh(); ready()
+                layers += properties().getLong("layer")
+                assertEquals(keys, properties().getJSONArray("controls").objects().map { it.getString("key") })
+                val before = pixels("p25-$theme-$effect-before.png")
+                edit(keys.first(), "63")
+                val adjusted = pixels("p25-$theme-$effect-adjusted.png")
+                assertNotEquals("$effect must change source pixels", before, adjusted)
+                invoke("undo"); ready(); assertEquals(0.0, value(keys.first()), .0001)
+                assertEquals(before, pixels("p25-$theme-$effect-undo.png"))
+                invoke("redo"); ready(); assertEquals(63.0, value(keys.first()), .0001)
+                assertEquals(adjusted, pixels("p25-$theme-$effect-redo.png"))
+                if (effect == "shadows_highlights") edit("highlights", "39")
+                if (effect == "clarity") { edit("amount", "-28"); edit("amount", "63") }
+                SystemClock.sleep(300)
+                instrumentation.uiAutomation.takeScreenshot().let { bitmap ->
+                    try { File(files, "p25-$theme-$effect-controls.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
+                }
+            }
+            val stacked = pixels("p25-$theme-stacked.png"); assertNotEquals(original, stacked)
+            select(sourceLayer); action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(.9,.15,.08,1)))); paint(144.0)
+            for (layer in layers) select(layer)
+            val painted = pixels("p25-$theme-painted.png"); assertNotEquals(stacked, painted)
+            invoke("undo"); for (layer in layers) select(layer)
+            assertEquals(stacked, pixels("p25-$theme-source-undo.png"))
+            invoke("redo"); for (layer in layers) select(layer)
+            assertEquals(painted, pixels("p25-$theme-source-redo.png"))
+            val name = "p25-$theme.capy"; val saved = manifest(save(name))
+            open(File(files, name)); refresh(); for (layer in layers) select(layer)
+            assertEquals(painted, pixels("p25-$theme-reopened.png"))
+            val reopened = manifest(save("p25-$theme-reopened.capy"))
+            assertEquals(saved.getJSONObject("document").getJSONArray("layers").toString(), reopened.getJSONObject("document").getJSONArray("layers").toString())
+            scenario.recreate(); scenario.onActivity { activity = it }
+            compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+            refresh(); for (layer in layers) select(layer)
+            assertEquals(painted, pixels("p25-$theme-recreated.png"))
+            assertNull(host.failure); assertNull(host.actionError)
+        }
+    }
+
     @Test fun embeddedLookupRetainsPixelsAndResourcesWithoutAndroidImport() {
         val fixture = File(requireNotNull(InstrumentationRegistry.getArguments().getString("lutArchive")) { "lutArchive must identify the private embedded-LUT fixture" })
         assertTrue(fixture.isFile)

@@ -12,12 +12,16 @@ pub(crate) mod resources;
 pub(super) trait Gpu {
     fn device(&self) -> &PipelineDevice;
     fn queue(&self) -> &wgpu::Queue;
+    fn analysis_resource(&self, _layer: LayerId) -> Option<Arc<resources::Resource>> { None }
     fn effect_time(&self, layer: &Layer, elapsed: f32) -> f32 {
         layer.effect.as_ref().unwrap().time_seconds(elapsed)
     }
 }
 pub(super) type Clocks = HashMap<LayerId, (Arc<str>, layer_core::EffectClock)>;
 impl Gpu for WgpuRasterizer {
+    fn analysis_resource(&self, layer: LayerId) -> Option<Arc<resources::Resource>> {
+        self.effect_analyses.iter().find(|analysis| analysis.layer() == layer).map(|analysis| analysis.resource.clone())
+    }
     fn effect_time(&self, layer: &Layer, elapsed: f32) -> f32 {
         let effect = layer.effect.as_ref().unwrap();
         self.effect_clocks.get(&layer.id).filter(|(id, _)| *id == effect.program.id)
@@ -284,7 +288,14 @@ impl Effects {
         self.ids.0.clear();
         self.ids.0.extend(layers.iter().map(|l| l.id));
         self.ids.1 = level;
+        let analysis = if let Some(layer) = layers.first().filter(|layer| layer.effect.as_ref().unwrap().program.analysis().is_some()) {
+            Some(match r.analysis_resource(layer.id) {
+                Some(resource) => resource,
+                None => r.device().effect_resources.lock().unwrap().get(r.device(), r.queue(), None)?,
+            })
+        } else { None };
         if let Some(old) = self.instances.get_mut(&self.ids)
+            && analysis.as_ref().is_none_or(|resource| Arc::ptr_eq(resource, &old.resource))
             && old
                 .effects
                 .iter()
@@ -458,7 +469,10 @@ impl Effects {
                 &bytes[base as usize * 16..end * 16],
             );
         }
-        let resource = r.device().effect_resources.lock().unwrap().get(r.device(), r.queue(), effects.first().and_then(|e| e.lut3d()).map(Arc::as_ref))?;
+        let resource = match analysis {
+            Some(resource) => resource,
+            None => r.device().effect_resources.lock().unwrap().get(r.device(), r.queue(), effects.first().and_then(|e| e.lut3d()).map(Arc::as_ref))?,
+        };
         let binding = if reusable && Arc::ptr_eq(&resource, &self.instances[&ids].resource) {
             self.instances[&ids].binding.clone()
         } else {
@@ -620,6 +634,8 @@ fn shader_source(
     let y = space.to_xyz()[1];
     source.push_str(&format!("\nconst FX_EXTENDED:bool=true;\nconst FX_HDR:bool={hdr};\nconst FX_ENCODED:bool={input_encoded};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
     source.push_str(include_str!("effects_color.wgsl"));
+    source.push_str(include_str!("float_number.wgsl"));
+    source.push_str(include_str!("guide_luminance.wgsl"));
     for i in 0..MASK_SLOTS {
         source.push_str(&format!(
             "@group(3) @binding({i}) var effect_mask_{i}:texture_2d<f32>;\n"

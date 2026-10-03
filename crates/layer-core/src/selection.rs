@@ -60,17 +60,7 @@ impl Layer {
 impl Document {
     /// Visibility through groups, also used for display-only selection previews.
     pub fn layer_is_visible(&self, id: LayerId) -> bool {
-        let mut current = Some(id);
-        while let Some(id) = current {
-            let Some(layer) = self.layer(id) else {
-                return false;
-            };
-            if !layer.visible {
-                return false;
-            }
-            current = layer.properties.parent;
-        }
-        true
+        crate::layer_is_visible(&self.layers, id)
     }
 
     /// Resolve stored placement into a working snapshot without copying pixels.

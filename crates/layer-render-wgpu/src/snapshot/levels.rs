@@ -29,7 +29,7 @@ impl SnapshotGpu {
         if !matches!(query.source,ArtworkSource::EffectInput(id)|ArtworkSource::EffectChannels(id) if query.document.layer(id).and_then(|l|l.effect.as_ref()).is_some_and(|e|e.program.id.as_ref()=="levels")) {
             return Err("Auto requires a Levels adjustment".into());
         }
-        let (mut snapshot,output)=self.artwork_capture(&query,control.clone())?;
+        let (mut snapshot,output)=self.artwork_capture(&query,control.clone()).await?;
         let pipeline=LevelsPipeline::new(&self.device);
         let initial:Vec<u8>=[u32::MAX,u32::MAX,u32::MAX,0,0,0,0,0].into_iter().chain(std::iter::repeat_n(0,12288)).flat_map(u32::to_le_bytes).collect();
         let summary=self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("Levels exact summary"),contents:&initial,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC});

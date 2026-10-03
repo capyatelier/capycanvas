@@ -612,3 +612,11 @@ resources-lookup-import = 가져오기…
 resources-lookup-replace = 바꾸기…
 resources-lookup-files = 색상 조회 파일
 resources-lookup-unavailable = 이 플랫폼에서는 아직 색상 조회 파일을 가져올 수 없습니다.
+
+resources-analysis-updating = 업데이트 중…
+resources-analysis-error = 이 조정을 업데이트하지 못했습니다.
+resources-filter-shadows-highlights = 어두운 영역/밝은 영역
+resources-filter-clarity = 선명도
+resources-local-shadows = 어두운 영역
+resources-local-highlights = 밝은 영역
+resources-local-amount = 양

@@ -141,12 +141,18 @@ struct ReferenceCache {
     slots: Vec<Slot>,
     clock: u64,
     failed: BTreeSet<[u32; 2]>,
+    analysis_job: Option<crate::effect_analysis::Job>,
+    analyses: Option<Result<crate::effect_analysis::Candidate, String>>,
 }
 impl ReferenceCache {
     fn validate(&mut self, frame: &artwork::Frame, members: &Arc<BTreeSet<LayerId>>, extent: [u32; 2]) {
         if self.key.as_ref().is_some_and(|key| key.matches(frame, members, extent)) {
+            let mut current = reference_frame(frame, members);
+            if let Some(previous) = &self.frame { current.time = previous.time; }
+            self.frame = Some(Arc::new(current));
             return;
         }
+        self.analysis_job = None; self.analyses = None;
         self.key = Some(ReferenceKey::new(frame, members, extent));
         self.frame = Some(Arc::new(reference_frame(frame, members)));
         self.pages.clear();
@@ -154,6 +160,23 @@ impl ReferenceCache {
         for slot in &mut self.slots {
             slot.coordinate = None;
         }
+    }
+    fn analysis_ready(&mut self, r: &WgpuRasterizer) -> Result<bool, GpuRasterError> {
+        let Some(frame) = &self.frame else { return Ok(true); };
+        if !frame.layers.iter().any(|layer| layer_core::layer_is_visible(&frame.layers, layer.id)
+            && layer.effect.as_ref().is_some_and(|effect| effect.program.analysis().is_some())) { return Ok(true); }
+        if let Some(result) = &self.analyses { return result.as_ref().map(|_| true).map_err(|e| GpuRasterError::Effect(e.clone())); }
+        if let Some(job) = &mut self.analysis_job {
+            if let Some(result) = job.take() { self.analyses = Some(result); self.analysis_job = None; return self.analysis_ready(r); }
+        } else {
+            let input = crate::effect_analysis::BakeInput {members: frame.layers.clone().into(), offset: layer_core::Point::default(), extent: self.key.as_ref().unwrap().extent,
+                color: r.document_color, blend: frame.blend_space, background: frame.background, time: frame.time};
+            match crate::effect_analysis::Job::frame(r.snapshot_gpu(), input) {
+                Ok(job) => self.analysis_job = Some(job),
+                Err(error) => { self.analyses = Some(Err(error.clone())); return Err(GpuRasterError::Effect(error)); }
+            }
+        }
+        Ok(false)
     }
     fn get(&mut self, coordinate: [u32; 2]) -> Option<usize> {
         let index = *self.pages.get(&coordinate)?;
@@ -458,6 +481,7 @@ impl RetouchSources {
         if let Some(layer) = lone_layer(&frame) {
             return self.copy_lone_layer(r, layer, coordinate, wait, encoder);
         }
+        if !self.cache.analysis_ready(r)? { return Ok(None); }
         let packet = frame.packet(extent);
         let blocking = self.capture.would_block(r, packet, region);
         if blocking && !wait {
@@ -465,7 +489,11 @@ impl RetouchSources {
         }
         let slot = self.cache.claim(r, coordinate);
         let texture = self.cache.slots[slot].page.texture.clone();
-        if let Err(error) = self.capture.region_into(r, packet, region, &texture, encoder) {
+        let previous = self.cache.analyses.as_ref().and_then(|result| result.as_ref().ok())
+            .map(|candidate| std::mem::replace(&mut r.effect_analyses, candidate.entries.clone()));
+        let result = self.capture.region_into(r, packet, region, &texture, encoder);
+        if let Some(previous) = previous { r.effect_analyses = previous; }
+        if let Err(error) = result {
             self.cache.release(slot);
             return Err(error);
         }
@@ -624,7 +652,9 @@ impl RetouchSources {
             (None, None, Some(prepared)) => (prepared.target, &prepared.retouch, None),
             (None, None, None) => return Err(GpuRasterError::MissingPaintLayer(LayerId(0))),
         };
-        let frame = r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?;
+        let frame = if retouch.source == layer_core::RetouchSource::References && !retouch.references.is_empty() {
+            self.cache.frame.as_ref()
+        } else { r.artwork_frame.as_ref() }.ok_or(GpuRasterError::InvalidExtent)?;
         let layer_core::Affine([a, b, c, d, tx, ty]) = layer_core::affine_edit_transform(&frame.layers, target)
             .ok_or(GpuRasterError::InvalidTransform("Apply the transform to edit these pixels"))?;
         let region = gather.region;
@@ -682,10 +712,6 @@ impl RetouchSources {
         if !matches!(mapping.mode, Mode::Target | Mode::References) {
             return Ok((views, true));
         }
-        if let Some(references) = &mapping.references {
-            let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
-            self.cache.validate(&frame, references, r.document_extent);
-        }
         let misses = self.counts.misses;
         let [targets, references] = mapping.blocks.map(block_pages);
         for i in 0..4 {
@@ -717,9 +743,8 @@ impl RetouchSources {
         });
         let lone = self.cache.frame.as_deref().and_then(lone_layer);
         let references = mapping.references.as_ref().is_none_or(|members| {
-            r.artwork_frame.as_ref().is_some_and(|frame| {
-                self.cache.key.as_ref().is_some_and(|key| key.matches(frame, members, r.document_extent))
-            }) && block_pages(mapping.blocks[1]).into_iter().flatten().all(|coordinate| {
+            self.cache.key.as_ref().is_some_and(|key| *key.members == **members && key.extent == r.document_extent)
+                && block_pages(mapping.blocks[1]).into_iter().flatten().all(|coordinate| {
                 lone.is_some_and(|layer| self.live.is_some() || !matches!(lone_page(r, layer, coordinate), Prepared::Decode))
                     || page_rect(coordinate).intersect(PixelRect::full(r.document_extent)).is_empty()
                     || self.cache.pages.contains_key(&coordinate)
@@ -767,6 +792,11 @@ impl RetouchSources {
         }
         let members = prepared.retouch.references.clone();
         self.cache.validate(frame, &members, r.document_extent);
+        match self.cache.analysis_ready(r) {
+            Ok(false) => { self.pending = true; return; },
+            Err(_) => return,
+            Ok(true) => {},
+        }
         let wanted: Vec<_> = rings(&prepared.points, r.document_extent)
             .into_iter()
             .filter(|c| !self.cache.pages.contains_key(c) && !self.cache.failed.contains(c))
@@ -834,6 +864,22 @@ fn raw_prepared_view(r: &WgpuRasterizer, layer: LayerId, coordinate: [u32; 2]) -
 }
 
 impl WgpuRasterizer {
+    pub(crate) fn retouch_analyses_ready(&mut self, packet: FramePacket<'_>) -> bool {
+        let Some(batch) = packet.dab_batches.iter().find(|batch| batch.style.retouch.as_ref().is_some_and(|retouch|
+            retouch.source == layer_core::RetouchSource::References && !retouch.references.is_empty())) else { return true; };
+        let references = &batch.style.retouch.as_ref().unwrap().references;
+        let mut sources = self.retouch_sources();
+        let same_stroke = sources.stroke.as_ref().is_some_and(|stroke| stroke.id == batch.stroke_id);
+        if !same_stroke {
+            let frame = artwork::Frame::new(packet, packet.view.background_rgba_linear);
+            if sources.cache.frame.as_ref().is_some_and(|old| old.time != frame.time && old.layers.iter().any(|layer|
+                references.contains(&layer.id) && layer.effect.as_ref().is_some_and(|effect| effect.animated()))) { sources.cache.key = None; }
+            sources.cache.validate(&frame, references, packet.document_extent);
+        }
+        let ready = sources.cache.analysis_ready(self).unwrap_or(true);
+        self.retouch = Some(sources);
+        ready
+    }
     pub(crate) fn retouch_sources(&mut self) -> Box<RetouchSources> {
         self.retouch.take().unwrap_or_else(|| Box::new(RetouchSources::new(self)))
     }

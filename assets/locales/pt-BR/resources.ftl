@@ -495,3 +495,11 @@ resources-lookup-replace = Substituir…
 resources-lookup-files = Arquivos de consulta de cores
 resources-lookup-unavailable = A importação de tabelas de consulta de cores ainda não está disponível nesta plataforma.
 resources-lookup-failed = Não foi possível importar a tabela de consulta.
+
+resources-analysis-updating = Atualizando…
+resources-analysis-error = Não foi possível atualizar este ajuste.
+resources-filter-shadows-highlights = Sombras/Realces
+resources-filter-clarity = Claridade
+resources-local-shadows = Sombras
+resources-local-highlights = Realces
+resources-local-amount = Intensidade

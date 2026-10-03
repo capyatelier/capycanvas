@@ -1,7 +1,7 @@
 use super::*;
 use std::sync::{Arc, Weak};
 
-pub(crate) struct Resource { pub buffer: wgpu::Buffer }
+pub(crate) struct Resource { pub buffer: wgpu::Buffer, pub _analysis: Option<Arc<crate::effect_analysis::Lease>> }
 #[derive(Default)]
 pub(crate) struct Cache {
     entries: HashMap<[u8;32], Weak<Resource>>,
@@ -28,11 +28,11 @@ impl Cache {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("immutable color lookup"), size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             queue.write_buffer(&buffer, 0, bytes);
-            let value = Arc::new(Resource {buffer});
+            let value = Arc::new(Resource {buffer, _analysis: None});
             self.entries.insert(resource.digest(), Arc::downgrade(&value)); self.uploads += 1;
             Ok(value)
         } else {
-            Ok(self.empty.get_or_insert_with(|| Arc::new(Resource {buffer: device.create_buffer(&wgpu::BufferDescriptor {
+            Ok(self.empty.get_or_insert_with(|| Arc::new(Resource {_analysis: None, buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("empty effect resource"), size: 16, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
             })})).clone())
         }
