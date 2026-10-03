@@ -5,7 +5,7 @@ extension XCTestCase {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"insert_tools","panel":"commands","before":null}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"zoom_in"},"selected":true}},{"type":"customize","action":{"type":"confirm_tools"}},{"type":"customize","action":{"type":"set_tile_style","panel":"commands","style":"medium_labeled"}}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         let zoom = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-commands-", "Zoom in")).firstMatch
         XCTAssertTrue(zoom.waitForExistence(timeout: 15))

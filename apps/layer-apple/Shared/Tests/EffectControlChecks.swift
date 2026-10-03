@@ -239,7 +239,7 @@ extension XCTestCase {
             XCTAssertTrue(viewport.contains(field.frame), "Filter search must remain onscreen with the keyboard open")
         }
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
-        XCTAssertTrue(canvas.waitForExistence(timeout: 20)); expect(canvas, "Metal ready")
+        XCTAssertTrue(canvas.waitForExistence(timeout: 20)); expect(canvas, "Canvas ready")
         workspaceActivate(app.buttons["panel-tab-adjustments"])
         let category = app.buttons["filter-category"]
         for index in [1, 0] {

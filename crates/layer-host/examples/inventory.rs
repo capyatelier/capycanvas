@@ -184,13 +184,20 @@ fn platform_inventory(platform: Platform) -> Value {
         serde_json::from_slice(&host.take_layout_update_bytes().unwrap().expect("initial snapshot")).unwrap();
     // Enumerate unavailable entries too. Filtering by visible menus would hide
     // an unimplemented host capability from the parity audit.
+    let hardware = std::env::args().any(|arg| arg == "--gpu");
     let commands: Vec<_> = CommandId::ALL
         .iter()
         .map(|&id| {
             let mut candidate = apple_host(platform);
             let initial = candidate.session.command(id);
             let dispatched = id.available_on(platform) && initial.enabled;
-            let error = dispatched.then(|| candidate.dispatch(UiAction::Invoke { command: id }).err()).flatten();
+            let mut error = dispatched.then(|| candidate.dispatch(UiAction::Invoke { command: id }).err()).flatten();
+            if error.is_some() && hardware {
+                candidate = apple_host(platform);
+                candidate.session.renderer_mut().0 =
+                    Some(layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap().into());
+                error = candidate.dispatch(UiAction::Invoke { command: id }).err();
+            }
             json!({"id": id, "available": id.available_on(platform), "initial": initial,
                 "invocation": {"dispatched":dispatched,"error":error,"requests":candidate.session.state().requests}})
         })

@@ -67,7 +67,7 @@ extension EditorLaunchTests {
             }
         }
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         let zen = window.buttons["zen-button"]
         XCTAssertTrue(zen.exists)

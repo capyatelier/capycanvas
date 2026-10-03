@@ -144,6 +144,7 @@ struct ExportForm: View {
                         Text("Keep original").tag("Master"); Text("Pixels per inch").tag("Ppi"); Text("Omit").tag("Omit")
                     }
                     if resolution == "Ppi" { number("Pixels per inch", $ppi, id: "export-ppi") }
+                    if editor.details["form"]["metadata"].bool { metadata }
                 }.padding(.top, 8)
             }
             DisclosureGroup("Saved presets") {
@@ -164,6 +165,22 @@ struct ExportForm: View {
                 }.padding(.top, 8).disabled(!editor.preferences.canSave)
             }
         }
+    }
+    @ViewBuilder private var metadata: some View {
+        let view = editor.draft["metadata"], kept = editor.recipe["metadata"]
+        if view["available"].bool {
+            FormPicker(view["label"].string, selection: Binding(get: { kept["keep"].string }, set: {
+                editor.change("metadata", kept.replacing("keep", with: JSON($0)))
+            })) {
+                ForEach(view["choices"].array, id: \.stableKey) { Text($0["label"].string).tag($0["value"].string) }
+            }.accessibilityIdentifier("export-metadata")
+        }
+        if view["location"].bool {
+            Toggle(view["remove_location"].string, isOn: Binding(get: { kept["remove_location"].bool }, set: {
+                editor.change("metadata", kept.replacing("remove_location", with: JSON($0)))
+            })).accessibilityIdentifier("export-remove-location")
+        }
+        if !view["note"].isNull { Text(view["note"].string).font(.caption).accessibilityIdentifier("export-metadata-note") }
     }
     private func choice(_ key: String) -> Binding<String> {
         Binding(get: { editor.recipe[key].string }, set: { editor.change(key, JSON($0)) })

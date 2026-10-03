@@ -77,33 +77,42 @@ struct SelectionMenuButton: View {
     }
 }
 
-struct SelectionRefinePanel: View {
+struct CanvasPreviewPanel: View {
+    struct Operations {
+        let type: String, value: String, apply: String, cancel: String, identifier: String
+        static let refine = Operations(type: "selection", value: "resize_radius", apply: "apply_resize", cancel: "cancel_resize", identifier: "selection-refine")
+        static let frequencySeparation = Operations(type: "frequency_separation", value: "radius", apply: "apply", cancel: "cancel", identifier: "frequency-separation")
+    }
     @ObservedObject var store: EditorStore
     let view: JSON
+    let operations: Operations
     let palette: EditorPalette
     @Environment(\.capyCommonCopy) private var common
     @State private var commitNumber: ((Bool) -> Bool)?
-    private func send(_ action: [String: Any]) { store.dispatch(["type": "selection", "action": action]) }
+    private func send(_ op: String, _ fields: [String: Any] = [:]) {
+        store.dispatch(["type": operations.type, "action": fields.merging(["op": op]) { $1 }])
+    }
     var body: some View {
+        let identifier = operations.identifier
         VStack(alignment: .leading, spacing: 10) {
-            Text(view["title"].string).fontWeight(.bold).accessibilityIdentifier("selection-refine-title")
+            Text(view["title"].string).fontWeight(.bold).accessibilityIdentifier(identifier + "-title")
             NumberControl(store: store, label: view["label"].string, value: view["radius"].number,
-                control: view["numeric"], identifier: "selection-refine-value", registerAdmission: { _, admission in commitNumber = admission }) { value, completion in
-                send(["op": "resize_radius", "radius": value]); completion(nil)
+                control: view["numeric"], identifier: identifier + "-value", registerAdmission: { _, admission in commitNumber = admission }) { value, completion in
+                send(operations.value, ["radius": value]); completion(nil)
             }.id(view["kind"].string)
             HStack(spacing: 8) {
                 Spacer()
-                Button(common["cancel"].string) { _ = commitNumber?(true); send(["op": "cancel_resize"]) }.buttonStyle(.bordered)
-                    .accessibilityIdentifier("selection-refine-cancel")
-                Button(common["apply"].string) { if commitNumber?(false) != false { send(["op": "apply_resize"]) } }.buttonStyle(.borderedProminent).tint(palette.accent)
-                    .accessibilityIdentifier("selection-refine-apply")
+                Button(common["cancel"].string) { _ = commitNumber?(true); send(operations.cancel) }.buttonStyle(.bordered)
+                    .accessibilityIdentifier(identifier + "-cancel")
+                Button(common["apply"].string) { if commitNumber?(false) != false { send(operations.apply) } }.buttonStyle(.borderedProminent).tint(palette.accent)
+                    .accessibilityIdentifier(identifier + "-apply")
             }.focusable(false)
         }.padding(.top, 14).padding(.horizontal, 16).padding(.bottom, 12)
             .foregroundStyle(palette["text"])
             .background {
                 SquircleShape.surface.fill(palette["panel"]).shadow(color: .black.opacity(0.27), radius: 4, y: 2)
             }
-            .accessibilityElement(children: .contain).accessibilityIdentifier("selection-refine-panel")
+            .accessibilityElement(children: .contain).accessibilityIdentifier(identifier + "-panel")
     }
 }
 

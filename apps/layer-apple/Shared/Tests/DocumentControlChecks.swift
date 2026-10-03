@@ -62,7 +62,7 @@ extension XCTestCase {
         let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
         XCTAssertTrue(paint.waitForExistence(timeout: 30))
         if !paint.isSelected { workspaceActivate(paint) }
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"),
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"),
             evaluatedWith: app.descendants(matching: .any)["canvas"].firstMatch)
         waitForExpectations(timeout: 30)
         let scenes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-"))
@@ -592,6 +592,10 @@ extension XCTestCase {
         let width = app.textFields["new-document-width"]
         let height = app.textFields["new-document-height"]
         let create = app.buttons["new-document-create"]
+        XCTAssertTrue(app.descendants(matching: .any)["new-document-blending"].waitForExistence(timeout: 15), "New Document offers Blending")
+        expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Like Photoshop and Clip Studio Paint", "Like Photoshop and Clip Studio Paint"),
+            evaluatedWith: app.staticTexts["new-document-blending-note"])
+        waitForExpectations(timeout: 10)
         replace(width, "0")
         XCTAssertFalse(create.isEnabled, "Invalid dimensions must not allocate a canvas")
         replace(width, "63"); replace(height, "47")

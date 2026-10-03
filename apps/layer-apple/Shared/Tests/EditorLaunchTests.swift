@@ -94,6 +94,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testSelectionAndTransform() { checkSelectionAndTransform(in: editorCaptureApplication()) }
 
     @MainActor func testCanvasSize() { checkCanvasSize(in: editorCaptureApplication()) }
+    @MainActor func testImageSize() { checkImageSize(in: editorCaptureApplication()) }
+    @MainActor func testFrequencySeparation() { checkFrequencySeparation(in: editorCaptureApplication()) }
     @MainActor func testCanvasActionBar() { checkCanvasActionBar(in: ignoringSavedWindows(editorCaptureApplication())) }
     @MainActor func testCanvasNotice() throws {
         #if os(iOS)

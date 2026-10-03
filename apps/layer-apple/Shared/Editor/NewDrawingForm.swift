@@ -81,6 +81,14 @@ struct NewDrawingForm: View {
                     FormPicker(text["depth"].string, selection: color("depth")) {
                         ForEach(spec["creation"]["depths"].array, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
                     }.accessibilityIdentifier("new-document-depth")
+                    let blending = spec["creation"]["blending"]
+                    FormPicker(blending["label"].string, selection: Binding(get: { appearance["blending"].string }, set: {
+                        options = options.replacing("blend_space", with: JSON($0))
+                    })) {
+                        ForEach(blending["choices"].array, id: \.stableKey) { Text($0["label"].string).tag($0["id"].string) }
+                    }.disabled(!appearance["blending_editable"].bool).accessibilityIdentifier("new-document-blending")
+                    Text(appearance["blending_help"].string).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("new-document-blending-note")
                     if !appearance["note"].isNull {
                         Text(appearance["note"].string).font(.caption)
                     }

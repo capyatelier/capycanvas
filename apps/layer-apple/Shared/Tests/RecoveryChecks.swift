@@ -8,7 +8,7 @@ extension XCTestCase {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"add_layer"},{"type":"set_layer_opacity","opacity":0.42},{"type":"set_color","rgba":[0.1,0.3,0.9,1]}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         let ready = app.staticTexts["recovery-status"]
         expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: ready)
@@ -42,7 +42,7 @@ extension XCTestCase {
         }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
         app.activate()
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == painted }, evaluatedWith: app)
         waitForExpectations(timeout: 20)
         XCTAssertEqual(scene.identifier, sceneID, "Returning must preserve the existing editor scene")

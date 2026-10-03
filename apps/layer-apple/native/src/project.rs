@@ -92,19 +92,7 @@ impl CapyProjectTask {
         }
     }
     fn perform(&self, work: impl FnOnce(&mut Payload) -> Result<(), String> + Send) -> i32 {
-        // Dispatch workers have a small stack. Recursive WGSL translation can
-        // exceed it even for built-in shaders in debug builds. Join a scoped
-        // worker so the borrowed descriptor/job remain valid until completion.
-        let result = std::thread::scope(|scope| {
-            std::thread::Builder::new()
-                .name("capy-project".into())
-                .stack_size(8 * 1024 * 1024)
-                .spawn_scoped(scope, || self.perform_inner(work))
-                .map_err(|e| e.to_string())?
-                .join()
-                .map_err(|_| "Document worker failed".to_string())
-        });
-        match result {
+        match on_large_stack("capy-project", || self.perform_inner(work)) {
             Ok(status) => status,
             Err(error) => {
                 self.state.lock().unwrap_or_else(|e| e.into_inner()).error = Some(error);

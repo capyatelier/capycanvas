@@ -32,29 +32,32 @@ struct CanvasFloorLayer: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var presence: CanvasNoticePresence
     @ObservedObject var bar: CanvasBarPresence
-    @State private var refineBar: CGRect?
-    private static let margin: CGFloat = 12, barReach: CGFloat = 72, maxWidth: CGFloat = 720, refineWidth: CGFloat = 360
+    @State private var previewBar: CGRect?
+    private static let margin: CGFloat = 12, barReach: CGFloat = 72, maxWidth: CGFloat = 720, previewWidth: CGFloat = 360
     var body: some View {
-        let refine = store.state["layer_tools"]["selection_resize"]
+        let tools = store.state["layer_tools"]
+        let preview: (view: JSON, operations: CanvasPreviewPanel.Operations)? = !tools["selection_resize"].isNull ? (tools["selection_resize"], .refine)
+            : !tools["frequency_separation"].isNull ? (tools["frequency_separation"], .frequencySeparation) : nil
         ZStack(alignment: .topLeading) {
             Color.clear.frame(width: 0, height: 0)
-            if !presence.notice.isNull || !refine.isNull {
+            if !presence.notice.isNull || preview != nil {
                 let layout = store.snapshot["layout"], area = layout["work_area"].rect, status = layout["status"].rect
                 let floor = min(area.maxY, status.height > 0 ? status.minY : .infinity)
-                let below = refine.isNull ? bar.bounds : refineBar
+                let below = preview == nil ? bar.bounds : previewBar
                 let bottom = below.map { $0.maxY > floor - Self.barReach ? $0.minY : floor } ?? floor
                 let width = min(Self.maxWidth, max(0, area.width - 2 * Self.margin))
                 let palette = EditorPalette(source: store.state["palette"])
                 VStack(spacing: Self.margin) {
                     if !presence.notice.isNull { notice(palette, width: width) }
-                    if !refine.isNull {
-                        SelectionRefinePanel(store: store, view: refine, palette: palette).frame(width: min(Self.refineWidth, width))
+                    if let preview {
+                        CanvasPreviewPanel(store: store, view: preview.view, operations: preview.operations, palette: palette)
+                            .frame(width: min(Self.previewWidth, width))
                     }
                 }.frame(width: width, height: max(0, bottom - Self.margin), alignment: .bottom)
                     .offset(x: area.midX - width / 2)
             }
-        }.onChange(of: refine.isNull) { _, closed in if !closed { refineBar = bar.bounds } }
-            .onChange(of: bar.bounds) { _, bounds in if let bounds { refineBar = bounds } }
+        }.onChange(of: preview == nil) { _, closed in if !closed { previewBar = bar.bounds } }
+            .onChange(of: bar.bounds) { _, bounds in if let bounds { previewBar = bounds } }
     }
     private func notice(_ palette: EditorPalette, width: CGFloat) -> some View {
         HStack(spacing: 12) {

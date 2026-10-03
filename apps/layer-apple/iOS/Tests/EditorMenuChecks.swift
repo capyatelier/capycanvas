@@ -24,7 +24,7 @@ final class EditorMenuChecks: XCTestCase {
             expectation(for: NSPredicate { _, _ in rows.count == 2 }, evaluatedWith: app)
             waitForExpectations(timeout: 5)
             app.buttons["layer-blend"].tap()
-            let normal = app.buttons["layer-blend-option-0"]
+            let normal = app.buttons["menu-action-Normal"]
             XCTAssertTrue(normal.waitForExistence(timeout: 5)); normal.tap()
             XCTAssertTrue(normal.waitForNonExistence(timeout: 5))
             app.terminate()

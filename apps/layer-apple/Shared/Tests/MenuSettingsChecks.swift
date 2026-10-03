@@ -451,7 +451,7 @@ extension XCTestCase {
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 30))
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         #if os(macOS)
         let applicationMenu = app.menuBars.menuBarItems["Capy Canvas"]

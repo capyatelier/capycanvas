@@ -69,10 +69,14 @@ struct LayerPanel: View {
     private var header: some View {
         VStack(spacing: 2) {
             HStack(spacing: 6) {
-                EditorChoice(label: store.catalog["native_copy"]["layers"]["blend"].string, options: store.catalog["layer_blends"].array.map(\.string),
-                    selected: Int(current["blend"].uint), identifier: "layer-blend", background: palette["input"], compact: true) {
-                    store.layer(["op": "blend", "id": current["id"].raw, "value": $0])
-                }.disabled(!view["controls"]["blend"].bool).frame(maxWidth: .infinity)
+                let blends = store.catalog["layer_blends"].array.map(\.string)
+                EditorChoice(label: store.catalog["native_copy"]["layers"]["blend"].string, options: blends,
+                    selected: blends.firstIndex(of: current["blend_label"].string) ?? -1, identifier: "layer-blend", background: palette["input"], compact: true,
+                    menu: { [store, id = current["id"].raw] show in
+                        store.query(["type": "layer_blend_menu", "id": id]) { menu in
+                            if !menu.isNull { show(AppleContextMenu(menu) { store.dispatch($0) }) }
+                        }
+                    }) { _ in }.disabled(!view["controls"]["blend"].bool).frame(maxWidth: .infinity)
                 LayerOpacityField(store: store).disabled(!view["controls"]["opacity"].bool).frame(maxWidth: .infinity)
             }
             HStack(spacing: 2) {

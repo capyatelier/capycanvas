@@ -19,7 +19,7 @@ extension EditorLaunchTests {
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 30))
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
@@ -217,7 +217,7 @@ extension EditorLaunchTests {
         app.launch()
         workspaceActivate(app.buttons["workspace-switch-builtin:workspace:painter"])
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         let before = app.frame
         let start = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
@@ -230,7 +230,7 @@ extension EditorLaunchTests {
         app.launch()
         let canvas = app.otherElements["canvas"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
-        let ready = NSPredicate(format: "value == %@", "Metal ready")
+        let ready = NSPredicate(format: "value == %@", "Canvas ready")
         expectation(for: ready, evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         let zen = app.buttons["zen-button"]
@@ -298,7 +298,7 @@ extension EditorLaunchTests {
         expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
         waitForExpectations(timeout: 30)
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
         editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")

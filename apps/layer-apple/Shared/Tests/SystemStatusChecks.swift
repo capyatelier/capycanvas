@@ -5,7 +5,7 @@ extension XCTestCase {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:painter"}}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 60)
         let sketch = app.buttons["workspace-switch-builtin:workspace:painter"]
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: sketch)

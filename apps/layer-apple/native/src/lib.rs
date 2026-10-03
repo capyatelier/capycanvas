@@ -106,7 +106,23 @@ pub unsafe extern "C" fn capy_apple_launch(platform: u32, json: *const c_char, b
         apple_launch_localized(platform, &launch.saved, localization)
     }).unwrap_or(std::ptr::null_mut())
 }
+/// Dispatch workers have small stacks; debug builds of the shared session exceed them.
+pub(crate) fn on_large_stack<T: Send>(name: &str, work: impl FnOnce() -> T + Send) -> Result<T, String> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name(name.into())
+            .stack_size(8 * 1024 * 1024)
+            .spawn_scoped(scope, work)
+            .map_err(|e| e.to_string())?
+            .join()
+            .map_err(|_| format!("{name} failed"))
+    })
+}
 fn apple_launch_localized(platform: u32, saved: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> *mut CapyApple {
+    on_large_stack("capy-launch", move || apple_launch_on_stack(platform, saved, localization) as usize)
+        .map_or(std::ptr::null_mut(), |app| app as *mut CapyApple)
+}
+fn apple_launch_on_stack(platform: u32, saved: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> *mut CapyApple {
     catch_unwind(AssertUnwindSafe(move || {
         let platform = match platform {
             0 => layer_ui::Platform::Ios,

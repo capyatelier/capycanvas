@@ -126,7 +126,7 @@ extension XCTestCase {
         XCTAssertTrue(multiply.waitForExistence(timeout: 5)); workspaceActivate(multiply)
         expect("Multiply"); command("Undo"); expect("Normal")
         open(compact)
-        let screen = app.buttons["layer-blend-option-2"]
+        let screen = app.buttons["menu-action-Screen"]
         XCTAssertTrue(screen.waitForExistence(timeout: 5)); workspaceActivate(screen)
         expect("Screen"); command("Undo"); expect("Normal"); command("Redo"); expect("Screen")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
@@ -164,7 +164,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 10)
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         if app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] != nil {
             for name in ["painter", "illustrator", "photographer"] {

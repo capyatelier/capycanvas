@@ -30,11 +30,13 @@ struct EditorChoice: View {
     let background: Color
     var compact = false
     var bold = false
+    var menu: ((@escaping @MainActor (AppleContextMenu) -> Void) -> Void)? = nil
     let select: (Int) -> Void
     @State private var choosing = false
+    @State private var model: AppleContextMenu?
     @Environment(\.isEnabled) private var enabled
     var body: some View {
-        Button { choosing = true } label: {
+        Button { if let menu { menu { model = $0; choosing = true } } else { choosing = true } } label: {
             ChoiceLabelLayout(ellipsis: compact) {
                 ForEach(options.indices, id: \.self) { Text(options[$0]).hidden().accessibilityHidden(true) }
                 Text(options.indices.contains(selected) ? options[selected] : label).lineLimit(1)
@@ -53,10 +55,10 @@ struct EditorChoice: View {
             .accessibilityLabel(label).accessibilityValue(options.indices.contains(selected) ? options[selected] : "")
             .accessibilityIdentifier(identifier)
             .editorPopover(isPresented: $choosing) {
-                EditorActionMenu(model: AppleContextMenu(JSON(["sections": [options.indices.map { index in
+                EditorActionMenu(model: model ?? AppleContextMenu(JSON(["sections": [options.indices.map { index in
                     ["label": options[index], "enabled": true, "selected": index == selected,
                      "identifier": identifier + "-option-\(index)", "action": ["index": index]]
-                }]])) { select(Int($0["index"].uint)) }, width: 230) { choosing = false }
+                }]])) { select(Int($0["index"].uint)) }, width: 230) { choosing = false; model = nil }
             }
     }
 }

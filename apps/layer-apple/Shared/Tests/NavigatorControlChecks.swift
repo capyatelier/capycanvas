@@ -19,7 +19,7 @@ extension XCTestCase {
         }
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         let overview = app.descendants(matching: .any)["navigator-overview"].firstMatch
         XCTAssertTrue(overview.waitForExistence(timeout: 10))

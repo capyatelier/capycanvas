@@ -5,7 +5,7 @@ extension XCTestCase {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":6},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":6,"collapsed":true}},{"type":"customize","action":{"type":"set_column_drawers","column":4,"drawers":true}}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
-        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         func drag(_ control: XCUIElement, to destination: XCUICoordinate) {
             XCTAssertTrue(control.waitForExistence(timeout: 10))
