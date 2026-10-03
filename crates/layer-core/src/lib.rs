@@ -12,6 +12,8 @@ mod cancellable;
 pub use cancellable::Cancellable;
 
 pub mod color;
+pub mod authored;
+pub mod package;
 pub mod binary_payload;
 mod image_metadata;
 pub use image_metadata::{ImageResolution, PhotoMetadata, ResolutionUnit};

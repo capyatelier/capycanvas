@@ -17,6 +17,11 @@ prototype and qualification gates below remain required. The
 workflows. The foundation owns ZIP, checksums, compatibility and preview rules;
 this plan resolves their relationship to the editor and renderer.
 
+M1's concrete ownership and wire contracts are in [authored model](../reference/authored-model.md)
+and [package grammar](../reference/capy-package.md). Their boundary fixtures live in
+`crates/layer-core/tests/fixtures/capy/`. The application remains on its current
+model and codec until the integrated M3 cutover.
+
 ## Scope and commitments
 
 Keep the restricted ZIP64 package, JSON object/resource tables, 256-pixel lossless
