@@ -200,8 +200,7 @@ are your task, and remove an entry when you fix it.
   (Microsoft.UI.Xaml.Controls.dll), which reads released scroll-controller tracker
   references of a panel or drawer `ScrollView` that left the tree.
 - Windows fixtures that also fail on the unported upstream build: `exercise-color-picker.ps1`
-  ("Pen hover did not preview the paper"), `exercise-canvas-bar.ps1` ("A finger drag
-  did not move the transform body"), `exercise-pen-buttons.ps1` (Transform is
+  ("Pen hover did not preview the paper"), `exercise-pen-buttons.ps1` (Transform is
   enabled on the empty starting layer), `exercise-tab-drag.ps1` ("Attached native
   tab preview did not cross the shared insertion threshold"), `exercise-layer-pickup.ps1`
   ("Layer tab did not begin its native drag" with touch), `exercise-column-stacks.ps1`
@@ -211,10 +210,9 @@ are your task, and remove an entry when you fix it.
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
 - Apple Rust `apple_photo_corrections_masks_and_original_samples_remain_revisable_after_worker_reopen`
-  and Windows Rust `property_wire_keeps_section_identity_and_choice_indices_with_equal_labels`
-  expect controls outside the selected Properties page. Apple Rust
+  expects controls outside the selected Properties page, and
   `apple_current_main_drawers_paper_and_zen_use_shared_actions` compares the
-  transient Properties epoch across undo/redo. All three also fail at `b886ccf6b`.
+  transient Properties epoch across undo/redo. Both also fail at `b886ccf6b`.
 - Headless Web `--toolbar-components`, `--tonal-selection`, `--editor`, `--hdr`,
   `--proof`, `--raster`, `--selection-tools` and `--shared-workflows`, and 8 pen
   side-button cases in `pointer.test.mjs`.

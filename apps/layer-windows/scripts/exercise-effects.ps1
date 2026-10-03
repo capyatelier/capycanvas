@@ -247,6 +247,20 @@ try {
     Wait-Until {(Property 'curve_0').value.value.Count -eq 2} 'Curve reset failed'
     if((Property 'curve_0').value.value[0][1] -ne 0 -or (Property 'curve_0').value.value[1][1] -ne 1){throw 'Reset curve kept an edited endpoint'}
     Wait-Until {!(Find 'property-curve_0-reset')} 'Reset curve still shows its reset icon'
+    $revision=(Model).state.document_file.revision;$pages=@((Model).state.layer_properties.pages)
+    if($pages.Count -ne 4){throw 'Curves did not publish its four pages'}
+    Choose 'properties-page' $pages[1].label
+    Wait-Until {(Model).state.layer_properties.page -eq $pages[1].id -and (Find 'property-curve_1-curve') -and !(Find 'property-curve_0-curve')} 'The Properties page did not show the second curve'
+    Choose 'properties-page' $pages[0].label
+    Wait-Until {(Model).state.layer_properties.page -eq $pages[0].id -and (Find 'property-curve_0-curve')} 'The Properties page did not return to the composite curve'
+    if((Model).state.document_file.revision -ne $revision){throw 'Changing the Properties page added an undo step'}
+    Select-Filter 'color_balance' 'Color Balance'
+    foreach($page in @((Model).state.layer_properties.pages)){
+        Choose 'properties-page' $page.label
+        Wait-Until {$keys=@((Model).state.layer_properties.controls|Where-Object page -eq $page.id|ForEach-Object key);(Model).state.layer_properties.page -eq $page.id -and $keys.Count -and @($keys|Where-Object {!(Find "property-$_")}).Count -eq 0} "Color Balance did not present its $($page.label) page"
+    }
+    Select-Filter 'levels' 'Levels'
+    if(Find 'properties-page'){throw 'A single-page filter offered a page choice'}
 
     Select-Filter 'gradient_map' 'Gradient Map'
     Invoke 'property-gradient-add';Wait-Until {(Property 'gradient').value.value.Count -eq 3} 'Gradient stop not added'

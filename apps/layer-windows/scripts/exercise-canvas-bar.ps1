@@ -27,8 +27,8 @@ function MenuOpen{
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem))
  $null -ne [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
-function AnchorCenter{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Find 'drawing-canvas').Current.BoundingRectangle
- @([int]($r.X+$c.translation[0]+$c.zoom*($a[0]+$a[2])/2),[int]($r.Y+$c.translation[1]+$c.zoom*($a[1]+$a[3])/2))}
+function AnchorQuadrant{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Find 'drawing-canvas').Current.BoundingRectangle
+ @([int]($r.X+$c.translation[0]+$c.zoom*($a[0]+3*$a[2])/4),[int]($r.Y+$c.translation[1]+$c.zoom*($a[1]+3*$a[3])/4))}
 function Center($Element){$r=$Element.Current.BoundingRectangle;@([int]($r.X+$r.Width/2),[int]($r.Y+$r.Height/2))}
 function Tap([string]$Id,[string]$Device){
  $item=@{value=$null};Wait-Until {$item.value=Find $Id;$item.value -and !$item.value.Current.IsOffscreen -and $item.value.Current.IsEnabled} "Missing bar control $Id" 10
@@ -137,7 +137,7 @@ try {
  }
  $checks.transform_mode_choices='passed'
  $x=Value 'transform_x'
- $inside=AnchorCenter
+ $inside=AnchorQuadrant
  Drag 'touch' $inside @(($inside[0]+80),$inside[1])
  Wait-Until {[Math]::Abs((Value 'transform_x')-$x) -gt 1 -and (Bar)} 'A finger drag did not move the transform body' 5
  if((Kind) -ne 'transform'){throw 'The finger drag ended the transform'}

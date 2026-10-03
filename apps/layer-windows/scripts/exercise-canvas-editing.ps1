@@ -38,6 +38,9 @@ function Select-Tool([string]$Id){
  Invoke $target.id;Wait-Until {$ready=Model;if(!$ready.canvas_ready -or !$ready.brush_ready){return $false};if($Id -eq 'scale_rotate'){return $ready.state.layer_tools.tool -eq 'transform'};($ready.state.commands|Where-Object id -eq $Id).selected} "Tool did not activate: $Id"
 }
 function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id).value}
+function Body-Point{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Control 'drawing-canvas').Current.BoundingRectangle
+ @([int]($r.X+$c.translation[0]+$c.zoom*($a[0]+3*$a[2])/4),[int]($r.Y+$c.translation[1]+$c.zoom*($a[1]+3*$a[3])/4))}
+function Origin{Wait-Until {$null -ne (Value 'transform_x') -and $null -ne (Value 'transform_y')} 'Transform position was not published';$script:x0=Value 'transform_x';$script:y0=Value 'transform_y'}
 function Signature {$m=Model;@($m.state.document_file,@($m.state.layers|Select-Object id,paint_revision,mask_revision))|ConvertTo-Json -Depth 25 -Compress}
 function Pixels {
  $rect=[CapyEditingCapture+Rect]::new();$origin=[CapyEditingCapture+Point]::new()
@@ -171,9 +174,9 @@ try{
   $selected=Signature;$baseline=Stable-Pixels
   $baselinePng=Export-Png ($device+'-selected-raster')
   if($baseline -ne $rectangle){throw 'Selection changed sampled artwork'};Pass 'lasso selects without painting'
-  Select-Tool 'scale_rotate'
-  Drag $device @(@($sx,$cy),@(($sx+300),$cy))
-  Wait-Until {[Math]::Abs((Value 'transform_x')-300/$camera.zoom) -lt 2 -and [Math]::Abs((Value 'transform_y')) -lt 2} 'Transform body did not move immediately'
+  Select-Tool 'scale_rotate';Origin;$from=Body-Point
+  Drag $device @($from,@(($from[0]+300),$from[1]))
+  Wait-Until {[Math]::Abs((Value 'transform_x')-$x0-300/$camera.zoom) -lt 2 -and [Math]::Abs((Value 'transform_y')-$y0) -lt 2} 'Transform body did not move immediately'
   Wait-Until {(Pixels) -ne $baseline} 'Move preview left the sampled pixels unchanged'
   $previewSignature=Signature;$previewPixels=Stable-Pixels
   @{before=$selected;after=$previewSignature;baseline=$baseline;preview=$previewPixels;centers=$sampleCenters}|ConvertTo-Json -Depth 25|Set-Content (Join-Path $run 'move-preview-state.json')
@@ -204,8 +207,8 @@ try{
    Apply-Preview $mode
    $selected=Signature
   }
-  Select-Tool 'scale_rotate';Drag $device @(@($sx,$cy),@(($sx+300),$cy))
-  Wait-Until {[Math]::Abs((Value 'transform_x')-300/$camera.zoom) -lt 2} 'Final move preview did not settle'
+  Select-Tool 'scale_rotate';Origin;$from=Body-Point;Drag $device @($from,@(($from[0]+300),$from[1]))
+  Wait-Until {[Math]::Abs((Value 'transform_x')-$x0-300/$camera.zoom) -lt 2} 'Final move preview did not settle'
   $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
   Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} 'Transform Apply did not commit'
   $moved=Stable-Pixels;$sourcePixels=$baseline.Split(':');$movedPixels=$moved.Split(':');$blankPixels=$empty.Split(':')

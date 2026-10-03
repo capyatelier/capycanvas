@@ -65,6 +65,7 @@ fn property_wire_keeps_section_identity_and_choice_indices_with_equal_labels() {
     let parameters = Arc::make_mut(&mut program.parameters);
     parameters[0].section = Some(layer_core::ResourceLabel::Message { message: "common-cancel".into() });
     parameters[1].section = Some("Cancel".into());
+    parameters[1].page = parameters[0].page.clone();
     let domain = parameters.iter_mut().find(|parameter| parameter.key.as_ref() == "domain").unwrap();
     let layer_core::EffectParameterKind::Choice { options } = &mut domain.kind else { panic!() };
     for option in Arc::make_mut(options) {
@@ -86,6 +87,8 @@ fn property_wire_keeps_section_identity_and_choice_indices_with_equal_labels() {
     let controls = wire["controls"].as_array().unwrap();
     let first = controls.iter().find(|control| control["key"] == "curve_0").unwrap();
     let second = controls.iter().find(|control| control["key"] == "curve_1").unwrap();
+    assert_eq!(wire["pages"].as_array().unwrap().len(), 4);
+    assert_eq!((&wire["page"], &first["page"], &second["page"]), (&serde_json::json!("rgb"), &serde_json::json!("rgb"), &serde_json::json!("rgb")));
     assert_eq!(first["section"], second["section"]);
     assert_ne!(first["section_id"], second["section_id"]);
     assert_eq!(first["section_id"], serde_json::json!({"message":"common-cancel"}));

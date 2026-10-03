@@ -104,7 +104,8 @@ layer and document changes retire the old contact. Android keeps numeric values
 as doubles through JNI so HDR coordinates retain the shared field's precision.
 Its native numeric draft, selection and edit focus use Compose saved state across
 Activity recreation; an in-progress IME composition is still owned by the input
-method.
+method. Windows presents the page selector (`exercise-effects.ps1`) but not yet
+the shared graph contacts and point fields.
 
 ## Checks
 

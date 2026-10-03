@@ -52,18 +52,36 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     StackPanel root,body;
     ContentControl bodyGate;
     TextBlock title;
+    ComboBox page;
     Bindings fields;
-    hstring schema;
+    hstring schema,pages;
     explicit PropertiesView(std::shared_ptr<WorkspaceData> source):data(std::move(source)){
         root.Spacing(6);body.Spacing(6);title=label(data,L"",true);
         AutomationProperties::SetAutomationId(root,L"layer-properties");AutomationProperties::SetName(root,L"Layer properties");
         bodyGate.Content(body);bodyGate.IsTabStop(false);bodyGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-        root.Children().Append(title);root.Children().Append(bodyGate);
+        page.MinWidth(0);page.MinHeight(32);page.HorizontalAlignment(HorizontalAlignment::Stretch);page.FontSize(data->textSize());
+        page.Background(data->brush(L"input"));page.BorderThickness({0,0,0,0});page.CornerRadius({6,6,6,6});
+        AutomationProperties::SetAutomationId(page,L"properties-page");page.Visibility(Visibility::Collapsed);
+        page.SelectionChanged([weak=make_weak(page),data=data](auto&&,auto&&){
+            auto box=weak.get();if(!box||data->updating||box.SelectedIndex()<0)return;
+            auto view=object(data->state,L"layer_properties");auto pages=array(view,L"pages");
+            if(uint32_t(box.SelectedIndex())>=pages.Size())return;auto id=str(pages.GetObjectAt(box.SelectedIndex()),L"id");
+            if(id==str(view,L"page")||view.GetNamedValue(L"layer",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Number)return;
+            data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"select_page")},{L"layer",N(num(view,L"layer"))},{L"page",S(id)}})}}),
+                to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch"))));
+        });
+        root.Children().Append(title);root.Children().Append(page);root.Children().Append(bodyGate);
     }
     void refresh(){
         Updating updating(data);
         auto view=object(data->state,L"layer_properties");
         title.Text(str(view,L"title"));CapyUi::tooltip(title,str(view,L"description"));
+        auto pageChoices=array(view,L"pages");
+        if(auto key=pageChoices.Stringify();key!=pages){pages=key;page.Items().Clear();for(auto choice:pageChoices)page.Items().Append(box_value(str(choice.GetObject(),L"label")));}
+        int32_t selected=-1;for(uint32_t i=0;i<pageChoices.Size();++i)if(str(pageChoices.GetObjectAt(i),L"id")==str(view,L"page"))selected=int32_t(i);
+        if(page.SelectedIndex()!=selected)page.SelectedIndex(selected);
+        page.Visibility(pageChoices.Size()>1?Visibility::Visible:Visibility::Collapsed);page.IsEnabled(flag(view,L"enabled"));
+        AutomationProperties::SetName(page,str(view,L"title"));
         A keys;for(auto value:array(view,L"controls")){
             auto c=value.GetObject();keys.Append(O({{L"key",S(str(c,L"key"))},{L"label",S(str(c,L"label"))},
                 {L"section",S(str(c,L"section"))},{L"section_id",c.GetNamedValue(L"section_id",JsonValue::CreateNullValue())},{L"kind",object(c,L"kind")},{L"color_action",object(c,L"color_action")}}));
@@ -72,7 +90,6 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             {L"layer",view.GetNamedValue(L"layer",JsonValue::CreateNullValue())},{L"controls",keys}}).Stringify();
         if(next!=schema){
             schema=next;fields.clear();body.Children().Clear();
-            std::vector<std::pair<hstring,FrameworkElement>> curves;
             auto controls=array(view,L"controls");hstring sectionId=L"null";
             for(auto value:controls){
                 auto c=value.GetObject();auto property=std::make_shared<Property>(data,c);
@@ -127,21 +144,10 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                         CapyUi::tooltip(bucket,data->caption(L"color",L"use_selected"));AutomationProperties::SetAutomationId(bucket,hstring(id+L"-bucket"));Grid::SetColumn(bucket,1);row.Children().Append(bucket);body.Children().Append(row);
                     }else body.Children().Append(color);
                 }else if(type==L"curve"){
-                    curves.emplace_back(name,CurveField(property,fields));
+                    body.Children().Append(CurveField(property,fields));
                 }else if(type==L"gradient"){
                     body.Children().Append(GradientField(property,fields));
                 }
-            }
-            if(!curves.empty()){
-                ComboBox channel;channel.MinWidth(0);channel.MinHeight(32);channel.HorizontalAlignment(HorizontalAlignment::Stretch);
-                channel.FontSize(data->textSize());channel.Background(data->brush(L"input"));
-                AutomationProperties::SetName(channel,L"Curve channel");AutomationProperties::SetAutomationId(channel,L"property-curve-channel");
-                for(auto const& [name,graph]:curves)channel.Items().Append(box_value(name));
-                Grid plots;for(auto const& [name,graph]:curves){graph.Visibility(Visibility::Collapsed);plots.Children().Append(graph);}
-                channel.SelectionChanged([curves,weak=make_weak(channel)](auto&&,auto&&){if(auto select=weak.get()){
-                    for(size_t i=0;i<curves.size();i++)curves[i].second.Visibility(int(i)==select.SelectedIndex()?Visibility::Visible:Visibility::Collapsed);
-                }});
-                channel.SelectedIndex(0);body.Children().InsertAt(0,plots);body.Children().InsertAt(0,channel);
             }
         }
         bodyGate.IsEnabled(flag(view,L"enabled"));body.Opacity(flag(view,L"enabled")?1.:.4);
