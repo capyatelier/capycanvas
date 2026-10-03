@@ -21,9 +21,9 @@ import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "crates/layer-core/src/color.rs"
-BEFORE = "if value <= 0.04045 {"
-AFTER = "if value <= 0.04046 {"
+SOURCE = ROOT / "crates/layer-core/src/color/rgb.rs"
+BEFORE = "if magnitude <= 0.04045 {"
+AFTER = "if magnitude <= 0.04046 {"
 PLATFORMS = {
     "gtk": ("layer-linux", None),
     "web": ("layer-web", "wasm32-unknown-unknown"),

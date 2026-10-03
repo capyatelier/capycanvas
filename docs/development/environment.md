@@ -22,8 +22,10 @@ hardware are in [devices](devices.md).
 
 ## Build profiles
 
-Each entry point picks a Cargo profile. Switching profiles in one target
-directory rebuilds everything, so prefer the profile the entry point already uses.
+Each entry point picks a Cargo profile. Profiles keep separate artifacts in the
+target directory: the first build of a profile compiles its dependencies, and
+returning to a cached profile reuses them. Prefer the entry point's profile for
+repeated edit/run builds.
 
 | Command | Profile |
 | --- | --- |
@@ -36,8 +38,26 @@ directory rebuilds everything, so prefer the profile the entry point already use
 
 `CAPY_RUST_PROFILE` overrides the GTK and Web scripts; Android also accepts
 `-PcapyRustProfile`. Compare performance only between builds of the same profile.
-`tools/build/profile-rust-incremental.py` times cached rebuilds after an edit to
-`layer-core`; run it on an otherwise idle machine.
+`dev-perf` keeps release optimization and 16 codegen units while caching
+incremental workspace compilation. A shared crate edit still recompiles its
+consumers. `cargo check --locked -p layer-linux` avoids code generation and linking
+when checking Rust changes. `CAPY_RUST_PROFILE=dev` selects an unoptimized app for
+UI development; use the required optimized profile for frame measurements.
+Keep profile overrides, compiler flags and the target directory stable to reuse
+the same cache.
+
+`tools/build/profile-rust-incremental.py` times cached rebuilds after a temporary
+edit to `layer-core`'s sRGB decode threshold, then restores the source. Run it on
+an otherwise idle machine in your own worktree. To measure the GTK launcher profile:
+
+```bash
+python3 tools/build/profile-rust-incremental.py \
+  --platforms gtk --profile dev-perf --modes configured
+```
+
+The report separates cache warm-up, unchanged builds and real edits. Increasing
+codegen units or reducing optimization can shorten compilation, but changes the
+generated code; qualify frame performance before changing the launcher default.
 
 ## Test state and processes
 

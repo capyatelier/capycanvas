@@ -1,7 +1,6 @@
 //! Native HDR picker transport and real input on the isolated Mutter display.
 use super::new_photo::{capture_ui, ready, response};
 use super::*;
-use gtk::subclass::prelude::*;
 use layer_core::color::{RgbColor, RgbSpace, SampleDepth};
 use layer_ui::{ColorAction, ColorShape, ColorSlot};
 

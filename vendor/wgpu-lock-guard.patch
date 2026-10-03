@@ -1,0 +1,33 @@
+diff --git a/vendor/wgpu-core/src/lock/ranked.rs b/vendor/wgpu-core/src/lock/ranked.rs
+index fff16a96e..b8b7ae3f5 100644
+--- a/vendor/wgpu-core/src/lock/ranked.rs
++++ b/vendor/wgpu-core/src/lock/ranked.rs
+@@ -81,6 +81,5 @@ pub struct Mutex<T> {
+ pub struct MutexGuard<'a, T> {
+     inner: parking_lot::MutexGuard<'a, T>,
+-    #[cfg_attr(not(miri), expect(unused))] // but `Drop` has important side effects
+-    saved: LockStateGuard,
++    _saved: LockStateGuard,
+ }
+
+@@ -227,5 +226,5 @@ impl<T> Mutex<T> {
+         MutexGuard {
+             inner: self.inner.lock(),
+-            saved: LockStateGuard(saved),
++            _saved: LockStateGuard(saved),
+         }
+     }
+@@ -286,5 +285,5 @@ pub struct RwLockReadGuard<'a, T> {
+ pub struct RwLockWriteGuard<'a, T> {
+     inner: parking_lot::RwLockWriteGuard<'a, T>,
+-    saved: LockStateGuard,
++    _saved: LockStateGuard,
+ }
+
+@@ -311,5 +310,5 @@ impl<T> RwLock<T> {
+         RwLockWriteGuard {
+             inner: self.inner.write(),
+-            saved: LockStateGuard(saved),
++            _saved: LockStateGuard(saved),
+         }
+     }

@@ -207,6 +207,12 @@ explicitly report initialized retained contents;
 ordinary acquired images still require initialization. One upstream comment
 trailing space is also removed.
 
+`wgpu-lock-guard.patch` names the mutex and write guards' retained lock state
+`_saved` and removes the mutex guard's unused-lint expectation. The normal,
+uninstrumented build allows dead code in the ranked-lock module, so that
+expectation cannot be fulfilled. Retained state still drops after the native
+guards and restores lock ordering.
+
 `wgpu-surface-discard-lost-device.patch` removes the acquired texture before
 checking device validity. A lost-device return releases its metadata
 without retaining swapchain semaphore references through surface teardown.
