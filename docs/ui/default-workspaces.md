@@ -217,6 +217,10 @@ changes its saved visibility without switching or previewing a workspace.
 stays in that editor. The compact workspace menu includes the same checklist
 under Show in top bar and ends with Manage Workspaces….
 
+The checklist keeps confirmed checkmarks while preferences are being saved or
+refreshed and updates when the operation completes. A failed save keeps the
+previous visibility and shows a notice when the full editor is closed.
+
 Right-clicking a workspace choice, the dots, or unused switcher space opens the
 same visibility menu. Touch/pen hold and the keyboard context-menu action do
 the same, including in Customize Title Bar. Releasing a recognized hold does
@@ -265,6 +269,7 @@ and shows a notice; see
 ```sh
 bash tools/performance/workspace-motion.sh gtk --workspace-switcher
 bash tools/performance/workspace-motion.sh gtk --native-test=native_workspace_switcher_options
+bash tools/performance/workspace-motion.sh gtk --native-test=native_workspace_switcher_pending_menu
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_compact_switcher_input
 bash tools/performance/workspace-motion.sh gtk --workspace-menus
 bash tools/performance/workspace-motion.sh gtk --native-test=native_paint_fitted_columns
@@ -272,6 +277,7 @@ bash tools/performance/workspace-motion.sh gtk --native-test=native_brush_drawer
 bash tools/performance/workspace-motion.sh gtk --native-test=native_unreadable_workspace_storage_input --native-storage
 node apps/layer-web/test.mjs --workspace-switcher
 node apps/layer-web/test.mjs --workspace-options
+node apps/layer-web/test.mjs --workspace-options-refresh
 node apps/layer-web/device.test.mjs --workspace-options
 node apps/layer-web/device.test.mjs --compact-workspaces
 node apps/layer-web/test.mjs --headless --stale-storage

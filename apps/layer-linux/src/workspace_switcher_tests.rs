@@ -535,6 +535,101 @@ fn wait_switcher(w: &Workspace) {
 }
 
 #[test]
+#[ignore = "isolated Mutter input and SQLite; workspace-motion.sh gtk --native-test=native_workspace_switcher_pending_menu --native-storage"]
+fn native_workspace_switcher_pending_menu() {
+    use std::io::Write;
+    let mut input = switcher_input();
+    let app = native_test_app("art.capycanvas.WorkspaceSwitcherPendingMenu");
+    gtk::Settings::default().unwrap().set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.maximize();
+    w.window.present();
+    wait_workspaces(&w);
+    pump(300);
+    input.ready();
+    let manager = w.workspaces.manager().unwrap();
+    let active = manager.active_id().unwrap();
+    let title = w.workspaces.view().switcher_display.iter().find(|row| row.id == active).unwrap().title.clone();
+    let original = manager.current().unwrap().capture().unwrap();
+    let menu_row = |popup: &gtk::PopoverMenu, label: &str| {
+        let mut row = mapped_label(popup.upcast_ref(), label).unwrap();
+        while !row.is_focusable() { row = row.parent().unwrap(); }
+        row
+    };
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for presentation in 0..3 {
+            if presentation == 2 {
+                w.workspaces.send(&w, layer_workspace::WorkspaceInput::EditSwitcher {
+                    edit: layer_workspace::SwitcherEdit::Show { id: active.clone(), visible: false },
+                });
+                wait_switcher(&w);
+            }
+            let ready = input.dir.join(format!("preference-lock-{theme:?}-{presentation}"));
+            let database = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap()).join("workspaces.sqlite3");
+            let mut lock = std::process::Command::new("python3")
+                .arg("-c").arg("import pathlib,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('BEGIN IMMEDIATE'); pathlib.Path(sys.argv[2]).touch(); sys.stdin.readline(); c.rollback()")
+                .arg(database).arg(&ready).stdin(std::process::Stdio::piped()).spawn().unwrap();
+            until(|| ready.exists(), "preference write lock");
+            w.workspaces.send(&w, layer_workspace::WorkspaceInput::EditSwitcher {
+                edit: layer_workspace::SwitcherEdit::Show { id: active.clone(), visible: false },
+            });
+            assert!(w.workspaces.view().switcher_busy);
+            let options = named::<gtk::MenuButton>(w.window.upcast_ref(), "workspace-switcher-options");
+            let popup = match presentation {
+                0 => {
+                    click(&w, &mut input, options.upcast_ref());
+                    options.popover().unwrap().downcast::<gtk::PopoverMenu>().unwrap()
+                }
+                1 => {
+                    let active_button = switcher_buttons(&w).into_iter().find(|button| button.is_active()).unwrap();
+                    let point = screen_point(active_button.upcast_ref(), &w.window, [0.5, 0.5]);
+                    input.perform(serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]));
+                    named::<gtk::PopoverMenu>(w.window.upcast_ref(), "workspace-switcher-options-context")
+                }
+                _ => {
+                    let popup = w.workspaces.switcher_popup(&w);
+                    options.set_popover(Some(&popup));
+                    popup.popup();
+                    pump(200);
+                    popup
+                }
+            };
+            let row = menu_row(&popup, if presentation == 2 { "Show in top bar" } else { &title });
+            assert!(!row.is_sensitive(), "pending preference rows are disabled: {theme:?} presentation {presentation}, native {:?}, shared {:?}", row.type_(), w.workspaces.view().switcher_options.sections[0].iter().map(|row| row.enabled).collect::<Vec<_>>());
+            let footer = menu_row(&popup, "Manage Workspaces…");
+            assert!(footer.grab_focus());
+            let model = popup.menu_model().unwrap();
+            let page = popup.visible_submenu();
+            lock.stdin.take().unwrap().write_all(b"release\n").unwrap();
+            assert!(lock.wait().unwrap().success());
+            until(|| !w.workspaces.view().switcher_busy, "preference write completed");
+            assert!(popup.is_visible());
+            if presentation != 2 { assert_eq!(popup.menu_model().unwrap(), model); }
+            assert_eq!(popup.visible_submenu(), page);
+            let enabled_row = menu_row(&popup, if presentation == 2 { "Show in top bar" } else { &title });
+            if presentation != 2 { assert_eq!(enabled_row, row); }
+            assert!(enabled_row.is_sensitive(), "open preference rows become enabled");
+            assert!(menu_row(&popup, "Manage Workspaces…").has_focus(), "menu refresh preserves focused native row: {theme:?} presentation {presentation}, focused {:?}", gtk::prelude::GtkWindowExt::focus(&w.window).map(|widget| (widget.type_(), widget.widget_name())));
+            pump(250);
+            if presentation == 2 {
+                click(&w, &mut input, &mapped_label(popup.upcast_ref(), "Show in top bar").unwrap());
+                assert!(popup.visible_submenu().as_deref().is_some_and(|page| page != "main"));
+            }
+            click(&w, &mut input, &mapped_label(popup.upcast_ref(), &title).unwrap());
+            wait_switcher(&w);
+            assert!(!popup.is_visible());
+            assert!(manager.switcher_ids().contains(&active));
+            assert_eq!(manager.active_id().as_ref(), Some(&active));
+            assert_eq!(manager.current().unwrap().capture().unwrap(), original);
+        }
+    }
+    input.finish();
+    w.window.close();
+    pump(200);
+}
+
+#[test]
 #[ignore = "isolated Mutter mouse/touch driver and SQLite; workspace-motion.sh gtk --native-test=native_workspace_switcher_options"]
 fn native_workspace_switcher_options() {
     let mut input = switcher_input();
@@ -573,6 +668,7 @@ fn native_workspace_switcher_options() {
         assert!(options().width() >= 26);
         assert_eq!(w.workspaces.switcher.measure(gtk::Orientation::Vertical, -1).1, 36);
         assert_eq!(options().measure(gtk::Orientation::Vertical, -1).1, 26);
+        until(|| !ui_session(&w).engine().backend().stats.lock().unwrap().presented.is_empty(), "first canvas presentation");
         crate::capture(&w, input.dir.join(format!("workspace-header-{theme:?}.png")).to_str().unwrap());
         click(&w, &mut input, options().upcast_ref());
         let popup = options().popover().unwrap().downcast::<gtk::PopoverMenu>().unwrap();
