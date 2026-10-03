@@ -24,10 +24,11 @@ without understanding the referring type. Let composition types own their
 coordinate and evaluation rules, and outputs own delivery intent. Signal
 compatibility through the content itself rather than through capability lists.
 Keep today's raster layouts in a versioned resource type, rather than building
-an arbitrary channel schema now. Prefer one authored graph with layers and nodes
-as views of the same representation. The node/layer design remains undefined
-pending a dedicated research review before implementation; the composition
-sketches below do not settle that representation.
+an arbitrary channel schema now. Use one authored graph with layers and nodes
+as views of the same representation, starting with structured stack operations.
+The [implementation plan](../development/capy-format.md) defines the staged
+file/runtime boundary and its correctness and performance gates. The byte-level
+schema remains provisional until those gates pass.
 
 The lasting commitment is **new readers preserve the meaning of old files**.
 Old readers cannot edit arbitrary future features correctly. They should show a
@@ -286,7 +287,7 @@ Relevant boundary cases include:
 | Unknown hidden object | It may contain editable work or become visible later. Visibility is not permission to discard it. |
 | Missing font, shader ABI, ICC support or video decoder | The package may be valid even when the reader cannot evaluate it. Report unsupported content separately from corruption. |
 | Corrupt payload, duplicate IDs, dangling references or cyclic hierarchy | Reject invalid native content; offer a separately verified preview or explicit recovery, never silently manufacture a successful load. |
-| Cropped canvas, negative placement or sparse empty area | The canvas is the layer stack's frame: offsets, effects and paper are defined relative to it, but it does not bound the stored content. Outputs frame a composition without redefining it. Absence must have type-defined meaning. |
+| Cropped canvas, negative placement or sparse empty area | The canvas is the composition's frame: offsets, effects and paper are defined relative to it, but it does not bound the stored content. Outputs frame a composition without redefining it. Absence must have type-defined meaning. |
 | Huge or adversarial file | Check arithmetic, decoded budgets, nesting, counts and codec output sizes. Deduplicated bytes can still describe an enormous decoded working set. |
 | Reordered or deleted objects with unknown metadata | Stable IDs help, but do not prove that unknown relationships remain valid after edits. |
 | Damaged thumbnail only | Artwork validity is independent; a supported reader can regenerate a preview from intact content. |
@@ -906,16 +907,17 @@ ordinary packages to private storage; only their publication and retention diffe
 
 ### Keep the file model small and independent
 
-The following layer-stack types and ordering examples describe semantic
-requirements, not a commitment to save layers separately from nodes. Their
-representation is subject to the [node/layer research review](#should-the-file-already-be-a-general-node-graph).
+The following stack types and ordering rules describe the first supported subset
+of one authored graph. The [implementation plan](../development/capy-format.md)
+defines the source/occurrence boundary, typed ports, runtime alternatives and
+qualification gates. Layers and nodes do not have separate saved authorities.
 
 The revised durable model needs five concepts:
 
 1. **Document envelope:** format identity and envelope version, a document ID, a
    reference to the authored root, the outputs and portable metadata. The root is
-   what the editor opens: today the layer stack, later perhaps a page collection
-   or a project bin.
+   what the editor opens: today a composition whose result is a structured stack,
+   later perhaps a page collection or a project bin.
 2. **A flat table of typed objects:** every independent artwork record is a top-level
    object with a globally unique ID and a namespaced type. Relationships are
    references, never array positions or duplicate embedded definitions. Ordinary
@@ -956,11 +958,13 @@ The revised durable model needs five concepts:
    ordinary save on a full-film render. Source data remains authoritative unless
    the artist explicitly converts it.
 
-**A composition type owns its evaluation domain.** The layer stack's frame is
-today's canvas: its size and origin, physical resolution, working color space
-and depth, and blend space. Offsets, effects and paper are defined relative to
-it, and content may extend beyond it. A nested composition later brings its own frame, and a timeline
-adds a time base and duration to it, as After Effects compositions do. Other types
+**A composition type owns its evaluation domain.** Its frame is today's canvas:
+size and origin, physical resolution, working color space and depth, and blend
+space. The composition references its result; a stack owns order and inherits
+that context. Offsets, effects and paper are defined relative to the composition,
+and content may extend beyond it. A nested composition later brings its own
+frame, and a timeline adds a time base and duration, as After Effects compositions
+do. Other types
 may define a 3D world, a texture set or an audio domain without a dummy pixel
 canvas. Image outputs frame and scale a composition rather than redefining it.
 Today's effect lengths are in canvas pixels. Every parameter declares its
@@ -969,31 +973,31 @@ composition-space distance and a normalized fraction are different meanings;
 Image Size rules belong to those meanings. Rendering at another scale,
 half-resolution proxies and Image Size then handle lengths without consulting
 display labels. Color belongs to the composition that blends and to each
-resource that stores samples, so the
-roadmap's per-layer linear blending becomes an override of the stack's default
-rather than a conflict with a document setting.
+resource that stores samples, so the roadmap's per-layer linear blending becomes
+an override of the composition's default rather than a conflict with a document
+setting.
 
-**Separate content from occurrences only where content is shared.** Today's
-layers own their pixels, sources and masks exclusively, so a first-format layer
-is an occurrence that references its resources and masks directly. The first
-feature that shares editable
-content, such as Smart Objects, held cels or symbols, introduces separate content
-objects: the layer keeps its ID as the occurrence and the content receives a new
-one. Nothing binds to content identity yet, so deferring the split loses nothing
-and avoids doubling today's objects and validation rules. Effect definitions
-differ because one program serves many instances: store each program once as a
-resource, and let effect applications reference it with values keyed by stable
-parameter keys.
+**Separate editable content from occurrences in the baseline.** A paint source
+owns its local domain, imported base, sparse overrides and material state; an
+occurrence owns placement and compositing controls. A mask use references a
+coverage source. Carry these identities into the shared editor and renderer, so
+loading does not rebuild a second layer authority and painting does not resolve
+ownership through a file-only wrapper. The initial editable subset uses at most
+one occurrence per editable source; linked uses remain a later feature. Independent
+Duplicate assigns new source identity while sharing immutable backing. Store
+each effect program once as a resource, and let effect applications reference it
+with values keyed by stable parameter keys.
 
-Store layer order once in the authored composition; the node/layer review must
-decide its representation. Do not add an independent authoritative parent/order
-table. Distinguish composition membership and stacking order from transform
-parenting, instancing, resource references and
+Store order once as a stack's ordered occurrence references. Do not add an
+independent authoritative parent/order table. Distinguish composition membership
+and stacking order from transform parenting, instancing, resource references and
 evaluation inputs. A future track matte can reference a sibling independently
 of z-order; a transform parent need not own the child or its compositing scope.
 Today's mask ownership and clipping rules remain rules of the stack type.
 Known types validate their own relationship/cycle rules; do not assume all
-references form one tree or one executable DAG. A future graph can contain ports and connections; a
+references form one tree or one executable DAG. The baseline gives evaluation
+connections typed endpoints with stable port keys and defines scoped backdrop
+and clipping inputs for stacks. Future operations extend those interfaces; a
 timeline can reference compositions and media; a page collection can reference
 multiple compositions. These can nest rather than being mutually exclusive root
 modes. Existing objects need not become fictitious layers in these models.
@@ -1005,8 +1009,10 @@ standardize an all-purpose list of modifier stages in the envelope. The first
 implementation supports today's effect layers and embedded filter programs;
 layer FX and other application types arrive with their features.
 
-Use dedicated wire types in shared Rust, with validated conversion to runtime
-types. Keep semantic rules and compatibility checks shared across hosts. JSON
+Use thin wire adapters in shared Rust, with validation and one-time resolution
+of portable IDs to compact runtime handles. File and editor share semantic
+ownership; wire spelling does not dictate arena layout or execution plans. Keep
+semantic rules and compatibility checks shared across hosts. JSON
 is adequate for the small structural description; reject duplicate JSON keys
 before interpreting a record. Avoid large numeric/byte arrays, base64 media,
 serialized pointers and runtime enum ordinals. IDs are opaque
@@ -1141,21 +1147,18 @@ Self-contained remains the default; one file need not mean one project.
 
 ### Should the file already be a general node graph?
 
-**Preferred direction: one authoritative authored graph, with layer and node
+**Selected direction: one authoritative authored graph, with layer and node
 editing as views of that representation.** Avoid separate saved layer and node
-models that must be synchronized. This replaces the preference for a distinct
-layer-stack composition with graph compositions added alongside it later.
+models that must be synchronized. Start with structured stacks, separate editable
+sources and occurrences, and typed interfaces. This replaces both the deferred
+content split and the idea of adding a separate graph composition model later.
 
-**Design status: undefined pending a dedicated research review before
-implementation.** The review must assess the unified approach before the file
-model commits to either representation. Node vocabulary, ports, grouping,
-ordering, layer-view behavior and evaluation semantics remain open. No graph
-schema, conversion strategy or implementation sequence is adopted here.
-
-The [dedicated node/layer assessment](authored-graph-research.md) recommends
-structured stack operations within one authored graph and proposes workflow,
-correctness and performance gates. Its candidate design remains unadopted;
-the assessment does not establish implementation or measured feasibility.
+The [node/layer assessment](authored-graph-research.md) supplies the workflow
+requirements. The [implementation plan](../development/capy-format.md) specifies
+the baseline ownership, code changes, extension cases and acceptance gates.
+The byte schema and runtime layout remain provisional until their prototypes
+pass correctness and performance qualification. Selecting the direction does
+not establish implementation or measured feasibility.
 
 Graphite demonstrates the product direction: layers and nodes are two views of
 one document, and canvas edits modify the graph. Its developer guide describes
@@ -1174,8 +1177,8 @@ Three different graphs must not be conflated:
   occurrences. The recommended file can represent this from the start.
 - An **authored evaluation graph** is a program: named typed ports, connections,
   parameter bindings, outputs and defined evaluation semantics. It is the
-  preferred common representation for layer and node editing; its design is
-  the subject of the pending review.
+  common representation for layer and node editing. Structured stacks are its
+  first supported subset; arbitrary graph editing is a later feature.
 - The **runtime execution graph** schedules tiles, passes, cache reuse and GPU
   work. It is derived and can change with optimizations; it should not be saved
   as the artwork's durable meaning.
@@ -1200,17 +1203,18 @@ pre-fill coverage and final appearance; representing every operation as one
 RGBA-in/RGBA-out shader is too restrictive.
 [Existing group semantics](../internals/documents.md#groups-and-pass-through).
 
-The research must also assess how the layer view handles sharing, fan-out and
+The node assessment addresses how the layer view handles sharing, fan-out and
 graphs without a single layer ordering, and what reorder, group and delete mean
-in those cases. The preference for a unified representation does not establish
-that every graph can be fully edited through a layer list.
+in those cases. The unified representation does not imply that every graph can
+be fully edited through a layer list; later editing features still need their
+own workflow qualification.
 
 Before landing an implementation, require evidence that it preserves current
 masks, clipping, isolated/pass-through groups and live adjustments; shared
 content evaluated in two contexts; and layer edits without lost authored data.
-Validate pixel equivalence and bounded incremental rendering. These are
-assessment criteria for the future design, not a request to implement it before
-the research review.
+Validate pixel equivalence and bounded incremental rendering. Follow the plan's
+prototype and cutover stages; do not persist runtime scheduling or require
+general node editing to ship the baseline format.
 
 ### Compatibility signalled by content
 
@@ -1235,7 +1239,10 @@ Three rules make additions visible without capability lists:
   document *unsupported*, not corrupt; malformed known data is invalid.
   Requirements close over nested content, effect definitions and resource
   encodings because each of those is its own record: a supported 3D object does
-  not imply a supported rig or material.
+  not imply a supported rig or material. A structurally valid combination of
+  known records can also exceed the editor's supported subset, such as linked
+  editable sources before shared-source editing exists. Test support separately
+  from structural validity; preserve unsupported combinations in preview mode.
 - **Records say whether they can be ignored.** Following PNG's chunk properties,
   a record may be `ancillary`, so a reader that does not understand it can still
   display and edit the document, and `copy_safe`, so that reader may keep it
@@ -1377,8 +1384,8 @@ sample order and type, byte order, color/alpha interpretation, finite-value rule
 and missing-tile meaning. Constants belong to that encoding's specification;
 do not repeat fixed channel names or a general layout description on every tile.
 Resource records carry only the varying descriptors and profile references.
-`layer-stack/1` may require paint to match its working format, but the container
-no longer compares every tile with a document-wide color.
+The baseline composition type may require paint to match its working format, but
+the container no longer compares every tile with a document-wide color.
 
 Do not implement an arbitrary plane/channel description language in the first
 format. New resource types can add layouts without changing resource addressing.
@@ -1489,18 +1496,18 @@ committing to the format implementation, require evidence for:
    the save. Exercise non-seekable provider streams and large offsets, not only local seekable
    files, with the [checks appropriate to the implementation](../development/testing.md).
 
-The first format should contain today's artwork types in a flat object table with
-random IDs and visible references, a resource table with today's typed layouts
-and per-block CRC-32s, the layer stack's frame and color on the stack, one output
-that owns delivery intent, content-signalled compatibility with ancillary and
-copy-safe records, and an optional current preview at a fixed location. Leave
-content/occurrence splits, composition interfaces, bindings, timeline schemas,
-vector geometry, 3D scenes, rigs, linked resources, incremental archive updates
-and collaboration protocols to their respective features. Resolve the preferred
-unified node/layer representation through the dedicated research review before
-fixing its wire schema. The foundation is successful when adding one of those
-types no longer requires replacing the
-container or reinterpreting the meaning of existing artwork.
+The first format should contain today's artwork as structured authored graph
+types in a flat object table: composition context, ordered stacks, separate
+sources and occurrences, stable typed endpoints, random IDs and visible
+references. Keep a resource table with today's typed layouts and per-block
+CRC-32s, one output owning delivery intent, content-signalled compatibility with
+ancillary and copy-safe records, and an optional current preview at a fixed
+location. Leave reusable graph interfaces, bindings, timeline schemas, vector
+geometry, 3D scenes, rigs, linked resources, incremental archive updates and
+collaboration protocols to their features. Follow the
+[implementation plan](../development/capy-format.md) before freezing the wire
+schema. Adding those features should extend authored types without replacing
+the container, maintaining a second layer document or reinterpreting artwork.
 
 ## 5. Adversarial review
 
@@ -1521,7 +1528,7 @@ not proof of implementation or performance.
 | --- | --- | --- |
 | Omit defaults; unknown means unsupported | `used`/`required` inventories and per-type minor versions | One source of truth. Frozen wire defaults let older readers keep editing newer files that use no new feature; semantic changes still need new type versions and maintained readers. |
 | `ancillary` and `copy_safe` marks | Preserved optional attachments, and read-only mode when one might depend on edits | PNG's long-tested rule. An older reader can still edit and knows what to keep. |
-| Layers own their content in the first format | A content object and an occurrence object per layer | No current feature shares editable content; the split can happen later without changing any saved meaning. |
+| Separate sources and occurrences in file and editor | Deferring the split until editable content is shared | Resolves paint-target versus placement identity once. Immutable backing remains shared; no per-frame conversion to an older layer model. General shared-source commands remain deferred. |
 | No editing-state record | An optional transferable editing-state attachment | Active layer, mask inspection, the current selection and selection display stay in local session state keyed by document ID; an ancillary record can carry them later. |
 | Current preview or no preview | Mandatory rendering before source publication, and first-format staleness bookkeeping | A bounded image does not imply bounded evaluation. Missing rendering support must not prevent saving captured source; absence is simpler and safer than retaining stale pixels. |
 | Today's raster layouts in a versioned type | Arbitrary channel/plane descriptors in the first implementation | Transport extensibility already comes from typed resources. UDIM sets and deep samples are not solved by adding channel names to today's pixels. |
@@ -1628,8 +1635,8 @@ or prove their behavior.
 | A literal-or-reference union in every property, as Figma stores a variable beside a fallback color | Rejected. The fallback literal is a second source of truth that an older editor would change without the binding. Binding records keep fields literal. |
 | Preserving unknown fields inside known records while editing | Deferred because preserving bytes does not establish edit safety. Open XML preprocessing illustrates possible loss on save, not a universal failure of unknown-field preservation. |
 | A mandatory full-resolution merged image, like Krita's `mergedimage.png` | Rejected as mandatory, since Krita's KRZ omits it to save space. Allowed as an optional saved representation. |
-| Fractional order keys on disk, as [Figma](https://www.figma.com/blog/realtime-editing-of-ordered-sequences/) and [Excalidraw](https://plus.excalidraw.com/docs/api/scene-content-schema) use for sync | Not required by the package foundation. The authored ordering representation is pending the node/layer review; synchronization is a separate feature. |
-| A unified authored graph with layer and node views | Preferred direction; design remains undefined pending a dedicated research review before implementation. See [the node/layer decision](#should-the-file-already-be-a-general-node-graph). |
+| Fractional order keys on disk, as [Figma](https://www.figma.com/blog/realtime-editing-of-ordered-sequences/) and [Excalidraw](https://plus.excalidraw.com/docs/api/scene-content-schema) use for sync | Not required. A stack stores ordered occurrence references once; synchronization is a separate feature. |
+| A unified authored graph with layer and node views | Selected direction with structured stacks first. The [implementation plan](../development/capy-format.md) requires semantic prototypes and runtime qualification before schema freeze. |
 | Opening `.capy` files in operating-system archive tools | Not promised; their ZIP64 support is unreliable. |
 
 ### Capy Canvas's own planned features
@@ -1638,7 +1645,7 @@ or prove their behavior.
 | --- | --- |
 | [Document palettes](color-palettes-research.md) and [document color samplers](../development/photo-editing-m5-m6.md) | Palette and sampler objects; swatches become bindable later. |
 | [Color Lookup with imported `.cube` files](../development/photo-editing-m5-m6-execution.md) | Resources referenced by effect applications, kept after the source file is deleted. |
-| [Per-layer linear blending](../development/photo-editing-roadmap.md), Blend If, mask density and feather ([research](photo-editing-research.md)) | Layer-stack fields omitted at their defaults; a per-layer blend space overrides the stack's. |
+| [Per-layer linear blending](../development/photo-editing-roadmap.md), Blend If, mask density and feather ([research](photo-editing-research.md)) | Occurrence fields omitted at their defaults; a per-layer blend space overrides the composition's. |
 | [Layer comps and tags](layers-research.md) | Comps are outputs with a context; tags are fields or copy-safe ancillary records. |
 | [Persisted history snapshots](photo-editing-research.md) | Explicitly retained snapshot objects outside the stack, with their own budget; ordinary undo history remains session state. |
 | [Vector strokes](vector-layers-research.md) with binary samples, embedded brushes and sub-path IDs | A typed content object with binary resources; sub-path IDs are local and addressed by path. Cross-record inputs use manifest bindings. Whether to keep an outline fallback is that feature's decision; the foundation defines only the portable output-preview convention. |

@@ -8,7 +8,10 @@ product documentation. The proposed semantics, implementation stages and
 additional acceptance gates are recommendations, not an adopted specification,
 an implementation or measured results. The
 [format foundation](capy-format-foundation.md#should-the-file-already-be-a-general-node-graph)
-records the preference and the questions this research addresses.
+records the questions this research addresses. The subsequent
+[implementation plan](../development/capy-format.md) selects this direction,
+resolves the baseline file/editor boundary and stages the code changes. Its
+qualification gates remain unverified; this research is not a byte specification.
 
 **Recommendation: one authoritative authored graph, with layers and nodes as
 views of it, explicit stack semantics and a deliberately limited first
