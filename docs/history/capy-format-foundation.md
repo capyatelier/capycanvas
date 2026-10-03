@@ -6,15 +6,16 @@ Research date: 2026-10-02, including the adversarial review in section 5. Code
 baseline: `2e574cb20`. This is a design recommendation, not an adopted format
 specification or an implementation plan for the future features discussed below. Current-format findings come from the
 reader, writer, model types and a checked-in file, rather than earlier plans.
-External sources are primary specifications, developer documentation and product
-manuals. Tradeoffs and recommendations are our analysis of those sources.
+External sources include specifications, developer documentation, product manuals
+and explicitly identified third-party investigations. Tradeoffs and
+recommendations are our analysis of those sources.
 
 **Recommendation:** keep `.capy` as one self-contained artwork file, using a
 restricted ZIP container with ZIP64 support, a small JSON manifest, a flat table
 of typed objects with globally unique IDs, binary resources and a mandatory
 portable preview. Keep today's sparse, lossless tile storage and reuse of
-compressed data, but check each stored block with a CRC-32 instead of decoding
-every tile on open. Replace serialization of the runtime `Document` with an
+compressed data, but check stored blocks with CRC-32 and defer decoding until
+needed. Replace serialization of the runtime `Document` with an
 explicit file model. Write every reference in one form that a reader can find
 without understanding the referring type. Give each composition its own frame,
 units and working color, and give each output its delivery intent. Signal
@@ -183,12 +184,13 @@ not a sufficient inventory. Check the
    structural validity from a particular device's editable working set. Do not
    remove resource limits to claim extensibility.
 
-10. **Color and geometry are canvas-global.** The reader rejects any tile whose
-    descriptor differs from the document color, so no layer, group or resource
-    can have its own space or depth; the roadmap's per-layer linear blending
-    already conflicts with a single blend space. Root offsets carry the canvas
-    origin, crop rewrites them, effects are evaluated over the canvas, and effect
-    lengths are canvas pixels. Layer pixels are already independent of canvas
+10. **Paint-tile color and composition geometry are canvas-global.** The reader
+    requires paint/material tile descriptors to match the document's plane
+    descriptors. Retained imported sources already have independent profiles and
+    depths; ordinary paint layers do not. The roadmap's per-layer linear blending
+    needs an override of today's document-wide blend policy. Root offsets carry
+    the canvas origin, crop rewrites them, effects are evaluated over the canvas,
+    and effect lengths are canvas pixels. Layer pixels are already independent of canvas
     pixels through placement. These are valid rules of today's layer stack, but
     they belong to that composition rather than to the document.
     See [`canvas_geometry.rs`](../../crates/layer-core/src/canvas_geometry.rs) and
@@ -420,7 +422,7 @@ frame. For temporal effects and motion blur, the feature declares its required
 time interval and sampling behavior, not only a spatial damage radius. Reversed
 time for video, audio and stateful simulation needs separately defined behavior.
 
-**Give each composition a time base and keep clips apart from what they animate.**
+**Give animated compositions a time base and keep clips apart from their targets.**
 After Effects stores frame rate, duration, start time and shutter on each
 composition and decides per composition whether nested frame rates are preserved;
 Clip Studio Paint creates each timeline with its own rate and length.
@@ -428,7 +430,9 @@ Clip Studio Paint creates each timeline with its own rate and length.
 [CSP timelines](https://help.clip-studio.com/en-us/manual_en/600_animation/Timeline_Palette.htm).
 Spine, Rive, Live2D and Moho keep many named animations beside one rig. A clip
 therefore targets properties through paths relative to the content it is applied
-to, so one clip can drive several occurrences or rigs. Some animation is keyed
+to, so one clip can drive several occurrences. Reuse across different rigs needs
+compatible declared interfaces or an explicit retargeting map; relative paths
+alone do not provide that mapping. Some animation is keyed
 on a parameter rather than on time: Live2D keyforms, Moho smart-bone actions and
 Rive joysticks. Curves are functions of an evaluation-context input, of which
 time is one. [Spine skins](https://esotericsoftware.com/spine-skins),
@@ -446,12 +450,12 @@ rule above applies to time-sampled outputs.
 
 **Retain authored work that is not currently played.** Unassigned cels, unused
 takes, disabled tracks, off-range keys and alternate poses are still artwork.
-The root's authored ownership must include them; tracing references only from
-rendered outputs would lose them. Deleting an exposure is not deleting its cel.
-Only data unowned by all authored records, with no preserved unknown attachment
-depending on it, is eligible for removal. This animation audit strengthens the
-root/outputs distinction in the recommendation without requiring a new container
-section for every kind of unused work.
+Their object-table entries retain them even when no current output or root
+references them. Deleting an exposure is not deleting its cel. Remove authored
+objects only through an explicit deletion operation; collect payloads only when
+no retained object, output or preserved ancillary record needs them. This
+distinguishes retention from render reachability without requiring a new
+container section for every kind of unused work.
 
 **Separate persistence from rendering policy.** Onion skins, the playhead,
 temporary solo controls, the light table and scrubbing caches are editor state.
@@ -795,7 +799,7 @@ frames and color, declared channel layouts and stricter container rules.
 | --- | --- | --- |
 | Evolve the current custom container | Reuses the compact index, streaming writer, tile checks and compressed backing. A generic resource directory could make it extensible. | We own every inspection/recovery tool and directory rule. A sound alternative if measured ZIP integration costs prove material; capabilities do not inherently require ZIP. |
 | ZIP with ZIP64 support | Standard directory and offsets, independent resources, preview extraction and a single transferable file. Krita, Sketch, Penpot, Procreate and dotLottie use ZIP. | Central directory is normally read from the end; safe updates generally rewrite the package. Restrict the ZIP feature set and pack tiny blocks. **Recommended default.** |
-| SQLite | Transactions, partial updates, indexes and a mature application-file story. [SQLite application files](https://www.sqlite.org/appfileformat.html). A [reverse-engineered parser](https://pypi.org/project/clipparse/) shows Clip Studio Paint keeping metadata in an embedded SQLite database beside offset-addressed pixel blocks. | Copying a database mid-transaction or separating it from its journal corrupts it, and deleted content stays in free pages unless `secure_delete` is on. [Corruption](https://www.sqlite.org/howtocorrupt.html), [pragmas](https://www.sqlite.org/pragma.html). Blobs above about 100 KB read faster from files. [Blob speed](https://sqlite.org/fasterthanfs.html). Sketch [moved from SQLite](https://blog.icons8.com/articles/what-is-inside-of-a-sketch-file/) to ZIP and JSON. Attractive for a working/recovery store if incremental saves become essential; not the interchange package. |
+| SQLite | Transactions, partial updates, indexes and a mature application-file story. [SQLite application files](https://www.sqlite.org/appfileformat.html). A [reverse-engineered parser](https://pypi.org/project/clipparse/) shows Clip Studio Paint keeping metadata in an embedded SQLite database beside offset-addressed pixel blocks. | Publishing a live database requires a consistent snapshot and journal handling; deleted data can remain in free pages without sanitization or compaction. [Corruption](https://www.sqlite.org/howtocorrupt.html), [pragmas](https://www.sqlite.org/pragma.html). SQLite's older large-blob benchmark favors separate files above roughly 100 KB on its tested setup, not universally. [Benchmark and caveats](https://www.sqlite.org/intern-v-extern-blob.html). A valid alternative, especially for a working store; ZIP better matches this proposal's member extraction and compressed-block reuse without a database layer. No Capy benchmark establishes a performance winner. |
 | Directory bundle, tar or whole-file compression | A directory is convenient for development and large projects; Toon Boom Harmony and OpenToonz keep scenes as folders. Sequential containers are easy to stream. | A directory is awkward to transfer through mobile providers, and Apple warns that iWork packages can be damaged by browser uploads or email. [Apple](https://support.apple.com/en-us/HT202887). Tar needs another index for random access; whole-file compression couples unrelated media. None is the default user-facing file. |
 
 ZIP64 must be supported from the first reader, including large entry counts and
@@ -816,14 +820,21 @@ Capy reader seeing the same members.
   uncompressed JSON and text resources; measure that cost before adding another
   mandatory codec.
 - **Sizes and CRC-32 in every local header; no data descriptors.** APPNOTE allows
-  descriptors with any method, but Java's `ZipInputStream` still rejects them on
-  STORED entries. [JDK-8143613](https://bugs.openjdk.org/browse/JDK-8143613).
+  descriptors with any method, but Java's `ZipInputStream` rejects them on
+  STORED entries. [OpenJDK reader](https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/java/util/zip/ZipInputStream.java).
   Block checksums are CRC-32s ([raster storage](#retain-efficient-raster-storage-normalize-its-contract)),
-  so a writer combines them into each member's CRC without rereading data, and a
-  non-seekable Android or browser stream still receives complete headers.
+  so a writer can combine already computed checksums and lengths in physical
+  byte order, including any pack headers or padding, into a member's CRC.
   [zlib `crc32_combine`](https://www.zlib.net/manual.html).
-- **One canonical ZIP64 encoding**, members without gaps or overlaps, no duplicate
-  names and a single end record.
+  A non-seekable output works only after each member's size and checksum are
+  known. Newly encoded previews, media or blocks must first be buffered or
+  spooled to bounded private storage. Descriptors normally enable unknown-length
+  streaming; excluding them is an interoperability tradeoff, not what enables
+  streaming. CRC combination does not verify bytes that have not been read.
+- **One canonical rule for classic/ZIP64 fields**, members without gaps or
+  overlaps and no duplicate names. Specify when to use ZIP64 size/offset fields
+  and require one terminal directory, with its end record and, when needed, the
+  ZIP64 end record and locator. Multiple competing archive tails are forbidden.
 - **Canonical relative ASCII member names that stay distinct when case is
   ignored.** Treat the package as an abstract set of members with ZIP as its
   exchange form, as EPUB defines its container separately from the ZIP mapping.
@@ -835,8 +846,12 @@ Capy reader seeing the same members.
   other members and the central directory.
   [C2PA specification](https://spec.c2pa.org/specifications/specifications/2.2/specs/C2PA_Specification.html),
   [c2pa-rs ZIP handler](https://github.com/contentauth/c2pa-rs/blob/main/sdk/src/asset_handlers/zip_io.rs).
-  Readers accept and ignore members there. An edited save drops them, because a
-  signature describes one exported snapshot.
+  Readers accept bounded optional members there without treating their presence
+  as proof of authenticity. C2PA specifies zero CRC fields for its manifest;
+  that exact member needs a documented exception to the normal member-CRC check,
+  with structural/bounds checks still enforced. An edited save drops signatures;
+  signing and verification remain separate future features. Reservation alone
+  does not establish C2PA interoperability, especially for ZIP64.
 
 An illustrative package, not final member names or a byte-level specification:
 
@@ -887,15 +902,18 @@ The revised durable model needs five concepts:
    reference to the authored root, the outputs and portable metadata. The root is
    what the editor opens: today the layer stack, later perhaps a page collection
    or a project bin.
-2. **A flat table of typed objects:** every addressable record is a top-level
+2. **A flat table of typed objects:** every independent artwork record is a top-level
    object with a globally unique ID and a namespaced type. Relationships are
    references, never array positions or records nested inside another object's
    data. Types own their fields, the stable keys of addressable properties and the
    meaning of their references. Identity is independent of array position,
    display name, runtime allocator and content hash. Every object in the table is
    retained authored work, including hidden layers and, later, unassigned cels and
-   unused takes. Deletion is explicit, and validation rejects objects that
-   neither the root nor an output reaches.
+   unused takes. Deletion is explicit: an object is not invalid or collectible
+   merely because the root and outputs do not reach it. Validate every retained
+   object's compatibility and references, including unplayed work. Future types
+   may define local subelement identities without making each point or sample a
+   document object.
 3. **Resources:** immutable binary or text payloads in one resource table. Objects
    reference resource IDs; the table gives each payload's location (today a
    member, or a pack and range), encoding, length and checksum. Several objects
@@ -910,10 +928,12 @@ The revised durable model needs five concepts:
    initial state without adding those fields to every document. Settings have one
    owner and are referenced where shared.
 5. **Saved representations:** a baseline preview and, later, optional richer
-   fallbacks, each belonging to an output. Every save regenerates every
-   representation from the same snapshot, so the first format needs no staleness
-   bookkeeping. Source data remains authoritative unless the artist explicitly
-   converts it.
+   fallbacks, each belonging to an output. Every save regenerates the mandatory
+   preview from the saved snapshot, so the first format needs no staleness
+   bookkeeping. Future optional movies or scoped fallbacks need dependency and
+   snapshot rules; omit or invalidate a stale proxy instead of blocking an
+   ordinary save on a full-film render. Source data remains authoritative unless
+   the artist explicitly converts it.
 
 **A composition owns its frame.** The layer stack's frame is today's canvas: its
 size and origin, physical resolution, working color space and depth, and blend
@@ -980,10 +1000,15 @@ features; generic extensibility is not a substitute for defining them.
 
 **References are visible without knowing the type.** Every reference to an object
 or resource uses one reserved JSON form, such as `{"ref": "<id>"}`, wherever it
-appears. A reader can then find the dependencies of a type it does not
-understand: check reachability, keep the resources it needs, copy it to another
-document and, later, edit around it. glTF hides references inside extension data,
-so glTF Transform does not write unregistered extensions and proposes passthrough
+appears. Reserve this form so literal user data cannot be mistaken for a
+reference. Paths use visible references at cross-object steps; property keys and
+type-owned subelement selectors remain local selectors. Binary/code payloads
+must declare their cross-record dependencies in the manifest rather than hide
+IDs in opaque bytes. A reader can then retain dependencies without understanding
+the type. This is necessary, but insufficient, for safe copying or editing:
+dependency discovery alone does not define ownership, evaluation or cloning.
+glTF hides references inside extension data, so glTF Transform does not write
+unregistered extensions and proposes passthrough
 only for extensions without references.
 [Writer](https://app.unpkg.com/@gltf-transform/core@4.2.0/files/src/io/writer.ts),
 [issue 1856](https://github.com/donmccurdy/glTF-Transform/issues/1856).
@@ -995,10 +1020,14 @@ Without a visible form, the rule that old readers must not collect resources
 they cannot see could never be relaxed.
 
 **IDs are globally unique and never reused.** Writers generate random 128-bit IDs
-for the document and its objects and keep no allocator state in the file. Paste
-between documents, linked libraries, branching and collaboration then need no
-remapping. Figma puts a per-client ID into every object ID so offline creation
-never collides; Sketch, Penpot and Krita use UUIDs; Aseprite added layer UUIDs
+for the document and its objects and keep no allocator state in the file. This
+avoids allocator coordination across documents; readers still reject duplicate
+IDs. Independent duplication or repeated paste creates new authored identities
+and remaps references within the copied set. Intentional links retain source
+identity, while branches can share IDs but hold different revisions: an ID is
+not a content hash or a conflict-resolution policy. Figma puts a per-client ID
+into every object ID to coordinate offline creation; Sketch, Penpot and Krita
+use UUIDs; Aseprite added layer UUIDs
 later behind a header flag.
 [Figma multiplayer](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/),
 [Sketch format](https://developer.sketch.com/file-format/),
@@ -1048,9 +1077,10 @@ tone pixels do. [OpenToonz styles](https://opentoonz.readthedocs.io/en/latest/ma
 **Resources can later live elsewhere.** A resource-table entry, not the reference
 to it, says where a payload lives. A later linked-media or library feature adds
 an external location with a document ID, object path, expected hash and an
-embedded cached copy, without changing any reference. A missing link then shows
-the cache and stays editable instead of forcing preview mode. Clip Studio Paint
-keeps a comic as a management file plus one file per page, InDesign books
+embedded cached copy, without changing any reference. A missing link can show
+the cache; native editability depends on what source was retained and the
+feature's linking policy. A flattened cache cannot restore editable source.
+Clip Studio Paint keeps a comic as a management file plus one file per page, InDesign books
 reference separate documents, Harmony and OpenToonz share project folders across
 scenes, and Sketch caches the library symbols a document uses.
 [CSP page files](https://help.clip-studio.com/en-us/manual_en/570_pages/Management_Files_and_Page_Files.htm),
@@ -1151,7 +1181,9 @@ Three rules make additions visible without capability lists:
 - **Writers omit every field at its default.** A new field appears in a file only
   when the artwork uses its feature, so a plain raster drawing saved by a future
   animation release contains nothing an older reader lacks. Defaults are part of
-  a type's frozen meaning.
+  a type's frozen meaning. A newly added field's absence must preserve the old
+  behavior; UI defaults may change, but then the writer emits the non-default
+  wire value. Never omit a field just because it equals today's UI default.
 - **Unknown is not invalid.** An unknown type, field, enumeration value, resource
   encoding or location kind in a record the reader must interpret makes the
   document *unsupported*, not corrupt; malformed known data is invalid.
@@ -1163,16 +1195,23 @@ Three rules make additions visible without capability lists:
   display and edit the document, and `copy_safe`, so that reader may keep it
   unchanged after edits. An unknown ancillary record that is not copy-safe is
   dropped on an edited save, and so is a kept one whose references no longer
-  resolve. Records that must be interpreted never reference ancillary ones.
+  resolve. Default both marks to false, and reject marks that contradict a known
+  type's schema. Required artwork never depends on ancillary records.
+  For the baseline, ancillary records may reference artwork and their payloads,
+  but not other ancillary records. Copy safety must remain true after arbitrary
+  allowed artwork edits, not just while referenced IDs still exist.
   [PNG chunk naming](https://www.w3.org/TR/png-3/#5Chunk-naming-conventions).
 
-The flat object and resource tables are the capability inventory. A reader checks
-each record's type and encoding without walking type-specific data. There is no
+The flat tables are the capability inventory. A reader checks the fields and
+values of every retained non-ancillary object and the encodings of resources it
+needs. Resource payloads used only by ignored ancillary records require bounded
+transport validation and preservation, not decoder support. The generic
+reference form makes those dependencies discoverable. There is no
 separate `used`/`required` list to keep consistent with the contents, and no
-table of which feature needs which minimum version. OpenTimelineIO shows the cost
-of the alternative: its per-schema versions advance with each change, so a newer
-writer must downgrade through registered functions and version targets before an
-older reader can open its files.
+table of which feature needs which minimum version. OpenTimelineIO illustrates
+another tradeoff: when a schema version advances, writing its older form uses
+registered downgrade functions and version targets. That explicit migration
+model also handles semantic changes that omission alone cannot handle.
 [OTIO versioning](https://opentimelineio.readthedocs.io/en/latest/tutorials/versioning-schemas.html).
 Protobuf's open enumerations similarly treat an unknown value as one from a
 newer schema rather than as a parse error. [Enum behavior](https://protobuf.dev/programming-guides/enum). Rive's
@@ -1211,7 +1250,7 @@ document, while lossy conversion should be explicit.
 | Supported envelope and every non-ancillary record understood | Validate and open for native editing. |
 | Unknown ancillary record | Ignore it for display and editing. Keep it unchanged when it is copy-safe; otherwise drop it on an edited save. A no-edit copy keeps everything. |
 | Unknown type, field, value, codec or location in a record that must be interpreted | List identified outputs and show their available saved representations; retain the source, with native editing disabled. |
-| Known format exceeding the device's resources | Offer the same preview path; distinguish resource limits from invalid artwork. |
+| Known format exceeding the device's resources or evaluator support | Offer the same preview path; distinguish these limits from invalid artwork. |
 | Unsupported envelope | Try only the fixed baseline preview convention within a safely parsed package; otherwise give a clear unsupported-format result. |
 | Corrupt native content | Refuse normal editing; show a verified preview only as a recovered view. |
 
@@ -1226,10 +1265,12 @@ visible references identify those resources without understanding the type. A
 no-edit copy can preserve the original package byte-for-byte. Generic retention
 is not proof of semantic validity after mutation, so unknown non-ancillary
 content leaves the document read-only, and unknown ancillary content survives an
-edit only when it declares itself copy-safe. Office never used its mechanism for
-preserving unknown markup inside known elements, and the standard dropped it as
-very hard to implement; refusing to edit around unknown fields avoids that trap.
-[Markup compatibility](https://www.ericwhite.com/blog/?p=2936).
+edit only when it declares itself copy-safe. Microsoft's Open XML SDK documents
+that compatibility preprocessing can remove unknown markup and that only the
+remaining markup is saved. This illustrates why parsing around unfamiliar
+fields is not a lossless round-trip policy; it does not establish that all Office
+preservation mechanisms were abandoned.
+[Markup compatibility](https://learn.microsoft.com/en-us/office/open-xml/general/introduction-to-markup-compatibility).
 
 Later, partial editing can be introduced for well-defined isolated scopes, and
 visible references give a future reader the dependencies it needs without a
@@ -1293,15 +1334,24 @@ absent override may reveal source pixels, and an absent mask tile may mean the
 mask's declared coverage. Preserve those distinctions.
 
 Check each stored block with a CRC-32 of its stored bytes, kept in the pack
-index. A reader can then verify a block, or copy it into a new save, without
-decompressing it; LZ4 decoding is deterministic, so the check also covers the
-decoded samples. Zarr checksums encoded chunks and Parquet checksums each
+index. A reader can then check stored-byte integrity, or copy a checked block
+into a new save, without decompressing it. This detects accidental corruption;
+it neither authenticates content nor proves decoded samples valid. Zarr
+checksums encoded chunks and Parquet checksums each
 compressed page for the same reason.
 [Zarr crc32c](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/crc32c/),
 [Parquet checksums](https://parquet.apache.org/docs/file-format/data-pages/checksumming/).
 Use CRC-32 rather than CRC-32C or xxHash because block values combine into the
-ZIP member's CRC. Validate sample values such as finite floats when a block is
-decoded for use, not as a condition of opening. Content hashes for deduplication
+ZIP member's CRC. The lazy-read benefit comes from checking stored bytes and
+deferring decode, not from CRC instead of SHA-256: a stored-byte hash could also
+be checked lazily, with a different integrity/cost tradeoff. CRCs have weaker
+collision resistance; never use them alone to deduplicate different blocks.
+Validate the manifest/index CRC before trusting descriptors, and block CRCs
+before decoding or reusing their bytes. Do not scan an entire pack merely to
+open one tile; the member CRC can be checked on a full read. Enforce decoded
+lengths, bounded LZ4 decoding and sample rules such as finite floats on use.
+If a later read finds damage, report it and preserve the original instead of
+silently saving replacement pixels. Content hashes for deduplication
 are runtime identity; if a later format records them, define their input bytes
 explicitly rather than as Serde output. Keep integrity checking per independently
 accessed block; a whole-file checksum alone would require scanning huge media to
@@ -1343,12 +1393,16 @@ committing to the format implementation, require evidence for:
    enumeration values reported as unsupported; unknown ancillary records kept or
    dropped by their copy-safe mark; references from unknown records keeping their
    resources; unsupported shader/codec; no-edit copying and no silent lossy
-   overwrite. Test missing dependencies and stale previews explicitly.
+   overwrite. Test frozen wire defaults independently of changed UI defaults,
+   unused retained objects, opaque ancillary-only resources, independent paste
+   with remapped IDs, missing dependencies and stale optional previews.
 3. **Transport failures:** truncated or conflicting directories, duplicate
    IDs/member names, case-colliding names, data descriptors, unreferenced pack
    ranges, corrupt blocks, overflow, oversized decode claims, failed writes,
    cancelled saves, provider failure during publication, and signature members
-   removed by an edited save.
+   removed by an edited save. Exercise precomputed sizes/checksums on non-seekable
+   outputs, bounded spooling, classic/ZIP64 boundaries and C2PA's zero-CRC
+   manifest exception before claiming interoperability.
 4. **Measured cost:** file size, save/open time, peak RAM, preview cost, unchanged
    save/recompression behavior, opening a large document without decoding every
    tile, large resource access and animation-shaped resource counts. Compare ZIP
@@ -1385,13 +1439,13 @@ accepted changes.
 
 | Change | Replaces | Reason |
 | --- | --- | --- |
-| Omit defaults; unknown means unsupported | `used`/`required` inventories and per-type minor versions | One source of truth. Older readers keep editing newer files that use no new feature, and writers track no minimum versions; OTIO needs downgrade functions for that. |
+| Omit defaults; unknown means unsupported | `used`/`required` inventories and per-type minor versions | One source of truth. Frozen wire defaults let older readers keep editing newer files that use no new feature; semantic changes still need new type versions and maintained readers. |
 | `ancillary` and `copy_safe` marks | Preserved optional attachments, and read-only mode when one might depend on edits | PNG's long-tested rule. An older reader can still edit and knows what to keep. |
 | Layers own their content in the first format | A content object and an occurrence object per layer | No current feature shares editable content; the split can happen later without changing any saved meaning. |
 | No editing-state record | An optional transferable editing-state attachment | Active layer, mask inspection, the current selection and selection display stay in local session state keyed by document ID; an ancillary record can carry them later. |
-| Representations regenerated on every save | Snapshot identifiers, staleness checks and object-scoped fallbacks | The first format has one preview, always written from the saved snapshot. |
-| CRC-32 per stored block | SHA-256 over decoded pixels, a specified preimage, and decoding every tile on open | Lazy verification, copying without decoding and ZIP CRCs from one value; no Serde-defined preimage to specify. |
-| Retention by table membership | Retention traced from the root | Unassigned cels and unused takes stay because they exist; deletion is explicit and orphans are invalid. |
+| Mandatory preview regenerated on every save | First-format snapshot identifiers and staleness bookkeeping | The first format has one preview from the saved snapshot. Future expensive proxies can be omitted or invalidated, with explicit validity rules. |
+| CRC-32 per stored block and deferred decoding | SHA-256 over decoded pixels and eager tile validation | Stored-byte checks permit copying without decoding; CRCs also combine into ZIP CRCs. Weaker collision resistance is a deliberate tradeoff, not a deduplication guarantee. |
+| Retention by table membership | Retention traced from rendered outputs or the root | Unassigned cels and unused takes stay because they exist; object deletion is explicit. Missing reference targets remain invalid. |
 | One package for recovery and saves | A separate recovery contract | One writer and reader; only publication differs. |
 
 ### Gaps found
@@ -1411,8 +1465,8 @@ accepted changes.
 | Channels beyond RGBA: Substance channels, spot channels, OpenEXR, OpenToonz CM32. | Fixed plane vocabulary. | Declared plane layouts per resource. | Now for the encoding; multi-channel stacks later. |
 | Multi-file projects and libraries: Clip Studio page files, InDesign books, Harmony and OpenToonz projects, Sketch's cached library symbols. | "One file" could be read as "one project". | Locations in the resource table; external entries with expected hashes and cached copies later. | The indirection now; links later. |
 | Large, frequent saves: Substance's fragmentation and Save and Compact; Procreate Dreams advertises no save times. | One pack; pack internals implicitly strict. | Several packs; readers tolerate unreferenced pack ranges; folder-safe member names. | Reader rules now; incremental saving later. |
-| Non-seekable outputs: Android provider streams may be pipes; Java rejects descriptors on STORED members. | ZIP options unspecified. | No data descriptors; member CRCs combined from block CRC-32s. | Now. |
-| Content Credentials: C2PA's ZIP embedding; Photoshop attaches credentials at export. | A strict reader would reject the signature member. | Reserve `META-INF/`. | Now. |
+| Non-seekable outputs: Android provider streams may be pipes; Java rejects descriptors on STORED members. | ZIP options unspecified. | No descriptors; precompute member sizes and CRCs, spooling new payloads when necessary. Combine known block CRCs in physical byte order. | Now. |
+| Content Credentials: C2PA's ZIP embedding; Photoshop attaches credentials at export. | A strict reader would reject the signature member or its mandated zero CRC. | Reserve `META-INF/` and define the exact signature-member checksum exception; validate interoperability before signing support. | Reader rules now; signing later. |
 
 Sources not linked in section 4:
 [Krita KRA source](https://github.com/KDE/krita/tree/master/plugins/impex/libkra),
@@ -1427,11 +1481,11 @@ Sources not linked in section 4:
 
 | Proposal | Decision |
 | --- | --- |
-| SQLite as the package, as in Clip Studio Paint | Rejected for exchange: copy and journal hazards, retained deleted data, slower large blobs, and Sketch's move away from it. It remains a candidate working store. |
+| SQLite as the package, as in Clip Studio Paint | Not preferred here: ZIP directly exposes independently readable members and compressed blocks. Consistent database snapshots can be valid exchange files; performance and sanitization depend on workload and publication policy. SQLite remains a candidate working store. |
 | Incremental or append saves now | Deferred. Only reader tolerance is decided now. ZipDiff shows how stale ZIP structures confuse parsers, and retained deleted bytes are a privacy hazard. |
 | Editing around unknown types now, as Rive's runtime does | Deferred. Visible references supply what a future reader needs; the first reader uses preview mode. |
 | A literal-or-reference union in every property, as Figma stores a variable beside a fallback color | Rejected. The fallback literal is a second source of truth that an older editor would change without the binding. Binding records keep fields literal. |
-| Preserving unknown fields inside known records while editing | Rejected. Office dropped its preservation mechanism as very hard; unknown fields make the document unsupported. |
+| Preserving unknown fields inside known records while editing | Deferred because preserving bytes does not establish edit safety. Open XML preprocessing illustrates possible loss on save, not a universal failure of unknown-field preservation. |
 | A mandatory full-resolution merged image, like Krita's `mergedimage.png` | Rejected as mandatory, since Krita's KRZ omits it to save space. Allowed as an optional saved representation. |
 | Fractional order keys on disk, as [Figma](https://www.figma.com/blog/realtime-editing-of-ordered-sequences/) and [Excalidraw](https://plus.excalidraw.com/docs/api/scene-content-schema) use for sync | Not needed. Child arrays are the saved order; a sync layer derives keys. |
 | A general executable node graph now | The section 4 recommendation stands. Harmony keeps a [node view and timeline](https://docs.toonboom.com/help/harmony-24/premium/rigging/order-layer-node-view.html) synchronized over one scene, which is consistent with a graph type added later beside the stack. |
@@ -1445,7 +1499,7 @@ Sources not linked in section 4:
 | [Color Lookup with imported `.cube` files](../development/photo-editing-m5-m6-execution.md) | Resources referenced by effect applications, kept after the source file is deleted. |
 | [Per-layer linear blending](../development/photo-editing-roadmap.md), Blend If, mask density and feather ([research](photo-editing-research.md)) | Layer-stack fields omitted at their defaults; a per-layer blend space overrides the stack's. |
 | [Layer comps and tags](layers-research.md) | Comps are outputs with a context; tags are fields or copy-safe ancillary records. |
-| [Persisted history snapshots](photo-editing-research.md) | Retained raster content outside the stack, reachable from the root, with its own budget. |
+| [Persisted history snapshots](photo-editing-research.md) | Explicitly retained snapshot objects outside the stack, with their own budget; ordinary undo history remains session state. |
 | [Vector strokes](vector-layers-research.md) with binary samples, embedded brushes and sub-path IDs | A typed content object with binary resources; sub-path IDs are local and addressed by path. Whether to keep an outline fallback is that feature's decision; the foundation requires only the output preview. |
 | [Paper surface and dry-media material](dry-media-brush-design.md) | Paint-material fields. |
 
