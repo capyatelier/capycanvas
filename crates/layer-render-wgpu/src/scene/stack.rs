@@ -69,7 +69,7 @@ fn group_into<C: Compositor>(
             }
             if !layer.visible { continue; }
             let mut chain = vec![i];
-            if direct_effect_mask(layers, layer) && !layer.effect.as_ref().unwrap().program.image_boundary() {
+            if direct_effect_mask(layers, layer) && !layer.effect.as_ref().unwrap().program.fusion_boundary() {
                 while let Some((j, _)) = siblings.peek().filter(|(j, next)| {
                     stop.is_none_or(|stop| *j > stop) && fuses_after(layers, layer, next, chain.len())
                 }) {

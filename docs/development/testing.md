@@ -92,6 +92,16 @@ Selective Color references lock original-color membership and Black scaling;
 Channel Mixer references cover signed coefficients, constants and independent
 Monochrome rows. Both preserve hidden page values through undo and project I/O.
 
+Color Lookup uses `lut3d_tests` in `layer-core`, `layer-ui` and
+`layer-render-wgpu`. These cover parser bounds, indexed payload integrity,
+history ownership, stale imports, independent tetrahedral/profile references,
+stacked resources, native-resolution output and buffer reuse during edits.
+Run GTK `native_color_lookup_import_replace_and_persistence` at narrow and wide
+widths. Web `--lookup-transport` and Android
+`embeddedLookupRetainsPixelsAndResourcesWithoutAndroidImport` verify loaded
+resources through save/reopen and renderer or Activity recreation. Their current
+scope preserves imported tables; GTK supplies the Import/Replace controls.
+
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
 `RUST_TEST_THREADS` or `--test-threads` says otherwise. Some Linux drivers limit

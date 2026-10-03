@@ -21,6 +21,10 @@ mod contact_presets;
 pub use contact_presets::CONTACT_BRUSH_PRESETS;
 mod effect_catalog;
 mod effects;
+pub mod lut3d;
+pub use lut3d::Lut3d;
+#[cfg(test)]
+mod lut3d_tests;
 pub mod raster;
 pub mod raster_storage;
 pub use effect_catalog::*;
@@ -67,7 +71,7 @@ pub use merge::{MergeDown, MergeKind, MergePlan, MergeRefusal, bake_layers};
 mod retouch_layers;
 pub use retouch_layers::{RetouchLayerPlan, RetouchLayerRefusal, SEPARATION_IDS, SeparationFilters};
 mod project_storage;
-pub use project_storage::SelectionIndex as ProjectSelections;
+pub use project_storage::{SelectionIndex as ProjectSelections, ResourceIndex as ProjectResources};
 mod history_budget;
 mod color_edit;
 mod color_history;
@@ -289,6 +293,10 @@ pub struct Layer {
 }
 
 impl Layer {
+    pub fn resource_roots<'a>(&'a self, out: &mut Vec<&'a Arc<Lut3d>>) {
+        out.extend(self.effect.iter().flat_map(|effect| effect.resources()));
+        for operation in self.pending_operations.iter().chain(self.mask.iter().flat_map(|m| m.pending_operations.iter())) { operation.resource_roots(out); }
+    }
     fn mesh_roots<'a>(&'a self,out:&mut Vec<&'a Arc<MeshMap>>) {
         out.extend(self.properties.placement.mesh.iter());
         for op in self.pending_operations.iter().chain(self.mask.iter().flat_map(|m|m.pending_operations.iter())) {op.mesh_roots(out);}
@@ -1794,6 +1802,10 @@ impl Edit {
     }
 
     fn requires_history_admission(&self, document: &Document) -> bool {
+        let resources = |layer: &Layer| {
+            let mut roots = Vec::new(); layer.resource_roots(&mut roots);
+            roots.into_iter().filter_map(|r| r.storage().map(|p| p.as_ptr() as usize)).collect::<Vec<_>>()
+        };
         match self {
             Self::SetColor { .. } | Self::SetProof(_) | Self::SetSdrRendition(_) => true,
             Self::SetSavedSelection { .. } => true,
@@ -1801,15 +1813,16 @@ impl Edit {
             // A copy that shares an existing layer's original adds no ownership.
             // A merge's result must leave room to undo it.
             Self::InsertLayer { layer, .. } => {
-                layer.selection.is_some()
+                !resources(layer).is_empty() || layer.selection.is_some()
                     || layer.pending_operations.iter().any(|op| matches!(op.kind,
                         LayerOperationKind::Bake { .. } | LayerOperationKind::FrequencyDetail { .. }))
                     || layer.source.as_ref().is_some_and(|source| {
                         !document.layers.iter().any(|l| l.source.as_ref().is_some_and(|s| Arc::ptr_eq(s, source)))
                     })
             }
-            Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| l.source.is_some() || l.selection.is_some()),
+            Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| !resources(l).is_empty() || l.source.is_some() || l.selection.is_some()),
             Self::ReplaceLayer(layer) => {
+                if resources(layer) != document.layer(layer.id).map_or_else(Vec::new, resources) { return true; }
                 if layer.selection.is_some() || document.layer(layer.id).is_some_and(|l| l.selection.is_some()) { return true; }
                 match (document.layer(layer.id).and_then(|l| l.source.as_ref()), &layer.source) {
                     (None, None) => false,
@@ -1844,6 +1857,15 @@ impl Edit {
             Self::Batch(edits) => edits.iter().for_each(|edit| edit.source_roots(out)),
             Self::ReplaceLayer(layer) => out.extend(layer.source.as_ref()),
             Self::InsertLayer { layer, .. } => out.extend(layer.source.as_ref()),
+            _ => (),
+        }
+    }
+    fn resource_roots<'a>(&'a self, out: &mut Vec<&'a Arc<Lut3d>>) {
+        match self {
+            Self::Batch(edits) => edits.iter().for_each(|edit| edit.resource_roots(out)),
+            Self::ReplaceLayer(layer) => layer.resource_roots(out),
+            Self::InsertLayer {layer, ..} => layer.resource_roots(out),
+            Self::SetColor {layers, ..} => layers.iter().for_each(|layer| layer.resource_roots(out)),
             _ => (),
         }
     }
@@ -1930,6 +1952,12 @@ pub(crate) fn json_len(value: &impl serde::Serialize) -> usize {
 }
 
 impl LayerOperation {
+    fn resource_roots<'a>(&'a self, out: &mut Vec<&'a Arc<Lut3d>>) {
+        if let LayerOperationKind::Bake {members, ..} | LayerOperationKind::FrequencyDetail {members, ..} = &self.kind {
+            for layer in members.iter() { layer.resource_roots(out); }
+        }
+        for operation in self.coverage.pending_operations.iter() { operation.resource_roots(out); }
+    }
     fn mesh_roots<'a>(&'a self, out: &mut Vec<&'a Arc<MeshMap>>) {
         match &self.kind {
             LayerOperationKind::Transform(transform) => out.extend(transform.placement.mesh.iter()),
@@ -2112,6 +2140,18 @@ impl Editor {
         // requested edit. Account the canonical Redo produced by Undo, too.
         let mut restored = candidate.clone();
         let forward = HistoryEntry::new(restored.apply(inverse.edit.clone())?, self.checkpoint);
+        let mut resources = Vec::new(); forward.edit.resource_roots(&mut resources);
+        if !resources.is_empty() {
+            let mut accounting = history_budget::Accounting::default();
+            for layer in &self.document.layers {
+                let mut current = Vec::new(); layer.resource_roots(&mut current);
+                for resource in current { accounting.charge_resource(resource); }
+            }
+            if resources.into_iter().any(|resource| accounting.charge_resource(resource) != 0)
+                && project::asset_bytes(&candidate) > ProjectLimits::default().asset_bytes {
+                return Err(DocumentError::InvalidLayerOperation("Effect resources exceed the project memory limit"));
+            }
+        }
         if history_budget::Accounting::new(&self.document).charge(&forward) > budget
             || history_budget::Accounting::new(&candidate).charge(&inverse) > budget
         {

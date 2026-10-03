@@ -48,6 +48,7 @@ pub struct EffectPanels {
     recording_was_active: Cell<bool>,
     page: gtk::DropDown,
     property_actions: adw::WrapBox,
+    resource_name: gtk::Label,
     tonal_histogram:Rc<crate::histogram::Inspector>,
     properties_updating: Cell<bool>,
     title: gtk::Label,
@@ -174,6 +175,10 @@ impl EffectPanels {
         properties.append(&page);
         let property_actions = adw::WrapBox::new();
         property_actions.set_child_spacing(6);property_actions.set_line_spacing(6);
+        let resource_name = gtk::Label::builder().xalign(0.).hexpand(true).width_chars(1)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle).build();
+        resource_name.add_css_class("dim-label");resource_name.set_widget_name("property-resource-name");
+        properties.append(&resource_name);
         properties.append(&property_actions);
         let tonal_histogram=crate::histogram::Inspector::new();
         tonal_histogram.root.set_widget_name("levels-histogram");tonal_histogram.root.set_visible(false);
@@ -252,6 +257,7 @@ impl EffectPanels {
             recording_was_active: Cell::new(false),
             page,
             property_actions,
+            resource_name,
             tonal_histogram,
             properties_updating: Cell::new(false),
             title,
@@ -645,6 +651,9 @@ impl EffectPanels {
                 self.property_actions.append(&button);
             }
         }
+        self.resource_name.set_label(view.resource_name.as_deref().unwrap_or(""));
+        self.resource_name.set_tooltip_text(view.resource_name.as_deref());
+        self.resource_name.set_visible(view.resource_name.is_some());
         self.property_actions.set_sensitive(view.enabled);
         self.tonal_histogram.root.set_visible(view.histogram);
         self.title.set_text(&view.title);

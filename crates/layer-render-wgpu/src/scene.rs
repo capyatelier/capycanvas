@@ -2087,7 +2087,7 @@ fn descriptor<'a>(
 }
 
 fn fusable_adjustment(layer: &Layer) -> bool {
-    layer.effect.as_ref().is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment && !e.program.image_boundary())
+    layer.effect.as_ref().is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment && !e.program.fusion_boundary())
 }
 fn fuses_after(layers: &[Layer], head: &Layer, next: &Layer, chain: usize) -> bool {
     next.visible

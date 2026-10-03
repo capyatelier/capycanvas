@@ -307,3 +307,62 @@ fn native_pointwise_filters_controls_and_persistence() {
     }
     input.finish();w.window.destroy();pump(100);
 }
+
+#[test]
+#[ignore = "private display, native file chooser and hardware GPU"]
+#[allow(deprecated)]
+fn native_color_lookup_import_replace_and_persistence() {
+    glib::set_prgname(Some("capy-canvas-test"));glib::set_application_name(APP_NAME);
+    let app=native_test_app("art.capycanvas.ColorLookup");let w=start(&app);
+    let output=std::path::Path::new(artifact_dir("../../artifacts/photo-editing-color/p23-gtk")).canonicalize().unwrap();
+    let mut input=RemoteInput::new().timeout_secs(30);input.ready();
+    let chooser=|| {
+        let end=Instant::now()+Duration::from_secs(10);
+        loop {
+            pump(30);
+            if let Some(dialog)=gtk::Window::list_toplevels().into_iter().find_map(|window|window.downcast::<gtk::FileChooserDialog>().ok()).filter(|dialog|dialog.is_visible()) {pump(500);return dialog;}
+            assert!(Instant::now()<end,"lookup file chooser not shown");
+        }
+    };
+    let import=|path:Option<&std::path::Path>,input:&mut RemoteInput| {
+        if let Some(notice)=state(&w).notice {w.dispatch(UiAction::Notice {id:notice.id,accept:false});pump(100);}
+        let button=find_named(w.effects.properties.upcast_ref(),"property-picker").unwrap();scroll_to(&button);assert!(button.is_mapped());let bounds=button.compute_bounds(&w.window).unwrap();let picked=w.window.pick((bounds.x()+bounds.width()/2.) as f64,(bounds.y()+bounds.height()/2.) as f64,gtk::PickFlags::DEFAULT).unwrap();assert!(picked==button||picked.is_ancestor(&button),"Import button is covered by {picked:?}");
+        input.click(screen_point(&button,&w.window,[0.5,0.5]));let dialog=chooser();assert!(state(&w).host_error.is_none(),"new native import clears preceding error");
+        if let Some(path)=path {dialog.set_file(&gtk::gio::File::for_path(path)).unwrap();pump(250);dialog.response(gtk::ResponseType::Accept);} else {dialog.response(gtk::ResponseType::Cancel);}
+        until(||!state(&w).document_file.busy,"lookup worker finishes");
+        if state(&w).host_error.is_none() {ready(&w);}
+    };
+    let lut=||document(&w).layer(document(&w).active_layer).unwrap().effect.as_ref().unwrap().lut3d().cloned();
+    let cube=|title:&str,swap:bool| {
+        let mut text=format!("TITLE \"{title}\"\nLUT_3D_SIZE 2\n");
+        for b in 0..2 {for g in 0..2 {for r in 0..2 {let v=if swap {[b,g,r]} else {[1-r,1-g,1-b]};text.push_str(&format!("{} {} {}\n",v[0],v[1],v[2]));}}}text
+    };
+    let mut pixels=Vec::new();
+    for theme in [Theme::Light,Theme::Dark] {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)});ready(&w);let source=document(&w);let original=canvas_pixel(&w);insert(&w,"color_lookup");
+        assert!(lut().is_none());assert_eq!(document(&w).layer(document(&w).active_layer).unwrap().effect.as_ref().unwrap().program.resolution,layer_core::EffectResolution::Native);assert_eq!(canvas_pixel(&w),original);
+        capture(&w,&output,&format!("lookup-empty-{}-{theme:?}",w.window.width()));let unchanged=document(&w).layers;let checkpoint=ui_session(&w).engine().checkpoint();import(None,&mut input);assert_eq!(document(&w).layers,unchanged);assert!(state(&w).host_error.is_none());
+        let malformed=output.join("malformed.cube");std::fs::write(&malformed,b"LUT_3D_SIZE 2\n0 0 0\n").unwrap();
+        import(Some(&malformed),&mut input);assert!(state(&w).host_error.is_some());assert_eq!(document(&w).layers,unchanged);
+        let oversized=output.join("oversized.cube");std::fs::File::create(&oversized).unwrap().set_len(layer_core::Lut3d::MAX_TEXT_BYTES as u64+1).unwrap();
+        import(Some(&oversized),&mut input);assert!(state(&w).host_error.is_some());assert_eq!(document(&w).layers,unchanged);std::fs::remove_file(oversized).unwrap();assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint,"cancelled and rejected imports create no undo entry");
+        let title="夕空の色彩調整と深い青の階調".repeat(10);let first=output.join("first.cube");let second=output.join("second.cube");std::fs::write(&first,cube("Inverse gradient",false)).unwrap();std::fs::write(&second,cube(&title,true)).unwrap();
+        import(Some(&first),&mut input);let inverse=lut().unwrap();assert!(inverse.payload().is_some());assert_eq!(state(&w).layer_properties.description,"Inverse gradient");let name=named::<gtk::Label>(w.window.upcast_ref(),"property-resource-name");assert!(name.is_mapped());assert_eq!(name.text(),"Inverse gradient");
+        assert!(state(&w).layer_properties.actions.iter().any(|action|action.label.contains("Replace")));
+        let first_pixel=canvas_pixel(&w);assert_ne!(first_pixel,original);assert_eq!(first_pixel[3],255);
+        edit(&w,&mut input,"intensity","65");choose(&w,&mut input,"property-color_space",1);assert_eq!(value(&w,"color_space"),EffectValue::Choice(1));capture(&w,&output,&format!("lookup-import-{}-{theme:?}",w.window.width()));
+        let before=document(&w).layers;import(Some(&second),&mut input);let replacement=lut().unwrap();assert_ne!(replacement.digest(),inverse.digest());let after=document(&w).layers;
+        w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before);assert_eq!(lut().unwrap().digest(),inverse.digest());
+        w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);assert_eq!(document(&w).layers,after);assert_eq!(lut().unwrap().digest(),replacement.digest());
+        assert_eq!(state(&w).layer_properties.description,title);assert_eq!(name.text(),title);assert_eq!(name.tooltip_text().as_deref(),Some(title.as_str()));assert!(name.width()<=w.effects.properties.width());let replaced_pixel=canvas_pixel(&w);assert_ne!(replaced_pixel,first_pixel);
+        std::fs::remove_file(first).unwrap();std::fs::remove_file(second).unwrap();unchanged_sources(&w,&source);
+        let bytes=super::place_source::snapshot(&w);let archive=output.join(format!("lookup-{}-{theme:?}.capy",w.window.width()));std::fs::write(&archive,&bytes).unwrap();
+        let reopened=layer_core::Project::read(std::io::Cursor::new(bytes),Default::default()).unwrap();assert_eq!(reopened.document.layers,document(&w).layers);
+        let loaded=reopened.document.layer(reopened.document.active_layer).unwrap().effect.as_ref().unwrap().lut3d().unwrap();assert_eq!(loaded.payload(),replacement.payload());
+        w.documents.enqueue(&w,(reopened,None,None));ready(&w);assert_eq!(canvas_pixel(&w),replaced_pixel);capture(&w,&output,&format!("lookup-reopened-{}-{theme:?}",w.window.width()));
+        pixels.push(json!({"theme":format!("{theme:?}"),"original":original,"inverse":first_pixel,"reopened":replaced_pixel}));
+        w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);
+    }
+    std::fs::write(output.join(format!("lookup-pixels-{}.json",w.window.width())),serde_json::to_vec_pretty(&pixels).unwrap()).unwrap();
+    input.finish();w.window.destroy();pump(100);
+}

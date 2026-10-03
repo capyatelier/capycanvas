@@ -1,4 +1,4 @@
-// ABI 3 parameter tables: exact Hermite segments and gradient stops. Bounded
+// ABI 4 parameter tables: exact Hermite segments and gradient stops. Bounded
 // binary search replaces the old 256-sample approximation at control knots.
 fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     let start=base+1u+offset;let header=effect_data[start];

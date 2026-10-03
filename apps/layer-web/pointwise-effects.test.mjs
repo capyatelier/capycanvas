@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
 import {png} from './clone-journey.test.mjs';
 
@@ -182,4 +182,40 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
     if(motion)await writeFile(`${directory}/hue-motion.json`,JSON.stringify({hardware:(await call('SystemInfo.getInfo',{},null)).gpu.devices,runs:reports},null,2));
     console.log(`PASS: Hue42 pages, Colorize retention/focus/artwork, ${effects.join(', ')}, Undo/source invariants/archive reopen at ${widths.join('/')} in both themes${motion?', native slider motion':''}`);
   } finally {await evaluate('window.showOpenFilePicker=pointwiseFiles.open;window.showSaveFilePicker=pointwiseFiles.save;delete window.pointwiseFiles;delete window.placementTest');}
+}
+
+export async function checkLookupTransport({call,evaluate,settle}) {
+  const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/photo-editing-color/p23-web';await mkdir(directory,{recursive:true});
+  const fixture=await readFile(process.env.LAYER_LOOKUP_FIXTURE??'artifacts/photo-editing-color/p23-gtk/lookup-1100-Light.capy');
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function poll(){if(${condition})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-900)));else setTimeout(poll,40)}poll()})`);
+  const invoke=async command=>{await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);await settle();};
+  const idle=()=>wait('!layerApp.state().document_file.busy&&!layerApp.documents.busy()&&layerApp.app.brush_ready()&&layerApp.startupTimes.complete!==null');
+  const install=()=>evaluate(`window.placementTest={};window.showSaveFilePicker=async o=>({name:o.suggestedName,async createWritable(){return{async write(v){placementTest.saved=new Uint8Array(v instanceof Blob?await v.arrayBuffer():v)},async close(){},async abort(){}}}});`);
+  const save=placementSave({evaluate,invoke,idle});
+  const pixel=async()=>{
+    await evaluate('layerApp.app.wait_for_canvas()');await settle();
+    const point=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(64*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(192*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
+    const shot=await call('Page.captureScreenshot',{format:'png',clip:{...point,width:1,height:1,scale:1}});
+    return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const c=document.createElement('canvas');c.width=c.height=1;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(image,0,0);return Array.from(x.getImageData(0,0,1,1).data)})()`);
+  };
+  await idle();await install();
+  await evaluate(`window.lookupFixture=new Uint8Array(${JSON.stringify(Array.from(fixture))});window.showOpenFilePicker=async()=>[{name:'loaded-lookup.capy',getFile:async()=>new File([lookupFixture],'loaded-lookup.capy')}];`);
+  await invoke('open_document');await idle();await invoke('fit_canvas');
+  const expected=await save();assert.equal(expected.resources.bindings.length,1);assert.equal(expected.resources.payloads.length,1);assert.ok(expected.resources.payloads[0].bytes>96);
+  const compare=async()=>{const actual=await save();assert.deepEqual(actual.resources,expected.resources,'Worker archives retain LUT descriptors and immutable payload digest');assert.deepEqual(actual.document.layers,expected.document.layers);assert.deepEqual(sourceIdentity(actual),sourceIdentity(expected));};
+  const samples=[];
+  for(const theme of ['light','dark']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();await invoke('fit_canvas');
+    const before=await pixel();assert.equal(before[3],255);assert.ok(Math.max(...before.slice(0,3))-Math.min(...before.slice(0,3))>30);
+    await evaluate(`window.showOpenFilePicker=async()=>[{name:'loaded-lookup.capy',getFile:async()=>new File([placementTest.saved],'loaded-lookup.capy')}];`);await invoke('open_document');await idle();await invoke('fit_canvas');await compare();assert.deepEqual(await pixel(),before);
+    await evaluate('layerApp.restartGpu()');await idle();assert.deepEqual(await pixel(),before,'Renderer recreation retains resolved LUT pixels');await compare();
+    const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/lookup-worker-${theme}.png`,Buffer.from(shot.data,'base64'));samples.push({theme,pixel:before});
+  }
+  await writeFile(`${directory}/lookup-worker.capy`,Buffer.from(await evaluate('Array.from(placementTest.saved)')));
+  await evaluate(`layerApp.app.save_recovery('lookup-worker-resource-test')`);await call('Page.reload',{ignoreCache:true});await new Promise(resolve=>setTimeout(resolve,1000));
+  await wait(`!![...document.querySelectorAll('dialog[open].document-dialog h2')].find(n=>n.textContent==='Recover drawing?')`);
+  await evaluate(`[...document.querySelectorAll('.document-dialog button')].find(n=>n.textContent==='Recover').click()`);await idle();
+  assert.equal(await evaluate('layerApp.state().document_file.modified'),true);assert.equal(await evaluate('layerApp.state().document_file.location??null'),null);
+  await install();await invoke('fit_canvas');await compare();assert.deepEqual(await pixel(),samples.at(-1).pixel,'IndexedDB recovery retains resolved LUT pixels');
+  await writeFile(`${directory}/lookup-worker-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: loaded LUT resource worker save/open, GPU recreation and IndexedDB reload recovery preserve descriptors, payload, source and visible pixels');
 }

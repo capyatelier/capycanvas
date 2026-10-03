@@ -153,6 +153,19 @@ class AndroidCanvasBarBenchmarkTest {
                 invoke("fit_canvas")
                 return photoLayer
             }
+            fun lookupDocument(): Pair<Long, Long> {
+                openProject(File(requireNotNull(args.getString("lookupProject"))))
+                waitFor("lookup photo document") { host.snapshot?.optBoolean("shaders_ready") == true &&
+                    state().array("tabs").objects().any { it.optBoolean("active") && it.optInt("width") == width && it.optInt("height") == height } }
+                documentExtent = "${width}x$height"
+                val layers = state().array("layers").objects()
+                val photoLayer = layers.single { it.getString("label") == "Photo" }.getLong("id")
+                val lookupLayer = layers.single { it.getString("label") == "Owned N65 lookup" }.getLong("id")
+                action(obj("type" to "select_layer", "id" to photoLayer))
+                invoke("add_layer")
+                invoke("fit_canvas")
+                return photoLayer to lookupLayer
+            }
             fun anchorPoint(fraction: Double): Pair<Double, Double> {
                 val anchor = state().getJSONObject("canvas_bar").getJSONArray("anchor")
                 val camera = state().getJSONObject("camera")
@@ -525,14 +538,16 @@ class AndroidCanvasBarBenchmarkTest {
                     Scrub("selective_color", "reds_cyan", "Cyan", "effect-selective-reds-cyan-drag", .3, page = "reds", span = .4),
                     Scrub("channel_mixer", "red_green", "Green", "effect-channel-mixer-coefficient-drag", .3, page = "red", span = .4),
                     Scrub("channel_mixer", "red_constant", "Constant", "effect-channel-mixer-constant-drag", .3, page = "red", span = .4),
+                    Scrub("color_lookup", "intensity", "Intensity", "effect-color-lookup-intensity-drag", .3, span = .4),
                     Scrub("exposure", "exposure", "Exposure", "effect-chain-exposure-drag", .45, true),
                 )
                 val selectedLabels = args.getString("labels")?.split(',')
                 for (scrub in scrubs.filter { selectedLabels == null || it.label in selectedLabels }) {
                     val preparedAt = System.nanoTime()
-                    val photoLayer = photoDocument()
+                    val lookup = if (scrub.id == "color_lookup") lookupDocument() else null
+                    val photoLayer = lookup?.first ?: photoDocument()
                     val fixtureVisibleLayerIds = state().array("layers").objects().filter { it.optBoolean("visible") }.map { it.getLong("id") }
-                    check(fixtureVisibleLayerIds.size == 2 && photoLayer in fixtureVisibleLayerIds) { "Effect fixture must contain only the photo and empty paint layer" }
+                    check(fixtureVisibleLayerIds.size == (if (lookup == null) 2 else 3) && photoLayer in fixtureVisibleLayerIds) { "Effect fixture has unexpected visible layers" }
                     action(obj("type" to "select_layer", "id" to photoLayer))
                     fun effect(op: JSONObject) = action(obj("type" to "effect", "action" to op))
                     if (scrub.chain) {
@@ -541,7 +556,8 @@ class AndroidCanvasBarBenchmarkTest {
                             "key" to "gamma", "value" to obj("kind" to "number", "value" to 1.25)))
                         effect(obj("op" to "insert", "effect" to "vibrance"))
                     }
-                    effect(obj("op" to "insert", "effect" to scrub.id))
+                    if (lookup == null) effect(obj("op" to "insert", "effect" to scrub.id))
+                    else action(obj("type" to "select_layer", "id" to lookup.second))
                     val effectLayer = state().getJSONObject("layer_properties").getLong("layer")
                     scrub.page?.let { effect(obj("op" to "select_page", "layer" to effectLayer, "page" to it)) }
                     if (scrub.colorize) effect(obj("op" to "set", "layer" to effectLayer, "key" to "colorize", "value" to obj("kind" to "toggle", "value" to true)))
@@ -607,7 +623,7 @@ class AndroidCanvasBarBenchmarkTest {
                             JSONArray(listOf(track.left, track.top, track.right, track.bottom))).toString(2))
                         if (effectRepeats > 1) result.copyTo(File(output, "$label-$index.json"), overwrite = true)
                         check(values.size > 1) { "$label did not change its value during motion" }
-                        if (scrub.span == .4) check(values.size > 25) { "$label did not traverse enough coarse numeric steps" }
+                        if (scrub.span == .4) check(values.max() - values.min() > 25) { "$label did not traverse enough coarse numeric steps" }
                         if (scrub.id == "gaussian_blur") check(values.all { it > 0 && it < 21 }) { "$label reached a stationary slider limit" }
                     }
                 }
@@ -622,14 +638,15 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("pointwise-navigation")) {
                 val selectedLabels = args.getString("labels")?.split(',')
-                for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter")) {
+                for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter", "color_lookup")) {
                     val label = "effect-$id-pan"
                     if (selectedLabels != null && label !in selectedLabels) continue
                     val preparedAt = System.nanoTime()
-                    val photoLayer = photoDocument()
+                    val lookup = if (id == "color_lookup") lookupDocument() else null
+                    val photoLayer = lookup?.first ?: photoDocument()
                     action(obj("type" to "select_layer", "id" to photoLayer))
                     val appliedAt = System.nanoTime()
-                    if (id != "none") action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
+                    if (id != "none" && lookup == null) action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
                     val applicationMs = (System.nanoTime() - appliedAt) / 1e6
                     invoke("hand"); invoke("fit_canvas")
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }

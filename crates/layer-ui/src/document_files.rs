@@ -36,7 +36,7 @@ impl DocumentHostErrorCopy {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentHostError {
-    NewWindowUnavailable, DrawingTabsUnavailable, ChooseDeviceFile, ChooseFilename, ProjectWriterFailed, NoDrawingToOpen,
+    NewWindowUnavailable, DrawingTabsUnavailable, ChooseDeviceFile, ChooseFilename, ProjectWriterFailed, NoDrawingToOpen, LookupImportFailed,
 }
 impl DocumentHostError {
     pub fn message(self, localization: &Localizer) -> String {
@@ -47,6 +47,7 @@ impl DocumentHostError {
             Self::ChooseFilename => MessageId::DOCUMENTS_ERROR_FILENAME,
             Self::ProjectWriterFailed => MessageId::DOCUMENTS_ERROR_PROJECT_WRITER,
             Self::NoDrawingToOpen => MessageId::DOCUMENTS_ERROR_NO_DRAWING,
+            Self::LookupImportFailed => MessageId::RESOURCES_LOOKUP_FAILED,
         }).to_string()
     }
 }
@@ -112,8 +113,12 @@ impl DocumentFileState {
 pub enum DocumentColorOperation { Assign, Convert, Depth }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct LookupTarget {pub document: std::sync::Arc<str>, pub activation:u64, pub layer:u64, pub epoch:u64, pub key:String}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DocumentRequest {
+    ImportLookup {target: LookupTarget},
     ChangeColor { operation: DocumentColorOperation },
     ColorHistory { redo: bool },
     Place,
@@ -140,6 +145,7 @@ pub enum DocumentRequest {
 impl DocumentRequest {
     pub fn title(&self, localization: &Localizer) -> std::sync::Arc<str> {
         let id = match self {
+            Self::ImportLookup {..} => MessageId::RESOURCES_LOOKUP_IMPORT,
             Self::ChangeColor { operation: DocumentColorOperation::Assign } => MessageId::DOCUMENTS_ASSIGN_PROFILE,
             Self::ChangeColor { operation: DocumentColorOperation::Convert } => MessageId::DOCUMENTS_CONVERT_COLOR,
             Self::ChangeColor { operation: DocumentColorOperation::Depth } => MessageId::DOCUMENTS_CHANGE_DEPTH,
@@ -166,7 +172,7 @@ impl DocumentRequest {
     pub fn accept_label(&self, localization: &Localizer) -> std::sync::Arc<str> {
         localization.text(match self {
             Self::ChangeColor { .. } | Self::ColorHistory { .. } | Self::RepairSourceProfile { .. } => MessageId::COMMON_APPLY,
-            Self::Place => MessageId::DOCUMENTS_IMPORT_ACCEPT,
+            Self::Place | Self::ImportLookup {..} => MessageId::DOCUMENTS_IMPORT_ACCEPT,
             Self::Paste { .. } => MessageId::COMMAND_PASTE_IMAGE,
             Self::Copy { .. } => MessageId::COMMAND_COPY,
             Self::Properties => MessageId::COMMON_DONE,
@@ -180,6 +186,7 @@ impl DocumentRequest {
     pub fn filter(&self, localization: &Localizer) -> (std::sync::Arc<str>, &'static str) {
         match self {
             Self::Export { .. } => (localization.text(MessageId::DOCUMENTS_PNG), "png"),
+            Self::ImportLookup {..} => (localization.text(MessageId::RESOURCES_LOOKUP_FILES), "cube"),
             _ => (localization.text(MessageId::DOCUMENTS_CAPY), "capy"),
         }
     }
@@ -533,6 +540,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.capture_project_recovery()
     }
 
+    pub fn apply_lookup(&mut self, request:u32, resource: std::sync::Arc<layer_core::Lut3d>) -> Result<bool,String> {
+        let DocumentRequest::ImportLookup {target} = self.document_request(request)?.clone() else {return Err("Invalid lookup request".into());};
+        if self.engine.document().id != target.document || self.state.document_file.epoch != target.activation || !self.property_editor.accepts(target.layer,target.epoch)
+            || self.state.layer_properties.layer != Some(target.layer) {return Ok(false);}
+        self.effect_action(EffectAction::Set {layer:target.layer,key:target.key,value:layer_core::EffectValue::Lut3d(Some(resource))})?;
+        Ok(true)
+    }
+
     /// Success acknowledges a completed write/open/export, never just a chosen
     /// filename. Cancellation is distinct from failure and does not clear dirty.
     pub fn complete_document_request(
@@ -545,6 +560,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(FileFailure::RespondClose.message(self.localization()));
         }
         let save = matches!(request, DocumentRequest::Save { .. });
+        let lookup = matches!(request, DocumentRequest::ImportLookup { .. });
         let cutting = matches!(request, DocumentRequest::Copy { cut: true, .. });
         if save && result == Ok(true) && self.files.pending.as_ref().unwrap().1.is_none() {
             return Err(FileFailure::NoSavedSnapshot.message(self.localization()));
@@ -554,7 +570,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.requests.retain(|r| r.id != id);
         let success = result == Ok(true);
         let cut = self.files.cut.take().filter(|_| cutting && success);
-        self.set_host_error(result.err());
+        let failure = result.err().map(|diagnostic| {
+            if lookup {
+                eprintln!("Lookup import: {diagnostic}");
+                DocumentHostError::LookupImportFailed.message(self.localization())
+            } else { diagnostic }
+        });
+        self.set_host_error(failure);
         if save
             && success
             && let Some((checkpoint, location)) = snapshot
@@ -576,7 +598,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_commands();
         Ok(self.changed(
             regions::DOCUMENT | regions::COMMANDS | regions::HOST,
-            self.files.close_after,
+            self.files.close_after || self.engine.has_pending_document_edits(),
         ))
     }
 

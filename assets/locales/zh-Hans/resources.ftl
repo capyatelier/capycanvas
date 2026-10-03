@@ -602,3 +602,13 @@ resources-choice-selective-color-relative = 相对
 resources-choice-selective-color-absolute = 绝对
 resources-parameter-channel-mixer-constant = 常量
 resources-parameter-channel-mixer-monochrome = 单色
+
+resources-filter-color-lookup = 颜色查找
+resources-lookup-table = 查找表
+resources-lookup-failed = 无法导入查找表。
+resources-lookup-space = 色彩空间
+resources-lookup-intensity = 强度
+resources-lookup-import = 导入…
+resources-lookup-replace = 替换…
+resources-lookup-files = 颜色查找文件
+resources-lookup-unavailable = 此平台暂不支持导入颜色查找文件。

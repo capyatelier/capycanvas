@@ -5,6 +5,8 @@ use layer_core::{EffectInstance, EffectKind, EffectProgram};
 use std::{collections::HashMap, sync::Arc};
 #[path = "effect_preparation.rs"]
 mod preparation;
+#[path = "effect_resources.rs"]
+pub(crate) mod resources;
 
 /// Only immutable GPU handles are shared with the compiler thread.
 pub(super) trait Gpu {
@@ -96,6 +98,7 @@ pub(super) struct PreparedEffect {
     pub pipeline: Deferred<wgpu::RenderPipeline>,
     pub binding: wgpu::BindGroup,
     pub pointwise: bool,
+    pub _resource: Arc<resources::Resource>,
 }
 struct Instance {
     effects: Vec<Arc<EffectInstance>>,
@@ -103,6 +106,7 @@ struct Instance {
     buffer: wgpu::Buffer,
     binding: wgpu::BindGroup,
     compute_binding: wgpu::BindGroup,
+    resource: Arc<resources::Resource>,
     pipelines: HashMap<Stage, Deferred<wgpu::RenderPipeline>>,
     lookups: Vec<preparation::State>,
     offsets: Vec<u32>,
@@ -235,7 +239,7 @@ impl Effects {
             wgpu::BufferBindingType::Storage { read_only: true },
             false,
             NonZeroU64::new(16),
-        )]);
+        ), crate::bindings::buffer(1, wgpu::ShaderStages::FRAGMENT, wgpu::BufferBindingType::Storage {read_only: true}, false, NonZeroU64::new(16))]);
         let masks = crate::bindings::layout(
             &r.device,
             "effect mask inputs",
@@ -246,7 +250,7 @@ impl Effects {
         let pipeline_layout = r
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("WGSL effects ABI 3"),
+                label: Some("WGSL effects ABI 4"),
                 bind_group_layouts: &[Some(uniforms), Some(sources), Some(&layout), Some(&masks)],
                 immediate_size: 0,
             });
@@ -262,8 +266,9 @@ impl Effects {
         }
     }
     pub fn retain(&mut self, layers: &[Layer]) {
-        self.instances
-            .retain(|(ids, _), _| ids.iter().all(|id| layers.iter().any(|l| l.id == *id)));
+        let current: HashMap<_, _> = layers.iter().filter_map(|layer| layer.effect.as_ref().map(|effect| (layer.id, effect))).collect();
+        self.instances.retain(|(ids, _), instance| ids.iter().zip(&instance.effects).all(|(id, old)|
+            current.get(id).is_some_and(|effect| old.program == effect.program && old.lut3d() == effect.lut3d())));
     }
     pub fn prepare(
         &mut self,
@@ -308,6 +313,7 @@ impl Effects {
                 pipeline: pipeline.clone(),
                 binding: old.binding.clone(),
                 pointwise: execution == Execution::Fused,
+                _resource: old.resource.clone(),
             });
         }
         let ids = self.ids.clone();
@@ -452,11 +458,12 @@ impl Effects {
                 &bytes[base as usize * 16..end * 16],
             );
         }
-        let binding = if reusable {
+        let resource = r.device().effect_resources.lock().unwrap().get(r.device(), r.queue(), effects.first().and_then(|e| e.lut3d()).map(Arc::as_ref))?;
+        let binding = if reusable && Arc::ptr_eq(&resource, &self.instances[&ids].resource) {
             self.instances[&ids].binding.clone()
         } else {
             crate::bindings::group(&r.device(), "effect parameter binding", &self.layout, [
-                buffer.as_entire_binding(),
+                buffer.as_entire_binding(), resource.buffer.as_entire_binding(),
             ])
         };
         let compute_binding = if reusable {
@@ -488,6 +495,7 @@ impl Effects {
             pipeline,
             binding: binding.clone(),
             pointwise: execution == Execution::Fused,
+            _resource: resource.clone(),
         };
         self.instances.insert(
             ids,
@@ -497,6 +505,7 @@ impl Effects {
                 buffer,
                 binding,
                 compute_binding,
+                resource,
                 pipelines,
                 lookups,
                 offsets,
@@ -531,7 +540,7 @@ pub(super) fn parse_validated(source: &str) -> Result<naga::Module, GpuRasterErr
 }
 fn validate_source(source: &str) -> Result<(), GpuRasterError> {
     let module = parse_validated(source)?;
-    if module.global_variables.len() != 5 + MASK_SLOTS
+    if module.global_variables.len() != 6 + MASK_SLOTS
         || module.entry_points.len() != 3
         || !module.overrides.is_empty()
     {
@@ -589,6 +598,9 @@ fn shader_source(
     hdr: bool,
     blend: layer_core::BlendSpace,
 ) -> Result<String, GpuRasterError> {
+    if programs.len() > 1 && programs.iter().any(|program| program.auxiliary.is_some()) {
+        return Err(GpuRasterError::Effect("An auxiliary resource requires its own effect stage".into()));
+    }
     // A Perceptual composite holds encoded values. Filters that read linear
     // values convert their input and output; a filter that follows the
     // document's Blending reads the composite as it is.
@@ -616,6 +628,8 @@ fn shader_source(
     source.push_str(
         r#"
 @group(2) @binding(0) var<storage,read> effect_data:array<vec4<f32>>;
+@group(2) @binding(1) var<storage,read> effect_auxiliary:array<vec4<f32>>;
+fn fx_auxiliary(index:u32)->vec4<f32> {return effect_auxiliary[index];}
 fn fx_parameter(base:u32,index:u32)->vec4<f32> { return effect_data[base+1u+index]; }
 fn fx_lookup(base:u32,table:u32,index:u32)->vec4<f32> {
     let directory=base+u32(effect_data[base].x);let entry=effect_data[directory+table];
@@ -652,6 +666,13 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
 "#,
     );
     source.push_str(include_str!("effect_tables.wgsl"));
+    source.push_str(include_str!("tetrahedron.wgsl"));
+    for (index, chosen) in layer_core::color::RgbSpace::ALL.into_iter().enumerate() {
+        source.push_str(&crate::view_color::transform(&format!("cube_to_{index}"), space, chosen));
+        source.push_str(&crate::view_color::transform(&format!("cube_from_{index}"), chosen, space));
+        source.push_str(&format!("const CUBE_LIMIT_{index}:f32={:.12e};\n", chosen.encode(f64::from(f32::MAX) * (1.-2048.*f64::from(f32::EPSILON)))));
+    }
+    source.push_str(include_str!("effect_cube.wgsl"));
     let mut included = Vec::<&str>::new();
     for program in programs {
         for part in program
@@ -763,7 +784,7 @@ mod tests {
         validate(
             &programs
                 .into_iter()
-                .filter(|p| !p.image_boundary() && p.kind == EffectKind::Adjustment)
+                .filter(|p| !p.fusion_boundary() && p.kind == EffectKind::Adjustment)
                 .collect::<Vec<_>>(),
             Execution::Fused,
         );

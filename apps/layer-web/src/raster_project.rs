@@ -36,6 +36,8 @@ struct Metadata {
     photo: [Option<Vec<usize>>; 3],
     profiles: Vec<Vec<usize>>,
     selections: layer_core::ProjectSelections,
+    resources: layer_core::ProjectResources,
+    resource_blocks: Vec<(Vec<usize>, u8)>,
     rasters: Vec<Raster>,
     blobs: Vec<Blob>,
     originals: Vec<Original>,
@@ -108,12 +110,15 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
         parts.push(Part::Selection(pixels.clone(), range));
         Ok(index)
     })?;
+    let (resources, resource_payloads) = layer_core::ProjectResources::detach(&mut document)?;
+    let resource_blocks = resource_payloads.into_iter().map(|r|
+        (push_bytes(r.storage().unwrap().clone(), &mut parts), r.admitted_spaces())).collect();
     let mut profile_bytes = Vec::new();
     let proof = document.proof.as_ref().map(|p| p.clone().with_profile(
         ProfileReference::detach(&p.profile, &mut profile_bytes)));
     let photo = document.metadata.blocks().map(|block| block.clone().map(|bytes| push_bytes(bytes, &mut parts)));
     let mut metadata = Metadata {
-        document, proof, photo, selections, profiles: Vec::new(),
+        document, proof, photo, selections, resources, resource_blocks, profiles: Vec::new(),
         rasters: Vec::new(),
         blobs: Vec::new(),
         originals: Vec::new(),
@@ -223,7 +228,14 @@ pub(super) async fn pack(project: Project) -> Result<JsValue, JsValue> {
 
 /// Blocks split by `push_bytes`, rejoined within `limit` bytes.
 async fn joined(buffers: &js_sys::Array, indices: Vec<usize>, limit: usize) -> Result<Vec<u8>, JsValue> {
+    let mut size = 0usize;
+    for &index in &indices {
+        let block = buffers.get(index as u32).dyn_into::<js_sys::Uint8Array>().map_err(|_| js("Missing project worker block"))?;
+        if block.length() as usize > BLOCK { return Err(js("Oversized project worker block")); }
+        size = size.checked_add(block.length() as usize).filter(|size| *size <= limit).ok_or_else(|| js("Oversized project block"))?;
+    }
     let mut bytes = Vec::new();
+    bytes.try_reserve_exact(size).map_err(|_| js("Project block allocation failed"))?;
     for index in indices {
         let block = part(buffers, index)?;
         if bytes.len() + block.len() > limit {
@@ -265,8 +277,19 @@ pub(super) async fn unpack(
         || metadata.originals.len() > budget.layers || metadata.profiles.len() > budget.layers + 1 {
         return Err(js("Oversized project worker index"));
     }
+    let resource_bytes = metadata.resources.validate(&project.document, budget.asset_bytes).map_err(js)?;
+    let descriptors = metadata.resources.descriptors().map_err(js)?;
+    if descriptors.len() != metadata.resource_blocks.len() { return Err(js("Mismatched effect resource blocks")); }
+    let mut resources = Vec::with_capacity(descriptors.len());
+    for (descriptor, (blocks, spaces)) in descriptors.into_iter().zip(metadata.resource_blocks) {
+        let bytes = joined(&buffers, blocks, descriptor.expected_bytes()).await?;
+        let resource = if verified { descriptor.from_verified_worker(bytes.into(), spaces) }
+            else { descriptor.with_owned_payload(bytes.into()) }.map_err(js)?;
+        resources.push(resource);
+    }
+    metadata.resources.attach(&mut project.document, &resources).map_err(js)?;
     let mut profiles = Vec::<Arc<[u8]>>::new();
-    let mut profile_bytes = 0usize;
+    let mut profile_bytes = resource_bytes as usize;
     for indices in metadata.profiles {
         let bytes = joined(&buffers, indices, layer_core::color::source::MAX_PROFILE_BYTES).await?;
         profile_bytes = profile_bytes.checked_add(bytes.len())

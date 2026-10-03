@@ -1,5 +1,5 @@
 import {runJourney} from "./journeys.mjs";
-import {checkPointwiseEffects} from './pointwise-effects.test.mjs';
+import {checkPointwiseEffects,checkLookupTransport} from './pointwise-effects.test.mjs';
 import {checkTonalSelections} from './tonal-selection.test.mjs';
 import {checkColorPicker} from './color-picker.test.mjs';
 import {checkInputDevices} from './input-devices.test.mjs';
@@ -243,6 +243,7 @@ try {
     [process.argv.includes("--title-bar-state"), () => checkTitleBarState({call,evaluate,settle,reload}), checkErrors],
     [process.argv.includes("--title-bar"), () => checkTitleBar({call,evaluate,settle,reload}), checkErrors],
     [process.argv.includes("--zen"), () => checkZen({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--lookup-icon"), () => checkIcons({call,evaluate,settle,only:"layer-color_lookup-symbolic.svg"}), checkErrors],
     [process.argv.includes("--icons"), () => checkIcons({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--header-controls"), () => checkHeaderControls({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--layout-drops"), () => checkLayoutDrops({call,evaluate,settle}), checkErrors],
@@ -289,6 +290,7 @@ try {
     [process.argv.includes("--curves"), () => checkCurves({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--pointwise-effects"), () => checkPointwiseEffects({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--pointwise-effects-smoke"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,widths:[1100],effects:['threshold']}), checkErrors],
+    [process.argv.includes("--lookup-transport"), () => checkLookupTransport({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--color-pages"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,colorPages:true}), checkErrors],
     [process.argv.includes("--color-pages-smoke"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,colorPages:true,widths:[1100]}), checkErrors],
     [process.argv.includes("--adjustments"), () => checkAdjustments({ call, evaluate, settle }), checkErrors],

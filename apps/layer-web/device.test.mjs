@@ -1,5 +1,5 @@
 import {checkCurves} from "./effects.test.mjs";
-import {checkPointwiseEffects} from './pointwise-effects.test.mjs';
+import {checkPointwiseEffects,checkLookupTransport} from './pointwise-effects.test.mjs';
 import {runJourney} from "./journeys.mjs";
 import {checkTonalSelections} from './tonal-selection.test.mjs';
 import {checkBinaryTransfer} from './binary-transfer.test.mjs';
@@ -155,6 +155,7 @@ try {
     [process.argv.includes("--staged-startup"), () => checkStagedStartup({call,evaluate,settle,canvasPixels}), checkErrors],
     [process.argv.includes("--curves"), () => checkCurves({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--pointwise-effects"), () => checkPointwiseEffects({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--lookup-transport"), () => checkLookupTransport({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--color-pages"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,colorPages:true}), checkErrors],
     [process.argv.includes("--color-pages-smoke"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,colorPages:true,widths:[1100]}), checkErrors],
     [process.argv.includes("--image-placement"), () => checkDeviceImagePlacement({call,evaluate,settle}), checkErrors],
@@ -171,6 +172,7 @@ try {
     [process.argv.includes("--retouch-layers"), () => checkRetouchLayers({call,evaluate,settle,device:true}), checkErrors],
     [process.argv.includes("--canvas-bar"), () => checkCanvasBar({call,evaluate,settle,device:true}), checkErrors],
     [process.argv.includes("--title-bar-feedback"), () => checkTitleBarFeedback({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--lookup-icon"), () => checkIcons({call,evaluate,settle,only:"layer-color_lookup-symbolic.svg"}), checkErrors],
     [process.argv.includes("--icons"), () => checkIcons({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--workspace-manager"), () => checkWorkspaceManager({call,evaluate,settle,reload,touch:true}), checkErrors],
     [process.argv.includes("--workspace-store"), () => checkWorkspaceStore({evaluate}), checkErrors],

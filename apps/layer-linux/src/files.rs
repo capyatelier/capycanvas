@@ -229,6 +229,18 @@ async fn document_request(
     id: u32,
     request: &DocumentRequest,
 ) -> Result<bool, String> {
+    if matches!(request, DocumentRequest::ImportLookup {..}) {
+        let Some(file) = choose_file(w, request).await? else {return Ok(false);};
+        let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization()))?;
+        let resource = gio::spawn_blocking(move || {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::open(&path).map_err(|e| e.to_string())?.take(layer_core::Lut3d::MAX_TEXT_BYTES as u64 + 1)
+                .read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            layer_core::Lut3d::parse_cube_named(&bytes, &path.file_name().unwrap_or_default().to_string_lossy()).map(std::sync::Arc::new).map_err(str::to_string)
+        }).await.map_err(|_| DocumentHostError::LookupImportFailed.message(&w.localization()))??;
+        return w.gpu.borrow_mut().as_mut().ok_or_else(|| w.localization().text(MessageId::DOCUMENTS_ERROR_CANVAS_UNAVAILABLE).to_string())?.session.apply_lookup(id, resource);
+    }
     if let DocumentRequest::ChangeColor { operation } = request {
         return color::run(w, id, *operation).await;
     }
@@ -353,7 +365,7 @@ async fn choose_file(
     dialog.set_filters(Some(&filters));
     dialog.set_default_filter(Some(&filter));
     let result = match request {
-        DocumentRequest::Open => chooser::open(&dialog, &w.window, chooser::Folder::Artwork).await,
+        DocumentRequest::Open | DocumentRequest::ImportLookup {..} => chooser::open(&dialog, &w.window, chooser::Folder::Artwork).await,
         DocumentRequest::Save { name, .. } => {
             dialog.set_initial_name(Some(name));
             chooser::save(&dialog, &w.window, chooser::Folder::Save).await

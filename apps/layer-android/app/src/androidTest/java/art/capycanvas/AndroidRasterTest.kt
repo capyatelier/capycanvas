@@ -207,7 +207,7 @@ class AndroidRasterTest {
     }
     private fun manifest(bytes: ByteArray): JSONObject {
         assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
-        assertTrue("Native archive version", bytes[10].toInt() == 14 && bytes[11].toInt() == 0)
+        assertTrue("Native archive version", bytes[10].toInt() == 15 && bytes[11].toInt() == 0)
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
@@ -2549,6 +2549,102 @@ class AndroidRasterTest {
             val recreated = manifest(save("p21-recreated.capy"))
             assertEquals(reopened.getJSONObject("document").getJSONArray("layers").toString(), recreated.getJSONObject("document").getJSONArray("layers").toString())
             assertEquals(original, sourceIdentity(recreated))
+            assertNull(host.failure); assertNull(host.actionError)
+        }
+    }
+
+    @Test fun embeddedLookupRetainsPixelsAndResourcesWithoutAndroidImport() {
+        val fixture = File(requireNotNull(InstrumentationRegistry.getArguments().getString("lutArchive")) { "lutArchive must identify the private embedded-LUT fixture" })
+        assertTrue(fixture.isFile)
+        val recipe = builtinRecipe(2).put("format", "Png").put("depth", "U8")
+        fun pixels(name: String) = hash(png(name, recipe))
+        fun resources(bytes: ByteArray): String {
+            val index = JSONObject(manifest(bytes).getJSONObject("resources").toString())
+            val body = 52 + ByteBuffer.wrap(bytes, 12, 8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
+            assertTrue(index.getJSONArray("bindings").length() > 0)
+            for (binding in index.getJSONArray("bindings").objects())
+                assertTrue("Small LUT descriptor", binding.getJSONObject("descriptor").toString().length < 4096)
+            for (payload in index.getJSONArray("payloads").objects()) {
+                val start = body + payload.getLong("offset").toInt()
+                val binary = bytes.copyOfRange(start, start + payload.getLong("bytes").toInt())
+                assertEquals(payload.getJSONArray("digest").toString(), org.json.JSONArray(hash(binary).map { it.toInt() and 255 }).toString())
+                payload.remove("offset")
+            }
+            return index.toString()
+        }
+        val original = manifest(fixture.readBytes())
+        val resourceIdentity = resources(fixture.readBytes())
+        val source = sourceIdentity(original)
+        val layer = original.getJSONObject("document").getJSONArray("layers").objects().first {
+            it.optJSONObject("effect")?.optJSONObject("program")?.optString("id") == "color_lookup"
+        }.getLong("id")
+        for (theme in listOf("light", "dark")) {
+            open(fixture); refresh(); invoke("fit_canvas")
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "select_layer", "id" to layer))
+            fun properties() = native { state(it).getJSONObject("layer_properties") }
+            fun value(key: String) = properties().getJSONArray("controls").objects().first { it.getString("key") == key }.getJSONObject("value").getDouble("value")
+            assertEquals(listOf("color_space", "intensity"), properties().getJSONArray("controls").objects().map { it.getString("key") })
+            assertEquals(0, properties().getJSONArray("actions").length())
+            val baseline = pixels("p23-$theme-original.png")
+            refresh()
+            instrumentation.uiAutomation.takeScreenshot().let { bitmap ->
+                try { File(files, "p23-$theme-controls.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
+            }
+            val fileBefore = native { state(it).getJSONObject("document_file").toString() }
+            val epoch = properties().getLong("epoch")
+            val rejected = runCatching {
+                native { Native.dispatch(it, obj("type" to "effect", "action" to obj("op" to "import_lookup", "layer" to layer, "epoch" to epoch)).toString()) }
+            }.exceptionOrNull()
+            assertNotNull("Unsupported import must reject", rejected)
+            assertTrue(rejected!!.message.orEmpty().contains("Color Lookup import is not available on this platform yet."))
+            assertEquals(fileBefore, native { state(it).getJSONObject("document_file").toString() })
+            assertEquals(baseline, pixels("p23-$theme-rejected.png"))
+            val before = value("intensity")
+            assertTrue("Fixture LUT must be active", before > 0)
+            compose.onNodeWithTag("number-value-intensity").performScrollTo().performClick()
+            val field = compose.onNodeWithTag("number-Intensity")
+            field.performTextReplacement("0"); field.performImeAction()
+            compose.waitUntil(30_000) { value("intensity") == 0.0 }
+            val unadjusted = pixels("p23-$theme-zero.png")
+            assertNotEquals("Embedded LUT changes pixels", baseline, unadjusted)
+            invoke("undo"); assertEquals(before, value("intensity"), .0001)
+            assertEquals(baseline, pixels("p23-$theme-undo.png"))
+            invoke("redo"); assertEquals(0.0, value("intensity"), .0001)
+            assertEquals(unadjusted, pixels("p23-$theme-redo.png")); invoke("undo")
+            compose.onNodeWithTag("property-color_space").performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .8f, height * .5f)) }
+            compose.onNodeWithText("Display P3").performClick()
+            compose.waitUntil(30_000) { value("color_space") == 1.0 }
+            invoke("undo"); assertEquals(0.0, value("color_space"), .0001)
+            var task = 0L; var clip = 0L
+            val control = Native.captureControl()
+            try {
+                val id = native { handle -> request(handle, "copy_merged").first.also { task = Native.clipTask(handle, it) } }
+                val consumed = task; task = 0
+                clip = Native.clipRun(consumed, control, "p23-$theme")
+                Native.clipWritePng(clip, File(files, "p23-$theme-copy.png").absolutePath)
+                val adopted = clip; clip = 0
+                native { Native.clipAdopt(it, id, adopted) }
+                native { handle -> Native.pasteClip(handle, request(handle, "paste_in_place").first) }
+                refresh(); assertEquals(baseline, pixels("p23-$theme-paste.png"))
+                invoke("undo")
+            } finally {
+                if (task != 0L) Native.clipTaskFree(task)
+                if (clip != 0L) Native.clipFree(clip)
+                Native.captureFree(control)
+            }
+            val name = "p23-$theme.capy"
+            val saved = save(name)
+            assertEquals(resourceIdentity, resources(saved)); assertEquals(source, sourceIdentity(manifest(saved)))
+            open(File(files, name)); refresh()
+            assertEquals(baseline, pixels("p23-$theme-reopened.png"))
+            scenario.recreate(); scenario.onActivity { activity = it }
+            compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+            refresh()
+            assertEquals(baseline, pixels("p23-$theme-recreated.png"))
+            val recreated = save("p23-$theme-recreated.capy")
+            assertEquals(resourceIdentity, resources(recreated)); assertEquals(source, sourceIdentity(manifest(recreated)))
+            assertEquals(original.getJSONObject("document").get("color").toString(), manifest(recreated).getJSONObject("document").get("color").toString())
             assertNull(host.failure); assertNull(host.actionError)
         }
     }

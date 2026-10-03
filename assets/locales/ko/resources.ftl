@@ -602,3 +602,13 @@ resources-choice-selective-color-relative = 상대값
 resources-choice-selective-color-absolute = 절대값
 resources-parameter-channel-mixer-constant = 상수
 resources-parameter-channel-mixer-monochrome = 단색
+
+resources-filter-color-lookup = 색상 조회
+resources-lookup-table = 조회 테이블
+resources-lookup-failed = 조회 테이블을 가져올 수 없습니다.
+resources-lookup-space = 색 공간
+resources-lookup-intensity = 강도
+resources-lookup-import = 가져오기…
+resources-lookup-replace = 바꾸기…
+resources-lookup-files = 색상 조회 파일
+resources-lookup-unavailable = 이 플랫폼에서는 아직 색상 조회 파일을 가져올 수 없습니다.

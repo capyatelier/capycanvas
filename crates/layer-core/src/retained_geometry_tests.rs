@@ -53,9 +53,9 @@ fn scalar_mask_bake_keeps_owner_tree_and_domain_while_linked_fold_bakes_register
     let pair=doc.transform_pixels_plan(mid,Interpolation::Bicubic,Default::default()).unwrap();assert_eq!(pair.target,mid);assert_eq!(pair.output.id,id);assert_eq!(pair.scope,TransformPixelsScope::Paint{linked_mask:true});assert_eq!(pair.output.properties.placement,LayerPlacement::IDENTITY);assert_eq!(pair.output.mask.as_ref().unwrap().placement,Projective::IDENTITY);
 }
 #[test]
-fn format14_round_trip_keeps_nonuniform_mesh_and_mask_extent_and_rejects_older_headers(){
-    let mut doc=document();let mesh=MeshMap::identity(Rect::from_extent([128,96]),[1,1]).unwrap().split(0,0.375).unwrap();doc.layers[0].properties.placement=LayerPlacement{outer:perspective(),mesh:Some(Arc::new(mesh)),interpolation:Interpolation::Lanczos};let mut mask=LayerMask::reveal_all(doc.allocate_layer_id(),Point::default());mask.extent=Some([64,48]);doc.layers[0].mask=Some(mask);let project=Project{document:doc};let mut bytes=Vec::new();project.write(&mut bytes).unwrap();assert_eq!(&bytes[..12],b"CAPYRASTER\x0e\0");let loaded=Project::read(bytes.as_slice(),Default::default()).unwrap();assert_eq!(loaded,project);
-    for version in 8..14 {let mut old=bytes.clone();old[10]=version;assert!(Project::read(old.as_slice(),Default::default()).is_err());}
+fn current_format_round_trip_keeps_nonuniform_mesh_and_mask_extent_and_rejects_older_headers(){
+    let mut doc=document();let mesh=MeshMap::identity(Rect::from_extent([128,96]),[1,1]).unwrap().split(0,0.375).unwrap();doc.layers[0].properties.placement=LayerPlacement{outer:perspective(),mesh:Some(Arc::new(mesh)),interpolation:Interpolation::Lanczos};let mut mask=LayerMask::reveal_all(doc.allocate_layer_id(),Point::default());mask.extent=Some([64,48]);doc.layers[0].mask=Some(mask);let project=Project{document:doc};let mut bytes=Vec::new();project.write(&mut bytes).unwrap();assert_eq!(&bytes[..12],b"CAPYRASTER\x0f\0");let loaded=Project::read(bytes.as_slice(),Default::default()).unwrap();assert_eq!(loaded,project);
+    for version in 8..15 {let mut old=bytes.clone();old[10]=version;assert!(Project::read(old.as_slice(),Default::default()).is_err());}
 }
 
 #[test]

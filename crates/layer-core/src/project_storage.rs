@@ -5,6 +5,8 @@ use crate::{raster::*, *};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
+mod resources;
+pub use resources::ResourceIndex;
 mod sources;
 use sources::SourceIndex;
 mod selections;
@@ -14,7 +16,7 @@ use photo_metadata::MetadataIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x0e\0";
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x0f\0";
 const READABLE: [&[u8; 12]; 1] = [MAGIC];
 
 #[derive(Serialize, Deserialize)]
@@ -49,6 +51,7 @@ struct Manifest<D = Document> {
     selections: SelectionIndex,
     #[serde(default, skip_serializing_if = "MetadataIndex::is_empty")]
     metadata: MetadataIndex,
+    resources: ResourceIndex,
 }
 
 pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), String> {
@@ -100,6 +103,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     let (mut tiled_sources, profiles) =
         SourceIndex::collect(&project.document, &mut blobs, &mut ids, &mut tile_count);
     let mut document = project.document.clone();
+    let (mut resources, resource_payloads) = ResourceIndex::detach(&mut document)?;
     let selections = SelectionIndex::collect(&mut document, &mut blobs, &mut ids, &mut tile_count)?;
     if tile_count > limits.tiles {
         return Err("Project has too many raster/source tiles".into());
@@ -122,6 +126,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     tiled_sources.index_profiles(&profiles, &mut offset);
     let (metadata_index, metadata_blocks) =
         MetadataIndex::collect(&project.document.metadata, &mut offset);
+    resources.index(&mut offset)?;
     let manifest = Manifest {
         document: &document,
         tile_size: TILE_SIZE,
@@ -130,6 +135,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
         tiled_sources,
         selections,
         metadata: metadata_index,
+        resources,
     };
     let json = metadata(&manifest, limits.metadata_bytes)?;
     output.write_all(MAGIC).map_err(io_error)?;
@@ -144,6 +150,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     for block in profiles.iter().chain(&metadata_blocks) {
         output.write_all(block).map_err(io_error)?;
     }
+    for resource in resource_payloads { output.write_all(resource.payload().ok_or("Unresolved effect resource")?).map_err(io_error)?; }
     Ok(())
 }
 
@@ -169,6 +176,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         serde_json::from_slice(&json).map_err(|e| format!("Invalid project metadata: {e}"))?;
     manifest.selections.reject_inline_pixels(&mut manifest.document)?;
     validate_document(&manifest.document, limits)?;
+    let resource_bytes = manifest.resources.validate(&manifest.document, limits.asset_bytes)?;
     if manifest.tile_size != TILE_SIZE
         || manifest.blobs.len() > limits.tiles
         || manifest.rasters.len() > limits.layers * 2
@@ -193,13 +201,14 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
     manifest.tiled_sources.validate(
         &manifest.document,
         &manifest.blobs,
-        limits,
+        ProjectLimits {asset_bytes: limits.asset_bytes - resource_bytes, ..limits},
         &mut offset,
         &mut referenced,
         &mut tile_count,
     )?;
     manifest.selections.validate(&manifest.document, &manifest.blobs, limits, &mut referenced, &mut tile_count)?;
     manifest.metadata.validate(&mut offset)?;
+    manifest.resources.validate_offsets(&mut offset)?;
     let mut target_ids = BTreeSet::new();
     let expected_targets: BTreeMap<_, _> = manifest
         .document
@@ -258,6 +267,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         .tiled_sources
         .read(&mut input, &tiles, &mut manifest.document)?;
     manifest.metadata.read(&mut input, &mut manifest.document)?;
+    manifest.resources.read(&mut input, &mut manifest.document)?;
     manifest.selections.restore(&tiles, &mut manifest.document)?;
     for raster in manifest.rasters {
         let mask = manifest
@@ -472,13 +482,13 @@ mod tests {
         assert!(read(&sources).is_err());
         bytes[10] = 7;
         assert!(read(&bytes).is_err());
-        bytes[10] = 15;
+        bytes[10] = 16;
         assert!(read(&bytes).is_err());
     }
 
     #[test]
-    fn published_version_14_choices_and_pixels_resave_unchanged() {
-        let bytes = include_bytes!("../tests/fixtures/published-v14-choice.capy");
+    fn published_version_15_choices_and_pixels_resave_unchanged() {
+        let bytes = include_bytes!("../tests/fixtures/published-v15-choice.capy");
         assert_eq!(&bytes[..12], MAGIC);
         let project = Project::read(bytes.as_slice(), Default::default()).unwrap();
         assert_eq!(project.document.layers[0].name.as_ref(), "  My curves { $name } 한글 🎨  ");

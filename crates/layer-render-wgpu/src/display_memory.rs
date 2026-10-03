@@ -204,3 +204,17 @@ fn windows_admission_respects_usage_and_available_memory() {
     assert_eq!(remaining_headroom(4096, 0, None), None);
     assert_eq!(remaining_headroom(0, 0, Some(8192)), Some(0));
 }
+
+pub(super) fn resource_budget(device: &wgpu::Device, retained: u64) -> u64 {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let system = layer_color::photo::PhotoMemoryBudget::available_memory();
+        let headroom = match (vulkan_headroom(device), system) {
+            (Some(gpu), Some(system)) => Some(gpu.min(system)),
+            (gpu, system) => gpu.or(system),
+        };
+        allowance(headroom, 4, retained).min(512 * 1024 * 1024)
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "windows"))]
+    { complete_budget(device, retained).min(512 * 1024 * 1024) }
+}

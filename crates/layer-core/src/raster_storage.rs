@@ -202,12 +202,14 @@ impl Editor {
     pub fn retained_tiles(&self) -> RetainedTiles {
         let mut rasters = Vec::new();
         let mut sources = Vec::new();
+        let mut resources = Vec::new();
         let mut selections: Vec<_> = self.document.selection.iter().collect();
         for layer in &self.document.layers {
             rasters.push(&layer.raster);
             rasters.extend(layer.masks().map(|m| &m.raster));
             sources.extend(layer.source.iter());
             layer.selection_roots(&mut selections);
+            layer.resource_roots(&mut resources);
         }
         let mut metadata_bytes = 0usize;
         if let Some(proof) = &self.document.proof {
@@ -220,6 +222,7 @@ impl Editor {
             entry.edit.raster_roots(&mut rasters);
             entry.edit.source_roots(&mut sources);
             entry.edit.selection_roots(&mut selections);
+            entry.edit.resource_roots(&mut resources);
             metadata_bytes = metadata_bytes.saturating_add(entry.metadata_bytes);
         }
         let mut seen = HashSet::new();
@@ -258,6 +261,7 @@ impl Editor {
         // proportional to JSON text. Never serialize millions of mask words on
         // the interaction thread just to estimate resident memory.
         let mut accounting = crate::history_budget::Accounting::default();
+        for resource in resources { metadata_bytes = metadata_bytes.saturating_add(accounting.charge_resource(resource)); }
         for selection in selections { metadata_bytes = metadata_bytes.saturating_add(accounting.charge_selection(selection)); }
         for layer in &self.document.layers{let mut roots=Vec::new();layer.mesh_roots(&mut roots);for mesh in roots{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_mesh(mesh));}}
         let mut document = self.document.clone();

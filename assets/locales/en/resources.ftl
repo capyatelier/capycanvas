@@ -485,3 +485,13 @@ resources-choice-selective-color-relative = Relative
 resources-choice-selective-color-absolute = Absolute
 resources-parameter-channel-mixer-constant = Constant
 resources-parameter-channel-mixer-monochrome = Monochrome
+
+resources-filter-color-lookup = Color Lookup
+resources-lookup-table = Lookup table
+resources-lookup-space = Color space
+resources-lookup-intensity = Intensity
+resources-lookup-import = Import…
+resources-lookup-replace = Replace…
+resources-lookup-files = Color Lookup files
+resources-lookup-unavailable = Color Lookup import is not available on this platform yet.
+resources-lookup-failed = Could not import the lookup table.

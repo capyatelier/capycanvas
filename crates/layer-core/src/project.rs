@@ -97,8 +97,6 @@ impl Project {
 
     pub fn validate(&self, limits: ProjectLimits) -> Result<(), String> {
         validate_document(&self.document, limits)?;
-        let mut total = 0u64;
-        let mut source_memory = color::source::SourceAccounting::default();
         let mut source_tiles = 0usize;
         let mut seen_sources = BTreeSet::new();
         for layer in &self.document.layers {
@@ -113,10 +111,9 @@ impl Project {
                 if source_tiles > limits.tiles {
                     return Err("Project has too many source tiles".into());
                 }
-                total = total.saturating_add(source_memory.charge(source) as u64);
             }
         }
-        if total > limits.asset_bytes {
+        if asset_bytes(&self.document) > limits.asset_bytes {
             return Err("Project images exceed the memory limit".into());
         }
         Ok(())
@@ -131,6 +128,18 @@ impl Project {
     pub fn read(input: impl Read, limits: ProjectLimits) -> Result<Self, String> {
         crate::project_storage::read(input, limits)
     }
+}
+
+pub(super) fn asset_bytes(document: &Document) -> u64 {
+    let mut total = 0u64;
+    let mut resources = crate::history_budget::Accounting::default();
+    let mut sources = color::source::SourceAccounting::default();
+    for layer in &document.layers {
+        let mut roots = Vec::new(); layer.resource_roots(&mut roots);
+        for resource in roots { total = total.saturating_add(resources.charge_resource(resource) as u64); }
+        if let Some(source) = &layer.source { total = total.saturating_add(sources.charge(source) as u64); }
+    }
+    total
 }
 
 pub(super) fn io_error(e: std::io::Error) -> String {
@@ -168,6 +177,8 @@ pub(super) fn read_block(input: &mut impl Read, size: u64, limit: u64) -> Result
         return Err("Project data exceeds the memory limit".into());
     }
     let mut bytes = Vec::new();
+    bytes.try_reserve_exact(usize::try_from(size).map_err(|_| "Project allocation size overflow")?)
+        .map_err(|_| "Project allocation failed")?;
     input.take(size).read_to_end(&mut bytes).map_err(io_error)?;
     if bytes.len() as u64 != size {
         return Err("The project is incomplete".into());

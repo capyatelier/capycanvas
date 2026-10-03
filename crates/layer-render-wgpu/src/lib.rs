@@ -3183,6 +3183,7 @@ impl CanvasRenderer for WgpuRasterizer {
             + self.portable_blend.byte_len()
             + 160 + self.dry_records.storage_bytes()
             + self.material_gather.as_ref().map_or(0, material_sources::Gather::storage_bytes)
+            + self.device.effect_resources.lock().unwrap().bytes()
             + m.retouch_storage_bytes
             + self
                 .transforms
@@ -5942,6 +5943,8 @@ mod artwork_statistics_tests;
 mod levels_statistics_tests;
 #[cfg(test)]
 mod curves_calibration_tests;
+#[cfg(test)]
+mod lut3d_tests;
 #[cfg(target_arch = "wasm32")]
 impl WgpuRasterizer {
     pub fn set_snapshot_worker(&mut self, worker: snapshot::BrowserSnapshot) { self.snapshot_worker_callback = Some(worker); }

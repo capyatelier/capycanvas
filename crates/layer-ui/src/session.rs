@@ -200,6 +200,7 @@ pub struct UiSession<R: CanvasRenderer> {
     notices: notices::Notices,
     pen: InputProducer<PenEvent>,
     input_pending: bool,
+    host_requests_changed: bool,
     pen_contact: bool,
     rendering_suspended: bool,
     touch: TouchGesture,
@@ -371,6 +372,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             engine,
             pen,
             input_pending: false,
+            host_requests_changed: false,
             pen_contact: false,
             rendering_suspended: false,
             touch: TouchGesture::default(),
@@ -5112,6 +5114,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let id = self.next_request;
         self.next_request = id.checked_add(1).ok_or("Host request IDs exhausted")?;
         self.state.requests.push(HostRequest { id, kind });
+        self.host_requests_changed = true;
         Ok(())
     }
     fn open_settings(&mut self, page: SettingsPage) {
@@ -5416,6 +5419,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
+        let regions = regions | if std::mem::take(&mut self.host_requests_changed) { regions::HOST } else { 0 };
         let canvas_wake=canvas_wake || (regions & (regions::LAYOUT|regions::CUSTOMIZATION)!=0 && self.histogram_visibility_changed());
         if regions & regions::COMMAND_SEARCH != 0 {
             self.command_search.revision += 1;
@@ -6131,6 +6135,7 @@ mod tests {
     include!("calibration_tests.rs");
     include!("levels_ui_tests.rs");
     include!("color_adjustment_tests.rs");
+    include!("lut3d_tests.rs");
     include!("targeted_curve_tests.rs");
     include!("histogram_tests.rs");
     include!("session_source_tests.rs");
@@ -9290,7 +9295,7 @@ mod tests {
                 result: Ok(()),
             });
             s.frame(0, 0).unwrap();
-            assert_eq!(s.state.adjustments.len(), 49);
+            assert_eq!(s.state.adjustments.len(), 50);
             assert_eq!(
                 s.state.filter_categories.last().unwrap().label.as_ref(),
                 "Examples"

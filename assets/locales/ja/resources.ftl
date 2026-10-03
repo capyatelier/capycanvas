@@ -602,3 +602,13 @@ resources-choice-selective-color-relative = 相対値
 resources-choice-selective-color-absolute = 絶対値
 resources-parameter-channel-mixer-constant = 定数
 resources-parameter-channel-mixer-monochrome = モノクロ
+
+resources-filter-color-lookup = カラールックアップ
+resources-lookup-table = ルックアップテーブル
+resources-lookup-failed = ルックアップテーブルを読み込めませんでした。
+resources-lookup-space = 色空間
+resources-lookup-intensity = 強度
+resources-lookup-import = 読み込む…
+resources-lookup-replace = 置き換える…
+resources-lookup-files = カラールックアップファイル
+resources-lookup-unavailable = このプラットフォームではカラールックアップをまだ読み込めません。

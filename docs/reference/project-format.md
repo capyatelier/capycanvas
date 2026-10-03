@@ -64,12 +64,22 @@ live edge settings are committed because they affect composition and later paint
 
 ## Container and validation
 
-The header is the twelve bytes `CAPYRASTER\x0e\0`, followed by a little-endian
+The header is the twelve bytes `CAPYRASTER\x0f\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
 blobs and image roles/interpretations. Payload offsets are relative to the payload start.
-Only version 14 is accepted, including recovery files. Earlier pre-release
+Only version 15 is accepted, including recovery files. Earlier pre-release
 containers are rejected; there is no compatibility reader.
+
+Effect resources have a typed binary index. Bindings identify a layer, parameter
+key and value/default role; descriptors carry the table size, domain, title and
+SHA-256 digest. Unique canonical LUT payloads follow raster blobs, source
+profiles and photo metadata. The reader validates every owner, role, descriptor,
+byte count, offset and asset budget before reading payloads, then verifies each
+unique payload once and shares its storage across aliases. Inline unresolved
+resource values are refused. The private Web worker transport carries the same
+bindings plus bounded binary blocks; verified worker results adopt validated
+storage without repeating table scans on the input thread.
 
 Layer placement stores an outer homography, an optional immutable cubic mesh
 and one interpolation choice. The mesh stores its affine source frame,

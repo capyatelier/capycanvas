@@ -1367,7 +1367,7 @@ fn assert_presentation_mip(r: &WgpuRasterizer) {
     }
 }
 
-fn quality(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::Plan) -> [f32; 3] {
+pub(crate) fn quality(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::Plan) -> [f32; 3] {
     quality_linear(actual, exact, plan, |color| color)
 }
 

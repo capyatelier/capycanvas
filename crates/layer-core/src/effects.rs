@@ -15,7 +15,7 @@ pub enum NumericMapping {
     },
 }
 
-pub const EFFECT_ABI: u32 = 3;
+pub const EFFECT_ABI: u32 = 4;
 /// Header plus two records for at most 32 control points/stops. Curves store
 /// analytic Hermite segments; gradients store exact stops, never sampled LUTs.
 pub const EFFECT_TABLE_VECTORS: usize = 65;
@@ -135,6 +135,8 @@ pub struct EffectProgram {
     /// Small parameter-derived tables, computed on edits rather than per pixel.
     #[serde(default)]
     pub lookups: Arc<[EffectLookup]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auxiliary: Option<EffectAuxiliary>,
     #[serde(default)]
     pub pages: Arc<[EffectPage]>,
     pub parameters: Arc<[EffectParameter]>,
@@ -196,12 +198,19 @@ pub struct EffectLookup {
     pub workgroups: [u32; 3],
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EffectAuxiliary {
+    Lut3d { resource: Arc<str>, color_space: Arc<str> },
+}
+
 impl EffectProgram {
     pub fn image_boundary(&self) -> bool {
         !self.passes.is_empty()
             || self.time
             || (self.kind == EffectKind::Adjustment && self.alpha == EffectAlpha::Filter)
     }
+    pub fn fusion_boundary(&self) -> bool { self.image_boundary() || self.auxiliary.is_some() }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -272,6 +281,7 @@ pub enum EffectParameterKind {
     Color,
     Curve,
     Gradient,
+    Lut3d,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -284,6 +294,7 @@ pub enum EffectValue {
     Color(RgbColor),
     Curve(Vec<[f32; 2]>),
     Gradient(Vec<GradientStop>),
+    Lut3d(Option<Arc<crate::Lut3d>>),
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GradientStop {
@@ -320,6 +331,38 @@ impl EffectClock {
     }
 }
 impl EffectInstance {
+    pub fn lut3d(&self) -> Option<&Arc<crate::Lut3d>> {
+        let EffectAuxiliary::Lut3d { resource, .. } = self.program.auxiliary.as_ref()?;
+        match self.value(resource) { Some(EffectValue::Lut3d(resource)) => resource.as_ref(), _ => None }
+    }
+    pub fn resources(&self) -> impl Iterator<Item = &Arc<crate::Lut3d>> {
+        self.values.iter().chain(self.program.parameters.iter().map(|p| &p.default))
+            .filter_map(|v| match v { EffectValue::Lut3d(Some(r)) => Some(r), _ => None })
+    }
+    fn auxiliary_indices(&self) -> Result<Option<(usize,usize)>, &'static str> {
+        let count = self.program.parameters.iter().filter(|p| p.kind == EffectParameterKind::Lut3d).count();
+        let Some(EffectAuxiliary::Lut3d {resource,color_space}) = &self.program.auxiliary else {
+            return if count == 0 { Ok(None) } else { Err("Color lookup requires its auxiliary declaration") };
+        };
+        let parameter = self.program.parameters.iter().position(|p| p.key == *resource && p.kind == EffectParameterKind::Lut3d)
+            .ok_or("Missing color lookup resource parameter")?;
+        let space = self.program.parameters.iter().position(|p| p.key == *color_space)
+            .ok_or("Missing color lookup color space parameter")?;
+        if count != 1 || !matches!(&self.program.parameters[space].kind,
+            EffectParameterKind::Choice {options} if options.iter().map(EffectOption::value).eq(RgbSpace::ALL.map(RgbSpace::name))) {
+            return Err("Invalid color lookup resource or color spaces");
+        }
+        Ok(Some((parameter,space)))
+    }
+    fn validate_resource<'a>(&self, value: impl Fn(usize) -> &'a EffectValue) -> Result<(), &'static str> {
+        let Some((resource,space)) = self.auxiliary_indices()? else { return Ok(()); };
+        let (EffectValue::Lut3d(resource),EffectValue::Choice(space)) = (value(resource),value(space)) else {
+            return Err("Invalid color lookup resource values");
+        };
+        let space = RgbSpace::ALL.get(*space as usize).ok_or("Invalid color lookup color space")?;
+        if resource.as_ref().is_some_and(|r| !r.accepts(*space)) { return Err("Color lookup exceeds the selected color space range"); }
+        Ok(())
+    }
     pub fn playback_rate(&self) -> f32 {
         match self.value("speed") { Some(EffectValue::Number(speed)) if self.program.time => *speed, _ => 1. }
     }
@@ -475,7 +518,7 @@ impl EffectInstance {
             }
             for (i, key) in lookup.dependencies.iter().enumerate() {
                 if lookup.dependencies[..i].contains(key)
-                    || !self.program.parameters.iter().any(|p| p.key == *key)
+                    || !self.program.parameters.iter().any(|p| p.key == *key && p.kind != EffectParameterKind::Lut3d)
                 {
                     return Err("Unknown or duplicate preparation dependency");
                 }
@@ -512,6 +555,8 @@ impl EffectInstance {
                 return Err("Invalid ordered parameter range");
             }
         }
+        self.validate_resource(|i| &self.values[i])?;
+        self.validate_resource(|i| &self.program.parameters[i].default)?;
         Ok(())
     }
     fn ordered_indices(&self, lower: &str, upper: &str) -> Result<(usize, usize), &'static str> {
@@ -564,6 +609,7 @@ impl EffectInstance {
             *v = v.clamp(low, high);
         }
         self.program.parameters[i].validate(&value)?;
+        self.validate_resource(|index| if index == i { &value } else { &self.values[index] })?;
         self.values[i] = value;
         Ok(())
     }
@@ -595,6 +641,7 @@ impl EffectInstance {
                 EffectValue::Color(v) => data.push(v.encoded_in(space)?),
                 EffectValue::Curve(points) => data.extend(curve_parameters(points)),
                 EffectValue::Gradient(stops) => data.extend(gradient_parameters(stops, space)?),
+                EffectValue::Lut3d(resource) => data.push([f32::from(resource.is_some()),0.,0.,0.]),
             }
         }
         let directory = data.len();
@@ -680,6 +727,8 @@ impl EffectParameter {
                     })
                     && s.windows(2).all(|v| v[0].position < v[1].position)
             }
+            (EffectParameterKind::Lut3d, EffectValue::Lut3d(resource)) => resource.as_ref().is_none_or(|r|
+                r.validate_descriptor().is_ok() && RgbSpace::ALL.into_iter().any(|space| r.accepts(space))),
             _ => false,
         };
         if valid {

@@ -6,7 +6,7 @@
     "icon": "adjustments",
     "preview": {"radius": {"kind": "number", "value": 5}},
     "program": {
-      "abi": 3,
+      "abi": 4,
       "id": "example:tent_blur",
       "label": "Tent Blur",
       "kind": "adjustment",

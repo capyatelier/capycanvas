@@ -32,6 +32,8 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Threshold slider, exact native resolution | 120, soft | **Not met.** 4.75–4.79 presents/s, interval p99 241.67 ms | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |
 | Selective Color, neutral and red-family corrections | 120, soft | **Not met.** 110.35–113.31 and 113.89–114.09 presents/s | [Selective Color and Channel Mixer](#selective-color-and-channel-mixer), 2026-10-03 |
 | Channel Mixer, coefficient and Constant | 120, soft | **Not met.** 112.20–115.25 and 109.06–112.53 presents/s | [Selective Color and Channel Mixer](#selective-color-and-channel-mixer), 2026-10-03 |
+| Color Lookup Intensity, native 65³ table | 120, soft | **Not met.** 2.94–3.19 presents/s; interval p99 325.01–333.34 ms | [Color Lookup](#color-lookup), 2026-10-03 |
+| Navigation with Color Lookup, native 65³ table | 120 | **Not met.** 41.34–51.29 presents/s; interval p99 25.00–33.33 ms | [Color Lookup](#color-lookup), 2026-10-03 |
 | Curves point drag (61 MP) | 120, soft | **Not met.** 72.07–74.61 completed canvas updates/s; native UI 76.51–78.53 frames/s | [Curves editing](#curves-editing), 2026-10-02 |
 | Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 120, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 120, soft | | |
@@ -178,6 +180,66 @@ Benchmark APK SHA-256:
 `5219219a6e6ebec0fd20e30b32f3ac3eb1404c8b2afbd193b44ee053d7275746`.
 Full input records, source identities, profiles and setup diagnostics are in
 `artifacts/photo-editing-color/p22-performance/p22-final-evidence.json`.
+
+## Color Lookup
+
+Measured on 2026-10-03 on the reference tablet with the original 9504 × 6336
+sRGB U8 photo, an owned nonidentity 65³ LUT, sRGB table interpretation, Fit zoom
+0.173295, Navigator and the private release benchmark. Native resolution remains
+required: admitted sharp tables fail the reduced-rendering quality bounds. Each
+motion has three warmed five-second contacts; only the owned SurfaceView's
+actual presents inside the input window count. Thermal status stays zero.
+
+| Motion | Actual presents/s, three contacts | Moving interval p99 |
+| --- | --- | --- |
+| Intensity | 3.194 / 2.935 / 2.996 | 325.011–333.344 ms |
+| Hand navigation, Intensity 100% | 51.291 / 43.695 / 41.338 | 25.002–33.334 ms |
+
+The matched preceding build presents Intensity at 0.399 / 0.200 / 0.200 Hz.
+Auxiliary-resource stages now stop shader fusion without forcing image-stage
+preparation. Separate traces show total command passes falling from 3,368 to
+285 per native update and expensive renderer-owner CPU from 2,508 ms to a
+170 ms median. These are total passes, distinct from final effect passes.
+The preceding trace observes 759 bounded-source allocations; the corrected trace
+observes 734, with 950 source visits and 216 misses per update. The comparable
+Threshold trace observes 751 allocations and records 268 total passes with
+199 misses per update. The
+17-pass difference matches the additional source misses.
+
+Remaining traced work includes 1,330 ms of command finalization, 27 ms of queue
+submission and 2,633 ms of bounded waits across the five-second window. Nested
+scopes overlap. GPU composition elapsed has a 329.73 ms median and includes
+scheduling and CPU submission gaps. Ordinary owner CPU medians are 118–150 ms.
+The native full-resolution work, admission-limited decoding and driver costs
+remain measured misses; they do not establish a hardware ceiling.
+
+Allocator boundaries retain one immutable LUT allocation of 4,394,112 bytes
+across Intensity changes and navigation. Ordinary Intensity observes 763 source
+allocations and navigation 749; each observes seven hierarchy allocations totaling
+1,290,511,168 bytes. These counts do not prove distinct mip levels. Continuous
+process/driver peaks and tablet upload counts are unverified; independent GPU
+tests verify one upload across repeated parameter changes. An eight-millisecond
+parameter observer measures 41–58 ms to its first changed value, including drag
+slop; changed-preview and physical presentation latency remain unverified. A
+failed distinct-value-count assertion is retained as diagnostic: sparse sampled
+values are not emitted transitions. Final contacts verify numeric range coverage
+with 40% travel and a 0.5-second triangle period.
+
+Separate workstation release measurements of the same production 96-byte-header
+parser take 26.5–29.1 ms for this 9,886,586-byte LUT. Dropping temporary sample
+storage before payload adoption reduces incremental requested Rust allocator
+peak from 12,083,776 to 8,788,256 bytes, 27.3%, excluding the retained input.
+Owned-payload hydration takes 3.4–3.9 ms without new heap requests; copying and
+hydrating takes 3.6–4.4 ms with 4,394,112 additional bytes. These are CPU
+diagnostics, not tablet import or OS-memory measurements.
+
+Measured APK SHA-256:
+`7d88637bcb8e112228b89f7888b820e9e789ef56bc2eb793d513bbf16008ba35`.
+The final source adds a 16-byte empty-resource accounting correction and import
+completion wake/error handling. These do not change the measured loaded-project
+slider or navigation path. Raw records, workload/source hashes,
+CPU memory scope and the failed observer run are retained in
+`artifacts/photo-editing-color/p23-performance/p23-final-evidence.json`.
 
 ## Exact artwork samples
 

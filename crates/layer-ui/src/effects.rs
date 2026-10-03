@@ -259,6 +259,7 @@ fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EffectAction {
+    ImportLookup {layer:u64,epoch:u64},
     AutoLevels {layer:u64,epoch:u64},
     TargetCurve {layer:u64,epoch:u64},
     Calibrate { layer: u64, epoch: u64, role:layer_core::levels::CalibrationRole },
@@ -312,7 +313,7 @@ pub enum EffectAction {
 impl EffectAction {
     pub(super) fn property_owner(&self)->Option<(u64,u64)> {
         match self {
-            Self::AutoLevels {layer,epoch}|Self::TargetCurve {layer,epoch}|Self::Calibrate {layer,epoch,..}
+            Self::ImportLookup {layer,epoch}|Self::AutoLevels {layer,epoch}|Self::TargetCurve {layer,epoch}|Self::Calibrate {layer,epoch,..}
             |Self::CurveSelectPoint {layer,epoch,..}|Self::CurveRemoveAt {layer,epoch,..}
             |Self::CurveContact {layer,epoch,..}|Self::CurveKey {layer,epoch,..}|Self::CurveNumber {layer,epoch,..}=>Some((*layer,*epoch)),
             Self::Gesture {action,..}=>action.property_owner(),
@@ -394,6 +395,7 @@ pub struct LayerPropertiesView {
     pub layer: Option<u64>,
     pub title: String,
     pub description: String,
+    pub resource_name: Option<String>,
     pub enabled: bool,
     pub controls: Vec<PropertyControl>,
     /// Linear input/output range for HDR curve axes; absent for encoded curves.
@@ -487,7 +489,7 @@ pub(super) fn number_control(p: &layer_core::EffectParameter) -> Option<NumericC
     }
     Some(numeric)
 }
-fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &Localizer) -> PropertyControl {
+fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &Localizer) -> Option<PropertyControl> {
     let kind = match &p.kind {
         EffectParameterKind::Number { .. } => PropertyKind::Number { numeric: number_control(p).unwrap() },
         EffectParameterKind::Toggle => PropertyKind::Toggle,
@@ -500,6 +502,7 @@ fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &
         EffectParameterKind::Color => PropertyKind::Color,
         EffectParameterKind::Curve => PropertyKind::Curve,
         EffectParameterKind::Gradient => PropertyKind::Gradient,
+        EffectParameterKind::Lut3d => return None,
     };
     let plot = if let EffectValue::Curve(points) = &value {
         (0..=128)
@@ -514,14 +517,14 @@ fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &
     let color_action = matches!(kind, PropertyKind::Color).then(|| UiAction::Effect {
         action: EffectAction::UseCurrentColor { layer, key: p.key.to_string() },
     });
-    PropertyControl {
+    Some(PropertyControl {
         plot,
         page:p.page.as_ref().map(|id|id.to_string()),
         section: p.section.as_ref().map(|s| resource_label(s, l).to_string()),
         section_id: p.section.clone(),
         color_action,
         ..PropertyControl::new(&p.key, &resource_label(&p.label, l), kind, value, p.default.clone())
-    }
+    })
 }
 pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBehavior, l: &Localizer) -> LayerPropertiesView {
     let Some(layer) = doc.layer(doc.active_layer) else {
@@ -541,7 +544,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
                 .iter()
                 .zip(&effect.values)
                 .filter(|(p,_)|p.visible_when.as_ref().is_none_or(|condition|effect.value(&condition.key)==Some(&condition.value)))
-                .map(|(p, v)| control(layer.id.0, p, v.clone(), l)),
+                .filter_map(|(p, v)| control(layer.id.0, p, v.clone(), l)),
         );
         if effect.program.id.as_ref() == "curves" {
             if let (Some(space), Some(EffectValue::Number(stops))) = (effect.choice("domain"), effect.value("hdr_stops")) {
@@ -605,6 +608,14 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
             action:EffectAction::Calibrate {layer:view.layer.unwrap(),epoch:view.epoch,role:*role},
         }).collect()
     });
+    if let Some(effect) = effect.filter(|effect| effect.program.auxiliary.is_some()) {
+        if let Some(resource) = effect.lut3d() {
+            let name = if resource.title().is_empty() {l.text(MessageId::RESOURCES_LOOKUP_TABLE).to_string()} else {resource.title().to_string()};
+            view.description = name.clone(); view.resource_name = Some(name);
+        }
+        view.actions.push(PropertyActionView {label:l.text(if effect.lut3d().is_some() {MessageId::RESOURCES_LOOKUP_REPLACE} else {MessageId::RESOURCES_LOOKUP_IMPORT}).to_string(),
+            action:EffectAction::ImportLookup {layer:view.layer.unwrap(),epoch:view.epoch}});
+    }
     if effect.is_some_and(|effect|effect.program.id.as_ref()=="levels") {
         view.actions.push(PropertyActionView {label:l.text(MessageId::RESOURCES_LEVELS_AUTO).to_string(),action:EffectAction::AutoLevels {layer:view.layer.unwrap(),epoch:view.epoch}});
     }
@@ -761,6 +772,14 @@ impl<R: CanvasRenderer> UiSession<R> {
 
         if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_ARTWORK_REQUIRED).to_string());}
         match action {
+            EffectAction::ImportLookup {layer,epoch} => {
+                if self.state.platform != Platform::Gtk { return Err(self.localization().text(MessageId::RESOURCES_LOOKUP_UNAVAILABLE).to_string()); }
+                if !self.property_editor.accepts(layer,epoch) {return Ok(());}
+                self.cancel_effect_gesture()?;
+                let Some(effect) = self.engine.document().layer(LayerId(layer)).and_then(|layer| layer.effect.as_ref()) else {return Ok(());};
+                let Some(layer_core::EffectAuxiliary::Lut3d {resource,..}) = &effect.program.auxiliary else {return Ok(());};
+                return self.request_document(DocumentRequest::ImportLookup {target: LookupTarget {document:self.engine.document().id.clone(),activation:self.state.document_file.epoch,layer,epoch,key:resource.to_string()}});
+            }
             EffectAction::TargetCurve {layer,epoch}=>return self.start_targeted_curve(layer,epoch),
             EffectAction::AutoLevels {layer,epoch}=>return self.start_auto_levels(layer,epoch),
             EffectAction::Calibrate { layer, epoch, role } => return self.start_calibration(layer, epoch, role),
@@ -1137,7 +1156,7 @@ mod resource_tests {
         let instance = EffectInstance::new(candidate.get("curves").unwrap().program());
         let copy: EffectInstance = serde_json::from_str(&serde_json::to_string(&instance).unwrap()).unwrap();
         assert_eq!(copy, instance);
-        let control = control(7, &copy.program.parameters[0], copy.values[0].clone(), &l);
+        let control = control(7, &copy.program.parameters[0], copy.values[0].clone(), &l).unwrap();
         assert_eq!(control.label, "한글 설정");
         assert_eq!(control.section.as_deref(), Some("我的分组"));
     }
@@ -1148,7 +1167,7 @@ mod resource_tests {
         let mut custom = package();
         custom.categories[0].label = message(MessageId::COMMON_CANCEL);
         custom.categories[1].label = "キャンセル".into();
-        let program = Arc::make_mut(&mut custom.filters[0].program);
+        let program = Arc::make_mut(&mut custom.filters.iter_mut().find(|filter| filter.id()=="curves").unwrap().program);
         let parameters = Arc::make_mut(&mut program.parameters);
         parameters[0].section = Some(message(MessageId::COMMON_CANCEL));
         parameters[1].section = Some("キャンセル".into());
@@ -1166,11 +1185,11 @@ mod resource_tests {
         assert!(tone.iter().all(|choice| choice.category.as_ref() == "tone"));
         assert_eq!(tone.len(), custom.filters().iter().filter(|f| f.category.as_ref() == "tone").count());
         let instance = custom.get("curves").unwrap().preview().unwrap();
-        let a = control(7, &instance.program.parameters[0], instance.values[0].clone(), &l);
-        let b = control(7, &instance.program.parameters[1], instance.values[1].clone(), &l);
+        let a = control(7, &instance.program.parameters[0], instance.values[0].clone(), &l).unwrap();
+        let b = control(7, &instance.program.parameters[1], instance.values[1].clone(), &l).unwrap();
         assert_eq!(a.section, b.section);
         assert_ne!(a.section_id, b.section_id);
-        let choice = control(7, &instance.program.parameters[4], EffectValue::Choice(1), &l);
+        let choice = control(7, &instance.program.parameters[4], EffectValue::Choice(1), &l).unwrap();
         let PropertyKind::Choice { options } = choice.kind else { panic!() };
         assert_eq!(&*options[1], "キャンセル");
         let mut instance = instance;
@@ -1187,7 +1206,7 @@ mod resource_tests {
                 let mut custom = package();
                 if field == 0 { custom.categories[0].label = invalid; }
                 else {
-                    let program = Arc::make_mut(&mut custom.filters[0].program);
+                    let program = Arc::make_mut(&mut custom.filters.iter_mut().find(|filter| filter.id()=="curves").unwrap().program);
                     match field {
                         1 => program.label = invalid,
                         2 => Arc::make_mut(&mut program.parameters)[0].label = invalid,

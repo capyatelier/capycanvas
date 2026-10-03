@@ -47,6 +47,48 @@ The [tone and color contract](../development/photo-editing-m5-m6-color.md#huesat
 defines the equations and bounds. All controls, validation, history and saved
 values use the existing runtime schema on GTK, Web, Android and Windows.
 
+## Imported color lookup tables
+
+Color Lookup imports a bounded 3D `.cube` table. GTK Properties has Import/Replace,
+Color space and Intensity; TITLE or the selected filename identifies the table.
+The chosen space describes both encoded table input and output, independently
+of document primaries. Empty tables and zero Intensity preserve input exactly.
+Imported tables retain native-resolution previews: sharp adjacent vertices
+can fail the reduced-graph quality bounds. Tetrahedral interpolation shares the
+proof sampler's stable x/y/z tie order;
+extended input retains its out-of-domain residual. A result whose conversion
+would overflow Float32 preserves its source pixel. Matrix normalization bounds
+its divisor at 2^126 so GPU reciprocal flushing cannot erase extreme inputs.
+
+A `lut3d` parameter stores an optional immutable resource. A program declares
+`auxiliary: {"kind":"lut3d","resource":"resource","color_space":"color_space"}`;
+the referenced choice lists sRGB, Display P3, Adobe RGB (1998), ProPhoto RGB in
+that order. The auxiliary binding is group 2, binding 1, read-only storage.
+`fx_auxiliary(index)` reads a vec4 record. Resource consumers stop fusion so each
+stage owns one binding. Pointwise consumers retain tiled batching without a
+spatial image cache; ordinary pointwise fusion is unchanged. The empty binding holds one
+zero record. Parameter data contains only a presence flag, never table samples.
+
+The canonical table has six vec4 headers (size, minimum, maximum, normalization
+exponents, scaled minima, reciprocal spans), then R-fastest RGB0 records.
+CPU parsing/hashing/admission runs on file workers. A single bounds scan checks
+finite samples; eight component-box corners validate signed decoding and every
+supported working-space transform, including Float32 partial sums. A
+2048×Float32-epsilon margin covers transfer/interpolation rounding near overflow.
+Power-of-two `ldexp` normalization avoids cancellation on tight normal domains.
+Domains whose possible subnormal flush loses more than one Float32 epsilon of
+a table cell are rejected. These restrictions are conservative; they do not
+claim support for camera-log shapers or arbitrary near-overflow tables.
+
+Projects deduplicate binary payloads by digest. Undo, pending operations and
+snapshots share immutable CPU storage; accounting charges each physical payload
+once. Device-local GPU buffers use weak digest caches and live stage leases.
+Parameter edits and resolution variants reuse uploads. Admission checks storage
+limits and measured available memory; Web's unavailable memory query uses a
+bounded 64 MiB resource allowance. Loading a project restores its table without
+needing the source file. Web/Android import controls remain pending GTK review;
+loaded tables and generic controls are preserved across hosts.
+
 ## Definitions and ownership
 
 `assets/filters/manifest.json` supplies runtime IDs, category/ordering, labels,
@@ -129,12 +171,12 @@ the [Vulkan core minimum of four fractional bits](https://docs.vulkan.org/spec/l
 while native-grid tests retain their Float32 tolerance. Native views and programs
 declaring native resolution retain exact evaluation.
 
-The current filter ABI is **3**. Curves and gradients each occupy 65 vec4
+The current filter ABI is **4**. Curves and gradients each occupy 65 vec4
 parameter records: one header plus up to 32 pairs. Curves store Hermite segments
 with interval-scaled tangents; gradients store exact positions and RGBA stops.
 `fx_lut(base, offset, value)` locates a segment with at most five binary-search
 steps and evaluates it directly. The former 256-sample parameter representation
-is removed. ABI 2 programs are rejected, including embedded document programs;
+is removed. Earlier ABI programs are rejected, including embedded document programs;
 there is no compatibility adapter. Native photo editing must not inherit a
 sampled LUT's error around closely spaced controls.
 
@@ -152,7 +194,7 @@ clamping or changing their stored definitions. Gradient interpolation uses those
 straight RGB coordinates and alpha; inserting a stop records that interpolation
 in the document space. Assignment, conversion and depth changes retain the
 original endpoint definitions. The GPU record layout and shader contract remain
-ABI 3. Individual effects decide how alpha contributes: Gradient Map uses stop
+ABI 4. Individual effects decide how alpha contributes: Gradient Map uses stop
 alpha as mapping strength; the built-in tint/ink/paper controls use RGB only.
 
 A `"kind":"generator"` program ignores its input and supplies color and coverage.

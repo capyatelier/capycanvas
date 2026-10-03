@@ -14,6 +14,7 @@ pub(super) struct Accounting {
     selections: HashSet<usize>,
     meshes: HashSet<usize>,
     mesh_arrays: HashSet<usize>,
+    resources: HashSet<usize>,
 }
 impl Accounting {
     pub fn new(document: &Document) -> Self {
@@ -24,6 +25,7 @@ impl Accounting {
             result.charge_selection(selection);
         }
         for layer in &document.layers {
+            let mut resources = Vec::new(); layer.resource_roots(&mut resources); for resource in resources { result.charge_resource(resource); }
             let mut meshes=Vec::new();layer.mesh_roots(&mut meshes);for mesh in meshes{result.charge_mesh(mesh);}
             if let Some(source) = &layer.source {
                 result.sources.charge(source);
@@ -42,6 +44,8 @@ impl Accounting {
 
     pub fn charge(&mut self, entry: &HistoryEntry) -> usize {
         let mut bytes = entry.metadata_bytes;
+        let mut resources = Vec::new(); entry.edit.resource_roots(&mut resources);
+        for resource in resources { bytes = bytes.saturating_add(self.charge_resource(resource)); }
         let mut meshes=Vec::new();entry.edit.mesh_roots(&mut meshes);for mesh in meshes{bytes=bytes.saturating_add(self.charge_mesh(mesh));}
         let mut selections = Vec::new();
         entry.edit.selection_roots(&mut selections);
@@ -80,6 +84,9 @@ impl Accounting {
         bytes
     }
 
+    pub(super) fn charge_resource(&mut self, resource: &Lut3d) -> usize {
+        resource.storage().filter(|bytes| self.resources.insert(bytes.as_ptr() as usize)).map_or(0, |bytes| bytes.len())
+    }
     pub(super) fn charge_mesh(&mut self,mesh:&Arc<MeshMap>)->usize {
         let mut bytes=if self.meshes.insert(Arc::as_ptr(mesh) as usize){std::mem::size_of::<MeshMap>()}else{0};
         if self.mesh_arrays.insert(mesh.net.as_ptr() as usize){bytes=bytes.saturating_add(mesh.net.len()*std::mem::size_of::<Point>());}

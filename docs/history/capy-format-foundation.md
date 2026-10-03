@@ -83,10 +83,10 @@ payload sequentially and decodes each tile to validate it before adoption; the
 presence of offsets does not make the current reader lazy. See
 [`raster.rs`](../../crates/layer-core/src/raster.rs).
 
-The checked-in
-[`published-v14-choice.capy`](../../crates/layer-core/tests/fixtures/published-v14-choice.capy)
-confirms the header and manifest shape, including active editing state and ID
-allocators. This inspection establishes the representation, not a performance
+The maintained regression fixture
+[`published-v15-choice.capy`](../../crates/layer-core/tests/fixtures/published-v15-choice.capy)
+now uses the current container version; it retains the active editing state and
+ID allocator checks described here. This inspection establishes the representation, not a performance
 result or qualification of every host's save workflow.
 
 | Area | Persisted today |

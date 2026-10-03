@@ -37,6 +37,11 @@ Threshold, Desaturate and Photo Filter use the existing shared Properties contro
 on GTK, Web, Android and Windows. Selective Color adds nine CMYK pages with Relative and
 Absolute methods; Channel Mixer adds RGB output rows and an independent
 Monochrome row through the same controls on GTK, Web, Android and Windows.
+Color Lookup imports bounded 3D `.cube` tables in GTK, with Color space,
+Intensity and undoable replacement. Projects embed and deduplicate table data;
+Web and Android preserve loaded tables and expose their numeric controls.
+Their file import presentation remains pending. See
+[runtime filters](../reference/runtime-filters.md#imported-color-lookup-tables).
 
 ## Milestones
 

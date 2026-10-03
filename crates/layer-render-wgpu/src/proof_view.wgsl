@@ -25,39 +25,9 @@ fn proof_artwork(source: vec4<f32>, position: vec2<f32>) -> vec4<f32> {
     let coordinate = bounded * f32(proof_options.x - 1u);
     let low = min(vec3<u32>(coordinate), vec3(proof_options.x - 2u));
     let t = coordinate - vec3<f32>(low);
-    // Spell out the six tetrahedra. Dynamically indexing and updating vectors
-    // in the three-step loop is substantially slower on Android Chrome/Dawn.
-    // Also avoid dynamic vector l-values, which Windows FXC cannot address.
-    // Keep the CPU interpolation's stable x/y/z tie order and accumulation.
-    var first = vec3<u32>(1u, 0u, 0u);
-    var second = vec3<u32>(0u, 1u, 0u);
-    var a = t.x;
-    var b = t.y;
-    var c = t.z;
-    if t.x >= t.y {
-        if t.y >= t.z { }
-        else if t.x >= t.z {
-            second = vec3<u32>(0u, 0u, 1u);
-            b = t.z; c = t.y;
-        } else {
-            first = vec3<u32>(0u, 0u, 1u);
-            second = vec3<u32>(1u, 0u, 0u);
-            a = t.z; b = t.x; c = t.y;
-        }
-    } else {
-        if t.x >= t.z {
-            first = vec3<u32>(0u, 1u, 0u);
-            second = vec3<u32>(1u, 0u, 0u);
-            a = t.y; b = t.x;
-        } else if t.y >= t.z {
-            first = vec3<u32>(0u, 1u, 0u);
-            second = vec3<u32>(0u, 0u, 1u);
-            a = t.y; b = t.z; c = t.x;
-        } else {
-            first = vec3<u32>(0u, 0u, 1u);
-            a = t.z; c = t.x;
-        }
-    }
+    let tetra = tetrahedron(t);
+    let first = tetra.first; let second = tetra.second;
+    let a = tetra.weights.x; let b = tetra.weights.y; let c = tetra.weights.z;
     let p0 = proof_at(low);
     let p1 = proof_at(low + first);
     let p2 = proof_at(low + first + second);
