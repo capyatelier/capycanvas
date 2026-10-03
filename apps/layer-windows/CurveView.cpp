@@ -79,7 +79,10 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         };
         auto captured=std::make_shared<bool>(false);
         NumberPresentation presentation;
-        presentation.title=[weak,axis]{if(auto self=weak.lock())return str(array(self->curve(),L"axes").GetObjectAt(axis),L"label");return hstring();};
+        presentation.title=[weak,axis]{
+            auto self=weak.lock();if(!self)return hstring();
+            auto axes=array(self->curve(),L"axes");return uint32_t(axis)<axes.Size()?str(axes.GetObjectAt(axis),L"label"):hstring();
+        };
         presentation.text=[value]{auto v=value();return v.ValueType()==JsonValueType::Object?str(v.GetObject(),L"text"):hstring();};
         presentation.identity=[weak]{if(auto self=weak.lock())return self->curve().GetNamedValue(L"selected",JsonValue::CreateNullValue()).Stringify()+L"/"+to_hstring(self->epoch());return hstring();};
         presentation.phase=[property=property,operation,captured](hstring const& phase,double v){*captured=phase==L"down";if(auto action=operation(v))property->action(action,phase);};

@@ -326,7 +326,7 @@ try {
         Choose 'properties-page' $page.label
         Wait-Until {$keys=@((Model).state.layer_properties.controls|Where-Object page -eq $page.id|ForEach-Object key);(Model).state.layer_properties.page -eq $page.id -and $keys.Count -and @($keys|Where-Object {!(Find "property-$_")}).Count -eq 0} "Color Balance did not present its $($page.label) page"
     }
-    Select-Filter 'levels' 'Levels'
+    Select-Filter 'hue_saturation' 'Hue / Saturation'
     if(Find 'properties-page'){throw 'A single-page filter offered a page choice'}
 
     Select-Filter 'gradient_map' 'Gradient Map'
