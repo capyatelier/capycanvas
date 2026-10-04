@@ -1,6 +1,6 @@
 [package]
 name = "layer-ui"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Portable workspace layout, UI state, actions, and canvas interaction"

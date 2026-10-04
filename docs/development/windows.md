@@ -240,28 +240,28 @@ then install it, check that a `.capy` drawing starts the installed app, and
 uninstall it on an unlocked desktop:
 
 ```powershell
-./apps/layer-windows/scripts/package-installer.ps1 -PortableResultFile <portable-result.json> -Version 1.0.0.0 -TestIdentity
+./apps/layer-windows/scripts/package-installer.ps1 -PortableResultFile <portable-result.json> -TestIdentity
 ./apps/layer-windows/scripts/test-installer.ps1 -ResultFile <installer-result.json>
 ```
 
 [`installer.nsi`](../../apps/layer-windows/scripts/installer.nsi) installs into
 `%LOCALAPPDATA%\Programs\Capy Canvas` without administrator rights, adds a Start
 menu shortcut and an Apps entry, and opens `.capy` drawings with the app. Setup
-replaces an earlier version in place and asks the painter to close a running
-app first; uninstalling removes the program, its shortcut and file type, and
-keeps preferences, workspaces and editing sessions. The packager downloads the
-pinned NSIS 3.11 release into `artifacts/windows/tools` and checks its SHA-256.
-The installer uses NSIS's zlib/libpng-licensed stub and zlib compression, not
-the LZMA module, which is under the Common Public License. It builds the setup
-program twice and requires identical bytes. `-TestIdentity` gives the program,
-uninstall entry and file type a separate name so a test never replaces an
-installed app; `test-installer.ps1` refuses any other installer. It checks the
-installed files against the manifest, the Apps entry, shortcut and `.capy`
-association, that setup refuses to replace a running app and upgrades a closed
-one in place, and that uninstalling leaves nothing behind. Opening the drawing
-itself needs a hardware GPU; `exercise-file-activation.ps1` covers it. Like the
-ZIP, the setup program is unsigned; sign it before distribution so SmartScreen
-can identify the publisher.
+replaces an earlier version in place and asks the painter to close a running app
+first; uninstalling removes the program, its shortcut and file type, and keeps
+preferences, workspaces and editing sessions. The packager downloads the pinned
+NSIS 3.11 release into `artifacts/windows/tools` and checks its SHA-256. The
+installer uses NSIS's zlib/libpng-licensed stub and zlib compression, not the
+LZMA module, which is under the Common Public License. It builds the setup
+program twice and requires identical bytes, and versions it like the MSIX.
+`-TestIdentity` gives the program, uninstall entry and file type a separate name
+so a test never replaces an installed app; `test-installer.ps1` refuses any
+other installer. It checks the installed files against the manifest, the Apps
+entry, shortcut and `.capy` association, that setup refuses to replace a running
+app and upgrades a closed one in place, and that uninstalling leaves nothing
+behind. Opening the drawing itself needs a hardware GPU;
+`exercise-file-activation.ps1` covers it. Like the ZIP, the setup program is
+unsigned; sign it before distribution so SmartScreen can identify the publisher.
 
 ### MSIX
 
@@ -269,15 +269,16 @@ Convert a portable build into an unsigned MSIX, using the portable `result.json`
 from an STA PowerShell session (Windows PowerShell 5.1 or PowerShell 7):
 
 ```powershell
-./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile <portable-result.json> -Version 1.0.0.0
+./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile <portable-result.json>
 ./apps/layer-windows/scripts/test-msix.ps1 -ResultFile <msix-result.json>
 ```
 
 The app runs as a `packagedClassicApp` at `mediumIL` with `runFullTrust` and
 keeps its files in the package's [app data](#where-files-live); the converter
 refuses a portable build without the release identity. Output
-stays under ignored `artifacts/windows/msix`. The version needs a nonzero major
-component and components no greater than 65535; `-AllowDirty` works as for the ZIP.
+stays under ignored `artifacts/windows/msix`. The package version is the
+workspace version with a fourth part of 0, and the Store requires a nonzero major
+part; `-AllowDirty` works as for the ZIP.
 MakeAppx writes wall-clock ZIP timestamps, so `normalize-msix.ps1` rewrites only
 their date and time fields and refuses signed packages. Never normalize after
 signing. The default identity is `CapyAtelier.CapyCanvas`, publisher

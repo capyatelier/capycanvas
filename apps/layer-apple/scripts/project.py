@@ -2,11 +2,14 @@
 """Deterministic Xcode project, without a global project-generator dependency."""
 import hashlib
 import json
+import re
 from pathlib import Path
 
 APP = Path(__file__).resolve().parents[1]
 PROJECT = APP / "CapyCanvas.xcodeproj"
 APP_ID = "art.capycanvas.CapyCanvas"
+VERSION = [int(part) for part in re.search(r'^version = "(\d+)\.(\d+)\.(\d+)"$',
+    (APP.parents[1] / "Cargo.toml").read_text(), re.M).groups()]
 objects = {}
 
 def ident(name):
@@ -140,7 +143,8 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
 product_group = obj("products", "PBXGroup", name="Products", children=products, sourceTree="<group>")
 main_group = obj("main", "PBXGroup", children=list(refs.values()) + [product_group], sourceTree="<group>")
 root = obj("project", "PBXProject", attributes={"LastUpgradeCheck": "2660", "BuildIndependentTargetsInParallel": "YES"},
-    buildConfigurationList=configs("project", {}), compatibilityVersion="Xcode 14.0", developmentRegion="en",
+    buildConfigurationList=configs("project", {"MARKETING_VERSION": ".".join(map(str, VERSION)),
+        "CURRENT_PROJECT_VERSION": VERSION[0] * 1_000_000 + VERSION[1] * 1_000 + VERSION[2]}), compatibilityVersion="Xcode 14.0", developmentRegion="en",
     knownRegions=["en", "Base"], mainGroup=main_group, productRefGroup=product_group, projectDirPath="", projectRoot="", targets=targets)
 PROJECT.mkdir(exist_ok=True)
 (PROJECT / "project.pbxproj").write_text("// !$*UTF8*$!\n" + plist({"archiveVersion": 1, "classes": {}, "objectVersion": 56, "objects": objects, "rootObject": root}) + "\n")

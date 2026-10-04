@@ -1,6 +1,6 @@
 [package]
 name = "layer-core"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Portable document model, edits and project format for Capy Canvas"
 license.workspace = true

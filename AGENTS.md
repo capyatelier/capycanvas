@@ -110,4 +110,5 @@ specific tasks.
 | Port a feature to Apple or Windows | [Apple porting](docs/APPLE_PORTING_GUIDE.md), [Windows porting](docs/WINDOWS_PORTING_GUIDE.md) |
 | Write docs, UI text or a handoff | [Writing](docs/development/writing.md) |
 | Understand a subsystem | [Technical documentation](docs/README.md) |
+| Change the version or release packages | [Releasing](docs/development/releasing.md) |
 | Add a dependency, vendor code or publish | [Publication](docs/development/publication.md), [vendored crates](vendor/README.md) |

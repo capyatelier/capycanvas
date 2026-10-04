@@ -10,6 +10,9 @@ val capyRustProfile = providers.gradleProperty("capyRustProfile")
     .orElse(providers.environmentVariable("CAPY_RUST_PROFILE"))
 val capyApplicationId = providers.gradleProperty("capyApplicationId")
 val capyDevelopmentSuffix = ".dev".takeUnless { capyApplicationId.isPresent }
+val capyVersion = Regex("^version = \"(\\d+)\\.(\\d+)\\.(\\d+)\"$", RegexOption.MULTILINE)
+    .find(providers.fileContents(rootProject.layout.projectDirectory.file("../../Cargo.toml")).asText.get())!!
+    .groupValues.drop(1).map(String::toInt)
 
 abstract class RustBuild : Exec() {
     @get:OutputDirectory
@@ -26,8 +29,8 @@ android {
         manifestPlaceholders["capyAppLabel"] = providers.gradleProperty("capyAppLabel").getOrElse("Capy Canvas")
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = capyVersion[0] * 1_000_000 + capyVersion[1] * 1_000 + capyVersion[2]
+        versionName = capyVersion.joinToString(".")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         testProguardFiles("test-proguard-rules.pro")
         buildConfigField("boolean", "WORKSPACE_BENCHMARK", "false")

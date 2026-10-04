@@ -471,7 +471,8 @@ extension XCTestCase {
             XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR value == %@", text, text))
                 .firstMatch.exists, "About must show \(text)")
         }
-        for (label, value) in [("Version", "0.1.0"), ("Application license", "MIT OR Apache-2.0"),
+        let version = Bundle(for: type(of: self)).object(forInfoDictionaryKey: "CFBundleShortVersionString") as! String
+        for (label, value) in [("Version", version), ("Application license", "MIT OR Apache-2.0"),
             ("Canvas rendering", "Native GPU")] {
             XCTAssertTrue(app.staticTexts[label].firstMatch.exists)
             let content = app.descendants(matching: .any).matching(NSPredicate(format:

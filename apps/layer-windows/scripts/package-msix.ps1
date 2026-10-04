@@ -1,6 +1,5 @@
 param(
     [Parameter(Mandatory)][string]$PortableResultFile,
-    [ValidatePattern('^[1-9][0-9]*\.[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version='1.0.0.0',
     [ValidateNotNullOrEmpty()][string]$Publisher='CN=Capy Atelier',
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9.-]{2,49}$')][string]$IdentityName='CapyAtelier.CapyCanvas',
     [switch]$UnsignedTestIdentity,
@@ -20,8 +19,8 @@ if($UnsignedTestIdentity){
 }
 $portable=Read-PortablePackage $PortableResultFile
 $manifest=$portable.manifest
-$parsedVersion=[Version]::Parse($Version)
-foreach($part in @($parsedVersion.Major,$parsedVersion.Minor,$parsedVersion.Build,$parsedVersion.Revision)){if($part -gt 65535){throw 'MSIX version components cannot exceed 65535.'}}
+if($manifest.version -notmatch '^[1-9][0-9]*\.[0-9]{1,3}\.[0-9]{1,3}$'){throw 'MSIX packages need a nonzero major version.'}
+$Version=$manifest.version+'.0'
 $sdk=Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) ('Windows Kits/10/bin/'+$manifest.windows_sdk+'/x64')
 $makeappx=Join-Path $sdk 'makeappx.exe'
 if(!(Test-Path -LiteralPath $makeappx)){throw 'Install the Windows SDK version recorded by the portable build.'}
@@ -60,7 +59,7 @@ Write-PackagedPayload $portable.source $payload $manifest $packaging {
     [IO.File]::WriteAllText((Join-Path $payload 'AppxManifest.xml'),$xml.Replace("`r`n",$lf)+$lf,$utf8)
     [IO.File]::WriteAllText((Join-Path $payload 'README.txt'),$readme,$utf8)
 }
-$label='CapyCanvas-windows-x64-'+$manifest.source_commit.Substring(0,12)+'-'+$Version+$(if($UnsignedTestIdentity){'-test'}else{'-unsigned'})
+$label='capycanvas-'+$manifest.version+'-windows-x64'+$(if($UnsignedTestIdentity){'-test'}else{''})
 if($manifest.development){$label+='-development'}
 $archive=Join-Path $run ($label+'.msix');$repeat=Join-Path $run 'repeat.msix'
 foreach($path in @($archive,$repeat)){

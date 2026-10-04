@@ -1,6 +1,5 @@
 param(
     [Parameter(Mandatory)][string]$PortableResultFile,
-    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version='1.0.0.0',
     [switch]$TestIdentity,
     [switch]$AllowDirty
 )
@@ -12,6 +11,7 @@ $packager=Get-PackagingSource $repo @('apps/layer-windows/scripts/package-instal
 $identity=if($TestIdentity){@{name='Capy Canvas Installer Test';key='CapyCanvasInstallerTest';progid='CapyAtelier.CapyCanvas.InstallerTest.capy'}}else{@{name='Capy Canvas';key='CapyCanvas';progid='CapyAtelier.CapyCanvas.capy'}}
 $portable=Read-PortablePackage $PortableResultFile
 $manifest=$portable.manifest
+$Version=$manifest.version+'.0'
 
 $nsisVersion='3.11'
 $nsisArchive=Join-Path $repo "artifacts/windows/tools/nsis-$nsisVersion.zip"
@@ -45,7 +45,7 @@ Write-PackagedPayload $portable.source $payload $manifest $packaging {
     & (Join-Path $PSScriptRoot 'package-logos.ps1') -Destination (Join-Path $run 'logos') -Icon (Join-Path $payload 'CapyCanvas.ico')
     [IO.File]::WriteAllText((Join-Path $payload 'README.txt'),$readme.Replace(([string][char]13+[char]10),$lf)+$lf,$utf8)
 }
-$label='CapyCanvas-windows-x64-'+$manifest.source_commit.Substring(0,12)+'-'+$Version+$(if($TestIdentity){'-installer-test'}else{'-setup'})
+$label='capycanvas-'+$manifest.version+'-windows-x64'+$(if($TestIdentity){'-installer-test'}else{'-setup'})
 if($manifest.development){$label+='-development'}
 $installer=Join-Path $run ($label+'.exe');$repeat=Join-Path $run 'repeat.exe'
 foreach($path in @($installer,$repeat)){

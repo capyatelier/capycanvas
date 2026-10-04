@@ -1,6 +1,6 @@
 [package]
 name = "layer-render"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Minimal backend-neutral render packets for Layer"
 license.workspace = true

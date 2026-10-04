@@ -17,6 +17,7 @@ and follow the rules in [`AGENTS.md`](../../AGENTS.md) and the
 | [Testing](testing.md) | Which checks to run for each kind of change, and known failures on `main`. |
 | [Writing](writing.md) | Where docs belong, their style, UI text and handoffs. |
 | [Publication](publication.md) | Licensing, dependencies and distribution checks. |
+| [Releasing](releasing.md) | The application version and how official packages are built. |
 | [GPU benchmark workloads](gpu-raster-benchmarks.md) | Offscreen GPU workloads for comparing revisions. |
 | [Stroke recording](stroke-recording.md) | Recording tablet input and replaying it for predictor comparisons. |
 

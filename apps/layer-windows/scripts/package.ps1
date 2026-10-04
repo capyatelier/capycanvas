@@ -10,6 +10,8 @@ Push-Location $repo
 try {
     $commit=(& git rev-parse HEAD).Trim()
     if($LASTEXITCODE -ne 0){throw 'A Git checkout is required to identify the package source.'}
+    $version=([regex]'(?m)^version = "(\d+\.\d+\.\d+)"').Match((Get-Content -LiteralPath (Join-Path $repo 'Cargo.toml') -Raw)).Groups[1].Value
+    if(!$version){throw 'Cannot read the workspace version from Cargo.toml.'}
     function Source-IsDirty {
         & git diff --quiet HEAD --
         if($LASTEXITCODE -gt 1){throw 'Cannot inspect tracked package sources.'}
@@ -79,7 +81,7 @@ sizes and SHA-256 hashes.
     $nuget=@($config.packages.package|ForEach-Object {[ordered]@{name=$_.id;version=$_.version}})
     if((& git rev-parse HEAD).Trim() -ne $commit -or (!$dirty -and (Source-IsDirty))){throw 'Package sources changed during the build; retry from a stable checkout.'}
     $manifest=[ordered]@{
-        schema=1;application='Capy Canvas';source_commit=$commit;development=$dirty;release_identity=$true;architecture='x64';minimum_windows='11';
+        schema=1;application='Capy Canvas';version=$version;source_commit=$commit;development=$dirty;release_identity=$true;architecture='x64';minimum_windows='11';
         rust=(& rustc --version).Trim();visual_cpp_tools=$env:VCToolsVersion;windows_sdk=$env:WindowsSDKVersion.TrimEnd('\');
         cargo_lock_sha256=(Get-FileHash -LiteralPath (Join-Path $repo 'Cargo.lock') -Algorithm SHA256).Hash.ToLowerInvariant();
         nuget=$nuget;files=$files
@@ -103,7 +105,7 @@ sizes and SHA-256 hashes.
             }
         }finally{$zip.Dispose();$stream.Dispose()}
     }
-    $label='CapyCanvas-windows-x64-'+$commit.Substring(0,12)+$(if($dirty){'-development'}else{''})
+    $label='capycanvas-'+$version+'-windows-x64'+$(if($dirty){'-development'}else{''})
     $archive=Join-Path $run ($label+'.zip')
     Write-Archive $archive
     $repeat=Join-Path $run 'reproducibility-check.zip';Write-Archive $repeat

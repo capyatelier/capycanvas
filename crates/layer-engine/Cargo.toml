@@ -1,6 +1,6 @@
 [package]
 name = "layer-engine"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Portable input, brush, document orchestration, and render submission for Layer"
 license.workspace = true

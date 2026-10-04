@@ -1,6 +1,6 @@
 [package]
 name = "layer-bench"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Completed-work wgpu canvas benchmark and brush-preview generator"
 license.workspace = true
