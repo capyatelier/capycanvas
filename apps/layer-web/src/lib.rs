@@ -16,6 +16,7 @@ mod editor;
 mod header;
 mod raster_project;
 mod raster_worker;
+mod scopes;
 mod workspaces;
 
 use layer_core::Point;
@@ -32,6 +33,7 @@ pub struct WebApp {
     language_preparation: Option<(layer_ui::LanguageRequest, layer_ui::LocalizerPreparation)>,
     preferred_tags: Vec<String>,
     published_language: Option<u64>,
+    scopes: scopes::Cache,
     state_cache: std::collections::BTreeMap<&'static str, Vec<u8>>,
     preferences_cache: Option<(u64, JsValue)>,
     tone: hdr::ToneState,
@@ -343,6 +345,7 @@ impl WebApp {
             cursor: Default::default(),
             sequence: 0,
             startup: StartupProgress::default(),
+            scopes: Default::default(),
             state_cache: Default::default(),
             preferences_cache: None,
             deferred_contacts: Default::default(),
@@ -673,6 +676,7 @@ impl WebApp {
         field!(host_error);
         field!(notice);
         field!(camera);
+        scopes::publish(state, &mut self.scopes, &result)?;
         let generation = self.session.localization_generation();
         if self.published_language != Some(generation) {
             js_sys::Reflect::set(&result, &JsValue::from_str("localization"), &serialize(&serde_json::json!({"generation":generation,"tag":self.session.localization().language().tag()}))?)?;

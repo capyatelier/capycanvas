@@ -1,5 +1,6 @@
-fn targeted_session()->UiSession<Recorder> {
-    let mut s=session(Platform::Gtk);
+fn targeted_session()->UiSession<Recorder> {targeted_session_on(Platform::Gtk)}
+fn targeted_session_on(platform:Platform)->UiSession<Recorder> {
+    let mut s=session(platform);
     s.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:"curves".into()}}).unwrap();
     s.reveal_panel(Panel::Properties).unwrap();s.frame(1,1).unwrap();
     s.dispatch(UiAction::Effect {action:EffectAction::TargetCurve {layer:s.engine.document().active_layer.0,epoch:s.state.layer_properties.epoch}}).unwrap();s
@@ -36,8 +37,8 @@ fn targeted_curve_publishes_only_fixed_sample_size_and_restores_picker_preferenc
 
 #[test]
 fn targeted_curve_pending_release_commits_one_undo_with_fixed_x_and_logical_screen_delta() {
-    for scale in [1.,2.] {for zoom in [0.5,3.] {
-        let mut s=targeted_session();s.state.camera.zoom=zoom;s.state.camera.rotation=0.7;
+    for platform in [Platform::Gtk,Platform::Web] {for scale in [1.,2.] {for zoom in [0.5,3.] {
+        let mut s=targeted_session_on(platform);s.state.camera.zoom=zoom;s.state.camera.rotation=0.7;
         s.logical_viewport=Some([s.state.camera.viewport[0] as f32/scale,s.state.camera.viewport[1] as f32/scale]);
         let before=s.engine.document().layers.clone();let checkpoint=s.engine.checkpoint();
         targeted_pointer(&mut s,ContactPhase::Down,400.);s.frame(2,2).unwrap();
@@ -55,7 +56,7 @@ fn targeted_curve_pending_release_commits_one_undo_with_fixed_x_and_logical_scre
         assert!((points[1][1]-(x+0.2).min(1.)).abs()<2e-6);
         assert_eq!(s.engine.backend().dabs,0);assert!(s.targeted_curve.is_some());assert!(!s.targeted_curve_busy());
         assert!(s.engine.undo().unwrap());assert_eq!(s.engine.document().layers,before);assert_eq!(s.engine.checkpoint(),checkpoint);
-    }}
+    }}}
 }
 
 #[test]

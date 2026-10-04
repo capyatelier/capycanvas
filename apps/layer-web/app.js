@@ -133,9 +133,9 @@ function button(text, action, className = "") {
   node.addEventListener("click", action);
   return node;
 }
-function numberField(control, label, onChange, inline = false) {
+function numberField(control, label, onChange, inline = false, valueOnly = false) {
   const read = typeof label === "function" ? label : null;
-  const number = createNumberField({ control, label:read ? read() : label, labels:next => app.numeric_labels(next), onChange, inline, icon, resolve: request => app.number_input(request), errorCaption: reason => app.native_caption({type:"numeric_error",reason}) });
+  const number = createNumberField({ control, label:read ? read() : label, labels:next => app.numeric_labels(next), onChange, inline, valueOnly, icon, resolve: request => app.number_input(request), errorCaption: reason => app.native_caption({type:"numeric_error",reason}) });
   if(read){Object.defineProperty(number,"localizedLabel",{set:next=>number.relabel(next)});bindCopy(number,read,"localizedLabel");}
   return number;
 }
@@ -340,7 +340,7 @@ function applyChange(change) {
           // the workspace behind it. Keep its controls and geometry intact.
           refreshPreferences(app.preferences_cached());
           updateZen();
-        } else update(languageChanged ? 2047 : change.regions | (moving ? 1 : 0));
+        } else update(languageChanged ? 4095 : change.regions | (moving ? 1 : 0));
         if (reopeningCanvas) {
           deferOptionalCompiler();
           wake();
@@ -782,7 +782,7 @@ function measurePanels() {
         panel: id,
         tab_width: cached.value?.tab_width ?? cached.tab.getBoundingClientRect().width,
         content_height,
-        ...(cached.content && id !== "color" && id !== "proof" ? { scroll: {
+        ...(cached.content && !["color","proof","histogram","waveform"].includes(id) ? { scroll: {
           fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
           unit_height: row ? row.getBoundingClientRect().height + (row.matches(".palette-tile") ? 4 : 0) : 0,
         }} : {}),
@@ -821,7 +821,7 @@ function buildPanels() {
     panelFrame(panel, kind !== "tiles");
   }
   panels.get("brushes").append(editor.control("brushes"));
-  for (const [panel, control] of [["brush_sets","brush_sets"],["sculpt_sets","sculpt_sets"],["tools","tools"],["tool_settings","tool_settings"],["color","color_wheel"],["navigator","navigator"]])
+  for (const [panel, control] of [["brush_sets","brush_sets"],["sculpt_sets","sculpt_sets"],["tools","tools"],["tool_settings","tool_settings"],["color","color_wheel"],["navigator","navigator"],["histogram","histogram"],["waveform","waveform"]])
     panels.get(panel).append(editor.control(control));
   const controls = element("div", "size-controls");
   controls.dataset.control = "brush_size";
@@ -877,7 +877,9 @@ function update(regions) {
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) header?.refresh();
   if (regions & (4 | 8)) documents?.refresh();
   if (regions & (2 | 4 | 16)) palettes.refresh(regions);
-  if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); selectionUi.refresh(); frequencySeparationUi.refresh(); canvasSizeUi.refresh(); imageSizeUi.refresh(); workspaceChrome?.refresh(); }
+  if (regions & 16) effectPanels.refresh();
+  if (regions & 2048) effectPanels.refreshHistograms();
+  if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128 | 2048)) { editor.refresh(); selectionUi.refresh(); frequencySeparationUi.refresh(); canvasSizeUi.refresh(); imageSizeUi.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 8 | 1024)) canvasBar?.refresh(state.canvas_bar);
   if (regions & (1 | 128)) persistWorkspace();

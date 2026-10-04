@@ -1,3 +1,4 @@
+import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -18,7 +19,7 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
   const setup=async()=>{await invoke('soft_proof_setup');await wait(`!!document.querySelector('.proof-panel select[aria-label="Proof profile"]')`);if(await evaluate('layerApp.app.proof_form().mode')!=='print')await click('Print');};
   const ready=async()=>{const expected=await evaluate(`document.querySelector('.proof-panel [aria-label="Proof profile"]')?.selectedOptions[0]?.textContent`);await wait(`${expected?`layerApp.app.proof_form().recipe.name===${JSON.stringify(expected)} &&`:''} !document.querySelector('.proof-panel [role="status"]')?.textContent && layerApp.app.proof_status().text.startsWith('Proof:') && !layerApp.app.proof_status().needed`);if(await evaluate(`!!document.querySelector('.proof-panel')`))await click('Close');};
   const choose=async(name,group='Saved Profiles')=>{const selector=`.proof-panel optgroup[label="${group}"] option`;await wait(`!![...document.querySelectorAll(${JSON.stringify(selector)})].find(o=>o.textContent===${JSON.stringify(name)})`);await evaluate(`(()=>{const s=document.querySelector('.proof-panel select[aria-label="Proof profile"]');s.value=[...document.querySelectorAll(${JSON.stringify(selector)})].find(o=>o.textContent===${JSON.stringify(name)}).value;s.dispatchEvent(new Event('change'));})()`);};
-  const histogram=()=>evaluate(`(async()=>{const c=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(c)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v))}catch(e){throw Error(String(e))}finally{c.free()}})()`);
+  const histogram=histogramJourney({evaluate,settle}).exact;
   const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return evaluate('proofTest.manifest([...proofTest.files.values()].at(-1))');};
   const backing=m=>({blobs:m.blobs,sources:m.tiled_sources?.images,layers:m.document.layers,color:m.document.color});
   const exportPng=async()=>{

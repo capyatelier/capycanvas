@@ -1,3 +1,4 @@
+import {histogramJourney} from './histogram-journey.mjs';
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -14,7 +15,7 @@ export async function checkSpatialFilterWindows({call,evaluate,settle,canvasPixe
     const key=commit?'Enter':'Escape',code=commit?13:27;
     await call('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:code});await call('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:code});await settle();await evaluate('layerApp.app.wait_for_canvas()');
   };
-  const histogram=()=>evaluate(`(async()=>{const control=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(control)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v));}finally{control.free();}})()`);
+  const histogram=histogramJourney({evaluate,settle}).exact;
   await wait('layerApp.startupTimes.complete!==null && !layerApp.documents.busy()');
   await send({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}});
   await evaluate(`(async()=>{
@@ -125,9 +126,7 @@ export async function checkAdjustments({call,evaluate,settle}) {
   const send=action=>evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);
   const capture=async name=>{await wait('layerApp.app.brush_ready()');await settle();const shot=await call("Page.captureScreenshot",{format:"png"});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,"base64"));};
   const wait=async(condition,timeout=120000)=>{const end=Date.now()+timeout;while(!await evaluate(condition))if(Date.now()>end)throw Error(`Timed out: ${condition}`);else await new Promise(resolve=>setTimeout(resolve,50));};
-  const histogram=()=>evaluate(`(async()=>{const control=layerApp.app.capture_control();try{
-    return JSON.parse(JSON.stringify((await layerApp.app.histogram(control)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v));
-  }finally{control.free();}})()`);
+  const histogram=histogramJourney({evaluate,settle}).exact;
   await send({type:"set_theme",theme:"dark"});
   // Inserting above a selected clipping base must preserve the whole stack.
   await send({type:"layer",action:{op:"new",group:false,clipped:true}});
@@ -249,6 +248,10 @@ export async function checkCurves({call,evaluate,settle}) {
   const properties=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state().layer_properties,(_,v)=>typeof v=== "bigint"?Number(v):v))');
   const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await send({type:'invoke',command});};
   const pointer=(type,p,pointerType='mouse')=>call('Input.dispatchMouseEvent',{type,...p,pointerType,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,force:type==='mouseReleased'?0:.65});
+  const activateNumber=async axis=>{
+    const point=await evaluate(`(()=>{const root=document.querySelector('[data-curve-axis="${axis}"]'),entry=root.querySelector('.number-entry'),button=root.querySelector('.number-value'),n=button&&!button.hidden?button:entry;const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await pointer('mousePressed',point);await pointer('mouseReleased',point);await settle();
+  };
   const graphPoint=async index=>evaluate(`(()=>{const g=document.querySelector('.curve-editor'),c=g.querySelectorAll('circle')[${index}],p=new DOMPoint(c.cx.baseVal.value,c.cy.baseVal.value).matrixTransform(g.getScreenCTM());return{x:p.x,y:p.y}})()`);
   const curves=view=>view.controls.filter(c=>c.curve).map(c=>({key:c.key,value:c.value}));
   await wait('layerApp.startupTimes.complete!==null&&!layerApp.documents.busy()');
@@ -286,22 +289,23 @@ export async function checkCurves({call,evaluate,settle}) {
         for(const axis of ['input','output']) {
           const selector=`[data-curve-axis="${axis}"] .number-entry`;
           await wait(`document.querySelector(${JSON.stringify(selector)})`);
-          await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+          await activateNumber(axis);
           await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
           await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
           assert.deepEqual(curves(await properties()),before,'Committing presented numeric text preserves point bits');
         }
-        for(const target of ['.number-entry','.number-step:last-child']) {
+        for(const step of [false,true]) {
           const old=curves(await properties());
-          await evaluate(`document.querySelector('[data-curve-axis="output"] .number-entry').focus()`);
+          await activateNumber('output');
           await call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});
-          const at=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(`[data-curve-axis="input"] ${target}`)}),r=n.getBoundingClientRect();return{x:r.left+r.width*.55,y:r.top+r.height*.5}})()`);
-          await pointer('mousePressed',at);await pointer('mouseReleased',at);
+          await activateNumber('input');
           await call('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});await settle();
           const changed=curves(await properties());
           assert.notDeepEqual(changed,old,'Held Output arrow commits when a native pointer enters another numeric control');
-          if(target!=='.number-entry') {
-            assert.notEqual(changed.find(c=>c.key===control.key).value.value[index][0],old.find(c=>c.key===control.key).value.value[index][0],'Pointer step starts its own Input edit after prior key release');
+          if(step) {
+            for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});await settle();
+            const stepped=curves(await properties());
+            assert.notEqual(stepped.find(c=>c.key===control.key).value.value[index][0],old.find(c=>c.key===control.key).value.value[index][0],'Focused Input keyboard step starts its own edit after prior Output key release');
             await invoke('undo');
           }
           await invoke('undo');assert.deepEqual(curves(await properties()),old,'Cross-control pointer transition preserves separate atomic gestures');

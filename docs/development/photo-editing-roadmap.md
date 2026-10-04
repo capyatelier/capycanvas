@@ -22,25 +22,24 @@ Properties now supplies bounded pages, conditional visibility, slider mappings
 and soft bounds. Curves uses shared channel navigation and precise numeric
 point editing in Encoded RGB and Log HDR, described in
 [numeric controls](../ui/numeric-controls.md#properties-and-curves).
-GTK White Balance now has a neutral-point picker with linear, alpha-weighted
-sampling before the adjustment and one-step undo. Its exact query path preserves
+White Balance on GTK and Web now has a neutral-point picker with linear,
+alpha-weighted sampling before the adjustment and one-step undo. Its exact query path preserves
 placed layer content, reference membership, nested adjustment input and frozen
 animation ownership. See [White Balance](../ui/color-picker.md#white-balance).
-GTK also has a dockable GPU Histogram, input histograms in Levels and Curves,
+GTK and Web also have dockable GPU Histogram and RGB Waveform panels, input histograms in Levels and Curves,
 and canvas clipping overlays. Levels has per-channel stages, full-source Auto
 and black/neutral/white calibration; Curves has matching calibration and targeted
 image dragging. See [Properties](../ui/numeric-controls.md#properties-and-curves)
 and [calibration](../ui/color-picker.md#levels-and-curves).
-The precision adjustment UI still needs Web and Android presentation.
+The precision adjustment UI still needs Android presentation.
 Hue / Saturation now has six editable hue ranges and Colorize. Invert, luminance
 Threshold, Desaturate and Photo Filter use the existing shared Properties controls
 on GTK, Web, Android and Windows. Selective Color adds nine CMYK pages with Relative and
 Absolute methods; Channel Mixer adds RGB output rows and an independent
 Monochrome row through the same controls on GTK, Web, Android and Windows.
-Color Lookup imports bounded 3D `.cube` tables in GTK, with Color space,
-Intensity and undoable replacement. Projects embed and deduplicate table data;
-Web and Android preserve loaded tables and expose their numeric controls.
-Their file import presentation remains pending. See
+Color Lookup on GTK, Web and Android offers built-in looks and imports bounded
+3D `.cube` LUTs, with Color space, Intensity and undoable replacement. Projects
+embed and deduplicate table data. See
 [runtime filters](../reference/runtime-filters.md#imported-color-lookup-tables).
 Shadows/Highlights and Clarity use shared source-aware illumination guides and
 ordinary Properties controls. Amount changes reuse their guide; exact capture

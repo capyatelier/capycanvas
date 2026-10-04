@@ -100,41 +100,6 @@ impl WebApp {
         }
     }
 
-    pub fn histogram(&self, control: &WebCaptureControl) -> Result<js_sys::Promise, JsValue> {
-        self.session.require_document_snapshot_idle().map_err(js)?;
-        let project = self.session.capture_project_recovery().map_err(js)?;
-        let epoch = self.session.state().document_file.epoch;
-        let revision = project.document.revision;
-        let background = self.session.engine().view().background_rgba_linear;
-        let time = self.session.engine().animation_time();
-        let sampled_time = project.document.has_animated_effects().then_some(time);
-        let gpu = self
-            .session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or_else(|| js("Canvas unavailable"))?
-            .snapshot_gpu();
-        let control = control.inner.clone();
-        Ok(future_to_promise(async move {
-            raster_project::wait_backing(&project).await?;
-            let mut renderer = gpu
-                .capture(
-                    project,
-                    background,
-                    time,
-                    control.clone(),
-                )
-                .map_err(js)?;
-            let result = renderer.histogram_async().await.map_err(js)?;
-            cancelled(&control)?;
-            serialize(
-                &serde_json::json!({"epoch":epoch,"revision":revision,"axis":result.axis(),"histogram":result,"sampled_time":sampled_time}),
-            )
-        }))
-    }
-
     pub fn export_image(
         &self,
         id: u32,

@@ -678,6 +678,14 @@ bins. Eight GPU counter shards add 8 MiB of scratch, and their final fold adds a
 1 MiB summary. Histogram-only requests allocate neither. The immutable result
 shares its histogram with both panels; only Waveform's changed result, channel,
 scale or theme regenerates its small display image. No source pixels are read back.
+Web transfers the count planes as one typed buffer from its snapshot worker.
+Incremental UI publication retains graph and image objects on status-only changes;
+shared Rust prepares channel normalization and straight or premultiplied RGBA for
+the native drawing API. A successful browser analysis worker and its same-color
+GPU pipelines can serve the next request; at most one remains idle, for five
+seconds. Cancellation and failures retire their own worker, and a Wasm heap over
+256 MiB is released after its result transfers. Concurrent requests retain
+separate cancellation owners.
 
 Auto Levels has a separate two-pass GPU summary: encoded extrema and 4096 bins
 per channel over each channel's observed range. Both summaries share bounded

@@ -1,3 +1,4 @@
+import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -23,7 +24,8 @@ export async function checkPassThrough({call,evaluate,settle}) {
   const groups=()=>evaluate(`(()=>{const out=[[]];for(const n of document.querySelector('${menu}').children){if(n.tagName==='HR')out.push([]);else out.at(-1).push(n.querySelector('.menu-label')?.textContent);}return out;})()`);
   const peaks=async()=>{
     await wait('!layerApp.documents.busy()');
-    const channels=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{const h=(await layerApp.app.histogram(c)).histogram;return h.channels.slice(0,2).map(ch=>Array.from(ch.bins,Number))}finally{c.free()}})()`);
+    const h=await histogramJourney({evaluate,settle}).exact();
+    const channels=h.channels.slice(0,2).map(ch=>Array.from(ch.bins,Number));
     return channels.map(bins=>bins.indexOf(Math.max(...bins)));
   };
   const capture=async(file,...boxes)=>{

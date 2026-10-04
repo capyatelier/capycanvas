@@ -1,3 +1,4 @@
+import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
 
 const helpers=(evaluate,{timeout=60000,enabled=false}={})=>{
@@ -92,16 +93,15 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   const assumed=await evaluate('sdrManifest(sdrFiles.get("untagged.capy"))');
   assert.deepEqual(assumed.tiled_sources.images[0].tiles,source.tiled_sources.images[0].tiles);
   await evaluate(`layerApp.dispatch({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}})`);
-  const inspection=await evaluate(`(async()=>{const control=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify(await layerApp.app.histogram(control),(_,v)=>typeof v==="bigint"?Number(v):v))}finally{control.free()}})()`);
+  const scope=histogramJourney({evaluate,settle});
+  const inspection={histogram:await scope.exact()};
   assert.deepEqual(inspection.histogram.color,{space:'AdobeRgb',depth:'U16'});
   assert.equal(Number(inspection.histogram.pixels)+Number(inspection.histogram.transparent),513*257);
   assert.equal(Number(inspection.histogram.transparent),31*257);
   for(const channel of inspection.histogram.channels)assert.equal(channel.bins.reduce((n,v)=>n+Number(v),0),Number(inspection.histogram.pixels));
-  await invoke('histogram');await wait(`!!document.querySelector('.histogram-dialog[open]')`);
-  await wait(`document.querySelector('.histogram-dialog').textContent.includes('Current committed drawing')`);
-  await evaluate(`[...document.querySelectorAll('.histogram-dialog button')].find(b=>b.textContent==='Close').click()`);
-  const cancelled=await evaluate(`(async()=>{const c=layerApp.app.capture_control();c.cancel();try{await layerApp.app.histogram(c);return false}catch(e){return String(e).toLowerCase().includes('cancel')}finally{c.free()}})()`);
-  assert.ok(cancelled);
+  assert.ok((await scope.cancel()).retired);
+  assert.deepEqual(await scope.exact(),inspection.histogram,'Revealing a retired subscription recaptures the same source');
+  await scope.hide();
   await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
   await click('Preview Output');await click('Cancel');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate('layerApp.state().host_error??null'),null);
@@ -137,7 +137,7 @@ export async function checkColorEdits({call,evaluate,settle}) {
   }
   await invoke('assign_profile');await wait(`!!document.querySelector('dialog[open] select[aria-label="Color space"]')`);
   await click('Preview Complete Result');await click('Cancel');await wait('!layerApp.state().document_file.busy');assert.deepEqual(backing(await save()),backing(original));
-  const paintedHistogram=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify(await layerApp.app.histogram(c),(_,v)=>typeof v==="bigint"?Number(v):v))}finally{c.free()}})()`);
+  const paintedHistogram={histogram:await histogramJourney({evaluate,settle}).exact()};
   assert.equal(paintedHistogram.histogram.pixels+paintedHistogram.histogram.transparent,513*257);
   await change('assign_profile','Color space','ProPhoto',false);assert.deepEqual(backing(await save()),backing(original));
   await change('assign_profile','Color space','ProPhoto');const assigned=await save();
@@ -344,7 +344,7 @@ export async function checkPhotoCorrections({evaluate,settle}) {
     const id=await evaluate(`(()=>{layerApp.dispatch({type:'effect',action:{op:'insert',effect:${JSON.stringify(name)}}});const layer=Number(layerApp.state().layer_properties.layer);layerApp.dispatch({type:'effect',action:{op:'set',layer,key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(value)}}}});layerApp.dispatch({type:'layer',action:{op:'add_mask',id:layer,replace:false}});return layer})()`);ids.push(id);await settle();
   }
   const edited=await save();assert.deepEqual(edited.tiled_sources,source);assert.equal(edited.document.layers.filter(l=>l.effect&&l.mask).length,6);
-  const histogram=()=>evaluate(`(async()=>{const c=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(c)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v))}finally{c.free()}})()`);
+  const histogram=histogramJourney({evaluate,settle}).exact;
   const before=await histogram();
   await evaluate(`window.sdrAdjusted=sdrFiles.get('photo-master.capy');window.showOpenFilePicker=async()=>[{name:'adjusted.capy',async getFile(){return new File([sdrAdjusted],'adjusted.capy')}}]`);await invoke('open_document');await idle();
   const reopened=await save();assert.deepEqual(reopened.document.layers,edited.document.layers);assert.deepEqual(reopened.tiled_sources,source);assert.deepEqual(await histogram(),before);

@@ -1,3 +1,4 @@
+import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
@@ -65,11 +66,10 @@ export async function measureHdr({call,evaluate,settle}) {
         await invoke('fit_canvas');await invoke('pen');await evaluate(`layerApp.dispatch({type:'select_brush',id:1});layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'Srgb',rgba:[${name==='sdr4k'?.8:1.8},.3,.1,1]}}});`);
         for(let i=0;i<3;i++){entry.interactions.push(await motion(i===1?'touch':'pen'));await persist();}
         await wait('!layerApp.app.tone_status().needed');
-        // Actual in-progress histogram cancellation; heartbeat includes setup/readback.
-        await reset();entry.histogram_cancel=await evaluate(`(async()=>{const c=layerApp.app.capture_control();const promise=layerApp.app.histogram(c);await new Promise(r=>setTimeout(r,40));const t=performance.now();c.cancel();try{await promise;return{completed_before_cancel:true}}catch(e){return{ms:performance.now()-t,error:String(e)}}finally{c.free()}})()`);entry.cancel_work=await read();
-        // Save while a separate bounded analysis is running; immutable snapshots
-        // and worker ownership must preserve the still-editable master.
-        await reset();const saved=performance.now();await evaluate(`hdrPerf.c=layerApp.app.capture_control();hdrPerf.inspection=layerApp.app.histogram(hdrPerf.c).then(()=>null,e=>String(e)).finally(()=>hdrPerf.c.free())`);await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');entry.save_ms=performance.now()-saved;entry.concurrent_histogram_error=await evaluate('hdrPerf.inspection');entry.saved_bytes=await evaluate('hdrPerf.savedBytes');entry.concurrent=await read();
+        // Retire the actual visible subscription and reject late publication.
+        await reset();entry.histogram_cancel=await histogramJourney({evaluate,settle}).cancel();entry.cancel_work=await read();
+        // Save with the shared Histogram subscription visible.
+        await reset();const saved=performance.now();await histogramJourney({evaluate,settle}).reveal();await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');entry.save_ms=performance.now()-saved;entry.concurrent_histogram=await histogramJourney({evaluate,settle}).exact();await histogramJourney({evaluate,settle}).hide();entry.saved_bytes=await evaluate('hdrPerf.savedBytes');entry.concurrent=await read();
         // Cancel actual visible Open and output-preview work, then verify the
         // existing saved document remains the active editable master.
         const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');

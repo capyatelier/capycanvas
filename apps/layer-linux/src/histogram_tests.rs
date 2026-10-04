@@ -280,7 +280,12 @@ fn native_curves_histogram_preserves_numeric_focus() {
             if minimum>100 || widget==control || widget==entry {eprintln!("HDR layout type={} name={} css={:?} min={} natural={} bounds={:?} entry={:?}",widget.type_().name(),widget.widget_name(),widget.css_classes(),minimum,natural,bounds,widget.downcast_ref::<gtk::Entry>().map(|entry|(entry.width_chars(),entry.max_width_chars())));}
         }
         crate::snapshot(&w).save_to_png(std::path::Path::new(output).join(format!("curves-long-draft-{}-{theme:?}.png",w.window.width()))).unwrap();
-        assert!(graph.width() >= 200 && graph.height() >= 200, "compact curve keeps its drawable graph visible");let graph_bounds=graph.compute_bounds(&w.window).unwrap();assert!(graph_bounds.x()>=0. && graph_bounds.x()+graph_bounds.width()<=w.window.width() as f32,"HDR draft cannot overflow the graph");if let Some(scroll)=scroll {assert_eq!(Some(scroll.hadjustment().value()),horizontal,"long exact draft scrolls within its editor, not the panel");}
+        assert!(graph.width() >= 64 && graph.height() >= 200, "compact curve keeps its drawable graph visible");
+        let plot=graph.parent().unwrap();let plot_bounds=graph.compute_bounds(&plot).unwrap();
+        assert!((plot_bounds.x()+plot_bounds.width()-plot.width() as f32).abs()<=1.,"curve fills its available plot column: {plot_bounds:?}, {}",plot.width());
+        let group=w.groups.borrow().iter().find(|group|group.panels.contains(&Panel::Properties) && group.root.is_mapped()).unwrap().root.clone();
+        let bounds=plot.compute_bounds(&group).unwrap();assert!(bounds.x()>=-1. && bounds.x()+bounds.width()<=group.width() as f32+1.,"curve axes and plot fit visible Properties: {bounds:?}, {}",group.width());
+        let graph_bounds=graph.compute_bounds(&w.window).unwrap();assert!(graph_bounds.x()>=0. && graph_bounds.x()+graph_bounds.width()<=w.window.width() as f32,"HDR draft cannot overflow the graph");if let Some(scroll)=scroll {assert_eq!(Some(scroll.hadjustment().value()),horizontal,"long exact draft scrolls within its editor, not the panel");}
         set("curve_1", EffectValue::Curve(vec![[0., 0.], [0.5, 0.25], [1., 1.]]));
         let checkpoint = ui_session(&w).engine().checkpoint();
         until(|| state(&w).tonal_histogram.data.as_ref().is_some_and(|data| **data != *initial), "channel edit publishes new embedded statistics");
@@ -425,8 +430,23 @@ fn native_waveform_photo_sources_channels_and_layout() {
         }
         let clipping=histogram_widget::<gtk::ToggleButton>(&w,"waveform-shadows");clipping.grab_focus();let focus=gtk::prelude::RootExt::focus(&w.window);let active=state(&w).histogram.shadows;input.key(0x20);assert_eq!(state(&w).histogram.shadows,!active);assert_eq!(gtk::prelude::RootExt::focus(&w.window),focus);input.key(0x20);assert_eq!(state(&w).histogram.shadows,active);
         invoke(&w,CommandId::Histogram);completed(&w);pump(200);crate::snapshot(&w).save_to_png(output.join(format!("histogram-photo-{width}-{theme:?}.png"))).unwrap();let group=state(&w).workspace.layout.panel_group(Panel::Histogram).unwrap();w.dispatch(UiAction::MovePanel {panel:Panel::Waveform,target:DockTarget::Tab {group,index:None},viewport:[width as f32,800.]});pump(200);tab(&w,&mut input,Panel::Histogram);until(||state(&w).waveform.data.is_none(),"inactive Waveform tab releases its plot");assert!(completed(&w).pixels>0);tab(&w,&mut input,Panel::Waveform);done();w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::Channel {index:4}});assert_eq!(state(&w).waveform.channel,0,"monitor channels are independent");
+        choose(&w,&mut input,"waveform-source",1);choose(&w,&mut input,"waveform-channel",4);let retained=done();
         w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Histogram,visible:false});w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Waveform,visible:false});until(||state(&w).waveform.data.is_none(),"hidden Waveform releases demand");assert_eq!(super::place_source::snapshot(&w),before);
-        invoke(&w,CommandId::Waveform);done();w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Waveform,visible:false});until(||state(&w).waveform.data.is_none(),"Waveform closes");
+        invoke(&w,CommandId::Waveform);assert_eq!(*done(),*retained);pump(200);
+        assert_eq!((state(&w).waveform.source,state(&w).waveform.channel),(1,4));
+        let group=w.groups.borrow().iter().find(|group|group.panels.contains(&Panel::Waveform) && group.root.is_mapped()).unwrap().root.clone();
+        let bounds=group.compute_bounds(&w.window).unwrap();assert!(group.width() as f32>=Panel::Waveform.default_width(),"reopened Waveform remains usable: {bounds:?}");
+        assert!(bounds.x()>=-1. && bounds.y()>=-1. && bounds.x()+bounds.width()<=w.window.width() as f32+1. && bounds.y()+bounds.height()<=w.window.height() as f32+1.,"reopened Waveform stays visible: {bounds:?} in {}x{}",w.window.width(),w.window.height());
+        for name in ["waveform-source","waveform-channel","waveform-log","waveform-chart","waveform-status","waveform-shadows","waveform-highlights"] {
+            let widget=histogram_widget::<gtk::Widget>(&w,name);let bounds=widget.compute_bounds(&group).unwrap();
+            assert!(widget.is_sensitive() && bounds.x()>=-1. && bounds.y()>=-1. && bounds.x()+bounds.width()<=group.width() as f32+1. && bounds.y()+bounds.height()<=group.height() as f32+1.,"reopened {name} remains usable: {bounds:?} in {}x{}",group.width(),group.height());
+        }
+        precision_label(&w,&output,"waveform",width,theme);crate::snapshot(&w).save_to_png(output.join(format!("waveform-reopened-{width}-{theme:?}.png"))).unwrap();
+        choose(&w,&mut input,"waveform-channel",2);assert_eq!(state(&w).waveform.channel,2);choose(&w,&mut input,"waveform-channel",4);
+        choose(&w,&mut input,"waveform-source",0);assert_eq!(*done(),*initial);choose(&w,&mut input,"waveform-source",1);assert_eq!(*done(),*retained);
+        assert_eq!(super::place_source::snapshot(&w),before);
+        w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Waveform,visible:false});until(||state(&w).waveform.data.is_none(),"Waveform closes");
+        w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::Source {index:0}});w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::WaveformChannel {index:0}});
         w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::WaveformLogarithmic {enabled:true}});
     }
     input.finish();w.window.destroy();pump(100);

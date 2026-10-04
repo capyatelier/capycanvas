@@ -3,7 +3,6 @@ import {createDrawingTabs} from './drawing-tabs.js';
 import {createDocumentRecovery} from './document-recovery.js';
 import {chooseDocumentColor} from './document-color.js';
 import {createProof} from './proof.js';
-import {createHistogram} from './histogram.js';
 import {chooseExport,chooseSourceProfile} from './export-controls.js';
 
 export const exportFormats={
@@ -25,7 +24,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   const deliveryMessage=(type,values)=>app.document_delivery_message({type,...values});
   const deliveryFailure=(type,values)=>({document_host_error:{type:"delivery",reason:{type,...values}}});
   const transportFailure=reason=>({document_host_error:{type:"transport",reason}});
-  const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
+  const active=new Set(),handles=new Map();
   let nextHandle=0,closing=false,changing=false,batching=false;
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
     interpret:()=>chooseSourceProfile({app,dialog,element,button})});
@@ -212,7 +211,6 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     try {
       if(request.kind.type==='drawings'){dispatch({type:'complete_request',id:request.id});tabs.showSelector();return;}
       if(["soft_proof_setup","sdr_rendition"].includes(request.kind.type)){await proof.run(request.id,request.kind.type==="sdr_rendition");if(app.state().requests.some(r=>r.id===request.id))dispatch({type:"complete_request",id:request.id});return;}
-      if(request.kind.type==="histogram"){histogram.open();dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type!=="document")throw new Error(`Unsupported host request: ${request.kind.type}`);
       const r=request.kind.request,id=request.id;
       if(r.type==="confirm_close") {
@@ -360,7 +358,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     changing=true;tabs.cancel();
     const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','',()=>delivery.switching_drawing));document.body.append(blocker);
     try{
-      await proof.pause();await histogram.retire();await readyToPark();
+      await proof.pause();await readyToPark();
       if(capture)await recovery.capture().catch(error=>{const detail=String(error);message(()=>app.document_recovery_unavailable(detail));});
       await action();
       await trim();
@@ -423,7 +421,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     canOffer:()=>app.gpu_ready()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
   return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing||batching,showSelector:tabs.showSelector,
-    mountProof:proof.mount,localize(){for(const form of openDialogs)form.localize?.();histogram.localize();proof.sync();tabs.refresh(true);},handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
+    mountProof:proof.mount,localize(){for(const form of openDialogs)form.localize?.();proof.sync();tabs.refresh(true);},handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
     proof.sync();tabs.refresh();
     const published=state();
     if(closing||changing||!published.document_file.close_ready)return;

@@ -699,7 +699,7 @@ pub enum PanelKind {
 }
 
 impl Panel {
-    pub fn available_on(self, platform: crate::Platform) -> bool { !matches!(self, Self::Histogram | Self::Waveform) || platform == crate::Platform::Gtk }
+    pub fn available_on(self, platform: crate::Platform) -> bool { !matches!(self, Self::Histogram | Self::Waveform) || matches!(platform, crate::Platform::Gtk | crate::Platform::Web) }
     /// Normal starting column width, excluding its divider. Allocation may
     /// raise this to a measured minimum or fit it into a smaller viewport.
     pub fn default_width(self) -> f32 {
@@ -2448,7 +2448,7 @@ impl DockLayout {
             .unwrap_or(0.0)
     }
 
-    fn group_min_width(&self, group: u32) -> f32 {
+    pub(crate) fn group_min_width(&self, group: u32) -> f32 {
         self.group_panels(group).map_or(0.0, |panels| {
             panels
                 .iter()
@@ -2458,6 +2458,7 @@ impl DockLayout {
                     Panel::Tools | Panel::Brushes => TOOL_PANEL_MIN_WIDTH,
                     Panel::ToolSettings => TOOL_SETTINGS_MIN_WIDTH,
                     Panel::Navigator => 192.0,
+                    Panel::Histogram | Panel::Waveform => p.default_width(),
                     Panel::Color => 4.0 * TILE_SIZE,
                     Panel::Palettes => 280.,
                     _ => 0.0,
@@ -2649,7 +2650,7 @@ impl DockLayout {
                     if tiles {
                         next.panel(selected).unwrap().tile_style.floating_width()
                     } else {
-                        source.map_or(232.0, |g| g.bounds.width)
+                        source.map_or(232.0, |g| g.bounds.width).max(self.group_min_width(source_group).max(TILE_SIZE))
                     }
                 });
                 next.floating.push(FloatingGroup {

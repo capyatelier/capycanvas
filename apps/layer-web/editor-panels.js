@@ -1,3 +1,4 @@
+import {createScope} from './histogram.js';
 import {liveCopy,bindCopy} from './localization.js';
 import { createRasterWorker } from './raster-worker-client.js';
 import { chooseColor } from './color-controls.js';
@@ -21,6 +22,10 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     else if (kind === "tool_settings") refresh = toolSettings(root);
     else if (kind === "color_wheel") refresh = colorWheel(root);
     else if (kind === "navigator") refresh = navigatorPanel(root);
+    else if (["histogram","waveform"].includes(kind)) {
+      const scope=createScope({state,app,element,button,icon,dispatch,waveform:kind==="waveform"});
+      root.append(scope.node);root.disposeSettings=scope.dispose;refresh=scope.refresh;
+    }
     else return null;
     updates.set(root, refresh); refresh();
     root.refreshEditor = refresh;

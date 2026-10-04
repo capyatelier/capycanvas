@@ -160,14 +160,10 @@ impl Inspector {
 }
 
 pub(crate) fn draw(cr:&gtk::cairo::Context,view:&HistogramView,colors:[[u8;3];4],width:f64,height:f64) {
-    let Some(data)=&view.data else{return;};
-    let channels=view.plotted_channels();
-    let plot=data.plot_bins();let scale=|v:u64| if view.logarithmic {(v as f64).ln_1p()} else {v as f64};
-    let maximum=channels.iter().flat_map(|i|&data.channels[*i].bins[plot.clone()]).copied().max().unwrap_or(1).max(1);
-    for &channel in channels {
+    for (channel,bins) in view.histogram_plot() {
         let [r,g,b]=colors[channel].map(|v|f64::from(v)/255.);cr.set_source_rgba(r,g,b,0.55);
-        for (x,&count) in data.channels[channel].bins[plot.clone()].iter().enumerate() {
-            let h=height*scale(count)/scale(maximum);cr.rectangle(x as f64*width/plot.len() as f64,height-h,width/plot.len() as f64+0.1,h);
+        for (x,&value) in bins.iter().enumerate() {
+            let h=height*f64::from(value);cr.rectangle(x as f64*width/bins.len() as f64,height-h,width/bins.len() as f64+0.1,h);
         }
         let _=cr.fill();
     }

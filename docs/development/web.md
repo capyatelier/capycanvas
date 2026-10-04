@@ -60,13 +60,20 @@ panel opens.
 Color, retained-source and output previews share `output::preview_value` for
 their extent and sRGB pixel array.
 
+Histogram and Waveform are workspace panels, including the Photo workspace's
+scope tabs. `src/scopes.rs` publishes shared normalized plots and bounded RGBA
+waveforms only when their data or display settings change. `histogram.js` retains
+the native canvases; Properties updates their embedded plots without replacing
+focused numeric fields. Calibration, Auto Levels and targeted Curves edits use
+shared actions and the existing canvas pointer path.
+
 ## Tests
 
 Pure unit tests need no browser or GPU:
 
 ```bash
 node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs
-node --test apps/layer-web/{numeric,histogram,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
+node --test apps/layer-web/{numeric,histogram,raster-worker-client,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
 ```
 
 The localization tests cover retained semantic copy, optional fields, binding
@@ -115,7 +122,7 @@ first matching row and its error check, or leaves the default journey to the hos
 | Editor smoke, drawing, pen | `--editor`, `--pen`, `--prediction`, `--raster`, `--color-mixing` |
 | Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-readout`, `--move-selection` |
 | Retouching | `--clone`, `--heal` |
-| Color | `--color-panel`, `--color-picker`, `--palettes` |
+| Color | `--color-panel`, `--color-picker`, `--palettes`, `--scopes-smoke`, `--scopes`, `--tonal-controls` |
 | Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--pointwise-effects`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
 | Photo files and export | `--portable-photo`, `--export-metadata`, `--document-errors` |

@@ -2,7 +2,7 @@
 // GPU objects remain in the owning Wasm instance; only bounded byte blocks move.
 export function createRasterWorker() {
   const owners = new Map();
-  let next = 0;
+  let next = 0, idleAnalysis;
   const outputs=new Map(),reads=new Set();
   function owner(kind) {
     if (owners.has(kind)) return owners.get(kind);
@@ -12,13 +12,14 @@ export function createRasterWorker() {
     let idleTimer;
     const fail = error => {
       closed=true;
+      if(idleAnalysis===state)idleAnalysis=null;
       for (const job of pending.values()) { clearTimeout(job.timer); job.reject(error); }
       clearTimeout(idleTimer); pending.clear(); worker.terminate(); owners.delete(kind);
     };
     worker.onmessage = ({data}) => {
       const job = pending.get(data.id);
       if (!job) return;
-      pending.delete(data.id); clearTimeout(job.timer);
+      pending.delete(data.id); clearTimeout(job.timer);state.retire=!!data.retire;
       if (data.color_feature_error) job.reject({color_feature_error:data.color_feature_error});
       else if (data.error) job.reject(new Error(data.error)); else job.resolve(data.result);
       // Wasm heaps cannot shrink. Release an oversized idle file arena after
@@ -29,10 +30,11 @@ export function createRasterWorker() {
     };
     worker.onerror = event => { event.preventDefault(); fail(new Error(event.message || "Raster worker stopped")); };
     worker.onmessageerror = () => fail(new Error("Invalid raster worker response"));
-    const state = {worker,pending,fail,get closed(){return closed;},active(){clearTimeout(idleTimer);}}; owners.set(kind,state); return state;
+    const state = {worker,pending,fail,retire:false,get closed(){return closed;},active(){clearTimeout(idleTimer);},park(){idleTimer=setTimeout(()=>fail(new DOMException("Analysis idle","AbortError")),5000);}}; owners.set(kind,state); return state;
   }
   function send(state,request,cancelled) {
     return new Promise((resolve,reject)=>{
+      if(cancelled?.()){reject(new DOMException("Image operation cancelled","AbortError"));return;}
       const id=++next;
       state.active();
       const timer=setTimeout(()=>state.fail(new Error("Raster worker timed out")),request.operation==="encode"?30000:180000);
@@ -66,7 +68,15 @@ export function createRasterWorker() {
         if(op==='output-close'||(op==='output-encode'&&(cancelled?.()||metadata.preview||metadata.flatten||metadata.clip))){outputs.delete(token);state.fail(new DOMException('Output finished','AbortError'));}
       }
     }
-    if(op==='tone'||op==='snapshot'){const state=owner(`analysis:${++next}`);try{return await send(state,request,cancelled);}finally{state.fail(new DOMException('Analysis finished','AbortError'));}}
+    if(op==='snapshot'){
+      const state=idleAnalysis&&!idleAnalysis.closed?idleAnalysis:owner(`analysis:${++next}`);idleAnalysis=null;
+      try {
+        const result=await send(state,request,cancelled);
+        if(!state.closed&&!state.retire&&!idleAnalysis){idleAnalysis=state;state.park();}
+        else state.fail(new DOMException('Analysis finished','AbortError'));
+        return result;
+      } catch(error){state.fail(error);throw error;}
+    }
     return send(owner(op==='color-field'?'color-preview':op==='encode'?'codec':'files'),request,cancelled);
   };
 }

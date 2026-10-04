@@ -1,3 +1,5 @@
+import {checkScopes,checkScopesSmoke} from './scopes.test.mjs';
+import {checkTonalControls} from './tonal-controls.test.mjs';
 import {checkDocumentErrors} from './document-errors-journey.test.mjs';
 import {runJourney} from "./journeys.mjs";
 import {checkPointwiseEffects,checkLookupTransport} from './pointwise-effects.test.mjs';
@@ -109,7 +111,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.some(x=>['--drawing-tabs-recovery','--scopes','--tonal-controls'].includes(x))?300000:process.argv.some(x=>["--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -305,6 +307,9 @@ try {
     [process.argv.includes("--editor"), () => checkEditor({call,evaluate,settle,canvasPixels}), checkErrors],
     [process.argv.includes("--staged-startup"), () => checkStagedStartup({ call, evaluate, settle, canvasPixels }), checkErrors],
     [process.argv.includes("--stroke-recording"), () => checkStrokeRecording({call,evaluate,settle})],
+    [process.argv.includes("--scopes-smoke"), () => checkScopesSmoke({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--scopes"), () => checkScopes({call,evaluate,settle,canvasPixels}), checkErrors],
+    [process.argv.includes("--tonal-controls"), () => checkTonalControls({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--curves"), () => checkCurves({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--pointwise-effects"), () => checkPointwiseEffects({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--pointwise-effects-smoke"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,widths:[1100],effects:['threshold']}), checkErrors],

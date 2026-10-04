@@ -1,3 +1,4 @@
+import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
 
 // Run on the real WebGPU host. More than sixteen source tiles forces a cold
@@ -9,7 +10,7 @@ export async function checkPhotoPaint({call, evaluate, settle}, photoUrl = null)
     await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);
     await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);
   };
-  const histogram = () => evaluate(`(async()=>{const c=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(c)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v))}finally{c.free()}})()`);
+  const histogram=histogramJourney({evaluate,settle}).exact;
   await wait('window.layerApp && layerApp.startupTimes.complete!==null');
   await evaluate(`window.photoPaint={open:window.showOpenFilePicker,save:window.showSaveFilePicker,files:new Map()};`);
   try {

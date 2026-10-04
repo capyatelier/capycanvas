@@ -55,6 +55,21 @@ impl HistogramCaptionKey {
 }
 
 impl HistogramView {
+    pub fn same_publication(&self, other:&Self) -> bool {
+        self.data.as_ref().map(Arc::as_ptr)==other.data.as_ref().map(Arc::as_ptr)
+            && (self.source,self.channel,self.logarithmic,self.shadows,self.highlights,self.captured_time)
+                ==(other.source,other.channel,other.logarithmic,other.shadows,other.highlights,other.captured_time)
+            && (&self.captured_source,&self.status,&self.description,&self.range,&self.axis,&self.sources,&self.channels,&self.labels)
+                ==(&other.captured_source,&other.status,&other.description,&other.range,&other.axis,&other.sources,&other.channels,&other.labels)
+    }
+    pub fn histogram_plot(&self) -> Vec<(usize,Vec<f32>)> {
+        let Some(data)=&self.data else {return Vec::new();};
+        let channels=self.plotted_channels();let bins=data.plot_bins();
+        let scale=|count:u64| if self.logarithmic {(count as f64).ln_1p()} else {count as f64};
+        let maximum=scale(channels.iter().flat_map(|&channel|&data.channels[channel].bins[bins.clone()]).copied().max().unwrap_or(1).max(1));
+        channels.iter().map(|&channel|(channel,data.channels[channel].bins[bins.clone()].iter().map(|&count|(scale(count)/maximum) as f32).collect())).collect()
+    }
+
     fn set_status(&mut self, message: MessageId, l: &Localizer) {
         if self.status_message == Some(message) && self.status_language == Some(l.language()) { return; }
         self.status_message = Some(message);self.status_language = Some(l.language());self.status = l.text(message);
@@ -99,7 +114,9 @@ impl HistogramView {
     pub fn plotted_channels(&self) -> &'static [usize] {
         match self.channel {1=>&[0],2=>&[1],3=>&[2],4=>&[3],_=>&[0,1,2]}
     }
-    pub fn waveform_premultiplied_rgba(&self, colors:[[u8;3];4]) -> Option<([u32;2], Vec<u8>)> {
+    pub fn waveform_premultiplied_rgba(&self, colors:[[u8;3];4]) -> Option<([u32;2], Vec<u8>)> { self.waveform_pixels(colors, true) }
+    pub fn waveform_rgba(&self, colors:[[u8;3];4]) -> Option<([u32;2], Vec<u8>)> { self.waveform_pixels(colors, false) }
+    fn waveform_pixels(&self, colors:[[u8;3];4], premultiplied:bool) -> Option<([u32;2], Vec<u8>)> {
         let data=self.data.as_ref()?;let waveform=data.waveform.as_ref()?;
         let bins=data.plot_bins();let height=bins.len();let channels=self.plotted_channels();
         let mut counts=vec![[0u32;3];256*height];
@@ -117,7 +134,9 @@ impl HistogramView {
                 let density=scale(counts[component])/maximum;alpha=alpha.max(density);
                 for c in 0..3 {rgb[c]+=f64::from(colors[channel][c])*density;}
             }
-            [rgb[0].min(255.*alpha).round() as u8,rgb[1].min(255.*alpha).round() as u8,rgb[2].min(255.*alpha).round() as u8,(alpha*255.).round() as u8]
+            if !premultiplied && alpha>0. {for c in &mut rgb {*c/=alpha;}}
+            let ceiling=if premultiplied {255.*alpha} else {255.};
+            [rgb[0].min(ceiling).round() as u8,rgb[1].min(ceiling).round() as u8,rgb[2].min(ceiling).round() as u8,(alpha*255.).round() as u8]
         }).collect();
         Some(([256,height as u32],rgba))
     }
@@ -149,7 +168,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .any(|drawer| drawer.columns.iter().any(|column| column.contains(&panel)))
     }
     pub(super) fn histogram_visibility_changed(&self)->bool {
-        if self.state.platform!=Platform::Gtk {return false;}
+        if !Panel::Histogram.available_on(self.state.platform) {return false;}
         let tonal=self.engine.document().layer(self.engine.document().active_layer).and_then(|layer|layer.effect.as_ref())
             .is_some_and(|effect|matches!(effect.program.id.as_ref(),"curves"|"levels"));
         let waveform=self.panel_is_presented(Panel::Waveform);
@@ -198,7 +217,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             layer.effect.as_ref().is_some_and(|effect| matches!(effect.program.id.as_ref(),"curves"|"levels")));
         let channel = match properties.page.as_deref() {Some("red")=>1,Some("green")=>2,Some("blue")=>3,_=>0};
         let source = tonal.map(|layer| if channel==0 {ArtworkSource::EffectChannels(layer.id)} else {ArtworkSource::EffectInput(layer.id)});
-        let demand = self.state.platform==Platform::Gtk && source.is_some() && self.panel_is_presented(Panel::Properties);
+        let demand = Panel::Histogram.available_on(self.state.platform) && source.is_some() && self.panel_is_presented(Panel::Properties);
         let mut task=std::mem::take(&mut self.tonal_histogram);
         let mut view=std::mem::take(&mut self.state.tonal_histogram);
         if view.channel!=channel { if task.active {self.engine.backend_mut().cancel_snapshot();}task=Statistics::default();view.clear(); }
@@ -211,8 +230,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut task=std::mem::take(&mut self.histogram);
         let mut view=std::mem::take(&mut self.state.histogram);
         let source = match view.source {1=>ArtworkSource::LayerContent(self.engine.document().active_layer),2=>ArtworkSource::Reference,_=>ArtworkSource::Visible};
-        let waveform=self.state.platform==Platform::Gtk && self.panel_is_presented(Panel::Waveform);
-        let demand=self.state.platform==Platform::Gtk && (self.panel_is_presented(Panel::Histogram) || waveform);
+        let waveform=Panel::Histogram.available_on(self.state.platform) && self.panel_is_presented(Panel::Waveform);
+        let demand=Panel::Histogram.available_on(self.state.platform) && (self.panel_is_presented(Panel::Histogram) || waveform);
         let admitted=!self.tonal_histogram.active && (!self.tonal_histogram.demand || self.tonal_histogram.settled);
         updates|=self.poll_statistics(now,source,view.source==3,demand,admitted,(waveform,&mut task,&mut view));
         self.histogram=task;self.state.histogram=view;

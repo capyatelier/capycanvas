@@ -2010,7 +2010,15 @@ impl CustomizationState {
                 }
             }
             SetPanelVisible { panel, visible } => {
+                let opening = visible && panel.kind() == PanelKind::Content && layout.panel_group(panel).is_none();
                 layout.set_panel_visible(panel, visible)?;
+                if opening {
+                    let group = layout.panel_group(panel).unwrap();
+                    let minimum = layout.group_min_width(group).max(TILE_SIZE);
+                    if layout.resolve(viewport[0], viewport[1]).groups.iter().any(|g| g.id == group && g.bounds.width < minimum) {
+                        layout.move_panel(viewport, panel, DockTarget::Float {position: [viewport[0] * 0.5, viewport[1] * 0.3]})?;
+                    }
+                }
                 changed |= regions::LAYOUT;
             }
             AddPanel { panel, group } => {

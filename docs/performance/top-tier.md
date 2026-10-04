@@ -46,6 +46,10 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Fill layer or gradient-fill edit | 120, soft | | |
 | Navigation with proof or tone guide shown | 120 | | |
 | Navigation with exact artwork sampling (61 MP) | 120 | **Not met.** 48.43–49.89 canvas presents/s; interval p99 25.00 ms | [Exact artwork samples](#exact-artwork-samples), 2026-10-02 |
+| Web Histogram pan, statistics pending / Exact settled (61 MP) | 120 | **Not met.** Chrome surface 111.27–112.40 / 111.96–113.88 presents/s; p99 gaps 16.67–25.00 / 16.67 ms | [Web scopes](#web-scopes), 2026-10-03 |
+| Web Waveform pan, statistics pending / Exact settled (61 MP) | 120 | **Not met.** Chrome surface 109.83–110.71 / 108.74–111.59 presents/s; p99 gaps 25.00 / 16.67 ms | [Web scopes](#web-scopes), 2026-10-03 |
+| Web Levels black slider (61 MP) | 120 | **Not met.** 44.57 / 49.01 / 41.45 Chrome surface presents/s; p99 gaps 41.67–91.67 ms | [Web scopes](#web-scopes), 2026-10-03 |
+| Web Curves knot / targeted adjustment (61 MP) | 120 | **Not met.** 40.57 / 38.81 / 35.63 and 49.58 / 48.09 / 48.14 Chrome surface presents/s | [Web scopes](#web-scopes), 2026-10-03 |
 | Navigation with Histogram Preview (61 MP) | 120 | **Not met.** 35.78–36.90 canvas presents/s; interval p99 41.67–50.00 ms | [Waveform statistics](#waveform-statistics), 2026-10-03 |
 | Navigation with Histogram Exact (61 MP) | 120 | **Not met.** 33.56–35.81 canvas presents/s; interval p99 41.67 ms | [Waveform statistics](#waveform-statistics), 2026-10-03 |
 | Navigation with Waveform Preview (61 MP) | 120 | **Not met.** 35.29–36.53 canvas presents/s; interval p99 41.67–50.00 ms | [Waveform statistics](#waveform-statistics), 2026-10-03 |
@@ -551,6 +555,90 @@ Raw records are under
 `artifacts/photo-editing-color/p15-performance/`, including
 `moving-comparison.json`, `final-sample-summary.json`,
 `final-navigation-summary.json` and `baseline2/diagnostic-audit.csv`.
+
+## Web scopes
+
+Chrome on the reference Pro 14 was measured on 2026-10-03 with the 9504 × 6336
+photo, the normal Photo workspace and three native five-second pan contacts per
+condition. The frozen final-layout WASM digest starts `eecc98acc73f`; complete
+source identities and records are in
+`artifacts/photo-editing-color/p19-web-pro14/final-layout/`.
+
+| Histogram condition | Chrome surface presents/s | Present gap p99 | Artwork canvas acquisitions/s |
+| --- | --- | --- | --- |
+| Analysis pending | 111.64 / 112.40 / 111.27 | 16.67–25.00 ms | 113.76–114.95 |
+| Exact settled | 111.96 / 113.22 / 113.88 | 16.67 ms | 112.68–114.39 |
+
+The Chrome surface includes DOM scope updates; artwork canvas acquisition is a
+separate submission proxy, not display presentation. Every contact moved the
+camera and preserved paint. Input event age p99 was 9.1–9.5 ms pending and
+8.9–9.0 ms settled. There is no input-to-photon identity. Surface clock alignment
+has 14–39 ms uncertainty. Thermal status was 0 afterward; initial thermal status
+was not captured. Earlier owned test tabs remained open in the background; their
+memory footprint was not measured. These results do not establish a matched improvement over
+native or earlier combined pan, zoom and rotation workloads, or meet 120 Hz.
+
+Pending show-to-Exact worker completion took 14.06–14.89 seconds; completion after
+release took 8.57–9.44 seconds. Preview requests took 2.79–3.19 seconds and Exact
+requests 10.58–11.01 seconds. Each transferred 168,012,079 bytes and explicitly
+returned `retire=true`, so the 256 MiB idle-arena policy did not reuse these large
+workers. Actual histogram pixels were nonempty. Hiding during a pending query
+terminated its worker without a late response. Separate cold/warm pilots have
+different workspace geometry and draw implementations and establish no tier gain.
+
+Waveform used the rebased WASM (`e3d5f8b0005`) with 254px scope panels on the same
+61 MP source, with three five-second contacts per condition. Pending Chrome
+surface rates were 110.71 / 109.83 / 109.83 presents/s; Exact-settled rates were
+109.65 / 108.74 / 111.59. Present gap p99 was 25.00 ms pending and 16.67 ms settled,
+with input event age p99 9.0–9.6 ms and clock alignment uncertainty 14.8–20.8 ms.
+Both thermal checks reported status 0. All contacts moved the camera, preserved
+paint and retained nonempty 424 × 280 Waveform plots.
+
+Pending pointer release to observed Exact status took 9.50 / 9.88 / 10.08 seconds;
+this is query readiness, not input-to-display latency. A separate admitted Preview
+request transferred 168,012,079 bytes and was terminated 37.4 ms after hiding,
+without publishing a late completion. Only the owned measurement tab was active.
+These results do not meet 120 Hz or establish a matched gain; complete source and
+evidence are in `artifacts/photo-editing-color/p19-web-pro14/rebased-final/`.
+
+The bounded 512² fixture transferred 1,042 bytes per request, returned
+`retire=false`, reused one worker for Preview and Exact (259.1 and 58.2 ms), and
+expired 5.000 seconds after the last response. These are different query modes,
+not a matched startup speedup. A separate CPU trace measured synchronous sends
+at 1.3–2.1 ms; sampled main-thread packing totaled about 210 ms and worker
+unpacking about 130–135 ms per query. Tile digest validation during region decode
+accounted for about 597/926 ms of Preview/Exact self samples. Sampling estimates
+and overlapping inclusive costs do not identify GPU or asynchronous device wait
+time. Pilot, retirement and CPU evidence is retained in the adjacent
+`after-reuse/` directory.
+
+Precision controls used a separate frozen copy of the `e3d5f8b0005` WASM plus the
+numeric-coordinate CSS fix, the same 61 MP photo, and three native five-second
+contacts per row. The Photo Properties dock was active; both artwork scope
+panels were hidden, with viewport 2880 × 1590 and work area 2257 × 1422.
+
+| Precision contact | Chrome surface presents/s | Present gap p99 | Post-contact completion |
+| --- | --- | --- | --- |
+| Levels black slider | 44.57 / 49.01 / 41.45 | 41.67–91.67 ms | 10.8–17.4 ms |
+| Curves interior knot | 40.57 / 38.81 / 35.63 | 50.00–91.67 ms | 11.7–17.5 ms |
+| Targeted Curves adjustment | 49.58 / 48.09 / 48.14 | 58.34 ms | 13.12–14.54 s |
+
+Each contact committed real parameter changes; final Undo restored the initial
+curve parameters. Thermal status was 0 before and after, input event age p99 was
+9.5–11.0 ms, and clock alignment uncertainty was 14.0–25.4 ms. No page errors
+were recorded. These Chrome surface rates do not meet 120 Hz and do not establish
+artwork or input-to-photon rates. Levels insertion to Exact worker response took
+12.42 s (Preview 4.64 s, Exact 6.91 s); both requests transferred 168,012,079
+bytes and retired their workers. Targeted five-pixel EffectInput requests took
+0.684–0.741 s, transferred the same bytes, and returned `retire=false`. Their
+13–14 s post-contact wait was the re-enabled Exact tonal histogram, not the
+pixel-sample latency. One bounded held-touch observation reached a finite
+preview in 1.415 s including the stationary hold, updated after movement, and
+cancelled without changing parameters. This pilot does not qualify Auto completion
+on the large photo; correction behavior is qualified by the separate bounded UI
+fixture. Complete source identities, successful
+rows and rejected fixture attempts remain in
+`artifacts/photo-editing-color/p19-web-pro14/precision-final/`.
 
 ## Artwork statistics
 

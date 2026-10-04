@@ -1,5 +1,6 @@
-fn levels_session()->UiSession<Recorder> {
-    let mut s=session(Platform::Gtk);
+fn levels_session()->UiSession<Recorder> {levels_session_on(Platform::Gtk)}
+fn levels_session_on(platform:Platform)->UiSession<Recorder> {
+    let mut s=session(platform);
     s.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:"levels".into()}}).unwrap();
     s.reveal_panel(Panel::Properties).unwrap();s.frame(1,1).unwrap();s
 }
@@ -30,8 +31,8 @@ fn stale_property_actions(layer:u64,epoch:u64)->Vec<EffectAction> {
 
 #[test]
 fn levels_auto_uses_current_page_source_and_commits_one_undo_preserving_other_values() {
-    for page in ["rgb","red","green","blue"] {
-        let mut s=levels_session();let layer=s.engine.document().active_layer;
+    for platform in [Platform::Gtk,Platform::Web] {for page in ["rgb","red","green","blue"] {
+        let mut s=levels_session_on(platform);let layer=s.engine.document().active_layer;
         for (key,value) in [("output_black",0.1),("output_white",0.9),("red_output_white",0.8),("green_gamma",1.7)] {
             s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:layer.0,key:key.into(),value:layer_core::EffectValue::Number(value)}}).unwrap();
         }
@@ -47,7 +48,7 @@ fn levels_auto_uses_current_page_source_and_commits_one_undo_preserving_other_va
         assert!(s.auto_levels.is_none());assert_eq!(s.engine.document().layers[0].effect.as_deref(),Some(&expected));
         assert_eq!(s.state.display_colors().definition(),paints);assert_eq!(s.engine.backend().dabs,0);
         assert!(s.engine.undo().unwrap());assert_eq!(s.engine.document().layers,before);assert_eq!(s.engine.checkpoint(),checkpoint);
-    }
+    }}
 }
 
 #[test]

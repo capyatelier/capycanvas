@@ -700,8 +700,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .property-row:has(> select) { flex-wrap:wrap; }
 .property-row:has(> select) > span:first-child { flex-shrink:0; max-width:100%; }
 .property-row select { flex:1; width:0; min-width:min(150px,100%); max-width:100%; }
-.property-controls select, .effect-properties > select { background:var(--input); padding:4px 6px; }
-.effect-properties > select { width:100%; margin-bottom:6px; }
+.property-controls select { background:var(--input); padding:4px 6px; }
 .property-row.property-resource { flex-wrap:nowrap; margin-bottom:6px; }
 .property-resource select { min-width:0; background:var(--input); padding:4px 6px; text-overflow:ellipsis; }
 .property-controls.disabled { opacity:.4; pointer-events:none; }
@@ -714,7 +713,6 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .curve-axis { display:flex; justify-content:space-between; color:var(--secondary); }
 .curve-axis-y { flex-direction:column; align-items:center; }
 .curve-ev { min-height:1em; text-align:right; color:var(--secondary); }
-.curve-field .number-entry { width:calc(7ch + 12px); }
 .gradient-editor { display:flex; flex-direction:column; gap:6px; }
 .gradient-ramp { height:32px; margin:0 6px; border-radius:4px; cursor:crosshair; }
 .gradient-stops { position:relative; height:14px; margin:0 6px; }
@@ -975,12 +973,6 @@ body[data-theme="light"] #header { text-shadow:none; }
 .property-color { min-width: 56px; min-height: 28px; max-width: 120px; overflow: hidden; text-indent: -9999px; border: 1px solid currentColor; border-radius: var(--control-radius); }
 
 
-.histogram-dialog { position:fixed; inset:6rem 1rem auto auto; margin:0; width:min(26rem,calc(100vw - 2rem)); box-sizing:border-box; border:1px solid var(--border); border-radius:calc(12px * var(--squircle-scale)); padding:1rem; background:var(--panel); color:inherit; z-index:30; box-shadow:0 8px 30px #0006; }
-.histogram-dialog header { display:flex; align-items:center; justify-content:space-between; }
-.histogram-dialog h2 { margin:0; font-size:1.1rem; }
-.histogram-dialog canvas { width:100%; height:140px; }
-.histogram-dialog p { white-space:pre-line; font-size:.85rem; }
-.histogram-actions { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin:.6rem 0; }
 .file-progress { position:fixed; bottom:1rem; left:50%; transform:translateX(-50%); display:flex; gap:1rem; align-items:center; padding:.6rem 1rem; border-radius:calc(10px * var(--squircle-scale)); background:var(--panel); box-shadow:0 2px 15px #0006; z-index:50; }
 .color-comparison { display: flex; flex-wrap: wrap; gap: 12px; }
 .color-comparison figure { margin: 0; flex: 1 1 180px; text-align: center; }
@@ -1098,7 +1090,8 @@ body[data-theme="light"] #header { text-shadow:none; }
 .toolbar-number-face.labeled svg { grid-row: 1 / 3; }
 .toolbar-face-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .toolbar-editor-popover { position: fixed; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--surface-radius); min-width: 220px; max-width: min(320px, 90vw); height: fit-content; max-height: calc(100vh - 12px); background: var(--panel); color: var(--text); }
-.toolbar-choice-menu { display: flex; flex-direction: column; gap: 2px; }
+.toolbar-choice-menu { flex-direction: column; gap: 2px; }
+.toolbar-choice-menu:not([popover]), .toolbar-choice-menu:popover-open { display: flex; }
 .toolbar-choice-menu > button { display: flex; align-items: center; gap: 8px; text-align: left; min-height: 32px; }
 .toolbar-choice-menu svg { width: 16px; height: 16px; }
 .canvas-action-bar { position: absolute; left: 0; top: 0; z-index: 900; display: flex; align-items: center; box-sizing: border-box; width: max-content; color: var(--text); background: var(--glass-panel); border-radius: var(--surface-radius); box-shadow: 0 2px 8px rgb(0 0 0 / 16%); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
@@ -1204,3 +1197,28 @@ body[data-theme="light"] #header { text-shadow:none; }
 .command-empty { text-align: center; padding: var(--command-inset); opacity: .65; }
 #command-bar [hidden] { display: none; }
 @media (max-width: 600px) { #command-bar { top: 16px; max-height: calc(100dvh - 32px); } #command-bar .command-result { min-height: 48px; } #command-bar .command-search-close { width: 48px; min-height: 48px; } .command-search-field { min-height: 48px; box-sizing: border-box; } }
+
+.histogram-panel,.waveform-panel { padding:0; }
+.scope-control { margin:6px; display:flex; flex-direction:column; gap:4px; min-width:0; }
+.scope-toolbar,.scope-footer { display:flex; align-items:center; gap:4px; min-width:0; }
+.scope-toolbar select { width:0; flex:1; min-width:0; background:var(--input); padding:4px 6px; }
+.scope-graph { position:relative; min-width:0; }
+.scope-graph canvas { display:block; width:100%; height:160px; }
+.scope-axis { display:flex; justify-content:space-between; color:var(--secondary); pointer-events:none; }
+.scope-waveform .scope-axis { position:absolute; inset:0 auto 0 3px; flex-direction:column-reverse; }
+.scope-footer > [data-scope-control=status] { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.scope-log,.scope-clipping { display:flex; align-items:center; gap:0; }
+.scope-clipping button { padding:0; width:28px; height:28px; display:grid; place-items:center; }
+.scope-tonal { margin:0; }
+.scope-tonal canvas { height:120px; }
+.property-toolbar,.property-actions { display:flex; align-items:center; gap:4px; min-width:0; }
+.property-toolbar { margin-bottom:6px; }
+.property-toolbar > select { flex:1; width:0; min-width:0; background:var(--input); padding:4px 6px; }
+.property-actions button { height:28px; min-width:28px; }
+.property-row > .number-inline { flex:1; min-width:0; }
+.curve-coordinates { display:flex; gap:6px; min-width:0; }
+.curve-coordinate { flex:1; min-width:0; }
+.curve-coordinate > label { display:flex; flex-direction:column; align-items:stretch; gap:2px; min-width:0; }
+.curve-coordinate .number-value-only { flex:1; min-width:0; }
+.curve-coordinate .number-value-box { flex:1; min-width:0; }
+.curve-plot > canvas { position:absolute; inset:0; width:100%; height:100%; opacity:.6; pointer-events:none; }

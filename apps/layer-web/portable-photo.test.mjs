@@ -1,3 +1,4 @@
+import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 
@@ -17,7 +18,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
     await evaluate(`portablePhoto.openName=${JSON.stringify(name)}`);await invoke('open_document');
     await wait(`Number(layerApp.state().document_file.epoch)!==${epoch}&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()`);
   };
-  const histogram=()=>evaluate(`(async()=>{const c=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(c)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v))}finally{c.free()}})()`);
+  const histogram=histogramJourney({evaluate,settle}).exact;
   const begin=async range=>{await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);await set('Dynamic range',range);};
   const preview=async()=>{await click('Preview Output');await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2&&!Array.from(document.querySelectorAll('dialog[open] button')).find(b=>b.textContent==='Preview Output').disabled`);};
   const outputPixels=()=>evaluate(`(()=>{const c=document.querySelector('canvas[aria-label="Output preview"]');return {extent:[c.width,c.height],pixels:Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data)}})()`);

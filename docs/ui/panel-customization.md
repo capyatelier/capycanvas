@@ -85,7 +85,8 @@ picker's availability rules.
 - The **Window** menu (see the [workspace manager](default-workspaces.md#workspace-manager))
   has checkable built-in-panel rows and a **Quick Access Toolbars** submenu with
   toolbar visibility, **New Toolbar…** and **Manage Toolbars…**. Hiding removes
-  placement, not configuration; checking the item shows it again.
+  placement, not configuration; checking the item shows it again. A content panel
+  opens floating when the dock cannot provide its minimum width.
 - **Manage Toolbars…** opens a single-selection list of all toolbars, including
   hidden ones. Select a row, then **Delete Toolbar…** to open the existing
   confirmation. Cancel returns to the selected row; successful deletion clears

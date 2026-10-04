@@ -70,7 +70,7 @@ impl WorkspacePreset {
         if !layout.fit_height_groups.contains(&group) {
             layout.fit_height_groups.push(group);
         }
-        if self == Self::Photographer && platform == crate::Platform::Gtk {
+        if self == Self::Photographer && Panel::Histogram.available_on(platform) {
             if let Some(DockNode::Tabs {panels,active,..})=layout.node_mut(group) {
                 *panels=vec![Panel::Histogram,Panel::Waveform];
                 *active=Panel::Histogram;
@@ -476,7 +476,7 @@ mod tests {
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
                 [Edge::Top, Edge::Left, Edge::Right, Edge::Right]);
             for (id, expected) in [
-                (14, if platform==Platform::Gtk {vec![Panel::Histogram,Panel::Waveform]}else{vec![Panel::Color,Panel::Palettes]}),
+                (14, if matches!(platform,Platform::Gtk|Platform::Web) {vec![Panel::Histogram,Panel::Waveform]}else{vec![Panel::Color,Panel::Palettes]}),
                 (15, vec![Panel::Properties, Panel::Adjustments]),
                 (16, vec![Panel::Layers]),
                 (6, vec![Panel::Brushes, Panel::Stats]),
@@ -492,7 +492,7 @@ mod tests {
             for [width, height] in [[1600., 1200.], [1200., 800.], [640., 480.]] {
                 let resolved = layout.workspace(width, height, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
                 let group = |panel| resolved.groups.iter().find(|g| g.panels.contains(&panel)).unwrap().bounds;
-                let color = group(if platform==Platform::Gtk {Panel::Histogram}else{Panel::Color});
+                let color = group(if matches!(platform,Platform::Gtk|Platform::Web) {Panel::Histogram}else{Panel::Color});
                 let properties = group(Panel::Properties);
                 let layers = group(Panel::Layers);
                 assert_eq!(properties, group(Panel::Adjustments));
@@ -557,7 +557,7 @@ mod tests {
             let mut layout = preset.layout(platform);
             layout.open_default_columns(platform);
             layout.validate().unwrap();
-            let scopes=preset==WorkspacePreset::Photographer && platform==Platform::Gtk;
+            let scopes=preset==WorkspacePreset::Photographer && matches!(platform,Platform::Gtk|Platform::Web);
             let (anchor,selected,minimum_width)=if scopes {
                 for panel in [Panel::Color,Panel::Palettes] {assert!(layout.panel(panel).is_ok());assert!(layout.panel_group(panel).is_none());}
                 (Panel::Histogram,Panel::Waveform,254.)

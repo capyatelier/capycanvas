@@ -5,13 +5,16 @@ import assert from 'node:assert/strict';
 // retain their normal usage. One row per surface bounds readback memory.
 export async function checkHdrDisplay({evaluate}, hdr) {
   const samples=await evaluate(`(async()=>{
+    const json=value=>JSON.stringify(value,(_,v)=>typeof v==='bigint'?String(v):v);
+    const camera=()=>{const {revision,...view}=layerApp.app.camera();return json(view);},cameraBefore=camera();
+    const history=()=>json({file:layerApp.state().document_file,commands:layerApp.state().commands.filter(c=>c.id==='undo'||c.id==='redo')}),historyBefore=history();
     const canvases=[layerApp.canvas,...document.querySelectorAll('.navigator-surface')];
     const contexts=new Map(canvases.map(canvas=>{
       const context=canvas.getContext('webgpu'),config=context?.getConfiguration();
       return [context,config?{config,name:canvas===layerApp.canvas?'Canvas':'Navigator'}:null];
     }).filter(([,v])=>v));
     const getTexture=GPUCanvasContext.prototype.getCurrentTexture,submit=GPUQueue.prototype.submit;
-    const jobs=[];let pending=null;
+    const jobs=[];let pending=null,panned=false;
     for(const [context,{config}]of contexts)context.configure({...config,usage:config.usage|GPUTextureUsage.COPY_SRC});
     GPUCanvasContext.prototype.getCurrentTexture=function(){
       const texture=getTexture.call(this),entry=contexts.get(this);
@@ -42,13 +45,15 @@ export async function checkHdrDisplay({evaluate}, hdr) {
       })());
     };
     try{
-      layerApp.wake();const started=performance.now();
-      while(jobs.length<contexts.size){if(performance.now()-started>15000)throw Error('Missing surface submission');await new Promise(r=>setTimeout(r,20));}
+      layerApp.app.gesture(0,0,1,0,1,0);panned=true;layerApp.wake();const started=performance.now();
+      while(jobs.length<contexts.size){if(performance.now()-started>15000)throw Error('Missing surface submission: '+[...contexts.values()].filter(entry=>!entry.captured).map(entry=>entry.name).join(', '));await new Promise(r=>setTimeout(r,20));}
       return await Promise.all(jobs);
     }finally{
       GPUCanvasContext.prototype.getCurrentTexture=getTexture;GPUQueue.prototype.submit=submit;
       for(const [context,{config}]of contexts)context.configure(config);
+      if(panned)layerApp.app.gesture(1,0,0,0,1,0);
       layerApp.wake();
+      if(camera()!==cameraBefore||history()!==historyBefore)throw Error('Surface readback changed camera geometry or history: '+json({cameraBefore,cameraAfter:camera(),historyBefore,historyAfter:history()}));
     }
   })()`);
   assert.ok(samples.some(s=>s.surface==='Canvas')&&samples.some(s=>s.surface==='Navigator'));

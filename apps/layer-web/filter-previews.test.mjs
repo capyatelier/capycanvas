@@ -1,3 +1,4 @@
+import {histogramJourney} from './histogram-journey.mjs';
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 
@@ -10,9 +11,7 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
       else if(performance.now()>end)reject(Error('Preview timeout: '+${JSON.stringify(condition)}));
       else setTimeout(check,40);
     }check();})`);
-  const histogram=()=>evaluate(`(async()=>{const control=layerApp.app.capture_control();try{
-    return JSON.parse(JSON.stringify((await layerApp.app.histogram(control)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v));
-  }finally{control.free();}})()`);
+  const histogram=histogramJourney({evaluate,settle}).exact;
   const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/filter-memory';
   await mkdir(directory,{recursive:true});
   const capture=async name=>{

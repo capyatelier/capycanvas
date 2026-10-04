@@ -1,61 +1,79 @@
-import {liveCopy,bindCopy} from "./localization.js";
-// One cancellable, full-resolution inspection per open window. Navigation and
-// editing remain available; a stale result is labeled until its successor ends.
-export function createHistogram({app,element,button}) {
-  const copy=liveCopy(app,"catalog").native_copy.color,common=liveCopy(app,"bootstrap_view").common,depthCopy=liveCopy(app,"document_color_copy");
-  let root,control,running=false,result,wanted,failed,changed=0,timer,done=Promise.resolve(),present=()=>{};
-  const key=()=>{const f=app.state().document_file;return`${f.epoch}:${f.revision}`;};
-  return {localize(){present();},async retire(){clearInterval(timer);control?.cancel();const old=root;if(old?.isConnected){const closed=new Promise(resolve=>old.addEventListener('close',resolve,{once:true}));if(old.open)old.close();await closed;}await done;},open(){
-    if(root){root.focus();return;}
-    root=element("dialog","histogram-dialog");bindCopy(root,()=>copy.histogram,"ariaLabel");
-    const title=element("h2"),close=button("",()=>root.close()),status=element("p"),description=element("p"),range=element("p");
-    bindCopy(title,()=>copy.histogram);bindCopy(close,()=>common.close);bindCopy(close,()=>common.close,"ariaLabel");
-    const select=element("select");bindCopy(select,()=>copy.channel,"ariaLabel");
-    [()=>"RGB",()=>copy.red,()=>copy.green,()=>copy.blue,()=>copy.luminance].forEach((name,i)=>{const option=element("option");bindCopy(option,name);option.value=i;select.append(option);});
-    const logarithmic=element("input");logarithmic.type="checkbox";
-    const logLabel=element("label");bindCopy(logLabel,()=>copy.log_scale);bindCopy(logarithmic,()=>copy.log_scale,"ariaLabel");logLabel.prepend(logarithmic);
-    const automatic=element("input");automatic.type="checkbox";automatic.checked=true;
-    const autoLabel=element("label");bindCopy(autoLabel,()=>copy.auto_update);bindCopy(automatic,()=>copy.auto_update,"ariaLabel");autoLabel.prepend(automatic);
-    const canvas=element("canvas");canvas.width=512;canvas.height=180;bindCopy(canvas,()=>app.native_caption({type:"inspection_graph",channel:select.options[Number(select.value)]?.textContent??"RGB"}),"ariaLabel");
-    const draw=()=>{
-      if(!result)return;const h=result.histogram,channel=Number(select.value),indices=channel?[channel-1]:[0,1,2];
-      const [start,end]=result.axis.bins.map(Number),bins=Array.from({length:end-start},(_,i)=>i+start);
-      const scale=n=>logarithmic.checked?Math.log1p(Number(n)):Number(n);
-      const maximum=Math.max(1,...indices.flatMap(i=>bins.map(x=>scale(h.channels[i].bins[x]))));
-      const context=canvas.getContext("2d",{willReadFrequently:true});context.clearRect(0,0,512,180);
-      for(const i of indices){context.beginPath();context.moveTo(0,180);bins.forEach((x,j)=>context.lineTo(j/(bins.length-1)*512,180-scale(h.channels[i].bins[x])/maximum*176));context.lineTo(512,180);context.closePath();context.fillStyle=["#ed747480","#69cf9280","#73a7f580","#aaaaaacc"][i];context.fill();}
-      if(result.axis.white!=null){const x=result.axis.white*512;context.beginPath();context.moveTo(x,0);context.lineTo(x,180);context.strokeStyle='#bbbbbb';context.setLineDash([4,4]);context.stroke();context.setLineDash([]);context.fillStyle='#dddddd';context.fillText(`0 EV · ${copy.sdr_white}`,x+4,12);}
+import {liveCopy} from './localization.js';
 
-    };
-    const channels=()=>Number(select.value)?[Number(select.value)-1]:[0,1,2];
-    const statusText=()=>{
-      if(running)return copy.inspection_updating;
-      if(failed)return copy.inspection_failed;
-      if(!result)return copy.inspection_preparing;
-      const current=result.sampled_time==null?copy.inspection_current:app.native_caption({type:"inspection_sample",seconds:Number(result.sampled_time)});
-      return key()===`${result.epoch}:${result.revision}`?current:app.native_caption({type:"inspection_changed",status:current});
-    };
-    bindCopy(status,statusText);
-    const descriptionRead=()=>{if(!result)return "";const h=result.histogram,depth={F32:"depth_float32",F16:"depth_float16",U16:"depth_16",U8:"depth_8"}[h.color.depth];return `${h.color.space} · ${depthCopy[depth]} · ${app.native_caption({type:"inspection_pixels",sampled:Number(h.pixels),transparent:Number(h.transparent)})}`;};bindCopy(description,descriptionRead);
-    const rangeRead=()=>!result?"":channels().map(i=>{const c=result.histogram.channels[i];return `${["R","G","B","Y"][i]}: ${app.native_caption({type:"inspection_channel",below:Number(c.below),above:Number(c.above),black:Number(c.black),white:Number(c.white)})}`;}).join("\n");bindCopy(range,rangeRead);
-    const help=()=>result&&["F16","F32"].includes(result.histogram.color.depth)?copy.inspection_hdr_help:copy.inspection_help;
-    bindCopy(canvas,help,"title");
-    const axis=element("p"),axisRead=()=>`${result?.axis.stops?app.native_caption({type:"inspection_range",start:Number(result.axis.stops[0]),end:Number(result.axis.stops[1])})+"\n":""}${help()}`;bindCopy(axis,axisRead);
-    present=()=>{draw();bindCopy(status,statusText);bindCopy(description,descriptionRead);bindCopy(range,rangeRead);bindCopy(axis,axisRead);bindCopy(canvas,help,"title");bindCopy(canvas,()=>app.native_caption({type:"inspection_graph",channel:select.options[Number(select.value)]?.textContent??"RGB"}),"ariaLabel");};
-    const refresh=async()=>{
-      if(running)return;failed=null;running=true;const owner=root;control=app.capture_control();present();update.disabled=true;
-      let settled;done=new Promise(resolve=>settled=resolve);
-      try{const next=await app.histogram(control);if(root===owner){result=next;}}
-      catch(error){if(root===owner&&!control.cancelled()){failed=key();console.error(error);}}
-      finally{control.free();control=null;running=false;if(root===owner)update.disabled=false;if(root)present();settled();}
-    };
-    const update=button("",refresh);bindCopy(update,()=>copy.refresh);bindCopy(update,()=>copy.refresh,"ariaLabel");
-    select.onchange=logarithmic.onchange=()=>present();
-    const header=element("header");header.append(title,close);const actions=element("div","histogram-actions");actions.append(select,logLabel,autoLabel,update);
-    root.append(header,actions,canvas,description,range,status,axis);
-    root.addEventListener("close",()=>{clearInterval(timer);control?.cancel();root.remove();root=null;result=null;wanted=null;failed=null;present=()=>{};},{once:true});
-    document.body.append(root);root.show();refresh();
-    timer=setInterval(()=>{const current=key();if(wanted!==current){if(wanted!==undefined)control?.cancel();wanted=current;changed=performance.now();if(result)present();}
-      if(automatic.checked&&!running&&failed!==current&&performance.now()-changed>=300&&(!result||`${result.epoch}:${result.revision}`!==current))refresh();},200);
+export function scopeGraph({state,element,kind,waveform=false,height=160}) {
+  const canvas=element('canvas');canvas.dataset.scopeControl='chart';canvas.setAttribute('role','img');
+  const context=canvas.getContext('2d',{willReadFrequently:true}),imageCanvas=waveform?document.createElement('canvas'):null;
+  const imageContext=imageCanvas?.getContext('2d',{willReadFrequently:true});
+  let painted,colors,extent;
+  function refresh() {
+    const view=state()[kind],plot=view?.plot;
+    const size=[Math.max(1,Math.round(canvas.clientWidth*devicePixelRatio)),Math.round(height*devicePixelRatio)];
+    canvas.title=[view?.description,view?.range].filter(Boolean).join('\n');
+    canvas.setAttribute('aria-label',canvas.title);
+    if(painted===plot&&colors===state().scope_colors&&extent?.every((n,i)=>n===size[i]))return;
+    painted=plot;colors=state().scope_colors;extent=size;
+    [canvas.width,canvas.height]=size;
+    if(!plot)return;
+    if(waveform) {
+      if(!view.image)return;
+      const {width,height,bytes}=view.image;imageCanvas.width=width;imageCanvas.height=height;
+      imageContext.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer,bytes.byteOffset,bytes.byteLength),width,height),0,0);
+      context.imageSmoothingEnabled=false;context.drawImage(imageCanvas,0,0,...size);
+    } else for(const [channel,bins] of plot) {
+      context.fillStyle=`rgba(${colors[channel].join(',')},.55)`;
+      const width=size[0]/bins.length;
+      context.beginPath();bins.forEach((value,x)=>context.rect(x*width,size[1]*(1-value),width+.1,size[1]*value));context.fill();
+    }
+  }
+  const observer=new ResizeObserver(refresh);observer.observe(canvas);
+  return {node:canvas,refresh,dispose:()=>observer.disconnect()};
+}
+
+export function scopeFooter({state,element,button,icon,dispatch,kind,logarithmic=false}) {
+  const send=action=>dispatch({type:'histogram',action});
+  const node=element('div','scope-footer'),status=element('span','dim'),clipping=element('div','scope-clipping');
+  status.dataset.scopeControl='status';node.append(status);
+  const log=element('input'),text=element('span');log.type='checkbox';log.dataset.scopeControl='log';
+  if(logarithmic) {const label=element('label','scope-log');label.append(log,text);node.append(label);}
+  log.onchange=()=>send({type:kind==='waveform'?'waveform_logarithmic':'logarithmic',enabled:log.checked});
+  for(const name of ['shadows','highlights']) {
+    const control=button('',()=>send({type:name,enabled:!state().histogram[name]}));
+    control.dataset.scopeControl=name;control.append(icon(`tonal-${name}`));clipping.append(control);
+  }
+  node.append(clipping);
+  return {node,refresh(){
+    const view=state()[kind];if(!view)return;
+    status.textContent=status.title=view.status;log.checked=view.logarithmic;text.textContent=view.labels[0]??'';
+    [...clipping.children].forEach((control,i)=>{
+      const name=control.dataset.scopeControl;control.title=state().histogram.labels[i+1]??'';
+      control.setAttribute('aria-label',control.title);control.setAttribute('aria-pressed',String(state().histogram[name]));
+    });
+  }};
+}
+
+export function createScope(options) {
+  const {state,app,element,dispatch,waveform=false,tonal=false}=options;
+  const kind=tonal?'tonal_histogram':waveform?'waveform':'histogram',copy=liveCopy(app,'catalog').native_copy;
+  const root=element('div','scope-control');root.dataset.scope=kind;
+  root.classList.toggle('scope-waveform',waveform);root.classList.toggle('scope-tonal',tonal);
+  const toolbar=element('div','scope-toolbar'),source=element('select'),channel=element('select');
+  source.dataset.scopeControl='source';channel.dataset.scopeControl='channel';
+  source.onchange=()=>dispatch({type:'histogram',action:{type:'source',index:Number(source.value)}});
+  channel.onchange=()=>dispatch({type:'histogram',action:{type:waveform?'waveform_channel':'channel',index:Number(channel.value)}});
+  toolbar.append(source,channel);toolbar.hidden=tonal;
+  const graph=element('div','scope-graph'),axis=element('div','scope-axis'),lower=element('span'),upper=element('span');
+  const plot=scopeGraph({state,element,kind,waveform,height:tonal?120:160}),footer=scopeFooter({...options,kind,logarithmic:!tonal});
+  axis.append(lower,upper);graph.append(plot.node,axis);root.append(toolbar,graph,footer.node);
+  const choices=(select,labels,index)=>{
+    const key=JSON.stringify(labels);
+    if(select.dataset.schema!==key){select.dataset.schema=key;select.replaceChildren(...labels.map((label,i)=>{const option=element('option','',label);option.value=i;return option;}));}
+    select.value=index;
+  };
+  return {node:root,dispose:plot.dispose,refresh(){
+    const view=state()[kind];if(!view)return;
+    choices(source,view.sources,view.source);choices(channel,view.channels,view.channel);
+    source.title=copy.sampler.source;source.setAttribute('aria-label',source.title);
+    channel.title=copy.color.channel;channel.setAttribute('aria-label',channel.title);
+    [lower.textContent,upper.textContent]=view.axis;plot.refresh();footer.refresh();
   }};
 }

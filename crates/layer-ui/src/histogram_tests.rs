@@ -111,7 +111,7 @@ fn histogram_retained_panel_configurations_publish_only_supported_host_controls(
             let actual:Vec<_>=view.controls.iter().map(|control|control.control).collect();
             let expected=if config.id.available_on(platform) {PanelControl::available(config.id)} else {&[]};
             assert_eq!(actual,expected,"{platform:?} {:?}",config.id);
-            if config.id==Panel::Histogram {assert_eq!(actual.is_empty(),platform!=Platform::Gtk);}
+            if config.id==Panel::Histogram {assert_eq!(actual.is_empty(),!matches!(platform,Platform::Gtk|Platform::Web));}
         }
         assert_eq!(serde_json::to_vec(&s.state.workspace).unwrap(),serialized);
     }
@@ -562,12 +562,12 @@ fn waveform_source_mutation_and_suspension_retire_shared_data_and_query() {
 }
 
 #[test]
-fn waveform_dedicated_command_is_localized_and_cannot_start_queries_off_gtk() {
+fn waveform_dedicated_command_is_localized_and_queries_only_supported_hosts() {
     for platform in Platform::ALL {for language in UiLanguage::ALL {
         let mut s=session(platform);s.set_localization(Localizer::shared(language));
         assert_eq!(CommandId::Waveform.localized_label(s.localization()),s.localization().text(MessageId::COMMAND_WAVEFORM));
         let config=s.state.workspace.layout.panel(Panel::Waveform).unwrap();assert_eq!(crate::customization::PanelCopy::new(&s.state,config).title,s.localization().text(MessageId::RESOURCES_WAVEFORM));
-        if platform==Platform::Gtk {invoke(&mut s,CommandId::Waveform);s.frame(100_000_000,100_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));}
+        if matches!(platform,Platform::Gtk|Platform::Web) {invoke(&mut s,CommandId::Waveform);s.frame(100_000_000,100_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));}
         else {let requests=s.engine.backend().snapshot_requests.len();s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert!(s.state.waveform.data.is_none());assert!(!Panel::Waveform.available_on(platform));}
     }}
 }
@@ -622,11 +622,75 @@ fn photo_monitors_share_default_tabs_and_remain_accessible_through_window_items(
 fn window_menu_routes_monitor_panels_and_preserves_legacy_histogram_on_other_hosts() {
     for platform in Platform::ALL {
         let s=session(platform);let menu=s.application_menu(ApplicationMenu::Window);let items=menu.sections.iter().flatten().collect::<Vec<_>>();
-        if platform==Platform::Gtk {
+        if matches!(platform,Platform::Gtk|Platform::Web) {
             for panel in [Panel::Histogram,Panel::Waveform] {assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:p,..}}) if p==panel)));}
         } else {
             assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Invoke{command:CommandId::Histogram}))));
             assert!(!items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:Panel::Histogram|Panel::Waveform,..}}))));
         }
+    }
+}
+
+#[test]
+fn statistics_publication_identity_includes_controls_and_every_visible_caption() {
+    let mut view=crate::HistogramView::default();view.data=Some(std::sync::Arc::new(histogram_value(&histogram_session(),3)));view.captured_source=Some(layer_core::ArtworkSource::Visible);view.captured_time=Some(1.);
+    assert!(view.same_publication(&view.clone()));
+    let mut copied=view.clone();copied.data=Some(std::sync::Arc::new((**view.data.as_ref().unwrap()).clone()));assert!(!view.same_publication(&copied));
+    for field in 0..15 {let mut changed=view.clone();match field {
+        0=>changed.source=1,1=>changed.channel=4,2=>changed.logarithmic=true,3=>changed.shadows=true,4=>changed.highlights=true,
+        5=>changed.captured_time=Some(2.),6=>changed.captured_source=Some(layer_core::ArtworkSource::Reference),7=>changed.status="Updating".into(),
+        8=>changed.description="count".into(),9=>changed.range="range".into(),10=>changed.axis[0]="low".into(),11=>changed.axis[1]="high".into(),
+        12=>changed.sources.push("source".into()),13=>changed.channels.push("channel".into()),_=>changed.labels.push("label".into())}
+        assert!(!view.same_publication(&changed),"field {field}");}
+}
+
+#[test]
+fn histogram_plot_uses_selected_channels_shared_peak_and_log_counts() {
+    use layer_core::color::{DocumentColor,histogram::Histogram};
+    let mut data=Histogram::new(DocumentColor::default());data.channels[0].bins[10]=1;data.channels[1].bins[20]=4;data.channels[2].bins[30]=2;data.channels[3].bins[40]=100;
+    let mut view=crate::HistogramView::default();assert!(view.histogram_plot().is_empty());view.data=Some(std::sync::Arc::new(data));
+    let plot=view.histogram_plot();assert_eq!(plot.iter().map(|p|p.0).collect::<Vec<_>>(),[0,1,2]);assert_eq!(plot[0].1[10],0.25);assert_eq!(plot[1].1[20],1.);assert_eq!(plot[2].1[30],0.5);assert_eq!(plot[0].1[11],0.);
+    view.logarithmic=true;let plot=view.histogram_plot();assert!((f64::from(plot[0].1[10])-2_f64.ln()/5_f64.ln()).abs()<1e-7);
+    view.channel=4;let plot=view.histogram_plot();assert_eq!(plot.len(),1);assert_eq!(plot[0].0,3);assert_eq!(plot[0].1[40],1.);
+    let mut hdr=Histogram::new(DocumentColor{depth:layer_core::color::SampleDepth::F32,..Default::default()});let visible=hdr.plot_bins();assert!(visible.start>0&&visible.end<256);hdr.channels[0].bins[0]=10000;hdr.channels[0].bins[visible.start]=1;hdr.channels[0].bins[visible.end-1]=2;let admitted=hdr.plot_bins();
+    view.data=Some(std::sync::Arc::new(hdr));view.channel=1;view.logarithmic=false;let plot=view.histogram_plot();assert_eq!(plot[0].1.len(),admitted.len());assert_eq!(plot[0].1[visible.start-admitted.start],0.5);assert_eq!(plot[0].1[visible.end-1-admitted.start],1.);
+
+}
+
+#[test]
+fn waveform_straight_rgba_preserves_palette_chroma_and_transparent_background() {
+    use layer_core::color::{DocumentColor,histogram::{Histogram,Waveform}};
+    let mut data=Histogram::new(DocumentColor::default());let mut counts=vec![0;Waveform::WORDS];counts[20*256+7]=1;counts[20*256+9]=4;data.waveform=Some(Waveform{counts});
+    let mut view=crate::HistogramView::default();view.data=Some(std::sync::Arc::new(data));view.channel=1;
+    let colors=[[200,80,40],[0,255,0],[0,0,255],[255;3]];let (size,straight)=view.waveform_rgba(colors).unwrap();let (premul_size,premul)=view.waveform_premultiplied_rgba(colors).unwrap();assert_eq!(size,premul_size);
+    let offset=((size[1] as usize-1-20)*256+7)*4;assert_eq!(&straight[offset..offset+4],&[200,80,40,64]);assert_eq!(&premul[offset..offset+4],&[50,20,10,64]);assert_eq!(&straight[0..4],&[0;4]);
+    let (_,changed)=view.waveform_rgba([[40,160,240],colors[1],colors[2],colors[3]]).unwrap();assert_eq!(&changed[offset..offset+4],&[40,160,240,64]);
+    view.logarithmic=true;let (_,log)=view.waveform_rgba(colors).unwrap();assert_eq!(&log[offset..offset+3],&colors[0]);assert!(log[offset+3]>straight[offset+3]);
+}
+
+#[test]
+fn reopened_photo_content_panels_remain_usable_in_narrow_viewports() {
+    for platform in [Platform::Gtk,Platform::Web] {
+        let mut s=session(platform);s.set_viewport([640.,800.],[640,800]).unwrap();
+        s.state.workspace.layout=crate::WorkspacePreset::Photographer.layout(platform);
+        let document=s.engine.document().clone();
+        let group=s.state.workspace.layout.panel_group(Panel::Histogram).unwrap();
+        s.dispatch(UiAction::MoveGroup{group,target:DockTarget::Float{position:[180.,160.]},viewport:[640.,800.]}).unwrap();
+        for panel in [Panel::Histogram,Panel::Waveform] {customize(&mut s,CustomizationAction::SetPanelVisible{panel,visible:false});}
+        for (panel,minimum) in [(Panel::Histogram,Panel::Histogram.default_width()),(Panel::Waveform,Panel::Waveform.default_width()),(Panel::Navigator,192.)] {
+            customize(&mut s,CustomizationAction::SetPanelVisible{panel,visible:false});
+            customize(&mut s,CustomizationAction::SetPanelVisible{panel,visible:true});
+            let resolved=s.state.workspace.layout.resolved([640.,800.]);
+            let bounds=resolved.groups.iter().find(|g|g.panels.contains(&panel)).unwrap().bounds;
+            assert!(bounds.width>=minimum,"{platform:?} {panel:?}: {bounds:?}");
+            assert!(bounds.x>=0.&&bounds.x+bounds.width<=640.);
+            assert!(bounds.y>=0.&&bounds.y+bounds.height<=800.);
+            assert_eq!(s.state.workspace.layout.active_panel(panel),Some(panel));
+        }
+        s.dispatch(UiAction::MovePanel{panel:Panel::Histogram,target:DockTarget::Float{position:[100.,120.]},viewport:[640.,800.]}).unwrap();
+        let before=s.state.workspace.layout.clone();
+        customize(&mut s,CustomizationAction::SetPanelVisible{panel:Panel::Histogram,visible:true});
+        assert_eq!(s.state.workspace.layout,before);
+        assert_eq!(s.engine.document(),&document);
     }
 }

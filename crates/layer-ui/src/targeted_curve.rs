@@ -36,7 +36,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         }
     }
     pub(super) fn start_targeted_curve(&mut self,layer:u64,epoch:u64)->Result<(),String> {
-        if self.state.platform!=Platform::Gtk {return Ok(());}
+        if !Panel::Histogram.available_on(self.state.platform) {return Ok(());}
         if self.targeted_curve.is_some() {self.cancel_picker();return Ok(());}
         self.require_idle()?;
         let document=self.engine.document();

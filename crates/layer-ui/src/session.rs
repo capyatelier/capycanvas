@@ -4471,7 +4471,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((change.regions, true))
             }
             CommandId::Histogram => {
-                if self.state.platform == Platform::Gtk {
+                if Panel::Histogram.available_on(self.state.platform) {
                     let change = self.reveal_panel(Panel::Histogram)?;
                     return Ok((change.regions, true));
                 }
@@ -5786,7 +5786,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.auto_levels.is_some() {
             for action in &mut self.state.layer_properties.actions {if matches!(action.action,EffectAction::AutoLevels {..}) {action.label=self.state.localization.text(MessageId::TOOLBAR_CANCEL).to_string();}}
         }
-        if self.state.platform != Platform::Gtk {
+        if !Panel::Histogram.available_on(self.state.platform) {
             self.state.layer_properties.actions.retain(|action| matches!(self.state.platform,Platform::Web|Platform::Android)
                 && matches!(action.action,EffectAction::ImportLookup {..}|EffectAction::LookupPreset {..}));
         }

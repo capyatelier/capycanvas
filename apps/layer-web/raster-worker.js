@@ -72,7 +72,7 @@ async function execute({id,request}) {
       case "write": result = await wasm.raster_worker_write(request.metadata,request.buffers); break;
       default: throw new Error("Unknown raster worker operation");
     }
-    self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : (result?.bytes ? [result.bytes] : result?.buffers || []).map(bytes=>bytes.buffer));
+    self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : (result?.bytes ? [result.bytes] : result?.waveform_counts ? [result.waveform_counts] : result?.buffers || []).map(bytes=>bytes.buffer));
   } catch(error) { self.postMessage({id,error:String(error),color_feature_error:error?.color_feature_error,retire:retire()}); }
 }
 

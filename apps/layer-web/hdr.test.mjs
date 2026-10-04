@@ -1,3 +1,4 @@
+import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
 import {checkGpuTone} from './gpu-tone.test.mjs';
 import {checkProofStartingLayout,checkProofKeys,checkProofPattern} from './proof-parity.test.mjs';
@@ -15,7 +16,7 @@ export async function checkHdr({call,evaluate,settle}) {
   const click=(label,root='dialog[open]')=>evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(root+' button')})].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
   const set=(label,value,root='dialog[open]')=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(root+' [aria-label="'+label+'"]')});if(!n)throw Error('Missing '+${JSON.stringify(label)});n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
-  const hist=()=>evaluate(`(async()=>{const c=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(c)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v))}finally{c.free()}})()`);
+  const hist=histogramJourney({evaluate,settle}).exact;
   const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy&&!layerApp.state().document_file.modified');return evaluate('hdrTest.manifest(hdrTest.last)');};
   const open=async name=>{const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');await evaluate(`hdrTest.openName=${JSON.stringify(name)}`);await invoke('open_document');await wait(`Number(layerApp.state().document_file.epoch)!==${epoch}&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()`);};
   await wait('layerApp.startupTimes.complete!==null && layerApp.app.brush_ready()');
@@ -177,7 +178,7 @@ export async function checkHdr({call,evaluate,settle}) {
     results.proofPattern=await checkProofPattern({evaluate});
     await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'proof',visible:false}})`);
     await evaluate(`hdrTest.files.set('hdr-master.capy',hdrTest.last.slice())`);
-    await open('hdr-master.capy');await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
+    await histogramJourney({evaluate,settle}).retire(()=>open('hdr-master.capy'));await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
     assert.deepEqual(await hist(),original);assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed);
     await evaluate('layerApp.restartGpu()');await wait('layerApp.app.brush_ready()&&layerApp.startupTimes.complete!==null');await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
     assert.deepEqual(await hist(),original);assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed);
@@ -208,7 +209,7 @@ export async function checkHdr({call,evaluate,settle}) {
       await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);
       await set('Dynamic range',range);if(range==='sdr')await set('Bit depth','U8');
       if(range==='hdr'){
-        const failure=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;const base=(await layerApp.app.export_presets({type:'get',index:0})).recipe;const recipe=layerApp.app.export_draft(base,{type:'format',value:'PngHdr'}).recipe;await layerApp.app.export_image(id,recipe,c,false);return null}catch(e){return String(e)}finally{c.free()}})()`);
+        const failure=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;const base=(await layerApp.app.export_presets({type:'get',index:0})).recipe;const recipe=layerApp.app.export_draft(base,{type:'format',value:'PngHdr'}).recipe;await layerApp.app.export_image(id,recipe,c,false);return null}catch(e){return layerApp.app.color_feature_error_copy(e)}finally{c.free()}})()`);
         assert.match(failure,/range|BT.2020/i,'Strict HDR rejects unrepresentable colors');
         await click('Preview Output');await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2`);
         assert.ok(await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Choose File…').disabled`));

@@ -1,3 +1,4 @@
+import {createScope,scopeGraph,scopeFooter} from './histogram.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {composingKey} from "./text-input.js";
 import {captureSliderContacts} from "./numeric.js";
@@ -89,7 +90,45 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   });
   panels.get("adjustments").append(adjustments);
   const properties=element("div","effect-properties");properties.dataset.control="properties";
-  const title=element("h3"),page=element("select"),body=element("div","property-controls");page.dataset.propertiesPage="";page.onchange=()=>send({op:"select_page",layer:state().layer_properties.layer,page:page.value});properties.append(title,page,body);panels.get("properties").append(properties);
+  const title=element("h3"),page=element("select"),body=element("div","property-controls");page.dataset.propertiesPage="";page.onchange=()=>send({op:"select_page",layer:state().layer_properties.layer,page:page.value});const toolbar=element("div","property-toolbar"),actions=element("div","property-actions");
+  toolbar.append(page,actions);properties.append(title,toolbar,body);panels.get("properties").append(properties);
+  const tonal=createScope({state,app,element,button,icon,dispatch,tonal:true});properties.insertBefore(tonal.node,body);
+  let actionKey,actionNodes=[],groupMenus=[];
+  function refreshActions(view) {
+    const key=JSON.stringify(view.actions.map(a=>[a.action,a.icon,a.group?.id]),(_,v)=>typeof v==="bigint"?String(v):v);
+    if(key!==actionKey) {
+      actionKey=key;groupMenus.forEach(menu=>menu.remove());groupMenus=[];actionNodes=[];actions.replaceChildren();
+      const groups=new Set();
+      const create=(index,parent,caption)=>{
+        const action=view.actions[index],node=button("",()=>{if(parent.popover)parent.hidePopover();send(action.action);});
+        node.dataset.propertyAction=index;
+        if(action.icon&&!caption)node.append(icon(action.icon.replace(/^layer-/,"").replace(/-symbolic$/,"")));
+        else node.append(element('span'));
+        parent.append(node);actionNodes.push({index,node,caption:caption||!action.icon});return node;
+      };
+      view.actions.forEach((action,index)=>{
+        if(["lookup_preset","import_lookup"].includes(action.action.op))return;
+        if(!action.group){create(index,actions,false);return;}
+        if(groups.has(action.group.id))return;groups.add(action.group.id);
+        const menu=element('div','toolbar-choice-menu toolbar-editor-popover panel');menu.popover='auto';menu.setAttribute('role','menu');
+        const opener=button('',()=>{
+          menu.showPopover();const a=opener.getBoundingClientRect(),b=menu.getBoundingClientRect();
+          menu.style.left=`${Math.max(6,Math.min(a.left,innerWidth-b.width-6))}px`;
+          menu.style.top=`${Math.max(6,Math.min(a.bottom+4,innerHeight-b.height-6))}px`;
+        });
+        opener.dataset.propertyActionGroup=action.group.id;
+        if(action.icon)opener.append(icon(action.icon.replace(/^layer-/,"").replace(/-symbolic$/,"")));else opener.append(element('span'));
+        opener.setAttribute('aria-haspopup','menu');actions.append(opener);properties.append(menu);groupMenus.push(menu);
+        actionNodes.push({index,node:opener,group:true,caption:!action.icon});
+        view.actions.forEach((choice,i)=>{if(choice.group?.id===action.group.id)create(i,menu,true).setAttribute('role','menuitem');});
+      });
+    }
+    for(const {index,node,caption,group} of actionNodes) {
+      const action=view.actions[index],label=group?action.group.label:action.label;
+      node.title=label;node.setAttribute('aria-label',label);node.disabled=!view.enabled;if(caption)node.querySelector('span').textContent=label;
+    }
+    toolbar.hidden=page.hidden&&!actions.children.length;
+  }
   const resource=element("div","property-row property-resource"),resourceChoice=element("select"),resourceImport=button("",()=>{
     const action=state().layer_properties.actions.find(a=>a.action.op==="import_lookup");if(action)send(action.action);
   });
@@ -113,10 +152,10 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     line.setAttribute("d",view.samples.map((ms,i)=>`${i?"L":"M"}${i*200/119} ${y(ms)}`).join(" "));
   },200);
   function row(label,input){const r=element("label","property-row"),text=element("span","",label);if(typeof label!=="function")text.title=label;r.append(text,input);return r;}
-  function numberEditor(numeric,label,request){
+  function numberEditor(numeric,label,request,valueOnly=false){
     let owner;
     const action=value=>({...(owner??request()),operation:{type:"value",value}});
-    const number=numberField(numeric,label,value=>send(owner?{op:"gesture",phase:"move",action:action(value)}:action(value)));
+    const number=numberField(numeric,label,value=>send(owner?{op:"gesture",phase:"move",action:action(value)}:action(value)),true,valueOnly);
     number.onEditPhase=phase=>{
       if(phase==="down")owner=request();
       const next=action(number.getValue());
@@ -134,16 +173,18 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     const path=svg("path",{fill:"none",stroke:"currentColor","stroke-width":1.5}),points=svg("g");
     const white=svg("path",{fill:"none",stroke:"currentColor","stroke-dasharray":"3 3",opacity:.7});graph.append(grid,white,path,points);
     const reset=button("",()=>send({op:"reset",layer,key}));reset.append(icon("reset"));reset.dataset.action="curve-reset";
-    plot.append(graph,reset);
+    const histogram=scopeGraph({state,element,kind:'tonal_histogram',height:200});
+    const footer=scopeFooter({state,element,button,icon,dispatch,kind:'tonal_histogram'});
+    plot.append(histogram.node,graph,reset);
     const axes=initial.curve.axes;
     const vertical=element("div","curve-axis curve-axis-y"),horizontal=element("div","curve-axis curve-axis-x");
     vertical.append(...[axes[1].maximum,axes[1].label,axes[1].minimum].map(text=>element("span","",text)));
     horizontal.append(...[axes[0].minimum,axes[0].label,axes[0].maximum].map(text=>element("span","",text)));
-    frame.append(vertical,plot,element("span"),horizontal);node.append(frame);
+    frame.append(vertical,plot,element("span"),horizontal);const coordinateRow=element("div","curve-coordinates");node.append(frame,coordinateRow,footer.node);
     const coordinates=["input","output"].map((axis,index)=>{
-      const number=numberEditor(initial.curve.numeric,axes[index].label,()=>({op:"curve_number",layer,key,epoch:control.curve.epoch,axis}));
+      const number=numberEditor(initial.curve.numeric,axes[index].label,()=>({op:"curve_number",layer,key,epoch:control.curve.epoch,axis}),true);
       number.dataset.curveAxis=axis;
-      const ev=element("div","curve-ev");node.append(number,ev);return{axis,number,ev};
+      const ev=element("div","curve-ev"),cell=element("div","curve-coordinate");cell.append(row(()=>control.curve.axes[index].label,number),ev);coordinateRow.append(cell);return{axis,number,ev};
     });
     const current=()=>({layer,key,epoch:control.curve.epoch});
     const position=(e,rect=graph.getBoundingClientRect())=>[e.clientX-rect.left,e.clientY-rect.top];
@@ -179,7 +220,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     graph.onkeydown=e=>keyEvent(e,true);graph.onkeyup=e=>keyEvent(e,false);graph.onblur=cancel;
     window.addEventListener('blur',cancel);
     function update(c){
-      control=c;const curve=c.curve;reset.hidden=!c.modified;reset.title=curve.reset_label;node.title=curve.help;graph.setAttribute('aria-label',c.label);
+      control=c;histogram.refresh();footer.refresh();const curve=c.curve;reset.hidden=!c.modified;reset.title=curve.reset_label;node.title=curve.help;graph.setAttribute('aria-label',c.label);
       for(const [index,axis] of curve.axes.entries()){const row=index?vertical:horizontal;[...row.children].forEach((label,i)=>label.textContent=(index?[axis.maximum,axis.label,axis.minimum]:[axis.minimum,axis.label,axis.maximum])[i]);}
       for(const [index,{number}] of coordinates.entries())number.relabel(curve.axes[index].label);
       const [x,y]=curve.axes.map(axis=>axis.white);
@@ -189,7 +230,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
       for(const {axis,number,ev} of coordinates){const value=curve[axis];number.update(value?.value??0,value?.text??'');number.setDisabled(!state().layer_properties.enabled||!value||value.read_only);ev.hidden=curve.domain.kind!=='log_hdr';ev.textContent=value?.ev??'';}
     }
     update(initial);
-    return {node,update,dispose(){window.removeEventListener('blur',cancel);cancel();coordinates.forEach(({number})=>number.dispose());}};
+    return {node,update,refreshHistogram(){histogram.refresh();footer.refresh();},dispose(){histogram.dispose();window.removeEventListener('blur',cancel);cancel();coordinates.forEach(({number})=>number.dispose());}};
   }
   function refresh(){
     refreshPicker();
@@ -207,7 +248,8 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     }
     const pages=JSON.stringify(view.pages.map(p=>p.id));
     if(page.dataset.schema!==pages){page.dataset.schema=pages;page.replaceChildren(...view.pages.map(p=>{const option=element("option","",()=>state().layer_properties.pages.find(v=>v.id===p.id)?.label??"");option.value=p.id;return option;}));}
-    page.hidden=view.pages.length<2;page.value=view.page??"";page.disabled=!view.enabled;
+    page.hidden=view.pages.length<2;page.value=view.page??"";page.disabled=!view.enabled;refreshActions(view);
+    tonal.node.hidden=!view.histogram;if(view.histogram)tonal.refresh();
     const owner=`${state().document_file.epoch}:${view.layer}`;
     const fieldSchema=c=>JSON.stringify([c.kind.kind,c.kind.numeric,c.kind.options?.length,c.color_action],(_,v)=>typeof v==="bigint"?String(v):v);
     const next=JSON.stringify([owner,view.controls.map(c=>[c.key,fieldSchema(c),c.section_id])]);
@@ -226,7 +268,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
         }
         const change=value=>send({op:"set",layer:view.layer,key:c.key,value:{kind:c.kind.kind,value}});let field=fields.get(c.key);
         if(!field){
-        if(c.kind.kind==="number") {const n=numberEditor(c.kind.numeric,()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",()=>({op:"number",layer:view.layer,key:c.key}));field={node:n,update:c=>n.update(c.value.value),disable:x=>n.setDisabled(x),dispose:()=>n.dispose()};}
+        if(c.kind.kind==="number") {const n=numberEditor(c.kind.numeric,()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",()=>({op:"number",layer:view.layer,key:c.key}));field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.update(c.value.value),disable:x=>n.setDisabled(x),dispose:()=>n.dispose()};}
         else if(c.kind.kind==="curve") {
           let curve=curveEditor(view.layer,c.key,c),domain=JSON.stringify(c.curve.domain);
           const node=element('div');node.append(curve.node);
@@ -234,7 +276,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
             const next=JSON.stringify(c.curve.domain);
             if(next!==domain){domain=next;curve.dispose();curve=curveEditor(view.layer,c.key,c);node.replaceChildren(curve.node);}
             else curve.update(c);
-          },dispose:()=>curve.dispose()};
+          },refreshHistogram:()=>curve.refreshHistogram(),dispose:()=>curve.dispose()};
         }
         else if(c.kind.kind==="toggle"){const n=element("input");n.type="checkbox";n.onchange=()=>change(n.checked);field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.checked=c.value.value,disable:x=>n.disabled=x};}
         else if(c.kind.kind==="choice"){const n=element("select");c.kind.options.forEach((label,i)=>{const o=element("option","",()=>state().layer_properties.controls.find(v=>v.key===c.key)?.kind.options[i]??"");o.value=i;n.append(o);});n.onchange=()=>change(Number(n.value));field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.value=c.value.value,disable:x=>n.disabled=x};}
@@ -253,7 +295,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     body.classList.toggle("disabled",!view.enabled);
     for(const c of view.controls){const field=fields.get(c.key);field?.update(c);field?.disable?.(!view.enabled);}
   }
-  return {refresh,dispose(){for(const field of fields.values())field.dispose?.();disposePreviews();clearInterval(statsTimer);disposeRecording();}};
+  return {refresh,refreshHistograms(){if(state().layer_properties.histogram)tonal.refresh();for(const field of fields.values())field.refreshHistogram?.();},dispose(){tonal.dispose();groupMenus.forEach(menu=>menu.remove());for(const field of fields.values())field.dispose?.();disposePreviews();clearInterval(statsTimer);disposeRecording();}};
   function gradientEditor(layer,key) {
     const node=element("div","gradient-editor"),bar=element("div","gradient-ramp"),stopsRow=element("div","gradient-stops");
     let stops=[],selected=0,rampKey;
